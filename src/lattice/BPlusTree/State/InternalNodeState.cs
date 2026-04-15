@@ -3,23 +3,6 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.State;
 
 /// <summary>
-/// A single child entry in an internal node: the separator key and the grain id of the child.
-/// </summary>
-[GenerateSerializer]
-[Immutable]
-internal sealed record ChildEntry
-{
-    /// <summary>
-    /// The separator key. All keys strictly less than this value are routed to the
-    /// <em>previous</em> child. This is <c>null</c> for the leftmost (catch-all) child.
-    /// </summary>
-    [Id(0)] public string? SeparatorKey { get; init; }
-
-    /// <summary>The grain identity of the child node.</summary>
-    [Id(1)] public required GrainId ChildId { get; init; }
-}
-
-/// <summary>
 /// Persistent state for an internal (non-leaf) node grain.
 /// Children are stored in separator-key order; the first child has a <c>null</c>
 /// separator and acts as the leftmost catch-all.
