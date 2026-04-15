@@ -28,6 +28,15 @@ internal sealed class InternalNodeState
     /// <summary>The tree this node belongs to. Used to resolve named <see cref="BPlusTree.LatticeOptions"/>.</summary>
     [Id(4)] public string? TreeId { get; set; }
 
+    /// <summary>If a split is in progress, the separator key being promoted.</summary>
+    [Id(5)] public string? SplitKey { get; set; }
+
+    /// <summary>If a split is in progress, the grain identity of the new right sibling.</summary>
+    [Id(6)] public GrainId? SplitSiblingId { get; set; }
+
+    /// <summary>If a split is in progress, the children that belong to the right sibling.</summary>
+    [Id(7)] public List<ChildEntry>? SplitRightChildren { get; set; }
+
     /// <summary>
     /// Routes a key to the correct child grain by finding the rightmost separator ≤ key.
     /// </summary>

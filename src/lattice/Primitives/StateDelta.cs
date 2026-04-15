@@ -18,6 +18,13 @@ public sealed record StateDelta
     /// </summary>
     [Id(1)] public required VersionVector Version { get; init; }
 
+    /// <summary>
+    /// If the leaf has been split, the key at which it was split. Cache consumers
+    /// should prune any locally held entries with keys ≥ this value because those
+    /// entries now belong to a different leaf.
+    /// </summary>
+    [Id(2)] public string? SplitKey { get; init; }
+
     /// <summary><c>true</c> if there were no changes to send.</summary>
     public bool IsEmpty => Entries.Count == 0;
 }

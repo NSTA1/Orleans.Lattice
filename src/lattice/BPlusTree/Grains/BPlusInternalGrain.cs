@@ -14,13 +14,14 @@ internal sealed class BPlusInternalGrain(
     IOptionsMonitor<LatticeOptions> optionsMonitor) : IBPlusInternalGrain
 {
     private LatticeOptions Options => optionsMonitor.Get(state.State.TreeId ?? string.Empty);
-    public async Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild)
+    public async Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild, bool childrenAreLeaves)
     {
         state.State.Children =
         [
             new ChildEntry { SeparatorKey = null, ChildId = leftChild },
             new ChildEntry { SeparatorKey = separatorKey, ChildId = rightChild }
         ];
+        state.State.ChildrenAreLeaves = childrenAreLeaves;
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
         await state.WriteStateAsync();
     }
@@ -28,8 +29,30 @@ internal sealed class BPlusInternalGrain(
     public Task<GrainId> RouteAsync(string key) =>
         Task.FromResult(state.State.Route(key));
 
+    public Task<bool> AreChildrenLeavesAsync() =>
+        Task.FromResult(state.State.ChildrenAreLeaves);
+
     public async Task<SplitResult?> AcceptSplitAsync(string promotedKey, GrainId newChild)
     {
+        SplitResult? pendingRecovery = null;
+
+        // Recovery: if a previous split was interrupted, complete it first.
+        if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
+        {
+            pendingRecovery = await CompleteSplitAsync();
+            await state.WriteStateAsync();
+
+            // Route the caller's promotion to the correct node after recovery.
+            if (string.Compare(promotedKey, state.State.SplitKey!, StringComparison.Ordinal) >= 0)
+            {
+                // The promotion belongs to the new sibling — forward it there.
+                var sibling = grainFactory.GetGrain<IBPlusInternalGrain>(state.State.SplitSiblingId!.Value);
+                await sibling.AcceptSplitAsync(promotedKey, newChild);
+                return pendingRecovery;
+            }
+            // Otherwise fall through to insert the promotion in THIS node.
+        }
+
         // Idempotency check: if this separator+child pair already exists, this is a
         // duplicate delivery (e.g. crash recovery re-emit). Skip the insert.
         for (int i = 0; i < state.State.Children.Count; i++)
@@ -37,7 +60,7 @@ internal sealed class BPlusInternalGrain(
             if (state.State.Children[i].SeparatorKey == promotedKey &&
                 state.State.Children[i].ChildId == newChild)
             {
-                return null;
+                return pendingRecovery;
             }
         }
 
@@ -60,7 +83,7 @@ internal sealed class BPlusInternalGrain(
         }
 
         await state.WriteStateAsync();
-        return splitResult;
+        return pendingRecovery ?? splitResult;
     }
 
     public async Task SetTreeIdAsync(string treeId)
@@ -72,8 +95,7 @@ internal sealed class BPlusInternalGrain(
 
     private async Task<SplitResult> SplitAsync()
     {
-        state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitInProgress);
-
+        // Phase 1: Persist the split intent before any cross-grain calls.
         int mid = state.State.Children.Count / 2;
         var promotedKey = state.State.Children[mid].SeparatorKey!;
 
@@ -82,30 +104,44 @@ internal sealed class BPlusInternalGrain(
         // The first entry in the right node becomes the new leftmost (null separator).
         rightChildren[0] = new ChildEntry { SeparatorKey = null, ChildId = rightChildren[0].ChildId };
 
-        var newInternal = grainFactory.GetGrain<IBPlusInternalGrain>(Guid.NewGuid());
-        await newInternal.SetTreeIdAsync(state.State.TreeId!);
+        state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitInProgress);
+        state.State.SplitKey = promotedKey;
+        state.State.SplitSiblingId = grainFactory.GetGrain<IBPlusInternalGrain>(Guid.NewGuid()).GetGrainId();
+        state.State.SplitRightChildren = rightChildren;
 
         // Trim our children to the left half.
         state.State.Children = state.State.Children.Take(mid).ToList();
-        state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
+        await state.WriteStateAsync();
 
-        return await InitializeNewInternalAsync(newInternal, rightChildren, promotedKey);
+        // Phase 2: Execute cross-grain operations using the persisted identity.
+        return await CompleteSplitAsync();
     }
 
-    private async Task<SplitResult> InitializeNewInternalAsync(
-        IBPlusInternalGrain newInternal,
-        List<ChildEntry> rightChildren,
-        string promotedKey)
+    /// <summary>
+    /// Completes (or resumes) a split whose intent has already been persisted.
+    /// Safe to call multiple times — <see cref="IBPlusInternalGrain.InitializeAsync"/>
+    /// overwrites the new sibling's state, and <see cref="IBPlusInternalGrain.AcceptSplitAsync"/>
+    /// has its own idempotency guard.
+    /// </summary>
+    private async Task<SplitResult> CompleteSplitAsync()
     {
+        var promotedKey = state.State.SplitKey!;
+        var siblingId = state.State.SplitSiblingId!.Value;
+        var rightChildren = state.State.SplitRightChildren!;
+
+        var newInternal = grainFactory.GetGrain<IBPlusInternalGrain>(siblingId);
+        await newInternal.SetTreeIdAsync(state.State.TreeId!);
+
         if (rightChildren.Count >= 2)
         {
             // Initialize with the leftmost and first real separator.
             await newInternal.InitializeAsync(
                 rightChildren[1].SeparatorKey!,
                 rightChildren[0].ChildId,
-                rightChildren[1].ChildId);
+                rightChildren[1].ChildId,
+                state.State.ChildrenAreLeaves);
 
-            // Accept remaining children.
+            // Accept remaining children (idempotent per AcceptSplitAsync guard).
             for (int i = 2; i < rightChildren.Count; i++)
             {
                 await newInternal.AcceptSplitAsync(
@@ -114,10 +150,13 @@ internal sealed class BPlusInternalGrain(
             }
         }
 
+        state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
+        state.State.SplitRightChildren = null;
+
         return new SplitResult
         {
             PromotedKey = promotedKey,
-            NewSiblingId = newInternal.GetGrainId()
+            NewSiblingId = siblingId
         };
     }
 }

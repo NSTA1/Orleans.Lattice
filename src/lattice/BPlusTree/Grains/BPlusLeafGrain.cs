@@ -29,6 +29,35 @@ internal sealed class BPlusLeafGrain(
 
     public async Task<SplitResult?> SetAsync(string key, byte[] value)
     {
+        // Recovery: if a previous split was interrupted, complete it first.
+        if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
+        {
+            var recovered = await CompleteSplitAsync();
+            await state.WriteStateAsync();
+
+            // Apply the caller's write to the correct leaf so it isn't silently dropped.
+            if (string.Compare(key, state.State.SplitKey!, StringComparison.Ordinal) >= 0)
+            {
+                // The key belongs to the new sibling — forward it there.
+                var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.SplitSiblingId!.Value);
+                await sibling.SetAsync(key, value);
+            }
+            else
+            {
+                // The key belongs to this leaf — write it here.
+                state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
+                state.State.Version.Tick(ReplicaId);
+                var entry = LwwValue<byte[]>.Create(value, state.State.Clock);
+                if (state.State.Entries.TryGetValue(key, out var prev))
+                    state.State.Entries[key] = LwwValue<byte[]>.Merge(prev, entry);
+                else
+                    state.State.Entries[key] = entry;
+                await state.WriteStateAsync();
+            }
+
+            return recovered;
+        }
+
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
         state.State.Version.Tick(ReplicaId);
         var newEntry = LwwValue<byte[]>.Create(value, state.State.Clock);
@@ -90,7 +119,8 @@ internal sealed class BPlusLeafGrain(
             return Task.FromResult(new StateDelta
             {
                 Entries = new Dictionary<string, LwwValue<byte[]>>(),
-                Version = state.State.Version.Clone()
+                Version = state.State.Version.Clone(),
+                SplitKey = state.State.SplitKey
             });
         }
 
@@ -110,49 +140,89 @@ internal sealed class BPlusLeafGrain(
         return Task.FromResult(new StateDelta
         {
             Entries = changed,
-            Version = state.State.Version.Clone()
+            Version = state.State.Version.Clone(),
+            SplitKey = state.State.SplitKey
         });
+    }
+
+    public async Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries)
+    {
+        foreach (var (key, incoming) in entries)
+        {
+            if (state.State.Entries.TryGetValue(key, out var existing))
+            {
+                state.State.Entries[key] = LwwValue<byte[]>.Merge(existing, incoming);
+            }
+            else
+            {
+                state.State.Entries[key] = incoming;
+            }
+        }
+
+        await state.WriteStateAsync();
     }
 
     private async Task<SplitResult> SplitAsync()
     {
-        state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitInProgress);
-
-        // Find the median key to split on.
+        // Phase 1: Persist the split intent so we can resume after a crash.
+        // Compute the split key and new sibling identity once, and write them
+        // to durable state before making any cross-grain calls.
         var keys = state.State.Entries.Keys.ToList();
         int mid = keys.Count / 2;
         var splitKey = keys[mid];
 
-        // Create the new right sibling leaf.
-        var newLeafId = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
-        await newLeafId.SetTreeIdAsync(state.State.TreeId!);
+        state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitInProgress);
+        state.State.SplitKey = splitKey;
+        state.State.SplitSiblingId = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid()).GetGrainId();
+        state.State.NextSibling = state.State.SplitSiblingId;
+        await state.WriteStateAsync();
 
-        // Move the upper half of entries to the new sibling.
-        // Set the new leaf's sibling pointer to our current sibling.
-        var oldNextSibling = state.State.NextSibling;
-        await newLeafId.SetNextSiblingAsync(oldNextSibling);
+        // Phase 2: Execute cross-grain operations using the persisted identity.
+        return await CompleteSplitAsync();
+    }
 
-        for (int i = mid; i < keys.Count; i++)
+    /// <summary>
+    /// Completes (or resumes) a split whose intent has already been persisted.
+    /// Safe to call multiple times — <see cref="IBPlusLeafGrain.MergeEntriesAsync"/>
+    /// is idempotent (LWW merge), and <see cref="IBPlusLeafGrain.SetNextSiblingAsync"/>
+    /// is a simple overwrite of the same value.
+    /// </summary>
+    private async Task<SplitResult> CompleteSplitAsync()
+    {
+        var splitKey = state.State.SplitKey!;
+        var siblingId = state.State.SplitSiblingId!.Value;
+        var newLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(siblingId);
+
+        await newLeaf.SetTreeIdAsync(state.State.TreeId!);
+
+        // Collect entries that belong to the right sibling (keys >= splitKey).
+        var rightEntries = new Dictionary<string, LwwValue<byte[]>>();
+        foreach (var (key, lww) in state.State.Entries)
         {
-            var k = keys[i];
-            var v = state.State.Entries[k];
-            if (!v.IsTombstone)
+            if (string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
             {
-                await newLeafId.SetAsync(k, v.Value!);
+                rightEntries[key] = lww;
             }
-            state.State.Entries.Remove(k);
         }
 
-        // Point our sibling pointer to the new leaf.
-        state.State.NextSibling = newLeafId.GetGrainId();
-        state.State.SplitKey = splitKey;
-        state.State.SplitSiblingId = newLeafId.GetGrainId();
+        // Bulk-merge preserves original timestamps and tombstones.
+        if (rightEntries.Count > 0)
+        {
+            await newLeaf.MergeEntriesAsync(rightEntries);
+        }
+
+        // Remove the transferred entries from our local state.
+        foreach (var key in rightEntries.Keys)
+        {
+            state.State.Entries.Remove(key);
+        }
+
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
 
         return new SplitResult
         {
             PromotedKey = splitKey,
-            NewSiblingId = newLeafId.GetGrainId()
+            NewSiblingId = siblingId
         };
     }
 }

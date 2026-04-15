@@ -47,6 +47,21 @@ internal sealed class LeafCacheGrain(IGrainContext context, IGrainFactory grainF
         var primaryLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
         var delta = await primaryLeaf.GetDeltaSinceAsync(_version);
 
+        // If the primary leaf has been split, prune any cached entries that
+        // now belong to the new sibling (keys >= SplitKey). This is idempotent
+        // and safe to apply on every refresh — pruning a key that doesn't
+        // exist is a no-op.
+        if (delta.SplitKey is not null)
+        {
+            var keysToRemove = _cache.Keys
+                .Where(k => string.Compare(k, delta.SplitKey, StringComparison.Ordinal) >= 0)
+                .ToList();
+            foreach (var key in keysToRemove)
+            {
+                _cache.Remove(key);
+            }
+        }
+
         if (delta.IsEmpty)
             return;
 

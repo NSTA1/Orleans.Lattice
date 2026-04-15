@@ -41,4 +41,11 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Returns an empty delta if the caller is already up to date.
     /// </summary>
     Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion);
+
+    /// <summary>
+    /// Bulk-merges entries (including tombstones) into this leaf using LWW semantics,
+    /// preserving original timestamps. Used during splits to transfer entries without
+    /// re-stamping them. Idempotent — re-merging the same entries is a no-op.
+    /// </summary>
+    Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries);
 }

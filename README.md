@@ -150,7 +150,7 @@ flowchart LR
 
 ### Leaf Splits
 
-When a leaf exceeds `MaxLeafKeys` (128) entries after an insert, it splits:
+When a leaf exceeds `MaxLeafKeys` (128) entries after an insert, it splits using a **two-phase** pattern that is crash-safe:
 
 ```mermaid
 sequenceDiagram
@@ -164,14 +164,22 @@ sequenceDiagram
     Root->>Leaf: SetAsync("key", value)
 
     Note over Leaf: Entry count > 128 → split triggered
+
+    rect rgb(240, 248, 255)
+    Note over Leaf: Phase 1 — persist intent
     Leaf->>Leaf: SplitState = SplitInProgress
+    Leaf->>Leaf: Record SplitKey, SplitSiblingId, split entries
+    Leaf->>Leaf: Trim local entries to left half
+    Leaf->>Leaf: WriteStateAsync()
+    end
 
-    Leaf->>New: Create new leaf grain
+    rect rgb(240, 255, 240)
+    Note over Leaf: Phase 2 — cross-grain ops
+    Leaf->>New: SetTreeIdAsync(treeId)
+    Leaf->>New: MergeEntriesAsync(upper half)
     Leaf->>New: SetNextSiblingAsync(oldNextSibling)
-    Leaf->>New: Move upper half of entries
-
-    Leaf->>Leaf: NextSibling = new leaf
     Leaf->>Leaf: SplitState = SplitComplete
+    end
 
     Leaf-->>Root: SplitResult { PromotedKey, NewSiblingId }
     Root->>Parent: AcceptSplitAsync(promotedKey, newSiblingId)
@@ -184,12 +192,13 @@ sequenceDiagram
     end
 ```
 
-1. The leaf finds the **median key** and creates a new sibling leaf grain.
-2. The upper half of entries are moved to the new sibling.
-3. Sibling pointers are updated (old leaf → new leaf → old leaf's former sibling).
-4. A `SplitResult` containing the promoted key and new sibling's `GrainId` is returned up the call stack.
-5. The parent internal node inserts the new separator. If *it* overflows, the split cascades further.
-6. If the split reaches the shard root, a new internal root is created above the old one, increasing tree depth by one.
+1. **Phase 1 (persist intent):** The leaf finds the **median key**, records the split metadata (`SplitKey`, `SplitSiblingId`, right-half entries) and trims its own entries to the left half — all in a single `WriteStateAsync` call.
+2. **Phase 2 (cross-grain ops):** The new sibling is populated via `MergeEntriesAsync` (an idempotent bulk merge), sibling pointers are updated, and `SplitState` advances to `SplitComplete`.
+3. A `SplitResult` containing the promoted key and new sibling's `GrainId` is returned up the call stack.
+4. The parent internal node inserts the new separator. If *it* overflows, the split cascades further (internal nodes use the same two-phase pattern).
+5. If the split reaches the shard root, a new internal root is created above the old one via a two-phase `PromoteRootAsync`, increasing tree depth by one.
+
+**Recovery:** If a grain crashes between Phase 1 and Phase 2, the next call to `SetAsync` detects `SplitState == SplitInProgress` and resumes Phase 2 (`CompleteSplitAsync`). After recovery completes, the caller's write is routed to the correct leaf — locally if the key falls below the split key, or forwarded to the new sibling otherwise. This ensures **no writes are lost** during a crash mid-split.
 
 ### Monotonic State Primitives
 
@@ -240,8 +249,9 @@ stateDiagram-v2
 
 The merge operation is `max()` — once a node reaches `SplitComplete`, no message can revert it to an earlier state. This means:
 
-- If a grain crashes between `SplitInProgress` and `SplitComplete`, on reactivation it can re-emit the split record to the parent. The parent's `AcceptSplit` is idempotent (same promoted key + child ID = no-op after merge).
+- If a grain crashes between `SplitInProgress` and `SplitComplete`, on reactivation it detects the incomplete split and resumes the cross-grain phase (`CompleteSplitAsync`). The sibling operations (`MergeEntriesAsync`, `InitializeAsync`) are idempotent, and the parent's `AcceptSplitAsync` guards against duplicate `(separatorKey, childId)` pairs.
 - If two messages arrive out of order (one carrying `SplitInProgress`, one carrying `SplitComplete`), the result is simply `SplitComplete`.
+- After recovery, the caller's original operation (a write for leaves, a split promotion for internal nodes) is routed to the correct node based on the split key — ensuring no operations are silently dropped.
 
 #### Version Vector
 
@@ -269,8 +279,11 @@ A `StateDelta` is a snapshot of changes extracted from a leaf:
 StateDelta = {
     Entries:  { key → LwwValue }   // only entries newer than the caller's version
     Version:  VersionVector          // the leaf's version at extraction time
+    SplitKey: string?                // non-null if the leaf has split since the caller's version
 }
 ```
+
+When `SplitKey` is present, it signals that the leaf has split and all entries ≥ `SplitKey` have moved to a new sibling. Consumers (e.g. `LeafCacheGrain`) use this to **prune** stale entries from their local cache that now belong to the sibling.
 
 The delta extraction flow:
 
@@ -313,17 +326,33 @@ flowchart LR
 - **Delta refresh**: Every read calls `GetDeltaSinceAsync` on the primary leaf, passing the cache's current `VersionVector`. If the cache is already up to date, the primary short-circuits and returns an empty delta (a cheap version-vector comparison, no entry scan). If entries have changed, only the newer entries are returned and merged in.
 - **Consistency**: Reads are consistent as of the moment the delta is fetched from the primary. The only window for a "stale" result is a concurrent write that lands on the primary *after* `GetDeltaSinceAsync` returns but *before* the caller sees the response — this is normal read-write race behaviour, not cache staleness.
 - **Why keep a local cache at all?**: The `VersionVector` fast-path makes the delta call cheap when nothing has changed, but the local `Dictionary<string, LwwValue<byte[]>>` avoids deserialising the full entry set on every read. When the primary returns a non-empty delta, only the changed entries are merged — the rest are already in memory.
+- **Split-aware pruning**: When a `StateDelta` contains a non-null `SplitKey`, the cache removes all entries with keys ≥ `SplitKey` from its local dictionary. These entries now belong to a different leaf grain and would otherwise become stale ghosts in the cache.
 
 ### Idempotent Split Propagation
 
-`AcceptSplitAsync` on internal nodes checks for duplicate `(separatorKey, childId)` pairs before inserting. If the same split result is delivered twice (e.g. crash recovery, message retry), the duplicate is detected and skipped. Combined with the monotonic `SplitState` on leaf nodes, this makes the entire split protocol idempotent end-to-end.
+`AcceptSplitAsync` on internal nodes checks for duplicate `(separatorKey, childId)` pairs before inserting. If the same split result is delivered twice (e.g. crash recovery, message retry), the duplicate is detected and skipped. Combined with the monotonic `SplitState` on leaf and internal nodes, this makes the entire split protocol idempotent end-to-end.
+
+Internal nodes themselves use the same two-phase split pattern as leaves. If an internal node crashes mid-split, the next `AcceptSplitAsync` call resumes the incomplete split before processing the caller's promotion — routing it to the correct node (locally or to the new sibling) based on the split key.
+
+### Root Promotion
+
+When a split cascades all the way up to the shard root, `ShardRootGrain` creates a new internal root above the old one via a **two-phase promotion**:
+
+1. **Phase 1 (persist intent):** The `SplitResult` and a `RootWasLeaf` flag are saved to `ShardRootState.PendingPromotion` and persisted.
+2. **Phase 2 (create root):** A new `BPlusInternalGrain` is created with a **deterministic `GrainId`** derived from the shard key and old root ID (`SHA-256` hash). The new root is initialised with the promoted key and left/right children, and `RootNodeId` is updated.
+
+If the shard root crashes between phases, `ResumePendingPromotionAsync` (called at the start of every `GetAsync`, `SetAsync`, and `DeleteAsync`) detects the pending promotion and completes it. The deterministic `GrainId` ensures that re-executing Phase 2 targets the same grain — making the promotion idempotent.
+
+### Bounded Retry
+
+`ShardRootGrain` wraps `SetAsync` and `DeleteAsync` in a bounded retry loop (default: 3 attempts). If a grain call fails due to a transient error (e.g. storage fault, network partition), the request is retried. Orleans automatically deactivates a failed grain; the retry hits a fresh activation that runs any pending recovery logic before processing the request. This shields callers from transient infrastructure errors without requiring client-side retry code.
 
 ### Grain-to-Grain Mapping
 
 | B+ Tree Concept | Orleans Grain | Key Format | Persistent State |
 |---|---|---|---|
 | Shard router | `LatticeGrain` (`[StatelessWorker]`) | `{treeId}` | None (stateless) |
-| Shard root | `ShardRootGrain` | `{treeId}/{shardIndex}` | `ShardRootState` — root node ID + leaf/internal flag |
+| Shard root | `ShardRootGrain` | `{treeId}/{shardIndex}` | `ShardRootState` — root node ID + leaf/internal flag + pending promotion |
 | Internal node | `BPlusInternalGrain` | `Guid` | `InternalNodeState` — sorted children + HLC + split state |
 | Leaf node | `BPlusLeafGrain` | `Guid` | `LeafNodeState` — sorted LWW entries + sibling pointer + HLC + version vector + split state |
 | Leaf cache | `LeafCacheGrain` (`[StatelessWorker]`) | `{leafGrainId}` | None (in-memory LWW-map + version vector) |
@@ -369,7 +398,7 @@ src/lattice/
 │   ├── LwwValue.cs              Last-writer-wins register with tombstone support
 │   ├── SplitState.cs            Monotonic split lifecycle enum
 │   ├── VersionVector.cs         Causal history per replica (pointwise-max merge)
-│   └── StateDelta.cs            Changed entries + version for delta replication
+│   └── StateDelta.cs            Changed entries + version + split key for delta replication
 └── BPlusTree/
     ├── LatticeOptions.cs        Branching factor and shard count constants
     ├── SplitResult.cs           Promoted key + new sibling ID
@@ -380,14 +409,14 @@ src/lattice/
     ├── ILeafCacheGrain.cs       Stateless read-through cache interface
     ├── State/
     │   ├── LeafNodeState.cs     Sorted LWW entries + sibling pointer + version vector
-    │   ├── InternalNodeState.cs Sorted children + routing logic
-    │   └── ShardRootState.cs    Root pointer + leaf/internal flag
+    │   ├── InternalNodeState.cs Sorted children + routing logic + split state
+    │   └── ShardRootState.cs    Root pointer + leaf/internal flag + pending promotion
     └── Grains/
         ├── LatticeGrain.cs           XxHash32 shard routing
-        ├── ShardRootGrain.cs        Root management + split promotion + cache routing
-        ├── BPlusInternalGrain.cs    Idempotent separator insertion + cascading splits
-        ├── BPlusLeafGrain.cs        LWW insert/delete + leaf splitting + delta extraction
-        └── LeafCacheGrain.cs        Stateless per-silo read cache with LWW merge
+        ├── ShardRootGrain.cs        Root management + two-phase split promotion + retry + cache routing
+        ├── BPlusInternalGrain.cs    Idempotent separator insertion + two-phase cascading splits
+        ├── BPlusLeafGrain.cs        LWW insert/delete + two-phase leaf splitting + delta extraction
+        └── LeafCacheGrain.cs        Stateless per-silo read cache with LWW merge + split pruning
 ```
 
 ## License
