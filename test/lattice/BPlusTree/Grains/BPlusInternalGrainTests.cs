@@ -333,4 +333,63 @@ public class BPlusInternalGrainTests
             Orleans.Lattice.Primitives.SplitState.SplitComplete,
             state.State.SplitState);
     }
+
+    // --- GetLeftmostChildAsync / GetRightmostChildAsync ---
+
+    [Fact]
+    public async Task GetLeftmostChild_returns_first_child()
+    {
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+
+        var result = await grain.GetLeftmostChildAsync();
+        Assert.Equal(Child0, result);
+    }
+
+    [Fact]
+    public async Task GetRightmostChild_returns_last_child()
+    {
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+
+        var result = await grain.GetRightmostChildAsync();
+        Assert.Equal(Child1, result);
+    }
+
+    [Fact]
+    public async Task GetRightmostChild_returns_last_after_accept_split()
+    {
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+        await grain.AcceptSplitAsync("monkey", Child2);
+
+        var result = await grain.GetRightmostChildAsync();
+        Assert.Equal(Child2, result);
+    }
+
+    [Fact]
+    public async Task GetLeftmostChild_unchanged_after_accept_split()
+    {
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+        await grain.AcceptSplitAsync("monkey", Child2);
+
+        var result = await grain.GetLeftmostChildAsync();
+        Assert.Equal(Child0, result);
+    }
+
+    // --- SetTreeIdAsync idempotency ---
+
+    [Fact]
+    public async Task SetTreeId_is_idempotent()
+    {
+        var state = new FakePersistentState<InternalNodeState>();
+        var grain = CreateGrain(state);
+
+        await grain.SetTreeIdAsync("tree-1");
+        Assert.Equal("tree-1", state.State.TreeId);
+
+        await grain.SetTreeIdAsync("tree-2");
+        Assert.Equal("tree-1", state.State.TreeId);
+    }
 }
