@@ -1,16 +1,31 @@
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Configuration constants for the Lattice.
+/// Configuration options for a Lattice tree. Register a named instance to
+/// override settings for a specific tree:
+/// <code>
+/// siloBuilder.Services.Configure&lt;LatticeOptions&gt;("my-tree", o =&gt; o.MaxLeafKeys = 256);
+/// </code>
+/// The unnamed (default) instance applies to all trees that do not have a
+/// named override.
 /// </summary>
-public static class LatticeOptions
+public sealed class LatticeOptions
 {
     /// <summary>Maximum number of keys per leaf node before a split is triggered.</summary>
-    public const int MaxLeafKeys = 128;
+    public int MaxLeafKeys { get; set; } = DefaultMaxLeafKeys;
 
     /// <summary>Maximum number of children per internal node before a split is triggered.</summary>
-    public const int MaxInternalChildren = 128;
+    public int MaxInternalChildren { get; set; } = DefaultMaxInternalChildren;
 
-    /// <summary>Default number of shards for the shard router.</summary>
+    /// <summary>Number of independent shards the key space is divided into.</summary>
+    public int ShardCount { get; set; } = DefaultShardCount;
+
+    /// <summary>Default value for <see cref="MaxLeafKeys"/>.</summary>
+    public const int DefaultMaxLeafKeys = 128;
+
+    /// <summary>Default value for <see cref="MaxInternalChildren"/>.</summary>
+    public const int DefaultMaxInternalChildren = 128;
+
+    /// <summary>Default value for <see cref="ShardCount"/>.</summary>
     public const int DefaultShardCount = 64;
 }

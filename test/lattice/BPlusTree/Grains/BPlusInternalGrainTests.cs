@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -17,7 +18,9 @@ public class BPlusInternalGrainTests
     {
         state ??= new FakePersistentState<InternalNodeState>();
         var grainFactory = Substitute.For<IGrainFactory>();
-        return new BPlusInternalGrain(state, grainFactory);
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        return new BPlusInternalGrain(state, grainFactory, optionsMonitor);
     }
 
     // --- InitializeAsync ---

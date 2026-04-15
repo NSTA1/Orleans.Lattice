@@ -30,6 +30,12 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     Task SetNextSiblingAsync(GrainId? siblingId);
 
     /// <summary>
+    /// Associates this leaf with a tree, enabling named options resolution.
+    /// Called once by the shard root after creating the grain. Idempotent.
+    /// </summary>
+    Task SetTreeIdAsync(string treeId);
+
+    /// <summary>
     /// Returns a <see cref="StateDelta"/> containing all entries whose timestamp is
     /// newer than what <paramref name="sinceVersion"/> has seen.
     /// Returns an empty delta if the caller is already up to date.

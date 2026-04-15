@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -13,7 +14,9 @@ public class LatticeGrainTests
         context.GrainId.Returns(GrainId.Create("lattice", treeId));
 
         var grainFactory = Substitute.For<IGrainFactory>();
-        var grain = new LatticeGrain(context, grainFactory);
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        var grain = new LatticeGrain(context, grainFactory, optionsMonitor);
         return (grain, grainFactory);
     }
 
