@@ -8,10 +8,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// in a sorted dictionary. Splits when the entry count exceeds <see cref="BPlusTreeOptions.MaxLeafKeys"/>.
 /// </summary>
 public sealed class BPlusLeafGrain(
+    IGrainContext context,
     [PersistentState("leaf", "bplustree")] IPersistentState<LeafNodeState> state,
-    IGrainFactory grainFactory) : Grain, IBPlusLeafGrain
+    IGrainFactory grainFactory) : IBPlusLeafGrain
 {
-    private string ReplicaId => this.GetGrainId().ToString();
+    private string ReplicaId => context.GrainId.ToString();
 
     public Task<byte[]?> GetAsync(string key)
     {
