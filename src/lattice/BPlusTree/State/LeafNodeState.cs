@@ -7,7 +7,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// wrapped in <see cref="LwwValue{T}"/> for monotonic merge semantics.
 /// </summary>
 [GenerateSerializer]
-public sealed class LeafNodeState
+internal sealed class LeafNodeState
 {
     /// <summary>Sorted entries: key → LWW-wrapped value.</summary>
     [Id(0)] public SortedDictionary<string, LwwValue<byte[]>> Entries { get; set; } = new(StringComparer.Ordinal);

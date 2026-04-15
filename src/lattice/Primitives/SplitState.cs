@@ -6,14 +6,14 @@ namespace Orleans.Lattice.Primitives;
 /// Merge is simply <c>max</c> — once a node reaches a higher state it can never go back.
 /// </summary>
 [GenerateSerializer]
-public enum SplitState
+internal enum SplitState
 {
     Unsplit = 0,
     SplitInProgress = 1,
     SplitComplete = 2
 }
 
-public static class SplitStateExtensions
+internal static class SplitStateExtensions
 {
     /// <summary>
     /// Lattice merge for <see cref="SplitState"/>: returns the maximum of two values.

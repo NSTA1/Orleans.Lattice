@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Primitives;
 /// </summary>
 [GenerateSerializer]
 [Immutable]
-public readonly record struct HybridLogicalClock : IComparable<HybridLogicalClock>
+public readonly record struct HybridLogicalClock
 {
     [Id(0)] public long WallClockTicks { get; init; }
     [Id(1)] public int Counter { get; init; }

@@ -16,7 +16,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// without an explicit invalidation protocol.
 /// </summary>
 [StatelessWorker]
-public sealed class LeafCacheGrain(IGrainContext context, IGrainFactory grainFactory) : ILeafCacheGrain
+internal sealed class LeafCacheGrain(IGrainContext context, IGrainFactory grainFactory) : ILeafCacheGrain
 {
     private readonly Dictionary<string, LwwValue<byte[]>> _cache = new(StringComparer.Ordinal);
     private VersionVector _version = new();

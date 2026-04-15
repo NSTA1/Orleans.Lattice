@@ -1,9 +1,9 @@
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Configuration constants for the B+ tree.
+/// Configuration constants for the Lattice.
 /// </summary>
-public static class BPlusTreeOptions
+public static class LatticeOptions
 {
     /// <summary>Maximum number of keys per leaf node before a split is triggered.</summary>
     public const int MaxLeafKeys = 128;

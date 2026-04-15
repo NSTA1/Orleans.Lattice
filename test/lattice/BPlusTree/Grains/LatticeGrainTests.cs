@@ -109,7 +109,7 @@ public class LatticeGrainTests
         await grain2.GetAsync("stable-key");
 
         // Both grains should have resolved the same shard key.
-        var expectedShardIndex = LatticeGrain.GetShardIndex("stable-key", BPlusTreeOptions.DefaultShardCount);
+        var expectedShardIndex = LatticeGrain.GetShardIndex("stable-key", LatticeOptions.DefaultShardCount);
         var expectedKey = $"tree-a/{expectedShardIndex}";
         factory1.Received(1).GetGrain<IShardRootGrain>(
             Arg.Is<string>(s => s == expectedKey), Arg.Any<string>());
