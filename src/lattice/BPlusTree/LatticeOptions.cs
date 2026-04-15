@@ -20,6 +20,9 @@ public sealed class LatticeOptions
     /// <summary>Number of independent shards the key space is divided into.</summary>
     public int ShardCount { get; set; } = DefaultShardCount;
 
+    /// <summary>Number of keys per page returned by <see cref="IShardRootGrain.GetSortedKeysBatchAsync"/>.</summary>
+    public int KeysPageSize { get; set; } = DefaultKeysPageSize;
+
     /// <summary>Default value for <see cref="MaxLeafKeys"/>.</summary>
     public const int DefaultMaxLeafKeys = 128;
 
@@ -28,4 +31,7 @@ public sealed class LatticeOptions
 
     /// <summary>Default value for <see cref="ShardCount"/>.</summary>
     public const int DefaultShardCount = 64;
+
+    /// <summary>Default value for <see cref="KeysPageSize"/>.</summary>
+    public const int DefaultKeysPageSize = 512;
 }

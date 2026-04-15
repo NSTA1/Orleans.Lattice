@@ -36,6 +36,17 @@ internal sealed class LeafNodeState
     /// <summary>The tree this leaf belongs to. Used to resolve named <see cref="BPlusTree.LatticeOptions"/>.</summary>
     [Id(7)] public string? TreeId { get; set; }
 
+    /// <summary>Grain identity of the left sibling leaf (for reverse scans), or <c>null</c>.</summary>
+    [Id(8)] public GrainId? PrevSibling { get; set; }
+
+    /// <summary>
+    /// During a split, the previous value of <see cref="NextSibling"/> before it was
+    /// overwritten with the new sibling. Persisted in Phase 1 so that
+    /// <see cref="BPlusTree.Grains.BPlusLeafGrain.CompleteSplitAsync"/> can link the
+    /// new sibling into the doubly-linked list even after a crash-recovery.
+    /// </summary>
+    [Id(9)] public GrainId? OldNextSibling { get; set; }
+
     /// <summary>Returns the number of live (non-tombstoned) entries.</summary>
     public int LiveCount => Entries.Count(e => !e.Value.IsTombstone);
 }

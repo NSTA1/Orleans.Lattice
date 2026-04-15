@@ -104,6 +104,15 @@ internal sealed class BPlusLeafGrain(
         await state.WriteStateAsync();
     }
 
+    public Task<GrainId?> GetPrevSiblingAsync() =>
+        Task.FromResult(state.State.PrevSibling);
+
+    public async Task SetPrevSiblingAsync(GrainId? siblingId)
+    {
+        state.State.PrevSibling = siblingId;
+        await state.WriteStateAsync();
+    }
+
     public async Task SetTreeIdAsync(string treeId)
     {
         if (state.State.TreeId is not null) return;
@@ -162,6 +171,24 @@ internal sealed class BPlusLeafGrain(
         await state.WriteStateAsync();
     }
 
+    public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null)
+    {
+        IEnumerable<KeyValuePair<string, LwwValue<byte[]>>> entries = state.State.Entries;
+
+        if (startInclusive is not null)
+        {
+            entries = entries.Where(e => string.Compare(e.Key, startInclusive, StringComparison.Ordinal) >= 0);
+        }
+
+        if (endExclusive is not null)
+        {
+            entries = entries.Where(e => string.Compare(e.Key, endExclusive, StringComparison.Ordinal) < 0);
+        }
+
+        var keys = entries.Where(e => !e.Value.IsTombstone).Select(e => e.Key).ToList();
+        return Task.FromResult(keys);
+    }
+
     private async Task<SplitResult> SplitAsync()
     {
         // Phase 1: Persist the split intent so we can resume after a crash.
@@ -174,6 +201,7 @@ internal sealed class BPlusLeafGrain(
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitInProgress);
         state.State.SplitKey = splitKey;
         state.State.SplitSiblingId = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid()).GetGrainId();
+        state.State.OldNextSibling = state.State.NextSibling; // preserve for doubly-linked list
         state.State.NextSibling = state.State.SplitSiblingId;
         await state.WriteStateAsync();
 
@@ -184,8 +212,8 @@ internal sealed class BPlusLeafGrain(
     /// <summary>
     /// Completes (or resumes) a split whose intent has already been persisted.
     /// Safe to call multiple times — <see cref="IBPlusLeafGrain.MergeEntriesAsync"/>
-    /// is idempotent (LWW merge), and <see cref="IBPlusLeafGrain.SetNextSiblingAsync"/>
-    /// is a simple overwrite of the same value.
+    /// is idempotent (LWW merge), and the sibling pointer setters are simple
+    /// overwrites of the same value.
     /// </summary>
     private async Task<SplitResult> CompleteSplitAsync()
     {
@@ -211,12 +239,31 @@ internal sealed class BPlusLeafGrain(
             await newLeaf.MergeEntriesAsync(rightEntries);
         }
 
+        // Wire the new sibling into the doubly-linked list.
+        // Before split: ... ← this → OldNext → ...
+        // After split:  ... ← this → newLeaf → OldNext → ...
+        var oldNextId = state.State.OldNextSibling;
+
+        // newLeaf.NextSibling = OldNext (fixes the forward-chain bug).
+        await newLeaf.SetNextSiblingAsync(oldNextId);
+
+        // newLeaf.PrevSibling = this leaf.
+        await newLeaf.SetPrevSiblingAsync(context.GrainId);
+
+        // If there was an old next sibling, point its PrevSibling back to newLeaf.
+        if (oldNextId is not null)
+        {
+            var oldNext = grainFactory.GetGrain<IBPlusLeafGrain>(oldNextId.Value);
+            await oldNext.SetPrevSiblingAsync(siblingId);
+        }
+
         // Remove the transferred entries from our local state.
         foreach (var key in rightEntries.Keys)
         {
             state.State.Entries.Remove(key);
         }
 
+        state.State.OldNextSibling = null;
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
 
         return new SplitResult

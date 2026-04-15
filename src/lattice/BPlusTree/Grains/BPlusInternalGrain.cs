@@ -29,6 +29,12 @@ internal sealed class BPlusInternalGrain(
     public Task<GrainId> RouteAsync(string key) =>
         Task.FromResult(state.State.Route(key));
 
+    public Task<GrainId> GetLeftmostChildAsync() =>
+        Task.FromResult(state.State.Children[0].ChildId);
+
+    public Task<GrainId> GetRightmostChildAsync() =>
+        Task.FromResult(state.State.Children[^1].ChildId);
+
     public Task<bool> AreChildrenLeavesAsync() =>
         Task.FromResult(state.State.ChildrenAreLeaves);
 
