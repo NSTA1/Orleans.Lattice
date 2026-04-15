@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
@@ -9,8 +10,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed class BPlusInternalGrain(
     [PersistentState("internal", "bplustree")] IPersistentState<InternalNodeState> state,
-    IGrainFactory grainFactory) : IBPlusInternalGrain
+    IGrainFactory grainFactory,
+    IOptionsMonitor<LatticeOptions> optionsMonitor) : IBPlusInternalGrain
 {
+    private LatticeOptions Options => optionsMonitor.Get(state.State.TreeId ?? string.Empty);
     public async Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild)
     {
         state.State.Children =
@@ -51,7 +54,7 @@ internal sealed class BPlusInternalGrain(
         state.State.Children.Insert(insertIndex, entry);
 
         SplitResult? splitResult = null;
-        if (state.State.Children.Count > LatticeOptions.MaxInternalChildren)
+        if (state.State.Children.Count > Options.MaxInternalChildren)
         {
             splitResult = await SplitAsync();
         }
@@ -60,7 +63,14 @@ internal sealed class BPlusInternalGrain(
         return splitResult;
     }
 
-    private Task<SplitResult> SplitAsync()
+    public async Task SetTreeIdAsync(string treeId)
+    {
+        if (state.State.TreeId is not null) return;
+        state.State.TreeId = treeId;
+        await state.WriteStateAsync();
+    }
+
+    private async Task<SplitResult> SplitAsync()
     {
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitInProgress);
 
@@ -73,24 +83,13 @@ internal sealed class BPlusInternalGrain(
         rightChildren[0] = new ChildEntry { SeparatorKey = null, ChildId = rightChildren[0].ChildId };
 
         var newInternal = grainFactory.GetGrain<IBPlusInternalGrain>(Guid.NewGuid());
-
-        // We can't call InitializeAsync directly since it only takes two children.
-        // Instead, we'll initialize then accept remaining splits.
-        // For now, we batch by initializing with the first two, then accepting the rest.
-        // Actually, let's just set up the new node fully by initializing with
-        // leftmost + first separator, then accepting the rest.
+        await newInternal.SetTreeIdAsync(state.State.TreeId!);
 
         // Trim our children to the left half.
         state.State.Children = state.State.Children.Take(mid).ToList();
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
 
-        // Initialize the new node. We handle this by having the shard root do it
-        // through the returned SplitResult. The new internal node state will be
-        // populated by the shard root grain.
-        // For simplicity, we store the right children on the split result isn't possible
-        // with the current interface. So let's initialize the new node inline.
-
-        return InitializeNewInternalAsync(newInternal, rightChildren, promotedKey);
+        return await InitializeNewInternalAsync(newInternal, rightChildren, promotedKey);
     }
 
     private async Task<SplitResult> InitializeNewInternalAsync(

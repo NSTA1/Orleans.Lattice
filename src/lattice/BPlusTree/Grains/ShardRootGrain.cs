@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -8,9 +9,15 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Key format: <c>{treeId}/{shardIndex}</c>.
 /// </summary>
 internal sealed class ShardRootGrain(
+    IGrainContext context,
     [PersistentState("shardroot", "bplustree")] IPersistentState<ShardRootState> state,
-    IGrainFactory grainFactory) : IShardRootGrain
+    IGrainFactory grainFactory,
+    IOptionsMonitor<LatticeOptions> optionsMonitor) : IShardRootGrain
 {
+    private string TreeId => context.GrainId.Key.ToString()!
+        [..context.GrainId.Key.ToString()!.LastIndexOf('/')];
+
+    private LatticeOptions Options => optionsMonitor.Get(TreeId);
     public async Task<byte[]?> GetAsync(string key)
     {
         await EnsureRootAsync();
@@ -51,6 +58,7 @@ internal sealed class ShardRootGrain(
 
         // First access: create the initial leaf.
         var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+        await leafGrain.SetTreeIdAsync(TreeId);
         state.State.RootNodeId = leafGrain.GetGrainId();
         state.State.RootIsLeaf = true;
         await state.WriteStateAsync();
@@ -134,6 +142,7 @@ internal sealed class ShardRootGrain(
     {
         // The old root split — create a new internal root above it.
         var newRoot = grainFactory.GetGrain<IBPlusInternalGrain>(Guid.NewGuid());
+        await newRoot.SetTreeIdAsync(TreeId);
         await newRoot.InitializeAsync(
             splitResult.PromotedKey,
             state.State.RootNodeId!.Value,

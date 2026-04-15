@@ -42,6 +42,9 @@ internal sealed class InternalNodeState
     /// <summary>Whether this node's children are leaves (<c>true</c>) or internal nodes (<c>false</c>).</summary>
     [Id(3)] public bool ChildrenAreLeaves { get; set; } = true;
 
+    /// <summary>The tree this node belongs to. Used to resolve named <see cref="BPlusTree.LatticeOptions"/>.</summary>
+    [Id(4)] public string? TreeId { get; set; }
+
     /// <summary>
     /// Routes a key to the correct child grain by finding the rightmost separator ≤ key.
     /// </summary>

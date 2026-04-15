@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -18,7 +19,9 @@ public class BPlusLeafGrainTests
         context.GrainId.Returns(GrainId.Create("leaf", replicaId));
         state ??= new FakePersistentState<LeafNodeState>();
         var grainFactory = Substitute.For<IGrainFactory>();
-        return new BPlusLeafGrain(context, state, grainFactory);
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        return new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
     }
 
     // --- GetAsync ---

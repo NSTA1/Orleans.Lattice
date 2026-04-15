@@ -1,5 +1,6 @@
 using System.IO.Hashing;
 using System.Text;
+using Microsoft.Extensions.Options;
 using Orleans.Concurrency;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -10,8 +11,14 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Key format: <c>{treeId}</c>.
 /// </summary>
 [StatelessWorker]
-internal sealed class LatticeGrain(IGrainContext context, IGrainFactory grainFactory) : ILattice
+internal sealed class LatticeGrain(
+    IGrainContext context,
+    IGrainFactory grainFactory,
+    IOptionsMonitor<LatticeOptions> optionsMonitor) : ILattice
 {
+    private string TreeId => context.GrainId.Key.ToString()!;
+    private LatticeOptions Options => optionsMonitor.Get(TreeId);
+
     public async Task<byte[]?> GetAsync(string key)
     {
         var shard = GetShardGrain(key);
@@ -32,8 +39,8 @@ internal sealed class LatticeGrain(IGrainContext context, IGrainFactory grainFac
 
     private IShardRootGrain GetShardGrain(string key)
     {
-        var shardIndex = GetShardIndex(key, LatticeOptions.DefaultShardCount);
-        var shardKey = $"{context.GrainId.Key}/{shardIndex}";
+        var shardIndex = GetShardIndex(key, Options.ShardCount);
+        var shardKey = $"{TreeId}/{shardIndex}";
         return grainFactory.GetGrain<IShardRootGrain>(shardKey);
     }
 

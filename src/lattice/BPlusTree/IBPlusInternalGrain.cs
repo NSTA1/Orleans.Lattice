@@ -15,4 +15,10 @@ public interface IBPlusInternalGrain : IGrainWithGuidKey
     /// <summary>Accepts a promoted split from a child node.</summary>
     /// <returns>A <see cref="SplitResult"/> if this node itself needed to split, otherwise <c>null</c>.</returns>
     Task<SplitResult?> AcceptSplitAsync(string promotedKey, GrainId newChild);
+
+    /// <summary>
+    /// Associates this node with a tree, enabling named options resolution.
+    /// Called once by the shard root after creating the grain. Idempotent.
+    /// </summary>
+    Task SetTreeIdAsync(string treeId);
 }

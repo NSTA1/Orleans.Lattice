@@ -33,6 +33,9 @@ internal sealed class LeafNodeState
     /// </summary>
     [Id(6)] public VersionVector Version { get; set; } = new();
 
+    /// <summary>The tree this leaf belongs to. Used to resolve named <see cref="BPlusTree.LatticeOptions"/>.</summary>
+    [Id(7)] public string? TreeId { get; set; }
+
     /// <summary>Returns the number of live (non-tombstoned) entries.</summary>
     public int LiveCount => Entries.Count(e => !e.Value.IsTombstone);
 }

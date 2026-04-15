@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
@@ -10,9 +11,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed class BPlusLeafGrain(
     IGrainContext context,
     [PersistentState("leaf", "bplustree")] IPersistentState<LeafNodeState> state,
-    IGrainFactory grainFactory) : IBPlusLeafGrain
+    IGrainFactory grainFactory,
+    IOptionsMonitor<LatticeOptions> optionsMonitor) : IBPlusLeafGrain
 {
     private string ReplicaId => context.GrainId.ToString();
+    private LatticeOptions Options => optionsMonitor.Get(state.State.TreeId ?? string.Empty);
 
     public Task<byte[]?> GetAsync(string key)
     {
@@ -40,7 +43,7 @@ internal sealed class BPlusLeafGrain(
         }
 
         SplitResult? splitResult = null;
-        if (state.State.Entries.Count > LatticeOptions.MaxLeafKeys)
+        if (state.State.Entries.Count > Options.MaxLeafKeys)
         {
             splitResult = await SplitAsync();
         }
@@ -69,6 +72,13 @@ internal sealed class BPlusLeafGrain(
     public async Task SetNextSiblingAsync(GrainId? siblingId)
     {
         state.State.NextSibling = siblingId;
+        await state.WriteStateAsync();
+    }
+
+    public async Task SetTreeIdAsync(string treeId)
+    {
+        if (state.State.TreeId is not null) return;
+        state.State.TreeId = treeId;
         await state.WriteStateAsync();
     }
 
@@ -115,6 +125,7 @@ internal sealed class BPlusLeafGrain(
 
         // Create the new right sibling leaf.
         var newLeafId = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+        await newLeafId.SetTreeIdAsync(state.State.TreeId!);
 
         // Move the upper half of entries to the new sibling.
         // Set the new leaf's sibling pointer to our current sibling.
