@@ -29,6 +29,12 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <summary>Sets the right sibling pointer (called during splits).</summary>
     Task SetNextSiblingAsync(GrainId? siblingId);
 
+    /// <summary>Returns the grain identity of the left sibling leaf, or <c>null</c>.</summary>
+    Task<GrainId?> GetPrevSiblingAsync();
+
+    /// <summary>Sets the left sibling pointer (called during splits).</summary>
+    Task SetPrevSiblingAsync(GrainId? siblingId);
+
     /// <summary>
     /// Associates this leaf with a tree, enabling named options resolution.
     /// Called once by the shard root after creating the grain. Idempotent.
@@ -48,4 +54,10 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// re-stamping them. Idempotent — re-merging the same entries is a no-op.
     /// </summary>
     Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries);
+
+    /// <summary>
+    /// Returns the sorted list of live (non-tombstoned) keys in this leaf
+    /// that fall within the optional [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
+    /// </summary>
+    Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null);
 }

@@ -83,6 +83,123 @@ internal sealed class ShardRootGrain(
         }
     }
 
+    public async Task<KeysPage> GetSortedKeysBatchAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken = null)
+    {
+        await EnsureRootAsync();
+        await ResumePendingPromotionAsync();
+
+        // Determine the starting leaf.
+        var seekKey = continuationToken ?? startInclusive;
+        GrainId leafId;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = state.State.RootNodeId!.Value;
+        }
+        else if (seekKey is not null)
+        {
+            leafId = await TraverseToLeafAsync(seekKey);
+        }
+        else
+        {
+            leafId = await TraverseToLeftmostLeafAsync();
+        }
+
+        // Walk the sibling chain, collecting keys until the page is full.
+        var keys = new List<string>(pageSize);
+        while (keys.Count < pageSize)
+        {
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive);
+
+            foreach (var key in leafKeys)
+            {
+                // Skip keys already returned in previous pages.
+                if (continuationToken is not null &&
+                    string.Compare(key, continuationToken, StringComparison.Ordinal) <= 0)
+                    continue;
+
+                keys.Add(key);
+                if (keys.Count >= pageSize)
+                    break;
+            }
+
+            if (keys.Count >= pageSize)
+                break;
+
+            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            if (nextSibling is null)
+                return new KeysPage { Keys = keys, HasMore = false };
+
+            leafId = nextSibling.Value;
+        }
+
+        return new KeysPage { Keys = keys, HasMore = true };
+    }
+
+    public async Task<KeysPage> GetSortedKeysBatchReverseAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken = null)
+    {
+        await EnsureRootAsync();
+        await ResumePendingPromotionAsync();
+
+        // Determine the starting leaf (rightmost, or the leaf for the seek key).
+        var seekKey = continuationToken ?? endExclusive;
+        GrainId leafId;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = state.State.RootNodeId!.Value;
+        }
+        else if (seekKey is not null)
+        {
+            leafId = await TraverseToLeafAsync(seekKey);
+        }
+        else
+        {
+            leafId = await TraverseToRightmostLeafAsync();
+        }
+
+        // Walk the sibling chain backward, collecting keys in reverse until the page is full.
+        var keys = new List<string>(pageSize);
+        while (keys.Count < pageSize)
+        {
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive);
+
+            // Walk the leaf's keys in reverse order.
+            for (int i = leafKeys.Count - 1; i >= 0; i--)
+            {
+                var key = leafKeys[i];
+
+                // Skip keys already returned in previous pages.
+                if (continuationToken is not null &&
+                    string.Compare(key, continuationToken, StringComparison.Ordinal) >= 0)
+                    continue;
+
+                keys.Add(key);
+                if (keys.Count >= pageSize)
+                    break;
+            }
+
+            if (keys.Count >= pageSize)
+                break;
+
+            var prevSibling = await leafGrain.GetPrevSiblingAsync();
+            if (prevSibling is null)
+                return new KeysPage { Keys = keys, HasMore = false };
+
+            leafId = prevSibling.Value;
+        }
+
+        return new KeysPage { Keys = keys, HasMore = true };
+    }
+
     private async Task EnsureRootAsync()
     {
         if (state.State.RootNodeId is not null) return;
@@ -191,6 +308,54 @@ internal sealed class ShardRootGrain(
         {
             var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
             var childId = await internalGrain.RouteAsync(key);
+            var childrenAreLeaves = await internalGrain.AreChildrenLeavesAsync();
+
+            if (childrenAreLeaves)
+            {
+                return childId;
+            }
+
+            currentId = childId;
+        }
+    }
+
+    private async Task<GrainId> TraverseToLeftmostLeafAsync()
+    {
+        if (state.State.RootIsLeaf)
+        {
+            return state.State.RootNodeId!.Value;
+        }
+
+        var currentId = state.State.RootNodeId!.Value;
+
+        while (true)
+        {
+            var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+            var childId = await internalGrain.GetLeftmostChildAsync();
+            var childrenAreLeaves = await internalGrain.AreChildrenLeavesAsync();
+
+            if (childrenAreLeaves)
+            {
+                return childId;
+            }
+
+            currentId = childId;
+        }
+    }
+
+    private async Task<GrainId> TraverseToRightmostLeafAsync()
+    {
+        if (state.State.RootIsLeaf)
+        {
+            return state.State.RootNodeId!.Value;
+        }
+
+        var currentId = state.State.RootNodeId!.Value;
+
+        while (true)
+        {
+            var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+            var childId = await internalGrain.GetRightmostChildAsync();
             var childrenAreLeaves = await internalGrain.AreChildrenLeavesAsync();
 
             if (childrenAreLeaves)

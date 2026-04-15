@@ -638,4 +638,195 @@ public class BPlusLeafGrainTests
         // The sibling's SetAsync was called.
         await siblingMock.Received(1).SetAsync("z", Arg.Any<byte[]>());
     }
+
+    // --- PrevSibling pointers ---
+
+    [Fact]
+    public async Task PrevSibling_is_null_initially()
+    {
+        var grain = CreateGrain();
+        Assert.Null(await grain.GetPrevSiblingAsync());
+    }
+
+    [Fact]
+    public async Task SetPrevSibling_persists_sibling_id()
+    {
+        var grain = CreateGrain();
+        var siblingId = GrainId.Create("leaf", "sibling-left");
+        await grain.SetPrevSiblingAsync(siblingId);
+
+        Assert.Equal(siblingId, await grain.GetPrevSiblingAsync());
+    }
+
+    // --- Split doubly-linked list maintenance ---
+    // These tests simulate a crash mid-split (same pattern as existing recovery tests)
+    // then trigger CompleteSplitAsync via the next SetAsync call.
+
+    [Fact]
+    public async Task Split_recovery_sets_new_sibling_PrevSibling_to_this_leaf()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var siblingMock = Substitute.For<IBPlusLeafGrain>();
+
+        var context = Substitute.For<IGrainContext>();
+        var grainId = GrainId.Create("leaf", "test-leaf");
+        context.GrainId.Returns(grainId);
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+
+        var siblingId = GrainId.Create("leaf", Guid.NewGuid().ToString());
+        grainFactory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);
+        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
+
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "m";
+        state.State.SplitSiblingId = siblingId;
+        state.State.NextSibling = siblingId;
+        state.State.OldNextSibling = null;
+        state.State.TreeId = "test-tree";
+
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("3"));
+
+        await siblingMock.Received().SetPrevSiblingAsync(grainId);
+    }
+
+    [Fact]
+    public async Task Split_recovery_sets_new_sibling_NextSibling_to_old_next()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var siblingMock = Substitute.For<IBPlusLeafGrain>();
+        var oldNextMock = Substitute.For<IBPlusLeafGrain>();
+
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("leaf", "test-leaf"));
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+
+        var siblingId = GrainId.Create("leaf", Guid.NewGuid().ToString());
+        var oldNextId = GrainId.Create("leaf", "old-next");
+
+        grainFactory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);
+        grainFactory.GetGrain<IBPlusLeafGrain>(oldNextId).Returns(oldNextMock);
+        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
+
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "m";
+        state.State.SplitSiblingId = siblingId;
+        state.State.NextSibling = siblingId;
+        state.State.OldNextSibling = oldNextId;
+        state.State.TreeId = "test-tree";
+
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("3"));
+
+        await siblingMock.Received().SetNextSiblingAsync(oldNextId);
+    }
+
+    [Fact]
+    public async Task Split_recovery_updates_old_next_PrevSibling_to_new_sibling()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var siblingMock = Substitute.For<IBPlusLeafGrain>();
+        var oldNextMock = Substitute.For<IBPlusLeafGrain>();
+
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("leaf", "test-leaf"));
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+
+        var siblingId = GrainId.Create("leaf", Guid.NewGuid().ToString());
+        var oldNextId = GrainId.Create("leaf", "old-next");
+
+        grainFactory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);
+        grainFactory.GetGrain<IBPlusLeafGrain>(oldNextId).Returns(oldNextMock);
+        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
+
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "m";
+        state.State.SplitSiblingId = siblingId;
+        state.State.NextSibling = siblingId;
+        state.State.OldNextSibling = oldNextId;
+        state.State.TreeId = "test-tree";
+
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("3"));
+
+        await oldNextMock.Received().SetPrevSiblingAsync(siblingId);
+    }
+
+    [Fact]
+    public async Task Split_recovery_clears_OldNextSibling()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var siblingMock = Substitute.For<IBPlusLeafGrain>();
+        var oldNextMock = Substitute.For<IBPlusLeafGrain>();
+
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("leaf", "test-leaf"));
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+
+        var siblingId = GrainId.Create("leaf", Guid.NewGuid().ToString());
+        var oldNextId = GrainId.Create("leaf", "old-next");
+
+        grainFactory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);
+        grainFactory.GetGrain<IBPlusLeafGrain>(oldNextId).Returns(oldNextMock);
+        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
+
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "m";
+        state.State.SplitSiblingId = siblingId;
+        state.State.NextSibling = siblingId;
+        state.State.OldNextSibling = oldNextId;
+        state.State.TreeId = "test-tree";
+
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("3"));
+
+        Assert.Null(state.State.OldNextSibling);
+    }
+
+    [Fact]
+    public async Task Split_recovery_with_no_old_next_sets_new_sibling_NextSibling_to_null()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var siblingMock = Substitute.For<IBPlusLeafGrain>();
+
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("leaf", "test-leaf"));
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+
+        var siblingId = GrainId.Create("leaf", Guid.NewGuid().ToString());
+        grainFactory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);
+        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
+
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "m";
+        state.State.SplitSiblingId = siblingId;
+        state.State.NextSibling = siblingId;
+        state.State.OldNextSibling = null;
+        state.State.TreeId = "test-tree";
+
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("3"));
+
+        await siblingMock.Received().SetNextSiblingAsync(null);
+    }
 }

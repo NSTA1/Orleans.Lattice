@@ -12,6 +12,12 @@ public interface IBPlusInternalGrain : IGrainWithGuidKey
     /// <summary>Routes a key down to the appropriate child grain.</summary>
     Task<GrainId> RouteAsync(string key);
 
+    /// <summary>Returns the grain identity of the leftmost child.</summary>
+    Task<GrainId> GetLeftmostChildAsync();
+
+    /// <summary>Returns the grain identity of the rightmost child.</summary>
+    Task<GrainId> GetRightmostChildAsync();
+
     /// <summary>Returns whether this node's children are leaf grains.</summary>
     Task<bool> AreChildrenLeavesAsync();
 

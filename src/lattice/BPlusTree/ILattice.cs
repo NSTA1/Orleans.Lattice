@@ -16,4 +16,11 @@ public interface ILattice : IGrainWithStringKey
 
     /// <summary>Deletes the value for <paramref name="key"/>. Returns <c>true</c> if it existed.</summary>
     Task<bool> DeleteAsync(string key);
+
+    /// <summary>
+    /// Returns all live keys in the tree as an ordered async stream.
+    /// Keys are returned in lexicographic order (or reverse if <paramref name="reverse"/> is <c>true</c>).
+    /// Optionally filters to keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
+    /// </summary>
+    IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false);
 }

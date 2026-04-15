@@ -11,4 +11,28 @@ public interface IShardRootGrain : IGrainWithStringKey
     Task<byte[]?> GetAsync(string key);
     Task SetAsync(string key, byte[] value);
     Task<bool> DeleteAsync(string key);
+
+    /// <summary>
+    /// Returns a page of live keys in this shard's B+ tree in sorted order,
+    /// filtered to the [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
+    /// Pass <paramref name="continuationToken"/> (the last key from the previous page)
+    /// to resume pagination; keys &gt; the token are returned.
+    /// </summary>
+    Task<KeysPage> GetSortedKeysBatchAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken = null);
+
+    /// <summary>
+    /// Returns a page of live keys in <em>reverse</em> sorted order,
+    /// filtered to the [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
+    /// Pass <paramref name="continuationToken"/> (the last key from the previous page)
+    /// to resume pagination; keys &lt; the token are returned.
+    /// </summary>
+    Task<KeysPage> GetSortedKeysBatchReverseAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken = null);
 }
