@@ -7,8 +7,8 @@ public class ShardRoutingTests
     [Fact]
     public void GetShardIndex_is_deterministic()
     {
-        var a = ShardRouterGrain.GetShardIndex("hello", 64);
-        var b = ShardRouterGrain.GetShardIndex("hello", 64);
+        var a = LatticeGrain.GetShardIndex("hello", 64);
+        var b = LatticeGrain.GetShardIndex("hello", 64);
         Assert.Equal(a, b);
     }
 
@@ -18,7 +18,7 @@ public class ShardRoutingTests
         var keys = new[] { "a", "b", "foo", "bar", "customer-12345", "", "z" };
         foreach (var key in keys)
         {
-            var index = ShardRouterGrain.GetShardIndex(key, 64);
+            var index = LatticeGrain.GetShardIndex(key, 64);
             Assert.InRange(index, 0, 63);
         }
     }
@@ -29,7 +29,7 @@ public class ShardRoutingTests
         var shards = new HashSet<int>();
         for (int i = 0; i < 1000; i++)
         {
-            shards.Add(ShardRouterGrain.GetShardIndex($"key-{i}", 64));
+            shards.Add(LatticeGrain.GetShardIndex($"key-{i}", 64));
         }
 
         // With 1000 random-ish keys and 64 shards, we should hit a reasonable number.

@@ -58,15 +58,18 @@ public sealed class ShardRootGrain(
 
     private async Task<byte[]?> TraverseForReadAsync(string key)
     {
+        GrainId leafId;
         if (state.State.RootIsLeaf)
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
-            return await leaf.GetAsync(key);
+            leafId = state.State.RootNodeId!.Value;
+        }
+        else
+        {
+            leafId = await TraverseToLeafAsync(key);
         }
 
-        var leafId = await TraverseToLeafAsync(key);
-        var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-        return await leafGrain.GetAsync(key);
+        var cache = grainFactory.GetGrain<ILeafCacheGrain>(leafId.ToString());
+        return await cache.GetAsync(key);
     }
 
     private async Task<SplitResult?> TraverseForWriteAsync(string key, byte[] value)

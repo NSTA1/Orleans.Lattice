@@ -11,6 +11,8 @@ public sealed class BPlusLeafGrain(
     [PersistentState("leaf", "bplustree")] IPersistentState<LeafNodeState> state,
     IGrainFactory grainFactory) : Grain, IBPlusLeafGrain
 {
+    private string ReplicaId => this.GetGrainId().ToString();
+
     public Task<byte[]?> GetAsync(string key)
     {
         if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone)
@@ -24,6 +26,7 @@ public sealed class BPlusLeafGrain(
     public async Task<SplitResult?> SetAsync(string key, byte[] value)
     {
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
+        state.State.Version.Tick(ReplicaId);
         var newEntry = LwwValue<byte[]>.Create(value, state.State.Clock);
 
         if (state.State.Entries.TryGetValue(key, out var existing))
@@ -53,6 +56,7 @@ public sealed class BPlusLeafGrain(
         }
 
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
+        state.State.Version.Tick(ReplicaId);
         state.State.Entries[key] = LwwValue<byte[]>.Tombstone(state.State.Clock);
         await state.WriteStateAsync();
         return true;
@@ -65,6 +69,38 @@ public sealed class BPlusLeafGrain(
     {
         state.State.NextSibling = siblingId;
         await state.WriteStateAsync();
+    }
+
+    public Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion)
+    {
+        // If the caller's version dominates ours, they already have everything.
+        if (sinceVersion.DominatesOrEquals(state.State.Version))
+        {
+            return Task.FromResult(new StateDelta
+            {
+                Entries = new Dictionary<string, LwwValue<byte[]>>(),
+                Version = state.State.Version.Clone()
+            });
+        }
+
+        // Return all entries whose timestamp is newer than what the caller has seen.
+        // We compare each entry's timestamp against the caller's clock for our replica.
+        var callerClock = sinceVersion.GetClock(ReplicaId);
+        var changed = new Dictionary<string, LwwValue<byte[]>>();
+
+        foreach (var (key, lww) in state.State.Entries)
+        {
+            if (lww.Timestamp > callerClock)
+            {
+                changed[key] = lww;
+            }
+        }
+
+        return Task.FromResult(new StateDelta
+        {
+            Entries = changed,
+            Version = state.State.Version.Clone()
+        });
     }
 
     private async Task<SplitResult> SplitAsync()

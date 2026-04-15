@@ -27,6 +27,12 @@ public sealed class LeafNodeState
     /// <summary>The current logical clock for this grain.</summary>
     [Id(5)] public HybridLogicalClock Clock { get; set; }
 
+    /// <summary>
+    /// Version vector tracking causal history. Each write ticks the local
+    /// replica entry, enabling delta extraction for replication.
+    /// </summary>
+    [Id(6)] public VersionVector Version { get; set; } = new();
+
     /// <summary>Returns the number of live (non-tombstoned) entries.</summary>
     public int LiveCount => Entries.Count(e => !e.Value.IsTombstone);
 }
