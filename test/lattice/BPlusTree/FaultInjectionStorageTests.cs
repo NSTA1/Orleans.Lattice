@@ -10,10 +10,10 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
     private readonly TestCluster _cluster = fixture.Cluster;
 
     /// <summary>
-    /// Helper to get the fault-injection grain for the "bplustree" storage provider.
+    /// Helper to get the fault-injection grain for the Lattice storage provider.
     /// </summary>
     private IStorageFaultGrain StorageFaultGrain =>
-        _cluster.GrainFactory.GetGrain<IStorageFaultGrain>("bplustree");
+        _cluster.GrainFactory.GetGrain<IStorageFaultGrain>(LatticeOptions.StorageProviderName);
 
     // -----------------------------------------------------------------------
     // Leaf split recovery after storage fault

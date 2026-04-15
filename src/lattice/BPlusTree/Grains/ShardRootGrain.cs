@@ -10,7 +10,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed class ShardRootGrain(
     IGrainContext context,
-    [PersistentState("shardroot", "bplustree")] IPersistentState<ShardRootState> state,
+    [PersistentState("shardroot", LatticeOptions.StorageProviderName)] IPersistentState<ShardRootState> state,
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor) : IShardRootGrain
 {

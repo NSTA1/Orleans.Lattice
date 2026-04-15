@@ -9,7 +9,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// child references. Splits when the child count exceeds <see cref="LatticeOptions.MaxInternalChildren"/>.
 /// </summary>
 internal sealed class BPlusInternalGrain(
-    [PersistentState("internal", "bplustree")] IPersistentState<InternalNodeState> state,
+    [PersistentState("internal", LatticeOptions.StorageProviderName)] IPersistentState<InternalNodeState> state,
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor) : IBPlusInternalGrain
 {

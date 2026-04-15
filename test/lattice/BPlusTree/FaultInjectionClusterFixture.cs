@@ -37,10 +37,11 @@ public sealed class FaultInjectionClusterFixture : IAsyncLifetime
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
-            siloBuilder.Services.AddFaultInjectionMemoryStorage(
-                "bplustree",
-                (Orleans.Configuration.MemoryGrainStorageOptions _) => { },
-                (FaultInjectionGrainStorageOptions _) => { });
+            siloBuilder.AddLattice((_, name) =>
+                siloBuilder.Services.AddFaultInjectionMemoryStorage(
+                    name,
+                    (Orleans.Configuration.MemoryGrainStorageOptions _) => { },
+                    (FaultInjectionGrainStorageOptions _) => { }));
             siloBuilder.ConfigureLattice(TreeName, o =>
             {
                 o.MaxLeafKeys = SmallMaxLeafKeys;
