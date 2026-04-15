@@ -7,7 +7,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// </summary>
 [GenerateSerializer]
 [Immutable]
-public sealed record ChildEntry
+internal sealed record ChildEntry
 {
     /// <summary>
     /// The separator key. All keys strictly less than this value are routed to the
@@ -25,7 +25,7 @@ public sealed record ChildEntry
 /// separator and acts as the leftmost catch-all.
 /// </summary>
 [GenerateSerializer]
-public sealed class InternalNodeState
+internal sealed class InternalNodeState
 {
     /// <summary>
     /// Ordered list of children. The first entry has <see cref="ChildEntry.SeparatorKey"/> == <c>null</c>

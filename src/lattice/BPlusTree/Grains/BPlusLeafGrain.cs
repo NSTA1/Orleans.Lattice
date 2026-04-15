@@ -5,9 +5,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Leaf node grain implementation. Stores key → <see cref="LwwValue{T}"/> entries
-/// in a sorted dictionary. Splits when the entry count exceeds <see cref="BPlusTreeOptions.MaxLeafKeys"/>.
+/// in a sorted dictionary. Splits when the entry count exceeds <see cref="LatticeOptions.MaxLeafKeys"/>.
 /// </summary>
-public sealed class BPlusLeafGrain(
+internal sealed class BPlusLeafGrain(
     IGrainContext context,
     [PersistentState("leaf", "bplustree")] IPersistentState<LeafNodeState> state,
     IGrainFactory grainFactory) : IBPlusLeafGrain
@@ -40,7 +40,7 @@ public sealed class BPlusLeafGrain(
         }
 
         SplitResult? splitResult = null;
-        if (state.State.Entries.Count > BPlusTreeOptions.MaxLeafKeys)
+        if (state.State.Entries.Count > LatticeOptions.MaxLeafKeys)
         {
             splitResult = await SplitAsync();
         }

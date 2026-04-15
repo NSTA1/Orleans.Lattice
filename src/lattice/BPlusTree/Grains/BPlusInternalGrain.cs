@@ -5,9 +5,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Internal (non-leaf) node grain implementation. Stores separator keys and
-/// child references. Splits when the child count exceeds <see cref="BPlusTreeOptions.MaxInternalChildren"/>.
+/// child references. Splits when the child count exceeds <see cref="LatticeOptions.MaxInternalChildren"/>.
 /// </summary>
-public sealed class BPlusInternalGrain(
+internal sealed class BPlusInternalGrain(
     [PersistentState("internal", "bplustree")] IPersistentState<InternalNodeState> state,
     IGrainFactory grainFactory) : IBPlusInternalGrain
 {
@@ -51,7 +51,7 @@ public sealed class BPlusInternalGrain(
         state.State.Children.Insert(insertIndex, entry);
 
         SplitResult? splitResult = null;
-        if (state.State.Children.Count > BPlusTreeOptions.MaxInternalChildren)
+        if (state.State.Children.Count > LatticeOptions.MaxInternalChildren)
         {
             splitResult = await SplitAsync();
         }

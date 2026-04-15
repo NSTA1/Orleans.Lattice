@@ -7,7 +7,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// handles root splits by creating a new internal root above the old one.
 /// Key format: <c>{treeId}/{shardIndex}</c>.
 /// </summary>
-public sealed class ShardRootGrain(
+internal sealed class ShardRootGrain(
     [PersistentState("shardroot", "bplustree")] IPersistentState<ShardRootState> state,
     IGrainFactory grainFactory) : IShardRootGrain
 {

@@ -371,7 +371,7 @@ src/lattice/
 │   ├── VersionVector.cs         Causal history per replica (pointwise-max merge)
 │   └── StateDelta.cs            Changed entries + version for delta replication
 └── BPlusTree/
-    ├── BPlusTreeOptions.cs      Branching factor and shard count constants
+    ├── LatticeOptions.cs        Branching factor and shard count constants
     ├── SplitResult.cs           Promoted key + new sibling ID
     ├── ILattice.cs              Public API — stateless router
     ├── IShardRootGrain.cs       Per-shard root interface
