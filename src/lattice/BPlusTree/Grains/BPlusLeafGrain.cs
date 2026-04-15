@@ -185,6 +185,17 @@ internal sealed class BPlusLeafGrain(
             entries = entries.Where(e => string.Compare(e.Key, endExclusive, StringComparison.Ordinal) < 0);
         }
 
+        // If a split is in progress, exclude keys that belong to the new sibling
+        // (keys >= SplitKey). This prevents duplicate keys when walking the sibling
+        // chain after a crash that interrupted CompleteSplitAsync — the sibling may
+        // already have these entries via MergeEntriesAsync while this leaf has not
+        // yet persisted their removal.
+        if (state.State.SplitState == Primitives.SplitState.SplitInProgress &&
+            state.State.SplitKey is not null)
+        {
+            entries = entries.Where(e => string.Compare(e.Key, state.State.SplitKey, StringComparison.Ordinal) < 0);
+        }
+
         var keys = entries.Where(e => !e.Value.IsTombstone).Select(e => e.Key).ToList();
         return Task.FromResult(keys);
     }

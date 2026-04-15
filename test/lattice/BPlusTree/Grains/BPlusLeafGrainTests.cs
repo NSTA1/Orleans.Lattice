@@ -829,4 +829,124 @@ public class BPlusLeafGrainTests
 
         await siblingMock.Received().SetNextSiblingAsync(null);
     }
+
+    // --- GetKeysAsync ---
+
+    [Fact]
+    public async Task GetKeys_empty_leaf_returns_empty_list()
+    {
+        var grain = CreateGrain();
+        var keys = await grain.GetKeysAsync();
+        Assert.Empty(keys);
+    }
+
+    [Fact]
+    public async Task GetKeys_returns_live_keys_in_sorted_order()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+
+        var keys = await grain.GetKeysAsync();
+        Assert.Equal(["a", "b", "c"], keys);
+    }
+
+    [Fact]
+    public async Task GetKeys_excludes_tombstoned_entries()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.DeleteAsync("b");
+
+        var keys = await grain.GetKeysAsync();
+        Assert.Equal(["a"], keys);
+    }
+
+    [Fact]
+    public async Task GetKeys_filters_by_startInclusive()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+
+        var keys = await grain.GetKeysAsync(startInclusive: "b");
+        Assert.Equal(["b", "c"], keys);
+    }
+
+    [Fact]
+    public async Task GetKeys_filters_by_endExclusive()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+
+        var keys = await grain.GetKeysAsync(endExclusive: "c");
+        Assert.Equal(["a", "b"], keys);
+    }
+
+    [Fact]
+    public async Task GetKeys_filters_by_combined_range()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        var keys = await grain.GetKeysAsync(startInclusive: "b", endExclusive: "d");
+        Assert.Equal(["b", "c"], keys);
+    }
+
+    [Fact]
+    public async Task GetKeys_excludes_keys_at_or_above_split_key_when_split_in_progress()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("4"));
+
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "m";
+
+        var keys = await grain.GetKeysAsync();
+        Assert.Equal(["a", "b"], keys);
+    }
+
+    [Fact]
+    public async Task GetKeys_does_not_filter_when_split_is_complete()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitComplete;
+        state.State.SplitKey = "m";
+
+        var keys = await grain.GetKeysAsync();
+        Assert.Equal(["a", "b"], keys);
+    }
+
+    // --- SetTreeIdAsync idempotency ---
+
+    [Fact]
+    public async Task SetTreeId_is_idempotent()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+
+        await grain.SetTreeIdAsync("tree-1");
+        Assert.Equal("tree-1", state.State.TreeId);
+
+        await grain.SetTreeIdAsync("tree-2");
+        Assert.Equal("tree-1", state.State.TreeId);
+    }
 }
