@@ -45,7 +45,7 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
     [Fact]
     public async Task Set_and_Get_roundtrips_a_value()
     {
-        var router = _cluster.GrainFactory.GetGrain<IShardRouterGrain>("test-tree");
+        var router = _cluster.GrainFactory.GetGrain<ILattice>("test-tree");
         var value = Encoding.UTF8.GetBytes("hello-world");
 
         await router.SetAsync("key1", value);
@@ -58,7 +58,7 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
     [Fact]
     public async Task Get_returns_null_for_missing_key()
     {
-        var router = _cluster.GrainFactory.GetGrain<IShardRouterGrain>("test-tree-miss");
+        var router = _cluster.GrainFactory.GetGrain<ILattice>("test-tree-miss");
         var result = await router.GetAsync("nonexistent");
         Assert.Null(result);
     }
@@ -66,7 +66,7 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
     [Fact]
     public async Task Delete_returns_false_for_missing_key()
     {
-        var router = _cluster.GrainFactory.GetGrain<IShardRouterGrain>("test-tree-del-miss");
+        var router = _cluster.GrainFactory.GetGrain<ILattice>("test-tree-del-miss");
         var result = await router.DeleteAsync("nonexistent");
         Assert.False(result);
     }
@@ -74,7 +74,7 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
     [Fact]
     public async Task Delete_removes_a_previously_set_key()
     {
-        var router = _cluster.GrainFactory.GetGrain<IShardRouterGrain>("test-tree-del");
+        var router = _cluster.GrainFactory.GetGrain<ILattice>("test-tree-del");
         await router.SetAsync("to-delete", Encoding.UTF8.GetBytes("value"));
 
         var deleted = await router.DeleteAsync("to-delete");
@@ -87,7 +87,7 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
     [Fact]
     public async Task Set_overwrites_existing_value()
     {
-        var router = _cluster.GrainFactory.GetGrain<IShardRouterGrain>("test-tree-overwrite");
+        var router = _cluster.GrainFactory.GetGrain<ILattice>("test-tree-overwrite");
         await router.SetAsync("k", Encoding.UTF8.GetBytes("v1"));
         await router.SetAsync("k", Encoding.UTF8.GetBytes("v2"));
 
@@ -99,7 +99,7 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
     [Fact]
     public async Task Multiple_keys_in_same_shard_are_independent()
     {
-        var router = _cluster.GrainFactory.GetGrain<IShardRouterGrain>("test-tree-multi");
+        var router = _cluster.GrainFactory.GetGrain<ILattice>("test-tree-multi");
         await router.SetAsync("alpha", Encoding.UTF8.GetBytes("a"));
         await router.SetAsync("bravo", Encoding.UTF8.GetBytes("b"));
         await router.SetAsync("charlie", Encoding.UTF8.GetBytes("c"));

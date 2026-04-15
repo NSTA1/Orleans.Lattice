@@ -10,7 +10,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Key format: <c>{treeId}</c>.
 /// </summary>
 [StatelessWorker]
-public sealed class ShardRouterGrain(IGrainFactory grainFactory) : Grain, IShardRouterGrain
+public sealed class LatticeGrain(IGrainFactory grainFactory) : Grain, ILattice
 {
     public async Task<byte[]?> GetAsync(string key)
     {

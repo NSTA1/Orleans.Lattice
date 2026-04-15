@@ -16,17 +16,21 @@ A distributed B+ tree library built on [Microsoft Orleans](https://learn.microso
 
 ### High-Level Architecture
 
-A request flows through four layers of Orleans grains:
+A request flows through five layers of Orleans grains. Writes go directly to the primary leaf; reads are served by a stateless cache that pulls deltas from the primary:
 
 ```mermaid
 flowchart TD
     Client([Client])
-    SR[ShardRouterGrain<br/>StatelessWorker]
+    SR[LatticeGrain<br/>StatelessWorker]
     S0[ShardRootGrain<br/>Shard 0]
     S1[ShardRootGrain<br/>Shard 1]
     SN[ShardRootGrain<br/>Shard N]
     I0[InternalGrain]
     I1[InternalGrain]
+    C0[LeafCacheGrain<br/>StatelessWorker]
+    C1[LeafCacheGrain<br/>StatelessWorker]
+    C2[LeafCacheGrain<br/>StatelessWorker]
+    C3[LeafCacheGrain<br/>StatelessWorker]
     L0[LeafGrain]
     L1[LeafGrain]
     L2[LeafGrain]
@@ -38,18 +42,27 @@ flowchart TD
     SR --> SN
     S0 --> I0
     S1 --> I1
-    I0 --> L0
-    I0 --> L1
-    I1 --> L2
-    I1 --> L3
+    I0 -->|read| C0
+    I0 -->|read| C1
+    I1 -->|read| C2
+    I1 -->|read| C3
+    I0 -->|write| L0
+    I0 -->|write| L1
+    I1 -->|write| L2
+    I1 -->|write| L3
+    C0 -.->|"GetDeltaSinceAsync"| L0
+    C1 -.->|"GetDeltaSinceAsync"| L1
+    C2 -.->|"GetDeltaSinceAsync"| L2
+    C3 -.->|"GetDeltaSinceAsync"| L3
     L0 -. "NextSibling" .-> L1
     L2 -. "NextSibling" .-> L3
 ```
 
-1. **`ShardRouterGrain`** — a `[StatelessWorker]` grain (many concurrent activations). Computes `XxHash32(key) % shardCount` to pick a shard, then forwards the request.
-2. **`ShardRootGrain`** — one per shard (keyed `{treeId}/{shardIndex}`). Manages the root pointer for its sub-tree and handles root-level splits by creating new internal nodes above the old root.
-3. **`BPlusInternalGrain`** — an internal node holding separator keys and child references. Routes a key to the correct child and accepts promoted splits from below.
-4. **`BPlusLeafGrain`** — a leaf node storing key → value entries in a sorted dictionary. Splits when the entry count exceeds the configured maximum.
+1. **`LatticeGrain`** — a `[StatelessWorker]` grain (many concurrent activations). Computes `XxHash32(key) % shardCount` to pick a shard, then forwards the request.
+2. **`ShardRootGrain`** — one per shard (keyed `{treeId}/{shardIndex}`). Manages the root pointer for its sub-tree and handles root-level splits by creating new internal nodes above the old root. Routes reads through the cache layer.
+3. **`BPlusInternalGrain`** — an internal node holding separator keys and child references. Routes a key to the correct child and accepts promoted splits from below. Split acceptance is idempotent — duplicate deliveries are detected and skipped.
+4. **`LeafCacheGrain`** — a `[StatelessWorker]` read-through cache. Each silo may have its own activation. On a cache miss, it pulls a `StateDelta` from the primary leaf and merges entries using `LwwValue.Merge`. Because the merge is commutative and idempotent, stale entries are harmlessly overwritten without an invalidation protocol.
+5. **`BPlusLeafGrain`** — a leaf node storing key → value entries in a sorted dictionary. Splits when the entry count exceeds the configured maximum. Maintains a `VersionVector` that is ticked on every write, enabling delta extraction for the cache layer.
 
 ### Sharding
 
@@ -57,7 +70,7 @@ Without sharding, every operation starts at a single root grain — a serialisat
 
 ```mermaid
 flowchart LR
-    subgraph Router["ShardRouterGrain (stateless)"]
+    subgraph Router["LatticeGrain (stateless)"]
         H["XxHash32(key) % 64"]
     end
 
@@ -230,14 +243,90 @@ The merge operation is `max()` — once a node reaches `SplitComplete`, no messa
 - If a grain crashes between `SplitInProgress` and `SplitComplete`, on reactivation it can re-emit the split record to the parent. The parent's `AcceptSplit` is idempotent (same promoted key + child ID = no-op after merge).
 - If two messages arrive out of order (one carrying `SplitInProgress`, one carrying `SplitComplete`), the result is simply `SplitComplete`.
 
+#### Version Vector
+
+Each leaf node maintains a `VersionVector` — a map from replica ID (the grain's string identity) to the highest `HLC` value produced by that replica:
+
+```
+VersionVector = { "grain/abc" → HLC(100:3), "grain/def" → HLC(95:0) }
+```
+
+The version vector is ticked on every write (insert, update, or delete). This enables **delta extraction**: a consumer can present its own version vector and ask "give me everything that changed since this point." The leaf compares each entry's timestamp against the consumer's clock for the relevant replica and returns only the newer entries.
+
+Merge is **pointwise-max** across all replica IDs:
+
+```
+Merge({r1→10, r2→5}, {r1→8, r3→3}) = {r1→10, r2→5, r3→3}
+```
+
+This is commutative, associative, and idempotent — making it safe for uncoordinated consumers to merge version vectors from multiple sources.
+
+#### State Deltas
+
+A `StateDelta` is a snapshot of changes extracted from a leaf:
+
+```
+StateDelta = {
+    Entries:  { key → LwwValue }   // only entries newer than the caller's version
+    Version:  VersionVector          // the leaf's version at extraction time
+}
+```
+
+The delta extraction flow:
+
+```mermaid
+sequenceDiagram
+    participant Cache as LeafCacheGrain
+    participant Leaf as BPlusLeafGrain
+
+    Cache->>Leaf: GetDeltaSinceAsync(myVersion)
+    Leaf->>Leaf: Compare each entry timestamp against myVersion
+    Leaf-->>Cache: StateDelta { changed entries + current version }
+    Cache->>Cache: For each entry: LwwValue.Merge(cached, delta)
+    Cache->>Cache: version = VersionVector.Merge(version, delta.Version)
+```
+
+Because both `LwwValue.Merge` and `VersionVector.Merge` are lattice operations, applying the same delta twice is a no-op. This makes the protocol tolerant of duplicate deliveries and message reordering.
+
+### Read Caching
+
+The `LeafCacheGrain` is a `[StatelessWorker]` that acts as a per-silo read-through cache for leaf data:
+
+```mermaid
+flowchart LR
+    subgraph SiloA["Silo A"]
+        CA[LeafCacheGrain<br/>activation 1]
+    end
+    subgraph SiloB["Silo B"]
+        CB[LeafCacheGrain<br/>activation 2]
+    end
+    subgraph Primary["Primary Silo"]
+        L[BPlusLeafGrain]
+    end
+
+    CA -->|"GetDeltaSinceAsync(v₁)"| L
+    CB -->|"GetDeltaSinceAsync(v₂)"| L
+    L -.->|"StateDelta"| CA
+    L -.->|"StateDelta"| CB
+```
+
+- **Delta refresh**: Every read calls `GetDeltaSinceAsync` on the primary leaf, passing the cache's current `VersionVector`. If the cache is already up to date, the primary short-circuits and returns an empty delta (a cheap version-vector comparison, no entry scan). If entries have changed, only the newer entries are returned and merged in.
+- **Consistency**: Reads are consistent as of the moment the delta is fetched from the primary. The only window for a "stale" result is a concurrent write that lands on the primary *after* `GetDeltaSinceAsync` returns but *before* the caller sees the response — this is normal read-write race behaviour, not cache staleness.
+- **Why keep a local cache at all?**: The `VersionVector` fast-path makes the delta call cheap when nothing has changed, but the local `Dictionary<string, LwwValue<byte[]>>` avoids deserialising the full entry set on every read. When the primary returns a non-empty delta, only the changed entries are merged — the rest are already in memory.
+
+### Idempotent Split Propagation
+
+`AcceptSplitAsync` on internal nodes checks for duplicate `(separatorKey, childId)` pairs before inserting. If the same split result is delivered twice (e.g. crash recovery, message retry), the duplicate is detected and skipped. Combined with the monotonic `SplitState` on leaf nodes, this makes the entire split protocol idempotent end-to-end.
+
 ### Grain-to-Grain Mapping
 
 | B+ Tree Concept | Orleans Grain | Key Format | Persistent State |
 |---|---|---|---|
-| Shard router | `ShardRouterGrain` (`[StatelessWorker]`) | `{treeId}` | None (stateless) |
+| Shard router | `LatticeGrain` (`[StatelessWorker]`) | `{treeId}` | None (stateless) |
 | Shard root | `ShardRootGrain` | `{treeId}/{shardIndex}` | `ShardRootState` — root node ID + leaf/internal flag |
 | Internal node | `BPlusInternalGrain` | `Guid` | `InternalNodeState` — sorted children + HLC + split state |
-| Leaf node | `BPlusLeafGrain` | `Guid` | `LeafNodeState` — sorted LWW entries + sibling pointer + HLC + split state |
+| Leaf node | `BPlusLeafGrain` | `Guid` | `LeafNodeState` — sorted LWW entries + sibling pointer + HLC + version vector + split state |
+| Leaf cache | `LeafCacheGrain` (`[StatelessWorker]`) | `{leafGrainId}` | None (in-memory LWW-map + version vector) |
 
 ### Capacity and Depth
 
@@ -259,7 +348,7 @@ siloBuilder.AddMemoryGrainStorage("bplustree");
 // Or use Azure Table Storage, ADO.NET, etc.
 
 // In client code:
-var router = grainFactory.GetGrain<IShardRouterGrain>("my-tree");
+var router = grainFactory.GetGrain<ILattice>("my-tree");
 
 // Write
 await router.SetAsync("customer-123", Encoding.UTF8.GetBytes("Alice"));
@@ -278,23 +367,27 @@ src/lattice/
 ├── Primitives/
 │   ├── HybridLogicalClock.cs    Monotonic timestamp (wall clock + counter)
 │   ├── LwwValue.cs              Last-writer-wins register with tombstone support
-│   └── SplitState.cs            Monotonic split lifecycle enum
+│   ├── SplitState.cs            Monotonic split lifecycle enum
+│   ├── VersionVector.cs         Causal history per replica (pointwise-max merge)
+│   └── StateDelta.cs            Changed entries + version for delta replication
 └── BPlusTree/
     ├── BPlusTreeOptions.cs      Branching factor and shard count constants
     ├── SplitResult.cs           Promoted key + new sibling ID
-    ├── IShardRouterGrain.cs     Public API — stateless router
+    ├── ILattice.cs              Public API — stateless router
     ├── IShardRootGrain.cs       Per-shard root interface
     ├── IBPlusInternalGrain.cs   Internal node interface
-    ├── IBPlusLeafGrain.cs       Leaf node interface
+    ├── IBPlusLeafGrain.cs       Leaf node interface + delta extraction
+    ├── ILeafCacheGrain.cs       Stateless read-through cache interface
     ├── State/
-    │   ├── LeafNodeState.cs     Sorted LWW entries + sibling pointer
+    │   ├── LeafNodeState.cs     Sorted LWW entries + sibling pointer + version vector
     │   ├── InternalNodeState.cs Sorted children + routing logic
     │   └── ShardRootState.cs    Root pointer + leaf/internal flag
     └── Grains/
-        ├── ShardRouterGrain.cs      XxHash32 shard routing
-        ├── ShardRootGrain.cs        Root management + split promotion
-        ├── BPlusInternalGrain.cs    Separator insertion + cascading splits
-        └── BPlusLeafGrain.cs        LWW insert/delete + leaf splitting
+        ├── LatticeGrain.cs           XxHash32 shard routing
+        ├── ShardRootGrain.cs        Root management + split promotion + cache routing
+        ├── BPlusInternalGrain.cs    Idempotent separator insertion + cascading splits
+        ├── BPlusLeafGrain.cs        LWW insert/delete + leaf splitting + delta extraction
+        └── LeafCacheGrain.cs        Stateless per-silo read cache with LWW merge
 ```
 
 ## License

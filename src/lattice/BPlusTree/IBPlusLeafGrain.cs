@@ -1,5 +1,7 @@
 namespace Orleans.Lattice.BPlusTree;
 
+using Orleans.Lattice.Primitives;
+
 /// <summary>
 /// A leaf node grain in the B+ tree. Stores key-value pairs as
 /// <see cref="Primitives.LwwValue{T}"/> entries for monotonic conflict resolution.
@@ -26,4 +28,11 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
 
     /// <summary>Sets the right sibling pointer (called during splits).</summary>
     Task SetNextSiblingAsync(GrainId? siblingId);
+
+    /// <summary>
+    /// Returns a <see cref="StateDelta"/> containing all entries whose timestamp is
+    /// newer than what <paramref name="sinceVersion"/> has seen.
+    /// Returns an empty delta if the caller is already up to date.
+    /// </summary>
+    Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion);
 }

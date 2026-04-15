@@ -27,6 +27,17 @@ public sealed class BPlusInternalGrain(
 
     public async Task<SplitResult?> AcceptSplitAsync(string promotedKey, GrainId newChild)
     {
+        // Idempotency check: if this separator+child pair already exists, this is a
+        // duplicate delivery (e.g. crash recovery re-emit). Skip the insert.
+        for (int i = 0; i < state.State.Children.Count; i++)
+        {
+            if (state.State.Children[i].SeparatorKey == promotedKey &&
+                state.State.Children[i].ChildId == newChild)
+            {
+                return null;
+            }
+        }
+
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
 
         // Insert the new child at the correct sorted position.
