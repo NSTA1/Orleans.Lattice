@@ -25,7 +25,7 @@ public sealed class ClusterFixture : IAsyncLifetime
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
-            siloBuilder.AddMemoryGrainStorage("bplustree");
+            siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
         }
     }
 }

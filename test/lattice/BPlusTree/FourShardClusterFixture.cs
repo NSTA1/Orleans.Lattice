@@ -30,7 +30,7 @@ public sealed class FourShardClusterFixture : IAsyncLifetime
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
-            siloBuilder.AddMemoryGrainStorage("bplustree");
+            siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.ConfigureLattice(o =>
             {
                 o.MaxLeafKeys = SmallMaxLeafKeys;

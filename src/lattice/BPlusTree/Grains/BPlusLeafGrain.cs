@@ -10,7 +10,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed class BPlusLeafGrain(
     IGrainContext context,
-    [PersistentState("leaf", "bplustree")] IPersistentState<LeafNodeState> state,
+    [PersistentState("leaf", LatticeOptions.StorageProviderName)] IPersistentState<LeafNodeState> state,
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor) : IBPlusLeafGrain
 {

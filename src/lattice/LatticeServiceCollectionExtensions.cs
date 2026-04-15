@@ -9,6 +9,24 @@ namespace Orleans.Lattice;
 public static class LatticeServiceCollectionExtensions
 {
     /// <summary>
+    /// Adds Lattice to the silo and registers the grain storage provider
+    /// that Lattice grains require. The <paramref name="configureStorage"/>
+    /// delegate receives the <see cref="ISiloBuilder"/> and the provider
+    /// name that must be used when registering storage.
+    /// <para>Example:</para>
+    /// <code>
+    /// silo.AddLattice((silo, name) =&gt; silo.AddMemoryGrainStorage(name));
+    /// </code>
+    /// </summary>
+    public static ISiloBuilder AddLattice(
+        this ISiloBuilder builder,
+        Action<ISiloBuilder, string> configureStorage)
+    {
+        configureStorage(builder, LatticeOptions.StorageProviderName);
+        return builder;
+    }
+
+    /// <summary>
     /// Configures global <see cref="LatticeOptions"/> that apply to all trees
     /// unless a per-tree override is registered.
     /// </summary>

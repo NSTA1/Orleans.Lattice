@@ -4,7 +4,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// Configuration options for a Lattice tree. Register a named instance to
 /// override settings for a specific tree:
 /// <code>
-/// siloBuilder.Services.Configure&lt;LatticeOptions&gt;("my-tree", o =&gt; o.MaxLeafKeys = 256);
+/// siloBuilder.Services.Configure&lt;LatticeOptions&gt;("my-tree", o => o.MaxLeafKeys = 256);
 /// </code>
 /// The unnamed (default) instance applies to all trees that do not have a
 /// named override.
@@ -34,4 +34,11 @@ public sealed class LatticeOptions
 
     /// <summary>Default value for <see cref="KeysPageSize"/>.</summary>
     public const int DefaultKeysPageSize = 512;
+
+    /// <summary>
+    /// The name of the Orleans grain storage provider used by Lattice grains.
+    /// Used internally by <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
+    /// and exposed for advanced scenarios where callers register storage directly.
+    /// </summary>
+    public const string StorageProviderName = "lattice";
 }
