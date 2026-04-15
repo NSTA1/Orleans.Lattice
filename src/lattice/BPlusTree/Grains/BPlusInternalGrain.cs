@@ -9,7 +9,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 public sealed class BPlusInternalGrain(
     [PersistentState("internal", "bplustree")] IPersistentState<InternalNodeState> state,
-    IGrainFactory grainFactory) : Grain, IBPlusInternalGrain
+    IGrainFactory grainFactory) : IBPlusInternalGrain
 {
     public async Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild)
     {

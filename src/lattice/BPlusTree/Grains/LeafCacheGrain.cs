@@ -16,7 +16,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// without an explicit invalidation protocol.
 /// </summary>
 [StatelessWorker]
-public sealed class LeafCacheGrain(IGrainFactory grainFactory) : Grain, ILeafCacheGrain
+public sealed class LeafCacheGrain(IGrainContext context, IGrainFactory grainFactory) : ILeafCacheGrain
 {
     private readonly Dictionary<string, LwwValue<byte[]>> _cache = new(StringComparer.Ordinal);
     private VersionVector _version = new();
@@ -25,7 +25,7 @@ public sealed class LeafCacheGrain(IGrainFactory grainFactory) : Grain, ILeafCac
     /// The <see cref="GrainId"/> string of the primary leaf grain this cache
     /// is associated with. Parsed from the grain's own string key.
     /// </summary>
-    private GrainId PrimaryLeafId => GrainId.Parse(this.GetPrimaryKeyString());
+    private GrainId PrimaryLeafId => GrainId.Parse(context.GrainId.Key.ToString()!);
 
     public async Task<byte[]?> GetAsync(string key)
     {

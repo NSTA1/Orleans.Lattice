@@ -9,7 +9,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 public sealed class ShardRootGrain(
     [PersistentState("shardroot", "bplustree")] IPersistentState<ShardRootState> state,
-    IGrainFactory grainFactory) : Grain, IShardRootGrain
+    IGrainFactory grainFactory) : IShardRootGrain
 {
     public async Task<byte[]?> GetAsync(string key)
     {

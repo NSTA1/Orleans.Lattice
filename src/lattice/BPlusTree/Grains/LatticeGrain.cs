@@ -10,7 +10,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Key format: <c>{treeId}</c>.
 /// </summary>
 [StatelessWorker]
-public sealed class LatticeGrain(IGrainFactory grainFactory) : Grain, ILattice
+public sealed class LatticeGrain(IGrainContext context, IGrainFactory grainFactory) : ILattice
 {
     public async Task<byte[]?> GetAsync(string key)
     {
@@ -33,7 +33,7 @@ public sealed class LatticeGrain(IGrainFactory grainFactory) : Grain, ILattice
     private IShardRootGrain GetShardGrain(string key)
     {
         var shardIndex = GetShardIndex(key, BPlusTreeOptions.DefaultShardCount);
-        var shardKey = $"{this.GetPrimaryKeyString()}/{shardIndex}";
+        var shardKey = $"{context.GrainId.Key}/{shardIndex}";
         return grainFactory.GetGrain<IShardRootGrain>(shardKey);
     }
 
