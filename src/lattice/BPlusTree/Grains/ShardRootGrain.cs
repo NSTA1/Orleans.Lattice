@@ -18,50 +18,106 @@ internal sealed class ShardRootGrain(
         [..context.GrainId.Key.ToString()!.LastIndexOf('/')];
 
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
+
+    private const int MaxRetries = 2;
+
     public async Task<byte[]?> GetAsync(string key)
     {
         await EnsureRootAsync();
+        await ResumePendingPromotionAsync();
         return await TraverseForReadAsync(key);
     }
 
     public async Task SetAsync(string key, byte[] value)
     {
         await EnsureRootAsync();
-        var splitResult = await TraverseForWriteAsync(key, value);
+        await ResumePendingPromotionAsync();
 
-        // If the root node split, we need to create a new internal root.
-        while (splitResult is not null)
+        for (int attempt = 0; ; attempt++)
         {
-            splitResult = await PromoteRootAsync(splitResult);
+            try
+            {
+                var splitResult = await TraverseForWriteAsync(key, value);
+
+                // If the root node split, we need to create a new internal root.
+                while (splitResult is not null)
+                {
+                    splitResult = await PromoteRootAsync(splitResult);
+                }
+
+                return;
+            }
+            catch when (attempt < MaxRetries)
+            {
+                // The failed grain will be deactivated by Orleans. On retry, a fresh
+                // activation loads clean state and the recovery guards resume any
+                // interrupted split.
+            }
         }
     }
 
     public async Task<bool> DeleteAsync(string key)
     {
         await EnsureRootAsync();
+        await ResumePendingPromotionAsync();
 
-        if (state.State.RootIsLeaf)
+        for (int attempt = 0; ; attempt++)
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
-            return await leaf.DeleteAsync(key);
-        }
+            try
+            {
+                if (state.State.RootIsLeaf)
+                {
+                    var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
+                    return await leaf.DeleteAsync(key);
+                }
 
-        // Traverse to the leaf.
-        var leafId = await TraverseToLeafAsync(key);
-        var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-        return await leafGrain.DeleteAsync(key);
+                // Traverse to the leaf.
+                var leafId = await TraverseToLeafAsync(key);
+                var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+                return await leafGrain.DeleteAsync(key);
+            }
+            catch when (attempt < MaxRetries)
+            {
+                // Retry — same rationale as SetAsync.
+            }
+        }
     }
 
     private async Task EnsureRootAsync()
     {
         if (state.State.RootNodeId is not null) return;
 
-        // First access: create the initial leaf.
-        var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+        // Use a deterministic GrainId derived from this shard's own identity
+        // so that a crash-retry reuses the same leaf instead of creating an orphan.
+        var shardKey = context.GrainId.Key.ToString()!;
+        var deterministicId = DeterministicGuid(shardKey);
+        var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
         await leafGrain.SetTreeIdAsync(TreeId);
         state.State.RootNodeId = leafGrain.GetGrainId();
         state.State.RootIsLeaf = true;
         await state.WriteStateAsync();
+    }
+
+    /// <summary>
+    /// If a previous root promotion was interrupted (Phase 1 persisted but
+    /// Phase 2 did not complete), resume it now.
+    /// </summary>
+    private async Task ResumePendingPromotionAsync()
+    {
+        if (state.State.PendingPromotion is null) return;
+        await CompletePromotionAsync();
+    }
+
+    /// <summary>
+    /// Produces a deterministic <see cref="Guid"/> from <paramref name="input"/>
+    /// using a SHA-256 hash truncated to 16 bytes. This ensures crash-retries
+    /// in <see cref="EnsureRootAsync"/> reuse the same grain identity.
+    /// </summary>
+    private static Guid DeterministicGuid(string input)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(input));
+        return new Guid(hash.AsSpan(0, 16));
     }
 
     private async Task<byte[]?> TraverseForReadAsync(string key)
@@ -91,28 +147,24 @@ internal sealed class ShardRootGrain(
         // Walk internal nodes down to the leaf, collecting the path for split propagation.
         var path = new Stack<GrainId>();
         var currentId = state.State.RootNodeId!.Value;
-        path.Push(currentId);
 
         while (true)
         {
             var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
             var childId = await internalGrain.RouteAsync(key);
+            var childrenAreLeaves = await internalGrain.AreChildrenLeavesAsync();
 
-            // We need to determine if the child is a leaf.
-            // For now, we try the leaf path; if the tree is deeper, the shard root
-            // tracks depth implicitly through the internal node chain.
-            // Simple heuristic: try to call SetAsync on the child as a leaf.
-            // Better approach: internal nodes know whether their children are leaves.
-            // We'll use the path depth + knowledge that the root tracks this.
-            // For the initial implementation, we traverse until we hit a leaf.
+            if (childrenAreLeaves)
+            {
+                // currentId is the parent of the leaf — push it for split propagation.
+                path.Push(currentId);
+                path.Push(childId); // the leaf
+                break;
+            }
 
-            // Check if we can resolve the child as a leaf by attempting to go one more level.
-            // A simpler approach: always descend through internal nodes.
-            // Since internal nodes' RouteAsync returns GrainId, we need metadata.
-            // Let's build a simpler traversal that assumes max 2 levels for now,
-            // and in the next iteration add depth tracking.
-            path.Push(childId);
-            break;
+            // The child is another internal node — descend further.
+            path.Push(currentId);
+            currentId = childId;
         }
 
         // The top of the stack is the leaf.
@@ -134,24 +186,61 @@ internal sealed class ShardRootGrain(
     private async Task<GrainId> TraverseToLeafAsync(string key)
     {
         var currentId = state.State.RootNodeId!.Value;
-        var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
-        return await internalGrain.RouteAsync(key);
+
+        while (true)
+        {
+            var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+            var childId = await internalGrain.RouteAsync(key);
+            var childrenAreLeaves = await internalGrain.AreChildrenLeavesAsync();
+
+            if (childrenAreLeaves)
+            {
+                return childId;
+            }
+
+            currentId = childId;
+        }
     }
 
     private async Task<SplitResult?> PromoteRootAsync(SplitResult splitResult)
     {
-        // The old root split — create a new internal root above it.
-        var newRoot = grainFactory.GetGrain<IBPlusInternalGrain>(Guid.NewGuid());
+        // Phase 1: Persist the split result that triggered the promotion so that
+        // a crash-retry can resume without creating orphan roots.
+        state.State.PendingPromotion = splitResult;
+        state.State.PendingPromotionRootWasLeaf = state.State.RootIsLeaf;
+        await state.WriteStateAsync();
+
+        // Phase 2: Create the new internal root.
+        await CompletePromotionAsync();
+        return null; // New root was just created with two children — no split.
+    }
+
+    /// <summary>
+    /// Completes (or resumes) a root promotion whose intent has already been persisted.
+    /// Uses a deterministic <see cref="Guid"/> derived from the shard identity and
+    /// the old root's <see cref="GrainId"/> so that crash-retries reuse the same grain
+    /// instead of creating orphans.
+    /// </summary>
+    private async Task CompletePromotionAsync()
+    {
+        var pending = state.State.PendingPromotion!;
+        var childrenAreLeaves = state.State.PendingPromotionRootWasLeaf;
+
+        var shardKey = context.GrainId.Key.ToString()!;
+        var deterministicId = DeterministicGuid(
+            shardKey + "/root-above/" + state.State.RootNodeId!.Value);
+
+        var newRoot = grainFactory.GetGrain<IBPlusInternalGrain>(deterministicId);
         await newRoot.SetTreeIdAsync(TreeId);
         await newRoot.InitializeAsync(
-            splitResult.PromotedKey,
+            pending.PromotedKey,
             state.State.RootNodeId!.Value,
-            splitResult.NewSiblingId);
+            pending.NewSiblingId,
+            childrenAreLeaves);
 
         state.State.RootNodeId = newRoot.GetGrainId();
         state.State.RootIsLeaf = false;
+        state.State.PendingPromotion = null;
         await state.WriteStateAsync();
-
-        return null; // New root was just created with two children — no split.
     }
 }

@@ -7,10 +7,13 @@ namespace Orleans.Lattice.BPlusTree;
 public interface IBPlusInternalGrain : IGrainWithGuidKey
 {
     /// <summary>Initialises this internal node with the result of a root split.</summary>
-    Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild);
+    Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild, bool childrenAreLeaves);
 
     /// <summary>Routes a key down to the appropriate child grain.</summary>
     Task<GrainId> RouteAsync(string key);
+
+    /// <summary>Returns whether this node's children are leaf grains.</summary>
+    Task<bool> AreChildrenLeavesAsync();
 
     /// <summary>Accepts a promoted split from a child node.</summary>
     /// <returns>A <see cref="SplitResult"/> if this node itself needed to split, otherwise <c>null</c>.</returns>

@@ -1,13 +1,21 @@
+using Orleans.Configuration;
+using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
-public sealed class SmallLeafClusterFixture : IAsyncLifetime
+/// <summary>
+/// Cluster fixture that uses <see cref="FaultInjectionGrainStorage"/> so that
+/// tests can inject read/write/clear faults per grain via <see cref="IStorageFaultGrain"/>.
+/// Small leaf and internal limits are used to force splits quickly.
+/// </summary>
+public sealed class FaultInjectionClusterFixture : IAsyncLifetime
 {
-    public const string TreeName = "small-leaf-tree";
+    public const string TreeName = "fi-tree";
     public const int SmallMaxLeafKeys = 4;
+    public const int SmallMaxInternalChildren = 4;
 
     public TestCluster Cluster { get; private set; } = null!;
 
@@ -29,10 +37,14 @@ public sealed class SmallLeafClusterFixture : IAsyncLifetime
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
-            siloBuilder.AddMemoryGrainStorage("bplustree");
+            siloBuilder.Services.AddFaultInjectionMemoryStorage(
+                "bplustree",
+                (Orleans.Configuration.MemoryGrainStorageOptions _) => { },
+                (FaultInjectionGrainStorageOptions _) => { });
             siloBuilder.ConfigureLattice(TreeName, o =>
             {
                 o.MaxLeafKeys = SmallMaxLeafKeys;
+                o.MaxInternalChildren = SmallMaxInternalChildren;
                 o.ShardCount = 1;
             });
         }

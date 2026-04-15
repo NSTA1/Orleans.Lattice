@@ -31,7 +31,7 @@ public class BPlusInternalGrainTests
         var state = new FakePersistentState<InternalNodeState>();
         var grain = CreateGrain(state);
 
-        await grain.InitializeAsync("fox", Child0, Child1);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
         Assert.Equal(2, state.State.Children.Count);
         Assert.Null(state.State.Children[0].SeparatorKey);
@@ -47,7 +47,7 @@ public class BPlusInternalGrainTests
         var grain = CreateGrain(state);
 
         var clockBefore = state.State.Clock;
-        await grain.InitializeAsync("fox", Child0, Child1);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
         Assert.True(state.State.Clock > clockBefore);
     }
@@ -58,7 +58,7 @@ public class BPlusInternalGrainTests
     public async Task Route_returns_leftmost_for_key_below_all_separators()
     {
         var grain = CreateGrain();
-        await grain.InitializeAsync("fox", Child0, Child1);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
         var result = await grain.RouteAsync("ant");
         Assert.Equal(Child0, result);
@@ -68,7 +68,7 @@ public class BPlusInternalGrainTests
     public async Task Route_returns_right_child_for_exact_separator_match()
     {
         var grain = CreateGrain();
-        await grain.InitializeAsync("fox", Child0, Child1);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
         var result = await grain.RouteAsync("fox");
         Assert.Equal(Child1, result);
@@ -78,7 +78,7 @@ public class BPlusInternalGrainTests
     public async Task Route_returns_right_child_for_key_above_separator()
     {
         var grain = CreateGrain();
-        await grain.InitializeAsync("fox", Child0, Child1);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
         var result = await grain.RouteAsync("zebra");
         Assert.Equal(Child1, result);
@@ -89,7 +89,7 @@ public class BPlusInternalGrainTests
     {
         var state = new FakePersistentState<InternalNodeState>();
         var grain = CreateGrain(state);
-        await grain.InitializeAsync("fox", Child0, Child1);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
         await grain.AcceptSplitAsync("monkey", Child2);
         await grain.AcceptSplitAsync("rabbit", Child3);
 
@@ -114,7 +114,7 @@ public class BPlusInternalGrainTests
     {
         var state = new FakePersistentState<InternalNodeState>();
         var grain = CreateGrain(state);
-        await grain.InitializeAsync("fox", Child0, Child1);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
         await grain.AcceptSplitAsync("monkey", Child2);
 
@@ -128,7 +128,7 @@ public class BPlusInternalGrainTests
     {
         var state = new FakePersistentState<InternalNodeState>();
         var grain = CreateGrain(state);
-        await grain.InitializeAsync("fox", Child0, Child1);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
         // Insert out of order — "ant" < "fox", should go before "fox".
         await grain.AcceptSplitAsync("ant", Child2);
@@ -145,7 +145,7 @@ public class BPlusInternalGrainTests
     {
         var state = new FakePersistentState<InternalNodeState>();
         var grain = CreateGrain(state);
-        await grain.InitializeAsync("fox", Child0, Child1);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
         await grain.AcceptSplitAsync("monkey", Child2);
         var result = await grain.AcceptSplitAsync("monkey", Child2);
@@ -158,7 +158,7 @@ public class BPlusInternalGrainTests
     public async Task AcceptSplit_returns_null_when_under_capacity()
     {
         var grain = CreateGrain();
-        await grain.InitializeAsync("fox", Child0, Child1);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
         var result = await grain.AcceptSplitAsync("monkey", Child2);
         Assert.Null(result);
@@ -169,7 +169,7 @@ public class BPlusInternalGrainTests
     {
         var state = new FakePersistentState<InternalNodeState>();
         var grain = CreateGrain(state);
-        await grain.InitializeAsync("fox", Child0, Child1);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
         var clockBefore = state.State.Clock;
         await grain.AcceptSplitAsync("monkey", Child2);
@@ -182,12 +182,155 @@ public class BPlusInternalGrainTests
     {
         var state = new FakePersistentState<InternalNodeState>();
         var grain = CreateGrain(state);
-        await grain.InitializeAsync("fox", Child0, Child1);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
         await grain.AcceptSplitAsync("monkey", Child2);
 
         var clockBefore = state.State.Clock;
         await grain.AcceptSplitAsync("monkey", Child2);
 
         Assert.Equal(clockBefore, state.State.Clock);
+    }
+
+    // --- ChildrenAreLeaves ---
+
+    [Fact]
+    public async Task Initialize_sets_childrenAreLeaves_true()
+    {
+        var state = new FakePersistentState<InternalNodeState>();
+        var grain = CreateGrain(state);
+
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+
+        Assert.True(state.State.ChildrenAreLeaves);
+        Assert.True(await grain.AreChildrenLeavesAsync());
+    }
+
+    [Fact]
+    public async Task Initialize_sets_childrenAreLeaves_false()
+    {
+        var state = new FakePersistentState<InternalNodeState>();
+        var grain = CreateGrain(state);
+
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: false);
+
+        Assert.False(state.State.ChildrenAreLeaves);
+        Assert.False(await grain.AreChildrenLeavesAsync());
+    }
+
+    // --- Split recovery ---
+
+    [Fact]
+    public async Task AcceptSplit_recovers_in_progress_split_and_forwards_promotion_to_sibling()
+    {
+        var state = new FakePersistentState<InternalNodeState>();
+        var grain = CreateGrain(state);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+
+        // Simulate crash mid-split: persist split intent.
+        var siblingId = GrainId.Create("internal", Guid.NewGuid().ToString());
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "fox";
+        state.State.SplitSiblingId = siblingId;
+        state.State.SplitRightChildren =
+        [
+            new ChildEntry { SeparatorKey = null, ChildId = Child1 }
+        ];
+        state.State.Children =
+        [
+            new ChildEntry { SeparatorKey = null, ChildId = Child0 }
+        ];
+
+        // "zebra" >= "fox" → recovery completes then forwards the promotion to the sibling.
+        var result = await grain.AcceptSplitAsync("zebra", Child3);
+
+        Assert.NotNull(result);
+        Assert.Equal("fox", result.PromotedKey);
+        Assert.Equal(siblingId, result.NewSiblingId);
+        // The promotion was NOT inserted locally — only Child0 remains.
+        Assert.Single(state.State.Children);
+    }
+
+    [Fact]
+    public async Task AcceptSplit_recovers_and_inserts_promotion_locally_when_below_split_key()
+    {
+        var state = new FakePersistentState<InternalNodeState>();
+        var grain = CreateGrain(state);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+
+        var siblingId = GrainId.Create("internal", Guid.NewGuid().ToString());
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "fox";
+        state.State.SplitSiblingId = siblingId;
+        state.State.SplitRightChildren =
+        [
+            new ChildEntry { SeparatorKey = null, ChildId = Child1 }
+        ];
+        state.State.Children =
+        [
+            new ChildEntry { SeparatorKey = null, ChildId = Child0 }
+        ];
+
+        // "ant" < "fox" → recovery completes then inserts the promotion locally.
+        var result = await grain.AcceptSplitAsync("ant", Child2);
+
+        Assert.NotNull(result);
+        Assert.Equal("fox", result.PromotedKey);
+        // The promotion WAS inserted locally.
+        Assert.Equal(2, state.State.Children.Count);
+        Assert.Equal("ant", state.State.Children[1].SeparatorKey);
+        Assert.Equal(Child2, state.State.Children[1].ChildId);
+    }
+
+    [Fact]
+    public async Task Recovery_reuses_persisted_sibling_id()
+    {
+        var state = new FakePersistentState<InternalNodeState>();
+        var grain = CreateGrain(state);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+
+        var siblingId = GrainId.Create("internal", Guid.NewGuid().ToString());
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "fox";
+        state.State.SplitSiblingId = siblingId;
+        state.State.SplitRightChildren =
+        [
+            new ChildEntry { SeparatorKey = null, ChildId = Child1 }
+        ];
+        state.State.Children =
+        [
+            new ChildEntry { SeparatorKey = null, ChildId = Child0 }
+        ];
+
+        var result = await grain.AcceptSplitAsync("ant", Child2);
+
+        // The recovered split must use the original persisted sibling ID.
+        Assert.Equal(siblingId, result!.NewSiblingId);
+    }
+
+    [Fact]
+    public async Task Recovery_clears_split_right_children()
+    {
+        var state = new FakePersistentState<InternalNodeState>();
+        var grain = CreateGrain(state);
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "fox";
+        state.State.SplitSiblingId = GrainId.Create("internal", Guid.NewGuid().ToString());
+        state.State.SplitRightChildren =
+        [
+            new ChildEntry { SeparatorKey = null, ChildId = Child1 }
+        ];
+        state.State.Children =
+        [
+            new ChildEntry { SeparatorKey = null, ChildId = Child0 }
+        ];
+
+        await grain.AcceptSplitAsync("ant", Child2);
+
+        Assert.Null(state.State.SplitRightChildren);
+        Assert.Equal(
+            Orleans.Lattice.Primitives.SplitState.SplitComplete,
+            state.State.SplitState);
     }
 }

@@ -250,4 +250,79 @@ public class LeafCacheGrainTests
         Assert.Equal("2", Encoding.UTF8.GetString((await grain.GetAsync("b"))!));
         Assert.Equal("3", Encoding.UTF8.GetString((await grain.GetAsync("c"))!));
     }
+
+    // --- Split key pruning ---
+
+    [Fact]
+    public async Task Cache_prunes_entries_above_split_key()
+    {
+        var (grain, leaf) = CreateGrain();
+
+        // Populate cache with three entries: a, m, z.
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+            .Returns(DeltaWith(
+                ("a", Encoding.UTF8.GetBytes("1")),
+                ("m", Encoding.UTF8.GetBytes("2")),
+                ("z", Encoding.UTF8.GetBytes("3"))));
+        await grain.GetAsync("a"); // triggers refresh
+
+        // Now the primary reports a split at "m" — entries >= "m" belong to the sibling.
+        var splitDelta = new StateDelta
+        {
+            Entries = new Dictionary<string, LwwValue<byte[]>>(),
+            Version = new VersionVector(),
+            SplitKey = "m"
+        };
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(splitDelta);
+        await grain.GetAsync("a"); // triggers refresh with split key
+
+        // "a" should still be cached; "m" and "z" should be pruned.
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        Assert.Equal("1", Encoding.UTF8.GetString((await grain.GetAsync("a"))!));
+        Assert.Null(await grain.GetAsync("m"));
+        Assert.Null(await grain.GetAsync("z"));
+    }
+
+    [Fact]
+    public async Task Cache_pruning_is_idempotent()
+    {
+        var (grain, leaf) = CreateGrain();
+
+        // Populate cache.
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+            .Returns(DeltaWith(("a", Encoding.UTF8.GetBytes("1")), ("z", Encoding.UTF8.GetBytes("2"))));
+        await grain.GetAsync("a");
+
+        // Report split key multiple times — should not crash or remove "a".
+        var splitDelta = new StateDelta
+        {
+            Entries = new Dictionary<string, LwwValue<byte[]>>(),
+            Version = new VersionVector(),
+            SplitKey = "m"
+        };
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(splitDelta);
+        await grain.GetAsync("a");
+        await grain.GetAsync("a");
+
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        Assert.Equal("1", Encoding.UTF8.GetString((await grain.GetAsync("a"))!));
+        Assert.Null(await grain.GetAsync("z"));
+    }
+
+    [Fact]
+    public async Task Cache_does_not_prune_when_split_key_is_null()
+    {
+        var (grain, leaf) = CreateGrain();
+
+        // Populate cache.
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+            .Returns(DeltaWith(("a", Encoding.UTF8.GetBytes("1")), ("z", Encoding.UTF8.GetBytes("2"))));
+        await grain.GetAsync("a");
+
+        // Delta with no split key — nothing pruned.
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+
+        Assert.Equal("1", Encoding.UTF8.GetString((await grain.GetAsync("a"))!));
+        Assert.Equal("2", Encoding.UTF8.GetString((await grain.GetAsync("z"))!));
+    }
 }
