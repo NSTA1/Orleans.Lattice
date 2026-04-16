@@ -1,3 +1,5 @@
+using Orleans.Lattice;
+
 namespace Orleans.Lattice.BPlusTree.State;
 
 /// <summary>
@@ -6,6 +8,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// resumed after a silo restart.
 /// </summary>
 [GenerateSerializer]
+[Alias(TypeAliases.TombstoneCompactionState)]
 internal sealed class TombstoneCompactionState
 {
     /// <summary>Whether a compaction pass is currently in progress.</summary>

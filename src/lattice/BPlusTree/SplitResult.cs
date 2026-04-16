@@ -1,3 +1,5 @@
+using Orleans.Lattice;
+
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
@@ -6,6 +8,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// the reference to the newly created sibling.
 /// </summary>
 [GenerateSerializer]
+[Alias(TypeAliases.SplitResult)]
 [Immutable]
 public sealed record SplitResult
 {

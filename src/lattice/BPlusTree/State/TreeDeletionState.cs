@@ -1,3 +1,5 @@
+using Orleans.Lattice;
+
 namespace Orleans.Lattice.BPlusTree.State;
 
 /// <summary>
@@ -6,6 +8,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// in-flight purge pass so that it can be resumed after a silo restart.
 /// </summary>
 [GenerateSerializer]
+[Alias(TypeAliases.TreeDeletionState)]
 internal sealed class TreeDeletionState
 {
     /// <summary>Whether the tree has been soft-deleted.</summary>

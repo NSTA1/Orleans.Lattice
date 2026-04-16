@@ -1,3 +1,5 @@
+using Orleans.Lattice;
+
 namespace Orleans.Lattice.Primitives;
 
 /// <summary>
@@ -9,6 +11,7 @@ namespace Orleans.Lattice.Primitives;
 /// This forms a join-semilattice (commutative, associative, idempotent).
 /// </summary>
 [GenerateSerializer]
+[Alias(TypeAliases.VersionVector)]
 public sealed class VersionVector
 {
     [Id(0)]
