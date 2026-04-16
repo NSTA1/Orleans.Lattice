@@ -42,4 +42,21 @@ public interface IShardRootGrain : IGrainWithStringKey
     /// Used by the tombstone compaction grain to walk the leaf chain.
     /// </summary>
     Task<GrainId?> GetLeftmostLeafIdAsync();
+
+    /// <summary>
+    /// Bulk-loads pre-sorted key-value pairs into this shard, building leaves and
+    /// internal nodes bottom-up. The shard must be empty (no root node).
+    /// Entries must already be sorted in ascending key order.
+    /// </summary>
+    /// <param name="operationId">Unique ID for idempotency. Retries with the same ID are no-ops.</param>
+    Task BulkLoadAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries);
+
+    /// <summary>
+    /// Appends a sorted batch of key-value pairs to the right edge of this shard's
+    /// B+ tree. All keys in <paramref name="sortedEntries"/> must be greater than
+    /// every existing key in the shard. Creates new leaves as needed and propagates
+    /// separators into internal nodes. Used by the streaming bulk-load extension method.
+    /// </summary>
+    /// <param name="operationId">Unique ID for idempotency. Retries with the same ID are no-ops.</param>
+    Task BulkAppendAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries);
 }

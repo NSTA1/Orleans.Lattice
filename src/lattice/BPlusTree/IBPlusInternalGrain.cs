@@ -30,4 +30,12 @@ public interface IBPlusInternalGrain : IGrainWithGuidKey
     /// Called once by the shard root after creating the grain. Idempotent.
     /// </summary>
     Task SetTreeIdAsync(string treeId);
+
+    /// <summary>
+    /// Initialises this internal node with a pre-built list of children.
+    /// Used by bulk load to construct internal nodes in a single call.
+    /// <paramref name="separatorKeys"/> and <paramref name="childIds"/> must have equal length.
+    /// The first separator key must be <c>null</c> (leftmost catch-all).
+    /// </summary>
+    Task InitializeWithChildrenAsync(List<string?> separatorKeys, List<GrainId> childIds, bool childrenAreLeaves);
 }

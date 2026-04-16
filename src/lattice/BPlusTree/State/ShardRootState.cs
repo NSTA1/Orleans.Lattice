@@ -25,4 +25,50 @@ internal sealed class ShardRootState
     /// creating the new internal root.
     /// </summary>
     [Id(3)] public bool PendingPromotionRootWasLeaf { get; set; }
+
+    /// <summary>
+    /// If a bulk-append graft is in progress, the intent record describing the
+    /// new leaves and separators to wire into the existing tree. Persisted before
+    /// mutating the tree so that a crash-retry can resume the graft.
+    /// </summary>
+    [Id(4)] public PendingBulkGraft? PendingBulkGraft { get; set; }
+
+    /// <summary>
+    /// The operation ID of the last successfully completed bulk operation on this shard.
+    /// Used for idempotency — if a retry arrives with the same ID, it is a no-op.
+    /// </summary>
+    [Id(5)] public string? LastCompletedBulkOperationId { get; set; }
+}
+
+/// <summary>
+/// Intent record for a bulk-append graft that has been committed to state but
+/// not yet fully wired into the tree. Contains all the information needed to
+/// resume the graft after a crash.
+/// </summary>
+[GenerateSerializer]
+[Immutable]
+internal sealed record PendingBulkGraft
+{
+    /// <summary>Unique operation ID for idempotency.</summary>
+    [Id(0)] public required string OperationId { get; init; }
+
+    /// <summary>The GrainId of the existing rightmost leaf to wire the first new leaf to.</summary>
+    [Id(1)] public required GrainId ExistingRightmostLeafId { get; init; }
+
+    /// <summary>Separators and leaf IDs for the new leaves, in order.</summary>
+    [Id(2)] public required List<GraftEntry> NewLeaves { get; init; }
+
+    /// <summary>Whether the root was a leaf when the graft started.</summary>
+    [Id(3)] public required bool RootWasLeaf { get; init; }
+}
+
+/// <summary>
+/// A single leaf in a pending bulk graft — its separator key and grain identity.
+/// </summary>
+[GenerateSerializer]
+[Immutable]
+internal sealed record GraftEntry
+{
+    [Id(0)] public required string SeparatorKey { get; init; }
+    [Id(1)] public required GrainId LeafId { get; init; }
 }
