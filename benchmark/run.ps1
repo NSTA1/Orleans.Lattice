@@ -1,11 +1,19 @@
 <#
 .SYNOPSIS
     Builds, starts the benchmark host, runs bombardier against every
-    Lattice CRUD endpoint, and prints a summary table.
+    Lattice CRUD endpoint for each key approach, and prints a summary table.
 
 .DESCRIPTION
     The host process is always terminated on exit, even when an error occurs.
     Requires bombardier (https://github.com/codesenberg/bombardier) on PATH.
+
+    Three key-ordering approaches are benchmarked:
+      - ordered  — keys inserted as k000000, k000001, … (ascending)
+      - random   — keys inserted in shuffled order
+      - reverse  — keys inserted as k{N-1}, k{N-2}, … (descending)
+
+    Each approach stores results in a separate JSON file under benchmark/:
+      results-ordered.json, results-random.json, results-reverse.json
 
 .PARAMETER Duration
     Seconds each bombardier scenario runs (default 15).
@@ -15,12 +23,17 @@
 
 .PARAMETER KeysKeyCount
     Number of keys to seed for the KEYS benchmark (default 100).
+
+.PARAMETER Approaches
+    Key-ordering approaches to run (default: ordered, random, reverse, bulkload).
 #>
 [CmdletBinding()]
 param(
-    [int]$Duration     = 15,
-    [int]$Concurrency  = 64,
-    [int]$KeysKeyCount = 100
+    [int]$Duration         = 15,
+    [int]$BulkLoadDuration = 10,
+    [int]$Concurrency      = 64,
+    [int]$KeysKeyCount     = 100,
+    [string[]]$Approaches  = @('ordered', 'random', 'reverse', 'bulkload')
 )
 
 Set-StrictMode -Version Latest
@@ -30,7 +43,6 @@ $ErrorActionPreference = 'Stop'
 $repoRoot    = Split-Path -Parent $PSScriptRoot          # benchmark/.. → repo root
 $hostProject = Join-Path $PSScriptRoot 'host' 'Orleans.Lattice.Benchmark.Host.csproj'
 $baseUrl     = 'http://localhost:5000'
-$historyFile = Join-Path $PSScriptRoot 'results.json'
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 function Write-Banner([string]$text) {
@@ -87,9 +99,9 @@ function Format-Bytes([double]$bytes) {
     else                    { '{0:N0} B'  -f $bytes }
 }
 
-function Load-PreviousRun {
-    if (Test-Path $historyFile) {
-        $json = Get-Content $historyFile -Raw | ConvertFrom-Json
+function Load-PreviousRun([string]$filePath) {
+    if (Test-Path $filePath) {
+        $json = Get-Content $filePath -Raw | ConvertFrom-Json
         if ($json -and $json.Results) { return $json }
     }
     return $null
@@ -115,7 +127,11 @@ function Show-Comparison($currentResults, $previousRun) {
                 RPS        = $r.RPS
                 'ΔRPS'     = 'new'
                 LatencyAvg = $r.LatencyAvg
-                'ΔLatency' = 'new'
+                'PrevLat'  = 'new'
+                AvgCpu     = $r.AvgCpu
+                PeakMem    = $r.PeakMem
+                'PrevCpu'  = 'new'
+                'PrevMem'  = 'new'
             }
             continue
         }
@@ -126,12 +142,16 @@ function Show-Comparison($currentResults, $previousRun) {
             LatencyAvg = $r.LatencyAvg
             'PrevRPS'  = $prev.RPS
             'PrevLat'  = $prev.LatencyAvg
+            AvgCpu     = $r.AvgCpu
+            PeakMem    = $r.PeakMem
+            'PrevCpu'  = $prev.AvgCpu
+            'PrevMem'  = $prev.PeakMem
         }
     }
 
     $ts = $previousRun.Timestamp
     Write-Banner "Comparison with previous run ($ts)"
-    $rows | Format-Table -AutoSize -Property Scenario, RPS, PrevRPS, 'ΔRPS', LatencyAvg, PrevLat
+    $rows | Format-Table -AutoSize -Property Scenario, RPS, PrevRPS, 'ΔRPS', LatencyAvg, PrevLat, AvgCpu, PrevCpu, PeakMem, PrevMem
 }
 
 # Starts a background job that samples CPU% and working-set every
@@ -207,30 +227,18 @@ dotnet build $hostProject -c Release --nologo -v q
 if ($LASTEXITCODE -ne 0) { Write-Host '✗ Build failed.' -ForegroundColor Red; exit 1 }
 Write-Step 'Build succeeded.'
 
-# ── Start host ───────────────────────────────────────────────────────────
-Write-Banner 'Starting host'
-# Run the compiled DLL directly (not via 'dotnet run') so the process we
-# monitor IS the application — 'dotnet run' spawns a child process whose
-# CPU/memory would be invisible to our sampler.
+# ── Host lifecycle helpers ───────────────────────────────────────────────
+# A fresh host is started per approach so memory/CPU measurements are
+# isolated and not cumulative across approaches.
 $hostDll = Join-Path $PSScriptRoot 'host' 'bin' 'Release' 'net10.0' 'Orleans.Lattice.Benchmark.Host.dll'
-$hostProc = Start-Process -FilePath 'dotnet' `
-    -ArgumentList $hostDll,"--urls",$baseUrl `
-    -PassThru -WindowStyle Hidden
+$script:hostProc = $null
 
-$hostPid = $hostProc.Id
-Write-Step "Host PID: $hostPid"
+function Start-Host {
+    $script:hostProc = Start-Process -FilePath 'dotnet' `
+        -ArgumentList $hostDll,"--urls",$baseUrl `
+        -PassThru -WindowStyle Hidden
+    Write-Step "Host PID: $($script:hostProc.Id)"
 
-# Ensure host is always killed on exit
-$cleanup = {
-    if (-not $hostProc.HasExited) {
-        Write-Host "`n▸ Stopping host (PID $hostPid)..." -ForegroundColor Yellow
-        Stop-Process -Id $hostPid -Force -ErrorAction SilentlyContinue
-    }
-}
-Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanup | Out-Null
-
-try {
-    # Wait for host to be ready
     $maxWait = 30
     $ready   = $false
     for ($i = 0; $i -lt $maxWait; $i++) {
@@ -240,104 +248,176 @@ try {
                         -UseBasicParsing -TimeoutSec 2 -ErrorAction SilentlyContinue
             $ready = $true; break
         } catch {
-            # 404 is fine — it means the server is up
             if ($_.Exception.Response.StatusCode.value__ -ge 400) { $ready = $true; break }
         }
     }
     if (-not $ready) { throw 'Host did not start within 30 s.' }
     Write-Step 'Host is ready.'
+    return $script:hostProc.Id
+}
 
-    # ── Define scenarios ─────────────────────────────────────────────────
-    # Scenarios run in order. SET populates the tree, then GET and DELETE
-    # reuse those keys (counter reset only — no re-seeding). KEYS uses a
-    # separate tree with a small seed so responses stay within timeout.
-    #
-    # Setup runs before bombardier; it can be $null or a script block.
-    $scenarios = @(
-        @{
-            Name = 'SET'; Method = 'POST'; Path = '/lattice/bench/bench/set'
-            Setup = $null
-        },
-        @{
-            Name = 'GET'; Method = 'GET'; Path = '/lattice/bench/bench/get'
-            Setup = { curl.exe -s -X POST "$baseUrl/lattice/bench/bench/reset" | Out-Null }
-        },
-        @{
-            Name = 'DELETE'; Method = 'DELETE'; Path = '/lattice/bench/bench/delete'
-            Setup = { curl.exe -s -X POST "$baseUrl/lattice/bench/bench/reset" | Out-Null }
-        },
-        @{
-            Name = 'KEYS'; Method = 'GET'; Path = '/lattice/keys-bench/keys'
-            Setup = {
-                Write-Step "Seeding $KeysKeyCount keys into 'keys-bench' tree..."
-                curl.exe -s -X POST "$baseUrl/lattice/keys-bench/seed?count=$KeysKeyCount" | Out-Null
+function Stop-Host {
+    if ($script:hostProc -and -not $script:hostProc.HasExited) {
+        Write-Host "▸ Stopping host (PID $($script:hostProc.Id))..." -ForegroundColor Yellow
+        Stop-Process -Id $script:hostProc.Id -Force -ErrorAction SilentlyContinue
+        $script:hostProc = $null
+    }
+}
+
+# Ctrl+C safety: kill the host no matter how we exit.
+trap {
+    Stop-Host
+    break
+}
+Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action { Stop-Host } | Out-Null
+
+try {
+    # ── Run each approach ───────────────────────────────────────────────
+    $allResults = @()
+    $approachResults = @{}
+
+    foreach ($approach in $Approaches) {
+        Write-Banner "Approach: $approach"
+
+        # Fresh host for each approach — clean memory baseline.
+        Write-Step 'Starting fresh host...'
+        $hostPid = Start-Host
+
+        $historyFile = Join-Path $PSScriptRoot "results-$approach.json"
+        $treeId = "bench-$approach"
+
+        # Configure the key strategy on the host (bulkload generates its own keys).
+        $configApproach = if ($approach -eq 'bulkload') { 'ordered' } else { $approach }
+        $configureUrl = "$baseUrl/lattice/$treeId/bench/configure?approach=$configApproach&keyCount=100000"
+        curl.exe -s -X POST $configureUrl | Out-Null
+        Write-Step "Configured key approach: $configApproach (tree: $treeId)"
+
+        # ── Define scenarios ─────────────────────────────────────────────
+        if ($approach -eq 'bulkload') {
+            $scenarios = @(
+                @{
+                    Name = 'BULK-SET'; Method = 'POST'; Path = "/lattice/$treeId/bench/bulkload"
+                    Setup = $null; Duration = $BulkLoadDuration
+                }
+            )
+        } else {
+            $scenarios = @(
+                @{
+                    Name = 'SET'; Method = 'POST'; Path = "/lattice/$treeId/bench/set"
+                    Setup = $null
+                },
+                @{
+                    Name = 'GET'; Method = 'GET'; Path = "/lattice/$treeId/bench/get"
+                    Setup = { curl.exe -s -X POST "$baseUrl/lattice/$treeId/bench/reset" | Out-Null }
+                },
+                @{
+                    Name = 'DELETE'; Method = 'DELETE'; Path = "/lattice/$treeId/bench/delete"
+                    Setup = { curl.exe -s -X POST "$baseUrl/lattice/$treeId/bench/reset" | Out-Null }
+                },
+                @{
+                    Name = 'KEYS'; Method = 'GET'; Path = "/lattice/keys-bench-$approach/keys"
+                    Setup = {
+                        Write-Step "Seeding $KeysKeyCount keys into 'keys-bench-$approach' tree..."
+                        curl.exe -s -X POST "$baseUrl/lattice/keys-bench-$approach/seed?count=$KeysKeyCount" | Out-Null
+                    }
+                }
+            )
+        }
+
+        $results = @()
+
+        foreach ($s in $scenarios) {
+            Write-Banner "$approach / $($s.Name) ($($s.Method) $($s.Path))"
+
+            if ($s.Setup) { & $s.Setup }
+
+            # Start sampling host CPU / memory in the background
+            $sampler = Start-ResourceSampler -processId $hostPid
+
+            $scenarioDuration = if ($s.ContainsKey('Duration') -and $s.Duration) { $s.Duration } else { $Duration }
+            $bmArgs = @('-c', $Concurrency, '-d', "${scenarioDuration}s", '-m', $s.Method, '-p', 'r')
+            $bmArgs += "$baseUrl$($s.Path)"
+
+            $output = & bombardier @bmArgs 2>&1 | ForEach-Object { $_.ToString() }
+            $output | ForEach-Object { Write-Host $_ }
+
+            # Collect resource samples
+            $res = Get-ResourceSummary $sampler
+
+            $parsed = Parse-BombardierOutput $output
+            $results += [PSCustomObject]@{
+                Scenario   = $s.Name
+                RPS        = $parsed.RPS
+                LatencyAvg = $parsed.LatencyAvg
+                Throughput = $parsed.Throughput
+                AvgCpu     = $res.AvgCpu
+                PeakCpu    = $res.PeakCpu
+                AvgMem     = $res.AvgMem
+                PeakMem    = $res.PeakMem
+                '2xx'      = $parsed.'2xx'
+                '4xx'      = $parsed.'4xx'
+                '5xx'      = $parsed.'5xx'
+                'other'    = $parsed.'other'
             }
         }
-    )
 
-    $results = @()
+        # Stop host before printing summary (frees resources).
+        Stop-Host
 
-    foreach ($s in $scenarios) {
-        Write-Banner "$($s.Name) ($($s.Method) $($s.Path))"
+        # ── Summary for this approach ────────────────────────────────────
+        Write-Banner "Results Summary — $approach"
+        $results | Format-Table -AutoSize -Property Scenario, RPS, LatencyAvg, Throughput, AvgCpu, PeakCpu, AvgMem, PeakMem, '2xx', '4xx', '5xx', 'other'
 
-        if ($s.Setup) { & $s.Setup }
+        # ── Comparison with previous run ─────────────────────────────────
+        $previousRun = Load-PreviousRun $historyFile
+        if ($previousRun) {
+            Show-Comparison $results $previousRun
+        } else {
+            Write-Host "`nNo previous run found for '$approach'. This run will become the baseline." -ForegroundColor DarkGray
+        }
 
-        # Start sampling host CPU / memory in the background
-        $sampler = Start-ResourceSampler -processId $hostPid
-
-        $bmArgs = @('-c', $Concurrency, '-d', "${Duration}s", '-m', $s.Method, '-p', 'r')
-        $bmArgs += "$baseUrl$($s.Path)"
-
-        $output = & bombardier @bmArgs 2>&1 | ForEach-Object { $_.ToString() }
-        $output | ForEach-Object { Write-Host $_ }
-
-        # Collect resource samples
-        $res = Get-ResourceSummary $sampler
-
-        $parsed = Parse-BombardierOutput $output
-        $results += [PSCustomObject]@{
-            Scenario   = $s.Name
-            RPS        = $parsed.RPS
-            LatencyAvg = $parsed.LatencyAvg
-            Throughput = $parsed.Throughput
-            AvgCpu     = $res.AvgCpu
-            PeakCpu    = $res.PeakCpu
-            AvgMem     = $res.AvgMem
-            PeakMem    = $res.PeakMem
-            '2xx'      = $parsed.'2xx'
-            '4xx'      = $parsed.'4xx'
-            '5xx'      = $parsed.'5xx'
-            'other'    = $parsed.'other'
+        # Store for end-of-run save and total summary
+        $approachResults[$approach] = $results
+        foreach ($r in $results) {
+            $allResults += [PSCustomObject]@{
+                Approach   = $approach
+                Scenario   = $r.Scenario
+                RPS        = $r.RPS
+                LatencyAvg = $r.LatencyAvg
+                Throughput = $r.Throughput
+                '2xx'      = $r.'2xx'
+                '4xx'      = $r.'4xx'
+                '5xx'      = $r.'5xx'
+                'other'    = $r.'other'
+            }
         }
     }
 
-    # ── Summary ──────────────────────────────────────────────────────────
-    Write-Banner 'Results Summary'
-    $results | Format-Table -AutoSize -Property Scenario, RPS, LatencyAvg, Throughput, AvgCpu, PeakCpu, AvgMem, PeakMem, '2xx', '4xx', '5xx', 'other'
-
-    # ── Comparison with previous run ─────────────────────────────────────
-    $previousRun = Load-PreviousRun
-    if ($previousRun) {
-        Show-Comparison $results $previousRun
-    } else {
-        Write-Host "`nNo previous run found. This run will become the baseline." -ForegroundColor DarkGray
+    # ── Total Summary — all approaches side-by-side ──────────────────────
+    if ($Approaches.Count -gt 1) {
+        Write-Banner 'Total Summary — all approaches'
+        $allResults | Format-Table -AutoSize -Property Approach, Scenario, RPS, LatencyAvg, Throughput, '2xx', '4xx', '5xx', 'other'
     }
 
-    # ── Retain / discard ─────────────────────────────────────────────────
-    $choice = Read-Host "`nSave this run to history? [Y/n]"
+    # ── Retain / discard (single prompt for all approaches) ──────────────
+    $choice = Read-Host "`nSave results to history? [Y/n]"
     if ($choice -eq '' -or $choice -match '^[Yy]') {
-        $run = [PSCustomObject]@{
-            Timestamp   = (Get-Date -Format 'o')
-            Duration    = $Duration
-            Concurrency = $Concurrency
-            Results     = $results
+        foreach ($approach in $approachResults.Keys) {
+            $historyFile = Join-Path $PSScriptRoot "results-$approach.json"
+            $run = [PSCustomObject]@{
+                Timestamp   = (Get-Date -Format 'o')
+                Duration    = $Duration
+                Concurrency = $Concurrency
+                Approach    = $approach
+                Results     = $approachResults[$approach]
+            }
+            $run | ConvertTo-Json -Depth 4 | Set-Content $historyFile -Encoding UTF8
+            Write-Step "Results saved to $historyFile"
         }
-        $run | ConvertTo-Json -Depth 4 | Set-Content $historyFile -Encoding UTF8
-        Write-Step "Results saved to $historyFile"
     } else {
         Write-Step 'Results discarded.'
     }
 
 } finally {
-    & $cleanup
+    Stop-Host
 }
