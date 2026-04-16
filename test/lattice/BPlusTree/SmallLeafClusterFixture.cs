@@ -1,3 +1,4 @@
+using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.TestingHost;
@@ -7,6 +8,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 public sealed class SmallLeafClusterFixture : IAsyncLifetime
 {
     public const string TreeName = "small-leaf-tree";
+    public const string CompactionTreeName = "compaction-tree";
     public const int SmallMaxLeafKeys = 4;
 
     public TestCluster Cluster { get; private set; } = null!;
@@ -34,12 +36,14 @@ public sealed class SmallLeafClusterFixture : IAsyncLifetime
             {
                 o.MaxLeafKeys = SmallMaxLeafKeys;
                 o.ShardCount = 1;
+                o.TombstoneGracePeriod = TimeSpan.Zero;
             });
             siloBuilder.ConfigureLattice(TreeName, o =>
             {
                 o.MaxLeafKeys = SmallMaxLeafKeys;
                 o.ShardCount = 1;
             });
+            siloBuilder.UseInMemoryReminderService();
         }
     }
 }

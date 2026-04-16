@@ -1,3 +1,4 @@
+using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.TestingHost;
@@ -36,6 +37,7 @@ public sealed class FourShardClusterFixture : IAsyncLifetime
                 o.MaxLeafKeys = SmallMaxLeafKeys;
                 o.ShardCount = TestShardCount;
             });
+            siloBuilder.UseInMemoryReminderService();
         }
     }
 }

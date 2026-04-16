@@ -19,6 +19,7 @@ internal sealed class LatticeGrain(
 {
     private string TreeId => context.GrainId.Key.ToString()!;
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
+    private bool _compactionEnsured;
 
     public async Task<byte[]?> GetAsync(string key)
     {
@@ -28,14 +29,26 @@ internal sealed class LatticeGrain(
 
     public async Task SetAsync(string key, byte[] value)
     {
+        await EnsureCompactionReminderAsync();
         var shard = GetShardGrain(key);
         await shard.SetAsync(key, value);
     }
 
     public async Task<bool> DeleteAsync(string key)
     {
+        await EnsureCompactionReminderAsync();
         var shard = GetShardGrain(key);
         return await shard.DeleteAsync(key);
+    }
+
+    private async Task EnsureCompactionReminderAsync()
+    {
+        if (_compactionEnsured) return;
+        if (Options.TombstoneGracePeriod == Timeout.InfiniteTimeSpan) return;
+
+        var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
+        await compaction.EnsureReminderAsync();
+        _compactionEnsured = true;
     }
 
     public async IAsyncEnumerable<string> KeysAsync(

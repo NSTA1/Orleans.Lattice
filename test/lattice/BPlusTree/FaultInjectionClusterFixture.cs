@@ -48,6 +48,7 @@ public sealed class FaultInjectionClusterFixture : IAsyncLifetime
                 o.MaxInternalChildren = SmallMaxInternalChildren;
                 o.ShardCount = 1;
             });
+            siloBuilder.UseInMemoryReminderService();
         }
     }
 }

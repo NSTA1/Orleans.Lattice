@@ -40,6 +40,13 @@ internal sealed class LeafNodeState
     [Id(8)] public GrainId? PrevSibling { get; set; }
 
     /// <summary>
+    /// The version vector as of the last tombstone compaction pass. Entries
+    /// that have not changed since this version are skipped during the next
+    /// compaction scan, avoiding redundant work.
+    /// </summary>
+    [Id(10)] public VersionVector LastCompactionVersion { get; set; } = new();
+
+    /// <summary>
     /// During a split, the previous value of <see cref="NextSibling"/> before it was
     /// overwritten with the new sibling. Persisted in Phase 1 so that
     /// <see cref="BPlusTree.Grains.BPlusLeafGrain.CompleteSplitAsync"/> can link the

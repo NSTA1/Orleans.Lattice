@@ -122,6 +122,36 @@ internal sealed class BPlusLeafGrain(
         await state.WriteStateAsync();
     }
 
+    public async Task<int> CompactTombstonesAsync(TimeSpan gracePeriod)
+    {
+        // Skip scan if nothing has changed since last compaction.
+        if (state.State.LastCompactionVersion.DominatesOrEquals(state.State.Version))
+            return 0;
+
+        var cutoff = DateTimeOffset.UtcNow.Ticks - gracePeriod.Ticks;
+        var toRemove = new List<string>();
+
+        foreach (var (key, lww) in state.State.Entries)
+        {
+            if (lww.IsTombstone && lww.Timestamp.WallClockTicks <= cutoff)
+            {
+                toRemove.Add(key);
+            }
+        }
+
+        if (toRemove.Count > 0)
+        {
+            foreach (var key in toRemove)
+            {
+                state.State.Entries.Remove(key);
+            }
+        }
+
+        state.State.LastCompactionVersion = state.State.Version.Clone();
+        await state.WriteStateAsync();
+        return toRemove.Count;
+    }
+
     public Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion)
     {
         // If the caller's version dominates ours, they already have everything.
