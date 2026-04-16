@@ -325,4 +325,67 @@ public class LeafCacheGrainTests
         Assert.Equal("1", Encoding.UTF8.GetString((await grain.GetAsync("a"))!));
         Assert.Equal("2", Encoding.UTF8.GetString((await grain.GetAsync("z"))!));
     }
+
+    // --- Sibling leaf after split (MergeEntriesAsync scenario) ---
+
+    [Fact]
+    public async Task Cache_populates_from_sibling_leaf_after_split()
+    {
+        // Simulates a sibling leaf that received entries via MergeEntriesAsync
+        // during a split. The sibling's version vector must be non-empty so that
+        // the cache's delta check doesn't short-circuit on empty-dominates-empty.
+        var (grain, leaf) = CreateGrain();
+
+        // The sibling has entries (transferred during split) and a ticked version.
+        // This mirrors the fix in MergeEntriesAsync which now ticks the version.
+        var clock = HybridLogicalClock.Tick(default);
+        var siblingVersion = new VersionVector();
+        siblingVersion.Tick("sibling-replica");
+
+        var siblingDelta = new StateDelta
+        {
+            Entries = new Dictionary<string, LwwValue<byte[]>>
+            {
+                ["k1"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("v1"), clock),
+                ["k2"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("v2"), HybridLogicalClock.Tick(clock))
+            },
+            Version = siblingVersion
+        };
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(siblingDelta);
+
+        var result = await grain.GetAsync("k1");
+        Assert.NotNull(result);
+        Assert.Equal("v1", Encoding.UTF8.GetString(result));
+
+        var result2 = await grain.GetAsync("k2");
+        Assert.NotNull(result2);
+        Assert.Equal("v2", Encoding.UTF8.GetString(result2));
+    }
+
+    [Fact]
+    public async Task Cache_fails_when_sibling_version_is_empty()
+    {
+        // Demonstrates the bug scenario: if MergeEntriesAsync did NOT tick the
+        // version, the sibling's version would be empty. The cache's delta check
+        // (empty.DominatesOrEquals(empty) → true) would short-circuit, returning
+        // an empty delta, and the cache would never populate.
+        var (grain, leaf) = CreateGrain();
+
+        // Sibling has entries but empty version (the bug scenario).
+        var clock = HybridLogicalClock.Tick(default);
+        var emptyVersion = new VersionVector();
+
+        // First call: cache version is empty, sibling version is empty.
+        // DominatesOrEquals(empty) → true → empty delta returned.
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+            .Returns(new StateDelta
+            {
+                Entries = new Dictionary<string, LwwValue<byte[]>>(),
+                Version = emptyVersion
+            });
+
+        // Key exists in the leaf but the cache can't see it.
+        var result = await grain.GetAsync("k1");
+        Assert.Null(result);
+    }
 }

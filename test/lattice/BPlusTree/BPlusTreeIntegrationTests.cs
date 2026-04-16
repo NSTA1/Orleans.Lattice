@@ -77,3 +77,126 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
     }
 }
 
+/// <summary>
+/// Integration tests that insert keys in non-ascending order using a single-shard,
+/// small-leaf cluster to force many splits and expose routing bugs.
+/// </summary>
+[Collection(SmallLeafClusterCollection.Name)]
+public class BPlusTreeInsertionOrderTests(SmallLeafClusterFixture fixture)
+{
+    private readonly TestCluster _cluster = fixture.Cluster;
+
+    [Fact]
+    public async Task Reverse_order_insert_then_get_all_keys()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("rev-insert-get");
+        const int count = 30;
+        var value = Encoding.UTF8.GetBytes("v");
+
+        for (int i = count - 1; i >= 0; i--)
+            await tree.SetAsync($"k{i:D4}", value);
+
+        var missing = new List<string>();
+        for (int i = 0; i < count; i++)
+        {
+            var result = await tree.GetAsync($"k{i:D4}");
+            if (result is null) missing.Add($"k{i:D4}");
+        }
+
+        Assert.Empty(missing);
+    }
+
+    [Fact]
+    public async Task Random_order_insert_then_get_all_keys()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("rand-insert-get");
+        const int count = 30;
+        var value = Encoding.UTF8.GetBytes("v");
+
+        var indices = Enumerable.Range(0, count).ToArray();
+        var rng = new Random(42);
+        for (int i = count - 1; i > 0; i--)
+        {
+            int j = rng.Next(i + 1);
+            (indices[i], indices[j]) = (indices[j], indices[i]);
+        }
+
+        foreach (var i in indices)
+            await tree.SetAsync($"k{i:D4}", value);
+
+        var missing = new List<string>();
+        for (int i = 0; i < count; i++)
+        {
+            var result = await tree.GetAsync($"k{i:D4}");
+            if (result is null) missing.Add($"k{i:D4}");
+        }
+
+        Assert.Empty(missing);
+    }
+
+    [Fact]
+    public async Task Reverse_order_insert_keys_scan_returns_all()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("rev-insert-keys");
+        const int count = 30;
+        var value = Encoding.UTF8.GetBytes("v");
+
+        for (int i = count - 1; i >= 0; i--)
+            await tree.SetAsync($"k{i:D4}", value);
+
+        var keys = new List<string>();
+        await foreach (var k in tree.KeysAsync())
+            keys.Add(k);
+
+        var expected = Enumerable.Range(0, count)
+            .Select(i => $"k{i:D4}")
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(expected, keys);
+    }
+
+    [Fact]
+    public async Task Reverse_order_insert_large_set_then_get_all()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("rev-insert-large");
+        const int count = 200;
+        var value = Encoding.UTF8.GetBytes("v");
+
+        for (int i = count - 1; i >= 0; i--)
+            await tree.SetAsync($"k{i:D4}", value);
+
+        var missing = new List<string>();
+        for (int i = 0; i < count; i++)
+        {
+            var result = await tree.GetAsync($"k{i:D4}");
+            if (result is null) missing.Add($"k{i:D4}");
+        }
+
+        Assert.Empty(missing);
+    }
+
+    [Fact]
+    public async Task Concurrent_reverse_order_inserts_then_get_all()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("rev-concurrent");
+        const int count = 50;
+        var value = Encoding.UTF8.GetBytes("v");
+
+        // Fire multiple inserts concurrently (reverse order).
+        var tasks = new List<Task>();
+        for (int i = count - 1; i >= 0; i--)
+            tasks.Add(tree.SetAsync($"k{i:D4}", value));
+        await Task.WhenAll(tasks);
+
+        var missing = new List<string>();
+        for (int i = 0; i < count; i++)
+        {
+            var result = await tree.GetAsync($"k{i:D4}");
+            if (result is null) missing.Add($"k{i:D4}");
+        }
+
+        Assert.Empty(missing);
+    }
+}
+
