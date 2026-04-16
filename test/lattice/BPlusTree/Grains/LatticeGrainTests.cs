@@ -204,6 +204,13 @@ public class LatticeGrainTests
     // --- ExistsAsync tests ---
 
     [Fact]
+    public async Task ExistsAsync_throws_on_null_key()
+    {
+        var (grain, _) = CreateGrain();
+        await Assert.ThrowsAsync<ArgumentNullException>(() => grain.ExistsAsync(null!));
+    }
+
+    [Fact]
     public async Task ExistsAsync_delegates_to_shard_root()
     {
         var (grain, factory) = CreateGrain();
@@ -229,6 +236,13 @@ public class LatticeGrainTests
     }
 
     // --- GetManyAsync tests ---
+
+    [Fact]
+    public async Task GetManyAsync_throws_on_null_keys()
+    {
+        var (grain, _) = CreateGrain();
+        await Assert.ThrowsAsync<ArgumentNullException>(() => grain.GetManyAsync(null!));
+    }
 
     [Fact]
     public async Task GetManyAsync_returns_existing_keys()
@@ -272,6 +286,13 @@ public class LatticeGrainTests
     }
 
     // --- SetManyAsync tests ---
+
+    [Fact]
+    public async Task SetManyAsync_throws_on_null_entries()
+    {
+        var (grain, _) = CreateGrain();
+        await Assert.ThrowsAsync<ArgumentNullException>(() => grain.SetManyAsync(null!));
+    }
 
     [Fact]
     public async Task SetManyAsync_delegates_all_entries_to_shard()
