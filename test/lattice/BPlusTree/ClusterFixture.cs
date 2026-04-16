@@ -1,3 +1,4 @@
+using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.TestingHost;
 
@@ -26,6 +27,7 @@ public sealed class ClusterFixture : IAsyncLifetime
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            siloBuilder.UseInMemoryReminderService();
         }
     }
 }

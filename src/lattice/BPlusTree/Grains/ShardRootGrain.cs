@@ -215,6 +215,12 @@ internal sealed class ShardRootGrain(
         return new KeysPage { Keys = keys, HasMore = true };
     }
 
+    public async Task<GrainId?> GetLeftmostLeafIdAsync()
+    {
+        if (state.State.RootNodeId is null) return null;
+        return await TraverseToLeftmostLeafAsync();
+    }
+
     private async Task EnsureRootAsync()
     {
         if (state.State.RootNodeId is not null) return;

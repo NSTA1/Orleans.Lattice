@@ -35,4 +35,11 @@ public interface IShardRootGrain : IGrainWithStringKey
         string? endExclusive,
         int pageSize,
         string? continuationToken = null);
+
+    /// <summary>
+    /// Returns the <see cref="GrainId"/> of the leftmost leaf in this shard's B+ tree,
+    /// or <c>null</c> if the tree has not been initialised yet.
+    /// Used by the tombstone compaction grain to walk the leaf chain.
+    /// </summary>
+    Task<GrainId?> GetLeftmostLeafIdAsync();
 }

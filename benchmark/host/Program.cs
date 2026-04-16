@@ -7,6 +7,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.UseOrleans(silo =>
 {
     silo.UseLocalhostClustering();
+    silo.UseInMemoryReminderService();
     silo.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
 });
 

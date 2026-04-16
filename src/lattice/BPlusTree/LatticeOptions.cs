@@ -23,6 +23,18 @@ public sealed class LatticeOptions
     /// <summary>Number of keys per page returned by <see cref="IShardRootGrain.GetSortedKeysBatchAsync"/>.</summary>
     public int KeysPageSize { get; set; } = DefaultKeysPageSize;
 
+    /// <summary>
+    /// How long a tombstone must exist before it is eligible for compaction.
+    /// A grain reminder fires at this interval; tombstones older than this
+    /// grace period are permanently removed. Set to <see cref="Timeout.InfiniteTimeSpan"/>
+    /// to disable compaction entirely. Per-tree overrides follow the same
+    /// named-options pattern as other properties.
+    /// </summary>
+    public TimeSpan TombstoneGracePeriod { get; set; } = DefaultTombstoneGracePeriod;
+
+    /// <summary>Default value for <see cref="TombstoneGracePeriod"/> (24 hours).</summary>
+    public static readonly TimeSpan DefaultTombstoneGracePeriod = TimeSpan.FromHours(24);
+
     /// <summary>Default value for <see cref="MaxLeafKeys"/>.</summary>
     public const int DefaultMaxLeafKeys = 128;
 

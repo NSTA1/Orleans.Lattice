@@ -60,4 +60,11 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// that fall within the optional [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
     /// </summary>
     Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null);
+
+    /// <summary>
+    /// Removes tombstones whose wall-clock age exceeds <paramref name="gracePeriod"/>.
+    /// Returns the number of tombstones removed. Tracks a <c>LastCompactionVersion</c>
+    /// to skip redundant scans when no writes have occurred since the last compaction.
+    /// </summary>
+    Task<int> CompactTombstonesAsync(TimeSpan gracePeriod);
 }
