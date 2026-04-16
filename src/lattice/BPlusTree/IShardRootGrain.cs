@@ -9,6 +9,7 @@ namespace Orleans.Lattice.BPlusTree;
 public interface IShardRootGrain : IGrainWithStringKey
 {
     Task<byte[]?> GetAsync(string key);
+    Task<bool> ExistsAsync(string key);
     Task SetAsync(string key, byte[] value);
     Task<bool> DeleteAsync(string key);
 

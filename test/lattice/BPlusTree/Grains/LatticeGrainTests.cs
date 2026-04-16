@@ -200,4 +200,108 @@ public class LatticeGrainTests
 
         await compaction.Received(1).EnsureReminderAsync();
     }
+
+    // --- ExistsAsync tests ---
+
+    [Fact]
+    public async Task ExistsAsync_delegates_to_shard_root()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        shardRoot.ExistsAsync("k1").Returns(true);
+
+        var result = await grain.ExistsAsync("k1");
+
+        Assert.True(result);
+        await shardRoot.Received(1).ExistsAsync("k1");
+    }
+
+    [Fact]
+    public async Task ExistsAsync_returns_false_for_missing_key()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        shardRoot.ExistsAsync("missing").Returns(false);
+
+        var result = await grain.ExistsAsync("missing");
+
+        Assert.False(result);
+    }
+
+    // --- GetManyAsync tests ---
+
+    [Fact]
+    public async Task GetManyAsync_returns_existing_keys()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        shardRoot.GetAsync("k1").Returns(Encoding.UTF8.GetBytes("v1"));
+        shardRoot.GetAsync("k2").Returns(Encoding.UTF8.GetBytes("v2"));
+
+        var result = await grain.GetManyAsync(["k1", "k2"]);
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal("v1", Encoding.UTF8.GetString(result["k1"]));
+        Assert.Equal("v2", Encoding.UTF8.GetString(result["k2"]));
+    }
+
+    [Fact]
+    public async Task GetManyAsync_omits_missing_keys()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        shardRoot.GetAsync("k1").Returns(Encoding.UTF8.GetBytes("v1"));
+        shardRoot.GetAsync("k2").Returns((byte[]?)null);
+
+        var result = await grain.GetManyAsync(["k1", "k2"]);
+
+        Assert.Single(result);
+        Assert.True(result.ContainsKey("k1"));
+        Assert.False(result.ContainsKey("k2"));
+    }
+
+    [Fact]
+    public async Task GetManyAsync_returns_empty_for_no_keys()
+    {
+        var (grain, factory) = CreateGrain();
+        SetupShardRoot(factory);
+
+        var result = await grain.GetManyAsync([]);
+
+        Assert.Empty(result);
+    }
+
+    // --- SetManyAsync tests ---
+
+    [Fact]
+    public async Task SetManyAsync_delegates_all_entries_to_shard()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        SetupCompactionGrain(factory, "my-tree");
+
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k1", Encoding.UTF8.GetBytes("v1")),
+            new("k2", Encoding.UTF8.GetBytes("v2")),
+        };
+
+        await grain.SetManyAsync(entries);
+
+        await shardRoot.Received(1).SetAsync("k1", Arg.Any<byte[]>());
+        await shardRoot.Received(1).SetAsync("k2", Arg.Any<byte[]>());
+    }
+
+    [Fact]
+    public async Task SetManyAsync_CallsEnsureReminderAsync()
+    {
+        const string treeId = "compaction-setmany";
+        var (grain, factory) = CreateGrain(treeId);
+        SetupShardRoot(factory);
+        var compaction = SetupCompactionGrain(factory, treeId);
+
+        await grain.SetManyAsync([new("k1", [1])]);
+
+        await compaction.Received(1).EnsureReminderAsync();
+    }
 }

@@ -39,19 +39,19 @@ internal sealed class ShardRootGrain(
 
     public async Task<byte[]?> GetAsync(string key)
     {
-        ThrowIfDeleted();
-        await EnsureRootAsync();
-        await ResumePendingPromotionAsync();
-        await ResumePendingBulkGraftAsync();
+        await PrepareForOperationAsync();
         return await TraverseForReadAsync(key);
+    }
+
+    public async Task<bool> ExistsAsync(string key)
+    {
+        await PrepareForOperationAsync();
+        return await TraverseForReadAsync(key) is not null;
     }
 
     public async Task SetAsync(string key, byte[] value)
     {
-        ThrowIfDeleted();
-        await EnsureRootAsync();
-        await ResumePendingPromotionAsync();
-        await ResumePendingBulkGraftAsync();
+        await PrepareForOperationAsync();
 
         for (int attempt = 0; ; attempt++)
         {
@@ -78,10 +78,7 @@ internal sealed class ShardRootGrain(
 
     public async Task<bool> DeleteAsync(string key)
     {
-        ThrowIfDeleted();
-        await EnsureRootAsync();
-        await ResumePendingPromotionAsync();
-        await ResumePendingBulkGraftAsync();
+        await PrepareForOperationAsync();
 
         for (int attempt = 0; ; attempt++)
         {
@@ -111,10 +108,7 @@ internal sealed class ShardRootGrain(
         int pageSize,
         string? continuationToken = null)
     {
-        ThrowIfDeleted();
-        await EnsureRootAsync();
-        await ResumePendingPromotionAsync();
-        await ResumePendingBulkGraftAsync();
+        await PrepareForOperationAsync();
 
         // Determine the starting leaf.
         var seekKey = continuationToken ?? startInclusive;
@@ -170,10 +164,7 @@ internal sealed class ShardRootGrain(
         int pageSize,
         string? continuationToken = null)
     {
-        ThrowIfDeleted();
-        await EnsureRootAsync();
-        await ResumePendingPromotionAsync();
-        await ResumePendingBulkGraftAsync();
+        await PrepareForOperationAsync();
 
         // Determine the starting leaf (rightmost, or the leaf for the seek key).
         var seekKey = continuationToken ?? endExclusive;
@@ -742,6 +733,14 @@ internal sealed class ShardRootGrain(
     {
         if (state.State.IsDeleted)
             throw new InvalidOperationException("This tree has been deleted and is no longer accessible.");
+    }
+
+    private async Task PrepareForOperationAsync()
+    {
+        ThrowIfDeleted();
+        await EnsureRootAsync();
+        await ResumePendingPromotionAsync();
+        await ResumePendingBulkGraftAsync();
     }
 
     public async Task MarkDeletedAsync()
