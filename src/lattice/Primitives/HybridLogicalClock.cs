@@ -1,3 +1,5 @@
+using Orleans.Lattice;
+
 namespace Orleans.Lattice.Primitives;
 
 /// <summary>
@@ -5,6 +7,7 @@ namespace Orleans.Lattice.Primitives;
 /// monotonic counter to produce totally-ordered, conflict-free timestamps.
 /// </summary>
 [GenerateSerializer]
+[Alias(TypeAliases.HybridLogicalClock)]
 [Immutable]
 public readonly record struct HybridLogicalClock
 {
