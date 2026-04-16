@@ -26,6 +26,18 @@ internal sealed class BPlusInternalGrain(
         await state.WriteStateAsync();
     }
 
+    public async Task InitializeWithChildrenAsync(List<string?> separatorKeys, List<GrainId> childIds, bool childrenAreLeaves)
+    {
+        var children = new List<ChildEntry>(separatorKeys.Count);
+        for (int i = 0; i < separatorKeys.Count; i++)
+            children.Add(new ChildEntry { SeparatorKey = separatorKeys[i], ChildId = childIds[i] });
+
+        state.State.Children = children;
+        state.State.ChildrenAreLeaves = childrenAreLeaves;
+        state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
+        await state.WriteStateAsync();
+    }
+
     public Task<GrainId> RouteAsync(string key) =>
         Task.FromResult(state.State.Route(key));
 

@@ -1,6 +1,4 @@
 using System.Buffers;
-using System.IO.Hashing;
-using System.Text;
 using Microsoft.Extensions.Options;
 using Orleans.Concurrency;
 
@@ -157,23 +155,33 @@ internal sealed class LatticeGrain(
     /// <summary>
     /// Computes a stable shard index for the given key using XxHash32.
     /// </summary>
-    internal static int GetShardIndex(string key, int shardCount)
+    internal static int GetShardIndex(string key, int shardCount) =>
+        LatticeSharding.GetShardIndex(key, shardCount);
+
+    public async Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries)
     {
-        var maxByteCount = Encoding.UTF8.GetMaxByteCount(key.Length);
-        byte[]? rented = null;
-        Span<byte> buffer = maxByteCount <= 256
-            ? stackalloc byte[maxByteCount]
-            : (rented = ArrayPool<byte>.Shared.Rent(maxByteCount));
-        try
+        var shardCount = Options.ShardCount;
+        var operationId = Guid.NewGuid().ToString("N");
+
+        // Group entries by shard, sorting each group by key.
+        var shardBuckets = new List<KeyValuePair<string, byte[]>>[shardCount];
+        for (int i = 0; i < shardCount; i++)
+            shardBuckets[i] = [];
+
+        foreach (var entry in entries)
+            shardBuckets[GetShardIndex(entry.Key, shardCount)].Add(entry);
+
+        var tasks = new List<Task>();
+        for (int i = 0; i < shardCount; i++)
         {
-            var written = Encoding.UTF8.GetBytes(key, buffer);
-            var hash = XxHash32.HashToUInt32(buffer[..written]);
-            return (int)(hash % (uint)shardCount);
+            var bucket = shardBuckets[i];
+            if (bucket.Count == 0) continue;
+
+            bucket.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
+            tasks.Add(shard.BulkLoadAsync($"{operationId}-{i}", bucket));
         }
-        finally
-        {
-            if (rented is not null)
-                ArrayPool<byte>.Shared.Return(rented);
-        }
+
+        await Task.WhenAll(tasks);
     }
 }

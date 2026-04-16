@@ -440,6 +440,113 @@ When a split cascades all the way up to the shard root, `ShardRootGrain` creates
 
 If the shard root crashes between phases, `ResumePendingPromotionAsync` (called at the start of every `GetAsync`, `SetAsync`, and `DeleteAsync`) detects the pending promotion and completes it. The deterministic `GrainId` ensures that re-executing Phase 2 targets the same grain — making the promotion idempotent.
 
+### Bulk Load
+
+Orleans.Lattice supports two bulk-loading modes for efficiently populating a tree without the overhead of individual `SetAsync` calls:
+
+#### One-Shot Bulk Load (`ILattice.BulkLoadAsync`)
+
+Builds the tree bottom-up from a pre-sorted list of key-value pairs. Designed for initial population of an empty tree:
+
+```csharp
+var tree = grainFactory.GetGrain<ILattice>("my-tree");
+var entries = data
+    .Select(d => KeyValuePair.Create(d.Key, Encoding.UTF8.GetBytes(d.Value)))
+    .ToList();
+
+await tree.BulkLoadAsync(entries);
+```
+
+Internally, `LatticeGrain` partitions entries by shard, sorts each partition, and calls `ShardRootGrain.BulkLoadAsync` in parallel across all shards.
+
+**How it works:**
+
+1. **Create leaves** — entries are divided into leaf-sized chunks. Each leaf gets a **deterministic `GrainId`** derived from the operation ID and index, so crash-retries reuse the same grains instead of creating orphans.
+2. **Wire sibling links** — leaves are connected in a doubly-linked list for range scans.
+3. **Build internal nodes** — internal nodes are created bottom-up, layer by layer, also with deterministic IDs.
+4. **Atomic commit** — the shard's root pointer is updated in a single `WriteStateAsync` call. This is the commit point: if a crash occurs before this write, the shard is still empty and the entire operation can be retried safely.
+
+**Idempotency:** Each shard call carries a unique `operationId`. If the same operation is retried after success, `LastCompletedBulkOperationId` matches and the call is a no-op. If the shard already has data from a *different* operation, an `InvalidOperationException` is thrown (bulk load requires an empty shard).
+
+#### Streaming Bulk Load (Extension Method)
+
+For datasets too large to materialise in memory, a streaming overload accepts an `IAsyncEnumerable`:
+
+```csharp
+async IAsyncEnumerable<KeyValuePair<string, byte[]>> ReadFromSource()
+{
+    // Yield entries in ascending key order.
+    await foreach (var record in database.StreamAllAsync())
+        yield return KeyValuePair.Create(record.Key, record.ValueBytes);
+}
+
+await tree.BulkLoadAsync(
+    ReadFromSource(),
+    grainFactory,
+    shardCount: 64,
+    chunkSize: 10_000);
+```
+
+The extension method buffers entries per shard and flushes each shard independently when its buffer reaches `chunkSize`. Flushes to different shards run in parallel; flushes to the *same* shard are sequential (preserving key order). Each chunk gets a unique `operationId` for idempotent retries.
+
+Under the hood, each chunk calls `ShardRootGrain.BulkAppendAsync`, which appends entries to the right edge of an existing tree.
+
+#### Two-Phase Graft (BulkAppendAsync)
+
+`BulkAppendAsync` uses a **two-phase graft** pattern to safely extend an existing tree:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant SR as ShardRootGrain
+    participant EL as Existing Rightmost Leaf
+    participant NL1 as New Leaf 1
+    participant NL2 as New Leaf 2
+    participant INT as Internal Nodes
+
+    Caller->>SR: BulkAppendAsync(operationId, entries)
+
+    rect rgb(240, 248, 255)
+    Note over SR: Phase 1 — Build in isolation
+    SR->>EL: Fill remaining space (MergeEntriesAsync)
+    SR->>NL1: Create with deterministic ID, load data
+    SR->>NL2: Create with deterministic ID, load data
+    NL1->>NL2: Wire sibling links (among new leaves only)
+    Note over SR: Existing tree untouched
+    end
+
+    rect rgb(255, 248, 240)
+    Note over SR: Phase 2 — Persist intent (atomic commit point)
+    SR->>SR: PendingBulkGraft = { operationId, leaves, rightmostLeafId }
+    SR->>SR: WriteStateAsync()
+    end
+
+    rect rgb(240, 255, 240)
+    Note over SR: Phase 3 — Execute graft
+    SR->>EL: SetNextSiblingAsync(newLeaf1)
+    SR->>NL1: SetPrevSiblingAsync(existingLeaf)
+    loop For each new leaf
+        SR->>INT: AcceptSplitAsync (propagate separator)
+    end
+    SR->>SR: Clear PendingBulkGraft, set LastCompletedBulkOperationId
+    SR->>SR: WriteStateAsync()
+    end
+```
+
+**Recovery guarantees:**
+
+| Crash point | State on recovery | Action |
+|---|---|---|
+| Before Phase 2 write | Existing tree unchanged, new leaves are orphans | Caller retries; deterministic IDs reuse same grains |
+| Between Phase 2 and Phase 3 | `PendingBulkGraft` persisted in state | `ResumePendingBulkGraftAsync` completes the graft on next access (Get/Set/Delete/Keys/BulkAppend) |
+| After Phase 3 | Fully grafted, operation ID recorded | Retry with same `operationId` is a no-op |
+
+**Key properties:**
+- **No corruption:** The existing tree is never modified until after the intent record is persisted.
+- **Deterministic grain IDs:** New leaves use IDs derived from `{shardKey}/append/{operationId}/leaf/{index}`, so retries target the same grains.
+- **Idempotent sibling wiring:** `SetNextSiblingAsync` and `SetPrevSiblingAsync` are safe to call multiple times with the same value.
+- **Idempotent separator propagation:** `AcceptSplitAsync` detects duplicate `(separatorKey, childId)` pairs and skips them.
+
 ### Bounded Retry
 
 `ShardRootGrain` wraps `SetAsync` and `DeleteAsync` in a bounded retry loop (default: 3 attempts). If a grain call fails due to a transient error (e.g. storage fault, network partition), the request is retried. Orleans automatically deactivates a failed grain; the retry hits a fresh activation that runs any pending recovery logic before processing the request. This shields callers from transient infrastructure errors without requiring client-side retry code.
@@ -449,7 +556,7 @@ If the shard root crashes between phases, `ResumePendingPromotionAsync` (called 
 | B+ Tree Concept | Orleans Grain | Key Format | Persistent State |
 |---|---|---|---|
 | Shard router | `LatticeGrain` (`[StatelessWorker]`) | `{treeId}` | None (stateless) |
-| Shard root | `ShardRootGrain` | `{treeId}/{shardIndex}` | `ShardRootState` — root node ID + leaf/internal flag + pending promotion |
+| Shard root | `ShardRootGrain` | `{treeId}/{shardIndex}` | `ShardRootState` — root node ID + leaf/internal flag + pending promotion + pending bulk graft + last completed bulk operation ID |
 | Internal node | `BPlusInternalGrain` | `Guid` | `InternalNodeState` — sorted children + HLC + split state |
 | Leaf node | `BPlusLeafGrain` | `Guid` | `LeafNodeState` — sorted LWW entries + sibling pointer + HLC + version vector + split state |
 | Leaf cache | `LeafCacheGrain` (`[StatelessWorker]`) | `{leafGrainId}` | None (in-memory LWW-map + version vector) |
@@ -498,8 +605,9 @@ src/lattice/
 │   └── StateDelta.cs            Changed entries + version + split key for delta replication
 └── BPlusTree/
     ├── LatticeOptions.cs        Branching factor and shard count constants
+    ├── LatticeSharding.cs       Public static shard index computation (XxHash32)
     ├── SplitResult.cs           Promoted key + new sibling ID
-    ├── ILattice.cs              Public API — stateless router
+    ├── ILattice.cs              Public API — stateless router + streaming bulk-load extension
     ├── IShardRootGrain.cs       Per-shard root interface
     ├── IBPlusInternalGrain.cs   Internal node interface
     ├── IBPlusLeafGrain.cs       Leaf node interface + delta extraction + tombstone compaction
@@ -508,11 +616,11 @@ src/lattice/
     ├── State/
     │   ├── LeafNodeState.cs     Sorted LWW entries + sibling pointer + version vector
     │   ├── InternalNodeState.cs Sorted children + routing logic + split state
-    │   ├── ShardRootState.cs    Root pointer + leaf/internal flag + pending promotion
+    │   ├── ShardRootState.cs    Root pointer + leaf/internal flag + pending promotion + pending bulk graft
     │   └── TombstoneCompactionState.cs  In-flight compaction progress for crash recovery
     └── Grains/
         ├── LatticeGrain.cs           XxHash32 shard routing
-        ├── ShardRootGrain.cs        Root management + two-phase split promotion + retry + cache routing
+        ├── ShardRootGrain.cs        Root management + two-phase split promotion + bulk load/append with two-phase graft + retry + cache routing
         ├── BPlusInternalGrain.cs    Idempotent separator insertion + two-phase cascading splits
         ├── BPlusLeafGrain.cs        LWW insert/delete + two-phase leaf splitting + delta extraction
         └── LeafCacheGrain.cs        Stateless per-silo read cache with LWW merge + split pruning
