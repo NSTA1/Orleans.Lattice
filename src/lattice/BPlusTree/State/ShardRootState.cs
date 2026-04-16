@@ -1,3 +1,5 @@
+using Orleans.Lattice;
+
 namespace Orleans.Lattice.BPlusTree.State;
 
 /// <summary>
@@ -5,6 +7,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// shard is currently a leaf or has been promoted to an internal node.
 /// </summary>
 [GenerateSerializer]
+[Alias(TypeAliases.ShardRootState)]
 internal sealed class ShardRootState
 {
     /// <summary>The grain identity of the current root node (leaf or internal).</summary>
@@ -52,6 +55,7 @@ internal sealed class ShardRootState
 /// resume the graft after a crash.
 /// </summary>
 [GenerateSerializer]
+[Alias(TypeAliases.PendingBulkGraft)]
 [Immutable]
 internal sealed record PendingBulkGraft
 {
@@ -72,6 +76,7 @@ internal sealed record PendingBulkGraft
 /// A single leaf in a pending bulk graft — its separator key and grain identity.
 /// </summary>
 [GenerateSerializer]
+[Alias(TypeAliases.GraftEntry)]
 [Immutable]
 internal sealed record GraftEntry
 {

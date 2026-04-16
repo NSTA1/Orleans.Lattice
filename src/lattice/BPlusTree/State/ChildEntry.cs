@@ -1,9 +1,12 @@
+using Orleans.Lattice;
+
 namespace Orleans.Lattice.BPlusTree.State;
 
 /// <summary>
 /// A single child entry in an internal node: the separator key and the grain id of the child.
 /// </summary>
 [GenerateSerializer]
+[Alias(TypeAliases.ChildEntry)]
 [Immutable]
 internal sealed record ChildEntry
 {
