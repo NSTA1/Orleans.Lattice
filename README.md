@@ -2,6 +2,10 @@
 
 A distributed [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree) library built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/), designed for scalable ordered key-value storage across a cluster.
 
+![CI](https://github.com/NSTA1/Orleans.Lattice/actions/workflows/ci.yml/badge.svg)
+![Publish](https://github.com/NSTA1/Orleans.Lattice/actions/workflows/publish.yml/badge.svg)
+[![NuGet](https://img.shields.io/nuget/v/Orleans.Lattice)](https://www.nuget.org/packages/Orleans.Lattice)
+
 ## What is it?
 
 Orleans.Lattice gives you a **sorted key-value store** that runs as a set of Orleans grains — no external database required. Keys are `string`, values are `byte[]`. You get point lookups, deletes, ordered key scans, and bulk loading, all distributed across a cluster of silos.
