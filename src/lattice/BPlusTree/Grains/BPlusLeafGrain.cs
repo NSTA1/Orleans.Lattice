@@ -8,7 +8,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Leaf node grain implementation. Stores key → <see cref="LwwValue{T}"/> entries
 /// in a sorted dictionary. Splits when the entry count exceeds <see cref="LatticeOptions.MaxLeafKeys"/>.
 /// </summary>
-internal sealed class BPlusLeafGrain(
+internal sealed partial class BPlusLeafGrain(
     IGrainContext context,
     [PersistentState("leaf", LatticeOptions.StorageProviderName)] IPersistentState<LeafNodeState> state,
     IGrainFactory grainFactory,
@@ -237,90 +237,6 @@ internal sealed class BPlusLeafGrain(
         }
 
         return Task.FromResult(keys);
-    }
-
-    private async Task<SplitResult> SplitAsync()
-    {
-        // Phase 1: Persist the split intent so we can resume after a crash.
-        // Compute the split key and new sibling identity once, and write them
-        // to durable state before making any cross-grain calls.
-        var keys = state.State.Entries.Keys.ToList();
-        int mid = keys.Count / 2;
-        var splitKey = keys[mid];
-
-        state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitInProgress);
-        state.State.SplitKey = splitKey;
-        state.State.SplitSiblingId = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid()).GetGrainId();
-        state.State.OldNextSibling = state.State.NextSibling; // preserve for doubly-linked list
-        state.State.NextSibling = state.State.SplitSiblingId;
-        await state.WriteStateAsync();
-
-        // Phase 2: Execute cross-grain operations using the persisted identity.
-        return await CompleteSplitAsync();
-    }
-
-    /// <summary>
-    /// Completes (or resumes) a split whose intent has already been persisted.
-    /// Safe to call multiple times — <see cref="IBPlusLeafGrain.MergeEntriesAsync"/>
-    /// is idempotent (LWW merge), and the sibling pointer setters are simple
-    /// overwrites of the same value.
-    /// </summary>
-    private async Task<SplitResult> CompleteSplitAsync()
-    {
-        var splitKey = state.State.SplitKey!;
-        var siblingId = state.State.SplitSiblingId!.Value;
-        var newLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(siblingId);
-
-        await newLeaf.SetTreeIdAsync(state.State.TreeId!);
-
-        // Collect entries that belong to the right sibling (keys >= splitKey).
-        var rightEntries = new Dictionary<string, LwwValue<byte[]>>();
-        foreach (var (key, lww) in state.State.Entries)
-        {
-            if (string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
-            {
-                rightEntries[key] = lww;
-            }
-        }
-
-        // Bulk-merge preserves original timestamps and tombstones.
-        if (rightEntries.Count > 0)
-        {
-            await newLeaf.MergeEntriesAsync(rightEntries);
-        }
-
-        // Wire the new sibling into the doubly-linked list.
-        // Before split: ... ← this → OldNext → ...
-        // After split:  ... ← this → newLeaf → OldNext → ...
-        var oldNextId = state.State.OldNextSibling;
-
-        // newLeaf.NextSibling = OldNext (fixes the forward-chain bug).
-        await newLeaf.SetNextSiblingAsync(oldNextId);
-
-        // newLeaf.PrevSibling = this leaf.
-        await newLeaf.SetPrevSiblingAsync(context.GrainId);
-
-        // If there was an old next sibling, point its PrevSibling back to newLeaf.
-        if (oldNextId is not null)
-        {
-            var oldNext = grainFactory.GetGrain<IBPlusLeafGrain>(oldNextId.Value);
-            await oldNext.SetPrevSiblingAsync(siblingId);
-        }
-
-        // Remove the transferred entries from our local state.
-        foreach (var key in rightEntries.Keys)
-        {
-            state.State.Entries.Remove(key);
-        }
-
-        state.State.OldNextSibling = null;
-        state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
-
-        return new SplitResult
-        {
-            PromotedKey = splitKey,
-            NewSiblingId = siblingId
-        };
     }
 
     public async Task ClearGrainStateAsync()
