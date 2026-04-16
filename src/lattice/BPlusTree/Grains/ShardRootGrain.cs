@@ -1,3 +1,4 @@
+using Microsoft.Extensions.ObjectPool;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 
@@ -14,10 +15,24 @@ internal sealed class ShardRootGrain(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor) : IShardRootGrain
 {
-    private string TreeId => context.GrainId.Key.ToString()!
-        [..context.GrainId.Key.ToString()!.LastIndexOf('/')];
+    private string? _treeId;
+    private string TreeId => _treeId ??= ComputeTreeId();
+    private string ComputeTreeId()
+    {
+        var key = context.GrainId.Key.ToString()!;
+        return key[..key.LastIndexOf('/')];
+    }
 
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
+
+    private static readonly ObjectPool<Stack<GrainId>> StackPool =
+        new DefaultObjectPoolProvider().Create(new StackPoolPolicy());
+
+    private sealed class StackPoolPolicy : PooledObjectPolicy<Stack<GrainId>>
+    {
+        public override Stack<GrainId> Create() => new();
+        public override bool Return(Stack<GrainId> obj) { obj.Clear(); return true; }
+    }
 
     private const int MaxRetries = 2;
 
@@ -262,7 +277,9 @@ internal sealed class ShardRootGrain(
         }
 
         // Walk internal nodes down to the leaf, collecting the path for split propagation.
-        var path = new Stack<GrainId>();
+        var path = StackPool.Get();
+        try
+        {
         var currentId = state.State.RootNodeId!.Value;
 
         while (true)
@@ -298,6 +315,11 @@ internal sealed class ShardRootGrain(
         }
 
         return splitResult;
+        }
+        finally
+        {
+            StackPool.Return(path);
+        }
     }
 
     private async Task<GrainId> TraverseToLeafAsync(string key)

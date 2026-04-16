@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO.Hashing;
 using System.Text;
 using Microsoft.Extensions.Options;
@@ -47,8 +48,10 @@ internal sealed class LatticeGrain(
 
         // Incremental k-way merge with per-shard pagination.
         // At any given time, we hold at most shardCount × pageSize keys in memory.
-        var cursors = new ShardCursor[shardCount];
-        var initTasks = new Task[shardCount];
+        var cursors = ArrayPool<ShardCursor>.Shared.Rent(shardCount);
+        var initTasks = ArrayPool<Task>.Shared.Rent(shardCount);
+        try
+        {
         for (int i = 0; i < shardCount; i++)
         {
             var shardKey = $"{TreeId}/{i}";
@@ -57,7 +60,7 @@ internal sealed class LatticeGrain(
                 startInclusive, endExclusive, pageSize, reverse);
             initTasks[i] = cursors[i].MoveNextAsync();
         }
-        await Task.WhenAll(initTasks);
+        await Task.WhenAll(initTasks.AsSpan(0, shardCount));
 
         // For forward: min-heap (ascending). For reverse: max-heap (descending).
         IComparer<string> comparer = reverse
@@ -79,6 +82,12 @@ internal sealed class LatticeGrain(
             await cursors[idx].MoveNextAsync();
             if (cursors[idx].HasCurrent)
                 pq.Enqueue(idx, cursors[idx].Current!);
+        }
+        }
+        finally
+        {
+            ArrayPool<ShardCursor>.Shared.Return(cursors, clearArray: true);
+            ArrayPool<Task>.Shared.Return(initTasks, clearArray: true);
         }
     }
 
@@ -137,8 +146,21 @@ internal sealed class LatticeGrain(
     /// </summary>
     internal static int GetShardIndex(string key, int shardCount)
     {
-        var bytes = Encoding.UTF8.GetBytes(key);
-        var hash = XxHash32.HashToUInt32(bytes);
-        return (int)(hash % (uint)shardCount);
+        var maxByteCount = Encoding.UTF8.GetMaxByteCount(key.Length);
+        byte[]? rented = null;
+        Span<byte> buffer = maxByteCount <= 256
+            ? stackalloc byte[maxByteCount]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxByteCount));
+        try
+        {
+            var written = Encoding.UTF8.GetBytes(key, buffer);
+            var hash = XxHash32.HashToUInt32(buffer[..written]);
+            return (int)(hash % (uint)shardCount);
+        }
+        finally
+        {
+            if (rented is not null)
+                ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 }

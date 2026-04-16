@@ -53,9 +53,13 @@ internal sealed class LeafCacheGrain(IGrainContext context, IGrainFactory grainF
         // exist is a no-op.
         if (delta.SplitKey is not null)
         {
-            var keysToRemove = _cache.Keys
-                .Where(k => string.Compare(k, delta.SplitKey, StringComparison.Ordinal) >= 0)
-                .ToList();
+            var splitKey = delta.SplitKey;
+            var keysToRemove = new List<string>();
+            foreach (var key in _cache.Keys)
+            {
+                if (string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+                    keysToRemove.Add(key);
+            }
             foreach (var key in keysToRemove)
             {
                 _cache.Remove(key);
