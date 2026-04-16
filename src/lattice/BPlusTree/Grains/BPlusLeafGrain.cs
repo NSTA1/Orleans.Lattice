@@ -29,6 +29,12 @@ internal sealed partial class BPlusLeafGrain(
         return Task.FromResult<byte[]?>(null);
     }
 
+    public Task<bool> ExistsAsync(string key)
+    {
+        return Task.FromResult(
+            state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone);
+    }
+
     public async Task<SplitResult?> SetAsync(string key, byte[] value)
     {
         // Recovery: if a previous split was interrupted, complete it first.

@@ -21,6 +21,22 @@ internal sealed partial class ShardRootGrain
         return await cache.GetAsync(key);
     }
 
+    private async Task<bool> TraverseForExistsAsync(string key)
+    {
+        GrainId leafId;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = state.State.RootNodeId!.Value;
+        }
+        else
+        {
+            leafId = await TraverseToLeafAsync(key);
+        }
+
+        var cache = grainFactory.GetGrain<ILeafCacheGrain>(leafId.ToString());
+        return await cache.ExistsAsync(key);
+    }
+
     private async Task<SplitResult?> TraverseForWriteAsync(string key, byte[] value)
     {
         if (state.State.RootIsLeaf)

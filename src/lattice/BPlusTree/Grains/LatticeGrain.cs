@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using Orleans.Concurrency;
 
@@ -26,12 +27,14 @@ internal sealed partial class LatticeGrain(
 
     public async Task<bool> ExistsAsync(string key)
     {
+        ArgumentNullException.ThrowIfNull(key);
         var shard = GetShardGrain(key);
         return await shard.ExistsAsync(key);
     }
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
+        ArgumentNullException.ThrowIfNull(keys);
         var shardCount = Options.ShardCount;
 
         // Group keys by shard.
@@ -48,7 +51,7 @@ internal sealed partial class LatticeGrain(
         }
 
         // Fan out reads in parallel per shard.
-        var result = new Dictionary<string, byte[]>(keys.Count);
+        var result = new ConcurrentDictionary<string, byte[]>();
         var tasks = new List<Task>(shardBuckets.Count);
 
         foreach (var (shardIdx, bucket) in shardBuckets)
@@ -58,22 +61,19 @@ internal sealed partial class LatticeGrain(
         }
 
         await Task.WhenAll(tasks);
-        return result;
+        return new Dictionary<string, byte[]>(result);
 
         static async Task FetchFromShardAsync(
             IShardRootGrain shard,
             List<string> keys,
-            Dictionary<string, byte[]> result)
+            ConcurrentDictionary<string, byte[]> result)
         {
             foreach (var key in keys)
             {
                 var value = await shard.GetAsync(key);
                 if (value is not null)
                 {
-                    lock (result)
-                    {
-                        result[key] = value;
-                    }
+                    result[key] = value;
                 }
             }
         }
@@ -88,6 +88,7 @@ internal sealed partial class LatticeGrain(
 
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
+        ArgumentNullException.ThrowIfNull(entries);
         await EnsureCompactionReminderAsync();
         var shardCount = Options.ShardCount;
 

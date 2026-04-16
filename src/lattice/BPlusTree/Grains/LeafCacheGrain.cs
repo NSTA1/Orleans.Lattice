@@ -42,6 +42,12 @@ internal sealed class LeafCacheGrain(IGrainContext context, IGrainFactory grainF
         return null;
     }
 
+    public async Task<bool> ExistsAsync(string key)
+    {
+        await RefreshAsync();
+        return _cache.TryGetValue(key, out var cached) && !cached.IsTombstone;
+    }
+
     private async Task RefreshAsync()
     {
         var primaryLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);

@@ -11,6 +11,9 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <summary>Gets the value for <paramref name="key"/>, or <c>null</c> if absent/tombstoned.</summary>
     Task<byte[]?> GetAsync(string key);
 
+    /// <summary>Returns <c>true</c> if <paramref name="key"/> exists and is not tombstoned.</summary>
+    Task<bool> ExistsAsync(string key);
+
     /// <summary>
     /// Inserts or updates a key-value pair.
     /// Returns a <see cref="SplitResult"/> if the leaf split as a consequence, otherwise <c>null</c>.

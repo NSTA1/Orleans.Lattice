@@ -46,7 +46,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<bool> ExistsAsync(string key)
     {
         await PrepareForOperationAsync();
-        return await TraverseForReadAsync(key) is not null;
+        return await TraverseForExistsAsync(key);
     }
 
     public async Task SetAsync(string key, byte[] value)
