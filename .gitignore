@@ -364,3 +364,13 @@ FodyWeavers.xsd
 
 # Benchmark results (local run history)
 benchmark/results-*.json
+
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+*.code-workspace
+.history/
