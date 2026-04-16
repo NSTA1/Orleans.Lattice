@@ -38,4 +38,16 @@ public interface IBPlusInternalGrain : IGrainWithGuidKey
     /// The first separator key must be <c>null</c> (leftmost catch-all).
     /// </summary>
     Task InitializeWithChildrenAsync(List<string?> separatorKeys, List<GrainId> childIds, bool childrenAreLeaves);
+
+    /// <summary>
+    /// Returns the grain identities of all children of this internal node.
+    /// Used during tree purge to enumerate the tree structure.
+    /// </summary>
+    Task<List<GrainId>> GetChildIdsAsync();
+
+    /// <summary>
+    /// Clears all persistent state for this grain and deactivates it.
+    /// Used during tree purge to permanently remove internal node data.
+    /// </summary>
+    Task ClearGrainStateAsync();
 }

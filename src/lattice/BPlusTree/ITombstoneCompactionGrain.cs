@@ -21,4 +21,10 @@ public interface ITombstoneCompactionGrain : IGrainWithStringKey
     /// the periodic reminder uses a timer-based approach instead.
     /// </summary>
     Task RunCompactionPassAsync();
+
+    /// <summary>
+    /// Unregisters all compaction reminders and deactivates the grain.
+    /// Called when the tree is deleted and compaction is no longer needed.
+    /// </summary>
+    Task UnregisterReminderAsync();
 }

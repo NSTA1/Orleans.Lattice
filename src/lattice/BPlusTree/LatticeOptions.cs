@@ -32,6 +32,20 @@ public sealed class LatticeOptions
     /// </summary>
     public TimeSpan TombstoneGracePeriod { get; set; } = DefaultTombstoneGracePeriod;
 
+    /// <summary>
+    /// How long a soft-deleted tree is retained before its grains are permanently
+    /// purged. During this window the tree is inaccessible (reads and writes throw
+    /// <see cref="InvalidOperationException"/>), but its data still exists in storage
+    /// and could theoretically be recovered by clearing the <c>IsDeleted</c> flag.
+    /// After the duration elapses, a grain reminder triggers a full purge that
+    /// walks every shard and clears all leaf and internal node state.
+    /// Set to <see cref="TimeSpan.Zero"/> for immediate purge on the next reminder tick.
+    /// </summary>
+    public TimeSpan SoftDeleteDuration { get; set; } = DefaultSoftDeleteDuration;
+
+    /// <summary>Default value for <see cref="SoftDeleteDuration"/> (72 hours).</summary>
+    public static readonly TimeSpan DefaultSoftDeleteDuration = TimeSpan.FromHours(72);
+
     /// <summary>Default value for <see cref="TombstoneGracePeriod"/> (24 hours).</summary>
     public static readonly TimeSpan DefaultTombstoneGracePeriod = TimeSpan.FromHours(24);
 

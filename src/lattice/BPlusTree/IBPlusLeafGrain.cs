@@ -67,4 +67,10 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// to skip redundant scans when no writes have occurred since the last compaction.
     /// </summary>
     Task<int> CompactTombstonesAsync(TimeSpan gracePeriod);
+
+    /// <summary>
+    /// Clears all persistent state for this grain and deactivates it.
+    /// Used during tree purge to permanently remove leaf data.
+    /// </summary>
+    Task ClearGrainStateAsync();
 }
