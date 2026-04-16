@@ -25,11 +25,105 @@ internal sealed class LatticeGrain(
         return await shard.GetAsync(key);
     }
 
+    public async Task<bool> ExistsAsync(string key)
+    {
+        var shard = GetShardGrain(key);
+        return await shard.ExistsAsync(key);
+    }
+
+    public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
+    {
+        var shardCount = Options.ShardCount;
+
+        // Group keys by shard.
+        var shardBuckets = new Dictionary<int, List<string>>();
+        foreach (var key in keys)
+        {
+            var idx = GetShardIndex(key, shardCount);
+            if (!shardBuckets.TryGetValue(idx, out var bucket))
+            {
+                bucket = [];
+                shardBuckets[idx] = bucket;
+            }
+            bucket.Add(key);
+        }
+
+        // Fan out reads in parallel per shard.
+        var result = new Dictionary<string, byte[]>(keys.Count);
+        var tasks = new List<Task>(shardBuckets.Count);
+
+        foreach (var (shardIdx, bucket) in shardBuckets)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{shardIdx}");
+            tasks.Add(FetchFromShardAsync(shard, bucket, result));
+        }
+
+        await Task.WhenAll(tasks);
+        return result;
+
+        static async Task FetchFromShardAsync(
+            IShardRootGrain shard,
+            List<string> keys,
+            Dictionary<string, byte[]> result)
+        {
+            foreach (var key in keys)
+            {
+                var value = await shard.GetAsync(key);
+                if (value is not null)
+                {
+                    lock (result)
+                    {
+                        result[key] = value;
+                    }
+                }
+            }
+        }
+    }
+
     public async Task SetAsync(string key, byte[] value)
     {
         await EnsureCompactionReminderAsync();
         var shard = GetShardGrain(key);
         await shard.SetAsync(key, value);
+    }
+
+    public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
+    {
+        await EnsureCompactionReminderAsync();
+        var shardCount = Options.ShardCount;
+
+        // Group entries by shard.
+        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>();
+        foreach (var entry in entries)
+        {
+            var idx = GetShardIndex(entry.Key, shardCount);
+            if (!shardBuckets.TryGetValue(idx, out var bucket))
+            {
+                bucket = [];
+                shardBuckets[idx] = bucket;
+            }
+            bucket.Add(entry);
+        }
+
+        // Fan out writes in parallel per shard.
+        var tasks = new List<Task>(shardBuckets.Count);
+        foreach (var (shardIdx, bucket) in shardBuckets)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{shardIdx}");
+            tasks.Add(WriteToShardAsync(shard, bucket));
+        }
+
+        await Task.WhenAll(tasks);
+
+        static async Task WriteToShardAsync(
+            IShardRootGrain shard,
+            List<KeyValuePair<string, byte[]>> entries)
+        {
+            foreach (var entry in entries)
+            {
+                await shard.SetAsync(entry.Key, entry.Value);
+            }
+        }
     }
 
     public async Task<bool> DeleteAsync(string key)
