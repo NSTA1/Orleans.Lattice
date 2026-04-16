@@ -50,6 +50,7 @@ Detailed design documentation is split by concept:
 
 | Document | Contents |
 |---|---|
+| [API Reference](docs/api.md) | Public `ILattice` interface, batch operations, options, serializable types |
 | [Architecture](docs/architecture.md) | Grain layers, sharding, root promotion, bounded retry, grain mapping, capacity |
 | [Benchmarks](docs/benchmarks.md) | Prerequisites, running benchmarks, interpreting results |
 | [Bulk Loading](docs/bulk-loading.md) | One-shot build, streaming ingestion, two-phase graft, recovery guarantees |
@@ -59,7 +60,6 @@ Detailed design documentation is split by concept:
 | [Tombstone Compaction](docs/tombstone-compaction.md) | Reminder-driven cleanup, grace periods, configuration |
 | [Tree Deletion](docs/tree-deletion.md) | Soft delete, recovery, manual purge, deferred purge |
 | [Tree Structure](docs/tree-structure.md) | Internal/leaf node layout, two-phase leaf splits, idempotent split propagation |
-| [API Reference](docs/api.md) | Public `ILattice` interface, batch operations, options, serializable types |
 
 ## Contributing
 

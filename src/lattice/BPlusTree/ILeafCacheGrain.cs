@@ -14,4 +14,10 @@ public interface ILeafCacheGrain : IGrainWithStringKey
     /// falling through to the primary leaf grain on a miss.
     /// </summary>
     Task<byte[]?> GetAsync(string key);
+
+    /// <summary>
+    /// Returns <c>true</c> if <paramref name="key"/> exists and is not tombstoned,
+    /// without transferring the value bytes.
+    /// </summary>
+    Task<bool> ExistsAsync(string key);
 }
