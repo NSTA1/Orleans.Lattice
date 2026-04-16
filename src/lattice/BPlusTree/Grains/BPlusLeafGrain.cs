@@ -200,6 +200,15 @@ internal sealed class BPlusLeafGrain(
             }
         }
 
+        // Tick the version so that LeafCacheGrain delta checks detect the new
+        // entries. Without this, a freshly-split sibling has an empty version
+        // vector and the cache short-circuits (empty dominates empty), never
+        // populating its local cache.
+        if (entries.Count > 0)
+        {
+            state.State.Version.Tick(ReplicaId);
+        }
+
         await state.WriteStateAsync();
     }
 
