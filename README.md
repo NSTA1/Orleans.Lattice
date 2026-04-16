@@ -59,6 +59,7 @@ Detailed design documentation is split by concept:
 | [Tombstone Compaction](docs/tombstone-compaction.md) | Reminder-driven cleanup, grace periods, configuration |
 | [Tree Deletion](docs/tree-deletion.md) | Soft delete, recovery, manual purge, deferred purge |
 | [Tree Structure](docs/tree-structure.md) | Internal/leaf node layout, two-phase leaf splits, idempotent split propagation |
+| [API Reference](docs/api.md) | Public `ILattice` interface, batch operations, options, serializable types |
 
 ## Contributing
 
