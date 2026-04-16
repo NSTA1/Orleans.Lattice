@@ -1,3 +1,5 @@
+using Orleans.Lattice;
+
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
@@ -5,6 +7,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// Used for paginated key enumeration to avoid loading all keys into memory.
 /// </summary>
 [GenerateSerializer]
+[Alias(TypeAliases.KeysPage)]
 [Immutable]
 public sealed record KeysPage
 {

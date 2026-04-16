@@ -1,3 +1,4 @@
+using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.State;
@@ -8,6 +9,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// separator and acts as the leftmost catch-all.
 /// </summary>
 [GenerateSerializer]
+[Alias(TypeAliases.InternalNodeState)]
 internal sealed class InternalNodeState
 {
     /// <summary>

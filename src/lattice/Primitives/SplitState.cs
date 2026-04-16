@@ -1,3 +1,5 @@
+using Orleans.Lattice;
+
 namespace Orleans.Lattice.Primitives;
 
 /// <summary>
@@ -6,6 +8,7 @@ namespace Orleans.Lattice.Primitives;
 /// Merge is simply <c>max</c> — once a node reaches a higher state it can never go back.
 /// </summary>
 [GenerateSerializer]
+[Alias(TypeAliases.SplitState)]
 internal enum SplitState
 {
     Unsplit = 0,

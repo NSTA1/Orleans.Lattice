@@ -1,3 +1,4 @@
+using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.State;
@@ -7,6 +8,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// wrapped in <see cref="LwwValue{T}"/> for monotonic merge semantics.
 /// </summary>
 [GenerateSerializer]
+[Alias(TypeAliases.LeafNodeState)]
 internal sealed class LeafNodeState
 {
     /// <summary>Sorted entries: key → LWW-wrapped value.</summary>
