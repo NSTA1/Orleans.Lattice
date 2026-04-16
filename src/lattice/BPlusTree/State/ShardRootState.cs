@@ -38,6 +38,12 @@ internal sealed class ShardRootState
     /// Used for idempotency — if a retry arrives with the same ID, it is a no-op.
     /// </summary>
     [Id(5)] public string? LastCompletedBulkOperationId { get; set; }
+
+    /// <summary>
+    /// Whether this shard has been soft-deleted. When <c>true</c>, all reads and writes
+    /// throw <see cref="InvalidOperationException"/>.
+    /// </summary>
+    [Id(6)] public bool IsDeleted { get; set; }
 }
 
 /// <summary>

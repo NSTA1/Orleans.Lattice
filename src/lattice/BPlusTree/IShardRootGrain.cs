@@ -59,4 +59,29 @@ public interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="operationId">Unique ID for idempotency. Retries with the same ID are no-ops.</param>
     Task BulkAppendAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries);
+
+    /// <summary>
+    /// Marks this shard as deleted. Subsequent reads and writes will throw
+    /// <see cref="InvalidOperationException"/>. Idempotent.
+    /// </summary>
+    Task MarkDeletedAsync();
+
+    /// <summary>
+    /// Clears the deleted flag on this shard, restoring it to normal operation.
+    /// Idempotent.
+    /// </summary>
+    Task UnmarkDeletedAsync();
+
+    /// <summary>
+    /// Returns <c>true</c> if this shard has been marked as deleted.
+    /// </summary>
+    Task<bool> IsDeletedAsync();
+
+    /// <summary>
+    /// Permanently purges all grains in this shard (leaves, internal nodes)
+    /// by clearing their persistent state and deactivating them, then clears
+    /// the shard root's own state. Called by <see cref="ITreeDeletionGrain"/>
+    /// after the soft-delete window has elapsed.
+    /// </summary>
+    Task PurgeAsync();
 }

@@ -322,4 +322,10 @@ internal sealed class BPlusLeafGrain(
             NewSiblingId = siblingId
         };
     }
+
+    public async Task ClearGrainStateAsync()
+    {
+        await state.ClearStateAsync();
+        context.Deactivate(new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "Tree purged"));
+    }
 }

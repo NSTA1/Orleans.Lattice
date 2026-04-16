@@ -9,6 +9,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// child references. Splits when the child count exceeds <see cref="LatticeOptions.MaxInternalChildren"/>.
 /// </summary>
 internal sealed class BPlusInternalGrain(
+    IGrainContext context,
     [PersistentState("internal", LatticeOptions.StorageProviderName)] IPersistentState<InternalNodeState> state,
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor) : IBPlusInternalGrain
@@ -176,5 +177,14 @@ internal sealed class BPlusInternalGrain(
             PromotedKey = promotedKey,
             NewSiblingId = siblingId
         };
+    }
+
+    public Task<List<GrainId>> GetChildIdsAsync() =>
+        Task.FromResult(state.State.Children.Select(c => c.ChildId).ToList());
+
+    public async Task ClearGrainStateAsync()
+    {
+        await state.ClearStateAsync();
+        context.Deactivate(new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "Tree purged"));
     }
 }
