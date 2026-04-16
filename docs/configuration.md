@@ -55,6 +55,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | `KeysPageSize` | `int` | 512 | Yes |
 | `TombstoneGracePeriod` | `TimeSpan` | 24 hours | Yes |
 | `SoftDeleteDuration` | `TimeSpan` | 72 hours | Yes |
+| `CacheTtl` | `TimeSpan` | `TimeSpan.Zero` (refresh on every read) | Yes |
 
 ### `ShardCount`
 
@@ -117,6 +118,23 @@ siloBuilder.ConfigureLattice("ephemeral-tree", o =>
 ```
 
 This option can be changed freely at any time. The new duration takes effect on the next deletion. Changing it does not affect trees that have already been deleted.
+
+### `CacheTtl`
+
+Minimum time between consecutive delta refreshes from the primary leaf in the `LeafCacheGrain`. When set to `TimeSpan.Zero` (the default), every read triggers a delta refresh — the version-vector comparison on the primary is cheap but the RPC overhead remains. Setting a non-zero value allows the cache to serve reads from its local dictionary without contacting the primary, trading freshness for lower read latency.
+
+```csharp
+// Allow up to 100 ms of staleness for lower read latency
+siloBuilder.ConfigureLattice(o => o.CacheTtl = TimeSpan.FromMilliseconds(100));
+
+// Per-tree: aggressive freshness for a real-time tree
+siloBuilder.ConfigureLattice("realtime", o =>
+{
+    o.CacheTtl = TimeSpan.Zero; // refresh on every read (default)
+});
+```
+
+This option can be changed freely at any time. The new TTL takes effect on the next read. A value of `TimeSpan.Zero` preserves the original behaviour (refresh on every read).
 
 ## Storage Provider Name
 

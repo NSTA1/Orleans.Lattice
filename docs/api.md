@@ -9,10 +9,10 @@ siloBuilder.AddLattice((silo, storageName) =>
     silo.AddMemoryGrainStorage(storageName));
 ```
 
-Per-tree options can be configured with named `LatticeOptions`:
+Per-tree options can be configured with the `ConfigureLattice` extension method:
 
 ```csharp
-siloBuilder.Services.Configure<LatticeOptions>("my-tree", o =>
+siloBuilder.ConfigureLattice("my-tree", o =>
 {
     o.MaxLeafKeys = 256;
     o.ShardCount = 32;
@@ -71,9 +71,10 @@ var tree = grainFactory.GetGrain<ILattice>("my-tree");
 | `MaxLeafKeys` | `int` | 128 | Max keys per leaf before splitting. |
 | `MaxInternalChildren` | `int` | 128 | Max children per internal node before splitting. |
 | `ShardCount` | `int` | 64 | Number of independent shards. |
-| `KeysPageSize` | `int` | 1000 | Keys per page in `KeysAsync` pagination. |
+| `KeysPageSize` | `int` | 512 | Keys per page in `KeysAsync` pagination. |
 | `TombstoneGracePeriod` | `TimeSpan` | 24 h | Minimum age before a tombstone is eligible for compaction. `InfiniteTimeSpan` disables compaction. |
 | `SoftDeleteDuration` | `TimeSpan` | 72 h | Retention window after soft-delete before purge fires. |
+| `CacheTtl` | `TimeSpan` | `TimeSpan.Zero` | Minimum time between delta refreshes in `LeafCacheGrain`. Zero means refresh on every read. |
 
 ## Serializable Types
 

@@ -77,7 +77,7 @@ When the reminder fires and the soft-delete window has elapsed (`now - DeletedAt
 For each shard, `PurgeAsync()`:
 
 1. Walks the doubly-linked leaf chain from the leftmost leaf, calling `ClearGrainStateAsync()` on each leaf (which clears persistent state and deactivates the grain).
-2. Recursively collects all internal node grain IDs by walking the tree from the root, then clears each one.
+2. Collects all internal node grain IDs by iteratively walking the tree from the root using an explicit stack, then clears each one.
 3. Clears the shard root's own state via `ClearStateAsync()`.
 
 After all shards are purged, the deletion grain marks `PurgeComplete = true`, unregisters all reminders, and deactivates itself.

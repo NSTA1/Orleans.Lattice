@@ -35,6 +35,19 @@ internal sealed partial class BPlusLeafGrain(
             state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone);
     }
 
+    public Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
+    {
+        var result = new Dictionary<string, byte[]>(keys.Count);
+        foreach (var key in keys)
+        {
+            if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone)
+            {
+                result[key] = lww.Value!;
+            }
+        }
+        return Task.FromResult(result);
+    }
+
     public async Task<SplitResult?> SetAsync(string key, byte[] value)
     {
         // Recovery: if a previous split was interrupted, complete it first.
@@ -89,6 +102,18 @@ internal sealed partial class BPlusLeafGrain(
         return splitResult;
     }
 
+    public async Task<SplitResult?> SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
+    {
+        SplitResult? lastSplit = null;
+        foreach (var entry in entries)
+        {
+            var split = await SetAsync(entry.Key, entry.Value);
+            if (split is not null)
+                lastSplit = split;
+        }
+        return lastSplit;
+    }
+
     public async Task<bool> DeleteAsync(string key)
     {
         if (!state.State.Entries.TryGetValue(key, out var existing) || existing.IsTombstone)
@@ -127,6 +152,9 @@ internal sealed partial class BPlusLeafGrain(
         state.State.TreeId = treeId;
         await state.WriteStateAsync();
     }
+
+    public Task<string?> GetTreeIdAsync() =>
+        Task.FromResult(state.State.TreeId);
 
     public async Task<int> CompactTombstonesAsync(TimeSpan gracePeriod)
     {
@@ -226,17 +254,17 @@ internal sealed partial class BPlusLeafGrain(
         var keys = new List<string>();
         foreach (var (key, lww) in state.State.Entries)
         {
+            if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+                break;
+
+            if (splitInProgress && splitKey is not null &&
+                string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+                break;
+
             if (lww.IsTombstone)
                 continue;
 
             if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
-                continue;
-
-            if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
-                continue;
-
-            if (splitInProgress && splitKey is not null &&
-                string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
                 continue;
 
             keys.Add(key);

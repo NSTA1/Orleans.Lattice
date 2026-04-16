@@ -39,14 +39,20 @@ internal sealed class BPlusInternalGrain(
         await state.WriteStateAsync();
     }
 
-    public Task<GrainId> RouteAsync(string key) =>
-        Task.FromResult(state.State.Route(key));
+    public Task<(GrainId ChildId, bool ChildrenAreLeaves)> RouteWithMetadataAsync(string key) =>
+        Task.FromResult((state.State.Route(key), state.State.ChildrenAreLeaves));
 
     public Task<GrainId> GetLeftmostChildAsync() =>
         Task.FromResult(state.State.Children[0].ChildId);
 
     public Task<GrainId> GetRightmostChildAsync() =>
         Task.FromResult(state.State.Children[^1].ChildId);
+
+    public Task<(GrainId ChildId, bool ChildrenAreLeaves)> GetLeftmostChildWithMetadataAsync() =>
+        Task.FromResult((state.State.Children[0].ChildId, state.State.ChildrenAreLeaves));
+
+    public Task<(GrainId ChildId, bool ChildrenAreLeaves)> GetRightmostChildWithMetadataAsync() =>
+        Task.FromResult((state.State.Children[^1].ChildId, state.State.ChildrenAreLeaves));
 
     public Task<bool> AreChildrenLeavesAsync() =>
         Task.FromResult(state.State.ChildrenAreLeaves);

@@ -37,6 +37,44 @@ internal sealed partial class ShardRootGrain
         return await cache.ExistsAsync(key);
     }
 
+    private async Task<Dictionary<string, byte[]>> TraverseForBatchReadAsync(List<string> keys)
+    {
+        // Group keys by their target leaf.
+        var leafBuckets = new Dictionary<GrainId, List<string>>();
+        foreach (var key in keys)
+        {
+            GrainId leafId;
+            if (state.State.RootIsLeaf)
+            {
+                leafId = state.State.RootNodeId!.Value;
+            }
+            else
+            {
+                leafId = await TraverseToLeafAsync(key);
+            }
+
+            if (!leafBuckets.TryGetValue(leafId, out var bucket))
+            {
+                bucket = [];
+                leafBuckets[leafId] = bucket;
+            }
+            bucket.Add(key);
+        }
+
+        // Batch read from each leaf cache.
+        var result = new Dictionary<string, byte[]>();
+        foreach (var (leafId, bucket) in leafBuckets)
+        {
+            var cache = grainFactory.GetGrain<ILeafCacheGrain>(leafId.ToString());
+            var values = await cache.GetManyAsync(bucket);
+            foreach (var (k, v) in values)
+            {
+                result[k] = v;
+            }
+        }
+        return result;
+    }
+
     private async Task<SplitResult?> TraverseForWriteAsync(string key, byte[] value)
     {
         if (state.State.RootIsLeaf)
@@ -53,8 +91,7 @@ internal sealed partial class ShardRootGrain
         while (true)
         {
             var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
-            var childId = await internalGrain.RouteAsync(key);
-            var childrenAreLeaves = await internalGrain.AreChildrenLeavesAsync();
+            var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
 
             if (childrenAreLeaves)
             {
@@ -93,8 +130,7 @@ internal sealed partial class ShardRootGrain
         while (true)
         {
             var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
-            var childId = await internalGrain.RouteAsync(key);
-            var childrenAreLeaves = await internalGrain.AreChildrenLeavesAsync();
+            var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
 
             if (childrenAreLeaves)
             {
@@ -117,8 +153,7 @@ internal sealed partial class ShardRootGrain
         while (true)
         {
             var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
-            var childId = await internalGrain.GetLeftmostChildAsync();
-            var childrenAreLeaves = await internalGrain.AreChildrenLeavesAsync();
+            var (childId, childrenAreLeaves) = await internalGrain.GetLeftmostChildWithMetadataAsync();
 
             if (childrenAreLeaves)
             {
@@ -141,8 +176,7 @@ internal sealed partial class ShardRootGrain
         while (true)
         {
             var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
-            var childId = await internalGrain.GetRightmostChildAsync();
-            var childrenAreLeaves = await internalGrain.AreChildrenLeavesAsync();
+            var (childId, childrenAreLeaves) = await internalGrain.GetRightmostChildWithMetadataAsync();
 
             if (childrenAreLeaves)
             {

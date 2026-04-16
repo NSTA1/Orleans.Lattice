@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -52,7 +53,7 @@ public class TreeDeletionGrainTests
         grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId).Returns(compaction);
 
         var grain = new TreeDeletionGrain(
-            context, grainFactory, reminderRegistry, optionsMonitor, state);
+            context, grainFactory, reminderRegistry, optionsMonitor, new LoggerFactory().CreateLogger<TreeDeletionGrain>(), state);
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);
     }
 

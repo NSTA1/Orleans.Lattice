@@ -249,8 +249,17 @@ public class LatticeGrainTests
     {
         var (grain, factory) = CreateGrain();
         var shardRoot = SetupShardRoot(factory);
-        shardRoot.GetAsync("k1").Returns(Encoding.UTF8.GetBytes("v1"));
-        shardRoot.GetAsync("k2").Returns(Encoding.UTF8.GetBytes("v2"));
+        shardRoot.GetManyAsync(Arg.Any<List<string>>()).Returns(callInfo =>
+        {
+            var keys = callInfo.Arg<List<string>>();
+            var result = new Dictionary<string, byte[]>();
+            foreach (var key in keys)
+            {
+                if (key == "k1") result[key] = Encoding.UTF8.GetBytes("v1");
+                if (key == "k2") result[key] = Encoding.UTF8.GetBytes("v2");
+            }
+            return result;
+        });
 
         var result = await grain.GetManyAsync(["k1", "k2"]);
 
@@ -264,8 +273,17 @@ public class LatticeGrainTests
     {
         var (grain, factory) = CreateGrain();
         var shardRoot = SetupShardRoot(factory);
-        shardRoot.GetAsync("k1").Returns(Encoding.UTF8.GetBytes("v1"));
-        shardRoot.GetAsync("k2").Returns((byte[]?)null);
+        shardRoot.GetManyAsync(Arg.Any<List<string>>()).Returns(callInfo =>
+        {
+            var keys = callInfo.Arg<List<string>>();
+            var result = new Dictionary<string, byte[]>();
+            foreach (var key in keys)
+            {
+                if (key == "k1") result[key] = Encoding.UTF8.GetBytes("v1");
+                // k2 is "missing" — not added to result
+            }
+            return result;
+        });
 
         var result = await grain.GetManyAsync(["k1", "k2"]);
 
@@ -309,8 +327,9 @@ public class LatticeGrainTests
 
         await grain.SetManyAsync(entries);
 
-        await shardRoot.Received(1).SetAsync("k1", Arg.Any<byte[]>());
-        await shardRoot.Received(1).SetAsync("k2", Arg.Any<byte[]>());
+        // All shards resolve to the same mock; verify SetManyAsync was called (not individual SetAsync).
+        await shardRoot.ReceivedWithAnyArgs().SetManyAsync(default!);
+        await shardRoot.DidNotReceiveWithAnyArgs().SetAsync(default!, default!);
     }
 
     [Fact]
@@ -324,5 +343,24 @@ public class LatticeGrainTests
         await grain.SetManyAsync([new("k1", [1])]);
 
         await compaction.Received(1).EnsureReminderAsync();
+    }
+
+    // --- GetManyAsync batch delegation test ---
+
+    [Fact]
+    public async Task GetManyAsync_calls_shard_GetManyAsync_not_individual_GetAsync()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        shardRoot.GetManyAsync(Arg.Any<List<string>>()).Returns(new Dictionary<string, byte[]>
+        {
+            ["k1"] = Encoding.UTF8.GetBytes("v1"),
+        });
+
+        await grain.GetManyAsync(["k1"]);
+
+        // Should call the batch method, not individual GetAsync.
+        await shardRoot.Received(1).GetManyAsync(Arg.Any<List<string>>());
+        await shardRoot.DidNotReceive().GetAsync(Arg.Any<string>());
     }
 }

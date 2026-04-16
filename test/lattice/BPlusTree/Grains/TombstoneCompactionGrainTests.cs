@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -37,7 +38,7 @@ public class TombstoneCompactionGrainTests
         var state = existingState ?? new FakePersistentState<TombstoneCompactionState>();
 
         var grain = new TombstoneCompactionGrain(
-            context, grainFactory, reminderRegistry, optionsMonitor, state);
+            context, grainFactory, reminderRegistry, optionsMonitor, new LoggerFactory().CreateLogger<TombstoneCompactionGrain>(), state);
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);
     }
 

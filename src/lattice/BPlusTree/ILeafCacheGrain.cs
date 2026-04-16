@@ -20,4 +20,11 @@ public interface ILeafCacheGrain : IGrainWithStringKey
     /// without transferring the value bytes.
     /// </summary>
     Task<bool> ExistsAsync(string key);
+
+    /// <summary>
+    /// Returns the values for the given <paramref name="keys"/> from the local cache,
+    /// falling through to the primary leaf grain on a miss.
+    /// Keys that do not exist or are tombstoned are omitted from the result.
+    /// </summary>
+    Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys);
 }

@@ -21,6 +21,7 @@ internal sealed partial class LatticeGrain(
 
     public async Task<byte[]?> GetAsync(string key)
     {
+        ArgumentNullException.ThrowIfNull(key);
         var shard = GetShardGrain(key);
         return await shard.GetAsync(key);
     }
@@ -50,7 +51,7 @@ internal sealed partial class LatticeGrain(
             bucket.Add(key);
         }
 
-        // Fan out reads in parallel per shard.
+        // Fan out batch reads in parallel per shard.
         var result = new ConcurrentDictionary<string, byte[]>();
         var tasks = new List<Task>(shardBuckets.Count);
 
@@ -68,19 +69,18 @@ internal sealed partial class LatticeGrain(
             List<string> keys,
             ConcurrentDictionary<string, byte[]> result)
         {
-            foreach (var key in keys)
+            var values = await shard.GetManyAsync(keys);
+            foreach (var (key, value) in values)
             {
-                var value = await shard.GetAsync(key);
-                if (value is not null)
-                {
-                    result[key] = value;
-                }
+                result[key] = value;
             }
         }
     }
 
     public async Task SetAsync(string key, byte[] value)
     {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(value);
         await EnsureCompactionReminderAsync();
         var shard = GetShardGrain(key);
         await shard.SetAsync(key, value);
@@ -119,15 +119,13 @@ internal sealed partial class LatticeGrain(
             IShardRootGrain shard,
             List<KeyValuePair<string, byte[]>> entries)
         {
-            foreach (var entry in entries)
-            {
-                await shard.SetAsync(entry.Key, entry.Value);
-            }
+            await shard.SetManyAsync(entries);
         }
     }
 
     public async Task<bool> DeleteAsync(string key)
     {
+        ArgumentNullException.ThrowIfNull(key);
         await EnsureCompactionReminderAsync();
         var shard = GetShardGrain(key);
         return await shard.DeleteAsync(key);
