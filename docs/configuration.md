@@ -54,6 +54,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | `MaxInternalChildren` | `int` | 128 | **No** |
 | `KeysPageSize` | `int` | 512 | Yes |
 | `TombstoneGracePeriod` | `TimeSpan` | 24 hours | Yes |
+| `SoftDeleteDuration` | `TimeSpan` | 72 hours | Yes |
 
 ### `ShardCount`
 
@@ -98,6 +99,25 @@ siloBuilder.ConfigureLattice("archive-tree", o =>
 
 This option can be changed freely at any time. The new grace period takes effect on the next compaction reminder tick. The reminder interval is automatically set to match the grace period (clamped to a minimum of 1 minute, the Orleans reminder floor).
 
+### `SoftDeleteDuration`
+
+How long a soft-deleted tree's data is retained in storage before being permanently purged. During this window the tree is inaccessible — all reads and writes throw `InvalidOperationException` — but its grain state still exists in the storage provider. After the duration elapses, a grain reminder triggers a full purge that walks every shard, clears all leaf and internal node state, and deactivates each grain.
+
+Set to `TimeSpan.Zero` for immediate purge on the next reminder tick (clamped to a 1-minute minimum by the Orleans reminder floor).
+
+```csharp
+// Retain deleted trees for 7 days
+siloBuilder.ConfigureLattice(o => o.SoftDeleteDuration = TimeSpan.FromDays(7));
+
+// Immediate purge for a specific tree
+siloBuilder.ConfigureLattice("ephemeral-tree", o =>
+{
+    o.SoftDeleteDuration = TimeSpan.Zero;
+});
+```
+
+This option can be changed freely at any time. The new duration takes effect on the next deletion. Changing it does not affect trees that have already been deleted.
+
 ## Storage Provider Name
 
 Lattice grains use the storage provider named `"lattice"` (exposed as `LatticeOptions.StorageProviderName`). The `AddLattice` extension method passes this name to your storage registration delegate. In advanced scenarios where you register storage directly, use this constant to ensure the provider name matches:
@@ -130,6 +150,7 @@ builder.UseOrleans(silo =>
         o.MaxInternalChildren = 128;
         o.KeysPageSize = 1024;
         o.TombstoneGracePeriod = TimeSpan.FromHours(12);
+        o.SoftDeleteDuration = TimeSpan.FromHours(72);
     });
 
     // Per-tree: higher shard count for a high-write tree

@@ -17,10 +17,11 @@ public class BPlusInternalGrainTests
     private static BPlusInternalGrain CreateGrain(FakePersistentState<InternalNodeState>? state = null)
     {
         state ??= new FakePersistentState<InternalNodeState>();
+        var context = Substitute.For<IGrainContext>();
         var grainFactory = Substitute.For<IGrainFactory>();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
-        return new BPlusInternalGrain(state, grainFactory, optionsMonitor);
+        return new BPlusInternalGrain(context, state, grainFactory, optionsMonitor);
     }
 
     // --- InitializeAsync ---

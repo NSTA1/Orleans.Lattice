@@ -32,6 +32,32 @@ public interface ILattice : IGrainWithStringKey
     /// Throws <see cref="InvalidOperationException"/> if any shard already contains data.
     /// </summary>
     Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries);
+
+    /// <summary>
+    /// Soft-deletes the entire tree. All shards are immediately marked as deleted,
+    /// causing subsequent reads and writes to throw <see cref="InvalidOperationException"/>.
+    /// A grain reminder is registered to permanently purge all tree data after the
+    /// configured <see cref="LatticeOptions.SoftDeleteDuration"/> has elapsed.
+    /// Idempotent — calling on an already-deleted tree is a no-op.
+    /// </summary>
+    Task DeleteTreeAsync();
+
+    /// <summary>
+    /// Recovers a soft-deleted tree, restoring it to normal operation.
+    /// All data written before the delete is accessible again.
+    /// Throws <see cref="InvalidOperationException"/> if the tree has not been
+    /// deleted, or if the purge has already completed (data is gone).
+    /// </summary>
+    Task RecoverTreeAsync();
+
+    /// <summary>
+    /// Immediately purges a soft-deleted tree without waiting for the
+    /// <see cref="LatticeOptions.SoftDeleteDuration"/> window to elapse.
+    /// Permanently removes all leaf and internal node state.
+    /// Throws <see cref="InvalidOperationException"/> if the tree has not been
+    /// deleted, or if the purge has already completed.
+    /// </summary>
+    Task PurgeTreeAsync();
 }
 
 /// <summary>

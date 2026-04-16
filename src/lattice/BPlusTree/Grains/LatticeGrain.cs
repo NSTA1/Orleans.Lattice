@@ -184,4 +184,22 @@ internal sealed class LatticeGrain(
 
         await Task.WhenAll(tasks);
     }
+
+    public async Task DeleteTreeAsync()
+    {
+        var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
+        await deletion.DeleteTreeAsync();
+    }
+
+    public async Task RecoverTreeAsync()
+    {
+        var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
+        await deletion.RecoverAsync();
+    }
+
+    public async Task PurgeTreeAsync()
+    {
+        var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
+        await deletion.PurgeNowAsync();
+    }
 }
