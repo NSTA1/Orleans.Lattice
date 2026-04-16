@@ -363,4 +363,4 @@ MigrationBackup/
 FodyWeavers.xsd
 
 # Benchmark results (local run history)
-benchmark/results.json
+benchmark/results-*.json
