@@ -14,6 +14,8 @@ internal sealed class BPlusLeafGrain(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor) : IBPlusLeafGrain
 {
+    private static readonly Dictionary<string, LwwValue<byte[]>> EmptyEntries = new();
+
     private string ReplicaId => context.GrainId.ToString();
     private LatticeOptions Options => optionsMonitor.Get(state.State.TreeId ?? string.Empty);
 
@@ -127,7 +129,7 @@ internal sealed class BPlusLeafGrain(
         {
             return Task.FromResult(new StateDelta
             {
-                Entries = new Dictionary<string, LwwValue<byte[]>>(),
+                Entries = EmptyEntries,
                 Version = state.State.Version.Clone(),
                 SplitKey = state.State.SplitKey
             });
@@ -173,30 +175,28 @@ internal sealed class BPlusLeafGrain(
 
     public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null)
     {
-        IEnumerable<KeyValuePair<string, LwwValue<byte[]>>> entries = state.State.Entries;
+        var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
+        var splitKey = state.State.SplitKey;
 
-        if (startInclusive is not null)
+        var keys = new List<string>();
+        foreach (var (key, lww) in state.State.Entries)
         {
-            entries = entries.Where(e => string.Compare(e.Key, startInclusive, StringComparison.Ordinal) >= 0);
+            if (lww.IsTombstone)
+                continue;
+
+            if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
+                continue;
+
+            if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+                continue;
+
+            if (splitInProgress && splitKey is not null &&
+                string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+                continue;
+
+            keys.Add(key);
         }
 
-        if (endExclusive is not null)
-        {
-            entries = entries.Where(e => string.Compare(e.Key, endExclusive, StringComparison.Ordinal) < 0);
-        }
-
-        // If a split is in progress, exclude keys that belong to the new sibling
-        // (keys >= SplitKey). This prevents duplicate keys when walking the sibling
-        // chain after a crash that interrupted CompleteSplitAsync — the sibling may
-        // already have these entries via MergeEntriesAsync while this leaf has not
-        // yet persisted their removal.
-        if (state.State.SplitState == Primitives.SplitState.SplitInProgress &&
-            state.State.SplitKey is not null)
-        {
-            entries = entries.Where(e => string.Compare(e.Key, state.State.SplitKey, StringComparison.Ordinal) < 0);
-        }
-
-        var keys = entries.Where(e => !e.Value.IsTombstone).Select(e => e.Key).ToList();
         return Task.FromResult(keys);
     }
 

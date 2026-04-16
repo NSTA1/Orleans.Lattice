@@ -106,7 +106,7 @@ internal sealed class BPlusInternalGrain(
         var promotedKey = state.State.Children[mid].SeparatorKey!;
 
         // Right half becomes a new internal node.
-        var rightChildren = state.State.Children.Skip(mid).ToList();
+        var rightChildren = state.State.Children.GetRange(mid, state.State.Children.Count - mid);
         // The first entry in the right node becomes the new leftmost (null separator).
         rightChildren[0] = new ChildEntry { SeparatorKey = null, ChildId = rightChildren[0].ChildId };
 
@@ -116,7 +116,7 @@ internal sealed class BPlusInternalGrain(
         state.State.SplitRightChildren = rightChildren;
 
         // Trim our children to the left half.
-        state.State.Children = state.State.Children.Take(mid).ToList();
+        state.State.Children.RemoveRange(mid, state.State.Children.Count - mid);
         await state.WriteStateAsync();
 
         // Phase 2: Execute cross-grain operations using the persisted identity.
