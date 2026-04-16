@@ -34,7 +34,7 @@ public static class LatticeServiceCollectionExtensions
         this ISiloBuilder builder,
         Action<LatticeOptions> configure)
     {
-        builder.Services.Configure(configure);
+        builder.Services.ConfigureAll(configure);
         return builder;
     }
 
