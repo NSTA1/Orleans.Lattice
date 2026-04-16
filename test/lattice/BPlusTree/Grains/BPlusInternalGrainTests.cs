@@ -53,7 +53,7 @@ public class BPlusInternalGrainTests
         Assert.True(state.State.Clock > clockBefore);
     }
 
-    // --- RouteAsync ---
+    // --- RouteWithMetadataAsync ---
 
     [Fact]
     public async Task Route_returns_leftmost_for_key_below_all_separators()
@@ -61,7 +61,7 @@ public class BPlusInternalGrainTests
         var grain = CreateGrain();
         await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
-        var result = await grain.RouteAsync("ant");
+        var (result, _) = await grain.RouteWithMetadataAsync("ant");
         Assert.Equal(Child0, result);
     }
 
@@ -71,7 +71,7 @@ public class BPlusInternalGrainTests
         var grain = CreateGrain();
         await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
-        var result = await grain.RouteAsync("fox");
+        var (result, _) = await grain.RouteWithMetadataAsync("fox");
         Assert.Equal(Child1, result);
     }
 
@@ -81,7 +81,7 @@ public class BPlusInternalGrainTests
         var grain = CreateGrain();
         await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
-        var result = await grain.RouteAsync("zebra");
+        var (result, _) = await grain.RouteWithMetadataAsync("zebra");
         Assert.Equal(Child1, result);
     }
 
@@ -95,17 +95,17 @@ public class BPlusInternalGrainTests
         await grain.AcceptSplitAsync("rabbit", Child3);
 
         // "ant" < "fox" → Child0
-        Assert.Equal(Child0, await grain.RouteAsync("ant"));
+        Assert.Equal(Child0, (await grain.RouteWithMetadataAsync("ant")).ChildId);
         // "fox" >= "fox" → Child1
-        Assert.Equal(Child1, await grain.RouteAsync("fox"));
+        Assert.Equal(Child1, (await grain.RouteWithMetadataAsync("fox")).ChildId);
         // "lion" >= "fox" but < "monkey" → Child1
-        Assert.Equal(Child1, await grain.RouteAsync("lion"));
+        Assert.Equal(Child1, (await grain.RouteWithMetadataAsync("lion")).ChildId);
         // "monkey" >= "monkey" → Child2
-        Assert.Equal(Child2, await grain.RouteAsync("monkey"));
+        Assert.Equal(Child2, (await grain.RouteWithMetadataAsync("monkey")).ChildId);
         // "penguin" >= "monkey" but < "rabbit" → Child2
-        Assert.Equal(Child2, await grain.RouteAsync("penguin"));
+        Assert.Equal(Child2, (await grain.RouteWithMetadataAsync("penguin")).ChildId);
         // "zebra" >= "rabbit" → Child3
-        Assert.Equal(Child3, await grain.RouteAsync("zebra"));
+        Assert.Equal(Child3, (await grain.RouteWithMetadataAsync("zebra")).ChildId);
     }
 
     // --- AcceptSplitAsync ---
@@ -392,5 +392,80 @@ public class BPlusInternalGrainTests
 
         await grain.SetTreeIdAsync("tree-2");
         Assert.Equal("tree-1", state.State.TreeId);
+    }
+
+    // --- RouteWithMetadataAsync ---
+
+    [Fact]
+    public async Task RouteWithMetadata_returns_child_and_leaf_flag()
+    {
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+
+        var (childId, childrenAreLeaves) = await grain.RouteWithMetadataAsync("ant");
+
+        Assert.Equal(Child0, childId);
+        Assert.True(childrenAreLeaves);
+    }
+
+    [Fact]
+    public async Task RouteWithMetadata_returns_false_when_children_are_internal()
+    {
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: false);
+
+        var (childId, childrenAreLeaves) = await grain.RouteWithMetadataAsync("zebra");
+
+        Assert.Equal(Child1, childId);
+        Assert.False(childrenAreLeaves);
+    }
+
+    // --- GetLeftmostChildWithMetadataAsync / GetRightmostChildWithMetadataAsync ---
+
+    [Fact]
+    public async Task GetLeftmostChildWithMetadata_returns_first_child_and_leaf_flag()
+    {
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+
+        var (childId, childrenAreLeaves) = await grain.GetLeftmostChildWithMetadataAsync();
+
+        Assert.Equal(Child0, childId);
+        Assert.True(childrenAreLeaves);
+    }
+
+    [Fact]
+    public async Task GetRightmostChildWithMetadata_returns_last_child_and_leaf_flag()
+    {
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+
+        var (childId, childrenAreLeaves) = await grain.GetRightmostChildWithMetadataAsync();
+
+        Assert.Equal(Child1, childId);
+        Assert.True(childrenAreLeaves);
+    }
+
+    [Fact]
+    public async Task GetLeftmostChildWithMetadata_returns_false_for_internal_children()
+    {
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: false);
+
+        var (_, childrenAreLeaves) = await grain.GetLeftmostChildWithMetadataAsync();
+
+        Assert.False(childrenAreLeaves);
+    }
+
+    [Fact]
+    public async Task GetRightmostChildWithMetadata_reflects_accept_split()
+    {
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+        await grain.AcceptSplitAsync("monkey", Child2);
+
+        var (childId, _) = await grain.GetRightmostChildWithMetadataAsync();
+
+        Assert.Equal(Child2, childId);
     }
 }

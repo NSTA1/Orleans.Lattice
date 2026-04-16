@@ -62,17 +62,26 @@ internal sealed partial class ShardRootGrain
         await state.ClearStateAsync();
     }
 
-    private async Task CollectInternalNodeIds(GrainId nodeId, List<GrainId> collected)
+    private async Task CollectInternalNodeIds(GrainId rootNodeId, List<GrainId> collected)
     {
-        collected.Add(nodeId);
-        var node = grainFactory.GetGrain<IBPlusInternalGrain>(nodeId);
-        if (await node.AreChildrenLeavesAsync())
-            return;
+        var stack = new Stack<GrainId>();
+        stack.Push(rootNodeId);
 
-        var children = await node.GetChildIdsAsync();
-        foreach (var childId in children)
+        while (stack.Count > 0)
         {
-            await CollectInternalNodeIds(childId, collected);
+            var nodeId = stack.Pop();
+            collected.Add(nodeId);
+
+            var node = grainFactory.GetGrain<IBPlusInternalGrain>(nodeId);
+            if (await node.AreChildrenLeavesAsync())
+                continue;
+
+            var children = await node.GetChildIdsAsync();
+            // Push in reverse order to preserve traversal order (optional).
+            for (int i = children.Count - 1; i >= 0; i--)
+            {
+                stack.Push(children[i]);
+            }
         }
     }
 }

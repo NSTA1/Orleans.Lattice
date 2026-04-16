@@ -1,3 +1,4 @@
+using System.IO;
 using Microsoft.Extensions.ObjectPool;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
@@ -49,6 +50,12 @@ internal sealed partial class ShardRootGrain(
         return await TraverseForExistsAsync(key);
     }
 
+    public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
+    {
+        await PrepareForOperationAsync();
+        return await TraverseForBatchReadAsync(keys);
+    }
+
     public async Task SetAsync(string key, byte[] value)
     {
         await PrepareForOperationAsync();
@@ -67,12 +74,20 @@ internal sealed partial class ShardRootGrain(
 
                 return;
             }
-            catch when (attempt < MaxRetries)
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
             {
                 // The failed grain will be deactivated by Orleans. On retry, a fresh
                 // activation loads clean state and the recovery guards resume any
                 // interrupted split.
             }
+        }
+    }
+
+    public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
+    {
+        foreach (var entry in entries)
+        {
+            await SetAsync(entry.Key, entry.Value);
         }
     }
 
@@ -95,7 +110,7 @@ internal sealed partial class ShardRootGrain(
                 var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
                 return await leafGrain.DeleteAsync(key);
             }
-            catch when (attempt < MaxRetries)
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
             {
                 // Retry — same rationale as SetAsync.
             }

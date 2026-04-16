@@ -10,7 +10,26 @@ public interface IShardRootGrain : IGrainWithStringKey
 {
     Task<byte[]?> GetAsync(string key);
     Task<bool> ExistsAsync(string key);
+
+    /// <summary>
+    /// Returns the values for the given <paramref name="keys"/>, performing a single
+    /// tree traversal per distinct leaf and batching reads at each leaf.
+    /// Keys that do not exist or are tombstoned are omitted from the result.
+    /// </summary>
+    Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys);
+
+    /// <summary>Inserts or updates the value for <paramref name="key"/>.</summary>
     Task SetAsync(string key, byte[] value);
+
+    /// <summary>
+    /// Inserts or updates multiple key-value pairs in a single traversal batch.
+    /// </summary>
+    Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
+
+    /// <summary>
+    /// Marks <paramref name="key"/> as deleted (tombstone).
+    /// Returns <c>true</c> if the key was present and live.
+    /// </summary>
     Task<bool> DeleteAsync(string key);
 
     /// <summary>

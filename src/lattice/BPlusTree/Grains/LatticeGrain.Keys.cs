@@ -1,5 +1,3 @@
-using System.Buffers;
-
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
@@ -15,10 +13,8 @@ internal sealed partial class LatticeGrain
         var shardCount = Options.ShardCount;
         var pageSize = Options.KeysPageSize;
 
-        var cursors = ArrayPool<ShardCursor>.Shared.Rent(shardCount);
-        var initTasks = ArrayPool<Task>.Shared.Rent(shardCount);
-        try
-        {
+        var cursors = new ShardCursor[shardCount];
+        var initTasks = new Task[shardCount];
         for (int i = 0; i < shardCount; i++)
         {
             var shardKey = $"{TreeId}/{i}";
@@ -27,7 +23,7 @@ internal sealed partial class LatticeGrain
                 startInclusive, endExclusive, pageSize, reverse);
             initTasks[i] = cursors[i].MoveNextAsync();
         }
-        await Task.WhenAll(initTasks.AsSpan(0, shardCount));
+        await Task.WhenAll(initTasks);
 
         IComparer<string> comparer = reverse
             ? Comparer<string>.Create((a, b) => string.Compare(b, a, StringComparison.Ordinal))
@@ -48,12 +44,6 @@ internal sealed partial class LatticeGrain
             await cursors[idx].MoveNextAsync();
             if (cursors[idx].HasCurrent)
                 pq.Enqueue(idx, cursors[idx].Current!);
-        }
-        }
-        finally
-        {
-            ArrayPool<ShardCursor>.Shared.Return(cursors, clearArray: true);
-            ArrayPool<Task>.Shared.Return(initTasks, clearArray: true);
         }
     }
 

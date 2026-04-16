@@ -1,6 +1,7 @@
 using Orleans.Concurrency;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
+using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -14,12 +15,22 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// local cache using <see cref="LwwValue{T}.Merge"/>. Because the merge is
 /// commutative and idempotent, stale entries are harmlessly overwritten
 /// without an explicit invalidation protocol.
+///
+/// When <see cref="LatticeOptions.CacheTtl"/> is non-zero, the cache skips
+/// the delta refresh if less than the configured duration has elapsed since
+/// the last successful refresh, reducing RPC overhead at the cost of
+/// potentially serving slightly stale data.
 /// </summary>
 [StatelessWorker]
-internal sealed class LeafCacheGrain(IGrainContext context, IGrainFactory grainFactory) : ILeafCacheGrain
+internal sealed class LeafCacheGrain(
+    IGrainContext context,
+    IGrainFactory grainFactory,
+    IOptionsMonitor<LatticeOptions> optionsMonitor) : ILeafCacheGrain
 {
     private readonly Dictionary<string, LwwValue<byte[]>> _cache = new(StringComparer.Ordinal);
     private VersionVector _version = new();
+    private long _lastRefreshTicks;
+    private string? _treeId;
 
     /// <summary>
     /// The <see cref="GrainId"/> string of the primary leaf grain this cache
@@ -48,8 +59,32 @@ internal sealed class LeafCacheGrain(IGrainContext context, IGrainFactory grainF
         return _cache.TryGetValue(key, out var cached) && !cached.IsTombstone;
     }
 
+    public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
+    {
+        await RefreshAsync();
+
+        var result = new Dictionary<string, byte[]>(keys.Count);
+        foreach (var key in keys)
+        {
+            if (_cache.TryGetValue(key, out var cached) && !cached.IsTombstone)
+            {
+                result[key] = cached.Value!;
+            }
+        }
+        return result;
+    }
+
     private async Task RefreshAsync()
     {
+        // Check TTL: skip refresh if the cache was populated recently enough.
+        var ttl = await GetCacheTtlAsync();
+        if (ttl > TimeSpan.Zero && _lastRefreshTicks > 0)
+        {
+            var elapsed = Environment.TickCount64 - _lastRefreshTicks;
+            if (elapsed < (long)ttl.TotalMilliseconds)
+                return;
+        }
+
         var primaryLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
         var delta = await primaryLeaf.GetDeltaSinceAsync(_version);
 
@@ -90,5 +125,16 @@ internal sealed class LeafCacheGrain(IGrainContext context, IGrainFactory grainF
 
         // Advance our version vector to reflect what we've received.
         _version = VersionVector.Merge(_version, delta.Version);
+        _lastRefreshTicks = Environment.TickCount64;
+    }
+
+    private async Task<TimeSpan> GetCacheTtlAsync()
+    {
+        if (_treeId is null)
+        {
+            var primaryLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
+            _treeId = await primaryLeaf.GetTreeIdAsync() ?? string.Empty;
+        }
+        return optionsMonitor.Get(_treeId).CacheTtl;
     }
 }
