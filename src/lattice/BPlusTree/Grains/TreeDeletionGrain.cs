@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
@@ -18,6 +19,7 @@ internal sealed class TreeDeletionGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    ILogger<TreeDeletionGrain> logger,
     [PersistentState("tree-deletion", LatticeOptions.StorageProviderName)]
     IPersistentState<TreeDeletionState> state) : ITreeDeletionGrain, IRemindable, IGrainBase
 {
@@ -209,8 +211,9 @@ internal sealed class TreeDeletionGrain(
             state.State.ShardRetries = 0;
             await state.WriteStateAsync();
         }
-        catch
+        catch (Exception ex)
         {
+            logger.LogWarning(ex, "Purge failed for shard {ShardIndex} of tree {TreeId}", state.State.NextShardIndex, TreeId);
             if (state.State.ShardRetries < MaxRetriesPerShard)
             {
                 state.State.ShardRetries++;
@@ -254,17 +257,17 @@ internal sealed class TreeDeletionGrain(
         {
             var reminder = await reminderRegistry.GetReminder(context.GrainId, ReminderName);
             if (reminder is not null)
-                await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
-        }
-        catch { /* best effort */ }
+                    await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
+                }
+                catch (Exception ex) { logger.LogWarning(ex, "Failed to unregister deletion reminder for tree {TreeId}", TreeId); }
 
-        try
-        {
-            var reminder = await reminderRegistry.GetReminder(context.GrainId, KeepaliveReminderName);
-            if (reminder is not null)
-                await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
-        }
-        catch { /* best effort */ }
+                try
+                {
+                    var reminder = await reminderRegistry.GetReminder(context.GrainId, KeepaliveReminderName);
+                    if (reminder is not null)
+                        await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
+                }
+                catch (Exception ex) { logger.LogWarning(ex, "Failed to unregister deletion keepalive reminder for tree {TreeId}", TreeId); }
     }
 
     private static TimeSpan ClampPeriod(TimeSpan duration) =>

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice;
@@ -23,6 +24,7 @@ public static class LatticeServiceCollectionExtensions
         Action<ISiloBuilder, string> configureStorage)
     {
         configureStorage(builder, LatticeOptions.StorageProviderName);
+        builder.Services.AddSingleton<IValidateOptions<LatticeOptions>, LatticeOptionsValidator>();
         return builder;
     }
 

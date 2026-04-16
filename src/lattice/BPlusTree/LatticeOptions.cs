@@ -43,6 +43,17 @@ public sealed class LatticeOptions
     /// </summary>
     public TimeSpan SoftDeleteDuration { get; set; } = DefaultSoftDeleteDuration;
 
+    /// <summary>
+    /// Minimum time between consecutive delta refreshes from the primary leaf
+    /// in the <c>LeafCacheGrain</c>. When set to <see cref="TimeSpan.Zero"/>
+    /// (the default), every read triggers a delta refresh — the version-vector
+    /// comparison on the primary is cheap but the RPC overhead remains. Setting
+    /// a non-zero value (e.g. 100 ms) allows the cache to serve reads from its
+    /// local dictionary without contacting the primary, trading freshness for
+    /// lower read latency. This option can be changed freely at any time.
+    /// </summary>
+    public TimeSpan CacheTtl { get; set; } = DefaultCacheTtl;
+
     /// <summary>Default value for <see cref="SoftDeleteDuration"/> (72 hours).</summary>
     public static readonly TimeSpan DefaultSoftDeleteDuration = TimeSpan.FromHours(72);
 
@@ -60,6 +71,9 @@ public sealed class LatticeOptions
 
     /// <summary>Default value for <see cref="KeysPageSize"/>.</summary>
     public const int DefaultKeysPageSize = 512;
+
+    /// <summary>Default value for <see cref="CacheTtl"/> (zero — refresh on every read).</summary>
+    public static readonly TimeSpan DefaultCacheTtl = TimeSpan.Zero;
 
     /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.

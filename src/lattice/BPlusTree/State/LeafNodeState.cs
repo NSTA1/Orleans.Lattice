@@ -57,5 +57,17 @@ internal sealed class LeafNodeState
     [Id(9)] public GrainId? OldNextSibling { get; set; }
 
     /// <summary>Returns the number of live (non-tombstoned) entries.</summary>
-    public int LiveCount => Entries.Count(e => !e.Value.IsTombstone);
+    public int LiveCount
+    {
+        get
+        {
+            int count = 0;
+            foreach (var e in Entries)
+            {
+                if (!e.Value.IsTombstone)
+                    count++;
+            }
+            return count;
+        }
+    }
 }

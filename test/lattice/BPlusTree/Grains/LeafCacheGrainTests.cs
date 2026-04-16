@@ -1,4 +1,5 @@
 using NSubstitute;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
@@ -10,9 +11,10 @@ public class LeafCacheGrainTests
 {
     private static readonly GrainId LeafGrainId = GrainId.Create("leaf", "primary-leaf");
 
-    private static (LeafCacheGrain grain, IBPlusLeafGrain leaf) CreateGrain()
+    private static (LeafCacheGrain grain, IBPlusLeafGrain leaf) CreateGrain(LatticeOptions? options = null)
     {
         var leafMock = Substitute.For<IBPlusLeafGrain>();
+        leafMock.GetTreeIdAsync().Returns("test-tree");
 
         var context = Substitute.For<IGrainContext>();
         // The cache grain key is the string form of the primary leaf's GrainId.
@@ -21,7 +23,10 @@ public class LeafCacheGrainTests
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leafMock);
 
-        var grain = new LeafCacheGrain(context, grainFactory);
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions());
+
+        var grain = new LeafCacheGrain(context, grainFactory, optionsMonitor);
         return (grain, leafMock);
     }
 
@@ -387,5 +392,98 @@ public class LeafCacheGrainTests
         // Key exists in the leaf but the cache can't see it.
         var result = await grain.GetAsync("k1");
         Assert.Null(result);
+    }
+
+    // --- GetManyAsync tests ---
+
+    [Fact]
+    public async Task GetManyAsync_returns_existing_keys_from_cache()
+    {
+        var (grain, leaf) = CreateGrain();
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+            .Returns(DeltaWith(
+                ("a", Encoding.UTF8.GetBytes("1")),
+                ("b", Encoding.UTF8.GetBytes("2")),
+                ("c", Encoding.UTF8.GetBytes("3"))));
+
+        var result = await grain.GetManyAsync(["a", "b", "c"]);
+
+        Assert.Equal(3, result.Count);
+        Assert.Equal("1", Encoding.UTF8.GetString(result["a"]));
+        Assert.Equal("2", Encoding.UTF8.GetString(result["b"]));
+        Assert.Equal("3", Encoding.UTF8.GetString(result["c"]));
+    }
+
+    [Fact]
+    public async Task GetManyAsync_omits_missing_and_tombstoned_keys()
+    {
+        var (grain, leaf) = CreateGrain();
+
+        var clock = HybridLogicalClock.Tick(default);
+        var version = new VersionVector();
+        version.Tick("primary");
+        var tombClock = HybridLogicalClock.Tick(clock);
+
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+            .Returns(new StateDelta
+            {
+                Entries = new Dictionary<string, LwwValue<byte[]>>
+                {
+                    ["a"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("1"), clock),
+                    ["b"] = LwwValue<byte[]>.Tombstone(tombClock)
+                },
+                Version = version
+            });
+
+        var result = await grain.GetManyAsync(["a", "b", "missing"]);
+
+        Assert.Single(result);
+        Assert.True(result.ContainsKey("a"));
+    }
+
+    [Fact]
+    public async Task GetManyAsync_returns_empty_for_empty_input()
+    {
+        var (grain, leaf) = CreateGrain();
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+
+        var result = await grain.GetManyAsync([]);
+
+        Assert.Empty(result);
+    }
+
+    // --- CacheTtl tests ---
+
+    [Fact]
+    public async Task Cache_skips_refresh_when_within_ttl()
+    {
+        var (grain, leaf) = CreateGrain(new LatticeOptions { CacheTtl = TimeSpan.FromSeconds(30) });
+
+        // First call populates cache.
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+            .Returns(DeltaWith(("k1", Encoding.UTF8.GetBytes("v1"))));
+        await grain.GetAsync("k1");
+
+        // Second call should use cached value without calling delta again.
+        // (TTL is 30s, so within window)
+        var result = await grain.GetAsync("k1");
+
+        Assert.Equal("v1", Encoding.UTF8.GetString(result!));
+        // Only 1 delta call — the second was skipped due to TTL.
+        await leaf.Received(1).GetDeltaSinceAsync(Arg.Any<VersionVector>());
+    }
+
+    [Fact]
+    public async Task Cache_refreshes_on_every_read_when_ttl_is_zero()
+    {
+        var (grain, leaf) = CreateGrain(new LatticeOptions { CacheTtl = TimeSpan.Zero });
+
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+
+        await grain.GetAsync("k1");
+        await grain.GetAsync("k2");
+        await grain.GetAsync("k3");
+
+        await leaf.Received(3).GetDeltaSinceAsync(Arg.Any<VersionVector>());
     }
 }

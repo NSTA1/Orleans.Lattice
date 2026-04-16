@@ -15,10 +15,22 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<bool> ExistsAsync(string key);
 
     /// <summary>
+    /// Returns the values for the given <paramref name="keys"/>.
+    /// Keys that do not exist or are tombstoned are omitted from the result.
+    /// </summary>
+    Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys);
+
+    /// <summary>
     /// Inserts or updates a key-value pair.
     /// Returns a <see cref="SplitResult"/> if the leaf split as a consequence, otherwise <c>null</c>.
     /// </summary>
     Task<SplitResult?> SetAsync(string key, byte[] value);
+
+    /// <summary>
+    /// Inserts or updates multiple key-value pairs.
+    /// Returns the last <see cref="SplitResult"/> if any split occurred, otherwise <c>null</c>.
+    /// </summary>
+    Task<SplitResult?> SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
 
     /// <summary>
     /// Marks <paramref name="key"/> as deleted (tombstone).
@@ -43,6 +55,9 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Called once by the shard root after creating the grain. Idempotent.
     /// </summary>
     Task SetTreeIdAsync(string treeId);
+
+    /// <summary>Returns the tree ID this leaf is associated with, or <c>null</c> if not yet set.</summary>
+    Task<string?> GetTreeIdAsync();
 
     /// <summary>
     /// Returns a <see cref="StateDelta"/> containing all entries whose timestamp is

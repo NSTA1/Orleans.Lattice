@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
@@ -23,6 +24,7 @@ internal sealed class TombstoneCompactionGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    ILogger<TombstoneCompactionGrain> logger,
     [PersistentState("tombstone-compaction", LatticeOptions.StorageProviderName)]
     IPersistentState<TombstoneCompactionState> state) : ITombstoneCompactionGrain, IRemindable, IGrainBase
 {
@@ -153,8 +155,9 @@ internal sealed class TombstoneCompactionGrain(
             state.State.ShardRetries = 0;
             await state.WriteStateAsync();
         }
-        catch
+        catch (Exception ex)
         {
+            logger.LogWarning(ex, "Tombstone compaction failed for shard {ShardIndex} of tree {TreeId}", state.State.NextShardIndex, TreeId);
             if (state.State.ShardRetries < MaxRetriesPerShard)
             {
                 state.State.ShardRetries++;
@@ -197,10 +200,11 @@ internal sealed class TombstoneCompactionGrain(
                 await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
             }
         }
-        catch
+        catch (Exception ex)
         {
             // Best effort — the keepalive will be cleaned up on the next tick
             // if it fires while InProgress is false.
+            logger.LogWarning(ex, "Failed to unregister keepalive reminder for tree {TreeId}", TreeId);
         }
     }
 
@@ -212,7 +216,7 @@ internal sealed class TombstoneCompactionGrain(
             if (reminder is not null)
                 await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
         }
-        catch { /* best effort */ }
+        catch (Exception ex) { logger.LogWarning(ex, "Failed to unregister compaction reminder for tree {TreeId}", TreeId); }
 
         await UnregisterKeepaliveAsync();
 

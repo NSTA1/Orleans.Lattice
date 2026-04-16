@@ -1056,4 +1056,133 @@ public class BPlusLeafGrainTests
         Assert.Single(state.State.Entries);
         Assert.True(state.State.Entries.ContainsKey("c"));
     }
+
+    // --- GetManyAsync ---
+
+    [Fact]
+    public async Task GetMany_returns_existing_values()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+
+        await grain.SetTreeIdAsync("t");
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+
+        var result = await grain.GetManyAsync(["a", "b"]);
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal("1", Encoding.UTF8.GetString(result["a"]));
+        Assert.Equal("2", Encoding.UTF8.GetString(result["b"]));
+    }
+
+    [Fact]
+    public async Task GetMany_omits_missing_and_tombstoned_keys()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+
+        await grain.SetTreeIdAsync("t");
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.DeleteAsync("b");
+
+        var result = await grain.GetManyAsync(["a", "b", "missing"]);
+
+        Assert.Single(result);
+        Assert.True(result.ContainsKey("a"));
+    }
+
+    [Fact]
+    public async Task GetMany_returns_empty_for_empty_input()
+    {
+        var grain = CreateGrain();
+        var result = await grain.GetManyAsync([]);
+        Assert.Empty(result);
+    }
+
+    // --- GetTreeIdAsync ---
+
+    [Fact]
+    public async Task GetTreeId_returns_null_when_not_set()
+    {
+        var grain = CreateGrain();
+        Assert.Null(await grain.GetTreeIdAsync());
+    }
+
+    [Fact]
+    public async Task GetTreeId_returns_tree_id_after_set()
+    {
+        var grain = CreateGrain();
+        await grain.SetTreeIdAsync("my-tree");
+        Assert.Equal("my-tree", await grain.GetTreeIdAsync());
+    }
+
+    // --- ExistsAsync ---
+
+    [Fact]
+    public async Task Exists_returns_false_for_missing_key()
+    {
+        var grain = CreateGrain();
+        Assert.False(await grain.ExistsAsync("missing"));
+    }
+
+    [Fact]
+    public async Task Exists_returns_true_for_live_key()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
+        Assert.True(await grain.ExistsAsync("k1"));
+    }
+
+    [Fact]
+    public async Task Exists_returns_false_for_tombstoned_key()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
+        await grain.DeleteAsync("k1");
+        Assert.False(await grain.ExistsAsync("k1"));
+    }
+
+    // --- SetManyAsync ---
+
+    [Fact]
+    public async Task SetMany_writes_all_entries()
+    {
+        var grain = CreateGrain();
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("a", Encoding.UTF8.GetBytes("1")),
+            new("b", Encoding.UTF8.GetBytes("2")),
+            new("c", Encoding.UTF8.GetBytes("3")),
+        };
+
+        var result = await grain.SetManyAsync(entries);
+
+        Assert.Null(result); // no split under capacity
+        Assert.Equal("1", Encoding.UTF8.GetString((await grain.GetAsync("a"))!));
+        Assert.Equal("2", Encoding.UTF8.GetString((await grain.GetAsync("b"))!));
+        Assert.Equal("3", Encoding.UTF8.GetString((await grain.GetAsync("c"))!));
+    }
+
+    [Fact]
+    public async Task SetMany_returns_null_when_no_split()
+    {
+        var grain = CreateGrain();
+        var result = await grain.SetManyAsync([new("k1", [1])]);
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task SetMany_empty_list_is_noop()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        await grain.SetAsync("existing", Encoding.UTF8.GetBytes("v"));
+
+        var result = await grain.SetManyAsync([]);
+
+        Assert.Null(result);
+        Assert.Single(state.State.Entries);
+    }
 }

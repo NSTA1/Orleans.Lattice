@@ -9,14 +9,28 @@ public interface IBPlusInternalGrain : IGrainWithGuidKey
     /// <summary>Initialises this internal node with the result of a root split.</summary>
     Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild, bool childrenAreLeaves);
 
-    /// <summary>Routes a key down to the appropriate child grain.</summary>
-    Task<GrainId> RouteAsync(string key);
+    /// <summary>
+    /// Routes a key down to the appropriate child grain and returns whether
+    /// this node's children are leaves, in a single call. Avoids two
+    /// sequential RPCs during tree traversal.
+    /// </summary>
+    Task<(GrainId ChildId, bool ChildrenAreLeaves)> RouteWithMetadataAsync(string key);
 
     /// <summary>Returns the grain identity of the leftmost child.</summary>
     Task<GrainId> GetLeftmostChildAsync();
 
     /// <summary>Returns the grain identity of the rightmost child.</summary>
     Task<GrainId> GetRightmostChildAsync();
+
+    /// <summary>
+    /// Returns the leftmost child and whether this node's children are leaves, in a single call.
+    /// </summary>
+    Task<(GrainId ChildId, bool ChildrenAreLeaves)> GetLeftmostChildWithMetadataAsync();
+
+    /// <summary>
+    /// Returns the rightmost child and whether this node's children are leaves, in a single call.
+    /// </summary>
+    Task<(GrainId ChildId, bool ChildrenAreLeaves)> GetRightmostChildWithMetadataAsync();
 
     /// <summary>Returns whether this node's children are leaf grains.</summary>
     Task<bool> AreChildrenLeavesAsync();
