@@ -75,6 +75,92 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
         Assert.Equal("b", Encoding.UTF8.GetString((await router.GetAsync("bravo"))!));
         Assert.Equal("c", Encoding.UTF8.GetString((await router.GetAsync("charlie"))!));
     }
+
+    [Fact]
+    public async Task ExistsAsync_returns_true_for_existing_key()
+    {
+        var router = _cluster.GrainFactory.GetGrain<ILattice>("test-exists-true");
+        await router.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
+
+        Assert.True(await router.ExistsAsync("k1"));
+    }
+
+    [Fact]
+    public async Task ExistsAsync_returns_false_for_missing_key()
+    {
+        var router = _cluster.GrainFactory.GetGrain<ILattice>("test-exists-false");
+
+        Assert.False(await router.ExistsAsync("nonexistent"));
+    }
+
+    [Fact]
+    public async Task ExistsAsync_returns_false_after_delete()
+    {
+        var router = _cluster.GrainFactory.GetGrain<ILattice>("test-exists-del");
+        await router.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
+        await router.DeleteAsync("k1");
+
+        Assert.False(await router.ExistsAsync("k1"));
+    }
+
+    [Fact]
+    public async Task GetManyAsync_returns_all_existing_keys()
+    {
+        var router = _cluster.GrainFactory.GetGrain<ILattice>("test-getmany");
+        await router.SetAsync("a", Encoding.UTF8.GetBytes("va"));
+        await router.SetAsync("b", Encoding.UTF8.GetBytes("vb"));
+        await router.SetAsync("c", Encoding.UTF8.GetBytes("vc"));
+
+        var result = await router.GetManyAsync(new List<string> { "a", "b", "c", "missing" });
+
+        Assert.Equal(3, result.Count);
+        Assert.Equal("va", Encoding.UTF8.GetString(result["a"]));
+        Assert.Equal("vb", Encoding.UTF8.GetString(result["b"]));
+        Assert.Equal("vc", Encoding.UTF8.GetString(result["c"]));
+        Assert.False(result.ContainsKey("missing"));
+    }
+
+    [Fact]
+    public async Task GetManyAsync_returns_empty_for_no_matches()
+    {
+        var router = _cluster.GrainFactory.GetGrain<ILattice>("test-getmany-empty");
+
+        var result = await router.GetManyAsync(new List<string> { "x", "y" });
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task SetManyAsync_writes_and_reads_back()
+    {
+        var router = _cluster.GrainFactory.GetGrain<ILattice>("test-setmany");
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("s1", Encoding.UTF8.GetBytes("v1")),
+            new("s2", Encoding.UTF8.GetBytes("v2")),
+            new("s3", Encoding.UTF8.GetBytes("v3")),
+        };
+
+        await router.SetManyAsync(entries);
+
+        var result = await router.GetManyAsync(new List<string> { "s1", "s2", "s3" });
+        Assert.Equal(3, result.Count);
+        Assert.Equal("v1", Encoding.UTF8.GetString(result["s1"]));
+        Assert.Equal("v2", Encoding.UTF8.GetString(result["s2"]));
+        Assert.Equal("v3", Encoding.UTF8.GetString(result["s3"]));
+    }
+
+    [Fact]
+    public async Task SetManyAsync_overwrites_existing_values()
+    {
+        var router = _cluster.GrainFactory.GetGrain<ILattice>("test-setmany-overwrite");
+        await router.SetAsync("k1", Encoding.UTF8.GetBytes("old"));
+
+        await router.SetManyAsync(new List<KeyValuePair<string, byte[]>> { new("k1", Encoding.UTF8.GetBytes("new")) });
+
+        var result = await router.GetAsync("k1");
+        Assert.Equal("new", Encoding.UTF8.GetString(result!));
+    }
 }
 
 /// <summary>

@@ -5,16 +5,15 @@ using System.Text;
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Public utility for computing which shard a key belongs to.
-/// Uses the same XxHash32-based algorithm used internally by <see cref="ILattice"/>
-/// grain routing, so callers can pre-partition data for bulk operations.
+/// Internal utility for computing which shard a key belongs to.
+/// Uses XxHash32 for stable, uniform distribution.
 /// </summary>
-public static class LatticeSharding
+internal static class LatticeSharding
 {
     /// <summary>
     /// Computes a stable shard index for the given key using XxHash32.
     /// </summary>
-    public static int GetShardIndex(string key, int shardCount)
+    internal static int GetShardIndex(string key, int shardCount)
     {
         var maxByteCount = Encoding.UTF8.GetMaxByteCount(key.Length);
         byte[]? rented = null;

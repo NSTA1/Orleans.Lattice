@@ -11,8 +11,22 @@ public interface ILattice : IGrainWithStringKey
     /// <summary>Gets the value associated with <paramref name="key"/>, or <c>null</c> if not found.</summary>
     Task<byte[]?> GetAsync(string key);
 
+    /// <summary>Returns <c>true</c> if <paramref name="key"/> exists and is not tombstoned.</summary>
+    Task<bool> ExistsAsync(string key);
+
+    /// <summary>
+    /// Returns the values for the given <paramref name="keys"/>, fanning out to shards in parallel.
+    /// Keys that do not exist or are tombstoned are omitted from the result.
+    /// </summary>
+    Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys);
+
     /// <summary>Inserts or updates the value for <paramref name="key"/>.</summary>
     Task SetAsync(string key, byte[] value);
+
+    /// <summary>
+    /// Inserts or updates multiple key-value pairs, fanning out to shards in parallel.
+    /// </summary>
+    Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
 
     /// <summary>Deletes the value for <paramref name="key"/>. Returns <c>true</c> if it existed.</summary>
     Task<bool> DeleteAsync(string key);
