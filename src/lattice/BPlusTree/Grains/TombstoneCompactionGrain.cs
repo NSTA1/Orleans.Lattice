@@ -204,6 +204,24 @@ internal sealed class TombstoneCompactionGrain(
         }
     }
 
+    public async Task UnregisterReminderAsync()
+    {
+        try
+        {
+            var reminder = await reminderRegistry.GetReminder(context.GrainId, ReminderName);
+            if (reminder is not null)
+                await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
+        }
+        catch { /* best effort */ }
+
+        await UnregisterKeepaliveAsync();
+
+        _compactionTimer?.Dispose();
+        _compactionTimer = null;
+
+        this.DeactivateOnIdle();
+    }
+
     private async Task CompactShardAsync(int shardIndex, TimeSpan gracePeriod)
     {
         var shardKey = $"{TreeId}/{shardIndex}";

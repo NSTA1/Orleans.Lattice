@@ -39,6 +39,7 @@ internal sealed class ShardRootGrain(
 
     public async Task<byte[]?> GetAsync(string key)
     {
+        ThrowIfDeleted();
         await EnsureRootAsync();
         await ResumePendingPromotionAsync();
         await ResumePendingBulkGraftAsync();
@@ -47,6 +48,7 @@ internal sealed class ShardRootGrain(
 
     public async Task SetAsync(string key, byte[] value)
     {
+        ThrowIfDeleted();
         await EnsureRootAsync();
         await ResumePendingPromotionAsync();
         await ResumePendingBulkGraftAsync();
@@ -76,6 +78,7 @@ internal sealed class ShardRootGrain(
 
     public async Task<bool> DeleteAsync(string key)
     {
+        ThrowIfDeleted();
         await EnsureRootAsync();
         await ResumePendingPromotionAsync();
         await ResumePendingBulkGraftAsync();
@@ -108,6 +111,7 @@ internal sealed class ShardRootGrain(
         int pageSize,
         string? continuationToken = null)
     {
+        ThrowIfDeleted();
         await EnsureRootAsync();
         await ResumePendingPromotionAsync();
         await ResumePendingBulkGraftAsync();
@@ -166,6 +170,7 @@ internal sealed class ShardRootGrain(
         int pageSize,
         string? continuationToken = null)
     {
+        ThrowIfDeleted();
         await EnsureRootAsync();
         await ResumePendingPromotionAsync();
         await ResumePendingBulkGraftAsync();
@@ -445,6 +450,7 @@ internal sealed class ShardRootGrain(
 
     public async Task BulkLoadAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries)
     {
+        ThrowIfDeleted();
         // Idempotency: skip if this exact operation already completed.
         if (state.State.LastCompletedBulkOperationId == operationId) return;
 
@@ -554,6 +560,7 @@ internal sealed class ShardRootGrain(
 
     public async Task BulkAppendAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries)
     {
+        ThrowIfDeleted();
         // Idempotency: skip if this exact operation already completed.
         if (state.State.LastCompletedBulkOperationId == operationId) return;
 
@@ -729,5 +736,88 @@ internal sealed class ShardRootGrain(
     {
         if (state.State.PendingBulkGraft is null) return;
         await CompleteBulkGraftAsync();
+    }
+
+    private void ThrowIfDeleted()
+    {
+        if (state.State.IsDeleted)
+            throw new InvalidOperationException("This tree has been deleted and is no longer accessible.");
+    }
+
+    public async Task MarkDeletedAsync()
+    {
+        if (state.State.IsDeleted) return;
+        state.State.IsDeleted = true;
+        await state.WriteStateAsync();
+    }
+
+    public Task<bool> IsDeletedAsync() => Task.FromResult(state.State.IsDeleted);
+
+    public async Task UnmarkDeletedAsync()
+    {
+        if (!state.State.IsDeleted) return;
+        state.State.IsDeleted = false;
+        await state.WriteStateAsync();
+    }
+
+    public async Task PurgeAsync()
+    {
+        if (state.State.RootNodeId is null)
+        {
+            // Nothing to purge — clear our own state and return.
+            await state.ClearStateAsync();
+            return;
+        }
+
+        // Walk the leaf chain from leftmost, clearing each leaf.
+        GrainId? leafId;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = state.State.RootNodeId;
+        }
+        else
+        {
+            leafId = await TraverseToLeftmostLeafAsync();
+        }
+
+        // Collect internal node IDs to clear afterward.
+        var internalNodeIds = new List<GrainId>();
+        if (!state.State.RootIsLeaf)
+        {
+            await CollectInternalNodeIds(state.State.RootNodeId!.Value, internalNodeIds);
+        }
+
+        // Clear all leaves.
+        while (leafId is not null)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+            var nextId = await leaf.GetNextSiblingAsync();
+            await leaf.ClearGrainStateAsync();
+            leafId = nextId;
+        }
+
+        // Clear all internal nodes.
+        foreach (var internalId in internalNodeIds)
+        {
+            var internalNode = grainFactory.GetGrain<IBPlusInternalGrain>(internalId);
+            await internalNode.ClearGrainStateAsync();
+        }
+
+        // Clear the shard root's own state.
+        await state.ClearStateAsync();
+    }
+
+    private async Task CollectInternalNodeIds(GrainId nodeId, List<GrainId> collected)
+    {
+        collected.Add(nodeId);
+        var node = grainFactory.GetGrain<IBPlusInternalGrain>(nodeId);
+        if (await node.AreChildrenLeavesAsync())
+            return;
+
+        var children = await node.GetChildIdsAsync();
+        foreach (var childId in children)
+        {
+            await CollectInternalNodeIds(childId, collected);
+        }
     }
 }

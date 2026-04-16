@@ -1,6 +1,6 @@
 # Orleans.Lattice
 
-A distributed B+ tree library built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/), designed for scalable ordered key-value storage across a cluster.
+A distributed [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree) library built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/), designed for scalable ordered key-value storage across a cluster.
 
 ## What is it?
 
@@ -39,6 +39,9 @@ await foreach (var key in tree.KeysAsync())
 // Bulk load
 var entries = data.Select(d => KeyValuePair.Create(d.Key, d.ValueBytes)).ToList();
 await tree.BulkLoadAsync(entries);
+
+// Delete entire tree (soft delete with deferred purge)
+await tree.DeleteTreeAsync();
 ```
 
 ## Documentation
@@ -47,14 +50,15 @@ Detailed design documentation is split by concept:
 
 | Document | Contents |
 |---|---|
-| [Configuration](docs/configuration.md) | Options reference, per-tree overrides, immutability constraints, storage provider |
 | [Architecture](docs/architecture.md) | Grain layers, sharding, root promotion, bounded retry, grain mapping, capacity |
-| [Tree Structure](docs/tree-structure.md) | Internal/leaf node layout, two-phase leaf splits, idempotent split propagation |
-| [State Primitives](docs/state-primitives.md) | Hybrid logical clocks, LWW registers, monotonic split state, version vectors, state deltas |
-| [Read Caching](docs/caching.md) | Delta-based `[StatelessWorker]` cache, split-aware pruning |
-| [Bulk Loading](docs/bulk-loading.md) | One-shot build, streaming ingestion, two-phase graft, recovery guarantees |
-| [Tombstone Compaction](docs/tombstone-compaction.md) | Reminder-driven cleanup, grace periods, configuration |
 | [Benchmarks](docs/benchmarks.md) | Prerequisites, running benchmarks, interpreting results |
+| [Bulk Loading](docs/bulk-loading.md) | One-shot build, streaming ingestion, two-phase graft, recovery guarantees |
+| [Configuration](docs/configuration.md) | Options reference, per-tree overrides, immutability constraints, storage provider |
+| [Read Caching](docs/caching.md) | Delta-based `[StatelessWorker]` cache, split-aware pruning |
+| [State Primitives](docs/state-primitives.md) | Hybrid logical clocks, LWW registers, monotonic split state, version vectors, state deltas |
+| [Tombstone Compaction](docs/tombstone-compaction.md) | Reminder-driven cleanup, grace periods, configuration |
+| [Tree Deletion](docs/tree-deletion.md) | Soft delete, recovery, manual purge, deferred purge |
+| [Tree Structure](docs/tree-structure.md) | Internal/leaf node layout, two-phase leaf splits, idempotent split propagation |
 
 ## Contributing
 
