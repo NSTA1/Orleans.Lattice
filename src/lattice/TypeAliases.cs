@@ -2,8 +2,10 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Centralized Orleans serialization alias constants for all grain state
-/// and serializable types. Each alias is a short, fixed string (max 3 chars)
+/// and serializable types. Each alias is a short, fixed string
 /// that provides a stable wire-format identity independent of CLR type names.
+/// Every constant must use the <c>ol.</c> prefix, be at most 6 characters,
+/// and be unique — these invariants are enforced by <c>TypeAliasesTests</c>.
 /// </summary>
 internal static class TypeAliases
 {
