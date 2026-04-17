@@ -46,6 +46,9 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </summary>
     Task<int> DeleteRangeAsync(string startInclusive, string endExclusive);
 
+    /// <summary>Returns the number of live (non-tombstoned) keys in this leaf.</summary>
+    Task<int> CountAsync();
+
     /// <summary>Returns the grain identity of the right sibling leaf, or <c>null</c>.</summary>
     Task<GrainId?> GetNextSiblingAsync();
 
