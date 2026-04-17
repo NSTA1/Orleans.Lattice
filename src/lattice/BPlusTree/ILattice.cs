@@ -32,6 +32,13 @@ public interface ILattice : IGrainWithStringKey
     Task<bool> DeleteAsync(string key);
 
     /// <summary>
+    /// Deletes all keys within the lexicographic range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>)
+    /// by walking the leaf chain and tombstoning matching entries in bulk.
+    /// Returns the total number of keys that were tombstoned across all shards.
+    /// </summary>
+    Task<int> DeleteRangeAsync(string startInclusive, string endExclusive);
+
+    /// <summary>
     /// Returns all live keys in the tree as an ordered async stream.
     /// Keys are returned in lexicographic order (or reverse if <paramref name="reverse"/> is <c>true</c>).
     /// Optionally filters to keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).

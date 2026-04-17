@@ -151,6 +151,46 @@ internal sealed partial class ShardRootGrain(
         }
     }
 
+    public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive)
+    {
+        await PrepareForOperationAsync();
+
+        // Find the starting leaf for the range.
+        GrainId leafId;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = state.State.RootNodeId!.Value;
+        }
+        else
+        {
+            leafId = await TraverseToLeafAsync(startInclusive);
+        }
+
+        // Walk the leaf chain, tombstoning matching entries in each leaf.
+        // We stop when a leaf deletes nothing and already has live keys at or
+        // beyond endExclusive — meaning the range is fully covered.
+        var totalDeleted = 0;
+        while (true)
+        {
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var deleted = await leafGrain.DeleteRangeAsync(startInclusive, endExclusive);
+            totalDeleted += deleted;
+
+            // If nothing was deleted, all remaining keys in this leaf (and
+            // subsequent leaves) are outside the range — we can stop.
+            if (deleted == 0)
+                break;
+
+            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            if (nextSibling is null)
+                break;
+
+            leafId = nextSibling.Value;
+        }
+
+        return totalDeleted;
+    }
+
     public async Task<KeysPage> GetSortedKeysBatchAsync(
         string? startInclusive,
         string? endExclusive,

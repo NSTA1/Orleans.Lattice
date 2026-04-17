@@ -523,4 +523,60 @@ public class LatticeGrainTests
 
         Assert.That(callCount, Is.EqualTo(2));
     }
+
+    [Test]
+    public async Task DeleteRangeAsync_delegates_to_all_shards()
+    {
+        var (grain, factory) = CreateGrain(options: new LatticeOptions { ShardCount = 2 });
+
+        var shard0 = Substitute.For<IShardRootGrain>();
+        var shard1 = Substitute.For<IShardRootGrain>();
+
+        factory.GetGrain<IShardRootGrain>("my-tree/0", null).Returns(shard0);
+        factory.GetGrain<IShardRootGrain>("my-tree/1", null).Returns(shard1);
+        shard0.DeleteRangeAsync("b", "d").Returns(3);
+        shard1.DeleteRangeAsync("b", "d").Returns(2);
+
+        var result = await grain.DeleteRangeAsync("b", "d");
+
+        Assert.That(result, Is.EqualTo(5));
+        await shard0.Received(1).DeleteRangeAsync("b", "d");
+        await shard1.Received(1).DeleteRangeAsync("b", "d");
+    }
+
+    [Test]
+    public void DeleteRangeAsync_throws_for_null_startInclusive()
+    {
+        var (grain, _) = CreateGrain();
+        Assert.ThrowsAsync<ArgumentNullException>(() => grain.DeleteRangeAsync(null!, "z"));
+    }
+
+    [Test]
+    public void DeleteRangeAsync_throws_for_null_endExclusive()
+    {
+        var (grain, _) = CreateGrain();
+        Assert.ThrowsAsync<ArgumentNullException>(() => grain.DeleteRangeAsync("a", null!));
+    }
+
+    [Test]
+    public async Task DeleteRangeAsync_retries_on_stale_alias()
+    {
+        var (grain, factory) = CreateGrain(options: new LatticeOptions { ShardCount = 1 });
+        SetupCompactionGrain(factory, "my-tree");
+
+        var shard = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>("my-tree/0", null).Returns(shard);
+        var callCount = 0;
+        shard.DeleteRangeAsync("a", "z").Returns(_ =>
+        {
+            if (callCount++ == 0)
+                throw new InvalidOperationException("This tree has been deleted.");
+            return Task.FromResult(5);
+        });
+
+        var result = await grain.DeleteRangeAsync("a", "z");
+
+        Assert.That(result, Is.EqualTo(5));
+        Assert.That(callCount, Is.EqualTo(2));
+    }
 }

@@ -40,6 +40,12 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </summary>
     Task<bool> DeleteAsync(string key);
 
+    /// <summary>
+    /// Tombstones all live keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
+    /// Returns the number of keys that were tombstoned.
+    /// </summary>
+    Task<int> DeleteRangeAsync(string startInclusive, string endExclusive);
+
     /// <summary>Returns the grain identity of the right sibling leaf, or <c>null</c>.</summary>
     Task<GrainId?> GetNextSiblingAsync();
 
