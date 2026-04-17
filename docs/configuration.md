@@ -67,13 +67,13 @@ The number of independent sub-trees the key space is divided into. Each key is a
 
 The maximum number of key-value entries a leaf node holds before it splits. Smaller values produce more frequent splits (more grains, shallower leaves) while larger values reduce grain count at the cost of larger per-grain state.
 
-> **⚠️ Do not change after data exists.** Existing leaves were split based on the original threshold. Lowering the value does not retroactively split over-full leaves, and raising it does not merge under-full ones. The result is an unbalanced tree with unpredictable split behaviour. If new leaves split at a different threshold than existing ones, parent internal nodes may accumulate children unevenly.
+> **⚠️ Do not change in configuration after data exists.** Existing leaves were split based on the original threshold. Lowering the value does not retroactively split over-full leaves, and raising it does not merge under-full ones. The result is an unbalanced tree with unpredictable split behaviour. To safely change this value on a tree with data, use [`ResizeAsync`](tree-sizing.md#resizing-an-existing-tree) which creates an offline snapshot of the tree with the new sizing and swaps the tree alias.
 
 ### `MaxInternalChildren`
 
 The maximum number of child references an internal node holds before it splits. This controls the branching factor of the tree above the leaf level.
 
-> **⚠️ Do not change after data exists.** The same reasoning as `MaxLeafKeys` applies — existing internal nodes were split at the original threshold and will not be rebalanced.
+> **⚠️ Do not change in configuration after data exists.** The same reasoning as `MaxLeafKeys` applies — existing internal nodes were split at the original threshold and will not be rebalanced. Use [`ResizeAsync`](tree-sizing.md#resizing-an-existing-tree) to safely change this value.
 
 ### `KeysPageSize`
 
