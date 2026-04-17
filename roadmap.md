@@ -12,7 +12,7 @@ Potential improvements and new features, organized by category.
 
 ## Performance & Scalability
 
-- [ ] **F-006 — Leaf-side continuation filtering for `EntriesAsync`**: Pass the continuation token down to the leaf grain as an `afterExclusive` parameter so it filters entries at the source, avoiding unnecessary `byte[]` value serialization across the grain boundary during forward pagination.
+- [x] **F-006 — Leaf-side continuation filtering for `EntriesAsync`**: Pass the continuation token down to the leaf grain as an `afterExclusive` parameter so it filters entries at the source, avoiding unnecessary `byte[]` value serialization across the grain boundary during forward pagination.
 - [ ] **F-007 — Leaf-side continuation filtering for `KeysAsync`**: Apply the same `afterExclusive` leaf-side filtering optimization from F-006 to `GetSortedKeysBatchAsync`, eliminating shard-level skip loops for key-only scans.
 - [ ] **F-008 — Reverse-scan leaf-side filtering**: Add a `beforeExclusive` parameter to leaf `GetKeysAsync` / `GetEntriesAsync` so reverse pagination can also filter at the leaf, avoiding unnecessary serialization for both keys and entries in `GetSortedKeysBatchReverseAsync` / `GetSortedEntriesBatchReverseAsync`.
 - [ ] **F-009 — Parallel shard pre-fetch for `KeysAsync` / `EntriesAsync`**: Double-buffer the k-way merge by pre-fetching the next page from each shard in parallel, hiding per-shard latency during ordered scans.

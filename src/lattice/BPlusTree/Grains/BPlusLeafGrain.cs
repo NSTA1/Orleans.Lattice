@@ -330,7 +330,7 @@ internal sealed partial class BPlusLeafGrain(
         return Task.FromResult(keys);
     }
 
-    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null)
+    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null)
     {
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
@@ -349,6 +349,9 @@ internal sealed partial class BPlusLeafGrain(
                 continue;
 
             if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
+                continue;
+
+            if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0)
                 continue;
 
             entries.Add(new KeyValuePair<string, byte[]>(key, lww.Value!));
