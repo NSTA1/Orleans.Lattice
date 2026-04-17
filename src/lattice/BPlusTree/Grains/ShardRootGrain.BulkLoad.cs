@@ -19,8 +19,9 @@ internal sealed partial class ShardRootGrain
         if (sortedEntries.Count == 0) return;
 
         var shardKey = context.GrainId.Key.ToString()!;
-        var maxLeafKeys = Options.MaxLeafKeys;
-        var maxChildren = Options.MaxInternalChildren;
+        var options = await GetOptionsAsync();
+        var maxLeafKeys = options.MaxLeafKeys;
+        var maxChildren = options.MaxInternalChildren;
         var clock = HybridLogicalClock.Zero;
 
         var leafIds = new List<GrainId>();
@@ -133,7 +134,8 @@ internal sealed partial class ShardRootGrain
         await ResumePendingPromotionAsync();
 
         var shardKey = context.GrainId.Key.ToString()!;
-        var maxLeafKeys = Options.MaxLeafKeys;
+        var options = await GetOptionsAsync();
+        var maxLeafKeys = options.MaxLeafKeys;
         var clock = HybridLogicalClock.Zero;
 
         GrainId rightmostLeafId = state.State.RootIsLeaf
