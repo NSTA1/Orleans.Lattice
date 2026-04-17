@@ -1560,15 +1560,90 @@ public class BPlusLeafGrainTests
     public async Task GetEntries_excludes_keys_at_or_above_split_key_when_split_in_progress()
     {
         var state = new FakePersistentState<LeafNodeState>();
-        state.State.SplitState = SplitState.SplitInProgress;
-        state.State.SplitKey = "c";
-        state.State.Entries["a"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("1"), default);
-        state.State.Entries["b"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("2"), default);
-        state.State.Entries["c"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("3"), default);
-        state.State.Entries["d"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("4"), default);
-
         var grain = CreateGrain(state);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("4"));
+
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "m";
+
         var entries = await grain.GetEntriesAsync();
         Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "a", "b" }));
+    }
+
+    [Test]
+    public async Task GetEntries_afterExclusive_skips_entries_at_or_below_token()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        var entries = await grain.GetEntriesAsync(afterExclusive: "b");
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "c", "d" }));
+    }
+
+    [Test]
+    public async Task GetEntries_afterExclusive_combined_with_range()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+        await grain.SetAsync("e", Encoding.UTF8.GetBytes("5"));
+
+        var entries = await grain.GetEntriesAsync(startInclusive: "a", endExclusive: "e", afterExclusive: "b");
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "c", "d" }));
+    }
+
+    [Test]
+    public async Task GetEntries_afterExclusive_null_returns_all()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+
+        var entries = await grain.GetEntriesAsync(afterExclusive: null);
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "a", "b" }));
+    }
+
+    [Test]
+    public async Task GetEntries_afterExclusive_beyond_all_keys_returns_empty()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+
+        var entries = await grain.GetEntriesAsync(afterExclusive: "z");
+        Assert.That(entries, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetEntries_afterExclusive_equal_to_key_skips_that_key()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+
+        var entries = await grain.GetEntriesAsync(afterExclusive: "a");
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "b", "c" }));
+    }
+
+    [Test]
+    public async Task GetEntries_values_reflect_latest_overwrite()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("old"));
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("new"));
+
+        var entries = await grain.GetEntriesAsync();
+        Assert.That(entries, Has.Count.EqualTo(1));
+        Assert.That(Encoding.UTF8.GetString(entries[0].Value), Is.EqualTo("new"));
     }
 }

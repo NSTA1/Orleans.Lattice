@@ -393,15 +393,13 @@ internal sealed partial class ShardRootGrain(
         while (entries.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive);
+            // Pass continuationToken as afterExclusive so the leaf filters
+            // at the source — avoids serializing byte[] values that would be
+            // discarded here.
+            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, continuationToken);
 
             foreach (var entry in leafEntries)
             {
-                // Skip entries already returned in previous pages.
-                if (continuationToken is not null &&
-                    string.Compare(entry.Key, continuationToken, StringComparison.Ordinal) <= 0)
-                    continue;
-
                 entries.Add(entry);
                 if (entries.Count >= pageSize)
                     break;

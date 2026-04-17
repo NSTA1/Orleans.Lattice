@@ -167,4 +167,23 @@ public class EntriesSmallLeafClusterTests
         items.Reverse();
         Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(items));
     }
+
+    [Test]
+    public async Task Entries_range_across_multiple_leaves()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("entries-range-multi");
+        var items = Enumerable.Range(0, 20).Select(i => $"e-{i:D3}").ToList();
+        foreach (var k in items)
+            await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
+
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        await foreach (var e in tree.EntriesAsync(startInclusive: "e-005", endExclusive: "e-015"))
+            entries.Add(e);
+
+        var expected = items.Where(k =>
+            string.Compare(k, "e-005", StringComparison.Ordinal) >= 0 &&
+            string.Compare(k, "e-015", StringComparison.Ordinal) < 0)
+            .OrderBy(k => k, StringComparer.Ordinal).ToList();
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(expected));
+    }
 }
