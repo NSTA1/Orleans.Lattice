@@ -70,6 +70,7 @@ These methods are used during normal application flow to read, write, and enumer
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `KeysAsync` | `IAsyncEnumerable<string> KeysAsync(string? startInclusive, string? endExclusive, bool reverse)` | Streams live keys in lexicographic order via paginated k-way merge across shards. |
+| `EntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive, string? endExclusive, bool reverse)` | Streams live key-value entries in lexicographic key order via paginated k-way merge across shards. Useful for exports, migrations, and analytics without a separate `GetAsync` per key. |
 
 ### Maintenance Operations
 
@@ -141,6 +142,7 @@ await tree.SetAsync("user:1", new User("Alice", 30), serializer);
 | `GetManyAsync<T>` | `Task<Dictionary<string, T>> GetManyAsync<T>(this ILattice, List<string> keys, ILatticeSerializer<T>)` | Fetches and deserializes multiple keys. Missing/tombstoned keys are omitted. |
 | `SetManyAsync<T>` | `Task SetManyAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and inserts/updates multiple entries in parallel. |
 | `BulkLoadAsync<T>` | `Task BulkLoadAsync<T>(this ILattice, IReadOnlyList<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and bulk-loads entries into an empty tree. |
+| `EntriesAsync<T>` | `IAsyncEnumerable<KeyValuePair<string, T>> EntriesAsync<T>(this ILattice, ILatticeSerializer<T>, string?, string?, bool)` | Streams live entries, deserializing values via the provided serializer. |
 
 Each method also has a parameterless overload that defaults to `JsonLatticeSerializer<T>.Default`.
 
@@ -181,6 +183,7 @@ Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Nev
 | `StateDelta` | `ol.sd` | public (hidden) | Delta of changed entries for replication. |
 | `SplitResult` | `ol.sr` | public (hidden) | Result of a node split (promoted key + new sibling). |
 | `KeysPage` | `ol.kp` | public (hidden) | Paginated batch of keys from a shard scan. |
+| `EntriesPage` | `ol.ep` | public (hidden) | Paginated batch of key-value entries from a shard scan. |
 | `TreeRegistryEntry` | `ol.tre` | public (hidden) | Per-tree metadata record (config overrides, physical tree alias). |
 | `SnapshotMode` | `ol.snm` | public | Enum: `Offline`, `Online`. Controls source-tree availability during a snapshot. |
 | `TreeResizeState` | `ol.trs` | internal | Persistent state tracking resize progress across phases. |
