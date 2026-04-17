@@ -39,6 +39,7 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
 - **Primary constructors** for grains and simple types — inject dependencies as constructor parameters, not fields.
 - **`readonly record struct`** for value types that participate in Orleans serialization.
 - **Partial classes** when a grain has multiple logical concerns (e.g. `ShardRootGrain.cs`, `ShardRootGrain.Lifecycle.cs`, `ShardRootGrain.Traversal.cs`).
+- **Partial classes for large test files** — split test classes that exceed ~400 lines into partial classes by logical concern, following the same `{ClassName}.{Concern}.cs` naming pattern (e.g. `BPlusLeafGrainTests.cs`, `BPlusLeafGrainTests.Split.cs`, `BPlusLeafGrainTests.Query.cs`). Keep the `CreateGrain` helper and core CRUD tests in the main file. Each partial file should have its own `using` directives for only the namespaces it needs. When a test file contains multiple distinct `[TestFixture]` classes, split each class into its own file instead of using partial classes.
 - Prefer `Task.FromResult` over `ValueTask` for synchronous grain returns.
 - Use `ArgumentNullException.ThrowIfNull` for public API parameter validation.
 - Keep XML doc comments (`<summary>`) on all public types, interfaces, and members.
