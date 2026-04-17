@@ -12,7 +12,7 @@ public class InternalGrainGuardFilterTests
     [SetUp]
     public void ClearRequestContext()
     {
-        RequestContext.Set(LatticeConstants.InternalCallTokenKey, null);
+        RequestContext.Set(LatticeConstants.InternalCallTokenKey, null!);
     }
 
     internal static IIncomingGrainCallContext CreateCallContext(object grainInstance)
@@ -57,7 +57,7 @@ public class InternalGrainGuardFilterTests
         }
         finally
         {
-            RequestContext.Set(LatticeConstants.InternalCallTokenKey, null);
+            RequestContext.Set(LatticeConstants.InternalCallTokenKey, null!);
         }
     }
 
@@ -81,7 +81,7 @@ public class InternalGrainGuardFilterTests
         }
         finally
         {
-            RequestContext.Set(LatticeConstants.InternalCallTokenKey, null);
+            RequestContext.Set(LatticeConstants.InternalCallTokenKey, null!);
         }
     }
 }
@@ -109,13 +109,13 @@ public class LatticeCallContextFilterTests
     [TearDown]
     public void ClearToken()
     {
-        RequestContext.Set(LatticeConstants.InternalCallTokenKey, null);
+        RequestContext.Set(LatticeConstants.InternalCallTokenKey, null!);
     }
 
     [SetUp]
     public void ClearTokenBefore()
     {
-        RequestContext.Set(LatticeConstants.InternalCallTokenKey, null);
+        RequestContext.Set(LatticeConstants.InternalCallTokenKey, null!);
     }
 
     [Test]

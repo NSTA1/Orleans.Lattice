@@ -116,6 +116,39 @@ Controls source-tree availability during a snapshot operation.
 |--------|-------------|
 | `BulkLoadAsync(IAsyncEnumerable<...>, IGrainFactory, int shardCount, int chunkSize)` | Streaming bulk load for large datasets. Input **must** be pre-sorted in ascending key order. See [Bulk Loading](bulk-loading.md). |
 
+## `TypedLatticeExtensions`
+
+Extension methods that serialize/deserialize values via an `ILatticeSerializer<T>`, eliminating per-caller `byte[]` boilerplate. Each method has two overloads: one accepting an explicit serializer and one that defaults to `JsonLatticeSerializer<T>` (System.Text.Json with UTF-8 encoding).
+
+```csharp
+// Default (System.Text.Json):
+await tree.SetAsync("user:1", new User("Alice", 30));
+var user = await tree.GetAsync<User>("user:1");
+
+// Custom serializer:
+var serializer = new JsonLatticeSerializer<User>(new JsonSerializerOptions { ... });
+await tree.SetAsync("user:1", new User("Alice", 30), serializer);
+```
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `GetAsync<T>` | `Task<T?> GetAsync<T>(this ILattice, string key, ILatticeSerializer<T>)` | Returns the deserialized value for `key`, or `default` if absent/tombstoned. |
+| `SetAsync<T>` | `Task SetAsync<T>(this ILattice, string key, T value, ILatticeSerializer<T>)` | Serializes and stores `value` under `key`. |
+| `GetManyAsync<T>` | `Task<Dictionary<string, T>> GetManyAsync<T>(this ILattice, List<string> keys, ILatticeSerializer<T>)` | Fetches and deserializes multiple keys. Missing/tombstoned keys are omitted. |
+| `SetManyAsync<T>` | `Task SetManyAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and inserts/updates multiple entries in parallel. |
+| `BulkLoadAsync<T>` | `Task BulkLoadAsync<T>(this ILattice, IReadOnlyList<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and bulk-loads entries into an empty tree. |
+
+Each method also has a parameterless overload that defaults to `JsonLatticeSerializer<T>.Default`.
+
+## `ILatticeSerializer<T>`
+
+Implement this interface to provide a custom serialization strategy. The library ships with `JsonLatticeSerializer<T>` as the default.
+
+| Member | Signature | Description |
+|--------|-----------|-------------|
+| `Serialize` | `byte[] Serialize(T value)` | Converts a value to bytes for storage. |
+| `Deserialize` | `T Deserialize(byte[] bytes)` | Converts bytes back to a value. |
+
 ## `LatticeOptions`
 
 See [Configuration](configuration.md) for detailed guidance on each option, immutability constraints, and per-tree overrides via the [tree registry](tree-registry.md).

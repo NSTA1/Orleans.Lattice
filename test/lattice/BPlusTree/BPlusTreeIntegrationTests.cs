@@ -34,7 +34,7 @@ public class BPlusTreeIntegrationTests
         var result = await router.GetAsync("key1");
 
         Assert.That(result, Is.Not.Null);
-        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("hello-world"));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("hello-world"));
     }
 
     [Test]
@@ -75,7 +75,7 @@ public class BPlusTreeIntegrationTests
 
         var result = await router.GetAsync("k");
         Assert.That(result, Is.Not.Null);
-        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("v2"));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("v2"));
     }
 
     [Test]
@@ -432,7 +432,7 @@ public class BPlusTreeBulkLoadTests
         await tree.SetAsync("k0099", Encoding.UTF8.GetBytes("new"));
         var result = await tree.GetAsync("k0099");
         Assert.That(result, Is.Not.Null);
-        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("new"));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("new"));
 
         // Delete a bulk-loaded key.
         var deleted = await tree.DeleteAsync("k0005");
@@ -453,7 +453,7 @@ public class BPlusTreeBulkLoadTests
 
         var result = await tree.GetAsync("only-key");
         Assert.That(result, Is.Not.Null);
-        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("only-value"));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("only-value"));
     }
 
     [Test]

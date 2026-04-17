@@ -41,7 +41,7 @@ public class LatticeOptionsIntegrationTests
         {
             var result = await tree.GetAsync($"key-{i:D4}");
             Assert.That(result, Is.Not.Null);
-            Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"value-{i}"));
+            Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo($"value-{i}"));
         }
     }
 
@@ -61,7 +61,7 @@ public class LatticeOptionsIntegrationTests
         {
             var result = await tree.GetAsync($"d-{i}");
             Assert.That(result, Is.Not.Null);
-            Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"v-{i}"));
+            Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo($"v-{i}"));
         }
     }
 }
