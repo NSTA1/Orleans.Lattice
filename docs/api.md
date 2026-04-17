@@ -1,15 +1,29 @@
 # Lattice Public API Reference
 
-Lattice is a distributed, CRDT-based B+ tree built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/). It exposes a single entry-point grain interface, `ILattice`, that routes operations to sharded internal storage.
+Lattice is a distributed, CRDT-based B+ tree built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/). It exposes a single entry-point grain interface, `ILattice`, that routes operations to sharded internal storage. See [Architecture](architecture.md) for the full grain layer design.
 
 ## Setup
+
+Install the NuGet package:
+
+```shell
+dotnet add package Orleans.Lattice
+```
+
+Add the namespace import:
+
+```csharp
+using Orleans.Lattice;
+```
+
+Register Lattice on the silo, providing a storage provider:
 
 ```csharp
 siloBuilder.AddLattice((silo, storageName) =>
     silo.AddMemoryGrainStorage(storageName));
 ```
 
-Per-tree options can be configured with the `ConfigureLattice` extension method:
+Per-tree options can be configured with the `ConfigureLattice` extension method (see [Configuration](configuration.md) for the full options reference and per-tree override semantics):
 
 ```csharp
 siloBuilder.ConfigureLattice("my-tree", o =>
@@ -35,10 +49,10 @@ These methods are used during normal application flow to read, write, and enumer
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `GetAsync` | `Task<byte[]?> GetAsync(string key)` | Returns the value for `key`, or `null` if absent or tombstoned. |
+| `GetAsync` | `Task<byte[]?> GetAsync(string key)` | Returns the value for `key`, or `null` if absent or tombstoned. Reads are served via a [stateless-worker cache](caching.md); `CacheTtl` controls how long cached entries are served before refreshing from the primary leaf. |
 | `ExistsAsync` | `Task<bool> ExistsAsync(string key)` | Returns `true` if `key` exists and is not tombstoned. |
 | `SetAsync` | `Task SetAsync(string key, byte[] value)` | Inserts or updates the value for `key`. |
-| `DeleteAsync` | `Task<bool> DeleteAsync(string key)` | Tombstones `key`. Returns `true` if it was live. |
+| `DeleteAsync` | `Task<bool> DeleteAsync(string key)` | Tombstones `key`. Returns `true` if it was live. Tombstones are removed by [background compaction](tombstone-compaction.md). |
 
 #### Batch
 
@@ -61,15 +75,15 @@ These methods manage tree structure and lifecycle. Several of them **take the tr
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `BulkLoadAsync` | `Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries)` | Bottom-up bulk load into an empty tree. Entries are sorted internally. Throws if any shard already has data. |
+| `BulkLoadAsync` | `Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries)` | Bottom-up bulk load into an empty tree. Entries are sorted internally. Throws if any shard already has data. See [Bulk Loading](bulk-loading.md) for streaming ingestion and recovery guarantees. |
 
 #### Tree Lifecycle
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `TreeExistsAsync` | `Task<bool> TreeExistsAsync()` | Returns `true` if this tree is registered in the internal tree registry. |
+| `TreeExistsAsync` | `Task<bool> TreeExistsAsync()` | Returns `true` if this tree is registered in the internal [tree registry](tree-registry.md). |
 | `GetAllTreeIdsAsync` | `Task<IReadOnlyList<string>> GetAllTreeIdsAsync()` | Returns all registered tree IDs in sorted order. System trees (prefixed with `_lattice_`) are excluded. Physical trees created by `ResizeAsync` and `SnapshotAsync` are included. |
-| `DeleteTreeAsync` | `Task DeleteTreeAsync()` | Soft-deletes the tree. Data is retained for `SoftDeleteDuration` before purge. Idempotent. ⚠️ **Takes the tree offline** — all reads and writes will throw `InvalidOperationException` until the tree is recovered. |
+| `DeleteTreeAsync` | `Task DeleteTreeAsync()` | Soft-deletes the tree. Data is retained for `SoftDeleteDuration` before purge. Idempotent. ⚠️ **Takes the tree offline** — all reads and writes will throw `InvalidOperationException` until the tree is recovered. See [Tree Deletion](tree-deletion.md). |
 | `RecoverTreeAsync` | `Task RecoverTreeAsync()` | Recovers a soft-deleted tree before purge completes. |
 | `PurgeTreeAsync` | `Task PurgeTreeAsync()` | Immediately purges a soft-deleted tree without waiting for the retention window. ⚠️ **Permanently destroys all data** — this cannot be undone. |
 
@@ -77,13 +91,13 @@ These methods manage tree structure and lifecycle. Several of them **take the tr
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `SnapshotAsync` | `Task SnapshotAsync(string destinationTreeId, SnapshotMode mode, int? maxLeafKeys, int? maxInternalChildren)` | Creates a point-in-time copy of the tree into `destinationTreeId`. In `Offline` mode the source is locked during the copy; in `Online` mode it remains available (best-effort consistency). Optional sizing overrides apply to the destination tree. ⚠️ **`Offline` mode takes the tree offline** — all reads and writes throw `InvalidOperationException` until the snapshot completes and shards are unmarked. |
+| `SnapshotAsync` | `Task SnapshotAsync(string destinationTreeId, SnapshotMode mode, int? maxLeafKeys, int? maxInternalChildren)` | Creates a point-in-time copy of the tree into `destinationTreeId`. In `Offline` mode the source is locked during the copy; in `Online` mode it remains available (best-effort consistency). Optional sizing overrides apply to the destination tree. ⚠️ **`Offline` mode takes the tree offline** — all reads and writes throw `InvalidOperationException` until the snapshot completes and shards are unmarked. See [Snapshots](snapshots.md). |
 
 #### Resize
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `ResizeAsync` | `Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)` | Resizes the tree by taking an offline snapshot with the new sizing, then swapping the tree alias so reads and writes target the resized tree. The old physical tree is soft-deleted. ⚠️ **Takes the tree offline** during the snapshot phase — all reads and writes throw `InvalidOperationException` until the alias swap completes. |
+| `ResizeAsync` | `Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)` | Resizes the tree by taking an offline snapshot with the new sizing, then swapping the tree alias so reads and writes target the resized tree. The old physical tree is soft-deleted. ⚠️ **Takes the tree offline** during the snapshot phase — all reads and writes throw `InvalidOperationException` until the alias swap completes. See [Tree Sizing](tree-sizing.md) for sizing guidance. |
 | `UndoResizeAsync` | `Task UndoResizeAsync()` | Undoes the most recent resize by recovering the old physical tree, removing the alias, restoring the original registry configuration, and deleting the snapshot tree. Only available while the old tree is within its `SoftDeleteDuration` window. |
 
 ## `SnapshotMode`
@@ -99,9 +113,11 @@ Controls source-tree availability during a snapshot operation.
 
 | Method | Description |
 |--------|-------------|
-| `BulkLoadAsync(IAsyncEnumerable<...>, IGrainFactory, int shardCount, int chunkSize)` | Streaming bulk load for large datasets. Input **must** be pre-sorted in ascending key order. |
+| `BulkLoadAsync(IAsyncEnumerable<...>, IGrainFactory, int shardCount, int chunkSize)` | Streaming bulk load for large datasets. Input **must** be pre-sorted in ascending key order. See [Bulk Loading](bulk-loading.md). |
 
 ## `LatticeOptions`
+
+See [Configuration](configuration.md) for detailed guidance on each option, immutability constraints, and per-tree overrides via the [tree registry](tree-registry.md).
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
@@ -121,7 +137,7 @@ Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Nev
 
 | Type | Alias | Visibility | Description |
 |------|-------|------------|-------------|
-| `HybridLogicalClock` | `ol.hlc` | public (hidden) | Hybrid logical clock for conflict-free timestamps. |
+| `HybridLogicalClock` | `ol.hlc` | public (hidden) | Hybrid logical clock for conflict-free timestamps. See [State Primitives](state-primitives.md). |
 | `LwwValue<T>` | `ol.lwv` | public (hidden) | Last-writer-wins register. |
 | `VersionVector` | `ol.vv` | public (hidden) | Causal version vector (pointwise-max merge). |
 | `StateDelta` | `ol.sd` | public (hidden) | Delta of changed entries for replication. |
