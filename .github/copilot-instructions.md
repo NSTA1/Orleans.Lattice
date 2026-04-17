@@ -2,12 +2,9 @@
 
 ## Project Overview
 
-Orleans.Lattice is a distributed B+ tree built on top of [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/).
-It provides a sharded, CRDT-backed key-value store where every key is a `string` and every value is `byte[]`.
+Orleans.Lattice is a distributed B+ tree built on top of [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/). It provides a sharded, CRDT-backed key-value store where every key is a `string` and every value is `byte[]`.
 
 ## Solution Layout
-
-```
 src/lattice/               → Main library (Orleans.Lattice)
   BPlusTree/               → Tree structures, options, grain interfaces
     Grains/                → Grain implementations (internal)
@@ -18,8 +15,6 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
     Grains/                → Unit tests per grain
   Fakes/                   → Test doubles (e.g. FakePersistentState<T>)
   Primitives/              → Unit tests for primitive types
-```
-
 ## Target Framework & Language
 
 - **.NET 10** (`net10.0`), C# with nullable reference types and implicit usings enabled.
@@ -72,3 +67,8 @@ Never rename or remove an alias — it is part of the wire format.
 - When adding a new grain, update the "Grain Key Conventions" table in `.github/instructions/grains.instructions.md` if it uses a structured key format.
 - Topic-specific documentation lives in the `docs/` folder. When adding a new document, add a corresponding row to the **Documentation** table in `README.md`, keeping entries sorted alphabetically by document name.
 - When changing behavior covered by an existing `docs/*.md` file, update that file in the same commit.
+
+## Branching and Pull Requests
+
+- Never push directly to main. All changes must go through a branch and pull request.
+- The main branch has branch protection enabled with a required 'build-and-test' status check.
