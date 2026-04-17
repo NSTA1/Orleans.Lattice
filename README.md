@@ -29,28 +29,7 @@ The name comes from its use of **lattice-based state primitives** (hybrid logica
 
 ## Quick Start
 
-```csharp
-// Silo configuration
-siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
-
-// Client code
-var tree = grainFactory.GetGrain<ILattice>("my-tree");
-
-await tree.SetAsync("customer-123", Encoding.UTF8.GetBytes("Alice"));
-byte[]? value = await tree.GetAsync("customer-123");
-bool deleted = await tree.DeleteAsync("customer-123");
-
-// Ordered key scan
-await foreach (var key in tree.KeysAsync())
-    Console.WriteLine(key);
-
-// Bulk load
-var entries = data.Select(d => KeyValuePair.Create(d.Key, d.ValueBytes)).ToList();
-await tree.BulkLoadAsync(entries);
-
-// Delete entire tree (soft delete with deferred purge)
-await tree.DeleteTreeAsync();
-```
+See the [API Reference](docs/api.md) for setup instructions, silo configuration, and full usage examples.
 
 ## Documentation
 
