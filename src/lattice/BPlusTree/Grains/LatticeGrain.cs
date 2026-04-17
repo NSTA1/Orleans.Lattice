@@ -124,6 +124,23 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    public async Task<byte[]?> GetOrSetAsync(string key, byte[] value)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(value);
+        await EnsureCompactionReminderAsync();
+        var shard = await GetShardGrainAsync(key);
+        try
+        {
+            return await shard.GetOrSetAsync(key, value);
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            shard = await GetShardGrainAsync(key);
+            return await shard.GetOrSetAsync(key, value);
+        }
+    }
+
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
         ArgumentNullException.ThrowIfNull(entries);

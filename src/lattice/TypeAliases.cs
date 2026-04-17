@@ -33,4 +33,5 @@ internal static class TypeAliases
     // BPlusTree
     internal const string SplitResult = "ol.sr";
     internal const string KeysPage = "ol.kp";
+    internal const string GetOrSetResult = "ol.gosr";
 }

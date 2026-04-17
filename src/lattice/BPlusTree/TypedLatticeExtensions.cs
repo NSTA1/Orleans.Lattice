@@ -23,6 +23,22 @@ public static class TypedLatticeExtensions
     public static Task<T?> GetAsync<T>(this ILattice lattice, string key) =>
         lattice.GetAsync(key, JsonLatticeSerializer<T>.Default);
 
+    /// <summary>
+    /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
+    /// already exist (or is tombstoned). Returns the existing deserialized value when the
+    /// key is already live, or <c>default</c> when the value was newly written.
+    /// </summary>
+    public static async Task<T?> GetOrSetAsync<T>(this ILattice lattice, string key, T value, ILatticeSerializer<T> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+        var bytes = await lattice.GetOrSetAsync(key, serializer.Serialize(value));
+        return bytes is null ? default : serializer.Deserialize(bytes);
+    }
+
+    /// <inheritdoc cref="GetOrSetAsync{T}(ILattice, string, T, ILatticeSerializer{T})"/>
+    public static Task<T?> GetOrSetAsync<T>(this ILattice lattice, string key, T value) =>
+        lattice.GetOrSetAsync(key, value, JsonLatticeSerializer<T>.Default);
+
     /// <summary>Serializes <paramref name="value"/> and stores it under <paramref name="key"/>.</summary>
     public static Task SetAsync<T>(this ILattice lattice, string key, T value, ILatticeSerializer<T> serializer)
     {

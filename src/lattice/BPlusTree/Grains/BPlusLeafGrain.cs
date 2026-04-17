@@ -35,6 +35,24 @@ internal sealed partial class BPlusLeafGrain(
             state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone);
     }
 
+    public Task<GetOrSetResult> GetOrSetAsync(string key, byte[] value)
+    {
+        // Short-circuit: if the key already exists and is live, return its value without writing.
+        if (state.State.Entries.TryGetValue(key, out var existing) && !existing.IsTombstone)
+        {
+            return Task.FromResult(new GetOrSetResult { ExistingValue = existing.Value });
+        }
+
+        // Key is absent or tombstoned — delegate to the write path and wrap the result.
+        return GetOrSetWriteAsync(key, value);
+    }
+
+    private async Task<GetOrSetResult> GetOrSetWriteAsync(string key, byte[] value)
+    {
+        var splitResult = await SetAsync(key, value);
+        return new GetOrSetResult { Split = splitResult };
+    }
+
     public Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
         var result = new Dictionary<string, byte[]>(keys.Count);
