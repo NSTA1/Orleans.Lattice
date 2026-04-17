@@ -92,6 +92,13 @@ These methods manage tree structure and lifecycle. Several of them **take the tr
 | `RecoverTreeAsync` | `Task RecoverTreeAsync()` | Recovers a soft-deleted tree before purge completes. |
 | `PurgeTreeAsync` | `Task PurgeTreeAsync()` | Immediately purges a soft-deleted tree without waiting for the retention window. ⚠️ **Permanently destroys all data** — this cannot be undone. |
 
+#### Resize
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `ResizeAsync` | `Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)` | Resizes the tree by creating an offline snapshot with new sizing into a new physical tree, swapping the tree alias, and soft-deleting the old data. The tree is unavailable during the snapshot phase but immediately accessible after the swap. Undoable within the `SoftDeleteDuration` retention window. See [Tree Sizing](tree-sizing.md#resizing-an-existing-tree). ⚠️ **Takes the tree offline** during the snapshot phase. |
+| `UndoResizeAsync` | `Task UndoResizeAsync()` | Undoes the most recent resize by recovering the old physical tree, removing the alias, restoring the original registry configuration, and deleting the new snapshot tree. Only available while the old tree is still within its `SoftDeleteDuration` window (before purge completes). |
+
 #### Snapshots
 
 | Method | Signature | Description |

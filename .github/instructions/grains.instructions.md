@@ -29,6 +29,12 @@ Grain identity is embedded in the string key with `/` as separator:
 | `ShardRootGrain` | `{treeId}/{shardIndex}` | `"my-tree/0"` |
 | `BPlusLeafGrain` | Opaque grain-assigned ID | — |
 | `BPlusInternalGrain` | Opaque grain-assigned ID | — |
+| `LeafCacheGrain` | `{leafGrainId}` | `"leaf/abc"` |
+| `LatticeRegistryGrain` | Singleton (`_lattice_trees`) | `"_lattice_trees"` |
+| `TombstoneCompactionGrain` | `{treeId}` | `"my-tree"` |
+| `TreeDeletionGrain` | `{treeId}` | `"my-tree"` |
+| `TreeResizeGrain` | `{treeId}` | `"my-tree"` |
+| `TreeSnapshotGrain` | `{sourceTreeId}` | `"my-tree"` |
 
 Parse the tree ID from the key using `key[..key.LastIndexOf('/')]` when needed.
 
