@@ -5,16 +5,17 @@
 Orleans.Lattice is a distributed B+ tree built on top of [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/). It provides a sharded, CRDT-backed key-value store where every key is a `string` and every value is `byte[]`.
 
 ## Solution Layout
-src/lattice/               → Main library (Orleans.Lattice)
-  BPlusTree/               → Tree structures, options, grain interfaces
-    Grains/                → Grain implementations (internal)
-    State/                 → Grain persistent state POCOs
-  Primitives/              → CRDTs & low-level types (HLC, LWW, VersionVector)
-test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
-  BPlusTree/               → Integration tests & cluster fixtures
-    Grains/                → Unit tests per grain
-  Fakes/                   → Test doubles (e.g. FakePersistentState<T>)
-  Primitives/              → Unit tests for primitive types
+src/lattice/               → Main library (Orleans.Lattice)  
+  BPlusTree/               → Tree structures, options, grain interfaces  
+    Grains/                → Grain implementations (internal)  
+    State/                 → Grain persistent state POCOs  
+  Primitives/              → CRDTs & low-level types (HLC, LWW, VersionVector)  
+test/lattice/              → NUnit test project (Orleans.Lattice.Tests)  
+  BPlusTree/               → Integration tests & cluster fixtures  
+    Grains/                → Unit tests per grain  
+  Fakes/                   → Test doubles (e.g. FakePersistentState<T>)  
+  Primitives/              → Unit tests for primitive types  
+
 ## Target Framework & Language
 
 - **.NET 10** (`net10.0`), C# with nullable reference types and implicit usings enabled.
@@ -72,10 +73,11 @@ Never rename or remove an alias — it is part of the wire format.
 
 - Never push directly to main. All changes must go through a branch and pull request.
 - The main branch has branch protection enabled with a required 'build-and-test' status check.
-- When creating a pull request, apply one of the following labels so the GitHub release API categorises it correctly:
+- When creating a pull request, apply one of the following labels so the GitHub release API categorizes it correctly:
   - `enhancement` — new features or improvements
   - `bug` — bug fixes
   - `documentation` — documentation-only changes
   - `ci` — CI/CD workflow changes
   - `dependencies` — dependency updates
   - `breaking` — breaking changes
+- Do not commit, push, or create PRs unless explicitly requested.
