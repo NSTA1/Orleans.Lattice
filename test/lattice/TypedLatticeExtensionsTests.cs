@@ -303,6 +303,27 @@ public class TypedLatticeExtensionsTests
         Assert.That(result, Is.Empty);
     }
 
+    [Test]
+    public async Task EntriesAsync_forwards_range_and_reverse_parameters()
+    {
+        var lattice = CreateMock();
+        var item = new TestItem("alice", 10);
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k2", JsonSerializer.SerializeToUtf8Bytes(item)),
+        };
+        lattice.EntriesAsync("k1", "k3", true)
+            .Returns(entries.ToAsyncEnumerable());
+
+        var result = new List<KeyValuePair<string, TestItem>>();
+        await foreach (var e in lattice.EntriesAsync(Serializer, startInclusive: "k1", endExclusive: "k3", reverse: true))
+            result.Add(e);
+
+        Assert.That(result, Has.Count.EqualTo(1));
+        Assert.That(result[0].Key, Is.EqualTo("k2"));
+        lattice.Received(1).EntriesAsync("k1", "k3", true);
+    }
+
     // ── Custom Serializer ───────────────────────────────────────
 
     [Test]
