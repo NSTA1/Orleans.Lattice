@@ -280,15 +280,13 @@ internal sealed partial class ShardRootGrain(
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive);
+            // Pass continuationToken as afterExclusive so the leaf filters
+            // at the source — avoids transferring keys that would be
+            // discarded here.
+            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, afterExclusive: continuationToken);
 
             foreach (var key in leafKeys)
             {
-                // Skip keys already returned in previous pages.
-                if (continuationToken is not null &&
-                    string.Compare(key, continuationToken, StringComparison.Ordinal) <= 0)
-                    continue;
-
                 keys.Add(key);
                 if (keys.Count >= pageSize)
                     break;
@@ -336,18 +334,15 @@ internal sealed partial class ShardRootGrain(
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive);
+            // Pass continuationToken as beforeExclusive so the leaf filters
+            // at the source — avoids transferring keys that would be
+            // discarded here.
+            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, beforeExclusive: continuationToken);
 
             // Walk the leaf's keys in reverse order.
             for (int i = leafKeys.Count - 1; i >= 0; i--)
             {
                 var key = leafKeys[i];
-
-                // Skip keys already returned in previous pages.
-                if (continuationToken is not null &&
-                    string.Compare(key, continuationToken, StringComparison.Ordinal) >= 0)
-                    continue;
-
                 keys.Add(key);
                 if (keys.Count >= pageSize)
                     break;
@@ -445,18 +440,14 @@ internal sealed partial class ShardRootGrain(
         while (entries.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            // For reverse, we can't use afterExclusive — the leaf returns entries
-            // in forward order and we walk backward, so we must filter here.
-            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive);
+            // Pass continuationToken as beforeExclusive so the leaf filters
+            // at the source — avoids serializing byte[] values that would be
+            // discarded here.
+            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, beforeExclusive: continuationToken);
 
             for (int i = leafEntries.Count - 1; i >= 0; i--)
             {
                 var entry = leafEntries[i];
-
-                if (continuationToken is not null &&
-                    string.Compare(entry.Key, continuationToken, StringComparison.Ordinal) >= 0)
-                    continue;
-
                 entries.Add(entry);
                 if (entries.Count >= pageSize)
                     break;

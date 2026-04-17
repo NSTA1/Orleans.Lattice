@@ -303,7 +303,7 @@ internal sealed partial class BPlusLeafGrain(
         await state.WriteStateAsync();
     }
 
-    public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null)
+    public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
     {
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
@@ -312,6 +312,9 @@ internal sealed partial class BPlusLeafGrain(
         foreach (var (key, lww) in state.State.Entries)
         {
             if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+                break;
+
+            if (beforeExclusive is not null && string.Compare(key, beforeExclusive, StringComparison.Ordinal) >= 0)
                 break;
 
             if (splitInProgress && splitKey is not null &&
@@ -324,13 +327,16 @@ internal sealed partial class BPlusLeafGrain(
             if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
                 continue;
 
+            if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0)
+                continue;
+
             keys.Add(key);
         }
 
         return Task.FromResult(keys);
     }
 
-    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null)
+    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
     {
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
@@ -339,6 +345,9 @@ internal sealed partial class BPlusLeafGrain(
         foreach (var (key, lww) in state.State.Entries)
         {
             if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+                break;
+
+            if (beforeExclusive is not null && string.Compare(key, beforeExclusive, StringComparison.Ordinal) >= 0)
                 break;
 
             if (splitInProgress && splitKey is not null &&
