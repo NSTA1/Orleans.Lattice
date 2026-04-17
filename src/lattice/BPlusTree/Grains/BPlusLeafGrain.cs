@@ -157,6 +157,16 @@ internal sealed partial class BPlusLeafGrain(
         return keysToDelete.Count;
     }
 
+    public Task<int> CountAsync()
+    {
+        var count = 0;
+        foreach (var lww in state.State.Entries.Values)
+        {
+            if (!lww.IsTombstone) count++;
+        }
+        return Task.FromResult(count);
+    }
+
     public Task<GrainId?> GetNextSiblingAsync() =>
         Task.FromResult(state.State.NextSibling);
 

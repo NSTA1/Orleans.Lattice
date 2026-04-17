@@ -42,6 +42,12 @@ public interface IShardRootGrain : IGrainWithStringKey
     Task<int> DeleteRangeAsync(string startInclusive, string endExclusive);
 
     /// <summary>
+    /// Returns the total number of live (non-tombstoned) keys in this shard's B+ tree
+    /// by walking the leaf chain and summing per-leaf counts.
+    /// </summary>
+    Task<int> CountAsync();
+
+    /// <summary>
     /// Returns a page of live keys in this shard's B+ tree in sorted order,
     /// filtered to the [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
     /// Pass <paramref name="continuationToken"/> (the last key from the previous page)

@@ -191,6 +191,32 @@ internal sealed partial class ShardRootGrain(
         return totalDeleted;
     }
 
+    public async Task<int> CountAsync()
+    {
+        await PrepareForOperationAsync();
+
+        if (state.State.RootNodeId is null)
+            return 0;
+
+        // Find the leftmost leaf and walk the chain.
+        var leafId = await GetLeftmostLeafIdAsync();
+        if (leafId is null) return 0;
+
+        var total = 0;
+        var currentId = leafId.Value;
+        while (true)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
+            total += await leaf.CountAsync();
+
+            var next = await leaf.GetNextSiblingAsync();
+            if (next is null) break;
+            currentId = next.Value;
+        }
+
+        return total;
+    }
+
     public async Task<KeysPage> GetSortedKeysBatchAsync(
         string? startInclusive,
         string? endExclusive,

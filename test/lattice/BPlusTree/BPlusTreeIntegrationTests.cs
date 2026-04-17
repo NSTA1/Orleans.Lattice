@@ -176,6 +176,78 @@ public class BPlusTreeIntegrationTests
         var result = await router.GetAsync("k1");
         Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("new"));
     }
+
+    // --- CountAsync ---
+
+    [Test]
+    public async Task Count_returns_zero_for_empty_tree()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("count-empty");
+        var count = await tree.CountAsync();
+        Assert.That(count, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task Count_returns_total_live_keys()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("count-live");
+        for (int i = 0; i < 10; i++)
+            await tree.SetAsync($"k-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
+
+        var count = await tree.CountAsync();
+        Assert.That(count, Is.EqualTo(10));
+    }
+
+    [Test]
+    public async Task Count_excludes_deleted_keys()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("count-del");
+        for (int i = 0; i < 5; i++)
+            await tree.SetAsync($"k-{i}", Encoding.UTF8.GetBytes($"v-{i}"));
+
+        await tree.DeleteAsync("k-2");
+        await tree.DeleteAsync("k-4");
+
+        var count = await tree.CountAsync();
+        Assert.That(count, Is.EqualTo(3));
+    }
+
+    [Test]
+    public async Task Count_works_after_bulk_load()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("count-bulk");
+        var entries = Enumerable.Range(0, 50)
+            .Select(i => KeyValuePair.Create($"b-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}")))
+            .ToList();
+
+        await tree.BulkLoadAsync(entries);
+
+        var count = await tree.CountAsync();
+        Assert.That(count, Is.EqualTo(50));
+    }
+
+    // --- CountPerShardAsync ---
+
+    [Test]
+    public async Task CountPerShard_returns_correct_shard_count()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("count-per-shard");
+        for (int i = 0; i < 20; i++)
+            await tree.SetAsync($"s-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
+
+        var counts = await tree.CountPerShardAsync();
+        Assert.That(counts.Count, Is.EqualTo(64)); // default shard count
+        Assert.That(counts.Sum(), Is.EqualTo(20));
+    }
+
+    [Test]
+    public async Task CountPerShard_returns_all_zeros_for_empty_tree()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("count-per-shard-empty");
+        var counts = await tree.CountPerShardAsync();
+        Assert.That(counts.Count, Is.EqualTo(64));
+        Assert.That(counts.Sum(), Is.EqualTo(0));
+    }
 }
 
 /// <summary>
