@@ -4,12 +4,27 @@ using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
-[Collection(ClusterCollection.Name)]
-public class BPlusTreeIntegrationTests(ClusterFixture fixture)
+[TestFixture]
+public class BPlusTreeIntegrationTests
 {
-    private readonly TestCluster _cluster = fixture.Cluster;
+    private ClusterFixture _fixture = null!;
+    private TestCluster _cluster = null!;
 
-    [Fact]
+    [OneTimeSetUp]
+    public async Task OneTimeSetUp()
+    {
+        _fixture = new ClusterFixture();
+        await _fixture.InitializeAsync();
+        _cluster = _fixture.Cluster;
+    }
+
+    [OneTimeTearDown]
+    public async Task OneTimeTearDown()
+    {
+        await _fixture.DisposeAsync();
+    }
+
+    [Test]
     public async Task Set_and_Get_roundtrips_a_value()
     {
         var router = _cluster.GrainFactory.GetGrain<ILattice>("test-tree");
@@ -18,40 +33,40 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
         await router.SetAsync("key1", value);
         var result = await router.GetAsync("key1");
 
-        Assert.NotNull(result);
-        Assert.Equal("hello-world", Encoding.UTF8.GetString(result));
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("hello-world"));
     }
 
-    [Fact]
+    [Test]
     public async Task Get_returns_null_for_missing_key()
     {
         var router = _cluster.GrainFactory.GetGrain<ILattice>("test-tree-miss");
         var result = await router.GetAsync("nonexistent");
-        Assert.Null(result);
+        Assert.That(result, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task Delete_returns_false_for_missing_key()
     {
         var router = _cluster.GrainFactory.GetGrain<ILattice>("test-tree-del-miss");
         var result = await router.DeleteAsync("nonexistent");
-        Assert.False(result);
+        Assert.That(result, Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task Delete_removes_a_previously_set_key()
     {
         var router = _cluster.GrainFactory.GetGrain<ILattice>("test-tree-del");
         await router.SetAsync("to-delete", Encoding.UTF8.GetBytes("value"));
 
         var deleted = await router.DeleteAsync("to-delete");
-        Assert.True(deleted);
+        Assert.That(deleted, Is.True);
 
         var result = await router.GetAsync("to-delete");
-        Assert.Null(result);
+        Assert.That(result, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task Set_overwrites_existing_value()
     {
         var router = _cluster.GrainFactory.GetGrain<ILattice>("test-tree-overwrite");
@@ -59,11 +74,11 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
         await router.SetAsync("k", Encoding.UTF8.GetBytes("v2"));
 
         var result = await router.GetAsync("k");
-        Assert.NotNull(result);
-        Assert.Equal("v2", Encoding.UTF8.GetString(result));
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("v2"));
     }
 
-    [Fact]
+    [Test]
     public async Task Multiple_keys_in_same_shard_are_independent()
     {
         var router = _cluster.GrainFactory.GetGrain<ILattice>("test-tree-multi");
@@ -71,39 +86,39 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
         await router.SetAsync("bravo", Encoding.UTF8.GetBytes("b"));
         await router.SetAsync("charlie", Encoding.UTF8.GetBytes("c"));
 
-        Assert.Equal("a", Encoding.UTF8.GetString((await router.GetAsync("alpha"))!));
-        Assert.Equal("b", Encoding.UTF8.GetString((await router.GetAsync("bravo"))!));
-        Assert.Equal("c", Encoding.UTF8.GetString((await router.GetAsync("charlie"))!));
+        Assert.That(Encoding.UTF8.GetString((await router.GetAsync("alpha"))!), Is.EqualTo("a"));
+        Assert.That(Encoding.UTF8.GetString((await router.GetAsync("bravo"))!), Is.EqualTo("b"));
+        Assert.That(Encoding.UTF8.GetString((await router.GetAsync("charlie"))!), Is.EqualTo("c"));
     }
 
-    [Fact]
+    [Test]
     public async Task ExistsAsync_returns_true_for_existing_key()
     {
         var router = _cluster.GrainFactory.GetGrain<ILattice>("test-exists-true");
         await router.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
 
-        Assert.True(await router.ExistsAsync("k1"));
+        Assert.That(await router.ExistsAsync("k1"), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task ExistsAsync_returns_false_for_missing_key()
     {
         var router = _cluster.GrainFactory.GetGrain<ILattice>("test-exists-false");
 
-        Assert.False(await router.ExistsAsync("nonexistent"));
+        Assert.That(await router.ExistsAsync("nonexistent"), Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task ExistsAsync_returns_false_after_delete()
     {
         var router = _cluster.GrainFactory.GetGrain<ILattice>("test-exists-del");
         await router.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
         await router.DeleteAsync("k1");
 
-        Assert.False(await router.ExistsAsync("k1"));
+        Assert.That(await router.ExistsAsync("k1"), Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task GetManyAsync_returns_all_existing_keys()
     {
         var router = _cluster.GrainFactory.GetGrain<ILattice>("test-getmany");
@@ -113,24 +128,24 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
 
         var result = await router.GetManyAsync(new List<string> { "a", "b", "c", "missing" });
 
-        Assert.Equal(3, result.Count);
-        Assert.Equal("va", Encoding.UTF8.GetString(result["a"]));
-        Assert.Equal("vb", Encoding.UTF8.GetString(result["b"]));
-        Assert.Equal("vc", Encoding.UTF8.GetString(result["c"]));
-        Assert.False(result.ContainsKey("missing"));
+        Assert.That(result.Count, Is.EqualTo(3));
+        Assert.That(Encoding.UTF8.GetString(result["a"]), Is.EqualTo("va"));
+        Assert.That(Encoding.UTF8.GetString(result["b"]), Is.EqualTo("vb"));
+        Assert.That(Encoding.UTF8.GetString(result["c"]), Is.EqualTo("vc"));
+        Assert.That(result.ContainsKey("missing"), Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task GetManyAsync_returns_empty_for_no_matches()
     {
         var router = _cluster.GrainFactory.GetGrain<ILattice>("test-getmany-empty");
 
         var result = await router.GetManyAsync(new List<string> { "x", "y" });
 
-        Assert.Empty(result);
+        Assert.That(result, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task SetManyAsync_writes_and_reads_back()
     {
         var router = _cluster.GrainFactory.GetGrain<ILattice>("test-setmany");
@@ -144,13 +159,13 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
         await router.SetManyAsync(entries);
 
         var result = await router.GetManyAsync(new List<string> { "s1", "s2", "s3" });
-        Assert.Equal(3, result.Count);
-        Assert.Equal("v1", Encoding.UTF8.GetString(result["s1"]));
-        Assert.Equal("v2", Encoding.UTF8.GetString(result["s2"]));
-        Assert.Equal("v3", Encoding.UTF8.GetString(result["s3"]));
+        Assert.That(result.Count, Is.EqualTo(3));
+        Assert.That(Encoding.UTF8.GetString(result["s1"]), Is.EqualTo("v1"));
+        Assert.That(Encoding.UTF8.GetString(result["s2"]), Is.EqualTo("v2"));
+        Assert.That(Encoding.UTF8.GetString(result["s3"]), Is.EqualTo("v3"));
     }
 
-    [Fact]
+    [Test]
     public async Task SetManyAsync_overwrites_existing_values()
     {
         var router = _cluster.GrainFactory.GetGrain<ILattice>("test-setmany-overwrite");
@@ -159,7 +174,7 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
         await router.SetManyAsync(new List<KeyValuePair<string, byte[]>> { new("k1", Encoding.UTF8.GetBytes("new")) });
 
         var result = await router.GetAsync("k1");
-        Assert.Equal("new", Encoding.UTF8.GetString(result!));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("new"));
     }
 }
 
@@ -167,12 +182,27 @@ public class BPlusTreeIntegrationTests(ClusterFixture fixture)
 /// Integration tests that insert keys in non-ascending order using a single-shard,
 /// small-leaf cluster to force many splits and expose routing bugs.
 /// </summary>
-[Collection(SmallLeafClusterCollection.Name)]
-public class BPlusTreeInsertionOrderTests(SmallLeafClusterFixture fixture)
+[TestFixture]
+public class BPlusTreeInsertionOrderTests
 {
-    private readonly TestCluster _cluster = fixture.Cluster;
+    private SmallLeafClusterFixture _fixture = null!;
+    private TestCluster _cluster = null!;
 
-    [Fact]
+    [OneTimeSetUp]
+    public async Task OneTimeSetUp()
+    {
+        _fixture = new SmallLeafClusterFixture();
+        await _fixture.InitializeAsync();
+        _cluster = _fixture.Cluster;
+    }
+
+    [OneTimeTearDown]
+    public async Task OneTimeTearDown()
+    {
+        await _fixture.DisposeAsync();
+    }
+
+    [Test]
     public async Task Reverse_order_insert_then_get_all_keys()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("rev-insert-get");
@@ -189,10 +219,10 @@ public class BPlusTreeInsertionOrderTests(SmallLeafClusterFixture fixture)
             if (result is null) missing.Add($"k{i:D4}");
         }
 
-        Assert.Empty(missing);
+        Assert.That(missing, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task Random_order_insert_then_get_all_keys()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("rand-insert-get");
@@ -217,10 +247,10 @@ public class BPlusTreeInsertionOrderTests(SmallLeafClusterFixture fixture)
             if (result is null) missing.Add($"k{i:D4}");
         }
 
-        Assert.Empty(missing);
+        Assert.That(missing, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task Reverse_order_insert_keys_scan_returns_all()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("rev-insert-keys");
@@ -239,10 +269,10 @@ public class BPlusTreeInsertionOrderTests(SmallLeafClusterFixture fixture)
             .OrderBy(k => k, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task Reverse_order_insert_large_set_then_get_all()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("rev-insert-large");
@@ -259,10 +289,10 @@ public class BPlusTreeInsertionOrderTests(SmallLeafClusterFixture fixture)
             if (result is null) missing.Add($"k{i:D4}");
         }
 
-        Assert.Empty(missing);
+        Assert.That(missing, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task Concurrent_reverse_order_inserts_then_get_all()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("rev-concurrent");
@@ -282,7 +312,7 @@ public class BPlusTreeInsertionOrderTests(SmallLeafClusterFixture fixture)
             if (result is null) missing.Add($"k{i:D4}");
         }
 
-        Assert.Empty(missing);
+        Assert.That(missing, Is.Empty);
     }
 }
 
@@ -291,12 +321,27 @@ public class BPlusTreeInsertionOrderTests(SmallLeafClusterFixture fixture)
 /// <see cref="LatticeExtensions.BulkLoadAsync"/> extension method.
 /// Uses a single-shard, small-leaf cluster to exercise multi-level tree construction.
 /// </summary>
-[Collection(SmallLeafClusterCollection.Name)]
-public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
+[TestFixture]
+public class BPlusTreeBulkLoadTests
 {
-    private readonly TestCluster _cluster = fixture.Cluster;
+    private SmallLeafClusterFixture _fixture = null!;
+    private TestCluster _cluster = null!;
 
-    [Fact]
+    [OneTimeSetUp]
+    public async Task OneTimeSetUp()
+    {
+        _fixture = new SmallLeafClusterFixture();
+        await _fixture.InitializeAsync();
+        _cluster = _fixture.Cluster;
+    }
+
+    [OneTimeTearDown]
+    public async Task OneTimeTearDown()
+    {
+        await _fixture.DisposeAsync();
+    }
+
+    [Test]
     public async Task BulkLoad_builds_tree_and_retrieves_all_keys()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-basic");
@@ -314,10 +359,10 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
             if (result is null) missing.Add($"k{i:D4}");
         }
 
-        Assert.Empty(missing);
+        Assert.That(missing, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task BulkLoad_keys_scan_returns_sorted_keys()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-keys-scan");
@@ -333,10 +378,10 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
             keys.Add(k);
 
         var expected = entries.Select(e => e.Key).Order().ToList();
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task BulkLoad_then_set_and_delete_work()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-then-mutate");
@@ -349,16 +394,16 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
         // Set a new key beyond the bulk-loaded range.
         await tree.SetAsync("k0099", Encoding.UTF8.GetBytes("new"));
         var result = await tree.GetAsync("k0099");
-        Assert.NotNull(result);
-        Assert.Equal("new", Encoding.UTF8.GetString(result));
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("new"));
 
         // Delete a bulk-loaded key.
         var deleted = await tree.DeleteAsync("k0005");
-        Assert.True(deleted);
-        Assert.Null(await tree.GetAsync("k0005"));
+        Assert.That(deleted, Is.True);
+        Assert.That(await tree.GetAsync("k0005"), Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task BulkLoad_single_entry_creates_root_leaf()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-single");
@@ -370,11 +415,11 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
         await tree.BulkLoadAsync(entries);
 
         var result = await tree.GetAsync("only-key");
-        Assert.NotNull(result);
-        Assert.Equal("only-value", Encoding.UTF8.GetString(result));
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("only-value"));
     }
 
-    [Fact]
+    [Test]
     public async Task BulkLoad_large_dataset_builds_multi_level_tree()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-large");
@@ -392,16 +437,16 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
             if (result is null) missing.Add($"k{i:D4}");
         }
 
-        Assert.Empty(missing);
+        Assert.That(missing, Is.Empty);
 
         // Verify key scan is complete and sorted.
         var keys = new List<string>();
         await foreach (var k in tree.KeysAsync())
             keys.Add(k);
-        Assert.Equal(count, keys.Count);
+        Assert.That(keys.Count, Is.EqualTo(count));
     }
 
-    [Fact]
+    [Test]
     public async Task Streaming_BulkLoad_via_extension_method()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-stream");
@@ -427,10 +472,10 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
             if (result is null) missing.Add($"k{i:D4}");
         }
 
-        Assert.Empty(missing);
+        Assert.That(missing, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task BulkAppend_after_BulkLoad_appends_to_right_edge()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-append");
@@ -464,16 +509,16 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
             if (result is null) missing.Add($"k{i:D4}");
         }
 
-        Assert.Empty(missing);
+        Assert.That(missing, Is.Empty);
 
         // Verify key scan returns all in order.
         var keys = new List<string>();
         await foreach (var k in tree.KeysAsync())
             keys.Add(k);
-        Assert.Equal(totalCount, keys.Count);
+        Assert.That(keys.Count, Is.EqualTo(totalCount));
     }
 
-    [Fact]
+    [Test]
     public async Task BulkAppend_direct_shard_call_stores_entries()
     {
         // Call BulkAppendAsync directly on the shard to isolate from extension method.
@@ -493,10 +538,10 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
             if (result is null) missing.Add($"k{i:D4}");
         }
 
-        Assert.Empty(missing);
+        Assert.That(missing, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task BulkLoad_idempotent_retry_is_noop()
     {
         // BulkLoadAsync on the same tree twice should succeed — the second
@@ -519,18 +564,18 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
             .ToList();
 
         // Calling with a different operationId on a non-empty shard should throw.
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        Assert.ThrowsAsync<InvalidOperationException>(
             () => shard.BulkLoadAsync("different-op", shardEntries));
 
         // All original keys still readable.
         for (int i = 0; i < 20; i++)
         {
             var result = await tree.GetAsync($"k{i:D4}");
-            Assert.NotNull(result);
+            Assert.That(result, Is.Not.Null);
         }
     }
 
-    [Fact]
+    [Test]
     public async Task BulkAppend_idempotent_retry_same_operationId_is_noop()
     {
         // Calling BulkAppendAsync twice with the same operationId should
@@ -552,10 +597,10 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
         await foreach (var k in tree.KeysAsync())
             keys.Add(k);
 
-        Assert.Equal(12, keys.Count);
+        Assert.That(keys.Count, Is.EqualTo(12));
     }
 
-    [Fact]
+    [Test]
     public async Task BulkAppend_different_operationIds_append_independently()
     {
         var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("bulk-append-multi/0");
@@ -575,10 +620,10 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
         await foreach (var k in tree.KeysAsync())
             keys.Add(k);
 
-        Assert.Equal(16, keys.Count);
+        Assert.That(keys.Count, Is.EqualTo(16));
     }
 
-    [Fact]
+    [Test]
     public async Task BulkLoad_empty_entries_is_noop()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-empty");
@@ -587,10 +632,10 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
         // Tree should still work — set and get a key after empty bulk load.
         await tree.SetAsync("after", Encoding.UTF8.GetBytes("val"));
         var result = await tree.GetAsync("after");
-        Assert.NotNull(result);
+        Assert.That(result, Is.Not.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task BulkAppend_empty_entries_is_noop()
     {
         var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("bulk-append-empty/0");
@@ -609,10 +654,10 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
         await foreach (var k in tree.KeysAsync())
             keys.Add(k);
 
-        Assert.Equal(5, keys.Count);
+        Assert.That(keys.Count, Is.EqualTo(5));
     }
 
-    [Fact]
+    [Test]
     public async Task BulkAppend_fills_existing_leaf_before_creating_new_ones()
     {
         // With MaxLeafKeys=4, append 2 entries (fills existing), then 6 more
@@ -635,10 +680,10 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
             keys.Add(k);
 
         var expected = Enumerable.Range(0, 8).Select(i => $"k{i:D4}").ToList();
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task Streaming_BulkLoad_multiple_chunks_all_keys_present()
     {
         // Streaming with a small chunkSize forces multiple BulkAppendAsync calls,
@@ -661,12 +706,12 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
         await foreach (var k in tree.KeysAsync())
             keys.Add(k);
 
-        Assert.Equal(count, keys.Count);
+        Assert.That(keys.Count, Is.EqualTo(count));
         var expected = Enumerable.Range(0, count).Select(i => $"k{i:D4}").Order().ToList();
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task Normal_operations_work_after_BulkAppend()
     {
         // After bulk append, Set/Get/Delete should work normally
@@ -681,19 +726,19 @@ public class BPlusTreeBulkLoadTests(SmallLeafClusterFixture fixture)
 
         // Set a new key beyond the bulk range.
         await tree.SetAsync("k0099", Encoding.UTF8.GetBytes("new"));
-        Assert.NotNull(await tree.GetAsync("k0099"));
+        Assert.That(await tree.GetAsync("k0099"), Is.Not.Null);
 
         // Delete a bulk-loaded key.
-        Assert.True(await tree.DeleteAsync("k0005"));
-        Assert.Null(await tree.GetAsync("k0005"));
+        Assert.That(await tree.DeleteAsync("k0005"), Is.True);
+        Assert.That(await tree.GetAsync("k0005"), Is.Null);
 
         // Keys scan should reflect the changes.
         var keys = new List<string>();
         await foreach (var k in tree.KeysAsync())
             keys.Add(k);
 
-        Assert.Contains("k0099", keys);
-        Assert.DoesNotContain("k0005", keys);
+        Assert.That(keys, Does.Contain("k0099"));
+        Assert.That(keys, Does.Not.Contain("k0005"));
     }
 }
 

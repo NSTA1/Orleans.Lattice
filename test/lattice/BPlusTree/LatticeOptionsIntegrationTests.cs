@@ -4,12 +4,27 @@ using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
-[Collection(SmallLeafClusterCollection.Name)]
-public class LatticeOptionsIntegrationTests(SmallLeafClusterFixture fixture)
+[TestFixture]
+public class LatticeOptionsIntegrationTests
 {
-    private readonly TestCluster _cluster = fixture.Cluster;
+    private SmallLeafClusterFixture _fixture = null!;
+    private TestCluster _cluster = null!;
 
-    [Fact]
+    [OneTimeSetUp]
+    public async Task OneTimeSetUp()
+    {
+        _fixture = new SmallLeafClusterFixture();
+        await _fixture.InitializeAsync();
+        _cluster = _fixture.Cluster;
+    }
+
+    [OneTimeTearDown]
+    public async Task OneTimeTearDown()
+    {
+        await _fixture.DisposeAsync();
+    }
+
+    [Test]
     public async Task Per_tree_options_override_triggers_earlier_split()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(SmallLeafClusterFixture.TreeName);
@@ -25,12 +40,12 @@ public class LatticeOptionsIntegrationTests(SmallLeafClusterFixture fixture)
         for (int i = 0; i < keyCount; i++)
         {
             var result = await tree.GetAsync($"key-{i:D4}");
-            Assert.NotNull(result);
-            Assert.Equal($"value-{i}", Encoding.UTF8.GetString(result));
+            Assert.That(result, Is.Not.Null);
+            Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"value-{i}"));
         }
     }
 
-    [Fact]
+    [Test]
     public async Task Default_tree_uses_global_options()
     {
         // A tree with no per-name override should still work at default capacity.
@@ -45,8 +60,8 @@ public class LatticeOptionsIntegrationTests(SmallLeafClusterFixture fixture)
         for (int i = 0; i < 10; i++)
         {
             var result = await tree.GetAsync($"d-{i}");
-            Assert.NotNull(result);
-            Assert.Equal($"v-{i}", Encoding.UTF8.GetString(result));
+            Assert.That(result, Is.Not.Null);
+            Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"v-{i}"));
         }
     }
 }

@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Tests;
 
 public class LatticeServiceCollectionExtensionsTests
 {
-    [Fact]
+    [Test]
     public void AddLattice_invokes_delegate_with_builder_and_storage_provider_name()
     {
         var builder = Substitute.For<ISiloBuilder>();
@@ -18,17 +18,17 @@ public class LatticeServiceCollectionExtensionsTests
             capturedName = name;
         });
 
-        Assert.Same(builder, capturedBuilder);
-        Assert.Equal(LatticeOptions.StorageProviderName, capturedName);
+        Assert.That(capturedBuilder, Is.SameAs(builder));
+        Assert.That(capturedName, Is.EqualTo(LatticeOptions.StorageProviderName));
     }
 
-    [Fact]
+    [Test]
     public void AddLattice_returns_builder_for_fluent_chaining()
     {
         var builder = Substitute.For<ISiloBuilder>();
 
         var result = builder.AddLattice((_, _) => { });
 
-        Assert.Same(builder, result);
+        Assert.That(result, Is.SameAs(builder));
     }
 }

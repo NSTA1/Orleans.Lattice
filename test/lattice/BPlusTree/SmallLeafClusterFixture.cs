@@ -5,7 +5,7 @@ using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
-public sealed class SmallLeafClusterFixture : IAsyncLifetime
+public sealed class SmallLeafClusterFixture
 {
     public const string TreeName = "small-leaf-tree";
     public const string CompactionTreeName = "compaction-tree";

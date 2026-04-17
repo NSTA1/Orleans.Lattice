@@ -68,17 +68,17 @@ public class LeafCacheGrainTests
 
     // --- Basic reads ---
 
-    [Fact]
+    [Test]
     public async Task Get_returns_null_when_primary_has_no_data()
     {
         var (grain, leaf) = CreateGrain();
         leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
 
         var result = await grain.GetAsync("k1");
-        Assert.Null(result);
+        Assert.That(result, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task Get_returns_value_from_primary_delta()
     {
         var (grain, leaf) = CreateGrain();
@@ -86,11 +86,11 @@ public class LeafCacheGrainTests
             .Returns(DeltaWith(("k1", Encoding.UTF8.GetBytes("v1"))));
 
         var result = await grain.GetAsync("k1");
-        Assert.NotNull(result);
-        Assert.Equal("v1", Encoding.UTF8.GetString(result));
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("v1"));
     }
 
-    [Fact]
+    [Test]
     public async Task Get_returns_null_for_key_not_in_delta()
     {
         var (grain, leaf) = CreateGrain();
@@ -98,12 +98,12 @@ public class LeafCacheGrainTests
             .Returns(DeltaWith(("k1", Encoding.UTF8.GetBytes("v1"))));
 
         var result = await grain.GetAsync("missing");
-        Assert.Null(result);
+        Assert.That(result, Is.Null);
     }
 
     // --- Tombstone handling ---
 
-    [Fact]
+    [Test]
     public async Task Get_returns_null_for_tombstoned_entry()
     {
         var (grain, leaf) = CreateGrain();
@@ -119,7 +119,7 @@ public class LeafCacheGrainTests
             Version = new VersionVector()
         };
         leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(liveDelta);
-        Assert.NotNull(await grain.GetAsync("k1"));
+        Assert.That(await grain.GetAsync("k1"), Is.Not.Null);
 
         // Second call returns a tombstone with higher timestamp.
         var tombClock = HybridLogicalClock.Tick(clock);
@@ -127,12 +127,12 @@ public class LeafCacheGrainTests
             .Returns(TombstoneDelta("k1", tombClock));
 
         var result = await grain.GetAsync("k1");
-        Assert.Null(result);
+        Assert.That(result, Is.Null);
     }
 
     // --- Delta refresh ---
 
-    [Fact]
+    [Test]
     public async Task Get_always_calls_delta_on_primary()
     {
         var (grain, leaf) = CreateGrain();
@@ -145,7 +145,7 @@ public class LeafCacheGrainTests
         await leaf.Received(3).GetDeltaSinceAsync(Arg.Any<VersionVector>());
     }
 
-    [Fact]
+    [Test]
     public async Task Get_skips_merge_when_delta_is_empty()
     {
         var (grain, leaf) = CreateGrain();
@@ -159,12 +159,12 @@ public class LeafCacheGrainTests
         leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
 
         var result = await grain.GetAsync("k1");
-        Assert.Equal("v1", Encoding.UTF8.GetString(result!));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("v1"));
     }
 
     // --- LWW merge ---
 
-    [Fact]
+    [Test]
     public async Task Cache_merges_updates_with_LWW_semantics()
     {
         var (grain, leaf) = CreateGrain();
@@ -195,10 +195,10 @@ public class LeafCacheGrainTests
         leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(delta2);
 
         var result = await grain.GetAsync("k1");
-        Assert.Equal("v2", Encoding.UTF8.GetString(result!));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("v2"));
     }
 
-    [Fact]
+    [Test]
     public async Task Cache_ignores_stale_updates()
     {
         var (grain, leaf) = CreateGrain();
@@ -232,12 +232,12 @@ public class LeafCacheGrainTests
         leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(delta2);
 
         var result = await grain.GetAsync("k1");
-        Assert.Equal("newer", Encoding.UTF8.GetString(result!));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("newer"));
     }
 
     // --- Multiple keys ---
 
-    [Fact]
+    [Test]
     public async Task Cache_handles_multiple_keys_independently()
     {
         var (grain, leaf) = CreateGrain();
@@ -247,18 +247,18 @@ public class LeafCacheGrainTests
                 ("b", Encoding.UTF8.GetBytes("2")),
                 ("c", Encoding.UTF8.GetBytes("3"))));
 
-        Assert.Equal("1", Encoding.UTF8.GetString((await grain.GetAsync("a"))!));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("a"))!), Is.EqualTo("1"));
 
         // Subsequent reads return empty delta, but cache retains all keys.
         leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
 
-        Assert.Equal("2", Encoding.UTF8.GetString((await grain.GetAsync("b"))!));
-        Assert.Equal("3", Encoding.UTF8.GetString((await grain.GetAsync("c"))!));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("b"))!), Is.EqualTo("2"));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("c"))!), Is.EqualTo("3"));
     }
 
     // --- Split key pruning ---
 
-    [Fact]
+    [Test]
     public async Task Cache_prunes_entries_above_split_key()
     {
         var (grain, leaf) = CreateGrain();
@@ -283,12 +283,12 @@ public class LeafCacheGrainTests
 
         // "a" should still be cached; "m" and "z" should be pruned.
         leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
-        Assert.Equal("1", Encoding.UTF8.GetString((await grain.GetAsync("a"))!));
-        Assert.Null(await grain.GetAsync("m"));
-        Assert.Null(await grain.GetAsync("z"));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("a"))!), Is.EqualTo("1"));
+        Assert.That(await grain.GetAsync("m"), Is.Null);
+        Assert.That(await grain.GetAsync("z"), Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task Cache_pruning_is_idempotent()
     {
         var (grain, leaf) = CreateGrain();
@@ -310,11 +310,11 @@ public class LeafCacheGrainTests
         await grain.GetAsync("a");
 
         leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
-        Assert.Equal("1", Encoding.UTF8.GetString((await grain.GetAsync("a"))!));
-        Assert.Null(await grain.GetAsync("z"));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("a"))!), Is.EqualTo("1"));
+        Assert.That(await grain.GetAsync("z"), Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task Cache_does_not_prune_when_split_key_is_null()
     {
         var (grain, leaf) = CreateGrain();
@@ -327,13 +327,13 @@ public class LeafCacheGrainTests
         // Delta with no split key — nothing pruned.
         leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
 
-        Assert.Equal("1", Encoding.UTF8.GetString((await grain.GetAsync("a"))!));
-        Assert.Equal("2", Encoding.UTF8.GetString((await grain.GetAsync("z"))!));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("a"))!), Is.EqualTo("1"));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("z"))!), Is.EqualTo("2"));
     }
 
     // --- Sibling leaf after split (MergeEntriesAsync scenario) ---
 
-    [Fact]
+    [Test]
     public async Task Cache_populates_from_sibling_leaf_after_split()
     {
         // Simulates a sibling leaf that received entries via MergeEntriesAsync
@@ -359,15 +359,15 @@ public class LeafCacheGrainTests
         leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(siblingDelta);
 
         var result = await grain.GetAsync("k1");
-        Assert.NotNull(result);
-        Assert.Equal("v1", Encoding.UTF8.GetString(result));
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("v1"));
 
         var result2 = await grain.GetAsync("k2");
-        Assert.NotNull(result2);
-        Assert.Equal("v2", Encoding.UTF8.GetString(result2));
+        Assert.That(result2, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result2), Is.EqualTo("v2"));
     }
 
-    [Fact]
+    [Test]
     public async Task Cache_fails_when_sibling_version_is_empty()
     {
         // Demonstrates the bug scenario: if MergeEntriesAsync did NOT tick the
@@ -391,12 +391,12 @@ public class LeafCacheGrainTests
 
         // Key exists in the leaf but the cache can't see it.
         var result = await grain.GetAsync("k1");
-        Assert.Null(result);
+        Assert.That(result, Is.Null);
     }
 
     // --- GetManyAsync tests ---
 
-    [Fact]
+    [Test]
     public async Task GetManyAsync_returns_existing_keys_from_cache()
     {
         var (grain, leaf) = CreateGrain();
@@ -408,13 +408,13 @@ public class LeafCacheGrainTests
 
         var result = await grain.GetManyAsync(["a", "b", "c"]);
 
-        Assert.Equal(3, result.Count);
-        Assert.Equal("1", Encoding.UTF8.GetString(result["a"]));
-        Assert.Equal("2", Encoding.UTF8.GetString(result["b"]));
-        Assert.Equal("3", Encoding.UTF8.GetString(result["c"]));
+        Assert.That(result.Count, Is.EqualTo(3));
+        Assert.That(Encoding.UTF8.GetString(result["a"]), Is.EqualTo("1"));
+        Assert.That(Encoding.UTF8.GetString(result["b"]), Is.EqualTo("2"));
+        Assert.That(Encoding.UTF8.GetString(result["c"]), Is.EqualTo("3"));
     }
 
-    [Fact]
+    [Test]
     public async Task GetManyAsync_omits_missing_and_tombstoned_keys()
     {
         var (grain, leaf) = CreateGrain();
@@ -437,11 +437,11 @@ public class LeafCacheGrainTests
 
         var result = await grain.GetManyAsync(["a", "b", "missing"]);
 
-        Assert.Single(result);
-        Assert.True(result.ContainsKey("a"));
+        Assert.That(result, Has.Count.EqualTo(1));
+        Assert.That(result.ContainsKey("a"), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task GetManyAsync_returns_empty_for_empty_input()
     {
         var (grain, leaf) = CreateGrain();
@@ -449,12 +449,12 @@ public class LeafCacheGrainTests
 
         var result = await grain.GetManyAsync([]);
 
-        Assert.Empty(result);
+        Assert.That(result, Is.Empty);
     }
 
     // --- CacheTtl tests ---
 
-    [Fact]
+    [Test]
     public async Task Cache_skips_refresh_when_within_ttl()
     {
         var (grain, leaf) = CreateGrain(new LatticeOptions { CacheTtl = TimeSpan.FromSeconds(30) });
@@ -468,12 +468,12 @@ public class LeafCacheGrainTests
         // (TTL is 30s, so within window)
         var result = await grain.GetAsync("k1");
 
-        Assert.Equal("v1", Encoding.UTF8.GetString(result!));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("v1"));
         // Only 1 delta call — the second was skipped due to TTL.
         await leaf.Received(1).GetDeltaSinceAsync(Arg.Any<VersionVector>());
     }
 
-    [Fact]
+    [Test]
     public async Task Cache_refreshes_on_every_read_when_ttl_is_zero()
     {
         var (grain, leaf) = CreateGrain(new LatticeOptions { CacheTtl = TimeSpan.Zero });

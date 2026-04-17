@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// tests can inject read/write/clear faults per grain via <see cref="IStorageFaultGrain"/>.
 /// Small leaf and internal limits are used to force splits quickly.
 /// </summary>
-public sealed class FaultInjectionClusterFixture : IAsyncLifetime
+public sealed class FaultInjectionClusterFixture
 {
     public const string TreeName = "fi-tree";
     public const int SmallMaxLeafKeys = 4;
