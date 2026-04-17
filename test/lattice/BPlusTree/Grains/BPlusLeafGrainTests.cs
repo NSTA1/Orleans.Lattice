@@ -1366,4 +1366,50 @@ public class BPlusLeafGrainTests
         Assert.That(await grain.GetAsync("b"), Is.Null);
         Assert.That(await grain.GetAsync("c"), Is.Not.Null);
     }
+
+    // --- CountAsync ---
+
+    [Test]
+    public async Task Count_returns_zero_for_empty_leaf()
+    {
+        var grain = CreateGrain();
+        var count = await grain.CountAsync();
+        Assert.That(count, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task Count_returns_number_of_live_keys()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+
+        var count = await grain.CountAsync();
+        Assert.That(count, Is.EqualTo(3));
+    }
+
+    [Test]
+    public async Task Count_excludes_tombstoned_keys()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.DeleteAsync("b");
+
+        var count = await grain.CountAsync();
+        Assert.That(count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task Count_returns_zero_when_all_keys_tombstoned()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.DeleteAsync("a");
+
+        var count = await grain.CountAsync();
+        Assert.That(count, Is.EqualTo(0));
+    }
 }

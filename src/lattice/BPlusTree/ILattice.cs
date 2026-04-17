@@ -39,6 +39,19 @@ public interface ILattice : IGrainWithStringKey
     Task<int> DeleteRangeAsync(string startInclusive, string endExclusive);
 
     /// <summary>
+    /// Returns the total number of live (non-tombstoned) keys across all shards.
+    /// Fans out to every shard in parallel and sums the per-shard counts.
+    /// </summary>
+    Task<int> CountAsync();
+
+    /// <summary>
+    /// Returns the number of live (non-tombstoned) keys in each shard as an ordered list.
+    /// The list index corresponds to the shard index (0-based).
+    /// Useful for diagnostics and load-balancing analysis.
+    /// </summary>
+    Task<IReadOnlyList<int>> CountPerShardAsync();
+
+    /// <summary>
     /// Returns all live keys in the tree as an ordered async stream.
     /// Keys are returned in lexicographic order (or reverse if <paramref name="reverse"/> is <c>true</c>).
     /// Optionally filters to keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).

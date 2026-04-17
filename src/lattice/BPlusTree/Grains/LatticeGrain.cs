@@ -226,6 +226,70 @@ internal sealed partial class LatticeGrain(
         return total;
     }
 
+    public async Task<int> CountAsync()
+    {
+        try
+        {
+            return await CountAsyncCore();
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            return await CountAsyncCore();
+        }
+    }
+
+    private async Task<int> CountAsyncCore()
+    {
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
+        var shardCount = Options.ShardCount;
+
+        var tasks = new Task<int>[shardCount];
+        for (int i = 0; i < shardCount; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{i}");
+            tasks[i] = shard.CountAsync();
+        }
+
+        await Task.WhenAll(tasks);
+
+        var total = 0;
+        for (int i = 0; i < tasks.Length; i++)
+            total += tasks[i].Result;
+        return total;
+    }
+
+    public async Task<IReadOnlyList<int>> CountPerShardAsync()
+    {
+        try
+        {
+            return await CountPerShardAsyncCore();
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            return await CountPerShardAsyncCore();
+        }
+    }
+
+    private async Task<IReadOnlyList<int>> CountPerShardAsyncCore()
+    {
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
+        var shardCount = Options.ShardCount;
+
+        var tasks = new Task<int>[shardCount];
+        for (int i = 0; i < shardCount; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{i}");
+            tasks[i] = shard.CountAsync();
+        }
+
+        await Task.WhenAll(tasks);
+
+        var counts = new int[shardCount];
+        for (int i = 0; i < shardCount; i++)
+            counts[i] = tasks[i].Result;
+        return counts;
+    }
+
     private async Task EnsureCompactionReminderAsync()
     {
         if (_compactionEnsured) return;
