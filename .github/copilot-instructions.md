@@ -72,3 +72,10 @@ Never rename or remove an alias — it is part of the wire format.
 
 - Never push directly to main. All changes must go through a branch and pull request.
 - The main branch has branch protection enabled with a required 'build-and-test' status check.
+- When creating a pull request, apply one of the following labels so the GitHub release API categorises it correctly:
+  - `enhancement` — new features or improvements
+  - `bug` — bug fixes
+  - `documentation` — documentation-only changes
+  - `ci` — CI/CD workflow changes
+  - `dependencies` — dependency updates
+  - `breaking` — breaking changes
