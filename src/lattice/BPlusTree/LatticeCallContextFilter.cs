@@ -47,7 +47,7 @@ internal sealed class LatticeCallContextFilter(IServiceProvider serviceProvider)
         }
         else
         {
-            RequestContext.Set(LatticeConstants.InternalCallTokenKey, null);
+            RequestContext.Set(LatticeConstants.InternalCallTokenKey, null!);
         }
 
         return context.Invoke();

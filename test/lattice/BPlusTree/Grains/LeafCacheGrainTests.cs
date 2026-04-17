@@ -87,7 +87,7 @@ public class LeafCacheGrainTests
 
         var result = await grain.GetAsync("k1");
         Assert.That(result, Is.Not.Null);
-        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("v1"));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("v1"));
     }
 
     [Test]
@@ -360,11 +360,11 @@ public class LeafCacheGrainTests
 
         var result = await grain.GetAsync("k1");
         Assert.That(result, Is.Not.Null);
-        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("v1"));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("v1"));
 
         var result2 = await grain.GetAsync("k2");
         Assert.That(result2, Is.Not.Null);
-        Assert.That(Encoding.UTF8.GetString(result2), Is.EqualTo("v2"));
+        Assert.That(Encoding.UTF8.GetString(result2!), Is.EqualTo("v2"));
     }
 
     [Test]

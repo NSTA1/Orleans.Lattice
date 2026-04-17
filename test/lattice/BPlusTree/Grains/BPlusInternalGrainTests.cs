@@ -245,7 +245,7 @@ public class BPlusInternalGrainTests
         var result = await grain.AcceptSplitAsync("zebra", Child3);
 
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.PromotedKey, Is.EqualTo("fox"));
+        Assert.That(result!.PromotedKey, Is.EqualTo("fox"));
         Assert.That(result.NewSiblingId, Is.EqualTo(siblingId));
         // The promotion was NOT inserted locally — only Child0 remains.
         Assert.That(state.State.Children, Has.Count.EqualTo(1));
@@ -275,7 +275,7 @@ public class BPlusInternalGrainTests
         var result = await grain.AcceptSplitAsync("ant", Child2);
 
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.PromotedKey, Is.EqualTo("fox"));
+        Assert.That(result!.PromotedKey, Is.EqualTo("fox"));
         // The promotion WAS inserted locally.
         Assert.That(state.State.Children.Count, Is.EqualTo(2));
         Assert.That(state.State.Children[1].SeparatorKey, Is.EqualTo("ant"));
