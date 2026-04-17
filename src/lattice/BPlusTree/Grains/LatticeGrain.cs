@@ -190,6 +190,42 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive)
+    {
+        ArgumentNullException.ThrowIfNull(startInclusive);
+        ArgumentNullException.ThrowIfNull(endExclusive);
+        await EnsureCompactionReminderAsync();
+        try
+        {
+            return await DeleteRangeAsyncCore(startInclusive, endExclusive);
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            return await DeleteRangeAsyncCore(startInclusive, endExclusive);
+        }
+    }
+
+    private async Task<int> DeleteRangeAsyncCore(string startInclusive, string endExclusive)
+    {
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
+        var shardCount = Options.ShardCount;
+
+        // Fan out to all shards in parallel — any shard may contain keys in the range.
+        var tasks = new Task<int>[shardCount];
+        for (int i = 0; i < shardCount; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{i}");
+            tasks[i] = shard.DeleteRangeAsync(startInclusive, endExclusive);
+        }
+
+        await Task.WhenAll(tasks);
+
+        var total = 0;
+        for (int i = 0; i < tasks.Length; i++)
+            total += tasks[i].Result;
+        return total;
+    }
+
     private async Task EnsureCompactionReminderAsync()
     {
         if (_compactionEnsured) return;

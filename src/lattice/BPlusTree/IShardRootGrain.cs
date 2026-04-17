@@ -36,6 +36,12 @@ public interface IShardRootGrain : IGrainWithStringKey
     Task<bool> DeleteAsync(string key);
 
     /// <summary>
+    /// Tombstones all live keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>)
+    /// by walking the leaf chain. Returns the total number of keys tombstoned.
+    /// </summary>
+    Task<int> DeleteRangeAsync(string startInclusive, string endExclusive);
+
+    /// <summary>
     /// Returns a page of live keys in this shard's B+ tree in sorted order,
     /// filtered to the [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
     /// Pass <paramref name="continuationToken"/> (the last key from the previous page)

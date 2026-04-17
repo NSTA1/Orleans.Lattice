@@ -128,6 +128,35 @@ internal sealed partial class BPlusLeafGrain(
         return true;
     }
 
+    public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive)
+    {
+        // Collect matching keys. Entries is a SortedDictionary so we can
+        // break early once we pass endExclusive.
+        List<string>? keysToDelete = null;
+        foreach (var (key, lww) in state.State.Entries)
+        {
+            if (string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+                break;
+
+            if (string.Compare(key, startInclusive, StringComparison.Ordinal) >= 0 && !lww.IsTombstone)
+                (keysToDelete ??= []).Add(key);
+        }
+
+        if (keysToDelete is null) return 0;
+
+        state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
+        state.State.Version.Tick(ReplicaId);
+        var tombstone = LwwValue<byte[]>.Tombstone(state.State.Clock);
+
+        foreach (var key in keysToDelete)
+        {
+            state.State.Entries[key] = tombstone;
+        }
+
+        await state.WriteStateAsync();
+        return keysToDelete.Count;
+    }
+
     public Task<GrainId?> GetNextSiblingAsync() =>
         Task.FromResult(state.State.NextSibling);
 
