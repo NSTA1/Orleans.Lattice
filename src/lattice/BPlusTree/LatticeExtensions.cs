@@ -1,4 +1,6 @@
-namespace Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree;
+
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Extension methods for <see cref="ILattice"/>.
