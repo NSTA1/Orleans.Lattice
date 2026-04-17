@@ -18,6 +18,12 @@ public class LatticeGrainTests
         var grainFactory = Substitute.For<IGrainFactory>();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions());
+
+        // Setup registry mock for alias resolution (returns treeId itself — no alias).
+        var registry = Substitute.For<ILatticeRegistry>();
+        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.ResolveAsync(Arg.Any<string>()).Returns(callInfo => Task.FromResult(callInfo.Arg<string>()));
+
         var grain = new LatticeGrain(context, grainFactory, optionsMonitor);
         return (grain, grainFactory);
     }
@@ -201,6 +207,43 @@ public class LatticeGrainTests
         await compaction.Received(1).EnsureReminderAsync();
     }
 
+    // --- Null validation tests ---
+
+    [Test]
+    public void GetAsync_throws_on_null_key()
+    {
+        var (grain, _) = CreateGrain();
+        Assert.ThrowsAsync<ArgumentNullException>(() => grain.GetAsync(null!));
+    }
+
+    [Test]
+    public void SetAsync_throws_on_null_key()
+    {
+        var (grain, _) = CreateGrain();
+        Assert.ThrowsAsync<ArgumentNullException>(() => grain.SetAsync(null!, [1]));
+    }
+
+    [Test]
+    public void SetAsync_throws_on_null_value()
+    {
+        var (grain, _) = CreateGrain();
+        Assert.ThrowsAsync<ArgumentNullException>(() => grain.SetAsync("k1", null!));
+    }
+
+    [Test]
+    public void DeleteAsync_throws_on_null_key()
+    {
+        var (grain, _) = CreateGrain();
+        Assert.ThrowsAsync<ArgumentNullException>(() => grain.DeleteAsync(null!));
+    }
+
+    [Test]
+    public void BulkLoadAsync_throws_on_null_entries()
+    {
+        var (grain, _) = CreateGrain();
+        Assert.ThrowsAsync<ArgumentNullException>(() => grain.BulkLoadAsync(null!));
+    }
+
     // --- ExistsAsync tests ---
 
     [Test]
@@ -362,5 +405,122 @@ public class LatticeGrainTests
         // Should call the batch method, not individual GetAsync.
         await shardRoot.Received(1).GetManyAsync(Arg.Any<List<string>>());
         await shardRoot.DidNotReceive().GetAsync(Arg.Any<string>());
+    }
+
+    // --- Stale alias retry tests ---
+
+    [Test]
+    public async Task GetAsync_retries_on_stale_alias()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        var callCount = 0;
+        shardRoot.GetAsync("k1").Returns(_ =>
+        {
+            if (callCount++ == 0)
+                throw new InvalidOperationException("This tree has been deleted.");
+            return Task.FromResult<byte[]?>([1, 2, 3]);
+        });
+
+        var result = await grain.GetAsync("k1");
+
+        Assert.That(result, Is.EqualTo(new byte[] { 1, 2, 3 }));
+        Assert.That(callCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task SetAsync_retries_on_stale_alias()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        SetupCompactionGrain(factory, "my-tree");
+        var callCount = 0;
+        shardRoot.SetAsync("k1", Arg.Any<byte[]>()).Returns(_ =>
+        {
+            if (callCount++ == 0)
+                throw new InvalidOperationException("This tree has been deleted.");
+            return Task.CompletedTask;
+        });
+
+        await grain.SetAsync("k1", [1]);
+
+        Assert.That(callCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task DeleteAsync_retries_on_stale_alias()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        SetupCompactionGrain(factory, "my-tree");
+        var callCount = 0;
+        shardRoot.DeleteAsync("k1").Returns(_ =>
+        {
+            if (callCount++ == 0)
+                throw new InvalidOperationException("This tree has been deleted.");
+            return Task.FromResult(true);
+        });
+
+        var result = await grain.DeleteAsync("k1");
+
+        Assert.That(result, Is.True);
+        Assert.That(callCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task ExistsAsync_retries_on_stale_alias()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        var callCount = 0;
+        shardRoot.ExistsAsync("k1").Returns(_ =>
+        {
+            if (callCount++ == 0)
+                throw new InvalidOperationException("This tree has been deleted.");
+            return Task.FromResult(true);
+        });
+
+        var result = await grain.ExistsAsync("k1");
+
+        Assert.That(result, Is.True);
+        Assert.That(callCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task GetManyAsync_retries_on_stale_alias()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        var callCount = 0;
+        shardRoot.GetManyAsync(Arg.Any<List<string>>()).Returns(_ =>
+        {
+            if (callCount++ == 0)
+                throw new InvalidOperationException("This tree has been deleted.");
+            return Task.FromResult(new Dictionary<string, byte[]> { ["k1"] = [1] });
+        });
+
+        var result = await grain.GetManyAsync(["k1"]);
+
+        Assert.That(result, Has.Count.EqualTo(1));
+        Assert.That(callCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task SetManyAsync_retries_on_stale_alias()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        SetupCompactionGrain(factory, "my-tree");
+        var callCount = 0;
+        shardRoot.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>()).Returns(_ =>
+        {
+            if (callCount++ == 0)
+                throw new InvalidOperationException("This tree has been deleted.");
+            return Task.CompletedTask;
+        });
+
+        await grain.SetManyAsync([new KeyValuePair<string, byte[]>("k1", [1])]);
+
+        Assert.That(callCount, Is.EqualTo(2));
     }
 }

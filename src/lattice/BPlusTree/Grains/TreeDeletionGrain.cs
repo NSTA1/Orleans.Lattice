@@ -239,6 +239,13 @@ internal sealed class TreeDeletionGrain(
         state.State.ShardRetries = 0;
         await state.WriteStateAsync();
 
+        // Remove the tree from the registry.
+        if (!TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            await registry.UnregisterAsync(TreeId);
+        }
+
         await UnregisterAllRemindersAsync();
         this.DeactivateOnIdle();
     }

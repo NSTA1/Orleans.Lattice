@@ -1,0 +1,124 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Orleans.Lattice.BPlusTree.State;
+
+namespace Orleans.Lattice.BPlusTree.Grains;
+
+/// <summary>
+/// Singleton grain that manages the tree registry backed by the internal
+/// <see cref="LatticeConstants.RegistryTreeId"/> Lattice tree.
+/// <para>
+/// Each user tree ID is stored as a key; the value is a JSON-serialized
+/// <see cref="TreeRegistryEntry"/>. The registry tree itself uses the
+/// <see cref="LatticeConstants.SystemTreePrefix"/> and is excluded from
+/// self-registration to avoid circular bootstrap.
+/// </para>
+/// </summary>
+internal sealed class LatticeRegistryGrain(
+    IGrainFactory grainFactory) : ILatticeRegistry
+{
+    private static readonly byte[] EmptyEntry = SerializeEntry(new TreeRegistryEntry());
+
+    private ILattice Registry => grainFactory.GetGrain<ILattice>(LatticeConstants.RegistryTreeId);
+
+    public async Task RegisterAsync(string treeId, TreeRegistryEntry? entry = null)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        // Idempotent — if already registered, preserve existing config.
+        if (await Registry.ExistsAsync(treeId))
+            return;
+
+        var bytes = entry is not null ? SerializeEntry(entry) : EmptyEntry;
+        await Registry.SetAsync(treeId, bytes);
+    }
+
+    public async Task UpdateAsync(string treeId, TreeRegistryEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(entry);
+
+        await Registry.SetAsync(treeId, SerializeEntry(entry));
+    }
+
+    public async Task UnregisterAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        await Registry.DeleteAsync(treeId);
+    }
+
+    public async Task<bool> ExistsAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        return await Registry.ExistsAsync(treeId);
+    }
+
+    public async Task<TreeRegistryEntry?> GetEntryAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        var bytes = await Registry.GetAsync(treeId);
+        return bytes is not null ? DeserializeEntry(bytes) : null;
+    }
+
+    public async Task<IReadOnlyList<string>> GetAllTreeIdsAsync()
+    {
+        var keys = new List<string>();
+        await foreach (var key in Registry.KeysAsync())
+        {
+            if (!key.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+                keys.Add(key);
+        }
+        return keys;
+    }
+
+    public async Task SetAliasAsync(string treeId, string physicalTreeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(physicalTreeId);
+
+        if (string.Equals(treeId, physicalTreeId, StringComparison.Ordinal))
+            throw new ArgumentException("Physical tree ID must differ from the logical tree ID.", nameof(physicalTreeId));
+
+        // Enforce single-level indirection: the target must not itself be aliased.
+        var targetEntry = await GetEntryAsync(physicalTreeId);
+        if (targetEntry?.PhysicalTreeId is not null)
+            throw new InvalidOperationException(
+                $"Cannot set alias: target tree '{physicalTreeId}' is itself aliased to '{targetEntry.PhysicalTreeId}'. " +
+                "Only a single level of indirection is supported.");
+
+        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var updated = existing with { PhysicalTreeId = physicalTreeId };
+        await UpdateAsync(treeId, updated);
+    }
+
+    public async Task RemoveAliasAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        var existing = await GetEntryAsync(treeId);
+        if (existing?.PhysicalTreeId is null) return;
+
+        var updated = existing with { PhysicalTreeId = null };
+        await UpdateAsync(treeId, updated);
+    }
+
+    public async Task<string> ResolveAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        var entry = await GetEntryAsync(treeId);
+        return entry?.PhysicalTreeId ?? treeId;
+    }
+
+    private static byte[] SerializeEntry(TreeRegistryEntry entry) =>
+        JsonSerializer.SerializeToUtf8Bytes(entry, RegistryEntryContext.Default.TreeRegistryEntry);
+
+    private static TreeRegistryEntry DeserializeEntry(byte[] bytes) =>
+        JsonSerializer.Deserialize(bytes, RegistryEntryContext.Default.TreeRegistryEntry)!;
+}
+
+/// <summary>
+/// Source-generated JSON context for <see cref="TreeRegistryEntry"/> serialization.
+/// </summary>
+[JsonSerializable(typeof(TreeRegistryEntry))]
+internal sealed partial class RegistryEntryContext : JsonSerializerContext;
