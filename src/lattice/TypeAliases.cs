@@ -23,6 +23,12 @@ internal static class TypeAliases
     internal const string GraftEntry = "ol.ge";
     internal const string TombstoneCompactionState = "ol.tcs";
     internal const string TreeDeletionState = "ol.tds";
+    internal const string TreeResizeState = "ol.trs";
+    internal const string ResizePhase = "ol.rp";
+    internal const string TreeRegistryEntry = "ol.tre";
+    internal const string TreeSnapshotState = "ol.tss";
+    internal const string SnapshotPhase = "ol.snp";
+    internal const string SnapshotMode = "ol.snm";
 
     // BPlusTree
     internal const string SplitResult = "ol.sr";

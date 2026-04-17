@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Orleans.Lattice;
 
 namespace Orleans.Lattice.BPlusTree;
@@ -9,6 +10,7 @@ namespace Orleans.Lattice.BPlusTree;
 [GenerateSerializer]
 [Alias(TypeAliases.KeysPage)]
 [Immutable]
+[EditorBrowsable(EditorBrowsableState.Never)]
 public sealed record KeysPage
 {
     /// <summary>The keys in this page, in sorted order.</summary>

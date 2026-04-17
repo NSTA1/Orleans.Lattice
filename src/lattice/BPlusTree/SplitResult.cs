@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Orleans.Lattice;
 
 namespace Orleans.Lattice.BPlusTree;
@@ -10,6 +11,7 @@ namespace Orleans.Lattice.BPlusTree;
 [GenerateSerializer]
 [Alias(TypeAliases.SplitResult)]
 [Immutable]
+[EditorBrowsable(EditorBrowsableState.Never)]
 public sealed record SplitResult
 {
     /// <summary>The separator key promoted to the parent.</summary>

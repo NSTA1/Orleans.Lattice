@@ -18,24 +18,54 @@ internal sealed partial class LatticeGrain(
     private string TreeId => context.GrainId.Key.ToString()!;
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
     private bool _compactionEnsured;
+    private string? _physicalTreeId;
 
     public async Task<byte[]?> GetAsync(string key)
     {
         ArgumentNullException.ThrowIfNull(key);
-        var shard = GetShardGrain(key);
-        return await shard.GetAsync(key);
+        var shard = await GetShardGrainAsync(key);
+        try
+        {
+            return await shard.GetAsync(key);
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            shard = await GetShardGrainAsync(key);
+            return await shard.GetAsync(key);
+        }
     }
 
     public async Task<bool> ExistsAsync(string key)
     {
         ArgumentNullException.ThrowIfNull(key);
-        var shard = GetShardGrain(key);
-        return await shard.ExistsAsync(key);
+        var shard = await GetShardGrainAsync(key);
+        try
+        {
+            return await shard.ExistsAsync(key);
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            shard = await GetShardGrainAsync(key);
+            return await shard.ExistsAsync(key);
+        }
     }
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
         ArgumentNullException.ThrowIfNull(keys);
+        try
+        {
+            return await GetManyAsyncCore(keys);
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            return await GetManyAsyncCore(keys);
+        }
+    }
+
+    private async Task<Dictionary<string, byte[]>> GetManyAsyncCore(List<string> keys)
+    {
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
         var shardCount = Options.ShardCount;
 
         // Group keys by shard.
@@ -57,7 +87,7 @@ internal sealed partial class LatticeGrain(
 
         foreach (var (shardIdx, bucket) in shardBuckets)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{shardIdx}");
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIdx}");
             tasks.Add(FetchFromShardAsync(shard, bucket, result));
         }
 
@@ -82,14 +112,35 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         await EnsureCompactionReminderAsync();
-        var shard = GetShardGrain(key);
-        await shard.SetAsync(key, value);
+        var shard = await GetShardGrainAsync(key);
+        try
+        {
+            await shard.SetAsync(key, value);
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            shard = await GetShardGrainAsync(key);
+            await shard.SetAsync(key, value);
+        }
     }
 
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
         ArgumentNullException.ThrowIfNull(entries);
         await EnsureCompactionReminderAsync();
+        try
+        {
+            await SetManyAsyncCore(entries);
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            await SetManyAsyncCore(entries);
+        }
+    }
+
+    private async Task SetManyAsyncCore(List<KeyValuePair<string, byte[]>> entries)
+    {
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
         var shardCount = Options.ShardCount;
 
         // Group entries by shard.
@@ -109,7 +160,7 @@ internal sealed partial class LatticeGrain(
         var tasks = new List<Task>(shardBuckets.Count);
         foreach (var (shardIdx, bucket) in shardBuckets)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{shardIdx}");
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIdx}");
             tasks.Add(WriteToShardAsync(shard, bucket));
         }
 
@@ -127,8 +178,16 @@ internal sealed partial class LatticeGrain(
     {
         ArgumentNullException.ThrowIfNull(key);
         await EnsureCompactionReminderAsync();
-        var shard = GetShardGrain(key);
-        return await shard.DeleteAsync(key);
+        var shard = await GetShardGrainAsync(key);
+        try
+        {
+            return await shard.DeleteAsync(key);
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            shard = await GetShardGrainAsync(key);
+            return await shard.DeleteAsync(key);
+        }
     }
 
     private async Task EnsureCompactionReminderAsync()
@@ -141,11 +200,49 @@ internal sealed partial class LatticeGrain(
         _compactionEnsured = true;
     }
 
-    private IShardRootGrain GetShardGrain(string key)
+    /// <summary>
+    /// Resolves the physical tree ID for this logical tree, caching the result
+    /// for the lifetime of this activation. Different physical tree IDs produce
+    /// different leaf <see cref="GrainId"/> values, which automatically creates
+    /// fresh <see cref="ILeafCacheGrain"/> instances — no cache invalidation needed.
+    /// </summary>
+    private async Task<string> GetPhysicalTreeIdAsync()
     {
+        if (_physicalTreeId is not null) return _physicalTreeId;
+
+        // System trees (e.g. _lattice_trees) must not resolve aliases — the
+        // registry itself is backed by an ILattice tree, so calling ResolveAsync
+        // here would create a circular call chain and deadlock.
+        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            _physicalTreeId = TreeId;
+            return _physicalTreeId;
+        }
+
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        _physicalTreeId = await registry.ResolveAsync(TreeId);
+        return _physicalTreeId;
+    }
+
+    private async Task<IShardRootGrain> GetShardGrainAsync(string key)
+    {
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
         var shardIndex = GetShardIndex(key, Options.ShardCount);
-        var shardKey = $"{TreeId}/{shardIndex}";
+        var shardKey = $"{physicalTreeId}/{shardIndex}";
         return grainFactory.GetGrain<IShardRootGrain>(shardKey);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> if the cached alias was stale and has been invalidated,
+    /// allowing a retry with a fresh resolution. Returns <c>false</c> if no alias
+    /// was cached (meaning the tree is genuinely deleted, not a stale alias).
+    /// Used as a <c>when</c> filter in catch clauses.
+    /// </summary>
+    private bool TryInvalidateStaleAlias()
+    {
+        if (_physicalTreeId is null) return false;
+        _physicalTreeId = null;
+        return true;
     }
 
     /// <summary>

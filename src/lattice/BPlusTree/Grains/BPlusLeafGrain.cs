@@ -273,6 +273,19 @@ internal sealed partial class BPlusLeafGrain(
         return Task.FromResult(keys);
     }
 
+    public Task<Dictionary<string, byte[]>> GetLiveEntriesAsync()
+    {
+        var result = new Dictionary<string, byte[]>();
+        foreach (var (key, lww) in state.State.Entries)
+        {
+            if (!lww.IsTombstone)
+            {
+                result[key] = lww.Value!;
+            }
+        }
+        return Task.FromResult(result);
+    }
+
     public async Task ClearGrainStateAsync()
     {
         await state.ClearStateAsync();

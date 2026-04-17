@@ -116,4 +116,4 @@ With the default branching factor of 128:
 | ≤ 16,384 | 2 | ~130 |
 | ≤ 2,097,152 | 3 | ~16,500 |
 
-With 64 shards, the total tree supports **~134 million keys** at depth 3. Each hop between grains costs approximately 0.1–1 ms within a cluster, so a depth-3 lookup is 3–4 grain calls from router to leaf.
+With 64 shards, the total tree supports **~134 million keys** at depth 3. A depth-3 lookup requires 3–4 grain calls from router to leaf; actual latency depends on cluster topology, network conditions, and storage provider performance.

@@ -10,6 +10,7 @@ internal sealed partial class LatticeGrain
         string? endExclusive = null,
         bool reverse = false)
     {
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
         var shardCount = Options.ShardCount;
         var pageSize = Options.KeysPageSize;
 
@@ -17,7 +18,7 @@ internal sealed partial class LatticeGrain
         var initTasks = new Task[shardCount];
         for (int i = 0; i < shardCount; i++)
         {
-            var shardKey = $"{TreeId}/{i}";
+            var shardKey = $"{physicalTreeId}/{i}";
             cursors[i] = new ShardCursor(
                 grainFactory.GetGrain<IShardRootGrain>(shardKey),
                 startInclusive, endExclusive, pageSize, reverse);

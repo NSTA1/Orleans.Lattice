@@ -1,3 +1,5 @@
+using System.ComponentModel;
+
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
@@ -6,6 +8,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// The root grain acts as the entry point for traversal; it may be an internal
 /// node or (initially) a leaf node.
 /// </summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public interface IShardRootGrain : IGrainWithStringKey
 {
     Task<byte[]?> GetAsync(string key);

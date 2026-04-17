@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.BPlusTree;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Configuration options for a Lattice tree. Register a named instance to
