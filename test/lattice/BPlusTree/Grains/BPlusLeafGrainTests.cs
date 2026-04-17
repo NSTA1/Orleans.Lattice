@@ -26,26 +26,26 @@ public class BPlusLeafGrainTests
 
     // --- GetAsync ---
 
-    [Fact]
+    [Test]
     public async Task Get_returns_null_for_missing_key()
     {
         var grain = CreateGrain();
         var result = await grain.GetAsync("nonexistent");
-        Assert.Null(result);
+        Assert.That(result, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task Get_returns_value_after_set()
     {
         var grain = CreateGrain();
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
 
         var result = await grain.GetAsync("k1");
-        Assert.NotNull(result);
-        Assert.Equal("v1", Encoding.UTF8.GetString(result));
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("v1"));
     }
 
-    [Fact]
+    [Test]
     public async Task Get_returns_null_after_delete()
     {
         var grain = CreateGrain();
@@ -53,20 +53,20 @@ public class BPlusLeafGrainTests
         await grain.DeleteAsync("k1");
 
         var result = await grain.GetAsync("k1");
-        Assert.Null(result);
+        Assert.That(result, Is.Null);
     }
 
     // --- SetAsync ---
 
-    [Fact]
+    [Test]
     public async Task Set_returns_null_split_when_under_capacity()
     {
         var grain = CreateGrain();
         var result = await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
-        Assert.Null(result);
+        Assert.That(result, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task Set_overwrites_existing_key_with_LWW()
     {
         var grain = CreateGrain();
@@ -74,10 +74,10 @@ public class BPlusLeafGrainTests
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("new"));
 
         var result = await grain.GetAsync("k1");
-        Assert.Equal("new", Encoding.UTF8.GetString(result!));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("new"));
     }
 
-    [Fact]
+    [Test]
     public async Task Set_persists_state()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -85,10 +85,10 @@ public class BPlusLeafGrainTests
 
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
 
-        Assert.True(state.State.Entries.ContainsKey("k1"));
+        Assert.That(state.State.Entries.ContainsKey("k1"), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Set_advances_HLC()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -97,10 +97,10 @@ public class BPlusLeafGrainTests
         var clockBefore = state.State.Clock;
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
 
-        Assert.True(state.State.Clock > clockBefore);
+        Assert.That(state.State.Clock > clockBefore, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Set_ticks_version_vector()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -109,51 +109,51 @@ public class BPlusLeafGrainTests
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
 
         var clock = state.State.Version.GetClock("leaf/replica-1");
-        Assert.True(clock > default(HybridLogicalClock));
+        Assert.That(clock > default(HybridLogicalClock), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Set_after_delete_resurrects_key()
     {
         var grain = CreateGrain();
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("alive"));
         await grain.DeleteAsync("k1");
 
-        Assert.Null(await grain.GetAsync("k1"));
+        Assert.That(await grain.GetAsync("k1"), Is.Null);
 
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("resurrected"));
         var result = await grain.GetAsync("k1");
-        Assert.Equal("resurrected", Encoding.UTF8.GetString(result!));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("resurrected"));
     }
 
     // --- DeleteAsync ---
 
-    [Fact]
+    [Test]
     public async Task Delete_returns_true_for_existing_key()
     {
         var grain = CreateGrain();
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
-        Assert.True(await grain.DeleteAsync("k1"));
+        Assert.That(await grain.DeleteAsync("k1"), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Delete_returns_false_for_missing_key()
     {
         var grain = CreateGrain();
-        Assert.False(await grain.DeleteAsync("nonexistent"));
+        Assert.That(await grain.DeleteAsync("nonexistent"), Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task Delete_returns_false_for_already_tombstoned_key()
     {
         var grain = CreateGrain();
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
         await grain.DeleteAsync("k1");
 
-        Assert.False(await grain.DeleteAsync("k1"));
+        Assert.That(await grain.DeleteAsync("k1"), Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task Delete_advances_HLC()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -163,10 +163,10 @@ public class BPlusLeafGrainTests
         var clockBefore = state.State.Clock;
         await grain.DeleteAsync("k1");
 
-        Assert.True(state.State.Clock > clockBefore);
+        Assert.That(state.State.Clock > clockBefore, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Delete_ticks_version_vector()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -176,10 +176,10 @@ public class BPlusLeafGrainTests
         var versionBefore = state.State.Version.GetClock("leaf/replica-1");
         await grain.DeleteAsync("k1");
 
-        Assert.True(state.State.Version.GetClock("leaf/replica-1") > versionBefore);
+        Assert.That(state.State.Version.GetClock("leaf/replica-1") > versionBefore, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Delete_creates_tombstone_in_state()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -187,31 +187,31 @@ public class BPlusLeafGrainTests
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
         await grain.DeleteAsync("k1");
 
-        Assert.True(state.State.Entries["k1"].IsTombstone);
+        Assert.That(state.State.Entries["k1"].IsTombstone, Is.True);
     }
 
     // --- Sibling pointers ---
 
-    [Fact]
+    [Test]
     public async Task NextSibling_is_null_initially()
     {
         var grain = CreateGrain();
-        Assert.Null(await grain.GetNextSiblingAsync());
+        Assert.That(await grain.GetNextSiblingAsync(), Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task SetNextSibling_persists_sibling_id()
     {
         var grain = CreateGrain();
         var siblingId = GrainId.Create("leaf", "sibling-1");
         await grain.SetNextSiblingAsync(siblingId);
 
-        Assert.Equal(siblingId, await grain.GetNextSiblingAsync());
+        Assert.That(await grain.GetNextSiblingAsync(), Is.EqualTo(siblingId));
     }
 
     // --- GetDeltaSinceAsync ---
 
-    [Fact]
+    [Test]
     public async Task Delta_returns_all_entries_for_empty_version()
     {
         var grain = CreateGrain();
@@ -220,11 +220,11 @@ public class BPlusLeafGrainTests
 
         var delta = await grain.GetDeltaSinceAsync(new VersionVector());
 
-        Assert.Equal(2, delta.Entries.Count);
-        Assert.False(delta.IsEmpty);
+        Assert.That(delta.Entries.Count, Is.EqualTo(2));
+        Assert.That(delta.IsEmpty, Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task Delta_returns_empty_when_caller_is_up_to_date()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -234,10 +234,10 @@ public class BPlusLeafGrainTests
         var currentVersion = state.State.Version.Clone();
         var delta = await grain.GetDeltaSinceAsync(currentVersion);
 
-        Assert.True(delta.IsEmpty);
+        Assert.That(delta.IsEmpty, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Delta_returns_only_entries_newer_than_caller_version()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -249,11 +249,11 @@ public class BPlusLeafGrainTests
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
         var delta = await grain.GetDeltaSinceAsync(snapshot);
 
-        Assert.Single(delta.Entries);
-        Assert.True(delta.Entries.ContainsKey("b"));
+        Assert.That(delta.Entries, Has.Count.EqualTo(1));
+        Assert.That(delta.Entries.ContainsKey("b"), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Delta_includes_tombstones()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -265,11 +265,11 @@ public class BPlusLeafGrainTests
         await grain.DeleteAsync("a");
         var delta = await grain.GetDeltaSinceAsync(snapshot);
 
-        Assert.Single(delta.Entries);
-        Assert.True(delta.Entries["a"].IsTombstone);
+        Assert.That(delta.Entries, Has.Count.EqualTo(1));
+        Assert.That(delta.Entries["a"].IsTombstone, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Delta_version_advances_monotonically()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -281,13 +281,13 @@ public class BPlusLeafGrainTests
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
         var v2 = state.State.Version.Clone();
 
-        Assert.True(v2.DominatesOrEquals(v1));
-        Assert.False(v1.DominatesOrEquals(v2));
+        Assert.That(v2.DominatesOrEquals(v1), Is.True);
+        Assert.That(v1.DominatesOrEquals(v2), Is.False);
     }
 
     // --- Multiple keys ---
 
-    [Fact]
+    [Test]
     public async Task Multiple_keys_are_independent()
     {
         var grain = CreateGrain();
@@ -295,12 +295,12 @@ public class BPlusLeafGrainTests
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
         await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
 
-        Assert.Equal("1", Encoding.UTF8.GetString((await grain.GetAsync("a"))!));
-        Assert.Equal("2", Encoding.UTF8.GetString((await grain.GetAsync("b"))!));
-        Assert.Equal("3", Encoding.UTF8.GetString((await grain.GetAsync("c"))!));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("a"))!), Is.EqualTo("1"));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("b"))!), Is.EqualTo("2"));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("c"))!), Is.EqualTo("3"));
     }
 
-    [Fact]
+    [Test]
     public async Task Deleting_one_key_does_not_affect_others()
     {
         var grain = CreateGrain();
@@ -309,13 +309,13 @@ public class BPlusLeafGrainTests
 
         await grain.DeleteAsync("a");
 
-        Assert.Null(await grain.GetAsync("a"));
-        Assert.Equal("2", Encoding.UTF8.GetString((await grain.GetAsync("b"))!));
+        Assert.That(await grain.GetAsync("a"), Is.Null);
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("b"))!), Is.EqualTo("2"));
     }
 
     // --- MergeEntriesAsync ---
 
-    [Fact]
+    [Test]
     public async Task MergeEntries_preserves_original_timestamps()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -329,11 +329,11 @@ public class BPlusLeafGrainTests
 
         await grain.MergeEntriesAsync(entries);
 
-        Assert.True(state.State.Entries.ContainsKey("k1"));
-        Assert.Equal(clock, state.State.Entries["k1"].Timestamp);
+        Assert.That(state.State.Entries.ContainsKey("k1"), Is.True);
+        Assert.That(state.State.Entries["k1"].Timestamp, Is.EqualTo(clock));
     }
 
-    [Fact]
+    [Test]
     public async Task MergeEntries_preserves_tombstones()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -347,11 +347,11 @@ public class BPlusLeafGrainTests
 
         await grain.MergeEntriesAsync(entries);
 
-        Assert.True(state.State.Entries["k1"].IsTombstone);
-        Assert.Equal(clock, state.State.Entries["k1"].Timestamp);
+        Assert.That(state.State.Entries["k1"].IsTombstone, Is.True);
+        Assert.That(state.State.Entries["k1"].Timestamp, Is.EqualTo(clock));
     }
 
-    [Fact]
+    [Test]
     public async Task MergeEntries_is_idempotent()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -366,11 +366,11 @@ public class BPlusLeafGrainTests
         await grain.MergeEntriesAsync(entries);
         await grain.MergeEntriesAsync(entries);
 
-        Assert.Single(state.State.Entries);
-        Assert.Equal(clock, state.State.Entries["k1"].Timestamp);
+        Assert.That(state.State.Entries, Has.Count.EqualTo(1));
+        Assert.That(state.State.Entries["k1"].Timestamp, Is.EqualTo(clock));
     }
 
-    [Fact]
+    [Test]
     public async Task MergeEntries_keeps_newer_local_value()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -389,11 +389,11 @@ public class BPlusLeafGrainTests
 
         await grain.MergeEntriesAsync(entries);
 
-        Assert.Equal("local", Encoding.UTF8.GetString(state.State.Entries["k1"].Value!));
-        Assert.Equal(localTimestamp, state.State.Entries["k1"].Timestamp);
+        Assert.That(Encoding.UTF8.GetString(state.State.Entries["k1"].Value!), Is.EqualTo("local"));
+        Assert.That(state.State.Entries["k1"].Timestamp, Is.EqualTo(localTimestamp));
     }
 
-    [Fact]
+    [Test]
     public async Task MergeEntries_with_mixed_live_and_tombstone_entries()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -409,13 +409,13 @@ public class BPlusLeafGrainTests
 
         await grain.MergeEntriesAsync(entries);
 
-        Assert.Equal(2, state.State.Entries.Count);
-        Assert.False(state.State.Entries["live"].IsTombstone);
-        Assert.Equal("value", Encoding.UTF8.GetString(state.State.Entries["live"].Value!));
-        Assert.True(state.State.Entries["dead"].IsTombstone);
+        Assert.That(state.State.Entries.Count, Is.EqualTo(2));
+        Assert.That(state.State.Entries["live"].IsTombstone, Is.False);
+        Assert.That(Encoding.UTF8.GetString(state.State.Entries["live"].Value!), Is.EqualTo("value"));
+        Assert.That(state.State.Entries["dead"].IsTombstone, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task MergeEntries_with_empty_dictionary_is_noop()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -426,12 +426,12 @@ public class BPlusLeafGrainTests
 
         await grain.MergeEntriesAsync(new Dictionary<string, LwwValue<byte[]>>());
 
-        Assert.Equal(countBefore, state.State.Entries.Count);
+        Assert.That(state.State.Entries.Count, Is.EqualTo(countBefore));
     }
 
     // --- Split recovery ---
 
-    [Fact]
+    [Test]
     public async Task SetAsync_returns_split_result_when_state_has_in_progress_split()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -452,12 +452,12 @@ public class BPlusLeafGrainTests
         // The next SetAsync should resume the split AND forward the write to the sibling.
         var result = await grain.SetAsync("z", Encoding.UTF8.GetBytes("3"));
 
-        Assert.NotNull(result);
-        Assert.Equal("m", result.PromotedKey);
-        Assert.Equal(siblingId, result.NewSiblingId);
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result.PromotedKey, Is.EqualTo("m"));
+        Assert.That(result.NewSiblingId, Is.EqualTo(siblingId));
     }
 
-    [Fact]
+    [Test]
     public async Task Recovery_reuses_persisted_sibling_id()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -477,10 +477,10 @@ public class BPlusLeafGrainTests
         var result1 = await grain.SetAsync("z", Encoding.UTF8.GetBytes("3"));
 
         // The sibling ID in the result must match the persisted one — not a new Guid.
-        Assert.Equal(siblingId, result1!.NewSiblingId);
+        Assert.That(result1!.NewSiblingId, Is.EqualTo(siblingId));
     }
 
-    [Fact]
+    [Test]
     public async Task Recovery_trims_entries_from_original_leaf()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -500,13 +500,13 @@ public class BPlusLeafGrainTests
         await grain.SetAsync("x", Encoding.UTF8.GetBytes("5"));
 
         // After recovery, entries >= "m" should be removed from the original leaf.
-        Assert.True(state.State.Entries.ContainsKey("a"));
-        Assert.True(state.State.Entries.ContainsKey("b"));
-        Assert.False(state.State.Entries.ContainsKey("m"));
-        Assert.False(state.State.Entries.ContainsKey("z"));
+        Assert.That(state.State.Entries.ContainsKey("a"), Is.True);
+        Assert.That(state.State.Entries.ContainsKey("b"), Is.True);
+        Assert.That(state.State.Entries.ContainsKey("m"), Is.False);
+        Assert.That(state.State.Entries.ContainsKey("z"), Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task Recovery_advances_split_state_to_complete()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -523,12 +523,11 @@ public class BPlusLeafGrainTests
 
         await grain.SetAsync("z", Encoding.UTF8.GetBytes("3"));
 
-        Assert.Equal(
-            Orleans.Lattice.Primitives.SplitState.SplitComplete,
-            state.State.SplitState);
+        Assert.That(state.State.SplitState, Is.EqualTo(
+            Orleans.Lattice.Primitives.SplitState.SplitComplete));
     }
 
-    [Fact]
+    [Test]
     public async Task Recovery_preserves_tombstones_in_right_half()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -548,12 +547,12 @@ public class BPlusLeafGrainTests
         // The tombstone should be removed from the original leaf.
         await grain.SetAsync("z", Encoding.UTF8.GetBytes("3"));
 
-        Assert.False(state.State.Entries.ContainsKey("m"));
+        Assert.That(state.State.Entries.ContainsKey("m"), Is.False);
     }
 
     // --- GetDeltaSinceAsync includes SplitKey ---
 
-    [Fact]
+    [Test]
     public async Task Delta_includes_split_key_after_split()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -565,22 +564,22 @@ public class BPlusLeafGrainTests
         state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitComplete;
 
         var delta = await grain.GetDeltaSinceAsync(new VersionVector());
-        Assert.Equal("m", delta.SplitKey);
+        Assert.That(delta.SplitKey, Is.EqualTo("m"));
     }
 
-    [Fact]
+    [Test]
     public async Task Delta_split_key_is_null_when_no_split()
     {
         var grain = CreateGrain();
         await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
 
         var delta = await grain.GetDeltaSinceAsync(new VersionVector());
-        Assert.Null(delta.SplitKey);
+        Assert.That(delta.SplitKey, Is.Null);
     }
 
     // --- Recovery applies write ---
 
-    [Fact]
+    [Test]
     public async Task Recovery_applies_write_locally_when_key_below_split_key()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -598,12 +597,12 @@ public class BPlusLeafGrainTests
         // "b" < "m" → write should be applied to THIS leaf.
         var result = await grain.SetAsync("b", Encoding.UTF8.GetBytes("local"));
 
-        Assert.NotNull(result);
-        Assert.True(state.State.Entries.ContainsKey("b"));
-        Assert.Equal("local", Encoding.UTF8.GetString(state.State.Entries["b"].Value!));
+        Assert.That(result, Is.Not.Null);
+        Assert.That(state.State.Entries.ContainsKey("b"), Is.True);
+        Assert.That(Encoding.UTF8.GetString(state.State.Entries["b"].Value!), Is.EqualTo("local"));
     }
 
-    [Fact]
+    [Test]
     public async Task Recovery_forwards_write_to_sibling_when_key_at_or_above_split_key()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -632,37 +631,37 @@ public class BPlusLeafGrainTests
         // "z" >= "m" → write should be forwarded to the sibling.
         var result = await grain.SetAsync("z", Encoding.UTF8.GetBytes("forwarded"));
 
-        Assert.NotNull(result);
+        Assert.That(result, Is.Not.Null);
         // The write was NOT applied to this leaf.
-        Assert.False(state.State.Entries.ContainsKey("z"));
+        Assert.That(state.State.Entries.ContainsKey("z"), Is.False);
         // The sibling's SetAsync was called.
         await siblingMock.Received(1).SetAsync("z", Arg.Any<byte[]>());
     }
 
     // --- PrevSibling pointers ---
 
-    [Fact]
+    [Test]
     public async Task PrevSibling_is_null_initially()
     {
         var grain = CreateGrain();
-        Assert.Null(await grain.GetPrevSiblingAsync());
+        Assert.That(await grain.GetPrevSiblingAsync(), Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task SetPrevSibling_persists_sibling_id()
     {
         var grain = CreateGrain();
         var siblingId = GrainId.Create("leaf", "sibling-left");
         await grain.SetPrevSiblingAsync(siblingId);
 
-        Assert.Equal(siblingId, await grain.GetPrevSiblingAsync());
+        Assert.That(await grain.GetPrevSiblingAsync(), Is.EqualTo(siblingId));
     }
 
     // --- Split doubly-linked list maintenance ---
     // These tests simulate a crash mid-split (same pattern as existing recovery tests)
     // then trigger CompleteSplitAsync via the next SetAsync call.
 
-    [Fact]
+    [Test]
     public async Task Split_recovery_sets_new_sibling_PrevSibling_to_this_leaf()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -694,7 +693,7 @@ public class BPlusLeafGrainTests
         await siblingMock.Received().SetPrevSiblingAsync(grainId);
     }
 
-    [Fact]
+    [Test]
     public async Task Split_recovery_sets_new_sibling_NextSibling_to_old_next()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -729,7 +728,7 @@ public class BPlusLeafGrainTests
         await siblingMock.Received().SetNextSiblingAsync(oldNextId);
     }
 
-    [Fact]
+    [Test]
     public async Task Split_recovery_updates_old_next_PrevSibling_to_new_sibling()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -764,7 +763,7 @@ public class BPlusLeafGrainTests
         await oldNextMock.Received().SetPrevSiblingAsync(siblingId);
     }
 
-    [Fact]
+    [Test]
     public async Task Split_recovery_clears_OldNextSibling()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -796,10 +795,10 @@ public class BPlusLeafGrainTests
 
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("3"));
 
-        Assert.Null(state.State.OldNextSibling);
+        Assert.That(state.State.OldNextSibling, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task Split_recovery_with_no_old_next_sets_new_sibling_NextSibling_to_null()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -832,15 +831,15 @@ public class BPlusLeafGrainTests
 
     // --- GetKeysAsync ---
 
-    [Fact]
+    [Test]
     public async Task GetKeys_empty_leaf_returns_empty_list()
     {
         var grain = CreateGrain();
         var keys = await grain.GetKeysAsync();
-        Assert.Empty(keys);
+        Assert.That(keys, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task GetKeys_returns_live_keys_in_sorted_order()
     {
         var grain = CreateGrain();
@@ -849,10 +848,10 @@ public class BPlusLeafGrainTests
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
 
         var keys = await grain.GetKeysAsync();
-        Assert.Equal(["a", "b", "c"], keys);
+        Assert.That(keys, Is.EqualTo(new[] { "a", "b", "c" }));
     }
 
-    [Fact]
+    [Test]
     public async Task GetKeys_excludes_tombstoned_entries()
     {
         var grain = CreateGrain();
@@ -861,10 +860,10 @@ public class BPlusLeafGrainTests
         await grain.DeleteAsync("b");
 
         var keys = await grain.GetKeysAsync();
-        Assert.Equal(["a"], keys);
+        Assert.That(keys, Is.EqualTo(new[] { "a" }));
     }
 
-    [Fact]
+    [Test]
     public async Task GetKeys_filters_by_startInclusive()
     {
         var grain = CreateGrain();
@@ -873,10 +872,10 @@ public class BPlusLeafGrainTests
         await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
 
         var keys = await grain.GetKeysAsync(startInclusive: "b");
-        Assert.Equal(["b", "c"], keys);
+        Assert.That(keys, Is.EqualTo(new[] { "b", "c" }));
     }
 
-    [Fact]
+    [Test]
     public async Task GetKeys_filters_by_endExclusive()
     {
         var grain = CreateGrain();
@@ -885,10 +884,10 @@ public class BPlusLeafGrainTests
         await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
 
         var keys = await grain.GetKeysAsync(endExclusive: "c");
-        Assert.Equal(["a", "b"], keys);
+        Assert.That(keys, Is.EqualTo(new[] { "a", "b" }));
     }
 
-    [Fact]
+    [Test]
     public async Task GetKeys_filters_by_combined_range()
     {
         var grain = CreateGrain();
@@ -898,10 +897,10 @@ public class BPlusLeafGrainTests
         await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
 
         var keys = await grain.GetKeysAsync(startInclusive: "b", endExclusive: "d");
-        Assert.Equal(["b", "c"], keys);
+        Assert.That(keys, Is.EqualTo(new[] { "b", "c" }));
     }
 
-    [Fact]
+    [Test]
     public async Task GetKeys_excludes_keys_at_or_above_split_key_when_split_in_progress()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -916,10 +915,10 @@ public class BPlusLeafGrainTests
         state.State.SplitKey = "m";
 
         var keys = await grain.GetKeysAsync();
-        Assert.Equal(["a", "b"], keys);
+        Assert.That(keys, Is.EqualTo(new[] { "a", "b" }));
     }
 
-    [Fact]
+    [Test]
     public async Task GetKeys_does_not_filter_when_split_is_complete()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -932,27 +931,27 @@ public class BPlusLeafGrainTests
         state.State.SplitKey = "m";
 
         var keys = await grain.GetKeysAsync();
-        Assert.Equal(["a", "b"], keys);
+        Assert.That(keys, Is.EqualTo(new[] { "a", "b" }));
     }
 
-    // --- SetTreeIdAsync idempotency ---
+    // --- SetTreeIdAsync
 
-    [Fact]
+    [Test]
     public async Task SetTreeId_is_idempotent()
     {
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
 
         await grain.SetTreeIdAsync("tree-1");
-        Assert.Equal("tree-1", state.State.TreeId);
+        Assert.That(state.State.TreeId, Is.EqualTo("tree-1"));
 
         await grain.SetTreeIdAsync("tree-2");
-        Assert.Equal("tree-1", state.State.TreeId);
+        Assert.That(state.State.TreeId, Is.EqualTo("tree-1"));
     }
 
     // --- CompactTombstonesAsync ---
 
-    [Fact]
+    [Test]
     public async Task CompactTombstones_removes_old_tombstones()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -965,11 +964,11 @@ public class BPlusLeafGrainTests
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
-        Assert.Equal(1, removed);
-        Assert.False(state.State.Entries.ContainsKey("dead"));
+        Assert.That(removed, Is.EqualTo(1));
+        Assert.That(state.State.Entries.ContainsKey("dead"), Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task CompactTombstones_keeps_recent_tombstones()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -985,11 +984,11 @@ public class BPlusLeafGrainTests
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
-        Assert.Equal(0, removed);
-        Assert.True(state.State.Entries.ContainsKey("recent"));
+        Assert.That(removed, Is.EqualTo(0));
+        Assert.That(state.State.Entries.ContainsKey("recent"), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task CompactTombstones_does_not_remove_live_entries()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -1001,11 +1000,11 @@ public class BPlusLeafGrainTests
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
-        Assert.Equal(0, removed);
-        Assert.True(state.State.Entries.ContainsKey("alive"));
+        Assert.That(removed, Is.EqualTo(0));
+        Assert.That(state.State.Entries.ContainsKey("alive"), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task CompactTombstones_tracks_LastCompactionVersion()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -1016,10 +1015,10 @@ public class BPlusLeafGrainTests
 
         await grain.CompactTombstonesAsync(TimeSpan.Zero);
 
-        Assert.True(state.State.LastCompactionVersion.DominatesOrEquals(state.State.Version));
+        Assert.That(state.State.LastCompactionVersion.DominatesOrEquals(state.State.Version), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task CompactTombstones_skips_scan_when_nothing_changed()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -1030,14 +1029,14 @@ public class BPlusLeafGrainTests
 
         // First compaction removes the tombstone.
         var removed1 = await grain.CompactTombstonesAsync(TimeSpan.Zero);
-        Assert.Equal(1, removed1);
+        Assert.That(removed1, Is.EqualTo(1));
 
         // Second compaction should be a no-op (version hasn't changed).
         var removed2 = await grain.CompactTombstonesAsync(TimeSpan.Zero);
-        Assert.Equal(0, removed2);
+        Assert.That(removed2, Is.EqualTo(0));
     }
 
-    [Fact]
+    [Test]
     public async Task CompactTombstones_returns_count_of_removed_entries()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -1052,14 +1051,14 @@ public class BPlusLeafGrainTests
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
-        Assert.Equal(2, removed);
-        Assert.Single(state.State.Entries);
-        Assert.True(state.State.Entries.ContainsKey("c"));
+        Assert.That(removed, Is.EqualTo(2));
+        Assert.That(state.State.Entries, Has.Count.EqualTo(1));
+        Assert.That(state.State.Entries.ContainsKey("c"), Is.True);
     }
 
     // --- GetManyAsync ---
 
-    [Fact]
+    [Test]
     public async Task GetMany_returns_existing_values()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -1071,12 +1070,12 @@ public class BPlusLeafGrainTests
 
         var result = await grain.GetManyAsync(["a", "b"]);
 
-        Assert.Equal(2, result.Count);
-        Assert.Equal("1", Encoding.UTF8.GetString(result["a"]));
-        Assert.Equal("2", Encoding.UTF8.GetString(result["b"]));
+        Assert.That(result.Count, Is.EqualTo(2));
+        Assert.That(Encoding.UTF8.GetString(result["a"]), Is.EqualTo("1"));
+        Assert.That(Encoding.UTF8.GetString(result["b"]), Is.EqualTo("2"));
     }
 
-    [Fact]
+    [Test]
     public async Task GetMany_omits_missing_and_tombstoned_keys()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -1089,64 +1088,64 @@ public class BPlusLeafGrainTests
 
         var result = await grain.GetManyAsync(["a", "b", "missing"]);
 
-        Assert.Single(result);
-        Assert.True(result.ContainsKey("a"));
+        Assert.That(result, Has.Count.EqualTo(1));
+        Assert.That(result.ContainsKey("a"), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task GetMany_returns_empty_for_empty_input()
     {
         var grain = CreateGrain();
         var result = await grain.GetManyAsync([]);
-        Assert.Empty(result);
+        Assert.That(result, Is.Empty);
     }
 
     // --- GetTreeIdAsync ---
 
-    [Fact]
+    [Test]
     public async Task GetTreeId_returns_null_when_not_set()
     {
         var grain = CreateGrain();
-        Assert.Null(await grain.GetTreeIdAsync());
+        Assert.That(await grain.GetTreeIdAsync(), Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task GetTreeId_returns_tree_id_after_set()
     {
         var grain = CreateGrain();
         await grain.SetTreeIdAsync("my-tree");
-        Assert.Equal("my-tree", await grain.GetTreeIdAsync());
+        Assert.That(await grain.GetTreeIdAsync(), Is.EqualTo("my-tree"));
     }
 
     // --- ExistsAsync ---
 
-    [Fact]
+    [Test]
     public async Task Exists_returns_false_for_missing_key()
     {
         var grain = CreateGrain();
-        Assert.False(await grain.ExistsAsync("missing"));
+        Assert.That(await grain.ExistsAsync("missing"), Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task Exists_returns_true_for_live_key()
     {
         var grain = CreateGrain();
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
-        Assert.True(await grain.ExistsAsync("k1"));
+        Assert.That(await grain.ExistsAsync("k1"), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Exists_returns_false_for_tombstoned_key()
     {
         var grain = CreateGrain();
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
         await grain.DeleteAsync("k1");
-        Assert.False(await grain.ExistsAsync("k1"));
+        Assert.That(await grain.ExistsAsync("k1"), Is.False);
     }
 
     // --- SetManyAsync ---
 
-    [Fact]
+    [Test]
     public async Task SetMany_writes_all_entries()
     {
         var grain = CreateGrain();
@@ -1159,21 +1158,21 @@ public class BPlusLeafGrainTests
 
         var result = await grain.SetManyAsync(entries);
 
-        Assert.Null(result); // no split under capacity
-        Assert.Equal("1", Encoding.UTF8.GetString((await grain.GetAsync("a"))!));
-        Assert.Equal("2", Encoding.UTF8.GetString((await grain.GetAsync("b"))!));
-        Assert.Equal("3", Encoding.UTF8.GetString((await grain.GetAsync("c"))!));
+        Assert.That(result, Is.Null); // no split under capacity
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("a"))!), Is.EqualTo("1"));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("b"))!), Is.EqualTo("2"));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("c"))!), Is.EqualTo("3"));
     }
 
-    [Fact]
+    [Test]
     public async Task SetMany_returns_null_when_no_split()
     {
         var grain = CreateGrain();
         var result = await grain.SetManyAsync([new("k1", [1])]);
-        Assert.Null(result);
+        Assert.That(result, Is.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task SetMany_empty_list_is_noop()
     {
         var state = new FakePersistentState<LeafNodeState>();
@@ -1182,7 +1181,7 @@ public class BPlusLeafGrainTests
 
         var result = await grain.SetManyAsync([]);
 
-        Assert.Null(result);
-        Assert.Single(state.State.Entries);
+        Assert.That(result, Is.Null);
+        Assert.That(state.State.Entries, Has.Count.EqualTo(1));
     }
 }

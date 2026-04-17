@@ -5,12 +5,27 @@ using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
-[Collection(ClusterCollection.Name)]
-public class DeltaExtractionTests(ClusterFixture fixture)
+[TestFixture]
+public class DeltaExtractionTests
 {
-    private readonly TestCluster _cluster = fixture.Cluster;
+    private ClusterFixture _fixture = null!;
+    private TestCluster _cluster = null!;
 
-    [Fact]
+    [OneTimeSetUp]
+    public async Task OneTimeSetUp()
+    {
+        _fixture = new ClusterFixture();
+        await _fixture.InitializeAsync();
+        _cluster = _fixture.Cluster;
+    }
+
+    [OneTimeTearDown]
+    public async Task OneTimeTearDown()
+    {
+        await _fixture.DisposeAsync();
+    }
+
+    [Test]
     public async Task GetDeltaSinceAsync_returns_all_entries_for_empty_version()
     {
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
@@ -19,13 +34,13 @@ public class DeltaExtractionTests(ClusterFixture fixture)
 
         var delta = await leaf.GetDeltaSinceAsync(new VersionVector());
 
-        Assert.False(delta.IsEmpty);
-        Assert.Equal(2, delta.Entries.Count);
-        Assert.True(delta.Entries.ContainsKey("a"));
-        Assert.True(delta.Entries.ContainsKey("b"));
+        Assert.That(delta.IsEmpty, Is.False);
+        Assert.That(delta.Entries.Count, Is.EqualTo(2));
+        Assert.That(delta.Entries.ContainsKey("a"), Is.True);
+        Assert.That(delta.Entries.ContainsKey("b"), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task GetDeltaSinceAsync_returns_empty_when_up_to_date()
     {
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
@@ -33,14 +48,14 @@ public class DeltaExtractionTests(ClusterFixture fixture)
 
         // First delta: get everything.
         var delta1 = await leaf.GetDeltaSinceAsync(new VersionVector());
-        Assert.False(delta1.IsEmpty);
+        Assert.That(delta1.IsEmpty, Is.False);
 
         // Second delta using the version from the first: should be empty.
         var delta2 = await leaf.GetDeltaSinceAsync(delta1.Version);
-        Assert.True(delta2.IsEmpty);
+        Assert.That(delta2.IsEmpty, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task GetDeltaSinceAsync_returns_only_new_entries()
     {
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
@@ -51,12 +66,12 @@ public class DeltaExtractionTests(ClusterFixture fixture)
         await leaf.SetAsync("second", Encoding.UTF8.GetBytes("2"));
 
         var delta2 = await leaf.GetDeltaSinceAsync(delta1.Version);
-        Assert.False(delta2.IsEmpty);
-        Assert.Single(delta2.Entries);
-        Assert.True(delta2.Entries.ContainsKey("second"));
+        Assert.That(delta2.IsEmpty, Is.False);
+        Assert.That(delta2.Entries, Has.Count.EqualTo(1));
+        Assert.That(delta2.Entries.ContainsKey("second"), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task GetDeltaSinceAsync_includes_tombstones()
     {
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
@@ -67,11 +82,11 @@ public class DeltaExtractionTests(ClusterFixture fixture)
         await leaf.DeleteAsync("k");
 
         var delta2 = await leaf.GetDeltaSinceAsync(delta1.Version);
-        Assert.False(delta2.IsEmpty);
-        Assert.True(delta2.Entries["k"].IsTombstone);
+        Assert.That(delta2.IsEmpty, Is.False);
+        Assert.That(delta2.Entries["k"].IsTombstone, Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task Delta_version_advances_monotonically()
     {
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
@@ -82,6 +97,6 @@ public class DeltaExtractionTests(ClusterFixture fixture)
         await leaf.SetAsync("b", Encoding.UTF8.GetBytes("2"));
         var v2 = (await leaf.GetDeltaSinceAsync(new VersionVector())).Version;
 
-        Assert.True(v2.IsNewerThan(v1));
+        Assert.That(v2.IsNewerThan(v1), Is.True);
     }
 }
