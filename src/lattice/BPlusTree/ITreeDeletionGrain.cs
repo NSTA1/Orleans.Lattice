@@ -1,3 +1,5 @@
+using System.ComponentModel;
+
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
@@ -9,6 +11,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// pattern as <see cref="ITombstoneCompactionGrain"/>) and permanently purges
 /// all leaf and internal node state.
 /// </summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public interface ITreeDeletionGrain : IGrainWithStringKey
 {
     /// <summary>
