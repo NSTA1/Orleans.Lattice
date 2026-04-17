@@ -123,6 +123,62 @@ internal sealed partial class ShardRootGrain
         }
     }
 
+    private async Task<GetOrSetResult> TraverseForGetOrSetAsync(string key, byte[] value)
+    {
+        if (state.State.RootIsLeaf)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
+            return await leaf.GetOrSetAsync(key, value);
+        }
+
+        var path = StackPool.Get();
+        try
+        {
+            var currentId = state.State.RootNodeId!.Value;
+
+            while (true)
+            {
+                var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+                var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
+
+                if (childrenAreLeaves)
+                {
+                    path.Push(currentId);
+                    path.Push(childId);
+                    break;
+                }
+
+                path.Push(currentId);
+                currentId = childId;
+            }
+
+            var leafId = path.Pop();
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var result = await leafGrain.GetOrSetAsync(key, value);
+
+            // If the key was already live, no write occurred — no splits to propagate.
+            if (result.ExistingValue is not null)
+            {
+                return result;
+            }
+
+            // Propagate splits up the tree.
+            var splitResult = result.Split;
+            while (splitResult is not null && path.Count > 0)
+            {
+                var parentId = path.Pop();
+                var parentGrain = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
+                splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
+            }
+
+            return new GetOrSetResult { Split = splitResult };
+        }
+        finally
+        {
+            StackPool.Return(path);
+        }
+    }
+
     private async Task<GrainId> TraverseToLeafAsync(string key)
     {
         var currentId = state.State.RootNodeId!.Value;

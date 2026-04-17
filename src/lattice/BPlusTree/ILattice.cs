@@ -24,6 +24,13 @@ public interface ILattice : IGrainWithStringKey
     Task SetAsync(string key, byte[] value);
 
     /// <summary>
+    /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
+    /// already exist (or is tombstoned). Returns the existing value when the key is
+    /// already live, or <c>null</c> when the value was newly written.
+    /// </summary>
+    Task<byte[]?> GetOrSetAsync(string key, byte[] value);
+
+    /// <summary>
     /// Inserts or updates multiple key-value pairs, fanning out to shards in parallel.
     /// </summary>
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries);

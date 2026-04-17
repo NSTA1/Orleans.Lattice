@@ -244,6 +244,50 @@ public class LatticeGrainTests
         Assert.ThrowsAsync<ArgumentNullException>(() => grain.BulkLoadAsync(null!));
     }
 
+    // --- GetOrSetAsync tests ---
+
+    [Test]
+    public void GetOrSetAsync_throws_on_null_key()
+    {
+        var (grain, _) = CreateGrain();
+        Assert.ThrowsAsync<ArgumentNullException>(() => grain.GetOrSetAsync(null!, [1]));
+    }
+
+    [Test]
+    public void GetOrSetAsync_throws_on_null_value()
+    {
+        var (grain, _) = CreateGrain();
+        Assert.ThrowsAsync<ArgumentNullException>(() => grain.GetOrSetAsync("k1", null!));
+    }
+
+    [Test]
+    public async Task GetOrSetAsync_delegates_to_shard_root()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        shardRoot.GetOrSetAsync("k1", Arg.Any<byte[]>())
+            .Returns((byte[]?)null);
+
+        var result = await grain.GetOrSetAsync("k1", Encoding.UTF8.GetBytes("v1"));
+
+        Assert.That(result, Is.Null);
+        await shardRoot.Received(1).GetOrSetAsync("k1", Arg.Any<byte[]>());
+    }
+
+    [Test]
+    public async Task GetOrSetAsync_returns_existing_value_from_shard()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        shardRoot.GetOrSetAsync("k1", Arg.Any<byte[]>())
+            .Returns(Encoding.UTF8.GetBytes("existing"));
+
+        var result = await grain.GetOrSetAsync("k1", Encoding.UTF8.GetBytes("ignored"));
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("existing"));
+    }
+
     // --- ExistsAsync tests ---
 
     [Test]
