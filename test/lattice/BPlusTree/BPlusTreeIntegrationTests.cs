@@ -314,6 +314,43 @@ public class BPlusTreeInsertionOrderTests
 
         Assert.That(missing, Is.Empty);
     }
+
+    [Test]
+    public async Task DeleteRange_spans_multiple_leaves()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("delrange-multi-leaf");
+        var value = Encoding.UTF8.GetBytes("v");
+
+        // Insert 20 keys into a tree with MaxLeafKeys=4 to force multiple splits.
+        for (int i = 0; i < 20; i++)
+            await tree.SetAsync($"k{i:D4}", value);
+
+        // Delete a range that spans multiple leaves.
+        var count = await tree.DeleteRangeAsync("k0005", "k0015");
+
+        Assert.That(count, Is.EqualTo(10));
+
+        // Verify keys outside the range are still live.
+        for (int i = 0; i < 5; i++)
+            Assert.That(await tree.GetAsync($"k{i:D4}"), Is.Not.Null, $"k{i:D4} should survive");
+
+        for (int i = 15; i < 20; i++)
+            Assert.That(await tree.GetAsync($"k{i:D4}"), Is.Not.Null, $"k{i:D4} should survive");
+
+        // Verify keys inside the range are tombstoned.
+        for (int i = 5; i < 15; i++)
+            Assert.That(await tree.GetAsync($"k{i:D4}"), Is.Null, $"k{i:D4} should be deleted");
+
+        // KeysAsync should exclude deleted keys.
+        var keys = new List<string>();
+        await foreach (var k in tree.KeysAsync())
+            keys.Add(k);
+
+        Assert.That(keys, Has.Count.EqualTo(10));
+        Assert.That(keys.Any(k =>
+            string.Compare(k, "k0005", StringComparison.Ordinal) >= 0 &&
+            string.Compare(k, "k0015", StringComparison.Ordinal) < 0), Is.False);
+    }
 }
 
 /// <summary>
@@ -739,6 +776,55 @@ public class BPlusTreeBulkLoadTests
 
         Assert.That(keys, Does.Contain("k0099"));
         Assert.That(keys, Does.Not.Contain("k0005"));
+    }
+
+    [Test]
+    public async Task DeleteRange_tombstones_keys_in_range()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("test-tree-delrange");
+        await tree.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await tree.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await tree.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await tree.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+        await tree.SetAsync("e", Encoding.UTF8.GetBytes("5"));
+
+        var count = await tree.DeleteRangeAsync("b", "e");
+
+        Assert.That(count, Is.EqualTo(3));
+        Assert.That(await tree.GetAsync("a"), Is.Not.Null);
+        Assert.That(await tree.GetAsync("b"), Is.Null);
+        Assert.That(await tree.GetAsync("c"), Is.Null);
+        Assert.That(await tree.GetAsync("d"), Is.Null);
+        Assert.That(await tree.GetAsync("e"), Is.Not.Null);
+    }
+
+    [Test]
+    public async Task DeleteRange_returns_zero_for_empty_range()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("test-tree-delrange-empty");
+        await tree.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+
+        var count = await tree.DeleteRangeAsync("m", "z");
+
+        Assert.That(count, Is.EqualTo(0));
+        Assert.That(await tree.GetAsync("a"), Is.Not.Null);
+    }
+
+    [Test]
+    public async Task DeleteRange_keys_excluded_from_subsequent_scan()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("test-tree-delrange-scan");
+        await tree.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await tree.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await tree.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+
+        await tree.DeleteRangeAsync("a", "c");
+
+        var keys = new List<string>();
+        await foreach (var k in tree.KeysAsync())
+            keys.Add(k);
+
+        Assert.That(keys, Is.EqualTo(new[] { "c" }));
     }
 }
 
