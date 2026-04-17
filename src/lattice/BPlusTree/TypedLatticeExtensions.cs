@@ -118,4 +118,32 @@ public static class TypedLatticeExtensions
         this ILattice lattice,
         IReadOnlyList<KeyValuePair<string, T>> entries) =>
         lattice.BulkLoadAsync(entries, JsonLatticeSerializer<T>.Default);
+
+    // ── Enumeration ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Streams live key-value entries in sorted key order, deserializing values via
+    /// the provided <paramref name="serializer"/>.
+    /// </summary>
+    public static async IAsyncEnumerable<KeyValuePair<string, T>> EntriesAsync<T>(
+        this ILattice lattice,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+        await foreach (var entry in lattice.EntriesAsync(startInclusive, endExclusive, reverse))
+        {
+            yield return new KeyValuePair<string, T>(entry.Key, serializer.Deserialize(entry.Value));
+        }
+    }
+
+    /// <inheritdoc cref="EntriesAsync{T}(ILattice, ILatticeSerializer{T}, string?, string?, bool)"/>
+    public static IAsyncEnumerable<KeyValuePair<string, T>> EntriesAsync<T>(
+        this ILattice lattice,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false) =>
+        lattice.EntriesAsync(JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse);
 }

@@ -124,7 +124,6 @@ public class TypedLatticeExtensionsTests
     {
         var lattice = CreateMock();
         lattice.GetManyAsync(Arg.Any<List<string>>()).Returns(new Dictionary<string, byte[]>());
-
         var result = await lattice.GetManyAsync<TestItem>(["x"], Serializer);
 
         Assert.That(result, Is.Empty);
@@ -243,7 +242,68 @@ public class TypedLatticeExtensionsTests
             Arg.Is<IReadOnlyList<KeyValuePair<string, byte[]>>>(l => l.Count == 0));
     }
 
-    // ── Custom serializer ───────────────────────────────────────
+    // ── EntriesAsync ────────────────────────────────────────────
+
+    [Test]
+    public async Task EntriesAsync_deserializes_values_with_explicit_serializer()
+    {
+        var lattice = CreateMock();
+        var item1 = new TestItem("alice", 10);
+        var item2 = new TestItem("bob", 20);
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k1", JsonSerializer.SerializeToUtf8Bytes(item1)),
+            new("k2", JsonSerializer.SerializeToUtf8Bytes(item2)),
+        };
+        lattice.EntriesAsync(null, null, false)
+            .Returns(entries.ToAsyncEnumerable());
+
+        var result = new List<KeyValuePair<string, TestItem>>();
+        await foreach (var e in lattice.EntriesAsync(Serializer))
+            result.Add(e);
+
+        Assert.That(result, Has.Count.EqualTo(2));
+        Assert.That(result[0].Key, Is.EqualTo("k1"));
+        Assert.That(result[0].Value, Is.EqualTo(item1));
+        Assert.That(result[1].Key, Is.EqualTo("k2"));
+        Assert.That(result[1].Value, Is.EqualTo(item2));
+    }
+
+    [Test]
+    public async Task EntriesAsync_deserializes_values_with_default_serializer()
+    {
+        var lattice = CreateMock();
+        var item = new TestItem("alice", 10);
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k1", JsonSerializer.SerializeToUtf8Bytes(item)),
+        };
+        lattice.EntriesAsync(null, null, false)
+            .Returns(entries.ToAsyncEnumerable());
+
+        var result = new List<KeyValuePair<string, TestItem>>();
+        await foreach (var e in lattice.EntriesAsync<TestItem>())
+            result.Add(e);
+
+        Assert.That(result, Has.Count.EqualTo(1));
+        Assert.That(result[0].Value, Is.EqualTo(item));
+    }
+
+    [Test]
+    public async Task EntriesAsync_empty_returns_nothing()
+    {
+        var lattice = CreateMock();
+        lattice.EntriesAsync(null, null, false)
+            .Returns(AsyncEnumerable.Empty<KeyValuePair<string, byte[]>>());
+
+        var result = new List<KeyValuePair<string, TestItem>>();
+        await foreach (var e in lattice.EntriesAsync<TestItem>(Serializer))
+            result.Add(e);
+
+        Assert.That(result, Is.Empty);
+    }
+
+    // ── Custom Serializer ───────────────────────────────────────
 
     [Test]
     public async Task Custom_serializer_is_used()

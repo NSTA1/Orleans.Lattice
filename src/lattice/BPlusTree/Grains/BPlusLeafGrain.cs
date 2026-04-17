@@ -330,6 +330,33 @@ internal sealed partial class BPlusLeafGrain(
         return Task.FromResult(keys);
     }
 
+    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null)
+    {
+        var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
+        var splitKey = state.State.SplitKey;
+
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        foreach (var (key, lww) in state.State.Entries)
+        {
+            if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+                break;
+
+            if (splitInProgress && splitKey is not null &&
+                string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+                break;
+
+            if (lww.IsTombstone)
+                continue;
+
+            if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
+                continue;
+
+            entries.Add(new KeyValuePair<string, byte[]>(key, lww.Value!));
+        }
+
+        return Task.FromResult(entries);
+    }
+
     public Task<Dictionary<string, byte[]>> GetLiveEntriesAsync()
     {
         var result = new Dictionary<string, byte[]>();

@@ -1481,4 +1481,94 @@ public class BPlusLeafGrainTests
         var count = await grain.CountAsync();
         Assert.That(count, Is.EqualTo(0));
     }
+
+    // --- GetEntriesAsync ---
+
+    [Test]
+    public async Task GetEntries_empty_leaf_returns_empty_list()
+    {
+        var grain = CreateGrain();
+        var entries = await grain.GetEntriesAsync();
+        Assert.That(entries, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetEntries_returns_live_entries_in_sorted_order()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+
+        var entries = await grain.GetEntriesAsync();
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "a", "b", "c" }));
+        Assert.That(Encoding.UTF8.GetString(entries[0].Value), Is.EqualTo("1"));
+        Assert.That(Encoding.UTF8.GetString(entries[1].Value), Is.EqualTo("2"));
+        Assert.That(Encoding.UTF8.GetString(entries[2].Value), Is.EqualTo("3"));
+    }
+
+    [Test]
+    public async Task GetEntries_excludes_tombstoned_entries()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.DeleteAsync("b");
+
+        var entries = await grain.GetEntriesAsync();
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "a" }));
+    }
+
+    [Test]
+    public async Task GetEntries_filters_by_startInclusive()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+
+        var entries = await grain.GetEntriesAsync(startInclusive: "b");
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "b", "c" }));
+    }
+
+    [Test]
+    public async Task GetEntries_filters_by_endExclusive()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+
+        var entries = await grain.GetEntriesAsync(endExclusive: "c");
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "a", "b" }));
+    }
+
+    [Test]
+    public async Task GetEntries_filters_by_combined_range()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        var entries = await grain.GetEntriesAsync(startInclusive: "b", endExclusive: "d");
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "b", "c" }));
+    }
+
+    [Test]
+    public async Task GetEntries_excludes_keys_at_or_above_split_key_when_split_in_progress()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.SplitState = SplitState.SplitInProgress;
+        state.State.SplitKey = "c";
+        state.State.Entries["a"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("1"), default);
+        state.State.Entries["b"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("2"), default);
+        state.State.Entries["c"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("3"), default);
+        state.State.Entries["d"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("4"), default);
+
+        var grain = CreateGrain(state);
+        var entries = await grain.GetEntriesAsync();
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "a", "b" }));
+    }
 }
