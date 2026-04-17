@@ -27,7 +27,11 @@ Obtain an `ILattice` grain from the grain factory using the tree's logical name 
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 ```
 
-### Single-Key Operations
+### Runtime Operations
+
+These methods are used during normal application flow to read, write, and enumerate data. They are safe to call concurrently and do not affect tree availability.
+
+#### Single-Key
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
@@ -36,27 +40,60 @@ var tree = grainFactory.GetGrain<ILattice>("my-tree");
 | `SetAsync` | `Task SetAsync(string key, byte[] value)` | Inserts or updates the value for `key`. |
 | `DeleteAsync` | `Task<bool> DeleteAsync(string key)` | Tombstones `key`. Returns `true` if it was live. |
 
-### Batch Operations
+#### Batch
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `GetManyAsync` | `Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)` | Fetches multiple keys in parallel across shards. Missing/tombstoned keys are omitted from the result. |
 | `SetManyAsync` | `Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)` | Inserts or updates multiple entries in parallel across shards. |
-| `BulkLoadAsync` | `Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries)` | Bottom-up bulk load into an empty tree. Entries are sorted internally. Throws if any shard already has data. |
 
-### Enumeration
+#### Enumeration
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `KeysAsync` | `IAsyncEnumerable<string> KeysAsync(string? startInclusive, string? endExclusive, bool reverse)` | Streams live keys in lexicographic order via paginated k-way merge across shards. |
 
-### Tree Lifecycle
+### Maintenance Operations
+
+These methods manage tree structure and lifecycle. Several of them **take the tree offline** — reads and writes will throw `InvalidOperationException` while the operation is in progress. Plan maintenance windows accordingly.
+
+#### Bulk Loading
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `DeleteTreeAsync` | `Task DeleteTreeAsync()` | Soft-deletes the tree. Data is retained for `SoftDeleteDuration` before purge. Idempotent. |
+| `BulkLoadAsync` | `Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries)` | Bottom-up bulk load into an empty tree. Entries are sorted internally. Throws if any shard already has data. |
+
+#### Tree Lifecycle
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `TreeExistsAsync` | `Task<bool> TreeExistsAsync()` | Returns `true` if this tree is registered in the internal tree registry. |
+| `GetAllTreeIdsAsync` | `Task<IReadOnlyList<string>> GetAllTreeIdsAsync()` | Returns all registered tree IDs in sorted order. System trees (prefixed with `_lattice_`) are excluded. Physical trees created by `ResizeAsync` and `SnapshotAsync` are included. |
+| `DeleteTreeAsync` | `Task DeleteTreeAsync()` | Soft-deletes the tree. Data is retained for `SoftDeleteDuration` before purge. Idempotent. ⚠️ **Takes the tree offline** — all reads and writes will throw `InvalidOperationException` until the tree is recovered. |
 | `RecoverTreeAsync` | `Task RecoverTreeAsync()` | Recovers a soft-deleted tree before purge completes. |
-| `PurgeTreeAsync` | `Task PurgeTreeAsync()` | Immediately purges a soft-deleted tree without waiting for the retention window. |
+| `PurgeTreeAsync` | `Task PurgeTreeAsync()` | Immediately purges a soft-deleted tree without waiting for the retention window. ⚠️ **Permanently destroys all data** — this cannot be undone. |
+
+#### Snapshots
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `SnapshotAsync` | `Task SnapshotAsync(string destinationTreeId, SnapshotMode mode, int? maxLeafKeys, int? maxInternalChildren)` | Creates a point-in-time copy of the tree into `destinationTreeId`. In `Offline` mode the source is locked during the copy; in `Online` mode it remains available (best-effort consistency). Optional sizing overrides apply to the destination tree. ⚠️ **`Offline` mode takes the tree offline** — all reads and writes throw `InvalidOperationException` until the snapshot completes and shards are unmarked. |
+
+#### Resize
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `ResizeAsync` | `Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)` | Resizes the tree by taking an offline snapshot with the new sizing, then swapping the tree alias so reads and writes target the resized tree. The old physical tree is soft-deleted. ⚠️ **Takes the tree offline** during the snapshot phase — all reads and writes throw `InvalidOperationException` until the alias swap completes. |
+| `UndoResizeAsync` | `Task UndoResizeAsync()` | Undoes the most recent resize by recovering the old physical tree, removing the alias, restoring the original registry configuration, and deleting the snapshot tree. Only available while the old tree is within its `SoftDeleteDuration` window. |
+
+## `SnapshotMode`
+
+Controls source-tree availability during a snapshot operation.
+
+| Value | Description |
+|-------|-------------|
+| `Offline` | Source tree is locked (marked deleted) during the copy, guaranteeing a fully consistent snapshot. |
+| `Online` | Source tree remains available. The result is a best-effort point-in-time copy — concurrent writes may cause minor inconsistencies across shards. |
 
 ## `LatticeExtensions`
 
@@ -80,11 +117,37 @@ var tree = grainFactory.GetGrain<ILattice>("my-tree");
 
 All serializable types carry stable `[Alias]` attributes (prefixed with `ol.`) to ensure wire-format compatibility across versions and prevent collisions when Lattice is hosted alongside other Orleans grains.
 
-| Type | Alias | Description |
-|------|-------|-------------|
-| `HybridLogicalClock` | `ol.hlc` | Hybrid logical clock for conflict-free timestamps. |
-| `LwwValue<T>` | `ol.lwv` | Last-writer-wins register. |
-| `VersionVector` | `ol.vv` | Causal version vector (pointwise-max merge). |
-| `StateDelta` | `ol.sd` | Delta of changed entries for replication. |
-| `SplitResult` | `ol.sr` | Result of a node split (promoted key + new sibling). |
-| `KeysPage` | `ol.kp` | Paginated batch of keys from a shard scan. |
+Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Never)]` — they remain `public` for Orleans code generation but are hidden from IntelliSense because they are internal implementation details not intended for direct use.
+
+| Type | Alias | Visibility | Description |
+|------|-------|------------|-------------|
+| `HybridLogicalClock` | `ol.hlc` | public (hidden) | Hybrid logical clock for conflict-free timestamps. |
+| `LwwValue<T>` | `ol.lwv` | public (hidden) | Last-writer-wins register. |
+| `VersionVector` | `ol.vv` | public (hidden) | Causal version vector (pointwise-max merge). |
+| `StateDelta` | `ol.sd` | public (hidden) | Delta of changed entries for replication. |
+| `SplitResult` | `ol.sr` | public (hidden) | Result of a node split (promoted key + new sibling). |
+| `KeysPage` | `ol.kp` | public (hidden) | Paginated batch of keys from a shard scan. |
+| `TreeRegistryEntry` | `ol.tre` | public (hidden) | Per-tree metadata record (config overrides, physical tree alias). |
+| `SnapshotMode` | `ol.snm` | public | Enum: `Offline`, `Online`. Controls source-tree availability during a snapshot. |
+| `TreeResizeState` | `ol.trs` | internal | Persistent state tracking resize progress across phases. |
+| `ResizePhase` | `ol.rp` | internal | Enum: `Snapshot`, `Swap`, `Cleanup`. |
+| `TreeSnapshotState` | `ol.tss` | internal | Persistent state tracking snapshot progress across shards. |
+| `SnapshotPhase` | `ol.snp` | internal | Enum: `Locking`, `Copying`, `Unlocking`, `Completed`. |
+| `TreeDeletionState` | `ol.tds` | internal | Persistent state for soft-delete / purge tracking. |
+| `TombstoneCompactionState` | `ol.tcs` | internal | Persistent state for tombstone compaction progress. |
+
+## Internal Grain Access Control
+
+Lattice exposes a single public entry-point — `ILattice`. All other grain interfaces (`IShardRootGrain`, `IBPlusLeafGrain`, `IBPlusInternalGrain`, `ILeafCacheGrain`, `ILatticeRegistry`, `ITombstoneCompactionGrain`, `ITreeDeletionGrain`, `ITreeResizeGrain`, `ITreeSnapshotGrain`) are internal implementation details.
+
+Two mechanisms prevent accidental direct use of internal grains:
+
+1. **IntelliSense exclusion** — All internal grain interfaces and public serializable model types (e.g. `HybridLogicalClock`, `SplitResult`, `KeysPage`, `LatticeConstants`) are annotated with `[EditorBrowsable(EditorBrowsableState.Never)]`, hiding them from auto-complete in IDEs. They remain `public` for Orleans code generation but are invisible during normal development.
+
+2. **Grain call filters** — `AddLattice` registers a pair of grain call filters:
+   - An **outgoing filter** (`LatticeCallContextFilter`) resolves the current grain context at call time via `IGrainContextAccessor` and checks whether the calling grain implements a Lattice interface (via direct `Type.IsAssignableFrom`). If so, it stamps the outgoing call with a `RequestContext` token. If the caller is **not** a Lattice grain, the filter **clears** the token to prevent it from leaking through a non-Lattice intermediary.
+   - An **incoming filter** (`InternalGrainGuardFilter`) rejects calls to internal Lattice grains that do not carry the token, throwing `InvalidOperationException`.
+
+   External client calls never carry the token and are blocked. Calls from non-Lattice grains co-hosted in the same silo are also blocked because the outgoing filter only stamps calls originating from Lattice grains. Both filters cache `Type.IsAssignableFrom` results in a `ConcurrentDictionary<Type, bool>`, so repeated calls from the same grain type cost a single dictionary lookup (~20 ns) rather than a linear scan. All type checks use direct .NET type comparison — there is no dependency on Orleans grain-type name conventions.
+
+> **Note:** The token is not a security credential — it prevents accidental misuse, not malicious access. A determined caller within the silo process could set the `RequestContext` value manually.
