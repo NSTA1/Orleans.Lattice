@@ -34,4 +34,5 @@ internal static class TypeAliases
     internal const string SplitResult = "ol.sr";
     internal const string KeysPage = "ol.kp";
     internal const string GetOrSetResult = "ol.gsr";
+    internal const string EntriesPage = "ol.ep";
 }

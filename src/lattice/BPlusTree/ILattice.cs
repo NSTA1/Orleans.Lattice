@@ -66,6 +66,13 @@ public interface ILattice : IGrainWithStringKey
     IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false);
 
     /// <summary>
+    /// Returns all live key-value entries in the tree as an ordered async stream.
+    /// Entries are returned in lexicographic key order (or reverse if <paramref name="reverse"/> is <c>true</c>).
+    /// Optionally filters to keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
+    /// </summary>
+    IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false);
+
+    /// <summary>
     /// Bulk-loads key-value pairs into an empty tree, building leaves and
     /// internal nodes bottom-up without any splits. Significantly faster than
     /// individual <see cref="SetAsync"/> calls for initial data seeding.

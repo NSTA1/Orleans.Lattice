@@ -79,6 +79,30 @@ public interface IShardRootGrain : IGrainWithStringKey
         string? continuationToken = null);
 
     /// <summary>
+    /// Returns a page of live key-value entries in this shard's B+ tree in sorted order,
+    /// filtered to the [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
+    /// Pass <paramref name="continuationToken"/> (the last key from the previous page)
+    /// to resume pagination; entries with keys &gt; the token are returned.
+    /// </summary>
+    Task<EntriesPage> GetSortedEntriesBatchAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken = null);
+
+    /// <summary>
+    /// Returns a page of live key-value entries in <em>reverse</em> sorted order,
+    /// filtered to the [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
+    /// Pass <paramref name="continuationToken"/> (the last key from the previous page)
+    /// to resume pagination; entries with keys &lt; the token are returned.
+    /// </summary>
+    Task<EntriesPage> GetSortedEntriesBatchReverseAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken = null);
+
+    /// <summary>
     /// Returns the <see cref="GrainId"/> of the leftmost leaf in this shard's B+ tree,
     /// or <c>null</c> if the tree has not been initialised yet.
     /// Used by the tombstone compaction grain to walk the leaf chain.
