@@ -1,10 +1,4 @@
 <Solution>
-  <Folder Name="/src/" />
-  <Folder Name="/src/lattice/">
-    <Project Path="src/lattice/Orleans.Lattice.csproj" />
-  </Folder>
-  <Folder Name="/test/" />
-  <Folder Name="/test/lattice/">
-    <Project Path="test/lattice/Orleans.Lattice.Tests.csproj" />
-  </Folder>
+  <Project Path="src/lattice/Orleans.Lattice.csproj" />
+  <Project Path="test/lattice/Orleans.Lattice.Tests.csproj" />
 </Solution>

@@ -8,12 +8,27 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// Integration tests for <see cref="ILattice.KeysAsync"/> using the default cluster
 /// (default shard count, default max leaf keys — no splits expected for small data sets).
 /// </summary>
-[Collection(ClusterCollection.Name)]
-public class KeysDefaultClusterTests(ClusterFixture fixture)
+[TestFixture]
+public class KeysDefaultClusterTests
 {
-    private readonly TestCluster _cluster = fixture.Cluster;
+    private ClusterFixture _fixture = null!;
+    private TestCluster _cluster = null!;
 
-    [Fact]
+    [OneTimeSetUp]
+    public async Task OneTimeSetUp()
+    {
+        _fixture = new ClusterFixture();
+        await _fixture.InitializeAsync();
+        _cluster = _fixture.Cluster;
+    }
+
+    [OneTimeTearDown]
+    public async Task OneTimeTearDown()
+    {
+        await _fixture.DisposeAsync();
+    }
+
+    [Test]
     public async Task Keys_empty_tree_returns_nothing()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("keys-empty");
@@ -21,10 +36,10 @@ public class KeysDefaultClusterTests(ClusterFixture fixture)
         await foreach (var k in tree.KeysAsync())
             keys.Add(k);
 
-        Assert.Empty(keys);
+        Assert.That(keys, Is.Empty);
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_returns_all_keys_sorted()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("keys-sorted");
@@ -36,10 +51,10 @@ public class KeysDefaultClusterTests(ClusterFixture fixture)
         await foreach (var k in tree.KeysAsync())
             keys.Add(k);
 
-        Assert.Equal(expected.OrderBy(k => k, StringComparer.Ordinal).ToList(), keys);
+        Assert.That(keys, Is.EqualTo(expected.OrderBy(k => k, StringComparer.Ordinal).ToList()));
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_reverse_returns_descending_order()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("keys-reverse");
@@ -51,12 +66,11 @@ public class KeysDefaultClusterTests(ClusterFixture fixture)
         await foreach (var k in tree.KeysAsync(reverse: true))
             keys.Add(k);
 
-        Assert.Equal(
-            items.OrderByDescending(k => k, StringComparer.Ordinal).ToList(),
-            keys);
+        Assert.That(keys, Is.EqualTo(
+            items.OrderByDescending(k => k, StringComparer.Ordinal).ToList()));
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_range_filters_correctly()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("keys-range");
@@ -68,10 +82,10 @@ public class KeysDefaultClusterTests(ClusterFixture fixture)
         await foreach (var k in tree.KeysAsync(startInclusive: "b", endExclusive: "e"))
             keys.Add(k);
 
-        Assert.Equal(["b", "c", "d"], keys);
+        Assert.That(keys, Is.EqualTo(new[] { "b", "c", "d" }));
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_range_reverse_returns_filtered_descending()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("keys-range-rev");
@@ -83,10 +97,10 @@ public class KeysDefaultClusterTests(ClusterFixture fixture)
         await foreach (var k in tree.KeysAsync(startInclusive: "b", endExclusive: "e", reverse: true))
             keys.Add(k);
 
-        Assert.Equal(["d", "c", "b"], keys);
+        Assert.That(keys, Is.EqualTo(new[] { "d", "c", "b" }));
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_excludes_deleted_keys()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("keys-deleted");
@@ -98,7 +112,7 @@ public class KeysDefaultClusterTests(ClusterFixture fixture)
         await foreach (var k in tree.KeysAsync())
             keys.Add(k);
 
-        Assert.Equal(["keep"], keys);
+        Assert.That(keys, Is.EqualTo(new[] { "keep" }));
     }
 }
 
@@ -106,12 +120,27 @@ public class KeysDefaultClusterTests(ClusterFixture fixture)
 /// Integration tests for <see cref="ILattice.KeysAsync"/> using a single-shard cluster
 /// with small leaf keys (max 4) to exercise leaf splits within a single shard.
 /// </summary>
-[Collection(SmallLeafClusterCollection.Name)]
-public class KeysSingleShardSplitTests(SmallLeafClusterFixture fixture)
+[TestFixture]
+public class KeysSingleShardSplitTests
 {
-    private readonly TestCluster _cluster = fixture.Cluster;
+    private SmallLeafClusterFixture _fixture = null!;
+    private TestCluster _cluster = null!;
 
-    [Fact]
+    [OneTimeSetUp]
+    public async Task OneTimeSetUp()
+    {
+        _fixture = new SmallLeafClusterFixture();
+        await _fixture.InitializeAsync();
+        _cluster = _fixture.Cluster;
+    }
+
+    [OneTimeTearDown]
+    public async Task OneTimeTearDown()
+    {
+        await _fixture.DisposeAsync();
+    }
+
+    [Test]
     public async Task Keys_after_splits_returns_all_keys_sorted()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("1s-keys-split");
@@ -129,10 +158,10 @@ public class KeysSingleShardSplitTests(SmallLeafClusterFixture fixture)
             keys.Add(k);
 
         expected.Sort(StringComparer.Ordinal);
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_range_works_across_split_leaves()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("1s-keys-range");
@@ -149,10 +178,10 @@ public class KeysSingleShardSplitTests(SmallLeafClusterFixture fixture)
             .OrderBy(k => k, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_reverse_works_across_split_leaves()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("1s-keys-rev");
@@ -169,10 +198,10 @@ public class KeysSingleShardSplitTests(SmallLeafClusterFixture fixture)
             .OrderByDescending(k => k, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_reverse_range_across_split_leaves()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("1s-keys-rev-range");
@@ -189,10 +218,10 @@ public class KeysSingleShardSplitTests(SmallLeafClusterFixture fixture)
             .OrderByDescending(k => k, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_forward_and_reverse_are_mirrors()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("1s-keys-mirror");
@@ -209,7 +238,7 @@ public class KeysSingleShardSplitTests(SmallLeafClusterFixture fixture)
             reverse.Add(k);
 
         forward.Reverse();
-        Assert.Equal(forward, reverse);
+        Assert.That(reverse, Is.EqualTo(forward));
     }
 }
 
@@ -217,12 +246,27 @@ public class KeysSingleShardSplitTests(SmallLeafClusterFixture fixture)
 /// Integration tests for <see cref="ILattice.KeysAsync"/> using a 4-shard cluster
 /// with small leaf keys to exercise cross-shard merging and leaf splits.
 /// </summary>
-[Collection(FourShardClusterCollection.Name)]
-public class KeysFourShardTests(FourShardClusterFixture fixture)
+[TestFixture]
+public class KeysFourShardTests
 {
-    private readonly TestCluster _cluster = fixture.Cluster;
+    private FourShardClusterFixture _fixture = null!;
+    private TestCluster _cluster = null!;
 
-    [Fact]
+    [OneTimeSetUp]
+    public async Task OneTimeSetUp()
+    {
+        _fixture = new FourShardClusterFixture();
+        await _fixture.InitializeAsync();
+        _cluster = _fixture.Cluster;
+    }
+
+    [OneTimeTearDown]
+    public async Task OneTimeTearDown()
+    {
+        await _fixture.DisposeAsync();
+    }
+
+    [Test]
     public async Task Keys_merges_across_shards_sorted()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("4s-merge");
@@ -239,10 +283,10 @@ public class KeysFourShardTests(FourShardClusterFixture fixture)
             keys.Add(k);
 
         expected.Sort(StringComparer.Ordinal);
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_range_across_shards()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("4s-range");
@@ -259,10 +303,10 @@ public class KeysFourShardTests(FourShardClusterFixture fixture)
             .OrderBy(k => k, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_reverse_across_shards()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("4s-reverse");
@@ -279,10 +323,10 @@ public class KeysFourShardTests(FourShardClusterFixture fixture)
             .OrderByDescending(k => k, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_many_keys_forces_pagination()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("4s-pagination");
@@ -301,10 +345,10 @@ public class KeysFourShardTests(FourShardClusterFixture fixture)
             keys.Add(k);
 
         expected.Sort(StringComparer.Ordinal);
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_reverse_many_keys_forces_pagination()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("4s-rev-pagination");
@@ -322,10 +366,10 @@ public class KeysFourShardTests(FourShardClusterFixture fixture)
 
         expected.Sort(StringComparer.Ordinal);
         expected.Reverse();
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 
-    [Fact]
+    [Test]
     public async Task Keys_reverse_range_across_shards()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("4s-rev-range");
@@ -342,6 +386,6 @@ public class KeysFourShardTests(FourShardClusterFixture fixture)
             .OrderByDescending(k => k, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(expected, keys);
+        Assert.That(keys, Is.EqualTo(expected));
     }
 }

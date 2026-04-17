@@ -4,12 +4,27 @@ using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
-[Collection(SmallLeafClusterCollection.Name)]
-public class TreeDeletionIntegrationTests(SmallLeafClusterFixture fixture)
+[TestFixture]
+public class TreeDeletionIntegrationTests
 {
-    private readonly TestCluster _cluster = fixture.Cluster;
+    private SmallLeafClusterFixture _fixture = null!;
+    private TestCluster _cluster = null!;
 
-    [Fact]
+    [OneTimeSetUp]
+    public async Task OneTimeSetUp()
+    {
+        _fixture = new SmallLeafClusterFixture();
+        await _fixture.InitializeAsync();
+        _cluster = _fixture.Cluster;
+    }
+
+    [OneTimeTearDown]
+    public async Task OneTimeTearDown()
+    {
+        await _fixture.DisposeAsync();
+    }
+
+    [Test]
     public async Task DeleteTree_makes_tree_inaccessible()
     {
         var treeName = $"del-test-{Guid.NewGuid():N}";
@@ -18,19 +33,19 @@ public class TreeDeletionIntegrationTests(SmallLeafClusterFixture fixture)
         // Write some data.
         await router.SetAsync("a", Encoding.UTF8.GetBytes("1"));
         await router.SetAsync("b", Encoding.UTF8.GetBytes("2"));
-        Assert.NotNull(await router.GetAsync("a"));
+        Assert.That(await router.GetAsync("a"), Is.Not.Null);
 
         // Delete the tree.
         await router.DeleteTreeAsync();
 
         // All operations should throw.
-        await Assert.ThrowsAsync<InvalidOperationException>(() => router.GetAsync("a"));
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        Assert.ThrowsAsync<InvalidOperationException>(() => router.GetAsync("a"));
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
             router.SetAsync("c", Encoding.UTF8.GetBytes("3")));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => router.DeleteAsync("a"));
+        Assert.ThrowsAsync<InvalidOperationException>(() => router.DeleteAsync("a"));
     }
 
-    [Fact]
+    [Test]
     public async Task DeleteTree_is_idempotent()
     {
         var treeName = $"del-idem-{Guid.NewGuid():N}";
@@ -40,10 +55,10 @@ public class TreeDeletionIntegrationTests(SmallLeafClusterFixture fixture)
         await router.DeleteTreeAsync();
         await router.DeleteTreeAsync(); // Should not throw.
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => router.GetAsync("x"));
+        Assert.ThrowsAsync<InvalidOperationException>(() => router.GetAsync("x"));
     }
 
-    [Fact]
+    [Test]
     public async Task DeleteTree_blocks_bulk_load()
     {
         var treeName = $"del-bulk-{Guid.NewGuid():N}";
@@ -55,11 +70,11 @@ public class TreeDeletionIntegrationTests(SmallLeafClusterFixture fixture)
         {
             KeyValuePair.Create("a", Encoding.UTF8.GetBytes("1")),
         };
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
             router.BulkLoadAsync(entries));
     }
 
-    [Fact]
+    [Test]
     public async Task DeleteTree_blocks_key_scan()
     {
         var treeName = $"del-keys-{Guid.NewGuid():N}";
@@ -68,13 +83,13 @@ public class TreeDeletionIntegrationTests(SmallLeafClusterFixture fixture)
         await router.SetAsync("a", Encoding.UTF8.GetBytes("1"));
         await router.DeleteTreeAsync();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await foreach (var _ in router.KeysAsync()) { }
         });
     }
 
-    [Fact]
+    [Test]
     public async Task DeleteTree_on_empty_tree_succeeds()
     {
         var treeName = $"del-empty-{Guid.NewGuid():N}";
@@ -82,25 +97,25 @@ public class TreeDeletionIntegrationTests(SmallLeafClusterFixture fixture)
 
         await router.DeleteTreeAsync();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => router.GetAsync("x"));
+        Assert.ThrowsAsync<InvalidOperationException>(() => router.GetAsync("x"));
     }
 
-    [Fact]
+    [Test]
     public async Task IsDeleted_returns_correct_state()
     {
         var treeName = $"del-isdeleted-{Guid.NewGuid():N}";
         var deletion = _cluster.GrainFactory.GetGrain<ITreeDeletionGrain>(treeName);
 
-        Assert.False(await deletion.IsDeletedAsync());
+        Assert.That(await deletion.IsDeletedAsync(), Is.False);
 
         await deletion.DeleteTreeAsync();
 
-        Assert.True(await deletion.IsDeletedAsync());
+        Assert.That(await deletion.IsDeletedAsync(), Is.True);
     }
 
     // --- RecoverTreeAsync ---
 
-    [Fact]
+    [Test]
     public async Task RecoverTree_restores_access_to_data()
     {
         var treeName = $"rec-test-{Guid.NewGuid():N}";
@@ -111,17 +126,17 @@ public class TreeDeletionIntegrationTests(SmallLeafClusterFixture fixture)
         await router.DeleteTreeAsync();
 
         // Tree is inaccessible.
-        await Assert.ThrowsAsync<InvalidOperationException>(() => router.GetAsync("a"));
+        Assert.ThrowsAsync<InvalidOperationException>(() => router.GetAsync("a"));
 
         // Recover.
         await router.RecoverTreeAsync();
 
         // Data is accessible again.
-        Assert.Equal("1", Encoding.UTF8.GetString((await router.GetAsync("a"))!));
-        Assert.Equal("2", Encoding.UTF8.GetString((await router.GetAsync("b"))!));
+        Assert.That(Encoding.UTF8.GetString((await router.GetAsync("a"))!), Is.EqualTo("1"));
+        Assert.That(Encoding.UTF8.GetString((await router.GetAsync("b"))!), Is.EqualTo("2"));
     }
 
-    [Fact]
+    [Test]
     public async Task RecoverTree_allows_new_writes_after_recovery()
     {
         var treeName = $"rec-write-{Guid.NewGuid():N}";
@@ -132,20 +147,20 @@ public class TreeDeletionIntegrationTests(SmallLeafClusterFixture fixture)
         await router.RecoverTreeAsync();
 
         await router.SetAsync("y", Encoding.UTF8.GetBytes("new"));
-        Assert.Equal("new", Encoding.UTF8.GetString((await router.GetAsync("y"))!));
+        Assert.That(Encoding.UTF8.GetString((await router.GetAsync("y"))!), Is.EqualTo("new"));
     }
 
-    [Fact]
+    [Test]
     public async Task RecoverTree_throws_if_not_deleted()
     {
         var treeName = $"rec-notdel-{Guid.NewGuid():N}";
         var router = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
 
         await router.SetAsync("a", Encoding.UTF8.GetBytes("1"));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => router.RecoverTreeAsync());
+        Assert.ThrowsAsync<InvalidOperationException>(() => router.RecoverTreeAsync());
     }
 
-    [Fact]
+    [Test]
     public async Task RecoverTree_throws_after_purge()
     {
         var treeName = $"rec-purged-{Guid.NewGuid():N}";
@@ -155,12 +170,12 @@ public class TreeDeletionIntegrationTests(SmallLeafClusterFixture fixture)
         await router.DeleteTreeAsync();
         await router.PurgeTreeAsync();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => router.RecoverTreeAsync());
+        Assert.ThrowsAsync<InvalidOperationException>(() => router.RecoverTreeAsync());
     }
 
     // --- PurgeTreeAsync ---
 
-    [Fact]
+    [Test]
     public async Task PurgeTree_immediately_destroys_data()
     {
         var treeName = $"purge-test-{Guid.NewGuid():N}";
@@ -172,20 +187,20 @@ public class TreeDeletionIntegrationTests(SmallLeafClusterFixture fixture)
 
         // Deletion grain should show purge complete.
         var deletion = _cluster.GrainFactory.GetGrain<ITreeDeletionGrain>(treeName);
-        Assert.True(await deletion.IsDeletedAsync());
+        Assert.That(await deletion.IsDeletedAsync(), Is.True);
     }
 
-    [Fact]
+    [Test]
     public async Task PurgeTree_throws_if_not_deleted()
     {
         var treeName = $"purge-notdel-{Guid.NewGuid():N}";
         var router = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
 
         await router.SetAsync("a", Encoding.UTF8.GetBytes("1"));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => router.PurgeTreeAsync());
+        Assert.ThrowsAsync<InvalidOperationException>(() => router.PurgeTreeAsync());
     }
 
-    [Fact]
+    [Test]
     public async Task PurgeTree_throws_if_already_purged()
     {
         var treeName = $"purge-twice-{Guid.NewGuid():N}";
@@ -194,6 +209,6 @@ public class TreeDeletionIntegrationTests(SmallLeafClusterFixture fixture)
         await router.DeleteTreeAsync();
         await router.PurgeTreeAsync();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => router.PurgeTreeAsync());
+        Assert.ThrowsAsync<InvalidOperationException>(() => router.PurgeTreeAsync());
     }
 }

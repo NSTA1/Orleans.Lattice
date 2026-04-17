@@ -31,7 +31,7 @@ public class LatticeGrainTests
         return shardRoot;
     }
 
-    [Fact]
+    [Test]
     public async Task GetAsync_delegates_to_shard_root()
     {
         var (grain, factory) = CreateGrain();
@@ -40,11 +40,11 @@ public class LatticeGrainTests
 
         var result = await grain.GetAsync("k1");
 
-        Assert.Equal("v1", Encoding.UTF8.GetString(result!));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("v1"));
         await shardRoot.Received(1).GetAsync("k1");
     }
 
-    [Fact]
+    [Test]
     public async Task SetAsync_delegates_to_shard_root()
     {
         var (grain, factory) = CreateGrain();
@@ -55,7 +55,7 @@ public class LatticeGrainTests
         await shardRoot.Received(1).SetAsync("k1", Arg.Any<byte[]>());
     }
 
-    [Fact]
+    [Test]
     public async Task DeleteAsync_delegates_to_shard_root()
     {
         var (grain, factory) = CreateGrain();
@@ -64,30 +64,30 @@ public class LatticeGrainTests
 
         var result = await grain.DeleteAsync("k1");
 
-        Assert.True(result);
+        Assert.That(result, Is.True);
         await shardRoot.Received(1).DeleteAsync("k1");
     }
 
-    [Fact]
+    [Test]
     public void GetShardIndex_is_deterministic()
     {
         var a = LatticeGrain.GetShardIndex("hello", 64);
         var b = LatticeGrain.GetShardIndex("hello", 64);
-        Assert.Equal(a, b);
+        Assert.That(b, Is.EqualTo(a));
     }
 
-    [Fact]
+    [Test]
     public void GetShardIndex_stays_in_range()
     {
         var keys = new[] { "a", "b", "foo", "bar", "customer-12345", "", "z" };
         foreach (var key in keys)
         {
             var index = LatticeGrain.GetShardIndex(key, 64);
-            Assert.InRange(index, 0, 63);
+            Assert.That(index, Is.InRange(0, 63));
         }
     }
 
-    [Fact]
+    [Test]
     public void GetShardIndex_distributes_across_shards()
     {
         var shards = new HashSet<int>();
@@ -96,10 +96,10 @@ public class LatticeGrainTests
             shards.Add(LatticeGrain.GetShardIndex($"key-{i}", 64));
         }
 
-        Assert.True(shards.Count > 30, $"Expected >30 distinct shards, got {shards.Count}");
+        Assert.That(shards.Count > 30, Is.True, $"Expected >30 distinct shards, got {shards.Count}");
     }
 
-    [Fact]
+    [Test]
     public async Task Same_key_always_routes_to_same_shard()
     {
         var (grain1, factory1) = CreateGrain("tree-a");
@@ -132,7 +132,7 @@ public class LatticeGrainTests
         return compaction;
     }
 
-    [Fact]
+    [Test]
     public async Task SetAsync_CallsEnsureReminderAsync()
     {
         const string treeId = "compaction-set";
@@ -145,7 +145,7 @@ public class LatticeGrainTests
         await compaction.Received(1).EnsureReminderAsync();
     }
 
-    [Fact]
+    [Test]
     public async Task DeleteAsync_CallsEnsureReminderAsync()
     {
         const string treeId = "compaction-delete";
@@ -158,7 +158,7 @@ public class LatticeGrainTests
         await compaction.Received(1).EnsureReminderAsync();
     }
 
-    [Fact]
+    [Test]
     public async Task GetAsync_DoesNotCallEnsureReminderAsync()
     {
         const string treeId = "compaction-get";
@@ -171,7 +171,7 @@ public class LatticeGrainTests
         await compaction.DidNotReceive().EnsureReminderAsync();
     }
 
-    [Fact]
+    [Test]
     public async Task SetAsync_WhenCompactionDisabled_DoesNotCallEnsureReminderAsync()
     {
         const string treeId = "compaction-disabled";
@@ -187,7 +187,7 @@ public class LatticeGrainTests
         await compaction.DidNotReceive().EnsureReminderAsync();
     }
 
-    [Fact]
+    [Test]
     public async Task SetAsync_SecondCall_DoesNotCallEnsureReminderAgain()
     {
         const string treeId = "compaction-dedup";
@@ -203,14 +203,14 @@ public class LatticeGrainTests
 
     // --- ExistsAsync tests ---
 
-    [Fact]
+    [Test]
     public async Task ExistsAsync_throws_on_null_key()
     {
         var (grain, _) = CreateGrain();
-        await Assert.ThrowsAsync<ArgumentNullException>(() => grain.ExistsAsync(null!));
+        Assert.ThrowsAsync<ArgumentNullException>(() => grain.ExistsAsync(null!));
     }
 
-    [Fact]
+    [Test]
     public async Task ExistsAsync_delegates_to_shard_root()
     {
         var (grain, factory) = CreateGrain();
@@ -219,11 +219,11 @@ public class LatticeGrainTests
 
         var result = await grain.ExistsAsync("k1");
 
-        Assert.True(result);
+        Assert.That(result, Is.True);
         await shardRoot.Received(1).ExistsAsync("k1");
     }
 
-    [Fact]
+    [Test]
     public async Task ExistsAsync_returns_false_for_missing_key()
     {
         var (grain, factory) = CreateGrain();
@@ -232,19 +232,19 @@ public class LatticeGrainTests
 
         var result = await grain.ExistsAsync("missing");
 
-        Assert.False(result);
+        Assert.That(result, Is.False);
     }
 
     // --- GetManyAsync tests ---
 
-    [Fact]
+    [Test]
     public async Task GetManyAsync_throws_on_null_keys()
     {
         var (grain, _) = CreateGrain();
-        await Assert.ThrowsAsync<ArgumentNullException>(() => grain.GetManyAsync(null!));
+        Assert.ThrowsAsync<ArgumentNullException>(() => grain.GetManyAsync(null!));
     }
 
-    [Fact]
+    [Test]
     public async Task GetManyAsync_returns_existing_keys()
     {
         var (grain, factory) = CreateGrain();
@@ -263,12 +263,12 @@ public class LatticeGrainTests
 
         var result = await grain.GetManyAsync(["k1", "k2"]);
 
-        Assert.Equal(2, result.Count);
-        Assert.Equal("v1", Encoding.UTF8.GetString(result["k1"]));
-        Assert.Equal("v2", Encoding.UTF8.GetString(result["k2"]));
+        Assert.That(result.Count, Is.EqualTo(2));
+        Assert.That(Encoding.UTF8.GetString(result["k1"]), Is.EqualTo("v1"));
+        Assert.That(Encoding.UTF8.GetString(result["k2"]), Is.EqualTo("v2"));
     }
 
-    [Fact]
+    [Test]
     public async Task GetManyAsync_omits_missing_keys()
     {
         var (grain, factory) = CreateGrain();
@@ -287,12 +287,12 @@ public class LatticeGrainTests
 
         var result = await grain.GetManyAsync(["k1", "k2"]);
 
-        Assert.Single(result);
-        Assert.True(result.ContainsKey("k1"));
-        Assert.False(result.ContainsKey("k2"));
+        Assert.That(result, Has.Count.EqualTo(1));
+        Assert.That(result.ContainsKey("k1"), Is.True);
+        Assert.That(result.ContainsKey("k2"), Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task GetManyAsync_returns_empty_for_no_keys()
     {
         var (grain, factory) = CreateGrain();
@@ -300,19 +300,19 @@ public class LatticeGrainTests
 
         var result = await grain.GetManyAsync([]);
 
-        Assert.Empty(result);
+        Assert.That(result, Is.Empty);
     }
 
     // --- SetManyAsync tests ---
 
-    [Fact]
+    [Test]
     public async Task SetManyAsync_throws_on_null_entries()
     {
         var (grain, _) = CreateGrain();
-        await Assert.ThrowsAsync<ArgumentNullException>(() => grain.SetManyAsync(null!));
+        Assert.ThrowsAsync<ArgumentNullException>(() => grain.SetManyAsync(null!));
     }
 
-    [Fact]
+    [Test]
     public async Task SetManyAsync_delegates_all_entries_to_shard()
     {
         var (grain, factory) = CreateGrain();
@@ -332,7 +332,7 @@ public class LatticeGrainTests
         await shardRoot.DidNotReceiveWithAnyArgs().SetAsync(default!, default!);
     }
 
-    [Fact]
+    [Test]
     public async Task SetManyAsync_CallsEnsureReminderAsync()
     {
         const string treeId = "compaction-setmany";
@@ -347,7 +347,7 @@ public class LatticeGrainTests
 
     // --- GetManyAsync batch delegation test ---
 
-    [Fact]
+    [Test]
     public async Task GetManyAsync_calls_shard_GetManyAsync_not_individual_GetAsync()
     {
         var (grain, factory) = CreateGrain();

@@ -4,12 +4,27 @@ using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
-[Collection(SmallLeafClusterCollection.Name)]
-public class TombstoneCompactionIntegrationTests(SmallLeafClusterFixture fixture)
+[TestFixture]
+public class TombstoneCompactionIntegrationTests
 {
-    private readonly TestCluster _cluster = fixture.Cluster;
+    private SmallLeafClusterFixture _fixture = null!;
+    private TestCluster _cluster = null!;
 
-    [Fact]
+    [OneTimeSetUp]
+    public async Task OneTimeSetUp()
+    {
+        _fixture = new SmallLeafClusterFixture();
+        await _fixture.InitializeAsync();
+        _cluster = _fixture.Cluster;
+    }
+
+    [OneTimeTearDown]
+    public async Task OneTimeTearDown()
+    {
+        await _fixture.DisposeAsync();
+    }
+
+    [Test]
     public async Task Compaction_removes_tombstones_and_preserves_live_keys()
     {
         var treeName = $"{SmallLeafClusterFixture.CompactionTreeName}-{Guid.NewGuid():N}";
@@ -26,8 +41,8 @@ public class TombstoneCompactionIntegrationTests(SmallLeafClusterFixture fixture
         await router.DeleteAsync("d");
 
         // Verify deletes are visible.
-        Assert.Null(await router.GetAsync("b"));
-        Assert.Null(await router.GetAsync("d"));
+        Assert.That(await router.GetAsync("b"), Is.Null);
+        Assert.That(await router.GetAsync("d"), Is.Null);
 
         // Run compaction (grace period = 0 → all tombstones eligible).
         var compaction = _cluster.GrainFactory
@@ -35,12 +50,12 @@ public class TombstoneCompactionIntegrationTests(SmallLeafClusterFixture fixture
         await compaction.RunCompactionPassAsync();
 
         // Live keys still readable.
-        Assert.Equal("1", Encoding.UTF8.GetString((await router.GetAsync("a"))!));
-        Assert.Equal("3", Encoding.UTF8.GetString((await router.GetAsync("c"))!));
+        Assert.That(Encoding.UTF8.GetString((await router.GetAsync("a"))!), Is.EqualTo("1"));
+        Assert.That(Encoding.UTF8.GetString((await router.GetAsync("c"))!), Is.EqualTo("3"));
 
         // Deleted keys still absent.
-        Assert.Null(await router.GetAsync("b"));
-        Assert.Null(await router.GetAsync("d"));
+        Assert.That(await router.GetAsync("b"), Is.Null);
+        Assert.That(await router.GetAsync("d"), Is.Null);
 
         // Verify tombstones are physically gone: the key enumeration should
         // return only live keys, and a second compaction should be a no-op
@@ -50,12 +65,12 @@ public class TombstoneCompactionIntegrationTests(SmallLeafClusterFixture fixture
         {
             keys.Add(key);
         }
-        Assert.Equal(2, keys.Count);
-        Assert.Contains("a", keys);
-        Assert.Contains("c", keys);
+        Assert.That(keys.Count, Is.EqualTo(2));
+        Assert.That(keys, Does.Contain("a"));
+        Assert.That(keys, Does.Contain("c"));
     }
 
-    [Fact]
+    [Test]
     public async Task Compaction_is_idempotent_and_handles_incremental_deletes()
     {
         var treeName = $"{SmallLeafClusterFixture.CompactionTreeName}-{Guid.NewGuid():N}";
@@ -73,8 +88,8 @@ public class TombstoneCompactionIntegrationTests(SmallLeafClusterFixture fixture
         // w1-b tombstone should be gone; a second pass is a fast no-op.
         await compaction.RunCompactionPassAsync();
 
-        Assert.Equal("1", Encoding.UTF8.GetString((await router.GetAsync("w1-a"))!));
-        Assert.Null(await router.GetAsync("w1-b"));
+        Assert.That(Encoding.UTF8.GetString((await router.GetAsync("w1-a"))!), Is.EqualTo("1"));
+        Assert.That(await router.GetAsync("w1-b"), Is.Null);
 
         // --- Second wave: more writes + deletes + compact ---
         await router.SetAsync("w2-a", Encoding.UTF8.GetBytes("3"));
@@ -84,10 +99,10 @@ public class TombstoneCompactionIntegrationTests(SmallLeafClusterFixture fixture
         await compaction.RunCompactionPassAsync();
 
         // First-wave survivor still intact.
-        Assert.Equal("1", Encoding.UTF8.GetString((await router.GetAsync("w1-a"))!));
+        Assert.That(Encoding.UTF8.GetString((await router.GetAsync("w1-a"))!), Is.EqualTo("1"));
         // Second-wave delete applied.
-        Assert.Null(await router.GetAsync("w2-a"));
-        Assert.Equal("4", Encoding.UTF8.GetString((await router.GetAsync("w2-b"))!));
+        Assert.That(await router.GetAsync("w2-a"), Is.Null);
+        Assert.That(Encoding.UTF8.GetString((await router.GetAsync("w2-b"))!), Is.EqualTo("4"));
 
         // Full key enumeration shows only live keys.
         var keys = new List<string>();
@@ -95,8 +110,8 @@ public class TombstoneCompactionIntegrationTests(SmallLeafClusterFixture fixture
         {
             keys.Add(key);
         }
-        Assert.Equal(2, keys.Count);
-        Assert.Contains("w1-a", keys);
-        Assert.Contains("w2-b", keys);
+        Assert.That(keys.Count, Is.EqualTo(2));
+        Assert.That(keys, Does.Contain("w1-a"));
+        Assert.That(keys, Does.Contain("w2-b"));
     }
 }

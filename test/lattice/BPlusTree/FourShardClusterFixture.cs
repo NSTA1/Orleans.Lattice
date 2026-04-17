@@ -5,7 +5,7 @@ using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
-public sealed class FourShardClusterFixture : IAsyncLifetime
+public sealed class FourShardClusterFixture
 {
     public const string TreeName = "four-shard-tree";
     public const int TestShardCount = 4;

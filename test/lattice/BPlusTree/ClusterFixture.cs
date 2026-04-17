@@ -4,7 +4,7 @@ using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
-public sealed class ClusterFixture : IAsyncLifetime
+public sealed class ClusterFixture
 {
     public TestCluster Cluster { get; private set; } = null!;
 

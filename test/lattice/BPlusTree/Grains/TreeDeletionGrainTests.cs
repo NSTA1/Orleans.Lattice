@@ -59,7 +59,7 @@ public class TreeDeletionGrainTests
 
     // --- DeleteTreeAsync ---
 
-    [Fact]
+    [Test]
     public async Task DeleteTree_marks_all_shards_as_deleted()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
@@ -73,18 +73,18 @@ public class TreeDeletionGrainTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task DeleteTree_persists_deleted_state()
     {
         var (grain, state, _, _, _) = CreateGrain();
 
         await grain.DeleteTreeAsync();
 
-        Assert.True(state.State.IsDeleted);
-        Assert.NotNull(state.State.DeletedAtUtc);
+        Assert.That(state.State.IsDeleted, Is.True);
+        Assert.That(state.State.DeletedAtUtc, Is.Not.Null);
     }
 
-    [Fact]
+    [Test]
     public async Task DeleteTree_registers_reminder()
     {
         var (grain, _, reminderRegistry, _, _) = CreateGrain();
@@ -98,7 +98,7 @@ public class TreeDeletionGrainTests
             Arg.Any<TimeSpan>());
     }
 
-    [Fact]
+    [Test]
     public async Task DeleteTree_is_idempotent()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
@@ -116,24 +116,24 @@ public class TreeDeletionGrainTests
 
     // --- IsDeletedAsync ---
 
-    [Fact]
+    [Test]
     public async Task IsDeleted_returns_false_initially()
     {
         var (grain, _, _, _, _) = CreateGrain();
-        Assert.False(await grain.IsDeletedAsync());
+        Assert.That(await grain.IsDeletedAsync(), Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task IsDeleted_returns_true_after_delete()
     {
         var (grain, _, _, _, _) = CreateGrain();
         await grain.DeleteTreeAsync();
-        Assert.True(await grain.IsDeletedAsync());
+        Assert.That(await grain.IsDeletedAsync(), Is.True);
     }
 
     // --- Purge ---
 
-    [Fact]
+    [Test]
     public async Task ProcessNextShard_purges_shards_sequentially()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
@@ -145,10 +145,10 @@ public class TreeDeletionGrainTests
 
         // Process each shard.
         await grain.ProcessNextShardAsync();
-        Assert.Equal(1, state.State.NextShardIndex);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(1));
 
         await grain.ProcessNextShardAsync();
-        Assert.Equal(2, state.State.NextShardIndex);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(2));
 
         // Verify all shards were purged.
         for (int i = 0; i < ShardCount; i++)
@@ -158,7 +158,7 @@ public class TreeDeletionGrainTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task ProcessNextShard_completes_purge_after_all_shards()
     {
         var (grain, state, _, _, _) = CreateGrain();
@@ -172,11 +172,11 @@ public class TreeDeletionGrainTests
 
         // The next call should complete the purge.
         await grain.ProcessNextShardAsync();
-        Assert.True(state.State.PurgeComplete);
-        Assert.False(state.State.PurgeInProgress);
+        Assert.That(state.State.PurgeComplete, Is.True);
+        Assert.That(state.State.PurgeInProgress, Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task ProcessNextShard_retries_failed_shard_once_then_skips()
     {
         var options = new LatticeOptions { ShardCount = ShardCount, SoftDeleteDuration = TimeSpan.FromHours(1) };
@@ -192,16 +192,16 @@ public class TreeDeletionGrainTests
 
         // First attempt — retry counter incremented.
         await grain.ProcessNextShardAsync();
-        Assert.Equal(0, state.State.NextShardIndex);
-        Assert.Equal(1, state.State.ShardRetries);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(0));
+        Assert.That(state.State.ShardRetries, Is.EqualTo(1));
 
         // Second attempt — retries exhausted, skip to next shard.
         await grain.ProcessNextShardAsync();
-        Assert.Equal(1, state.State.NextShardIndex);
-        Assert.Equal(0, state.State.ShardRetries);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(1));
+        Assert.That(state.State.ShardRetries, Is.EqualTo(0));
     }
 
-    [Fact]
+    [Test]
     public async Task Purge_resumes_from_persisted_shard_index()
     {
         var existingState = new FakePersistentState<TreeDeletionState>();
@@ -225,14 +225,14 @@ public class TreeDeletionGrainTests
 
     // --- RecoverAsync ---
 
-    [Fact]
+    [Test]
     public async Task Recover_throws_if_tree_not_deleted()
     {
         var (grain, _, _, _, _) = CreateGrain();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => grain.RecoverAsync());
+        Assert.ThrowsAsync<InvalidOperationException>(() => grain.RecoverAsync());
     }
 
-    [Fact]
+    [Test]
     public async Task Recover_throws_if_purge_complete()
     {
         var existingState = new FakePersistentState<TreeDeletionState>();
@@ -240,10 +240,10 @@ public class TreeDeletionGrainTests
         existingState.State.PurgeComplete = true;
 
         var (grain, _, _, _, _) = CreateGrain(existingState: existingState);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => grain.RecoverAsync());
+        Assert.ThrowsAsync<InvalidOperationException>(() => grain.RecoverAsync());
     }
 
-    [Fact]
+    [Test]
     public async Task Recover_throws_if_purge_in_progress()
     {
         var existingState = new FakePersistentState<TreeDeletionState>();
@@ -251,10 +251,10 @@ public class TreeDeletionGrainTests
         existingState.State.PurgeInProgress = true;
 
         var (grain, _, _, _, _) = CreateGrain(existingState: existingState);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => grain.RecoverAsync());
+        Assert.ThrowsAsync<InvalidOperationException>(() => grain.RecoverAsync());
     }
 
-    [Fact]
+    [Test]
     public async Task Recover_unmarks_all_shards_and_clears_state()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
@@ -262,8 +262,8 @@ public class TreeDeletionGrainTests
 
         await grain.RecoverAsync();
 
-        Assert.False(state.State.IsDeleted);
-        Assert.Null(state.State.DeletedAtUtc);
+        Assert.That(state.State.IsDeleted, Is.False);
+        Assert.That(state.State.DeletedAtUtc, Is.Null);
 
         for (int i = 0; i < ShardCount; i++)
         {
@@ -272,7 +272,7 @@ public class TreeDeletionGrainTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task Recover_unregisters_reminders()
     {
         var (grain, _, reminderRegistry, _, _) = CreateGrain();
@@ -291,7 +291,7 @@ public class TreeDeletionGrainTests
         await reminderRegistry.Received().UnregisterReminder(Arg.Any<GrainId>(), deletionReminder);
     }
 
-    [Fact]
+    [Test]
     public async Task DeleteTree_unregisters_compaction_reminder()
     {
         var (grain, _, _, grainFactory, _) = CreateGrain();
@@ -302,7 +302,7 @@ public class TreeDeletionGrainTests
         await compaction.Received(1).UnregisterReminderAsync();
     }
 
-    [Fact]
+    [Test]
     public async Task Recover_reinstates_compaction_reminder()
     {
         var (grain, _, _, grainFactory, _) = CreateGrain();
@@ -314,17 +314,17 @@ public class TreeDeletionGrainTests
         await compaction.Received(1).EnsureReminderAsync();
     }
 
-    [Fact]
+    [Test]
     public async Task DeleteTree_compaction_unregister_failure_propagates()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
         var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
         compaction.UnregisterReminderAsync().Returns(Task.FromException(new Exception("Compaction grain unavailable")));
 
-        await Assert.ThrowsAsync<Exception>(() => grain.DeleteTreeAsync());
+        Assert.ThrowsAsync<Exception>(() => grain.DeleteTreeAsync());
     }
 
-    [Fact]
+    [Test]
     public async Task Recover_compaction_reinstate_failure_propagates()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
@@ -333,19 +333,19 @@ public class TreeDeletionGrainTests
         var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
         compaction.EnsureReminderAsync().Returns(Task.FromException(new Exception("Compaction grain unavailable")));
 
-        await Assert.ThrowsAsync<Exception>(() => grain.RecoverAsync());
+        Assert.ThrowsAsync<Exception>(() => grain.RecoverAsync());
     }
 
     // --- PurgeNowAsync ---
 
-    [Fact]
+    [Test]
     public async Task PurgeNow_throws_if_tree_not_deleted()
     {
         var (grain, _, _, _, _) = CreateGrain();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => grain.PurgeNowAsync());
+        Assert.ThrowsAsync<InvalidOperationException>(() => grain.PurgeNowAsync());
     }
 
-    [Fact]
+    [Test]
     public async Task PurgeNow_throws_if_already_purged()
     {
         var existingState = new FakePersistentState<TreeDeletionState>();
@@ -353,10 +353,10 @@ public class TreeDeletionGrainTests
         existingState.State.PurgeComplete = true;
 
         var (grain, _, _, _, _) = CreateGrain(existingState: existingState);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => grain.PurgeNowAsync());
+        Assert.ThrowsAsync<InvalidOperationException>(() => grain.PurgeNowAsync());
     }
 
-    [Fact]
+    [Test]
     public async Task PurgeNow_purges_all_shards_and_marks_complete()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
@@ -364,8 +364,8 @@ public class TreeDeletionGrainTests
 
         await grain.PurgeNowAsync();
 
-        Assert.True(state.State.PurgeComplete);
-        Assert.False(state.State.PurgeInProgress);
+        Assert.That(state.State.PurgeComplete, Is.True);
+        Assert.That(state.State.PurgeInProgress, Is.False);
 
         for (int i = 0; i < ShardCount; i++)
         {

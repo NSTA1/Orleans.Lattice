@@ -73,7 +73,7 @@ public class TombstoneCompactionGrainTests
 
     // --- EnsureReminderAsync ---
 
-    [Fact]
+    [Test]
     public async Task EnsureReminder_registers_reminder_with_clamped_period()
     {
         var (grain, _, reminderRegistry, _, _) = CreateGrain();
@@ -87,7 +87,7 @@ public class TombstoneCompactionGrainTests
             Arg.Any<TimeSpan>());
     }
 
-    [Fact]
+    [Test]
     public async Task EnsureReminder_clamps_period_to_one_minute_minimum()
     {
         var options = new LatticeOptions
@@ -106,7 +106,7 @@ public class TombstoneCompactionGrainTests
             TimeSpan.FromMinutes(1));
     }
 
-    [Fact]
+    [Test]
     public async Task EnsureReminder_skips_when_compaction_disabled()
     {
         var options = new LatticeOptions
@@ -124,19 +124,19 @@ public class TombstoneCompactionGrainTests
 
     // --- BeginCompactionStateAsync ---
 
-    [Fact]
+    [Test]
     public async Task BeginCompaction_persists_InProgress_and_shard_index()
     {
         var (grain, state, _, _, _) = CreateGrain();
 
         await grain.BeginCompactionStateAsync(startFromShard: 3);
 
-        Assert.True(state.State.InProgress);
-        Assert.Equal(3, state.State.NextShardIndex);
-        Assert.Equal(0, state.State.ShardRetries);
+        Assert.That(state.State.InProgress, Is.True);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(3));
+        Assert.That(state.State.ShardRetries, Is.EqualTo(0));
     }
 
-    [Fact]
+    [Test]
     public async Task BeginCompaction_registers_keepalive_reminder()
     {
         var (grain, _, reminderRegistry, _, _) = CreateGrain();
@@ -152,7 +152,7 @@ public class TombstoneCompactionGrainTests
 
     // --- ProcessNextShardAsync ---
 
-    [Fact]
+    [Test]
     public async Task ProcessNextShard_compacts_leaves_and_advances_index()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
@@ -162,14 +162,14 @@ public class TombstoneCompactionGrainTests
         await grain.BeginCompactionStateAsync(startFromShard: 0);
         await grain.ProcessNextShardAsync();
 
-        Assert.Equal(1, state.State.NextShardIndex);
-        Assert.Equal(0, state.State.ShardRetries);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(1));
+        Assert.That(state.State.ShardRetries, Is.EqualTo(0));
 
         var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
         await leaf.Received(1).CompactTombstonesAsync(Arg.Any<TimeSpan>());
     }
 
-    [Fact]
+    [Test]
     public async Task ProcessNextShard_walks_entire_leaf_chain()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
@@ -189,7 +189,7 @@ public class TombstoneCompactionGrainTests
             .CompactTombstonesAsync(Arg.Any<TimeSpan>());
     }
 
-    [Fact]
+    [Test]
     public async Task ProcessNextShard_skips_empty_shard()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
@@ -198,10 +198,10 @@ public class TombstoneCompactionGrainTests
         await grain.BeginCompactionStateAsync(startFromShard: 0);
         await grain.ProcessNextShardAsync();
 
-        Assert.Equal(1, state.State.NextShardIndex);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(1));
     }
 
-    [Fact]
+    [Test]
     public async Task ProcessNextShard_retries_on_first_failure()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
@@ -213,11 +213,11 @@ public class TombstoneCompactionGrainTests
         await grain.ProcessNextShardAsync();
 
         // Should have incremented retries, not shard index.
-        Assert.Equal(0, state.State.NextShardIndex);
-        Assert.Equal(1, state.State.ShardRetries);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(0));
+        Assert.That(state.State.ShardRetries, Is.EqualTo(1));
     }
 
-    [Fact]
+    [Test]
     public async Task ProcessNextShard_skips_shard_after_exhausting_retries()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
@@ -229,16 +229,16 @@ public class TombstoneCompactionGrainTests
 
         // First call: retry.
         await grain.ProcessNextShardAsync();
-        Assert.Equal(0, state.State.NextShardIndex);
-        Assert.Equal(1, state.State.ShardRetries);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(0));
+        Assert.That(state.State.ShardRetries, Is.EqualTo(1));
 
         // Second call: skip.
         await grain.ProcessNextShardAsync();
-        Assert.Equal(1, state.State.NextShardIndex);
-        Assert.Equal(0, state.State.ShardRetries);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(1));
+        Assert.That(state.State.ShardRetries, Is.EqualTo(0));
     }
 
-    [Fact]
+    [Test]
     public async Task ProcessNextShard_processes_shards_sequentially()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
@@ -250,15 +250,15 @@ public class TombstoneCompactionGrainTests
         await grain.BeginCompactionStateAsync(startFromShard: 0);
 
         await grain.ProcessNextShardAsync(); // shard 0
-        Assert.Equal(1, state.State.NextShardIndex);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(1));
 
         await grain.ProcessNextShardAsync(); // shard 1
-        Assert.Equal(2, state.State.NextShardIndex);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(2));
     }
 
     // --- CompleteCompactionAsync ---
 
-    [Fact]
+    [Test]
     public async Task CompleteCompaction_resets_state()
     {
         var (grain, state, reminderRegistry, _, _) = CreateGrain();
@@ -268,12 +268,12 @@ public class TombstoneCompactionGrainTests
         await grain.BeginCompactionStateAsync(startFromShard: 5);
         await grain.CompleteCompactionAsync();
 
-        Assert.False(state.State.InProgress);
-        Assert.Equal(0, state.State.NextShardIndex);
-        Assert.Equal(0, state.State.ShardRetries);
+        Assert.That(state.State.InProgress, Is.False);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(0));
+        Assert.That(state.State.ShardRetries, Is.EqualTo(0));
     }
 
-    [Fact]
+    [Test]
     public async Task CompleteCompaction_unregisters_keepalive_reminder()
     {
         var (grain, _, reminderRegistry, _, _) = CreateGrain();
@@ -288,7 +288,7 @@ public class TombstoneCompactionGrainTests
             .UnregisterReminder(Arg.Any<GrainId>(), mockReminder);
     }
 
-    [Fact]
+    [Test]
     public async Task CompleteCompaction_tolerates_missing_keepalive_reminder()
     {
         var (grain, state, reminderRegistry, _, _) = CreateGrain();
@@ -299,10 +299,10 @@ public class TombstoneCompactionGrainTests
         await grain.CompleteCompactionAsync();
 
         // Should not throw; state should still be cleaned up.
-        Assert.False(state.State.InProgress);
+        Assert.That(state.State.InProgress, Is.False);
     }
 
-    [Fact]
+    [Test]
     public async Task CompleteCompaction_tolerates_reminder_unregister_failure()
     {
         var (grain, state, reminderRegistry, _, _) = CreateGrain();
@@ -313,12 +313,12 @@ public class TombstoneCompactionGrainTests
         await grain.CompleteCompactionAsync();
 
         // Should not throw; state should still be cleaned up.
-        Assert.False(state.State.InProgress);
+        Assert.That(state.State.InProgress, Is.False);
     }
 
     // --- Full pass (begin → process all shards → complete) ---
 
-    [Fact]
+    [Test]
     public async Task Full_pass_compacts_all_shards_and_completes()
     {
         var (grain, state, reminderRegistry, grainFactory, _) = CreateGrain();
@@ -336,13 +336,13 @@ public class TombstoneCompactionGrainTests
         await grain.ProcessNextShardAsync(); // shard 1
         await grain.ProcessNextShardAsync(); // triggers completion
 
-        Assert.False(state.State.InProgress);
-        Assert.Equal(0, state.State.NextShardIndex);
+        Assert.That(state.State.InProgress, Is.False);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(0));
     }
 
     // --- Recovery (keepalive resume) ---
 
-    [Fact]
+    [Test]
     public async Task Recovery_resumes_from_persisted_shard_index()
     {
         // Simulate a grain that was mid-compaction when silo restarted.
@@ -361,18 +361,18 @@ public class TombstoneCompactionGrainTests
         // Simulate: the keepalive fires, grain detects InProgress, resumes.
         await grain.BeginCompactionStateAsync(startFromShard: state.State.NextShardIndex);
 
-        Assert.Equal(1, state.State.NextShardIndex); // still at shard 1
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(1)); // still at shard 1
 
         await grain.ProcessNextShardAsync(); // process shard 1
-        Assert.Equal(2, state.State.NextShardIndex);
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(2));
 
         await grain.ProcessNextShardAsync(); // all done → complete
-        Assert.False(state.State.InProgress);
+        Assert.That(state.State.InProgress, Is.False);
     }
 
     // --- Passes grace period to leaves ---
 
-    [Fact]
+    [Test]
     public async Task ProcessNextShard_passes_configured_grace_period_to_leaves()
     {
         var gracePeriod = TimeSpan.FromHours(12);

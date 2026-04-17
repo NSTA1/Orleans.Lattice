@@ -4,10 +4,25 @@ using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
-[Collection(FaultInjectionClusterCollection.Name)]
-public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
+[TestFixture]
+public class FaultInjectionStorageTests
 {
-    private readonly TestCluster _cluster = fixture.Cluster;
+    private FaultInjectionClusterFixture _fixture = null!;
+    private TestCluster _cluster = null!;
+
+    [OneTimeSetUp]
+    public async Task OneTimeSetUp()
+    {
+        _fixture = new FaultInjectionClusterFixture();
+        await _fixture.InitializeAsync();
+        _cluster = _fixture.Cluster;
+    }
+
+    [OneTimeTearDown]
+    public async Task OneTimeTearDown()
+    {
+        await _fixture.DisposeAsync();
+    }
 
     /// <summary>
     /// Helper to get the fault-injection grain for the Lattice storage provider.
@@ -19,7 +34,7 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
     // Leaf split recovery after storage fault
     // -----------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task Leaf_split_recovers_after_write_fault_and_all_keys_are_readable()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(FaultInjectionClusterFixture.TreeName);
@@ -61,8 +76,8 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
         for (int i = 0; i <= limit; i++)
         {
             var result = await tree.GetAsync($"lsr-{i:D4}");
-            Assert.NotNull(result);
-            Assert.Equal($"v-{i}", Encoding.UTF8.GetString(result));
+            Assert.That(result, Is.Not.Null);
+            Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"v-{i}"));
         }
     }
 
@@ -70,7 +85,7 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
     // Multiple splits after fault — system stabilizes
     // -----------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task Multiple_splits_after_fault_stabilize_and_data_is_consistent()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(
@@ -119,8 +134,8 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
         for (int i = 0; i < totalKeys; i++)
         {
             var result = await tree.GetAsync($"ms-{i:D4}");
-            Assert.NotNull(result);
-            Assert.Equal($"v-{i}", Encoding.UTF8.GetString(result));
+            Assert.That(result, Is.Not.Null);
+            Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"v-{i}"));
         }
     }
 
@@ -128,7 +143,7 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
     // Idempotent split promotion — duplicate AcceptSplit is harmless
     // -----------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task Split_result_is_idempotent_when_replayed_through_tree()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(
@@ -145,8 +160,8 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
         for (int i = 0; i < limit * 3; i++)
         {
             var result = await tree.GetAsync($"id-{i:D4}");
-            Assert.NotNull(result);
-            Assert.Equal($"v-{i}", Encoding.UTF8.GetString(result));
+            Assert.That(result, Is.Not.Null);
+            Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"v-{i}"));
         }
     }
 
@@ -154,7 +169,7 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
     // Write fault on new sibling during split — sibling retains data on retry
     // -----------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task Data_survives_write_fault_on_sibling_during_split()
     {
         var treeName = $"{FaultInjectionClusterFixture.TreeName}-sib";
@@ -175,15 +190,15 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
         await tree.SetAsync(upperKey, Encoding.UTF8.GetBytes("updated"));
 
         var result = await tree.GetAsync(upperKey);
-        Assert.NotNull(result);
-        Assert.Equal("updated", Encoding.UTF8.GetString(result));
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("updated"));
     }
 
     // -----------------------------------------------------------------------
     // Tombstones survive leaf splits
     // -----------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task Tombstones_survive_leaf_split()
     {
         var treeName = $"{FaultInjectionClusterFixture.TreeName}-tomb";
@@ -204,13 +219,13 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
 
         // The deleted key must still be absent (tombstone preserved across split).
         var result = await tree.GetAsync($"tb-{limit - 1:D4}");
-        Assert.Null(result);
+        Assert.That(result, Is.Null);
 
         // Other keys should be present.
         for (int i = 0; i < limit - 1; i++)
         {
             var r = await tree.GetAsync($"tb-{i:D4}");
-            Assert.NotNull(r);
+            Assert.That(r, Is.Not.Null);
         }
     }
 
@@ -218,7 +233,7 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
     // Deep tree traversal (3+ levels) still routes correctly
     // -----------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task Deep_tree_traversal_routes_correctly_after_many_splits()
     {
         var treeName = $"{FaultInjectionClusterFixture.TreeName}-deep";
@@ -238,8 +253,8 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
         for (int i = 0; i < totalKeys; i++)
         {
             var result = await tree.GetAsync($"deep-{i:D4}");
-            Assert.NotNull(result);
-            Assert.Equal($"v-{i}", Encoding.UTF8.GetString(result));
+            Assert.That(result, Is.Not.Null);
+            Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"v-{i}"));
         }
     }
 
@@ -247,7 +262,7 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
     // Cache reflects correct data after split (no stale entries)
     // -----------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task Cache_returns_correct_data_after_leaf_split()
     {
         var treeName = $"{FaultInjectionClusterFixture.TreeName}-cache";
@@ -274,11 +289,11 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
         for (int i = 0; i <= limit; i++)
         {
             var result = await tree.GetAsync($"ca-{i:D4}");
-            Assert.NotNull(result);
+            Assert.That(result, Is.Not.Null);
             if (i == limit)
-                Assert.Equal("updated", Encoding.UTF8.GetString(result));
+                Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("updated"));
             else
-                Assert.Equal($"v-{i}", Encoding.UTF8.GetString(result));
+                Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"v-{i}"));
         }
     }
 
@@ -286,7 +301,7 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
     // Deterministic root leaf — same shard always produces same GrainId
     // -----------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task Deterministic_root_leaf_is_reachable_after_shard_reinitializes()
     {
         // Two independent reads to the same shard should resolve
@@ -300,15 +315,15 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
         // Read it back — internally this goes through a potentially different
         // cache activation, but the shard root must route to the same leaf.
         var result = await tree.GetAsync("det-key");
-        Assert.NotNull(result);
-        Assert.Equal("det-value", Encoding.UTF8.GetString(result));
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("det-value"));
     }
 
     // -----------------------------------------------------------------------
     // ShardRootGrain retry — write succeeds despite a transient fault
     // -----------------------------------------------------------------------
 
-    [Fact]
+    [Test]
     public async Task Write_succeeds_after_transient_storage_fault_via_retry()
     {
         var treeName = $"{FaultInjectionClusterFixture.TreeName}-retry";
@@ -329,11 +344,11 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
         await tree.SetAsync("retry-key", Encoding.UTF8.GetBytes("retry-value"));
 
         var result = await tree.GetAsync("retry-key");
-        Assert.NotNull(result);
-        Assert.Equal("retry-value", Encoding.UTF8.GetString(result));
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("retry-value"));
     }
 
-    [Fact]
+    [Test]
     public async Task Delete_succeeds_after_transient_storage_fault_via_retry()
     {
         var treeName = $"{FaultInjectionClusterFixture.TreeName}-retry-del";
@@ -349,10 +364,10 @@ public class FaultInjectionStorageTests(FaultInjectionClusterFixture fixture)
 
         // Delete should succeed via retry.
         var deleted = await tree.DeleteAsync("del-key");
-        Assert.True(deleted);
+        Assert.That(deleted, Is.True);
 
         var result = await tree.GetAsync("del-key");
-        Assert.Null(result);
+        Assert.That(result, Is.Null);
     }
 
     // -----------------------------------------------------------------------
