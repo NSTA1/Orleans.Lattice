@@ -95,17 +95,23 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <summary>
     /// Returns the sorted list of live (non-tombstoned) keys in this leaf
     /// that fall within the optional [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
+    /// If <paramref name="afterExclusive"/> is provided, only keys strictly greater than
+    /// that value are returned. If <paramref name="beforeExclusive"/> is provided, only keys
+    /// strictly less than that value are returned. These parameters support continuation-token
+    /// pagination to avoid transferring keys that will be discarded by the caller.
     /// </summary>
-    Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null);
+    Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null);
 
     /// <summary>
     /// Returns the sorted list of live (non-tombstoned) key-value pairs in this leaf
     /// that fall within the optional [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
     /// If <paramref name="afterExclusive"/> is provided, only entries with keys strictly
-    /// greater than that value are returned (used for continuation-token pagination to
-    /// avoid transferring values that will be discarded by the caller).
+    /// greater than that value are returned. If <paramref name="beforeExclusive"/> is provided,
+    /// only entries with keys strictly less than that value are returned. These parameters
+    /// support continuation-token pagination to avoid transferring values that will be
+    /// discarded by the caller.
     /// </summary>
-    Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null);
+    Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null);
 
     /// <summary>
     /// Removes tombstones whose wall-clock age exceeds <paramref name="gracePeriod"/>.

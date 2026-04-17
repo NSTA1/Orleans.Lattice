@@ -111,6 +111,199 @@ public partial class BPlusLeafGrainTests
         Assert.That(keys, Is.EqualTo(new[] { "a", "b" }));
     }
 
+    // --- GetKeysAsync afterExclusive ---
+
+    [Test]
+    public async Task GetKeys_afterExclusive_skips_keys_at_or_below_token()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        var keys = await grain.GetKeysAsync(afterExclusive: "b");
+        Assert.That(keys, Is.EqualTo(new[] { "c", "d" }));
+    }
+
+    [Test]
+    public async Task GetKeys_afterExclusive_combined_with_range()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+        await grain.SetAsync("e", Encoding.UTF8.GetBytes("5"));
+
+        var keys = await grain.GetKeysAsync(startInclusive: "a", endExclusive: "e", afterExclusive: "b");
+        Assert.That(keys, Is.EqualTo(new[] { "c", "d" }));
+    }
+
+    [Test]
+    public async Task GetKeys_afterExclusive_null_returns_all()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+
+        var keys = await grain.GetKeysAsync(afterExclusive: null);
+        Assert.That(keys, Is.EqualTo(new[] { "a", "b" }));
+    }
+
+    [Test]
+    public async Task GetKeys_afterExclusive_beyond_all_keys_returns_empty()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+
+        var keys = await grain.GetKeysAsync(afterExclusive: "z");
+        Assert.That(keys, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetKeys_afterExclusive_equal_to_key_skips_that_key()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+
+        var keys = await grain.GetKeysAsync(afterExclusive: "a");
+        Assert.That(keys, Is.EqualTo(new[] { "b", "c" }));
+    }
+
+    // --- GetKeysAsync beforeExclusive ---
+
+    [Test]
+    public async Task GetKeys_beforeExclusive_skips_keys_at_or_above_token()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        var keys = await grain.GetKeysAsync(beforeExclusive: "c");
+        Assert.That(keys, Is.EqualTo(new[] { "a", "b" }));
+    }
+
+    [Test]
+    public async Task GetKeys_beforeExclusive_combined_with_range()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+        await grain.SetAsync("e", Encoding.UTF8.GetBytes("5"));
+
+        var keys = await grain.GetKeysAsync(startInclusive: "b", endExclusive: "e", beforeExclusive: "d");
+        Assert.That(keys, Is.EqualTo(new[] { "b", "c" }));
+    }
+
+    [Test]
+    public async Task GetKeys_beforeExclusive_null_returns_all()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+
+        var keys = await grain.GetKeysAsync(beforeExclusive: null);
+        Assert.That(keys, Is.EqualTo(new[] { "a", "b" }));
+    }
+
+    [Test]
+    public async Task GetKeys_beforeExclusive_below_all_keys_returns_empty()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("2"));
+
+        var keys = await grain.GetKeysAsync(beforeExclusive: "a");
+        Assert.That(keys, Is.Empty);
+    }
+
+    // --- GetEntriesAsync beforeExclusive ---
+
+    [Test]
+    public async Task GetEntries_beforeExclusive_skips_entries_at_or_above_token()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        var entries = await grain.GetEntriesAsync(beforeExclusive: "c");
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "a", "b" }));
+    }
+
+    [Test]
+    public async Task GetEntries_beforeExclusive_combined_with_range()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+        await grain.SetAsync("e", Encoding.UTF8.GetBytes("5"));
+
+        var entries = await grain.GetEntriesAsync(startInclusive: "b", endExclusive: "e", beforeExclusive: "d");
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "b", "c" }));
+    }
+
+    [Test]
+    public async Task GetEntries_beforeExclusive_null_returns_all()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+
+        var entries = await grain.GetEntriesAsync(beforeExclusive: null);
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "a", "b" }));
+    }
+
+    [Test]
+    public async Task GetEntries_beforeExclusive_below_all_keys_returns_empty()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("2"));
+
+        var entries = await grain.GetEntriesAsync(beforeExclusive: "a");
+        Assert.That(entries, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetEntries_afterExclusive_and_beforeExclusive_combined()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+        await grain.SetAsync("e", Encoding.UTF8.GetBytes("5"));
+
+        var entries = await grain.GetEntriesAsync(afterExclusive: "a", beforeExclusive: "d");
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "b", "c" }));
+    }
+
+    [Test]
+    public async Task GetKeys_afterExclusive_and_beforeExclusive_combined()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+        await grain.SetAsync("e", Encoding.UTF8.GetBytes("5"));
+
+        var keys = await grain.GetKeysAsync(afterExclusive: "a", beforeExclusive: "d");
+        Assert.That(keys, Is.EqualTo(new[] { "b", "c" }));
+    }
+
     // --- GetEntriesAsync ---
 
     [Test]
