@@ -42,7 +42,7 @@ public class BPlusLeafGrainTests
 
         var result = await grain.GetAsync("k1");
         Assert.That(result, Is.Not.Null);
-        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("v1"));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("v1"));
     }
 
     [Test]
@@ -453,7 +453,7 @@ public class BPlusLeafGrainTests
         var result = await grain.SetAsync("z", Encoding.UTF8.GetBytes("3"));
 
         Assert.That(result, Is.Not.Null);
-        Assert.That(result.PromotedKey, Is.EqualTo("m"));
+        Assert.That(result!.PromotedKey, Is.EqualTo("m"));
         Assert.That(result.NewSiblingId, Is.EqualTo(siblingId));
     }
 

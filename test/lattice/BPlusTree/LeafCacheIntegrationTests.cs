@@ -32,7 +32,7 @@ public class LeafCacheIntegrationTests
 
         var result = await router.GetAsync("ck1");
         Assert.That(result, Is.Not.Null);
-        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("cached-value"));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("cached-value"));
     }
 
     [Test]

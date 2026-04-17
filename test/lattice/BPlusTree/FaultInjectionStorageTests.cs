@@ -77,12 +77,12 @@ public class FaultInjectionStorageTests
         {
             var result = await tree.GetAsync($"lsr-{i:D4}");
             Assert.That(result, Is.Not.Null);
-            Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"v-{i}"));
+            Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo($"v-{i}"));
         }
     }
 
     // -----------------------------------------------------------------------
-    // Multiple splits after fault — system stabilizes
+    // Multiple splits after fault
     // -----------------------------------------------------------------------
 
     [Test]
@@ -135,12 +135,12 @@ public class FaultInjectionStorageTests
         {
             var result = await tree.GetAsync($"ms-{i:D4}");
             Assert.That(result, Is.Not.Null);
-            Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"v-{i}"));
+            Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo($"v-{i}"));
         }
     }
 
     // -----------------------------------------------------------------------
-    // Idempotent split promotion — duplicate AcceptSplit is harmless
+    // Idempotent split promotion
     // -----------------------------------------------------------------------
 
     [Test]
@@ -161,12 +161,12 @@ public class FaultInjectionStorageTests
         {
             var result = await tree.GetAsync($"id-{i:D4}");
             Assert.That(result, Is.Not.Null);
-            Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"v-{i}"));
+            Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo($"v-{i}"));
         }
     }
 
     // -----------------------------------------------------------------------
-    // Write fault on new sibling during split — sibling retains data on retry
+    // Write fault on new sibling during split
     // -----------------------------------------------------------------------
 
     [Test]
@@ -191,7 +191,7 @@ public class FaultInjectionStorageTests
 
         var result = await tree.GetAsync(upperKey);
         Assert.That(result, Is.Not.Null);
-        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("updated"));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("updated"));
     }
 
     // -----------------------------------------------------------------------
@@ -254,7 +254,7 @@ public class FaultInjectionStorageTests
         {
             var result = await tree.GetAsync($"deep-{i:D4}");
             Assert.That(result, Is.Not.Null);
-            Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"v-{i}"));
+            Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo($"v-{i}"));
         }
     }
 
@@ -291,9 +291,9 @@ public class FaultInjectionStorageTests
             var result = await tree.GetAsync($"ca-{i:D4}");
             Assert.That(result, Is.Not.Null);
             if (i == limit)
-                Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("updated"));
+                Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("updated"));
             else
-                Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo($"v-{i}"));
+                Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo($"v-{i}"));
         }
     }
 
@@ -316,7 +316,7 @@ public class FaultInjectionStorageTests
         // cache activation, but the shard root must route to the same leaf.
         var result = await tree.GetAsync("det-key");
         Assert.That(result, Is.Not.Null);
-        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("det-value"));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("det-value"));
     }
 
     // -----------------------------------------------------------------------
@@ -345,7 +345,7 @@ public class FaultInjectionStorageTests
 
         var result = await tree.GetAsync("retry-key");
         Assert.That(result, Is.Not.Null);
-        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("retry-value"));
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("retry-value"));
     }
 
     [Test]

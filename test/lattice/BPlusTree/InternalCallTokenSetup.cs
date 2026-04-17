@@ -18,6 +18,6 @@ public class InternalCallTokenSetup
     [OneTimeTearDown]
     public void ClearToken()
     {
-        RequestContext.Set(LatticeConstants.InternalCallTokenKey, null);
+        RequestContext.Set(LatticeConstants.InternalCallTokenKey, null!);
     }
 }
