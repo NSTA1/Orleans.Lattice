@@ -126,6 +126,75 @@ public class BPlusLeafGrainTests
         Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("resurrected"));
     }
 
+    // --- GetOrSetAsync ---
+
+    [Test]
+    public async Task GetOrSet_sets_value_when_key_missing()
+    {
+        var grain = CreateGrain();
+        var result = await grain.GetOrSetAsync("k1", Encoding.UTF8.GetBytes("v1"));
+
+        Assert.That(result.ExistingValue, Is.Null);
+
+        var stored = await grain.GetAsync("k1");
+        Assert.That(Encoding.UTF8.GetString(stored!), Is.EqualTo("v1"));
+    }
+
+    [Test]
+    public async Task GetOrSet_returns_existing_value_when_key_live()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("k1", Encoding.UTF8.GetBytes("original"));
+
+        var result = await grain.GetOrSetAsync("k1", Encoding.UTF8.GetBytes("ignored"));
+
+        Assert.That(result.ExistingValue, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result.ExistingValue!), Is.EqualTo("original"));
+        Assert.That(result.Split, Is.Null);
+
+        // Value should not have changed.
+        var stored = await grain.GetAsync("k1");
+        Assert.That(Encoding.UTF8.GetString(stored!), Is.EqualTo("original"));
+    }
+
+    [Test]
+    public async Task GetOrSet_sets_value_when_key_tombstoned()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("k1", Encoding.UTF8.GetBytes("old"));
+        await grain.DeleteAsync("k1");
+
+        var result = await grain.GetOrSetAsync("k1", Encoding.UTF8.GetBytes("new"));
+
+        Assert.That(result.ExistingValue, Is.Null);
+
+        var stored = await grain.GetAsync("k1");
+        Assert.That(Encoding.UTF8.GetString(stored!), Is.EqualTo("new"));
+    }
+
+    [Test]
+    public async Task GetOrSet_does_not_persist_state_when_key_exists()
+    {
+        var fakeState = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(fakeState);
+        await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
+
+        var writeCountBefore = fakeState.WriteCount;
+        await grain.GetOrSetAsync("k1", Encoding.UTF8.GetBytes("ignored"));
+
+        Assert.That(fakeState.WriteCount, Is.EqualTo(writeCountBefore));
+    }
+
+    [Test]
+    public async Task GetOrSet_returns_null_split_when_under_capacity()
+    {
+        var grain = CreateGrain();
+        var result = await grain.GetOrSetAsync("k1", Encoding.UTF8.GetBytes("v1"));
+
+        Assert.That(result.ExistingValue, Is.Null);
+        Assert.That(result.Split, Is.Null);
+    }
+
     // --- DeleteAsync ---
 
     [Test]

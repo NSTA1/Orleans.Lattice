@@ -29,6 +29,14 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<SplitResult?> SetAsync(string key, byte[] value);
 
     /// <summary>
+    /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
+    /// already exist (or is tombstoned). Returns a <see cref="GetOrSetResult"/> containing
+    /// the existing value when the key is live, or <c>null</c> existing value when the
+    /// write was performed.
+    /// </summary>
+    Task<GetOrSetResult> GetOrSetAsync(string key, byte[] value);
+
+    /// <summary>
     /// Inserts or updates multiple key-value pairs.
     /// Returns the last <see cref="SplitResult"/> if any split occurred, otherwise <c>null</c>.
     /// </summary>

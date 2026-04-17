@@ -177,6 +177,52 @@ public class BPlusTreeIntegrationTests
         Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("new"));
     }
 
+    // --- GetOrSetAsync ---
+
+    [Test]
+    public async Task GetOrSet_sets_value_when_key_absent()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("getorset-absent");
+        var result = await tree.GetOrSetAsync("k1", Encoding.UTF8.GetBytes("v1"));
+
+        Assert.That(result, Is.Null);
+
+        var stored = await tree.GetAsync("k1");
+        Assert.That(stored, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(stored!), Is.EqualTo("v1"));
+    }
+
+    [Test]
+    public async Task GetOrSet_returns_existing_value_without_overwriting()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("getorset-existing");
+        await tree.SetAsync("k1", Encoding.UTF8.GetBytes("original"));
+
+        var result = await tree.GetOrSetAsync("k1", Encoding.UTF8.GetBytes("ignored"));
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("original"));
+
+        // Confirm the value was not overwritten.
+        var stored = await tree.GetAsync("k1");
+        Assert.That(Encoding.UTF8.GetString(stored!), Is.EqualTo("original"));
+    }
+
+    [Test]
+    public async Task GetOrSet_sets_value_after_delete()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("getorset-deleted");
+        await tree.SetAsync("k1", Encoding.UTF8.GetBytes("old"));
+        await tree.DeleteAsync("k1");
+
+        var result = await tree.GetOrSetAsync("k1", Encoding.UTF8.GetBytes("new"));
+
+        Assert.That(result, Is.Null);
+
+        var stored = await tree.GetAsync("k1");
+        Assert.That(Encoding.UTF8.GetString(stored!), Is.EqualTo("new"));
+    }
+
     // --- CountAsync ---
 
     [Test]

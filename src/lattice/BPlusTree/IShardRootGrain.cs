@@ -25,6 +25,13 @@ public interface IShardRootGrain : IGrainWithStringKey
     Task SetAsync(string key, byte[] value);
 
     /// <summary>
+    /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
+    /// already exist (or is tombstoned). Returns the existing value when the key is live,
+    /// or <c>null</c> when the write was performed.
+    /// </summary>
+    Task<byte[]?> GetOrSetAsync(string key, byte[] value);
+
+    /// <summary>
     /// Inserts or updates multiple key-value pairs in a single traversal batch.
     /// </summary>
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
