@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Orleans.Lattice;
 
 namespace Orleans.Lattice.Primitives;
@@ -9,6 +10,7 @@ namespace Orleans.Lattice.Primitives;
 [GenerateSerializer]
 [Alias(TypeAliases.LwwValue)]
 [Immutable]
+[EditorBrowsable(EditorBrowsableState.Never)]
 public readonly record struct LwwValue<T>
 {
     [Id(0)] public T? Value { get; init; }

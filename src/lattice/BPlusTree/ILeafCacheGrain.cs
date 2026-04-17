@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree;
@@ -7,6 +8,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// of the backing <see cref="IBPlusLeafGrain"/>.
 /// Multiple activations may exist across silos (stateless worker).
 /// </summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public interface ILeafCacheGrain : IGrainWithStringKey
 {
     /// <summary>

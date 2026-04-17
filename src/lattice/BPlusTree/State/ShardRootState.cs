@@ -47,6 +47,14 @@ internal sealed class ShardRootState
     /// throw <see cref="InvalidOperationException"/>.
     /// </summary>
     [Id(6)] public bool IsDeleted { get; set; }
+
+    /// <summary>
+    /// Whether this shard's tree has been registered in the
+    /// <see cref="LatticeConstants.RegistryTreeId"/> registry tree.
+    /// Set once on first write; avoids redundant registration calls on
+    /// subsequent operations.
+    /// </summary>
+    [Id(7)] public bool IsRegistered { get; set; }
 }
 
 /// <summary>

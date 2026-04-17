@@ -1184,4 +1184,47 @@ public class BPlusLeafGrainTests
         Assert.That(result, Is.Null);
         Assert.That(state.State.Entries, Has.Count.EqualTo(1));
     }
+
+    // --- GetLiveEntriesAsync ---
+
+    [Test]
+    public async Task GetLiveEntries_returns_empty_for_empty_leaf()
+    {
+        var grain = CreateGrain();
+
+        var result = await grain.GetLiveEntriesAsync();
+
+        Assert.That(result, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetLiveEntries_returns_only_live_entries()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("v1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("v2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("v3"));
+        await grain.DeleteAsync("b");
+
+        var result = await grain.GetLiveEntriesAsync();
+
+        Assert.That(result, Has.Count.EqualTo(2));
+        Assert.That(result.ContainsKey("a"), Is.True);
+        Assert.That(result.ContainsKey("c"), Is.True);
+        Assert.That(result.ContainsKey("b"), Is.False);
+    }
+
+    [Test]
+    public async Task GetLiveEntries_returns_all_entries_when_no_tombstones()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("x", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("y", Encoding.UTF8.GetBytes("2"));
+
+        var result = await grain.GetLiveEntriesAsync();
+
+        Assert.That(result, Has.Count.EqualTo(2));
+        Assert.That(Encoding.UTF8.GetString(result["x"]), Is.EqualTo("1"));
+        Assert.That(Encoding.UTF8.GetString(result["y"]), Is.EqualTo("2"));
+    }
 }

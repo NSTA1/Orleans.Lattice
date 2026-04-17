@@ -1,11 +1,13 @@
 namespace Orleans.Lattice.BPlusTree;
 
+using System.ComponentModel;
 using Orleans.Lattice.Primitives;
 
 /// <summary>
 /// A leaf node grain in the B+ tree. Stores key-value pairs as
 /// <see cref="Primitives.LwwValue{T}"/> entries for monotonic conflict resolution.
 /// </summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public interface IBPlusLeafGrain : IGrainWithGuidKey
 {
     /// <summary>Gets the value for <paramref name="key"/>, or <c>null</c> if absent/tombstoned.</summary>
@@ -85,6 +87,12 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// to skip redundant scans when no writes have occurred since the last compaction.
     /// </summary>
     Task<int> CompactTombstonesAsync(TimeSpan gracePeriod);
+
+    /// <summary>
+    /// Returns all live (non-tombstoned) key-value pairs in this leaf.
+    /// Used by the tree resize operation to drain entries before purging.
+    /// </summary>
+    Task<Dictionary<string, byte[]>> GetLiveEntriesAsync();
 
     /// <summary>
     /// Clears all persistent state for this grain and deactivates it.

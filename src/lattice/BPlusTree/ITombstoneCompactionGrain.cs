@@ -1,3 +1,5 @@
+using System.ComponentModel;
+
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
@@ -6,6 +8,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// Registers a single grain reminder whose period matches
 /// <see cref="LatticeOptions.TombstoneGracePeriod"/>.
 /// </summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public interface ITombstoneCompactionGrain : IGrainWithStringKey
 {
     /// <summary>

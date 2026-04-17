@@ -52,6 +52,10 @@ public class TreeDeletionGrainTests
         var compaction = Substitute.For<ITombstoneCompactionGrain>();
         grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId).Returns(compaction);
 
+        // Set up registry grain mock.
+        var registry = Substitute.For<ILatticeRegistry>();
+        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+
         var grain = new TreeDeletionGrain(
             context, grainFactory, reminderRegistry, optionsMonitor, new LoggerFactory().CreateLogger<TreeDeletionGrain>(), state);
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);

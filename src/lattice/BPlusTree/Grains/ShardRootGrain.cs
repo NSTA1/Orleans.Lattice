@@ -25,7 +25,41 @@ internal sealed partial class ShardRootGrain(
         return key[..key.LastIndexOf('/')];
     }
 
-    private LatticeOptions Options => optionsMonitor.Get(TreeId);
+    private LatticeOptions? _cachedOptions;
+
+    /// <summary>
+    /// Returns the effective options for this tree. On first access, checks the
+    /// registry for per-tree overrides; falls back to <see cref="IOptionsMonitor{LatticeOptions}"/>.
+    /// Cached for the grain's lifetime.
+    /// </summary>
+    private async Task<LatticeOptions> GetOptionsAsync()
+    {
+        if (_cachedOptions is not null) return _cachedOptions;
+
+        if (!TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var entry = await registry.GetEntryAsync(TreeId);
+            if (entry is not null)
+            {
+                var baseOptions = optionsMonitor.Get(TreeId);
+                _cachedOptions = new LatticeOptions
+                {
+                    MaxLeafKeys = entry.MaxLeafKeys ?? baseOptions.MaxLeafKeys,
+                    MaxInternalChildren = entry.MaxInternalChildren ?? baseOptions.MaxInternalChildren,
+                    ShardCount = entry.ShardCount ?? baseOptions.ShardCount,
+                    KeysPageSize = baseOptions.KeysPageSize,
+                    TombstoneGracePeriod = baseOptions.TombstoneGracePeriod,
+                    SoftDeleteDuration = baseOptions.SoftDeleteDuration,
+                    CacheTtl = baseOptions.CacheTtl,
+                };
+                return _cachedOptions;
+            }
+        }
+
+        _cachedOptions = optionsMonitor.Get(TreeId);
+        return _cachedOptions;
+    }
 
     private static readonly ObjectPool<Stack<GrainId>> StackPool =
         new DefaultObjectPoolProvider().Create(new StackPoolPolicy());
@@ -241,6 +275,17 @@ internal sealed partial class ShardRootGrain(
     private async Task EnsureRootAsync()
     {
         if (state.State.RootNodeId is not null) return;
+
+        // Register the tree in the registry before creating the root node.
+        // This ensures the tree is discoverable before any data is written.
+        // System trees (e.g. the registry itself) skip self-registration.
+        if (!state.State.IsRegistered &&
+            !TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            await registry.RegisterAsync(TreeId);
+            state.State.IsRegistered = true;
+        }
 
         // Use a deterministic GrainId derived from this shard's own identity
         // so that a crash-retry reuses the same leaf instead of creating an orphan.
