@@ -364,4 +364,8 @@ internal sealed class TreeSnapshotGrain(
             logger.LogWarning(ex, "Failed to unregister snapshot keepalive reminder for tree {TreeId}", SourceTreeId);
         }
     }
+
+    /// <inheritdoc />
+    public Task<bool> IsCompleteAsync() =>
+        Task.FromResult(!state.State.InProgress);
 }

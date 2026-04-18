@@ -315,4 +315,8 @@ internal sealed class TreeResizeGrain(
             logger.LogWarning(ex, "Failed to unregister resize keepalive reminder for tree {TreeId}", TreeId);
         }
     }
+
+    /// <inheritdoc />
+    public Task<bool> IsCompleteAsync() =>
+        Task.FromResult(!state.State.InProgress);
 }

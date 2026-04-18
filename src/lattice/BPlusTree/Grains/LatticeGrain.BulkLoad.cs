@@ -87,4 +87,22 @@ internal sealed partial class LatticeGrain
         var merge = grainFactory.GetGrain<ITreeMergeGrain>(TreeId);
         await merge.MergeAsync(sourceTreeId);
     }
+
+    public async Task<bool> IsMergeCompleteAsync()
+    {
+        var merge = grainFactory.GetGrain<ITreeMergeGrain>(TreeId);
+        return await merge.IsCompleteAsync();
+    }
+
+    public async Task<bool> IsSnapshotCompleteAsync()
+    {
+        var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
+        return await snapshot.IsCompleteAsync();
+    }
+
+    public async Task<bool> IsResizeCompleteAsync()
+    {
+        var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
+        return await resize.IsCompleteAsync();
+    }
 }
