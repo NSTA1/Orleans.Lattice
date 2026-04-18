@@ -10,15 +10,15 @@ internal sealed partial class LatticeGrain
         string? endExclusive = null,
         bool reverse = false)
     {
-        var physicalTreeId = await GetPhysicalTreeIdAsync();
-        var shardCount = Options.ShardCount;
+        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        var physicalShards = shardMap.GetPhysicalShardIndices();
         var pageSize = Options.KeysPageSize;
 
-        var cursors = new EntriesCursor[shardCount];
-        var initTasks = new Task[shardCount];
-        for (int i = 0; i < shardCount; i++)
+        var cursors = new EntriesCursor[physicalShards.Count];
+        var initTasks = new Task[physicalShards.Count];
+        for (int i = 0; i < physicalShards.Count; i++)
         {
-            var shardKey = $"{physicalTreeId}/{i}";
+            var shardKey = $"{physicalTreeId}/{physicalShards[i]}";
             cursors[i] = new EntriesCursor(
                 grainFactory.GetGrain<IShardRootGrain>(shardKey),
                 startInclusive, endExclusive, pageSize, reverse);
@@ -31,7 +31,7 @@ internal sealed partial class LatticeGrain
             : StringComparer.Ordinal;
         var pq = new PriorityQueue<int, string>(comparer);
 
-        for (int i = 0; i < shardCount; i++)
+        for (int i = 0; i < physicalShards.Count; i++)
         {
             if (cursors[i].HasCurrent)
                 pq.Enqueue(i, cursors[i].Current.Key);

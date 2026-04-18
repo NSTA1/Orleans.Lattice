@@ -110,6 +110,23 @@ internal sealed class LatticeRegistryGrain(
         return entry?.PhysicalTreeId ?? treeId;
     }
 
+    public async Task<ShardMap?> GetShardMapAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        var entry = await GetEntryAsync(treeId);
+        return entry?.ShardMap;
+    }
+
+    public async Task SetShardMapAsync(string treeId, ShardMap map)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(map);
+
+        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var updated = existing with { ShardMap = map };
+        await UpdateAsync(treeId, updated);
+    }
+
     private static byte[] SerializeEntry(TreeRegistryEntry entry) =>
         JsonSerializer.SerializeToUtf8Bytes(entry, RegistryEntryContext.Default.TreeRegistryEntry);
 

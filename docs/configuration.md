@@ -50,6 +50,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | Option | Type | Default | Safe to change after data exists? |
 |---|---|---|---|
 | `ShardCount` | `int` | 64 | **No** |
+| `VirtualShardCount` | `int` | 4096 | **No** |
 | `MaxLeafKeys` | `int` | 128 | **No** |
 | `MaxInternalChildren` | `int` | 128 | **No** |
 | `KeysPageSize` | `int` | 512 | Yes |
@@ -60,9 +61,17 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 
 ### `ShardCount`
 
-The number of independent sub-trees the key space is divided into. Each key is assigned to a shard via `XxHash32(key) % ShardCount`. More shards mean more write parallelism (each shard is an independent grain with its own lock-free write path) but also more grains and a wider scatter-gather for global key scans.
+The number of independent sub-trees the key space is divided into. Each key is assigned to a shard via the per-tree [`ShardMap`](tree-registry.md#shard-map) — by default `ShardMap.CreateDefault(VirtualShardCount, ShardCount)` produces an identity mapping that is bit-for-bit equivalent to legacy `XxHash32(key) % ShardCount` routing. More shards mean more write parallelism (each shard is an independent grain with its own lock-free write path) but also more grains and a wider scatter-gather for global key scans.
 
-> **⚠️ Do not change after data exists.** Changing `ShardCount` changes the hash-to-shard mapping. Keys already stored under the old shard count will no longer be routable — reads will miss, writes will create duplicates in the wrong shard, and the tree will be in an inconsistent state. Choose a shard count before first use and keep it fixed for the lifetime of the tree.
+> **⚠️ Do not change after data exists.** Changing `ShardCount` changes the default shard map. Keys already stored under the old shard count will no longer be routable — reads will miss, writes will create duplicates in the wrong shard, and the tree will be in an inconsistent state. Choose a shard count before first use and keep it fixed for the lifetime of the tree.
+
+### `VirtualShardCount`
+
+The size of the virtual shard space (default 4096). Keys hash into `[0, VirtualShardCount)` and the per-tree [`ShardMap`](tree-registry.md#shard-map) collapses ranges of virtual slots onto physical shards. This indirection decouples logical key routing from the physical shard count, enabling future adaptive shard splitting without rehashing existing keys.
+
+`VirtualShardCount` must be ≥ `ShardCount` and divisible by `ShardCount` (validated at startup). The divisibility constraint guarantees that the default identity map preserves legacy `hash % ShardCount` routing exactly.
+
+> **⚠️ Do not change after data exists.** Changing `VirtualShardCount` changes the virtual-slot a key hashes to. Persisted shard maps reference virtual slots, so altering this value invalidates all existing routing. Choose a value before first use and keep it fixed.
 
 ### `MaxLeafKeys`
 
@@ -207,4 +216,3 @@ builder.UseOrleans(silo =>
         o.TombstoneGracePeriod = Timeout.InfiniteTimeSpan;
     });
 });
-```

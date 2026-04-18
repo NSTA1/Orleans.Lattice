@@ -8,26 +8,28 @@ internal sealed partial class LatticeGrain
     public async Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries)
     {
         ArgumentNullException.ThrowIfNull(entries);
-        var physicalTreeId = await GetPhysicalTreeIdAsync();
-        var shardCount = Options.ShardCount;
+        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        var physicalShards = shardMap.GetPhysicalShardIndices();
         var operationId = Guid.NewGuid().ToString("N");
 
-        var shardBuckets = new List<KeyValuePair<string, byte[]>>[shardCount];
-        for (int i = 0; i < shardCount; i++)
-            shardBuckets[i] = [];
+        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(physicalShards.Count);
+        foreach (var idx in physicalShards)
+            shardBuckets[idx] = [];
 
         foreach (var entry in entries)
-            shardBuckets[GetShardIndex(entry.Key, shardCount)].Add(entry);
+        {
+            var idx = shardMap.Resolve(entry.Key);
+            shardBuckets[idx].Add(entry);
+        }
 
         var tasks = new List<Task>();
-        for (int i = 0; i < shardCount; i++)
+        foreach (var (shardIdx, bucket) in shardBuckets)
         {
-            var bucket = shardBuckets[i];
             if (bucket.Count == 0) continue;
 
             bucket.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{i}");
-            tasks.Add(shard.BulkLoadAsync($"{operationId}-{i}", bucket));
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIdx}");
+            tasks.Add(shard.BulkLoadAsync($"{operationId}-{shardIdx}", bucket));
         }
 
         await Task.WhenAll(tasks);

@@ -77,4 +77,18 @@ public interface ILatticeRegistry : IGrainWithStringKey
     /// Returns <paramref name="treeId"/> itself if no alias is set.
     /// </summary>
     Task<string> ResolveAsync(string treeId);
+
+    /// <summary>
+    /// Returns the persisted <see cref="ShardMap"/> for <paramref name="treeId"/>,
+    /// or <c>null</c> if the tree uses the default identity map. Callers should
+    /// fall back to <see cref="ShardMap.CreateDefault"/> when this returns <c>null</c>.
+    /// </summary>
+    Task<ShardMap?> GetShardMapAsync(string treeId);
+
+    /// <summary>
+    /// Persists a custom <see cref="ShardMap"/> for <paramref name="treeId"/>.
+    /// Used by adaptive shard splits to retarget virtual slots to new physical
+    /// shards. Upserts the registry entry if the tree is not yet registered.
+    /// </summary>
+    Task SetShardMapAsync(string treeId, ShardMap map);
 }

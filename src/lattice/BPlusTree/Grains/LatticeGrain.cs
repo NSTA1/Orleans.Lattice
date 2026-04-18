@@ -20,6 +20,7 @@ internal sealed partial class LatticeGrain(
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
     private bool _compactionEnsured;
     private string? _physicalTreeId;
+    private ShardMap? _shardMap;
 
     public async Task<byte[]?> GetAsync(string key)
     {
@@ -257,14 +258,14 @@ internal sealed partial class LatticeGrain(
 
     private async Task<int> DeleteRangeAsyncCore(string startInclusive, string endExclusive)
     {
-        var physicalTreeId = await GetPhysicalTreeIdAsync();
-        var shardCount = Options.ShardCount;
+        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        var physicalShards = shardMap.GetPhysicalShardIndices();
 
-        // Fan out to all shards in parallel — any shard may contain keys in the range.
-        var tasks = new Task<int>[shardCount];
-        for (int i = 0; i < shardCount; i++)
+        // Fan out to all physical shards in parallel — any may contain keys in the range.
+        var tasks = new Task<int>[physicalShards.Count];
+        for (int i = 0; i < physicalShards.Count; i++)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{i}");
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
             tasks[i] = shard.DeleteRangeAsync(startInclusive, endExclusive);
         }
 
@@ -290,13 +291,13 @@ internal sealed partial class LatticeGrain(
 
     private async Task<int> CountAsyncCore()
     {
-        var physicalTreeId = await GetPhysicalTreeIdAsync();
-        var shardCount = Options.ShardCount;
+        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        var physicalShards = shardMap.GetPhysicalShardIndices();
 
-        var tasks = new Task<int>[shardCount];
-        for (int i = 0; i < shardCount; i++)
+        var tasks = new Task<int>[physicalShards.Count];
+        for (int i = 0; i < physicalShards.Count; i++)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{i}");
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
             tasks[i] = shard.CountAsync();
         }
 
@@ -322,20 +323,20 @@ internal sealed partial class LatticeGrain(
 
     private async Task<IReadOnlyList<int>> CountPerShardAsyncCore()
     {
-        var physicalTreeId = await GetPhysicalTreeIdAsync();
-        var shardCount = Options.ShardCount;
+        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        var physicalShards = shardMap.GetPhysicalShardIndices();
 
-        var tasks = new Task<int>[shardCount];
-        for (int i = 0; i < shardCount; i++)
+        var tasks = new Task<int>[physicalShards.Count];
+        for (int i = 0; i < physicalShards.Count; i++)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{i}");
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
             tasks[i] = shard.CountAsync();
         }
 
         await Task.WhenAll(tasks);
 
-        var counts = new int[shardCount];
-        for (int i = 0; i < shardCount; i++)
+        var counts = new int[physicalShards.Count];
+        for (int i = 0; i < physicalShards.Count; i++)
             counts[i] = tasks[i].Result;
         return counts;
     }
@@ -376,10 +377,39 @@ internal sealed partial class LatticeGrain(
 
     private async Task<IShardRootGrain> GetShardGrainAsync(string key)
     {
-        var physicalTreeId = await GetPhysicalTreeIdAsync();
-        var shardIndex = GetShardIndex(key, Options.ShardCount);
+        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        var shardIndex = shardMap.Resolve(key);
         var shardKey = $"{physicalTreeId}/{shardIndex}";
         return grainFactory.GetGrain<IShardRootGrain>(shardKey);
+    }
+
+    /// <summary>
+    /// Returns the routing context for this tree: the resolved physical tree
+    /// ID and the effective <see cref="ShardMap"/>. Both are cached for the
+    /// lifetime of this activation and invalidated together by
+    /// <see cref="TryInvalidateStaleAlias"/> when a downstream shard reports
+    /// the tree as deleted.
+    /// </summary>
+    private async Task<(string PhysicalTreeId, ShardMap Map)> GetRoutingAsync()
+    {
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
+        if (_shardMap is not null) return (physicalTreeId, _shardMap);
+
+        var options = Options;
+        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            // System trees never have a custom shard map; using the default
+            // also avoids a circular registry call.
+            _shardMap = ShardMap.CreateDefault(options.VirtualShardCount, options.ShardCount);
+        }
+        else
+        {
+            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            _shardMap = await registry.GetShardMapAsync(TreeId)
+                ?? ShardMap.CreateDefault(options.VirtualShardCount, options.ShardCount);
+        }
+
+        return (physicalTreeId, _shardMap);
     }
 
     /// <summary>
@@ -392,11 +422,14 @@ internal sealed partial class LatticeGrain(
     {
         if (_physicalTreeId is null) return false;
         _physicalTreeId = null;
+        _shardMap = null;
         return true;
     }
 
     /// <summary>
     /// Computes a stable shard index for the given key using XxHash32.
+    /// Provided for backward compatibility; new routing should go through
+    /// the per-tree <see cref="ShardMap"/> via <see cref="GetRoutingAsync"/>.
     /// </summary>
     internal static int GetShardIndex(string key, int shardCount) =>
         LatticeSharding.GetShardIndex(key, shardCount);
