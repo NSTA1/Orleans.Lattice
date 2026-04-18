@@ -56,6 +56,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | `TombstoneGracePeriod` | `TimeSpan` | 24 hours | Yes |
 | `SoftDeleteDuration` | `TimeSpan` | 72 hours | Yes |
 | `CacheTtl` | `TimeSpan` | `TimeSpan.Zero` (refresh on every read) | Yes |
+| `PrefetchKeysScan` | `bool` | `false` | Yes |
 
 ### `ShardCount`
 
@@ -135,6 +136,29 @@ siloBuilder.ConfigureLattice("realtime", o =>
 ```
 
 This option can be changed freely at any time. The new TTL takes effect on the next read. A value of `TimeSpan.Zero` preserves the original behaviour (refresh on every read).
+
+### `PrefetchKeysScan`
+
+When enabled, `KeysAsync` pre-fetches the next page from each shard in the background while the current page is being consumed by the k-way merge. This hides per-shard grain-call latency and can significantly reduce wall-clock time for large scans across many shards.
+
+```csharp
+// Enable globally
+siloBuilder.ConfigureLattice(o => o.PrefetchKeysScan = true);
+```
+
+Pre-fetch can also be controlled per-call via the `prefetch` parameter on `KeysAsync`, which overrides the global option:
+
+```csharp
+// Override for a single call regardless of global setting
+await foreach (var key in tree.KeysAsync(prefetch: true))
+{
+    // ...
+}
+```
+
+Because each pre-fetched page is held in memory until consumed, callers that abort iteration early (e.g. `Take(n)`) pay for pages they never read. For bounded scans, leave this disabled or pass `prefetch: false` explicitly.
+
+This option can be changed freely at any time.
 
 ## Storage Provider Name
 
