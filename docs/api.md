@@ -50,8 +50,10 @@ These methods are used during normal application flow to read, write, and enumer
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `GetAsync` | `Task<byte[]?> GetAsync(string key)` | Returns the value for `key`, or `null` if absent or tombstoned. Reads are served via a [stateless-worker cache](caching.md); `CacheTtl` controls how long cached entries are served before refreshing from the primary leaf. |
+| `GetWithVersionAsync` | `Task<VersionedValue> GetWithVersionAsync(string key)` | Returns the value and its `HybridLogicalClock` version for `key`, or a default `VersionedValue` with `null` value and zero version when absent/tombstoned. Use the returned version with `SetIfVersionAsync` for optimistic concurrency (CAS). Reads directly from the primary leaf (not cached) to ensure version freshness. |
 | `ExistsAsync` | `Task<bool> ExistsAsync(string key)` | Returns `true` if `key` exists and is not tombstoned. |
 | `SetAsync` | `Task SetAsync(string key, byte[] value)` | Inserts or updates the value for `key`. |
+| `SetIfVersionAsync` | `Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)` | Sets `key` to `value` only if the entry's current `HybridLogicalClock` matches `expectedVersion`. Returns `true` if the write was applied, `false` if the version did not match (another writer updated the key). For a new key, pass `HybridLogicalClock.Zero` as the expected version. Enables safe read-modify-write patterns without distributed locks. |
 | `GetOrSetAsync` | `Task<byte[]?> GetOrSetAsync(string key, byte[] value)` | Sets `key` to `value` only if the key does not already exist (or is tombstoned). Returns the existing value when the key is live, or `null` when the value was newly written. Avoids a read-then-write roundtrip by short-circuiting at the leaf grain. |
 | `DeleteAsync` | `Task<bool> DeleteAsync(string key)` | Tombstones `key`. Returns `true` if it was live. Tombstones are removed by [background compaction](tombstone-compaction.md). |
 
@@ -146,13 +148,20 @@ var user = await tree.GetAsync<User>("user:1");
 // Custom serializer:
 var serializer = new JsonLatticeSerializer<User>(new JsonSerializerOptions { ... });
 await tree.SetAsync("user:1", new User("Alice", 30), serializer);
+
+// Compare-and-swap (CAS):
+var versioned = await tree.GetWithVersionAsync<User>("user:1");
+var updated = versioned.Value! with { Age = 31 };
+bool success = await tree.SetIfVersionAsync("user:1", updated, versioned.Version);
 ```
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `GetAsync<T>` | `Task<T?> GetAsync<T>(this ILattice, string key, ILatticeSerializer<T>)` | Returns the deserialized value for `key`, or `default` if absent/tombstoned. |
+| `GetWithVersionAsync<T>` | `Task<Versioned<T>> GetWithVersionAsync<T>(this ILattice, string key, ILatticeSerializer<T>)` | Returns the deserialized value and its `HybridLogicalClock` version. Returns a `Versioned<T>` with `default` value and zero version when absent/tombstoned. |
 | `GetOrSetAsync<T>` | `Task<T?> GetOrSetAsync<T>(this ILattice, string key, T value, ILatticeSerializer<T>)` | Sets `key` to `value` only if absent/tombstoned. Returns the existing deserialized value when live, or `default` when newly written. |
 | `SetAsync<T>` | `Task SetAsync<T>(this ILattice, string key, T value, ILatticeSerializer<T>)` | Serializes and stores `value` under `key`. |
+| `SetIfVersionAsync<T>` | `Task<bool> SetIfVersionAsync<T>(this ILattice, string key, T value, HybridLogicalClock expectedVersion, ILatticeSerializer<T>)` | Serializes and conditionally writes `value` only if the entry's current version matches `expectedVersion`. Returns `true` if applied. |
 | `GetManyAsync<T>` | `Task<Dictionary<string, T>> GetManyAsync<T>(this ILattice, List<string> keys, ILatticeSerializer<T>)` | Fetches and deserializes multiple keys. Missing/tombstoned keys are omitted. |
 | `SetManyAsync<T>` | `Task SetManyAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and inserts/updates multiple entries in parallel. |
 | `BulkLoadAsync<T>` | `Task BulkLoadAsync<T>(this ILattice, IReadOnlyList<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and bulk-loads entries into an empty tree. |
@@ -206,6 +215,9 @@ Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Nev
 | `SnapshotPhase` | `ol.snp` | internal | Enum: `Locking`, `Copying`, `Unlocking`, `Completed`. |
 | `TreeDeletionState` | `ol.tds` | internal | Persistent state for soft-delete / purge tracking. |
 | `TreeMergeState` | `ol.tms` | internal | Persistent state tracking merge progress across source shards. |
+| `CasResult` | `ol.cas` | public (hidden) | Result of a compare-and-swap operation (success, current version, optional split). |
+| `VersionedValue` | `ol.vvl` | public (hidden) | A `byte[]` value paired with its `HybridLogicalClock` version for CAS reads. |
+| `Versioned<T>` | `ol.ver` | public (hidden) | A typed value paired with its `HybridLogicalClock` version (used by typed extensions). |
 
 ## Internal Grain Access Control
 

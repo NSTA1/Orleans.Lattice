@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using Orleans.Concurrency;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -32,6 +33,21 @@ internal sealed partial class LatticeGrain(
         {
             shard = await GetShardGrainAsync(key);
             return await shard.GetAsync(key);
+        }
+    }
+
+    public async Task<VersionedValue> GetWithVersionAsync(string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        var shard = await GetShardGrainAsync(key);
+        try
+        {
+            return await shard.GetWithVersionAsync(key);
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            shard = await GetShardGrainAsync(key);
+            return await shard.GetWithVersionAsync(key);
         }
     }
 
@@ -121,6 +137,23 @@ internal sealed partial class LatticeGrain(
         {
             shard = await GetShardGrainAsync(key);
             await shard.SetAsync(key, value);
+        }
+    }
+
+    public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(value);
+        await EnsureCompactionReminderAsync();
+        var shard = await GetShardGrainAsync(key);
+        try
+        {
+            return await shard.SetIfVersionAsync(key, value, expectedVersion);
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            shard = await GetShardGrainAsync(key);
+            return await shard.SetIfVersionAsync(key, value, expectedVersion);
         }
     }
 

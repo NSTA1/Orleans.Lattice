@@ -1,6 +1,8 @@
 using NSubstitute;
+using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Primitives;
 using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -285,5 +287,66 @@ public partial class LatticeGrainTests
     {
         var (grain, _) = CreateGrain();
         Assert.ThrowsAsync<ArgumentNullException>(() => grain.DeleteRangeAsync("a", null!));
+    }
+
+    // --- GetWithVersionAsync tests ---
+
+    [Test]
+    public void GetWithVersionAsync_throws_on_null_key()
+    {
+        var (grain, _) = CreateGrain();
+        Assert.ThrowsAsync<ArgumentNullException>(() => grain.GetWithVersionAsync(null!));
+    }
+
+    [Test]
+    public async Task GetWithVersionAsync_delegates_to_shard_root()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        var expected = new VersionedValue
+        {
+            Value = Encoding.UTF8.GetBytes("v1"),
+            Version = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 }
+        };
+        shardRoot.GetWithVersionAsync("k1").Returns(expected);
+
+        var result = await grain.GetWithVersionAsync("k1");
+
+        Assert.That(Encoding.UTF8.GetString(result.Value!), Is.EqualTo("v1"));
+        Assert.That(result.Version, Is.EqualTo(expected.Version));
+        await shardRoot.Received(1).GetWithVersionAsync("k1");
+    }
+
+    // --- SetIfVersionAsync tests ---
+
+    [Test]
+    public void SetIfVersionAsync_throws_on_null_key()
+    {
+        var (grain, _) = CreateGrain();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => grain.SetIfVersionAsync(null!, [1], HybridLogicalClock.Zero));
+    }
+
+    [Test]
+    public void SetIfVersionAsync_throws_on_null_value()
+    {
+        var (grain, _) = CreateGrain();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => grain.SetIfVersionAsync("k1", null!, HybridLogicalClock.Zero));
+    }
+
+    [Test]
+    public async Task SetIfVersionAsync_delegates_to_shard_root()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = SetupShardRoot(factory);
+        SetupCompactionGrain(factory, "my-tree");
+        var version = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 };
+        shardRoot.SetIfVersionAsync("k1", Arg.Any<byte[]>(), version).Returns(true);
+
+        var result = await grain.SetIfVersionAsync("k1", Encoding.UTF8.GetBytes("v1"), version);
+
+        Assert.That(result, Is.True);
+        await shardRoot.Received(1).SetIfVersionAsync("k1", Arg.Any<byte[]>(), version);
     }
 }

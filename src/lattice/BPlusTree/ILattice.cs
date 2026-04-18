@@ -1,5 +1,7 @@
 namespace Orleans.Lattice;
 
+using Orleans.Lattice.Primitives;
+
 /// <summary>
 /// Public entry point for a distributed B+ tree.
 /// A stateless-worker grain that routes requests to the correct shard root
@@ -10,6 +12,15 @@ public interface ILattice : IGrainWithStringKey
 {
     /// <summary>Gets the value associated with <paramref name="key"/>, or <c>null</c> if not found.</summary>
     Task<byte[]?> GetAsync(string key);
+
+    /// <summary>
+    /// Gets the value and its <see cref="HybridLogicalClock"/> version for
+    /// <paramref name="key"/>. Returns a <see cref="VersionedValue"/> with <c>null</c>
+    /// value and <see cref="HybridLogicalClock.Zero"/> version when the key is absent
+    /// or tombstoned. Use the returned version with <see cref="SetIfVersionAsync"/>
+    /// for optimistic concurrency.
+    /// </summary>
+    Task<VersionedValue> GetWithVersionAsync(string key);
 
     /// <summary>Returns <c>true</c> if <paramref name="key"/> exists and is not tombstoned.</summary>
     Task<bool> ExistsAsync(string key);
@@ -24,11 +35,14 @@ public interface ILattice : IGrainWithStringKey
     Task SetAsync(string key, byte[] value);
 
     /// <summary>
-    /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
-    /// already exist (or is tombstoned). Returns the existing value when the key is
-    /// already live, or <c>null</c> when the value was newly written.
+    /// Sets <paramref name="key"/> to <paramref name="value"/> only if the entry's
+    /// current <see cref="HybridLogicalClock"/> matches <paramref name="expectedVersion"/>.
+    /// Returns <c>true</c> if the write was applied, <c>false</c> if the version did not
+    /// match (another writer updated the key since it was read). Use
+    /// <see cref="GetWithVersionAsync"/> to obtain the current version for the first attempt.
+    /// For a new key, pass <see cref="HybridLogicalClock.Zero"/> as the expected version.
     /// </summary>
-    Task<byte[]?> GetOrSetAsync(string key, byte[] value);
+    Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion);
 
     /// <summary>
     /// Inserts or updates multiple key-value pairs, fanning out to shards in parallel.
