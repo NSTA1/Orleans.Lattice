@@ -383,7 +383,7 @@ public class ChaosWithFaultsIntegrationTests
         // ---- Quiescence: fault injector is stopped (cts fired). Any
         // remaining armed one-shot faults will be consumed by the next
         // write on their target. Retry healing writes until convergence.
-        await DrainAndHealAsync(tree, treeId, faultCtl, targets);
+        await DrainAndHealAsync(tree);
 
         // ---- Strong post-quiescence invariants.
         var finalCount = await tree.CountAsync();
@@ -437,11 +437,7 @@ public class ChaosWithFaultsIntegrationTests
     /// every universe key until three consecutive passes complete without
     /// a tolerated error. Bounded by <see cref="QuiescenceTimeout"/>.
     /// </summary>
-    private static async Task DrainAndHealAsync(
-        ILattice tree,
-        string treeId,
-        IStorageFaultGrain faultCtl,
-        IReadOnlyList<GrainId> targets)
+    private static async Task DrainAndHealAsync(ILattice tree)
     {
         var deadline = DateTime.UtcNow + QuiescenceTimeout;
         int cleanPasses = 0;

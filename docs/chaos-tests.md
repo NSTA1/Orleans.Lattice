@@ -21,14 +21,19 @@ Both tests live under `test/lattice/BPlusTree/` and use the
 
 ## The workload
 
-Both tests run the same parallel workload against a pinned 4-shard tree
-(`MaxLeafKeys = 4`, `MaxInternalChildren = 4` — aggressive limits so even
-small key counts trigger many splits) over a fixed key *universe*
-(`fchaos-00000` … `fchaos-00NNN`). The universe is seeded before the
-chaos window and its size never changes; writers only rewrite existing
+Both tests run a parallel workload against a pinned 4-shard tree with
+aggressive `MaxLeafKeys = 4` (so even small key counts trigger many
+leaf splits) over a fixed key *universe*. Writers only rewrite existing
 keys with monotonically-increasing values of the form
 `v-{keyIndex}-{writerId}-{seq}`. Any value matching that envelope proves
 the byte array is internally consistent.
+
+Fixture differences:
+
+| Test | Fixture | `MaxLeafKeys` | `MaxInternalChildren` | Key prefix | Universe |
+|---|---|---|---|---|---|
+| Happy-path | `FourShardClusterFixture` | 4 | default | `chaos-{i:D5}` | 500 |
+| Chaos + faults | `MultiShardFaultInjectionClusterFixture` | 4 | 4 | `fchaos-{i:D5}` | 200 |
 
 ```mermaid
 flowchart LR
@@ -150,7 +155,7 @@ sequenceDiagram
     participant Workers
     Test->>Tree: Seed universe (faults off)
     Test->>Injector: Start at p=faultProbability
-    Test->>Workers: Start 13 parallel workers + split coordinator
+    Test->>Workers: Start 12 role workers + split coordinator
     loop Chaos window (4 s)
         Injector-->>Tree: AddFaultOnWrite(random target)
         Workers-->>Tree: mixed reads/writes/scans/splits
@@ -233,7 +238,7 @@ in [shard-splitting.md](shard-splitting.md) and the architecture notes:
 | Duration | ~5 s chaos + ~1 s assert | ~4 s chaos + up to 15 s heal |
 | Wall-clock | ~8 s | ~20 s per `TestCase` (~80 s total) |
 | Universe size | 500 keys | 200 keys |
-| Parallel workers | 14 | 13 + fault injector |
+| Parallel workers | 16 (4 pw + 2 bw + 3 pr + 2 br + 2 sc + 2 ct + 1 split) | 14 (3 pw + 2 bw + 2 pr + 2 br + 2 sc + 1 ct + 1 split + 1 fault injector) |
 | Shards (initial / post) | 4 / up to ~8 | 4 / up to ~6 |
 
 ## See also
