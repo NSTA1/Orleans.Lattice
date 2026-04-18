@@ -41,4 +41,5 @@ internal static class TypeAliases
     internal const string CasResult = "ol.cas";
     internal const string Versioned = "ol.ver";
     internal const string VersionedValue = "ol.vvl";
+    internal const string ShardHotness = "ol.sh";
 }

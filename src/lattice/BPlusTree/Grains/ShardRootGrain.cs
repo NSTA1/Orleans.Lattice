@@ -75,30 +75,35 @@ internal sealed partial class ShardRootGrain(
     public async Task<byte[]?> GetAsync(string key)
     {
         await PrepareForOperationAsync();
+        RecordRead();
         return await TraverseForReadAsync(key);
     }
 
     public async Task<VersionedValue> GetWithVersionAsync(string key)
     {
         await PrepareForOperationAsync();
+        RecordRead();
         return await TraverseForReadWithVersionAsync(key);
     }
 
     public async Task<bool> ExistsAsync(string key)
     {
         await PrepareForOperationAsync();
+        RecordRead();
         return await TraverseForExistsAsync(key);
     }
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
         await PrepareForOperationAsync();
+        RecordRead();
         return await TraverseForBatchReadAsync(keys);
     }
 
     public async Task SetAsync(string key, byte[] value)
     {
         await PrepareForOperationAsync();
+        RecordWrite();
 
         for (int attempt = 0; ; attempt++)
         {
@@ -126,6 +131,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<byte[]?> GetOrSetAsync(string key, byte[] value)
     {
         await PrepareForOperationAsync();
+        RecordWrite();
 
         for (int attempt = 0; ; attempt++)
         {
@@ -160,6 +166,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
     {
         await PrepareForOperationAsync();
+        RecordWrite();
 
         for (int attempt = 0; ; attempt++)
         {
@@ -198,6 +205,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<bool> DeleteAsync(string key)
     {
         await PrepareForOperationAsync();
+        RecordWrite();
 
         for (int attempt = 0; ; attempt++)
         {
@@ -224,6 +232,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive)
     {
         await PrepareForOperationAsync();
+        RecordWrite();
 
         // Find the starting leaf for the range.
         GrainId leafId;
@@ -264,6 +273,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<int> CountAsync()
     {
         await PrepareForOperationAsync();
+        RecordRead();
 
         if (state.State.RootNodeId is null)
             return 0;
@@ -294,6 +304,7 @@ internal sealed partial class ShardRootGrain(
         string? continuationToken = null)
     {
         await PrepareForOperationAsync();
+        RecordRead();
 
         // Determine the starting leaf.
         var seekKey = continuationToken ?? startInclusive;
@@ -348,6 +359,7 @@ internal sealed partial class ShardRootGrain(
         string? continuationToken = null)
     {
         await PrepareForOperationAsync();
+        RecordRead();
 
         // Determine the starting leaf (rightmost, or the leaf for the seek key).
         var seekKey = continuationToken ?? endExclusive;
@@ -404,6 +416,7 @@ internal sealed partial class ShardRootGrain(
         string? continuationToken = null)
     {
         await PrepareForOperationAsync();
+        RecordRead();
 
         var seekKey = continuationToken ?? startInclusive;
         GrainId leafId;
@@ -456,6 +469,7 @@ internal sealed partial class ShardRootGrain(
         string? continuationToken = null)
     {
         await PrepareForOperationAsync();
+        RecordRead();
 
         var seekKey = continuationToken ?? endExclusive;
         GrainId leafId;
@@ -573,6 +587,7 @@ internal sealed partial class ShardRootGrain(
     public async Task MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries)
     {
         await PrepareForOperationAsync();
+        RecordWrite();
 
         // Reuse a single dictionary to avoid per-entry allocation.
         var single = new Dictionary<string, LwwValue<byte[]>>(1);

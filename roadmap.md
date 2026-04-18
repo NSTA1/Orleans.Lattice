@@ -19,13 +19,15 @@ Potential improvements and new features, organized by category.
 - [x] **F-009 — Parallel shard pre-fetch for `KeysAsync`**: Double-buffer the k-way merge by pre-fetching the next page from each shard in parallel, hiding per-shard latency during ordered key scans. Controlled via `LatticeOptions.PrefetchKeysScan` or the per-call `prefetch` parameter.
 - [ ] **F-024 — Parallel shard pre-fetch for `EntriesAsync`**: Extend the F-009 pre-fetch strategy to `EntriesAsync`. Because entries carry `byte[]` values, pre-fetched pages increase in-flight memory proportionally to `shardCount × pageSize × avgValueSize`. The implementation should be gated behind a dedicated option (e.g. `PrefetchEntriesScan`) or an optional `prefetch` parameter on `EntriesAsync` so callers can opt in only when the memory trade-off is acceptable.
 - [ ] **F-010 — Leaf-level write batching**: Coalesce concurrent `SetAsync` calls targeting the same leaf into a single `WriteStateAsync` (similar to a WAL flush group) to reduce storage I/O under write-heavy workloads.
-- [ ] **F-011 — Adaptive shard splitting**: Allow a hot shard to split into two at runtime without a full offline resize, enabling the tree to scale with workload growth.
+- [ ] **F-011 — Adaptive shard splitting**: Allow a hot shard to split into two at runtime without a full offline resize, enabling the tree to scale with workload growth. Requires F-013 (internal shard hotness counters to detect hot shards) and F-028 (shard map indirection to route keys to dynamically created shards).
+- [ ] **F-028 — Shard map indirection**: Replace the fixed `XxHash32 % shardCount` routing with a persistent `ShardMap` that maps virtual shard indices to physical `ShardRootGrain` identities. Hash into a large fixed virtual space (e.g. 4 096 slots); the shard map collapses ranges of virtual slots to physical shards. `LatticeGrain` caches the map in memory and invalidates on splits or resizes. This decouples logical key routing from the physical shard count, enabling F-011 (adaptive shard splitting) and simplifying F-019 (online resize). The map is persisted per-tree and updated transactionally during shard topology changes.
 - [ ] **F-012 — Warm cache on silo startup**: Optionally pre-warm `LeafCacheGrain` activations for recently-accessed leaves after a silo restart to reduce cold-start read-latency spikes.
 - [ ] **F-027 — Leaf-grouped merge routing**: `ShardRootGrain.MergeManyAsync` currently traverses the B+ tree once per entry, sending a single-entry dictionary to each leaf. Group entries by target leaf before calling `MergeManyAsync`, reducing tree traversals from O(n) to O(leaves) and collapsing multiple `WriteStateAsync` calls per leaf into one.
 
 ## Reliability & Observability
 
-- [ ] **F-013 — Metrics / telemetry integration**: Expose `System.Diagnostics.Metrics` counters and histograms (reads, writes, splits, cache hit/miss ratio, tombstone count, compaction duration, scan latency) for OpenTelemetry-compatible dashboards.
+- [x] **F-013 — Internal shard hotness counters**: Add volatile in-memory counters (`reads`, `writes`, `countersSince`) to `ShardRootGrain`, incremented on each operation at zero persistence cost. Expose a lightweight `GetHotnessAsync()` method on `IShardRootGrain` returning a `ShardHotness` struct so a split coordinator can poll all shards in parallel. Counters reset on grain deactivation (inactive shards are not hot). This is the minimum instrumentation F-011 needs to detect hot shards.
+- [ ] **F-029 — External metrics / telemetry export**: Publish `System.Diagnostics.Metrics` counters and histograms (reads, writes, splits, cache hit/miss ratio, tombstone count, compaction duration, scan latency) for OpenTelemetry-compatible dashboards. Instruments read from the same per-grain counters introduced in F-013, so F-013 is a prerequisite.
 - [ ] **F-014 — Tree diagnostics (`DiagnoseAsync`)**: Return per-shard health information — depth, live key count, tombstone ratio, pending splits/promotions — via an `ILatticeAdmin` interface or a method on `ILattice`.
 - [ ] **F-015 — Event notifications / observers**: Publish tree events (key written, tree deleted, split occurred, compaction completed) via an `ILatticeObserver` interface or Orleans Streams integration for event-driven architectures.
 
@@ -43,3 +45,11 @@ Potential improvements and new features, organized by category.
 - [ ] **F-021 — Migration guide**: Document how to migrate data from external stores (Redis, SQL, Cosmos DB) into Lattice using the streaming bulk-load API, including key-design and value-serialization best practices.
 - [ ] **F-022 — Troubleshooting guide (`docs/troubleshooting.md`)**: Cover common issues — storage provider exceptions from oversized grains, split storms, slow scans, stale cache behavior — and how to interpret diagnostic data.
 - [ ] **F-023 — Sample applications (`samples/`)**: End-to-end examples (e.g. ASP.NET Core session store, leaderboard, distributed configuration service) showing real integration patterns beyond the Quick Start snippet.
+
+## Dependencies
+
+| Feature | Depends on | Reason |
+|---|---|---|
+| F-011 (Adaptive shard splitting) | F-013 (Internal shard hotness counters) | `GetHotnessAsync()` is needed to detect hot shards and trigger splits. |
+| F-011 (Adaptive shard splitting) | F-028 (Shard map indirection) | Fixed `hash % shardCount` routing cannot address dynamically created shards; a shard map provides the required indirection. |
+| F-029 (External metrics / telemetry export) | F-013 (Internal shard hotness counters) | External `System.Diagnostics.Metrics` instruments read from the same in-grain counters introduced by F-013. |
