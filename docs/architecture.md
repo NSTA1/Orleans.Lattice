@@ -23,7 +23,7 @@ flowchart TD
     L3[LeafGrain]
 
     Client --> SR
-    SR -->|"XxHash32(key) % 64"| S0
+    SR -->|"ShardMap.Resolve(XxHash32 % 4096)"| S0
     SR --> S1
     SR --> SN
     S0 --> I0
@@ -57,7 +57,7 @@ Without sharding, every operation starts at a single root grain — a serialisat
 ```mermaid
 flowchart LR
     subgraph Router["LatticeGrain (stateless)"]
-        H["XxHash32(key) % 64"]
+        H["XxHash32(key) % VirtualShardCount<br/>→ ShardMap.Resolve"]
     end
 
     subgraph Shard0["Shard 0"]
@@ -100,13 +100,85 @@ If the shard root crashes between phases, `ResumePendingPromotionAsync` (called 
 
 ## Grain-to-Grain Mapping
 
+### Data-path grains
+
+These grains form the structural B+ tree and handle every read/write request:
+
 | B+ Tree Concept | Orleans Grain | Key Format | Persistent State |
 |---|---|---|---|
-| Shard router | `LatticeGrain` (`[StatelessWorker]`) | `{treeId}` | None (stateless) |
+| Shard router | `LatticeGrain` (`[StatelessWorker]`) | `{treeId}` | None (stateless). Caches the resolved `ShardMap` in memory; invalidated on stale-routing detection. |
 | Shard root | `ShardRootGrain` | `{treeId}/{shardIndex}` | `ShardRootState` — root node ID + leaf/internal flag + pending promotion + pending bulk graft + last completed bulk operation ID |
 | Internal node | `BPlusInternalGrain` | `Guid` | `InternalNodeState` — sorted children + HLC + split state |
 | Leaf node | `BPlusLeafGrain` | `Guid` | `LeafNodeState` — sorted LWW entries + sibling pointer + HLC + version vector + split state |
 | Leaf cache | `LeafCacheGrain` (`[StatelessWorker]`) | `{leafGrainId}` | None (in-memory LWW-map + version vector) |
+
+### Tree registry
+
+| Grain | Key Format | Storage |
+|---|---|---|
+| `LatticeRegistryGrain` | `_lattice_trees` (the `LatticeConstants.RegistryTreeId` constant) | **Self-hosting** — stores its data in a Lattice tree keyed `_lattice_trees`, so registry reads/writes flow through the same `LatticeGrain → ShardRootGrain → LeafGrain` path as user data. |
+
+The registry holds a `TreeRegistryEntry` per user tree, containing:
+
+- **`ShardMap`** — the per-tree mapping from virtual slots to physical shard indices. `null` until the first topology change (adaptive split or explicit `SetShardMapAsync`); `LatticeGrain` falls back to `ShardMap.CreateDefault(VirtualShardCount, ShardCount)` when absent.
+- **Config overrides** — per-tree `LatticeOptions` values (e.g. `MaxLeafKeys`, `ShardCount`) that override the global defaults.
+- **Tree alias** — an optional indirection from a logical tree name to a physical tree ID, used by `ResizeAsync` and `SnapshotAsync` to swap the backing tree atomically.
+- **Soft-delete metadata** — deletion timestamp and retention window for `DeleteTreeAsync` / `RecoverTreeAsync`.
+
+### Coordination grains
+
+Long-running or multi-step operations are managed by dedicated coordination grains. Each persists its progress and registers an Orleans reminder so that a silo crash mid-operation is recovered automatically on the next reminder tick. All are internal — external callers interact only through methods on `ILattice`.
+
+| Operation | Orleans Grain | Key Format | Persistent State | Reminder-driven |
+|---|---|---|---|---|
+| Adaptive shard split | `TreeShardSplitGrain` | `{treeId}/{shardIndex}` | `TreeShardSplitState` — source/dest shard, migrating slots, drain cursor, phase | Yes |
+| Hot-shard monitoring | `HotShardMonitorGrain` | `{treeId}` | None (polls `ShardRootGrain.GetHotnessAsync` on each tick) | Yes |
+| Tree merge | `TreeMergeGrain` | `{treeId}` | `TreeMergeState` — source tree, per-shard progress | Yes |
+| Snapshot | `TreeSnapshotGrain` | `{treeId}` | `TreeSnapshotState` — destination tree, per-shard progress, phase | Yes |
+| Resize | `TreeResizeGrain` | `{treeId}` | `TreeResizeState` — old/new tree IDs, sizing overrides, phase | Yes |
+| Soft delete / purge | `TreeDeletionGrain` | `{treeId}` | `TreeDeletionState` — deletion timestamp, retention, purge progress | Yes |
+| Tombstone compaction | `TombstoneCompactionGrain` | `{treeId}` | `TombstoneCompactionState` — per-shard compaction cursor | Yes |
+
+### Interaction diagram
+
+The following diagram shows how `ILattice` delegates to data-path and coordination grains, and how the registry self-hosts its own data through the same data path.
+
+```mermaid
+flowchart TD
+    Client([Client]) --> ILattice
+
+    subgraph "Data path"
+        ILattice --> ShardRoot[ShardRootGrain]
+        ShardRoot --> Internal[BPlusInternalGrain]
+        Internal --> Leaf[BPlusLeafGrain]
+        Leaf --> Cache[LeafCacheGrain]
+    end
+
+    subgraph "Coordination"
+        ILattice --> Snapshot[TreeSnapshotGrain]
+        ILattice --> Resize[TreeResizeGrain]
+        ILattice --> Merge[TreeMergeGrain]
+        ILattice --> Delete[TreeDeletionGrain]
+        ILattice --> Compact[TombstoneCompactionGrain]
+        Monitor[HotShardMonitorGrain] -->|poll hotness| ShardRoot
+        Monitor -->|trigger| Split[TreeShardSplitGrain]
+        Split -->|drain entries| ShardRoot
+        Split -->|update shard map| Registry
+    end
+
+    subgraph "Registry (self-hosting)"
+        ILattice -->|resolve tree config| Registry[LatticeRegistryGrain]
+        Registry -->|read/write via| SelfLattice["ILattice(&quot;_lattice_trees&quot;)"]
+        SelfLattice -.->|same data path| ShardRoot
+    end
+
+    Snapshot --> Registry
+    Resize --> Registry
+    Merge --> Registry
+    Delete --> Registry
+```
+
+All coordination grains are guarded by `InternalGrainGuardFilter` — external callers interact only through methods on `ILattice`.
 
 ## Capacity and Depth
 
