@@ -331,6 +331,40 @@ internal sealed partial class BPlusLeafGrain(
         });
     }
 
+    public Task<StateDelta> GetDeltaSinceForSlotsAsync(VersionVector sinceVersion, int[] sortedMovedSlots, int virtualShardCount)
+    {
+        ArgumentNullException.ThrowIfNull(sinceVersion);
+        ArgumentNullException.ThrowIfNull(sortedMovedSlots);
+
+        if (sortedMovedSlots.Length == 0 || sinceVersion.DominatesOrEquals(state.State.Version))
+        {
+            return Task.FromResult(new StateDelta
+            {
+                Entries = EmptyEntries,
+                Version = state.State.Version.Clone(),
+                SplitKey = state.State.SplitKey
+            });
+        }
+
+        var callerClock = sinceVersion.GetClock(ReplicaId);
+        var changed = new Dictionary<string, LwwValue<byte[]>>();
+
+        foreach (var (key, lww) in state.State.Entries)
+        {
+            if (lww.Timestamp <= callerClock) continue;
+            var slot = ShardMap.GetVirtualSlot(key, virtualShardCount);
+            if (Array.BinarySearch(sortedMovedSlots, slot) < 0) continue;
+            changed[key] = lww;
+        }
+
+        return Task.FromResult(new StateDelta
+        {
+            Entries = changed,
+            Version = state.State.Version.Clone(),
+            SplitKey = state.State.SplitKey
+        });
+    }
+
     public async Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries)
     {
         foreach (var (key, incoming) in entries)

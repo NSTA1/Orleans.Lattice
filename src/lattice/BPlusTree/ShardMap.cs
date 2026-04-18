@@ -35,6 +35,18 @@ public sealed class ShardMap
     public int[] Slots { get; set; } = [];
 
     /// <summary>
+    /// Monotonically increasing version stamped by
+    /// <see cref="BPlusTree.ILatticeRegistry.SetShardMapAsync"/> on every persist.
+    /// Used by strongly-consistent scan APIs (F-011) as a fast-path stability
+    /// signal: when the version observed at the start of a scan equals the
+    /// version observed at the end, no swap occurred during the scan and the
+    /// result is trivially consistent. The default identity map produced by
+    /// <see cref="CreateDefault"/> has version <c>0</c>.
+    /// </summary>
+    [Id(1)]
+    public long Version { get; set; }
+
+    /// <summary>
     /// Lazily-computed cache of the sorted, distinct physical shard indices
     /// referenced by <see cref="Slots"/>. Recomputed on first access in any
     /// new activation; <c>[NonSerialized]</c> excludes it from the wire format.
