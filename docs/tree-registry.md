@@ -92,6 +92,24 @@ string physicalId = await registry.ResolveAsync("my-tree");
 await registry.RemoveAliasAsync("my-tree");
 ```
 
+## Shard Map
+
+A `TreeRegistryEntry` can also carry a per-tree `ShardMap` that maps virtual shard slots to physical shard indices. The shard map decouples logical key routing from the physical shard count: keys hash into a large fixed virtual space (`VirtualShardCount`, default 4096), and the `ShardMap.Slots` array collapses ranges of virtual slots onto physical shards.
+
+When no shard map is persisted (the default state for newly created trees), `LatticeGrain` materialises an identity map (`slot[i] = i % shardCount`) which preserves the legacy `XxHash32(key) % shardCount` routing bit-for-bit. Custom shard maps are written by topology-changing operations (e.g. future adaptive shard splits) and are cached by `LatticeGrain` for the activation's lifetime — invalidated together with the physical-tree-ID cache when a shard signals a stale alias.
+
+### API
+
+```csharp
+var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+
+// Read the persisted shard map for a tree (null if none).
+ShardMap? map = await registry.GetShardMapAsync("my-tree");
+
+// Persist a new shard map for a tree.
+await registry.SetShardMapAsync("my-tree", new ShardMap { Slots = [0, 0, 1, 1] });
+```
+
 ## Accessing the Registry Grain Directly
 
 For advanced scenarios, the `ILatticeRegistry` grain can be accessed directly:
@@ -101,4 +119,3 @@ var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.Registry
 bool exists = await registry.ExistsAsync("my-tree");
 var entry = await registry.GetEntryAsync("my-tree");
 var allIds = await registry.GetAllTreeIdsAsync();
-```

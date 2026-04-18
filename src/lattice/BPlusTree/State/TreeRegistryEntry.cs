@@ -32,4 +32,13 @@ public sealed record TreeRegistryEntry
     /// itself have a <see cref="PhysicalTreeId"/>.
     /// </summary>
     [Id(3)] public string? PhysicalTreeId { get; init; }
+
+    /// <summary>
+    /// Persistent shard map for this tree, or <c>null</c> if the tree uses
+    /// the default identity map derived from <see cref="LatticeOptions.VirtualShardCount"/>
+    /// and <see cref="LatticeOptions.ShardCount"/>. The map records which
+    /// physical shard owns each virtual slot and is rewritten when adaptive
+    /// shard splits change the topology.
+    /// </summary>
+    [Id(4)] public ShardMap? ShardMap { get; init; }
 }
