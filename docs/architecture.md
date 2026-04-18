@@ -150,8 +150,9 @@ flowchart TD
     subgraph "Data path"
         ILattice --> ShardRoot[ShardRootGrain]
         ShardRoot --> Internal[BPlusInternalGrain]
-        Internal --> Leaf[BPlusLeafGrain]
-        Leaf --> Cache[LeafCacheGrain]
+        Internal -->|write| Leaf[BPlusLeafGrain]
+        Internal -->|read| Cache[LeafCacheGrain]
+        Cache -.->|delta refresh| Leaf
     end
 
     subgraph "Coordination"
