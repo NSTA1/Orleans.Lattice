@@ -2,8 +2,9 @@
 
 Adaptive shard splitting allows a hot physical shard to split into two **at
 runtime, fully online** — no shard is ever taken offline. Splits happen
-automatically when an autonomic monitor detects a hot shard, or can be
-triggered manually for diagnostics and tooling.
+automatically when an autonomic monitor detects a hot shard. Shard
+splitting is internal-only: `ITreeShardSplitGrain` is guarded by
+`InternalGrainGuardFilter` and is not exposed on the public API.
 
 ## Why
 
@@ -97,39 +98,47 @@ registry's monotonically-incrementing `ShardMap.Version`:
      `MovedAwaySlots` table (entries it no longer authoritatively owns), and
    * the set of `MovedAwaySlots` virtual slots it observed during the
      traversal (used as a topology-stability hint).
-2. **Stability check.** The orchestrator re-reads `ShardMap.Version` from
-   the registry. If the version moved during pass 1, a concurrent split
-   committed its swap mid-scan and the per-shard view is potentially
-   inconsistent — the whole pass is discarded and retried. Bounded by
+2. **Stability check (CountAsync).** For `CountAsync`, the orchestrator
+   re-reads `ShardMap.Version` from the registry after pass 1. If the
+   version moved during pass 1, a concurrent split committed its swap
+   mid-scan and the per-shard view is potentially inconsistent — the
+   whole pass is discarded and retried. Bounded by
    `LatticeOptions.MaxScanRetries` (default 3); throws
-   `InvalidOperationException` on exhaustion. Each retry re-fetches only
-   the virtual slots that actually moved, so the cost per retry is
-   O(moved slots), not O(all shards). Under the default configuration
-   (`MaxConcurrentAutoSplits` = 2, `HotShardSplitCooldown` = 2 minutes),
-   exhausting 3 retries would require an unusually sustained burst of
-   concurrent topology changes.
-3. **Pass 2 — reconcile (Keys/Entries only).** For `KeysAsync` and
-   `EntriesAsync`, the orchestrator compares the shard map at the start of
-   pass 1 against the current map and asks the new owners of any slots
-   that changed hands for the missing entries, using the slot-filtered
-   variants `GetSortedKeysBatchForSlotsAsync` /
-   `GetSortedEntriesBatchForSlotsAsync`. A `HashSet<string>` deduplicator
-   ensures no key is emitted twice. `CountAsync` does not need pass 2 —
-   pass 1 already polled every current owner and the source's
-   `MovedAwaySlots` filter prevents double counting.
+   `InvalidOperationException` on exhaustion. Under the default
+   configuration (`MaxConcurrentAutoSplits` = 2,
+   `HotShardSplitCooldown` = 2 minutes), exhausting 3 retries would
+   require an unusually sustained burst of concurrent topology changes.
+3. **In-line reconciliation (Keys/Entries only, F-032).** For `KeysAsync`,
+   and `EntriesAsync`, reconciliation is driven inside the main k-way
+   merge loop rather than as a separate pass. Before each priority-queue
+   dequeue, the orchestrator checks whether any live shard cursor has
+   reported new `MovedAwaySlots` since the last reconciliation step. If
+   so, it queries the current owners of the affected slots via the
+   slot-filtered variants `GetSortedKeysBatchForSlotsAsync` /
+   `GetSortedEntriesBatchForSlotsAsync`, loads the reconciled keys into
+   memory, sorts them with the same comparer, and injects them as an
+   additional in-memory cursor into the same priority queue. The merge
+   invariant (global minimum is yielded next) then carries ordering
+   across the topology boundary. A per-call `HashSet<string>` suppresses
+   duplicates across pre- and post-swap views. A final stability check
+   after the priority queue drains catches the edge case where a split
+   commits after all live cursors finished — reconciled entries from
+   this path are also sorted and injected as a cursor, not appended.
+   `CountAsync` does not need this step — its single pass already polls
+   every current owner and the source's `MovedAwaySlots` filter prevents
+   double counting.
 
 ### Trade-offs
 
-* **Order**: Keys/Entries are streamed in sorted (or reverse) order
-  during pass 1. Reconciled entries from pass 2, when present, are
-  appended at the tail in unspecified order — breaking the lexicographic
-  ordering guarantee for the affected scan. Callers requiring strict
-  global ordering across topology changes should sort the output, or
-  scan again after `IsSplittingAsync()` returns `false` on every shard.
-  Tracked by **F-032** (scan ordering preservation under topology change).
+* **Order**: Keys/Entries are streamed in strict lexicographic (or
+  reverse) order end-to-end, even when splits commit mid-scan.
+  Reconciled entries participate in the same k-way merge as live
+  cursors, so the ordering guarantee is preserved.
 * **Memory**: scans allocate a `HashSet<string>` for dedup that grows
-  with the number of distinct keys observed in pass 1. For very large
-  trees, prefer the range-bounded overload of `KeysAsync` /
+  with the number of distinct keys observed during the scan, plus a
+  per-reconciliation buffer proportional to the number of keys in
+  slots that actually moved during the scan (typically small). For
+  very large trees, prefer the range-bounded overload of `KeysAsync` /
   `EntriesAsync` to bound memory.
 * **Latency**: when no split has ever occurred, scans take the same
   fast path as before (one round-trip per shard). The reconciliation
@@ -187,7 +196,7 @@ individually** when:
 
 | Option | Default | Description |
 |---|---|---|
-| `AutoSplitEnabled` | `true` | Master switch for autonomic splits. Manual splits via `ITreeShardSplitGrain` remain available even when `false`. |
+| `AutoSplitEnabled` | `true` | Master switch for autonomic splits. When `false`, `HotShardMonitorGrain` will not trigger any splits; there is no external way to invoke a split. |
 | `HotShardOpsPerSecondThreshold` | `200` | Operations/second above which a shard is considered hot. Intentionally low so splits occur before throughput degrades. |
 | `HotShardSampleInterval` | `30 s` | How often the monitor polls hotness counters. |
 | `HotShardSplitCooldown` | `2 min` | Minimum interval between consecutive splits of the same physical shard. |
@@ -208,17 +217,10 @@ individually** when:
   half each pass, isolating the hot slot in `O(log virtualSlotsPerShard)`
   splits.
 
-## Manual control
+## Scope
 
-For tooling and tests, `ITreeShardSplitGrain` exposes:
-
-| Method | Purpose |
-|---|---|
-| `SplitAsync(int sourceShardIndex)` | Initiate a split of the given shard. Idempotent for matching parameters. |
-| `RunSplitPassAsync()` | Synchronously drive the in-progress split to completion. |
-| `IsCompleteAsync()` | `true` when no split is in progress. |
-
-Both grains are internal infrastructure (`[EditorBrowsable(Never)]`) and are
-not exposed on `ILattice`. The intent is that splits remain an
-autonomic concern; the manual interface exists to support tests and
-operators investigating routing topology.
+Shard splitting is an autonomic concern. `ITreeShardSplitGrain` is internal
+infrastructure protected by `InternalGrainGuardFilter` — external client
+calls are rejected with `InvalidOperationException`. There is no public
+API to trigger or control a split; tuning is performed exclusively through
+the `LatticeOptions` listed above.

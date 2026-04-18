@@ -256,6 +256,7 @@ public class ChaosIntegrationTests
                         if (mode == 0)
                         {
                             var seen = new HashSet<string>();
+                            string? prev = null;
                             await foreach (var k in tree.KeysAsync())
                             {
                                 if (ct.IsCancellationRequested) break;
@@ -263,6 +264,9 @@ public class ChaosIntegrationTests
                                     failures.Add($"scanner{scannerId}: KeysAsync duplicate '{k}'");
                                 if (IndexOfKey(k) < 0)
                                     failures.Add($"scanner{scannerId}: KeysAsync unknown '{k}'");
+                                if (prev is not null && string.CompareOrdinal(prev, k) >= 0)
+                                    failures.Add($"scanner{scannerId}: KeysAsync out-of-order '{prev}' -> '{k}'");
+                                prev = k;
                             }
                             if (!ct.IsCancellationRequested && seen.Count != UniverseSize)
                                 failures.Add($"scanner{scannerId}: KeysAsync yielded {seen.Count}, expected {UniverseSize}");
@@ -271,6 +275,7 @@ public class ChaosIntegrationTests
                         else if (mode == 1)
                         {
                             var seen = new HashSet<string>();
+                            string? prev = null;
                             await foreach (var kv in tree.EntriesAsync())
                             {
                                 if (ct.IsCancellationRequested) break;
@@ -281,6 +286,9 @@ public class ChaosIntegrationTests
                                     failures.Add($"scanner{scannerId}: EntriesAsync unknown '{kv.Key}'");
                                 else if (!IsValidValueFor(idx, kv.Value))
                                     failures.Add($"scanner{scannerId}: EntriesAsync bad value for '{kv.Key}'");
+                                if (prev is not null && string.CompareOrdinal(prev, kv.Key) >= 0)
+                                    failures.Add($"scanner{scannerId}: EntriesAsync out-of-order '{prev}' -> '{kv.Key}'");
+                                prev = kv.Key;
                             }
                             if (!ct.IsCancellationRequested && seen.Count != UniverseSize)
                                 failures.Add($"scanner{scannerId}: EntriesAsync yielded {seen.Count}, expected {UniverseSize}");
@@ -289,11 +297,15 @@ public class ChaosIntegrationTests
                         else if (mode == 2)
                         {
                             var seen = new HashSet<string>();
+                            string? prev = null;
                             await foreach (var k in tree.KeysAsync(null, null, reverse: true))
                             {
                                 if (ct.IsCancellationRequested) break;
                                 if (!seen.Add(k))
                                     failures.Add($"scanner{scannerId}: KeysAsync(reverse) duplicate '{k}'");
+                                if (prev is not null && string.CompareOrdinal(prev, k) <= 0)
+                                    failures.Add($"scanner{scannerId}: KeysAsync(reverse) out-of-order '{prev}' -> '{k}'");
+                                prev = k;
                             }
                             if (!ct.IsCancellationRequested && seen.Count != UniverseSize)
                                 failures.Add($"scanner{scannerId}: KeysAsync(reverse) yielded {seen.Count}, expected {UniverseSize}");
@@ -305,6 +317,7 @@ public class ChaosIntegrationTests
                             var end = KeyOf(400);
                             const int expectedInRange = 300;
                             var seen = new HashSet<string>();
+                            string? prev = null;
                             await foreach (var k in tree.KeysAsync(start, end))
                             {
                                 if (ct.IsCancellationRequested) break;
@@ -313,6 +326,9 @@ public class ChaosIntegrationTests
                                 var idx = IndexOfKey(k);
                                 if (idx < 100 || idx >= 400)
                                     failures.Add($"scanner{scannerId}: KeysAsync(range) out-of-range '{k}'");
+                                if (prev is not null && string.CompareOrdinal(prev, k) >= 0)
+                                    failures.Add($"scanner{scannerId}: KeysAsync(range) out-of-order '{prev}' -> '{k}'");
+                                prev = k;
                             }
                             if (!ct.IsCancellationRequested && seen.Count != expectedInRange)
                                 failures.Add($"scanner{scannerId}: KeysAsync(range) yielded {seen.Count}, expected {expectedInRange}");

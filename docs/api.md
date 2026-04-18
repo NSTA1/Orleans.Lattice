@@ -71,8 +71,37 @@ These methods are used during normal application flow to read, write, and enumer
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `KeysAsync` | `IAsyncEnumerable<string> KeysAsync(string? startInclusive, string? endExclusive, bool reverse, bool? prefetch)` | Streams live keys in lexicographic order via paginated k-way merge across shards. When `prefetch` is `true` (or `null` with `PrefetchKeysScan` enabled), the next page from each shard is fetched in parallel while the current page is consumed, hiding grain-call latency during large scans. **Strongly consistent during shard splits**: pass-1 streams keys from current owners (sorted) while sources filter their own moved-away slots; pass-2 fetches missing entries from the new owners and yields them at the tail (unspecified order). A `HashSet<string>` deduplicates across passes. See [`docs/shard-splitting.md`](shard-splitting.md). |
-| `EntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive, string? endExclusive, bool reverse)` | Streams live key-value entries in lexicographic key order via paginated k-way merge across shards. Useful for exports, migrations, and analytics without a separate `GetAsync` per key. **Strongly consistent during shard splits** with the same per-slot reconciliation algorithm as `KeysAsync`. |
+| `KeysAsync` | `IAsyncEnumerable<string> KeysAsync(string? startInclusive, string? endExclusive, bool reverse, bool? prefetch)` | Streams live keys in strict lexicographic order via paginated k-way merge across shards. When `prefetch` is `true` (or `null` with `PrefetchKeysScan` enabled), the next page from each shard is fetched in parallel while the current page is consumed, hiding grain-call latency during large scans. **Strongly consistent and strictly ordered during shard splits (F-032)**: when a shard reports moved-away slots or the `ShardMap` version advances mid-scan, the orchestrator drains the affected slots from their current owners into a sorted in-memory cursor and injects it into the same k-way merge priority queue, so output remains globally sorted end-to-end. A per-call `HashSet<string>` suppresses duplicates across pre- and post-swap views. Reconciliation is bounded by `LatticeOptions.MaxScanRetries`; throws `InvalidOperationException` if the topology keeps mutating beyond that budget (see [Scan reliability](#scan-reliability) below). See [`docs/shard-splitting.md`](shard-splitting.md). |
+| `EntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive, string? endExclusive, bool reverse)` | Streams live key-value entries in strict lexicographic key order via paginated k-way merge across shards. Useful for exports, migrations, and analytics without a separate `GetAsync` per key. **Strongly consistent and strictly ordered during shard splits (F-032)** with the same reconciliation-cursor injection algorithm as `KeysAsync`. Subject to the same `InvalidOperationException` contract on retry exhaustion — see [Scan reliability](#scan-reliability). |
+
+### Scan reliability
+
+`CountAsync`, `KeysAsync`, and `EntriesAsync` use bounded optimistic
+retry (`LatticeOptions.MaxScanRetries`, default 3) to reconcile against
+concurrent shard splits. If the shard topology keeps mutating after
+every reconciliation step, the scan throws
+`InvalidOperationException` rather than returning a silently
+incomplete result.
+
+Under the default configuration (`MaxConcurrentAutoSplits = 2`,
+`HotShardSplitCooldown = 2 minutes`) this is not a realistic
+operational concern: splits are rate-limited well below the retry
+budget. Point operations (`GetAsync` / `SetAsync` / `DeleteAsync` /
+`SetIfVersionAsync`) transparently retry on `StaleShardRoutingException`
+during shard-map swaps and never surface this exception to callers.
+
+Callers running multi-minute export scans in aggressively split-prone
+workloads have three options:
+
+1. Raise `LatticeOptions.MaxScanRetries` — cheap, addresses transient
+   topology churn.
+2. Wrap the scan in an application-level retry with exponential backoff
+   and resume from the last successfully yielded key (using
+   `startInclusive`).
+3. Wait for **G-003 (Stateful cursor grain)** — server-side checkpointed
+   iteration designed for long-running exports that survive topology
+   changes, silo failover, and client restarts without caller retry
+   code.
 
 ### Maintenance Operations
 
