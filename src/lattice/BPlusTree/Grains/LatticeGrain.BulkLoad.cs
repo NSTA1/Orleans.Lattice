@@ -81,4 +81,10 @@ internal sealed partial class LatticeGrain
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         return await registry.GetAllTreeIdsAsync();
     }
+
+    public async Task MergeAsync(string sourceTreeId)
+    {
+        var merge = grainFactory.GetGrain<ITreeMergeGrain>(TreeId);
+        await merge.MergeAsync(sourceTreeId);
+    }
 }
