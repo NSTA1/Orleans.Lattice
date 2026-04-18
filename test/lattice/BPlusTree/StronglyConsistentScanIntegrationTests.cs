@@ -376,5 +376,281 @@ public class StronglyConsistentScanIntegrationTests
 
         Assert.That(actual, Is.EquivalentTo(expectedSubset));
     }
+
+    // ==========================================================================
+    // F-032 — Scan ordering preservation under topology change.
+    // Output must be strictly sorted end-to-end even when a shard split commits
+    // mid-scan. The current implementation injects reconciled keys as an
+    // additional memory cursor into the same k-way merge priority queue, so
+    // ordering is preserved rather than appended unordered at the tail.
+    // ==========================================================================
+
+    [Test]
+    public async Task KeysAsync_during_concurrent_split_yields_strictly_ascending_order()
+    {
+        var treeId = $"sc-ord-fwd-{Guid.NewGuid():N}";
+        var expected = await SeedAsync(treeId, 400);
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+
+        var failures = new ConcurrentBag<string>();
+        var completedScans = 0;
+        using var cts = new CancellationTokenSource();
+
+        var scanner = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                try
+                {
+                    string? prev = null;
+                    var observed = new List<string>();
+                    var firstBadIdx = -1;
+                    await foreach (var k in tree.KeysAsync())
+                    {
+                        if (cts.IsCancellationRequested) break;
+                        if (prev is not null && string.CompareOrdinal(prev, k) >= 0 && firstBadIdx < 0)
+                        {
+                            firstBadIdx = observed.Count;
+                            var from = Math.Max(0, firstBadIdx - 3);
+                            var snippet = string.Join(",", observed.Skip(from).Take(4).Append(k));
+                            failures.Add($"out-of-order at idx {firstBadIdx} (tail: {snippet}, total-yielded={observed.Count + 1})");
+                        }
+                        prev = k;
+                        observed.Add(k);
+                    }
+                    if (!cts.IsCancellationRequested)
+                    {
+                        if (observed.Count != expected.Count)
+                            failures.Add($"observed {observed.Count} keys, expected {expected.Count}");
+                        Interlocked.Increment(ref completedScans);
+                    }
+                }
+                catch (Exception) when (cts.IsCancellationRequested) { }
+                catch (Exception ex) when (ex.GetType().Name == "EnumerationAbortedException") { }
+                catch (Exception ex) { failures.Add($"threw {ex.GetType().Name}: {ex.Message}"); }
+            }
+        });
+
+        await Task.Delay(150);
+        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        await split.SplitAsync(0);
+        await split.RunSplitPassAsync();
+        Assert.That(await split.IsCompleteAsync(), Is.True);
+        await Task.Delay(300);
+
+        cts.Cancel();
+        await scanner;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(failures, Is.Empty,
+                $"Ordering failures during concurrent split:\n  {string.Join("\n  ", failures.Take(20))}");
+            Assert.That(completedScans, Is.GreaterThan(0));
+        });
+    }
+
+    [Test]
+    public async Task KeysAsync_reverse_during_concurrent_split_yields_strictly_descending_order()
+    {
+        var treeId = $"sc-ord-rev-{Guid.NewGuid():N}";
+        var expected = await SeedAsync(treeId, 400);
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+
+        var failures = new ConcurrentBag<string>();
+        var completedScans = 0;
+        using var cts = new CancellationTokenSource();
+
+        var scanner = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                try
+                {
+                    string? prev = null;
+                    var count = 0;
+                    await foreach (var k in tree.KeysAsync(reverse: true))
+                    {
+                        if (cts.IsCancellationRequested) break;
+                        if (prev is not null && string.CompareOrdinal(prev, k) <= 0)
+                            failures.Add($"out-of-order (reverse): '{prev}' then '{k}'");
+                        prev = k;
+                        count++;
+                    }
+                    if (!cts.IsCancellationRequested)
+                    {
+                        if (count != expected.Count)
+                            failures.Add($"observed {count} keys, expected {expected.Count}");
+                        Interlocked.Increment(ref completedScans);
+                    }
+                }
+                catch (Exception) when (cts.IsCancellationRequested) { }
+                catch (Exception ex) when (ex.GetType().Name == "EnumerationAbortedException") { }
+                catch (Exception ex) { failures.Add($"threw {ex.GetType().Name}: {ex.Message}"); }
+            }
+        });
+
+        await Task.Delay(150);
+        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        await split.SplitAsync(0);
+        await split.RunSplitPassAsync();
+        Assert.That(await split.IsCompleteAsync(), Is.True);
+        await Task.Delay(300);
+
+        cts.Cancel();
+        await scanner;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(failures, Is.Empty,
+                $"Reverse ordering failures during concurrent split:\n  {string.Join("\n  ", failures.Take(20))}");
+            Assert.That(completedScans, Is.GreaterThan(0));
+        });
+    }
+
+    [Test]
+    public async Task EntriesAsync_during_concurrent_split_yields_strictly_ascending_key_order()
+    {
+        var treeId = $"sc-ord-entries-fwd-{Guid.NewGuid():N}";
+        var expected = await SeedAsync(treeId, 400);
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+
+        var failures = new ConcurrentBag<string>();
+        var completedScans = 0;
+        using var cts = new CancellationTokenSource();
+
+        var scanner = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                try
+                {
+                    string? prev = null;
+                    var count = 0;
+                    await foreach (var kv in tree.EntriesAsync())
+                    {
+                        if (cts.IsCancellationRequested) break;
+                        if (prev is not null && string.CompareOrdinal(prev, kv.Key) >= 0)
+                            failures.Add($"out-of-order: '{prev}' then '{kv.Key}'");
+                        if (!expected.TryGetValue(kv.Key, out var want) || !kv.Value.AsSpan().SequenceEqual(want))
+                            failures.Add($"bad entry '{kv.Key}'");
+                        prev = kv.Key;
+                        count++;
+                    }
+                    if (!cts.IsCancellationRequested)
+                    {
+                        if (count != expected.Count)
+                            failures.Add($"observed {count} entries, expected {expected.Count}");
+                        Interlocked.Increment(ref completedScans);
+                    }
+                }
+                catch (Exception) when (cts.IsCancellationRequested) { }
+                catch (Exception ex) when (ex.GetType().Name == "EnumerationAbortedException") { }
+                catch (Exception ex) { failures.Add($"threw {ex.GetType().Name}: {ex.Message}"); }
+            }
+        });
+
+        await Task.Delay(150);
+        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        await split.SplitAsync(0);
+        await split.RunSplitPassAsync();
+        Assert.That(await split.IsCompleteAsync(), Is.True);
+        await Task.Delay(300);
+
+        cts.Cancel();
+        await scanner;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(failures, Is.Empty,
+                $"Entry ordering failures during concurrent split:\n  {string.Join("\n  ", failures.Take(20))}");
+            Assert.That(completedScans, Is.GreaterThan(0));
+        });
+    }
+
+    [Test]
+    public async Task EntriesAsync_reverse_during_concurrent_split_yields_strictly_descending_key_order()
+    {
+        var treeId = $"sc-ord-entries-rev-{Guid.NewGuid():N}";
+        var expected = await SeedAsync(treeId, 400);
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+
+        var failures = new ConcurrentBag<string>();
+        var completedScans = 0;
+        using var cts = new CancellationTokenSource();
+
+        var scanner = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                try
+                {
+                    string? prev = null;
+                    var count = 0;
+                    await foreach (var kv in tree.EntriesAsync(reverse: true))
+                    {
+                        if (cts.IsCancellationRequested) break;
+                        if (prev is not null && string.CompareOrdinal(prev, kv.Key) <= 0)
+                            failures.Add($"out-of-order (reverse): '{prev}' then '{kv.Key}'");
+                        prev = kv.Key;
+                        count++;
+                    }
+                    if (!cts.IsCancellationRequested)
+                    {
+                        if (count != expected.Count)
+                            failures.Add($"observed {count} entries, expected {expected.Count}");
+                        Interlocked.Increment(ref completedScans);
+                    }
+                }
+                catch (Exception) when (cts.IsCancellationRequested) { }
+                catch (Exception ex) when (ex.GetType().Name == "EnumerationAbortedException") { }
+                catch (Exception ex) { failures.Add($"threw {ex.GetType().Name}: {ex.Message}"); }
+            }
+        });
+
+        await Task.Delay(150);
+        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        await split.SplitAsync(0);
+        await split.RunSplitPassAsync();
+        Assert.That(await split.IsCompleteAsync(), Is.True);
+        await Task.Delay(300);
+
+        cts.Cancel();
+        await scanner;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(failures, Is.Empty,
+                $"Reverse entry ordering failures during concurrent split:\n  {string.Join("\n  ", failures.Take(20))}");
+            Assert.That(completedScans, Is.GreaterThan(0));
+        });
+    }
+
+    [Test]
+    public async Task KeysAsync_after_split_completes_yields_strictly_ascending_order()
+    {
+        // Regression: the post-drain final-stability reconciliation path must
+        // still yield in sorted order. The scan starts after the split
+        // commits, so no live cursor reports MovedAwaySlots — the only
+        // trigger is the ShardMap version diff.
+        var treeId = $"sc-ord-post-{Guid.NewGuid():N}";
+        var expected = await SeedAsync(treeId, 300);
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+
+        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        await split.SplitAsync(0);
+        await split.RunSplitPassAsync();
+        Assert.That(await split.IsCompleteAsync(), Is.True);
+
+        var observed = new List<string>();
+        await foreach (var k in tree.KeysAsync()) observed.Add(k);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed, Is.EqualTo(expected.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList()));
+            for (int i = 1; i < observed.Count; i++)
+                Assert.That(string.CompareOrdinal(observed[i - 1], observed[i]), Is.LessThan(0),
+                    $"Not strictly ascending at index {i}: '{observed[i - 1]}' vs '{observed[i]}'");
+        });
+    }
 }
 

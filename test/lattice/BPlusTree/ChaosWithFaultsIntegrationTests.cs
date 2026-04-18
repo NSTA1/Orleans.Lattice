@@ -311,6 +311,7 @@ public class ChaosWithFaultsIntegrationTests
                 {
                     try
                     {
+                        string? prev = null;
                         await foreach (var kv in tree.EntriesAsync().WithCancellation(ct))
                         {
                             var idx = IndexOfKey(kv.Key);
@@ -318,6 +319,9 @@ public class ChaosWithFaultsIntegrationTests
                                 failures.Add($"scanner{scannerId}: unknown key '{kv.Key}'");
                             else if (!IsValidValueFor(idx, kv.Value))
                                 failures.Add($"scanner{scannerId}: corrupt value for key {idx}");
+                            if (prev is not null && string.CompareOrdinal(prev, kv.Key) >= 0)
+                                failures.Add($"scanner{scannerId}: EntriesAsync out-of-order '{prev}' -> '{kv.Key}'");
+                            prev = kv.Key;
                         }
                         Bump(stats, "scans");
                     }

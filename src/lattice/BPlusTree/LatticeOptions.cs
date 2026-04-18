@@ -111,9 +111,8 @@ public sealed class LatticeOptions
     /// polls each physical shard's hotness counters (<see cref="IShardRootGrain.GetHotnessAsync"/>)
     /// and triggers an online adaptive split (F-011) when the observed
     /// operations-per-second exceeds <see cref="HotShardOpsPerSecondThreshold"/>.
-    /// Splits happen fully online via shadow-writing — no shard is ever taken offline.
-    /// Set to <c>false</c> to disable autonomic splitting entirely; manual
-    /// splits via <c>ITreeShardSplitGrain</c> remain available for tooling.
+    /// Splits happen fully online via shadow-writing — no shard is ever taken
+    /// offline. Set to <c>false</c> to disable autonomic splitting entirely.
     /// </summary>
     public bool AutoSplitEnabled { get; set; } = DefaultAutoSplitEnabled;
 

@@ -79,12 +79,12 @@ observes a fully consistent view of the tree.
 | Invariant | Mechanism under test |
 |---|---|
 | `CountAsync` returns the exact universe size, always | Per-slot reconciliation with `ShardMap.Version` stability check |
-| `KeysAsync` / `EntriesAsync` yield exactly the universe, no duplicates, no unknowns | Pass 2 reconciliation against the post-pass-1 shard map + `HashSet` dedup |
+| `KeysAsync` / `EntriesAsync` yield exactly the universe, no duplicates, no unknowns, in strict sorted order | In-line reconciliation-cursor injection into the k-way merge (F-032) + `HashSet` dedup |
 | `KeysAsync(null, null, reverse: true)` yields the full universe in reverse | Reverse-scan path also reconciles |
 | `KeysAsync(start, end)` yields exactly the in-range slice | Range pruning is slot-aware |
 | `GetAsync` / `GetManyAsync` never return a corrupt value | Writes are atomic per-shard; CRDT LWW resolves concurrent rewrites |
 | No public-API call throws an unhandled exception | Stale routing retries and enumeration aborts are transparent |
-| Splits during a scan never cause data loss or duplication | `MovedAwaySlots` + version stamping + pass-2 reconciliation |
+| Splits during a scan never cause data loss, duplication, or out-of-order output | `MovedAwaySlots` + version stamping + in-line reconciliation (F-032) |
 
 ### Tolerated transients
 
@@ -221,7 +221,7 @@ in [shard-splitting.md](shard-splitting.md) and the architecture notes:
 | Surface | Happy path | With faults |
 |---|:---:|:---:|
 | Concurrent reads/writes during split shadow phase | ✅ | ✅ |
-| `KeysAsync` / `EntriesAsync` pass-2 reconciliation | ✅ | ✅ |
+| `KeysAsync` / `EntriesAsync` in-line reconciliation (F-032) | ✅ | ✅ |
 | `CountAsync` version stability check + bounded retry | ✅ | ✅ |
 | `StaleShardRoutingException` transparent retry | ✅ | ✅ |
 | Permanent `MovedAwaySlots` rejection after split completion | ✅ | ✅ |

@@ -10,7 +10,11 @@ A distributed [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree) library built o
 
 Orleans.Lattice gives you a **sorted, durable key-value store** that runs
 entirely as a set of Orleans grains — no external database, no coordinator
-service, no external queue. Keys are `string`, values are `byte[]`. You get
+service, no external queue. Keys are `string` and values are `byte[]` at
+the core API; typed value helpers (see `TypedLatticeExtensions`) layer
+automatic serialization on top — `System.Text.Json` by default, or any
+`ILatticeSerializer<T>` you supply — so callers never have to hand-roll
+`byte[]` conversions. You get
 point lookups, deletes, ordered key scans (forward, reverse, and
 range-bounded), bulk loading, snapshots, and tree aliasing, all
 horizontally distributed across a cluster of silos.
@@ -51,7 +55,7 @@ without distributed locks or coordination protocols.
 
 | Property | How |
 |---|---|
-| **Adaptive shard splitting** | Hot shards split online via shadow-write + drain + swap + reject phases. Fully transparent: no downtime, no dropped writes, no coordination protocol. An autonomic monitor detects hot shards; splits can also be triggered manually for tooling. |
+| **Adaptive shard splitting** | Hot shards split online via shadow-write + drain + swap + reject phases. Fully transparent: no downtime, no dropped writes, no coordination protocol. An autonomic monitor detects hot shards and triggers splits; shard splitting is not part of the public API and cannot be invoked externally. |
 | **Bulk loading** | One-shot bottom-up build or streaming `IAsyncEnumerable` ingestion with per-shard parallel flushing. Both modes are idempotent and retryable. |
 | **Conflict-free** | All state merges are monotonic. Concurrent writes to the same key resolve via last-writer-wins with hybrid logical clocks. |
 | **Crash-safe splits** | Every node split uses a two-phase pattern with persisted intent. Interrupted splits resume automatically on the next access. |
