@@ -92,19 +92,18 @@ its own tombstone compaction reminder registered upon snapshot completion.
 ## Grain Interface
 
 The snapshot is orchestrated by `ITreeSnapshotGrain`, keyed by the source tree
-ID. The `ILattice` interface delegates to it:
+ID. This grain is **guarded by `InternalGrainGuardFilter`** — external callers
+cannot invoke it directly. The `ILattice` interface delegates to it via
+`SnapshotAsync`:
 
 ```csharp
-public interface ITreeSnapshotGrain : IGrainWithStringKey
-{
-    Task SnapshotAsync(string destinationTreeId, SnapshotMode mode,
-        int? maxLeafKeys = null, int? maxInternalChildren = null);
-    Task RunSnapshotPassAsync();
-}
+// Public API — use this
+await lattice.SnapshotAsync("my-snapshot", SnapshotMode.Full);
 ```
 
-`RunSnapshotPassAsync` processes all remaining shards synchronously in a single
-call, useful for testing and manual operations.
+Internally, `ITreeSnapshotGrain` exposes `RunSnapshotPassAsync` which processes
+all remaining shards synchronously in a single call. This method is used by
+integration tests that drive snapshot passes deterministically.
 
 ## Relationship to Resize
 
