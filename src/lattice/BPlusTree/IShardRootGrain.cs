@@ -173,4 +173,11 @@ public interface IShardRootGrain : IGrainWithStringKey
     /// Used by the tree merge operation.
     /// </summary>
     Task MergeManyAsync(Dictionary<string, Orleans.Lattice.Primitives.LwwValue<byte[]>> entries);
+
+    /// <summary>
+    /// Returns volatile in-memory hotness counters for this shard. Counters
+    /// track reads and writes since grain activation and reset on deactivation.
+    /// Used by split coordinators to detect hot shards without persistence overhead.
+    /// </summary>
+    Task<ShardHotness> GetHotnessAsync();
 }
