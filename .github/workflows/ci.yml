@@ -6,58 +6,53 @@ on:
   push:
     branches: [main]
 
+# Least-privilege: this workflow only reads source code.
+permissions:
+  contents: read
+
+# Cancel in-progress runs for the same branch/PR to save runner minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
+      # Skip build & test when only markdown files changed.
       - name: Check for non-markdown changes
         id: filter
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE=${{ github.event.pull_request.base.sha }}
-            HEAD=${{ github.event.pull_request.head.sha }}
-          else
-            BASE=${{ github.event.before }}
-            HEAD=${{ github.sha }}
-          fi
-          # On initial push (e.g. new branch) treat as code change
-          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
-            echo "has_code_changes=true" >> "$GITHUB_OUTPUT"
-          else
-            NON_MD=$(git diff --name-only "$BASE" "$HEAD" -- . ':!*.md' | wc -l)
-            if [ "$NON_MD" -gt 0 ]; then
-              echo "has_code_changes=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "has_code_changes=false" >> "$GITHUB_OUTPUT"
-              echo "Only markdown files changed — skipping build and test."
-            fi
-          fi
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            code:
+              - '!**.md'
 
       - name: Setup .NET
-        if: steps.filter.outputs.has_code_changes == 'true'
+        if: steps.filter.outputs.code == 'true'
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+          cache: true # Cache ~/.nuget/packages between runs.
 
       - name: Restore
-        if: steps.filter.outputs.has_code_changes == 'true'
+        if: steps.filter.outputs.code == 'true'
         run: dotnet restore
 
       - name: Build
-        if: steps.filter.outputs.has_code_changes == 'true'
+        if: steps.filter.outputs.code == 'true'
         run: dotnet build --no-restore --configuration Release
 
       - name: Test
-        if: steps.filter.outputs.has_code_changes == 'true'
+        if: steps.filter.outputs.code == 'true'
         run: dotnet test --no-build --configuration Release --logger "trx;LogFileName=results.trx"
 
+      # Upload test results even if the Test step fails.
       - name: Upload test results
-        if: always() && steps.filter.outputs.has_code_changes == 'true'
+        if: always() && steps.filter.outputs.code == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: test-results
