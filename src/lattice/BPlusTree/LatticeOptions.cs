@@ -76,6 +76,20 @@ public sealed class LatticeOptions
     public static readonly TimeSpan DefaultCacheTtl = TimeSpan.Zero;
 
     /// <summary>
+    /// When <c>true</c>, <see cref="ILattice.KeysAsync"/> pre-fetches the next page
+    /// from each shard in parallel while the current page is being consumed,
+    /// hiding per-shard grain-call latency during ordered scans. Because pre-fetched
+    /// pages are held in memory until consumed, callers that abort iteration early
+    /// (e.g. <c>Take(n)</c>) pay for pages they never read. Disabled by default.
+    /// This option can also be overridden per-call via the <c>prefetch</c> parameter
+    /// on <see cref="ILattice.KeysAsync"/>.
+    /// </summary>
+    public bool PrefetchKeysScan { get; set; } = DefaultPrefetchKeysScan;
+
+    /// <summary>Default value for <see cref="PrefetchKeysScan"/> (<c>false</c>).</summary>
+    public const bool DefaultPrefetchKeysScan = false;
+
+    /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.
     /// Used internally by <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
     /// and exposed for advanced scenarios where callers register storage directly.
