@@ -18,6 +18,8 @@ internal sealed partial class ShardRootGrain
 
         if (sortedEntries.Count == 0) return;
 
+        RecordWrite();
+
         var shardKey = context.GrainId.Key.ToString()!;
         var options = await GetOptionsAsync();
         var maxLeafKeys = options.MaxLeafKeys;
@@ -117,6 +119,7 @@ internal sealed partial class ShardRootGrain
     {
         ThrowIfDeleted();
         if (state.State.LastCompletedBulkOperationId == operationId) return;
+        RecordWrite();
 
         if (state.State.PendingBulkGraft is not null)
         {
