@@ -19,6 +19,7 @@ internal sealed partial class LatticeGrain(
     private string TreeId => context.GrainId.Key.ToString()!;
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
     private bool _compactionEnsured;
+    private bool _monitorEnsured;
     private string? _physicalTreeId;
     private ShardMap? _shardMap;
 
@@ -28,6 +29,11 @@ internal sealed partial class LatticeGrain(
         var shard = await GetShardGrainAsync(key);
         try
         {
+            return await shard.GetAsync(key);
+        }
+        catch (StaleShardRoutingException) when (InvalidateShardMap())
+        {
+            shard = await GetShardGrainAsync(key);
             return await shard.GetAsync(key);
         }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
@@ -45,6 +51,11 @@ internal sealed partial class LatticeGrain(
         {
             return await shard.GetWithVersionAsync(key);
         }
+        catch (StaleShardRoutingException) when (InvalidateShardMap())
+        {
+            shard = await GetShardGrainAsync(key);
+            return await shard.GetWithVersionAsync(key);
+        }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
         {
             shard = await GetShardGrainAsync(key);
@@ -58,6 +69,11 @@ internal sealed partial class LatticeGrain(
         var shard = await GetShardGrainAsync(key);
         try
         {
+            return await shard.ExistsAsync(key);
+        }
+        catch (StaleShardRoutingException) when (InvalidateShardMap())
+        {
+            shard = await GetShardGrainAsync(key);
             return await shard.ExistsAsync(key);
         }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
@@ -74,6 +90,10 @@ internal sealed partial class LatticeGrain(
         {
             return await GetManyAsyncCore(keys);
         }
+        catch (StaleShardRoutingException) when (InvalidateShardMap())
+        {
+            return await GetManyAsyncCore(keys);
+        }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
         {
             return await GetManyAsyncCore(keys);
@@ -82,14 +102,13 @@ internal sealed partial class LatticeGrain(
 
     private async Task<Dictionary<string, byte[]>> GetManyAsyncCore(List<string> keys)
     {
-        var physicalTreeId = await GetPhysicalTreeIdAsync();
-        var shardCount = Options.ShardCount;
+        var (physicalTreeId, shardMap) = await GetRoutingAsync();
 
         // Group keys by shard.
         var shardBuckets = new Dictionary<int, List<string>>();
         foreach (var key in keys)
         {
-            var idx = GetShardIndex(key, shardCount);
+            var idx = shardMap.Resolve(key);
             if (!shardBuckets.TryGetValue(idx, out var bucket))
             {
                 bucket = [];
@@ -129,9 +148,15 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         await EnsureCompactionReminderAsync();
+        await EnsureMonitorAsync();
         var shard = await GetShardGrainAsync(key);
         try
         {
+            await shard.SetAsync(key, value);
+        }
+        catch (StaleShardRoutingException) when (InvalidateShardMap())
+        {
+            shard = await GetShardGrainAsync(key);
             await shard.SetAsync(key, value);
         }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
@@ -146,9 +171,15 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         await EnsureCompactionReminderAsync();
+        await EnsureMonitorAsync();
         var shard = await GetShardGrainAsync(key);
         try
         {
+            return await shard.SetIfVersionAsync(key, value, expectedVersion);
+        }
+        catch (StaleShardRoutingException) when (InvalidateShardMap())
+        {
+            shard = await GetShardGrainAsync(key);
             return await shard.SetIfVersionAsync(key, value, expectedVersion);
         }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
@@ -163,9 +194,15 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         await EnsureCompactionReminderAsync();
+        await EnsureMonitorAsync();
         var shard = await GetShardGrainAsync(key);
         try
         {
+            return await shard.GetOrSetAsync(key, value);
+        }
+        catch (StaleShardRoutingException) when (InvalidateShardMap())
+        {
+            shard = await GetShardGrainAsync(key);
             return await shard.GetOrSetAsync(key, value);
         }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
@@ -179,7 +216,12 @@ internal sealed partial class LatticeGrain(
     {
         ArgumentNullException.ThrowIfNull(entries);
         await EnsureCompactionReminderAsync();
+        await EnsureMonitorAsync();
         try
+        {
+            await SetManyAsyncCore(entries);
+        }
+        catch (StaleShardRoutingException) when (InvalidateShardMap())
         {
             await SetManyAsyncCore(entries);
         }
@@ -191,14 +233,13 @@ internal sealed partial class LatticeGrain(
 
     private async Task SetManyAsyncCore(List<KeyValuePair<string, byte[]>> entries)
     {
-        var physicalTreeId = await GetPhysicalTreeIdAsync();
-        var shardCount = Options.ShardCount;
+        var (physicalTreeId, shardMap) = await GetRoutingAsync();
 
         // Group entries by shard.
         var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>();
         foreach (var entry in entries)
         {
-            var idx = GetShardIndex(entry.Key, shardCount);
+            var idx = shardMap.Resolve(entry.Key);
             if (!shardBuckets.TryGetValue(idx, out var bucket))
             {
                 bucket = [];
@@ -234,6 +275,11 @@ internal sealed partial class LatticeGrain(
         {
             return await shard.DeleteAsync(key);
         }
+        catch (StaleShardRoutingException) when (InvalidateShardMap())
+        {
+            shard = await GetShardGrainAsync(key);
+            return await shard.DeleteAsync(key);
+        }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
         {
             shard = await GetShardGrainAsync(key);
@@ -247,6 +293,10 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(endExclusive);
         await EnsureCompactionReminderAsync();
         try
+        {
+            return await DeleteRangeAsyncCore(startInclusive, endExclusive);
+        }
+        catch (StaleShardRoutingException) when (InvalidateShardMap())
         {
             return await DeleteRangeAsyncCore(startInclusive, endExclusive);
         }
@@ -352,6 +402,27 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <summary>
+    /// Lazily activates the per-tree autonomic <c>HotShardMonitorGrain</c> on
+    /// the first write to this tree. Subsequent writes are no-ops. The monitor
+    /// itself is a no-op when <see cref="LatticeOptions.AutoSplitEnabled"/> is
+    /// <c>false</c>.
+    /// </summary>
+    private async Task EnsureMonitorAsync()
+    {
+        if (_monitorEnsured) return;
+        if (!Options.AutoSplitEnabled) { _monitorEnsured = true; return; }
+        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            _monitorEnsured = true;
+            return;
+        }
+
+        var monitor = grainFactory.GetGrain<IHotShardMonitorGrain>(TreeId);
+        await monitor.EnsureRunningAsync();
+        _monitorEnsured = true;
+    }
+
+    /// <summary>
     /// Resolves the physical tree ID for this logical tree, caching the result
     /// for the lifetime of this activation. Different physical tree IDs produce
     /// different leaf <see cref="GrainId"/> values, which automatically creates
@@ -422,6 +493,19 @@ internal sealed partial class LatticeGrain(
     {
         if (_physicalTreeId is null) return false;
         _physicalTreeId = null;
+        _shardMap = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Invalidates the cached <see cref="ShardMap"/> only (preserves the
+    /// resolved physical tree ID). Used by <see cref="StaleShardRoutingException"/>
+    /// catch clauses to force a fresh map fetch on retry after an adaptive
+    /// shard split has remapped virtual slots to a new physical shard.
+    /// Always returns <c>true</c> so it can be used as a <c>when</c> filter.
+    /// </summary>
+    private bool InvalidateShardMap()
+    {
         _shardMap = null;
         return true;
     }

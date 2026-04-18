@@ -107,6 +107,73 @@ public sealed class LatticeOptions
     public const bool DefaultPrefetchKeysScan = false;
 
     /// <summary>
+    /// When <c>true</c>, the autonomic <c>HotShardMonitorGrain</c> periodically
+    /// polls each physical shard's hotness counters (<see cref="IShardRootGrain.GetHotnessAsync"/>)
+    /// and triggers an online adaptive split (F-011) when the observed
+    /// operations-per-second exceeds <see cref="HotShardOpsPerSecondThreshold"/>.
+    /// Splits happen fully online via shadow-writing — no shard is ever taken offline.
+    /// Set to <c>false</c> to disable autonomic splitting entirely; manual
+    /// splits via <c>ITreeShardSplitGrain</c> remain available for tooling.
+    /// </summary>
+    public bool AutoSplitEnabled { get; set; } = DefaultAutoSplitEnabled;
+
+    /// <summary>Default value for <see cref="AutoSplitEnabled"/> (<c>true</c>).</summary>
+    public const bool DefaultAutoSplitEnabled = true;
+
+    /// <summary>
+    /// Operations-per-second threshold above which a shard is considered hot
+    /// and eligible for an autonomic split. Computed as
+    /// <c>(reads + writes) / window.TotalSeconds</c> over the period reported
+    /// by <see cref="ShardHotness.Window"/>. Lower values trigger splits more
+    /// aggressively; the default of 200 ops/s is intentionally low so splits
+    /// occur well before throughput degrades.
+    /// </summary>
+    public int HotShardOpsPerSecondThreshold { get; set; } = DefaultHotShardOpsPerSecondThreshold;
+
+    /// <summary>Default value for <see cref="HotShardOpsPerSecondThreshold"/> (200).</summary>
+    public const int DefaultHotShardOpsPerSecondThreshold = 200;
+
+    /// <summary>
+    /// How often the autonomic monitor polls shard hotness counters.
+    /// Shorter intervals detect hot shards faster at a small CPU cost.
+    /// </summary>
+    public TimeSpan HotShardSampleInterval { get; set; } = DefaultHotShardSampleInterval;
+
+    /// <summary>Default value for <see cref="HotShardSampleInterval"/> (30 seconds).</summary>
+    public static readonly TimeSpan DefaultHotShardSampleInterval = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Minimum interval between consecutive autonomic splits of the same
+    /// physical shard. Prevents thrashing when a single hot virtual slot
+    /// dominates traffic (the slot will be split once, then need to wait this
+    /// long before the new shard can be split again).
+    /// </summary>
+    public TimeSpan HotShardSplitCooldown { get; set; } = DefaultHotShardSplitCooldown;
+
+    /// <summary>Default value for <see cref="HotShardSplitCooldown"/> (2 minutes).</summary>
+    public static readonly TimeSpan DefaultHotShardSplitCooldown = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Maximum number of autonomic splits that can be in flight concurrently
+    /// for a single tree. The monitor refuses to start a new split while this
+    /// many are already active. Defaults to 1 to keep storage I/O bounded.
+    /// </summary>
+    public int MaxConcurrentAutoSplits { get; set; } = DefaultMaxConcurrentAutoSplits;
+
+    /// <summary>Default value for <see cref="MaxConcurrentAutoSplits"/> (1).</summary>
+    public const int DefaultMaxConcurrentAutoSplits = 1;
+
+    /// <summary>
+    /// Minimum age of a tree (since the monitor first activated) before
+    /// autonomic splits are allowed. Prevents premature splits during
+    /// startup bursts before the workload has stabilised.
+    /// </summary>
+    public TimeSpan AutoSplitMinTreeAge { get; set; } = DefaultAutoSplitMinTreeAge;
+
+    /// <summary>Default value for <see cref="AutoSplitMinTreeAge"/> (60 seconds).</summary>
+    public static readonly TimeSpan DefaultAutoSplitMinTreeAge = TimeSpan.FromSeconds(60);
+
+    /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.
     /// Used internally by <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
     /// and exposed for advanced scenarios where callers register storage directly.

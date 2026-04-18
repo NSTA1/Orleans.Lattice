@@ -180,4 +180,49 @@ public interface IShardRootGrain : IGrainWithStringKey
     /// Used by split coordinators to detect hot shards without persistence overhead.
     /// </summary>
     Task<ShardHotness> GetHotnessAsync();
+
+    /// <summary>
+    /// Marks this shard as the source of an in-progress adaptive split (F-011).
+    /// While the returned task is incomplete or the split has not been completed,
+    /// every write to a key whose virtual slot is in <paramref name="movedSlots"/>
+    /// is mirrored to the shard at <paramref name="targetShardIndex"/> via
+    /// <see cref="MergeManyAsync"/>, preserving HLC timestamps for CRDT-safe
+    /// convergence. Reads continue to be served locally.
+    /// <para>
+    /// Idempotent: if the shard is already in <see cref="ShardSplitPhase.BeginShadowWrite"/>
+    /// or <see cref="ShardSplitPhase.Drain"/> with a matching
+    /// <paramref name="targetShardIndex"/> and <paramref name="movedSlots"/>, the call
+    /// is a no-op.
+    /// </para>
+    /// </summary>
+    Task BeginSplitAsync(int targetShardIndex, int[] movedSlots, int virtualShardCount);
+
+    /// <summary>
+    /// Transitions this shard's in-progress split to the <see cref="ShardSplitPhase.Reject"/>
+    /// phase. Subsequent reads and writes to keys in any of the moved virtual slots
+    /// throw <see cref="StaleShardRoutingException"/>, which the calling
+    /// <c>LatticeGrain</c> catches to refresh its cached <see cref="ShardMap"/> and
+    /// retry against the new physical shard. Idempotent.
+    /// </summary>
+    Task EnterRejectPhaseAsync();
+
+    /// <summary>
+    /// Clears the in-progress split state on this shard. Called by the split
+    /// coordinator after the post-swap cleanup phase has finished tombstoning
+    /// the moved entries. Idempotent.
+    /// </summary>
+    Task CompleteSplitAsync();
+
+    /// <summary>
+    /// Returns <c>true</c> if this shard has a non-null
+    /// <see cref="ShardSplitInProgress"/> in its persistent state.
+    /// </summary>
+    Task<bool> IsSplittingAsync();
+
+    /// <summary>
+    /// Returns <c>true</c> if this shard has a pending bulk-load or bulk-append
+    /// operation that has not yet been fully grafted into the tree. Used by the
+    /// auto-split monitor to suppress splits while bulk operations are mid-flight.
+    /// </summary>
+    Task<bool> HasPendingBulkOperationAsync();
 }

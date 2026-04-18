@@ -44,4 +44,10 @@ internal static class TypeAliases
     internal const string ShardHotness = "ol.sh";
     internal const string ShardMap = "ol.sm";
     internal const string RoutingInfo = "ol.ri";
+
+    // Adaptive shard splitting (F-011)
+    internal const string TreeShardSplitState = "ol.sss";
+    internal const string ShardSplitInProgress = "ol.sip";
+    internal const string ShardSplitPhase = "ol.sph";
+    internal const string StaleShardRouting = "ol.ssr";
 }

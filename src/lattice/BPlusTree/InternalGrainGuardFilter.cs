@@ -22,6 +22,8 @@ internal sealed class InternalGrainGuardFilter : IIncomingGrainCallFilter
         typeof(ITreeResizeGrain),
         typeof(ITreeSnapshotGrain),
         typeof(ITreeMergeGrain),
+        typeof(ITreeShardSplitGrain),
+        typeof(IHotShardMonitorGrain),
     ];
 
     private static readonly ConcurrentDictionary<Type, bool> GuardedTypeCache = new();

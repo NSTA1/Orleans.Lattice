@@ -75,6 +75,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<byte[]?> GetAsync(string key)
     {
         await PrepareForOperationAsync();
+        ThrowIfRejectedForKey(key);
         RecordRead();
         return await TraverseForReadAsync(key);
     }
@@ -82,6 +83,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<VersionedValue> GetWithVersionAsync(string key)
     {
         await PrepareForOperationAsync();
+        ThrowIfRejectedForKey(key);
         RecordRead();
         return await TraverseForReadWithVersionAsync(key);
     }
@@ -89,6 +91,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<bool> ExistsAsync(string key)
     {
         await PrepareForOperationAsync();
+        ThrowIfRejectedForKey(key);
         RecordRead();
         return await TraverseForExistsAsync(key);
     }
@@ -96,6 +99,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
         await PrepareForOperationAsync();
+        ThrowIfRejectedForAnyKey(keys);
         RecordRead();
         return await TraverseForBatchReadAsync(keys);
     }
@@ -103,6 +107,7 @@ internal sealed partial class ShardRootGrain(
     public async Task SetAsync(string key, byte[] value)
     {
         await PrepareForOperationAsync();
+        ThrowIfRejectedForKey(key);
         RecordWrite();
 
         for (int attempt = 0; ; attempt++)
@@ -117,6 +122,8 @@ internal sealed partial class ShardRootGrain(
                     splitResult = await PromoteRootAsync(splitResult);
                 }
 
+                // F-011: shadow-forward the write to the split target if applicable.
+                await ForwardLocalWriteToShadowIfNeededAsync(key);
                 return;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
@@ -131,6 +138,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<byte[]?> GetOrSetAsync(string key, byte[] value)
     {
         await PrepareForOperationAsync();
+        ThrowIfRejectedForKey(key);
         RecordWrite();
 
         for (int attempt = 0; ; attempt++)
@@ -152,6 +160,8 @@ internal sealed partial class ShardRootGrain(
                     splitResult = await PromoteRootAsync(splitResult);
                 }
 
+                // F-011: shadow-forward the write to the split target if applicable.
+                await ForwardLocalWriteToShadowIfNeededAsync(key);
                 return null;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
@@ -166,6 +176,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
     {
         await PrepareForOperationAsync();
+        ThrowIfRejectedForKey(key);
         RecordWrite();
 
         for (int attempt = 0; ; attempt++)
@@ -186,6 +197,8 @@ internal sealed partial class ShardRootGrain(
                     splitResult = await PromoteRootAsync(splitResult);
                 }
 
+                // F-011: shadow-forward the write to the split target if applicable.
+                await ForwardLocalWriteToShadowIfNeededAsync(key);
                 return true;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
@@ -196,6 +209,9 @@ internal sealed partial class ShardRootGrain(
 
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
+        // Reject-check up-front so the batch fails fast rather than partially applying.
+        ThrowIfRejectedForAnyKey(entries.Select(e => e.Key));
+        // SetAsync internally re-checks reject + shadow-forwards each entry.
         foreach (var entry in entries)
         {
             await SetAsync(entry.Key, entry.Value);
@@ -205,22 +221,31 @@ internal sealed partial class ShardRootGrain(
     public async Task<bool> DeleteAsync(string key)
     {
         await PrepareForOperationAsync();
+        ThrowIfRejectedForKey(key);
         RecordWrite();
 
         for (int attempt = 0; ; attempt++)
         {
             try
             {
+                bool result;
                 if (state.State.RootIsLeaf)
                 {
                     var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
-                    return await leaf.DeleteAsync(key);
+                    result = await leaf.DeleteAsync(key);
+                }
+                else
+                {
+                    // Traverse to the leaf.
+                    var leafId = await TraverseToLeafAsync(key);
+                    var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+                    result = await leafGrain.DeleteAsync(key);
                 }
 
-                // Traverse to the leaf.
-                var leafId = await TraverseToLeafAsync(key);
-                var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-                return await leafGrain.DeleteAsync(key);
+                // F-011: tombstone forwarding is handled by the comprehensive
+                // cleanup phase of the split coordinator. See
+                // ForwardLocalWriteToShadowIfNeededAsync XML doc for rationale.
+                return result;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
             {
@@ -232,6 +257,12 @@ internal sealed partial class ShardRootGrain(
     public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive)
     {
         await PrepareForOperationAsync();
+        // F-011: range deletes do not currently shadow-forward tombstones — see
+        // ForwardLocalWriteToShadowIfNeededAsync XML doc. The cleanup phase of
+        // the split coordinator restores convergence by re-tombstoning moved
+        // entries on T after the swap. No explicit reject check is performed
+        // here because the LatticeGrain has already routed the range delete
+        // to the correct shard via the current ShardMap.
         RecordWrite();
 
         // Find the starting leaf for the range.
@@ -282,12 +313,30 @@ internal sealed partial class ShardRootGrain(
         var leafId = await GetLeftmostLeafIdAsync();
         if (leafId is null) return 0;
 
+        // F-011: if any virtual slots have been split away, we cannot trust
+        // the leaf-level count (it includes orphan moved-slot entries). Walk
+        // the keys and filter. The fast path (no splits) is preserved when
+        // MovedAwaySlots is empty.
+        var hasMovedAway = state.State.MovedAwaySlots.Count > 0
+            && state.State.MovedAwayVirtualShardCount is not null;
+
         var total = 0;
         var currentId = leafId.Value;
         while (true)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
-            total += await leaf.CountAsync();
+            if (hasMovedAway)
+            {
+                var keys = await leaf.GetKeysAsync(null, null);
+                for (int i = 0; i < keys.Count; i++)
+                {
+                    if (!IsSlotMovedAway(keys[i])) total++;
+                }
+            }
+            else
+            {
+                total += await leaf.CountAsync();
+            }
 
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
@@ -334,6 +383,7 @@ internal sealed partial class ShardRootGrain(
 
             foreach (var key in leafKeys)
             {
+                if (IsSlotMovedAway(key)) continue; // F-011: filter orphan moved-slot data
                 keys.Add(key);
                 if (keys.Count >= pageSize)
                     break;
@@ -391,6 +441,7 @@ internal sealed partial class ShardRootGrain(
             for (int i = leafKeys.Count - 1; i >= 0; i--)
             {
                 var key = leafKeys[i];
+                if (IsSlotMovedAway(key)) continue; // F-011: filter orphan moved-slot data
                 keys.Add(key);
                 if (keys.Count >= pageSize)
                     break;
@@ -444,6 +495,7 @@ internal sealed partial class ShardRootGrain(
 
             foreach (var entry in leafEntries)
             {
+                if (IsSlotMovedAway(entry.Key)) continue; // F-011: filter orphan moved-slot data
                 entries.Add(entry);
                 if (entries.Count >= pageSize)
                     break;
@@ -498,6 +550,7 @@ internal sealed partial class ShardRootGrain(
             for (int i = leafEntries.Count - 1; i >= 0; i--)
             {
                 var entry = leafEntries[i];
+                if (IsSlotMovedAway(entry.Key)) continue; // F-011: filter orphan moved-slot data
                 entries.Add(entry);
                 if (entries.Count >= pageSize)
                     break;
