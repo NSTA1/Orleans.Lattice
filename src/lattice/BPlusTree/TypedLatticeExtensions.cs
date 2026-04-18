@@ -1,3 +1,6 @@
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Primitives;
+
 namespace Orleans.Lattice;
 
 /// <summary>
@@ -22,6 +25,27 @@ public static class TypedLatticeExtensions
     /// <inheritdoc cref="GetAsync{T}(ILattice, string, ILatticeSerializer{T})"/>
     public static Task<T?> GetAsync<T>(this ILattice lattice, string key) =>
         lattice.GetAsync(key, JsonLatticeSerializer<T>.Default);
+
+    /// <summary>
+    /// Gets the deserialized value and its <see cref="HybridLogicalClock"/> version for
+    /// <paramref name="key"/>. Returns a <see cref="Versioned{T}"/> with <c>default</c>
+    /// value and <see cref="HybridLogicalClock.Zero"/> version when the key is absent
+    /// or tombstoned.
+    /// </summary>
+    public static async Task<Versioned<T>> GetWithVersionAsync<T>(this ILattice lattice, string key, ILatticeSerializer<T> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+        var result = await lattice.GetWithVersionAsync(key);
+        return new Versioned<T>
+        {
+            Value = result.Value is null ? default : serializer.Deserialize(result.Value),
+            Version = result.Version
+        };
+    }
+
+    /// <inheritdoc cref="GetWithVersionAsync{T}(ILattice, string, ILatticeSerializer{T})"/>
+    public static Task<Versioned<T>> GetWithVersionAsync<T>(this ILattice lattice, string key) =>
+        lattice.GetWithVersionAsync(key, JsonLatticeSerializer<T>.Default);
 
     /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
@@ -49,6 +73,22 @@ public static class TypedLatticeExtensions
     /// <inheritdoc cref="SetAsync{T}(ILattice, string, T, ILatticeSerializer{T})"/>
     public static Task SetAsync<T>(this ILattice lattice, string key, T value) =>
         lattice.SetAsync(key, value, JsonLatticeSerializer<T>.Default);
+
+    /// <summary>
+    /// Sets <paramref name="key"/> to <paramref name="value"/> only if the entry's
+    /// current <see cref="HybridLogicalClock"/> matches <paramref name="expectedVersion"/>.
+    /// Returns <c>true</c> if the write was applied. See <see cref="ILattice.SetIfVersionAsync"/>
+    /// for full semantics.
+    /// </summary>
+    public static Task<bool> SetIfVersionAsync<T>(this ILattice lattice, string key, T value, HybridLogicalClock expectedVersion, ILatticeSerializer<T> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+        return lattice.SetIfVersionAsync(key, serializer.Serialize(value), expectedVersion);
+    }
+
+    /// <inheritdoc cref="SetIfVersionAsync{T}(ILattice, string, T, HybridLogicalClock, ILatticeSerializer{T})"/>
+    public static Task<bool> SetIfVersionAsync<T>(this ILattice lattice, string key, T value, HybridLogicalClock expectedVersion) =>
+        lattice.SetIfVersionAsync(key, value, expectedVersion, JsonLatticeSerializer<T>.Default);
 
     // ── Batch ───────────────────────────────────────────────────
 

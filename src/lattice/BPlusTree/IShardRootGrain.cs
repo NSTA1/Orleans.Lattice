@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -13,6 +14,13 @@ public interface IShardRootGrain : IGrainWithStringKey
 {
     Task<byte[]?> GetAsync(string key);
     Task<bool> ExistsAsync(string key);
+
+    /// <summary>
+    /// Gets the value and its <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/>
+    /// version for <paramref name="key"/>. Returns a <see cref="VersionedValue"/>
+    /// with <c>null</c> value and zero version when the key is absent or tombstoned.
+    /// </summary>
+    Task<VersionedValue> GetWithVersionAsync(string key);
 
     /// <summary>
     /// Returns the values for the given <paramref name="keys"/>, performing a single
@@ -30,6 +38,13 @@ public interface IShardRootGrain : IGrainWithStringKey
     /// or <c>null</c> when the write was performed.
     /// </summary>
     Task<byte[]?> GetOrSetAsync(string key, byte[] value);
+
+    /// <summary>
+    /// Sets <paramref name="key"/> to <paramref name="value"/> only if the entry's
+    /// current <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/> matches
+    /// <paramref name="expectedVersion"/>. Returns <c>true</c> if the write was applied.
+    /// </summary>
+    Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion);
 
     /// <summary>
     /// Inserts or updates multiple key-value pairs in a single traversal batch.
