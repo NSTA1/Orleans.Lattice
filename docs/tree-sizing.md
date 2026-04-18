@@ -280,13 +280,7 @@ This recovers the old physical tree, removes the alias, and deletes the new snap
 
 ### Manual trigger (testing)
 
-For integration tests or manual operations, use the `ITreeResizeGrain` directly:
-
-```csharp
-var resize = grainFactory.GetGrain<ITreeResizeGrain>("my-tree");
-await resize.ResizeAsync(256, 64);
-await resize.RunResizePassAsync(); // synchronous — processes all phases in one call
-```
+In integration tests, the existing test harnesses call `ITreeResizeGrain` directly to drive resize passes synchronously. This grain is **guarded by `InternalGrainGuardFilter`** — external callers (including application code and `dotnet tool` wrappers) cannot invoke it. Use `ILattice.ResizeAsync` for all non-test scenarios; it delegates to `ITreeResizeGrain` internally and exposes `ILattice.IsResizeCompleteAsync()` for progress polling.
 
 ## Summary
 

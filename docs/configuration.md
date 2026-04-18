@@ -58,6 +58,14 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | `SoftDeleteDuration` | `TimeSpan` | 72 hours | Yes |
 | `CacheTtl` | `TimeSpan` | `TimeSpan.Zero` (refresh on every read) | Yes |
 | `PrefetchKeysScan` | `bool` | `false` | Yes |
+| `AutoSplitEnabled` | `bool` | `true` | Yes |
+| `HotShardOpsPerSecondThreshold` | `int` | 200 | Yes |
+| `HotShardSampleInterval` | `TimeSpan` | 30 seconds | Yes |
+| `HotShardSplitCooldown` | `TimeSpan` | 2 minutes | Yes |
+| `MaxConcurrentAutoSplits` | `int` | 2 | Yes |
+| `SplitDrainBatchSize` | `int` | 1024 | Yes |
+| `AutoSplitMinTreeAge` | `TimeSpan` | 60 seconds | Yes |
+| `MaxScanRetries` | `int` | 3 | Yes |
 
 ### `ShardCount`
 
@@ -166,6 +174,54 @@ await foreach (var key in tree.KeysAsync(prefetch: true))
 ```
 
 Because each pre-fetched page is held in memory until consumed, callers that abort iteration early (e.g. `Take(n)`) pay for pages they never read. For bounded scans, leave this disabled or pass `prefetch: false` explicitly.
+
+This option can be changed freely at any time.
+
+### `AutoSplitEnabled`
+
+Master switch for [adaptive shard splitting](shard-splitting.md). When `true` (the default), `HotShardMonitorGrain` periodically polls shard hotness counters and triggers splits when a shard's ops/sec exceeds `HotShardOpsPerSecondThreshold`. When `false`, no autonomic splits occur; the shard count remains fixed at `ShardCount`.
+
+This option can be changed freely at any time. The change takes effect on the next `HotShardMonitorGrain` reminder tick.
+
+### `HotShardOpsPerSecondThreshold`
+
+The ops/sec threshold on a single shard that triggers an adaptive split (default: 200). Lowering this value makes the system more aggressive about splitting; raising it allows shards to absorb more load before splitting.
+
+This option can be changed freely at any time.
+
+### `HotShardSampleInterval`
+
+How often `HotShardMonitorGrain` polls every shard's hotness counters (default: 30 seconds). Shorter intervals increase detection responsiveness at the cost of more grain calls.
+
+This option can be changed freely at any time.
+
+### `HotShardSplitCooldown`
+
+Minimum time between consecutive splits of the same shard (default: 2 minutes). Prevents rapid re-splitting before the post-split load distribution has stabilised.
+
+This option can be changed freely at any time.
+
+### `MaxConcurrentAutoSplits`
+
+Maximum number of in-flight adaptive splits per tree (default: 2). Because `HotShardMonitorGrain` is keyed per tree, this limit is enforced independently per tree in a multi-tree cluster.
+
+This option can be changed freely at any time.
+
+### `SplitDrainBatchSize`
+
+Number of entries per batch during the shadow-write drain phase of an adaptive split (default: 1024). Larger batches reduce the number of drain rounds but increase per-round memory and storage I/O.
+
+This option can be changed freely at any time.
+
+### `AutoSplitMinTreeAge`
+
+Minimum tree age before the hot-shard monitor begins sampling (default: 60 seconds). Prevents splits during initial bulk-load bursts that would otherwise appear as sustained hot-shard traffic.
+
+This option can be changed freely at any time.
+
+### `MaxScanRetries`
+
+Maximum bounded-retry passes for `CountAsync`, `KeysAsync`, and `EntriesAsync` when the shard topology changes mid-scan (default: 3). If the topology keeps mutating after every reconciliation step, the scan throws `InvalidOperationException` rather than returning a silently incomplete result. Under the default split rate-limits (`MaxConcurrentAutoSplits = 2`, `HotShardSplitCooldown = 2 minutes`), exhausting 3 retries is not a realistic operational concern. See [Scan reliability](api.md#scan-reliability).
 
 This option can be changed freely at any time.
 
