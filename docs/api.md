@@ -64,15 +64,15 @@ These methods are used during normal application flow to read, write, and enumer
 | `GetManyAsync` | `Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)` | Fetches multiple keys in parallel across shards. Missing/tombstoned keys are omitted from the result. |
 | `SetManyAsync` | `Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)` | Inserts or updates multiple entries in parallel across shards. |
 | `DeleteRangeAsync` | `Task<int> DeleteRangeAsync(string startInclusive, string endExclusive)` | Tombstones all live keys in the lexicographic range [`startInclusive`, `endExclusive`] by walking the leaf chain in each shard. Returns the total number of keys tombstoned. |
-| `CountAsync` | `Task<int> CountAsync()` | Returns the total number of live (non-tombstoned) keys across all shards by fanning out in parallel. |
+| `CountAsync` | `Task<int> CountAsync()` | Returns the total number of live (non-tombstoned) keys across all shards by fanning out in parallel. **Strongly consistent during shard splits**: uses per-slot reconciliation against the registry's monotonic `ShardMap.Version` plus bounded optimistic retry (`LatticeOptions.MaxScanRetries`, default 3) so the result reflects the exact live key set even when concurrent splits move slots between shards mid-scan. Throws `InvalidOperationException` if the topology keeps mutating beyond the retry budget. |
 | `CountPerShardAsync` | `Task<IReadOnlyList<int>> CountPerShardAsync()` | Returns the number of live keys in each shard as an ordered list (index = shard index). Useful for diagnostics and load-balancing analysis. |
 
 #### Enumeration
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `KeysAsync` | `IAsyncEnumerable<string> KeysAsync(string? startInclusive, string? endExclusive, bool reverse, bool? prefetch)` | Streams live keys in lexicographic order via paginated k-way merge across shards. When `prefetch` is `true` (or `null` with `PrefetchKeysScan` enabled), the next page from each shard is fetched in parallel while the current page is consumed, hiding grain-call latency during large scans. |
-| `EntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive, string? endExclusive, bool reverse)` | Streams live key-value entries in lexicographic key order via paginated k-way merge across shards. Useful for exports, migrations, and analytics without a separate `GetAsync` per key. |
+| `KeysAsync` | `IAsyncEnumerable<string> KeysAsync(string? startInclusive, string? endExclusive, bool reverse, bool? prefetch)` | Streams live keys in lexicographic order via paginated k-way merge across shards. When `prefetch` is `true` (or `null` with `PrefetchKeysScan` enabled), the next page from each shard is fetched in parallel while the current page is consumed, hiding grain-call latency during large scans. **Strongly consistent during shard splits**: pass-1 streams keys from current owners (sorted) while sources filter their own moved-away slots; pass-2 fetches missing entries from the new owners and yields them at the tail (unspecified order). A `HashSet<string>` deduplicates across passes. See [`docs/shard-splitting.md`](shard-splitting.md). |
+| `EntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive, string? endExclusive, bool reverse)` | Streams live key-value entries in lexicographic key order via paginated k-way merge across shards. Useful for exports, migrations, and analytics without a separate `GetAsync` per key. **Strongly consistent during shard splits** with the same per-slot reconciliation algorithm as `KeysAsync`. |
 
 ### Maintenance Operations
 
@@ -223,6 +223,7 @@ Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Nev
 | `ShardHotness` | `ol.sh` | public (hidden) | Volatile shard hotness counters (reads, writes, window) returned by `IShardRootGrain.GetHotnessAsync()`. |
 | `ShardMap` | `ol.sm` | public (hidden) | Per-tree mapping from virtual shard slots to physical shard indices. Persisted on `TreeRegistryEntry`. |
 | `RoutingInfo` | `ol.ri` | public (hidden) | Per-activation routing snapshot returned by `ILattice.GetRoutingAsync()`: physical tree id plus the resolved `ShardMap`. Used by infrastructure (e.g. streaming bulk load) that must route to the same physical shards as `LatticeGrain`. |
+| `ShardCountResult` | `ol.scr` | internal | Per-shard count plus the set of virtual slots the shard observed in its `MovedAwaySlots` table during the count. Used by `IShardRootGrain.CountWithMovedAwayAsync` to coordinate strongly-consistent scans during shard splits. |
 
 ## Internal Grain Access Control
 

@@ -55,6 +55,37 @@ internal sealed class ShardRootState
     /// subsequent operations.
     /// </summary>
     [Id(7)] public bool IsRegistered { get; set; }
+
+    /// <summary>
+    /// Non-null when this shard is participating in an adaptive split (F-011)
+    /// as the source. Drives shadow-write and reject-routing behaviour on the
+    /// hot path of every operation. Cleared once the split coordinator
+    /// completes the post-cleanup phase.
+    /// </summary>
+    [Id(8)] public ShardSplitInProgress? SplitInProgress { get; set; }
+
+    /// <summary>
+    /// Virtual slots that this shard has permanently split away to other
+    /// physical shards (key = virtual slot, value = new owner shard index).
+    /// Accumulated on every successful split completion; never cleared.
+    /// <para>
+    /// Used by the hot-path reject gate after <see cref="SplitInProgress"/>
+    /// has been cleared so that stale <c>LatticeGrain</c> activations whose
+    /// cached <c>ShardMap</c> still routes to this shard always observe a
+    /// <see cref="StaleShardRoutingException"/> and refresh their map. Without
+    /// this, a stale <see cref="StatelessWorkerAttribute"/> activation could
+    /// indefinitely return orphan data from a slot it no longer owns.
+    /// </para>
+    /// </summary>
+    [Id(9)] public Dictionary<int, int> MovedAwaySlots { get; set; } = new();
+
+    /// <summary>
+    /// The virtual shard count under which <see cref="MovedAwaySlots"/> entries
+    /// were recorded. Once a split completes for this shard, all subsequent
+    /// splits of the same tree must use the same virtual shard count;
+    /// otherwise the recorded slot indices would lose meaning.
+    /// </summary>
+    [Id(10)] public int? MovedAwayVirtualShardCount { get; set; }
 }
 
 /// <summary>

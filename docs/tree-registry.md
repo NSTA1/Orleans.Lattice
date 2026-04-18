@@ -106,9 +106,17 @@ var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.Registry
 // Read the persisted shard map for a tree (null if none).
 ShardMap? map = await registry.GetShardMapAsync("my-tree");
 
-// Persist a new shard map for a tree.
+// Persist a new shard map for a tree. The registry atomically stamps a
+// fresh monotonic Version on every persist (the caller-supplied Version
+// is ignored).
 await registry.SetShardMapAsync("my-tree", new ShardMap { Slots = [0, 0, 1, 1] });
 ```
+
+### Monotonic `ShardMap.Version`
+
+Every `SetShardMapAsync` call increments `ShardMap.Version` by one, starting from 1 on the first persist. The default identity map materialised in memory for never-persisted trees has `Version = 0`.
+
+`LatticeGrain` uses this version as a stability hint for strongly-consistent scans (`CountAsync`, `KeysAsync`, `EntriesAsync`): a scan records the version when it starts and re-reads it before returning. If the version moved, the scan retries up to `LatticeOptions.MaxScanRetries` times. Because the registry grain is non-reentrant, the version increment is atomic with the shard-map write, so concurrent splits cannot produce torn maps or out-of-order version stamps. See [Shard Splitting](shard-splitting.md#scan-semantics-during-a-split) for the full algorithm.
 
 ## Accessing the Registry Grain Directly
 

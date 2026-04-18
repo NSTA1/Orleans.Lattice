@@ -18,4 +18,14 @@ public sealed record EntriesPage
 
     /// <summary>Whether more pages are available after this one.</summary>
     [Id(1)] public required bool HasMore { get; init; }
+
+    /// <summary>
+    /// Virtual slots whose entries were filtered out of <see cref="Entries"/> by
+    /// the source shard because the slot has been (or is being) moved to
+    /// another physical shard by an adaptive split (F-011). <c>null</c> or
+    /// empty when no such filtering occurred. Strongly-consistent scans
+    /// (<c>ILattice.EntriesAsync</c>) use this signal to query the new owner
+    /// for the missing slots before completing.
+    /// </summary>
+    [Id(2)] public int[]? MovedAwaySlots { get; init; }
 }

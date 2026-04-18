@@ -180,4 +180,123 @@ public interface IShardRootGrain : IGrainWithStringKey
     /// Used by split coordinators to detect hot shards without persistence overhead.
     /// </summary>
     Task<ShardHotness> GetHotnessAsync();
+
+    /// <summary>
+    /// Marks this shard as the source of an in-progress adaptive split (F-011).
+    /// While the returned task is incomplete or the split has not been completed,
+    /// every write to a key whose virtual slot is in <paramref name="movedSlots"/>
+    /// is mirrored to the shard at <paramref name="targetShardIndex"/> via
+    /// <see cref="MergeManyAsync"/>, preserving HLC timestamps for CRDT-safe
+    /// convergence. Reads continue to be served locally.
+    /// <para>
+    /// Idempotent: if the shard is already in <see cref="ShardSplitPhase.BeginShadowWrite"/>
+    /// or <see cref="ShardSplitPhase.Drain"/> with a matching
+    /// <paramref name="targetShardIndex"/> and <paramref name="movedSlots"/>, the call
+    /// is a no-op.
+    /// </para>
+    /// </summary>
+    Task BeginSplitAsync(int targetShardIndex, int[] movedSlots, int virtualShardCount);
+
+    /// <summary>
+    /// Transitions this shard's in-progress split to the <see cref="ShardSplitPhase.Reject"/>
+    /// phase. Subsequent reads and writes to keys in any of the moved virtual slots
+    /// throw <see cref="StaleShardRoutingException"/>, which the calling
+    /// <c>LatticeGrain</c> catches to refresh its cached <see cref="ShardMap"/> and
+    /// retry against the new physical shard. Idempotent.
+    /// </summary>
+    Task EnterRejectPhaseAsync();
+
+    /// <summary>
+    /// Clears the in-progress split state on this shard. Called by the split
+    /// coordinator after the post-swap cleanup phase has finished tombstoning
+    /// the moved entries. Idempotent.
+    /// </summary>
+    Task CompleteSplitAsync();
+
+    /// <summary>
+    /// Returns <c>true</c> if this shard has a non-null
+    /// <see cref="ShardSplitInProgress"/> in its persistent state.
+    /// </summary>
+    Task<bool> IsSplittingAsync();
+
+    /// <summary>
+    /// Returns <c>true</c> if this shard has a pending bulk-load or bulk-append
+    /// operation that has not yet been fully grafted into the tree. Used by the
+    /// auto-split monitor to suppress splits while bulk operations are mid-flight.
+    /// </summary>
+    Task<bool> HasPendingBulkOperationAsync();
+
+    /// <summary>
+    /// Strongly-consistent variant of <see cref="CountAsync"/> for use by
+    /// <c>ILattice.CountAsync</c>. Returns the live key count plus the set of
+    /// virtual slots this shard filtered out because they have been (or are
+    /// being) moved to another physical shard by an adaptive split (F-011).
+    /// The orchestrator uses <see cref="ShardCountResult.MovedAwaySlots"/> to
+    /// query the new owners for the missing slots and produce a consistent
+    /// total even mid-split.
+    /// </summary>
+    Task<ShardCountResult> CountWithMovedAwayAsync();
+
+    /// <summary>
+    /// Returns the number of live (non-tombstoned) keys in this shard whose
+    /// virtual slot is in <paramref name="sortedSlots"/>. Used by
+    /// <c>ILattice.CountAsync</c> after detecting a topology change to count
+    /// only the entries that moved to this shard during a split, without
+    /// double-counting the shard's pre-existing data.
+    /// </summary>
+    /// <param name="sortedSlots">
+    /// Virtual slots to count, in ascending order. Used by binary search on
+    /// the leaf hot path; pre-sorting is the caller's responsibility.
+    /// </param>
+    /// <param name="virtualShardCount">
+    /// Virtual shard count used to compute the slot for each key; must match
+    /// the value used elsewhere in the tree's routing.
+    /// </param>
+    Task<int> CountForSlotsAsync(int[] sortedSlots, int virtualShardCount);
+
+    /// <summary>
+    /// Returns a page of live keys in this shard whose virtual slot is in
+    /// <paramref name="sortedSlots"/>, in sorted order, filtered to the
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
+    /// Used by <c>ILattice.KeysAsync</c> to fetch slot-restricted entries
+    /// from a new owner after detecting a topology change mid-scan (F-011).
+    /// Pagination semantics match <see cref="GetSortedKeysBatchAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="GetSortedKeysBatchAsync"/>, this method does <em>not</em>
+    /// apply the shard's <c>MovedAwaySlots</c> filter — the caller has explicitly
+    /// asked for these slots and is responsible for routing to the correct owner
+    /// based on the latest <see cref="ShardMap"/>. The returned
+    /// <see cref="KeysPage.MovedAwaySlots"/> is always <c>null</c>.
+    /// </remarks>
+    Task<KeysPage> GetSortedKeysBatchForSlotsAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken,
+        int[] sortedSlots,
+        int virtualShardCount);
+
+    /// <summary>
+    /// Returns a page of live key-value entries in this shard whose virtual slot
+    /// is in <paramref name="sortedSlots"/>, in sorted key order, filtered to the
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
+    /// Used by <c>ILattice.EntriesAsync</c> to fetch slot-restricted entries
+    /// from a new owner after detecting a topology change mid-scan (F-011).
+    /// Pagination semantics match <see cref="GetSortedEntriesBatchAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="GetSortedEntriesBatchAsync"/>, this method does <em>not</em>
+    /// apply the shard's <c>MovedAwaySlots</c> filter — the caller has explicitly
+    /// asked for these slots and is responsible for routing to the correct owner
+    /// based on the latest <see cref="ShardMap"/>. The returned
+    /// <see cref="EntriesPage.MovedAwaySlots"/> is always <c>null</c>.
+    /// </remarks>
+    Task<EntriesPage> GetSortedEntriesBatchForSlotsAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken,
+        int[] sortedSlots,
+        int virtualShardCount);
 }

@@ -8,20 +8,58 @@ A distributed [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree) library built o
 
 ## What is it?
 
-Orleans.Lattice gives you a **sorted key-value store** that runs as a set of Orleans grains — no external database required. Keys are `string`, values are `byte[]`. You get point lookups, deletes, ordered key scans, and bulk loading, all distributed across a cluster of silos.
+Orleans.Lattice gives you a **sorted, durable key-value store** that runs
+entirely as a set of Orleans grains — no external database, no coordinator
+service, no external queue. Keys are `string`, values are `byte[]`. You get
+point lookups, deletes, ordered key scans (forward, reverse, and
+range-bounded), bulk loading, snapshots, and tree aliasing, all
+horizontally distributed across a cluster of silos.
 
-The name comes from its use of **lattice-based state primitives** (hybrid logical clocks, last-writer-wins registers, version vectors) — mathematical structures where merges are commutative, associative, and idempotent. This means operations are conflict-free, crash-safe, and recoverable without distributed locks or coordination protocols.
+The system is designed around a few core properties:
+
+* **Self-organising under load.** Keys are hash-sharded across a virtual
+  slot space mapped onto physical shards. When a shard gets hot, an
+  autonomic monitor splits it online — no downtime, no lost writes, no
+  coordination protocol. Cold shards stay cheap.
+* **Strongly consistent from the outside.** Point reads, writes, and
+  ordered scans always see a consistent view of the data, even while
+  shards are splitting underneath. A concurrent `CountAsync` during a
+  mid-split workload will return the exact number of live keys.
+* **Crash-safe by construction.** Every multi-step operation — splits,
+  promotions, bulk grafts, snapshots — persists its intent before any
+  side effect. A silo crash mid-operation is recovered by the next
+  reminder tick, replaying the exact same idempotent work.
+* **Eventually convergent under failure.** State merges use hybrid
+  logical clocks and last-writer-wins CRDTs. Storage faults, stale
+  routing, and interrupted splits cannot corrupt data; once the fault
+  window closes, the tree converges to the correct state.
+* **No locks, no consensus round-trips.** All conflict resolution is
+  algebraic (commutative, associative, idempotent merges). There is no
+  Paxos, no Raft, no distributed lock manager.
+
+Behavior is validated end-to-end by a pair of [chaos tests](docs/chaos-tests.md)
+that hammer a live cluster with concurrent reads, writes, scans, and
+shard splits — optionally with random storage-write faults — and assert
+both live consistency and eventual convergence.
+
+The name comes from its use of **lattice-based state primitives** —
+mathematical structures where merges are commutative, associative, and
+idempotent. This is what makes operations conflict-free and recoverable
+without distributed locks or coordination protocols.
 
 ## Key Properties
 
 | Property | How |
 |---|---|
+| **Adaptive shard splitting** | Hot shards split online via shadow-write + drain + swap + reject phases. Fully transparent: no downtime, no dropped writes, no coordination protocol. An autonomic monitor detects hot shards; splits can also be triggered manually for tooling. |
 | **Bulk loading** | One-shot bottom-up build or streaming `IAsyncEnumerable` ingestion with per-shard parallel flushing. Both modes are idempotent and retryable. |
 | **Conflict-free** | All state merges are monotonic. Concurrent writes to the same key resolve via last-writer-wins with hybrid logical clocks. |
 | **Crash-safe splits** | Every node split uses a two-phase pattern with persisted intent. Interrupted splits resume automatically on the next access. |
 | **Fast reads** | A `[StatelessWorker]` cache grain per silo serves reads via delta replication from the primary leaf. Cache misses cost a single version-vector comparison. |
+| **Fault-tolerant** | Validated end-to-end by a parametrized fault-injection chaos theory: random storage-write failures during concurrent reads, writes, scans, and splits converge to the correct state once faults stop. |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on an existing tree. Takes an offline snapshot to a new physical tree, swaps the alias, and soft-deletes the old data. The tree is unavailable during the snapshot phase but immediately accessible after the swap. Undoable within the retention window. |
-| **Scalable writes** | Keys are hash-sharded across 64 independent sub-trees (configurable). No single-root bottleneck. |
+| **Scalable writes** | Keys are hash-sharded across a configurable number of independent sub-trees (default 64). No single-root bottleneck. Shards split further at runtime as load grows. |
+| **Strongly-consistent scans** | `CountAsync`, `KeysAsync`, and `EntriesAsync` return the exact live key set even during concurrent adaptive shard splits, via per-slot reconciliation against a monotonic `ShardMap.Version` and bounded optimistic retry. |
 | **Snapshots** | Create a point-in-time copy of a tree: offline (locked - tree unavailable during snapshot process) or online (best-effort), with optional sizing overrides for the destination. |
 | **Soft delete & recovery** | Trees can be soft-deleted with a configurable retention window. Recovery restores full access; purge permanently removes all data. |
 | **Tombstone cleanup** | Reminder-driven compaction removes expired tombstones shard-by-shard, with crash-safe progress tracking. |
@@ -41,8 +79,10 @@ Detailed design documentation is split by concept:
 | [Architecture](docs/architecture.md) | Grain layers, sharding, root promotion, bounded retry, grain mapping, capacity |
 | [Benchmarks](docs/benchmarks.md) | Prerequisites, running benchmarks, interpreting results |
 | [Bulk Loading](docs/bulk-loading.md) | One-shot build, streaming ingestion, two-phase graft, recovery guarantees |
+| [Chaos Tests](docs/chaos-tests.md) | Happy-path and fault-injection chaos integration tests, invariants proven, recovery surfaces exercised |
 | [Configuration](docs/configuration.md) | Options reference, per-tree overrides, immutability constraints, storage provider |
 | [Read Caching](docs/caching.md) | Delta-based `[StatelessWorker]` cache, split-aware pruning |
+| [Shard Splitting](docs/shard-splitting.md) | Adaptive online splits, shadow-write design, autonomic monitor, suppression rules, scan semantics during splits, tunables |
 | [Snapshots](docs/snapshots.md) | Offline and online snapshot modes, crash safety, sizing overrides |
 | [State Primitives](docs/state-primitives.md) | Hybrid logical clocks, LWW registers, monotonic split state, version vectors, state deltas |
 | [Tombstone Compaction](docs/tombstone-compaction.md) | Reminder-driven cleanup, grace periods, configuration |

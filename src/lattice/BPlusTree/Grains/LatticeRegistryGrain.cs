@@ -123,8 +123,31 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(map);
 
         var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        // Bump the map version on every persist so strongly-consistent scans
+        // can detect topology changes via a single long comparison. The
+        // registry grain is non-reentrant and singleton-keyed, so the
+        // get-modify-set sequence is atomic across concurrent split
+        // coordinators (F-011).
+        var previousVersion = existing.ShardMap?.Version ?? 0L;
+        map.Version = previousVersion + 1;
         var updated = existing with { ShardMap = map };
         await UpdateAsync(treeId, updated);
+    }
+
+    public async Task<int> AllocateNextShardIndexAsync(string treeId, int currentMaxFromMap)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        // Atomic read-modify-write: this grain is non-reentrant and is a
+        // singleton (keyed by RegistryTreeId), so the entire method body runs
+        // without interleaving across concurrent callers, guaranteeing each
+        // split coordinator receives a distinct target shard index.
+        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var floor = Math.Max(existing.NextShardIndex ?? -1, currentMaxFromMap);
+        var allocated = floor + 1;
+        var updated = existing with { NextShardIndex = allocated };
+        await UpdateAsync(treeId, updated);
+        return allocated;
     }
 
     private static byte[] SerializeEntry(TreeRegistryEntry entry) =>
