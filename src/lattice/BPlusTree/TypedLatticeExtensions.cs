@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
