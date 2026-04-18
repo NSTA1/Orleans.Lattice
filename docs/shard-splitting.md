@@ -36,10 +36,15 @@ stateDiagram-v2
    virtual slot is mirrored to *T* via `T.MergeManyAsync`, preserving the
    original HLC. CRDT LWW guarantees correct convergence regardless of how
    the foreground write and the background drain interleave.
-2. **Drain** — Coordinator walks *S*'s leaf chain, filters entries by moved
-   slot, and forwards them (including tombstones) to *T* with their original
-   HLC timestamps. Idempotent under retry — re-running merges only converges
-   to the same state.
+2. **Drain** — Coordinator walks *S*'s leaf chain and forwards moved-slot
+   entries (including tombstones) to *T* with their original HLC timestamps.
+   The drain is **chunked** and **leaf-side filtered**: each leaf returns
+   only entries whose virtual slot is in the moved-slot set via
+   `IBPlusLeafGrain.GetDeltaSinceForSlotsAsync`, and the coordinator flushes
+   to *T* in batches of `SplitDrainBatchSize` (default 1024) entries. This
+   bounds peak memory on the coordinator regardless of source shard size,
+   and avoids transferring non-moved entries over the wire. Idempotent under
+   retry — re-running merges only converges to the same state.
 3. **Swap** — Coordinator persists a new `ShardMap` in the registry that
    redirects moved slots to *T*. New `LatticeGrain` activations immediately
    route the moved slots to *T*; stale activations still cache the old map.
@@ -100,23 +105,39 @@ re-anchored by a keepalive reminder. On each tick (default every 30 s) it:
 
 1. Polls every physical shard's `GetHotnessAsync()` in parallel (F-013).
 2. Computes ops/sec = `(reads + writes) / window.TotalSeconds`.
-3. Selects the hottest shard whose rate exceeds
-   `HotShardOpsPerSecondThreshold` (default 200 ops/s).
-4. Triggers `ITreeShardSplitGrain.SplitAsync` on that shard and starts a
-   per-shard cooldown.
+3. Counts the cluster-wide number of in-flight splits by polling every
+   shard's `IsSplittingAsync()`. If that count is already
+   `MaxConcurrentAutoSplits`, the pass returns without triggering anything.
+4. Selects the top-`(MaxConcurrentAutoSplits − inFlight)` hottest shards
+   whose rate exceeds `HotShardOpsPerSecondThreshold` (default 200 ops/s),
+   skipping any shard already splitting, on cooldown, or owning a single
+   virtual slot.
+5. Triggers `ITreeShardSplitGrain.SplitAsync` on each selected shard in
+   parallel via `Task.WhenAll` and starts a per-shard cooldown.
 
-A split is **suppressed** when any of the following hold, to avoid
-thrashing or interfering with bulk maintenance:
+Each split runs in its own coordinator activation: the
+`ITreeShardSplitGrain` key format is **`{treeId}/{sourceShardIndex}`**,
+so independent splits of different source shards within the same tree do
+not contend on a single coordinator. Concurrent target-index allocation is
+made collision-free by a registry-side atomic counter
+(`ILatticeRegistry.AllocateNextShardIndexAsync`), and concurrent shard-map
+swaps are made composition-safe by re-reading the current map inside the
+swap phase before persisting the diff. Both atomicity guarantees rely on
+the singleton `LatticeRegistryGrain` being non-reentrant.
 
-| Suppression rule | Mechanism |
-|---|---|
-| `AutoSplitEnabled = false` | Returns early. |
-| Tree younger than `AutoSplitMinTreeAge` (since monitor activation, default 60 s) | Returns early. |
-| Resize / merge / snapshot in progress | `ILattice.IsResize/Merge/SnapshotCompleteAsync()` returns `false`. |
-| Any shard splitting | `IShardRootGrain.IsSplittingAsync()` returns `true`. |
-| Any shard has a pending bulk graft | `IShardRootGrain.HasPendingBulkOperationAsync()` returns `true`. |
-| Per-shard cooldown active (default 2 min) | In-memory cooldown timestamp. |
-| Shard owns a single virtual slot | Cannot be subdivided further. |
+A split is **suppressed** (whole pass skipped) or a candidate is **skipped
+individually** when:
+
+| Suppression rule | Scope | Mechanism |
+|---|---|---|
+| `AutoSplitEnabled = false` | Whole pass | Returns early. |
+| Tree younger than `AutoSplitMinTreeAge` (since monitor activation, default 60 s) | Whole pass | Returns early. |
+| Resize / merge / snapshot in progress | Whole pass | `ILattice.IsResize/Merge/SnapshotCompleteAsync()` returns `false`. |
+| Any shard has a pending bulk graft | Whole pass | `IShardRootGrain.HasPendingBulkOperationAsync()` returns `true`. |
+| In-flight splits already at `MaxConcurrentAutoSplits` | Whole pass | Sum of `IsSplittingAsync()` results. |
+| Shard already splitting | Per shard | Excluded from candidate set. |
+| Per-shard cooldown active (default 2 min) | Per shard | In-memory cooldown timestamp. |
+| Shard owns a single virtual slot | Per shard | Cannot be subdivided further. |
 
 ## Tunables (`LatticeOptions`)
 
@@ -126,7 +147,8 @@ thrashing or interfering with bulk maintenance:
 | `HotShardOpsPerSecondThreshold` | `200` | Operations/second above which a shard is considered hot. Intentionally low so splits occur before throughput degrades. |
 | `HotShardSampleInterval` | `30 s` | How often the monitor polls hotness counters. |
 | `HotShardSplitCooldown` | `2 min` | Minimum interval between consecutive splits of the same physical shard. |
-| `MaxConcurrentAutoSplits` | `1` | Maximum concurrent splits per tree. Default `1` keeps storage I/O bounded. |
+| `MaxConcurrentAutoSplits` | `2` | Maximum concurrent splits per tree. Each split runs in its own per-shard coordinator activation; the cap bounds aggregate storage I/O. |
+| `SplitDrainBatchSize` | `1024` | Maximum number of moved-slot entries the drain accumulates in memory before flushing to the target shard. Caps coordinator allocation regardless of source shard size. |
 | `AutoSplitMinTreeAge` | `60 s` | Minimum tree age before autonomic splits are allowed; absorbs startup bursts. |
 
 ## Convergence guarantees

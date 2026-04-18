@@ -11,19 +11,22 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// The monitor is started lazily by <c>LatticeGrain</c> on the first write
 /// to a tree and re-activates on silo restart via a keepalive reminder. On
 /// each tick it polls every physical shard's <see cref="IShardRootGrain.GetHotnessAsync"/>
-/// in parallel, computes ops-per-second, and triggers a split on the hottest
-/// eligible shard.
+/// in parallel, computes ops-per-second, and triggers splits on up to
+/// <see cref="LatticeOptions.MaxConcurrentAutoSplits"/> of the hottest
+/// eligible shards in parallel.
 /// </para>
 /// <para>
-/// Suppression rules (a hot shard is <em>not</em> split if any apply):
+/// Suppression rules:
 /// </para>
 /// <list type="bullet">
-/// <item><description><see cref="LatticeOptions.AutoSplitEnabled"/> is <c>false</c>.</description></item>
-/// <item><description>The tree is younger than <see cref="LatticeOptions.AutoSplitMinTreeAge"/> (since this monitor activated).</description></item>
-/// <item><description>A resize, merge, or snapshot is in progress (<see cref="ILattice.IsResizeCompleteAsync"/> etc.).</description></item>
-/// <item><description>Any physical shard is currently splitting (<see cref="IShardRootGrain.IsSplittingAsync"/>) or has a pending bulk graft (<see cref="IShardRootGrain.HasPendingBulkOperationAsync"/>).</description></item>
-/// <item><description>The shard is in the per-shard cooldown window after a recent split.</description></item>
-/// <item><description><see cref="LatticeOptions.MaxConcurrentAutoSplits"/> in-flight splits already running.</description></item>
+/// <item><description><see cref="LatticeOptions.AutoSplitEnabled"/> is <c>false</c> — entire pass returns.</description></item>
+/// <item><description>The tree is younger than <see cref="LatticeOptions.AutoSplitMinTreeAge"/> (since this monitor activated) — entire pass returns.</description></item>
+/// <item><description>A resize, merge, or snapshot is in progress (<see cref="ILattice.IsResizeCompleteAsync"/> etc.) — entire pass returns.</description></item>
+/// <item><description>Any physical shard has a pending bulk graft (<see cref="IShardRootGrain.HasPendingBulkOperationAsync"/>) — entire pass returns.</description></item>
+/// <item><description>A shard is already splitting — that shard is skipped and counts toward the in-flight cap.</description></item>
+/// <item><description>The shard is in the per-shard cooldown window after a recent split — that shard is skipped.</description></item>
+/// <item><description>The shard owns fewer than two virtual slots — that shard is skipped (nothing to subdivide).</description></item>
+/// <item><description><see cref="LatticeOptions.MaxConcurrentAutoSplits"/> in-flight splits already running — no further splits this tick.</description></item>
 /// </list>
 /// Key format: <c>{treeId}</c>.
 /// </summary>
@@ -134,10 +137,6 @@ internal sealed class HotShardMonitorGrain(
         if (!await lattice.IsMergeCompleteAsync()) return;
         if (!await lattice.IsSnapshotCompleteAsync()) return;
 
-        // Suppress when an existing split is still running (only one at a time per tree for v1).
-        var splitGrain = grainFactory.GetGrain<ITreeShardSplitGrain>(TreeId);
-        if (!await splitGrain.IsCompleteAsync()) return;
-
         // Resolve the current shard map and list of physical shards.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var physicalTreeId = await registry.ResolveAsync(TreeId);
@@ -160,52 +159,84 @@ internal sealed class HotShardMonitorGrain(
         await Task.WhenAll(pendingBulkTasks);
         await Task.WhenAll(splittingTasks);
 
-        // Suppress all autonomic splits if any shard has a pending bulk graft
-        // or is mid-split (the latter can occur if reminder fires during splits).
+        // Suppress all autonomic splits if any shard has a pending bulk graft.
+        // (Bulk grafts mutate tree topology in ways the split coordinator
+        // cannot interleave with safely.)
         for (int i = 0; i < physicalShards.Count; i++)
-            if (pendingBulkTasks[i].Result || splittingTasks[i].Result) return;
+            if (pendingBulkTasks[i].Result) return;
 
-        // Pick the hottest shard above threshold that is not in cooldown.
+        // Count splits already in flight from the splitting-status results.
+        // A shard reports IsSplitting==true while it is the source of an
+        // unfinished split; this is our authoritative cluster-wide concurrency
+        // counter, surviving silo restarts and monitor reactivation.
+        var inFlight = 0;
+        for (int i = 0; i < physicalShards.Count; i++)
+            if (splittingTasks[i].Result) inFlight++;
+
+        var maxConcurrent = options.MaxConcurrentAutoSplits;
+        if (maxConcurrent < 1) maxConcurrent = 1;
+        if (inFlight >= maxConcurrent) return;
+        var slotsAvailable = maxConcurrent - inFlight;
+
+        // Build the candidate list of hot, eligible shards. A shard is
+        // eligible when it (a) is not already splitting, (b) is above the
+        // ops/sec threshold, (c) is not in cooldown, and (d) owns at least
+        // two virtual slots (otherwise there is nothing to subdivide).
         var threshold = options.HotShardOpsPerSecondThreshold;
-        var bestShardIndex = -1;
-        double bestRate = 0;
+        var candidates = new List<(double Rate, int ShardIndex)>(physicalShards.Count);
         for (int i = 0; i < physicalShards.Count; i++)
         {
+            if (splittingTasks[i].Result) continue;
+
             var h = hotnessTasks[i].Result;
             if (h.Window <= TimeSpan.Zero) continue;
             var rate = (h.Reads + h.Writes) / h.Window.TotalSeconds;
             if (rate < threshold) continue;
             if (_shardCooldownUntilUtc.TryGetValue(physicalShards[i], out var until) && nowUtc < until) continue;
 
-            // Don't try to split shards owning a single virtual slot — geometric
-            // convergence already isolated them.
             var owned = 0;
             foreach (var slot in map.Slots)
                 if (slot == physicalShards[i]) { owned++; if (owned > 1) break; }
             if (owned < 2) continue;
 
-            if (rate > bestRate)
-            {
-                bestRate = rate;
-                bestShardIndex = physicalShards[i];
-            }
+            candidates.Add((rate, physicalShards[i]));
         }
 
-        if (bestShardIndex < 0) return;
+        if (candidates.Count == 0) return;
 
-        // Trigger the split. Coordinator runs asynchronously after persisting intent.
+        // Pick the top N hottest by rate (descending).
+        candidates.Sort((a, b) => b.Rate.CompareTo(a.Rate));
+        var triggerCount = Math.Min(slotsAvailable, candidates.Count);
+
+        // Trigger each split via its own per-shard coordinator key. Each
+        // coordinator runs independently and persists its own state, so
+        // multiple splits proceed in parallel without coordination on this
+        // monitor grain.
+        var triggers = new List<Task>(triggerCount);
+        for (int i = 0; i < triggerCount; i++)
+        {
+            var shardIndex = candidates[i].ShardIndex;
+            var rate = candidates[i].Rate;
+            triggers.Add(TriggerSplitAsync(shardIndex, rate, threshold, nowUtc + options.HotShardSplitCooldown));
+        }
+        await Task.WhenAll(triggers);
+    }
+
+    private async Task TriggerSplitAsync(int shardIndex, double rate, int threshold, DateTime cooldownUntilUtc)
+    {
+        var splitGrain = grainFactory.GetGrain<ITreeShardSplitGrain>($"{TreeId}/{shardIndex}");
         try
         {
-            await splitGrain.SplitAsync(bestShardIndex);
-            _shardCooldownUntilUtc[bestShardIndex] = nowUtc + options.HotShardSplitCooldown;
+            await splitGrain.SplitAsync(shardIndex);
+            _shardCooldownUntilUtc[shardIndex] = cooldownUntilUtc;
             logger.LogInformation(
                 "Triggered autonomic split of shard {ShardIndex} for tree {TreeId} (rate={Rate:F1} ops/s, threshold={Threshold})",
-                bestShardIndex, TreeId, bestRate, threshold);
+                shardIndex, TreeId, rate, threshold);
         }
         catch (InvalidOperationException ex)
         {
-            // Coordinator already busy — ignore until next tick.
-            logger.LogDebug(ex, "Could not trigger split for shard {ShardIndex} of tree {TreeId}", bestShardIndex, TreeId);
+            // Coordinator already busy on a different parameter set — ignore until next tick.
+            logger.LogDebug(ex, "Could not trigger split for shard {ShardIndex} of tree {TreeId}", shardIndex, TreeId);
         }
     }
 }

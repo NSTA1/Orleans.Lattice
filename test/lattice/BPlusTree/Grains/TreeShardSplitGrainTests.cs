@@ -29,7 +29,8 @@ public class TreeShardSplitGrainTests
         FakePersistentState<TreeShardSplitState>? existingState = null)
     {
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("split", TreeId));
+        // Coordinator key format: {treeId}/{sourceShardIndex}.
+        context.GrainId.Returns(GrainId.Create("split", $"{TreeId}/{sourceShardIndex}"));
 
         var grainFactory = Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
@@ -45,6 +46,10 @@ public class TreeShardSplitGrainTests
         registry.ResolveAsync(TreeId).Returns(TreeId);
         registry.GetShardMapAsync(TreeId).Returns(existingMap
             ?? ShardMap.CreateDefault(virtualShardCount, physicalShardCount));
+        // Default allocation hands back currentMaxFromMap + 1 — matches the
+        // previous max-existing+1 behavior for unit-test expectations.
+        registry.AllocateNextShardIndexAsync(TreeId, Arg.Any<int>())
+            .Returns(ci => Task.FromResult(((int)ci[1]) + 1));
 
         // Stub source + target shards.
         var sourceShard = Substitute.For<IShardRootGrain>();

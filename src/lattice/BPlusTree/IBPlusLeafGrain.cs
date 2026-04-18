@@ -101,6 +101,17 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion);
 
     /// <summary>
+    /// Returns a <see cref="StateDelta"/> containing only the entries whose
+    /// virtual slot is in <paramref name="sortedMovedSlots"/> and whose
+    /// timestamp is newer than what <paramref name="sinceVersion"/> has seen.
+    /// Used by the adaptive split coordinator (F-011) to drain only moved-slot
+    /// data from each leaf, eliminating the cost of serialising entries the
+    /// coordinator would otherwise discard. The slot list must be sorted in
+    /// ascending order; lookup uses binary search.
+    /// </summary>
+    Task<StateDelta> GetDeltaSinceForSlotsAsync(VersionVector sinceVersion, int[] sortedMovedSlots, int virtualShardCount);
+
+    /// <summary>
     /// Bulk-merges entries (including tombstones) into this leaf using LWW semantics,
     /// preserving original timestamps. Used during splits to transfer entries without
     /// re-stamping them. Idempotent — re-merging the same entries is a no-op.

@@ -91,4 +91,19 @@ public interface ILatticeRegistry : IGrainWithStringKey
     /// shards. Upserts the registry entry if the tree is not yet registered.
     /// </summary>
     Task SetShardMapAsync(string treeId, ShardMap map);
+
+    /// <summary>
+    /// Atomically allocates a fresh physical shard index for an adaptive split
+    /// (F-011). Returns <c>max(currentMaxFromMap, persisted) + 1</c> and
+    /// persists the new high-water mark so concurrent split coordinators each
+    /// receive a unique target shard index. The registry grain's non-reentrant
+    /// scheduling guarantees the read-modify-write is atomic across callers.
+    /// </summary>
+    /// <param name="treeId">The tree whose shard space is being expanded.</param>
+    /// <param name="currentMaxFromMap">
+    /// The maximum physical shard index in the caller's view of the current
+    /// <see cref="ShardMap"/>. Used as the floor when no allocation has yet
+    /// been recorded.
+    /// </param>
+    Task<int> AllocateNextShardIndexAsync(string treeId, int currentMaxFromMap);
 }

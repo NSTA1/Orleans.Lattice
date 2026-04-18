@@ -42,7 +42,7 @@ public class ShardSplitIntegrationTests
         }
 
         // Drive a manual split of shard 0 to completion.
-        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>(treeId);
+        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
         Assert.That(await split.IsCompleteAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
@@ -73,7 +73,7 @@ public class ShardSplitIntegrationTests
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
         await tree.SetAsync("k", [1]);
 
-        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>(treeId);
+        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(sourceShardIndex: 0);
         // Same source — must not throw.
         await split.SplitAsync(sourceShardIndex: 0);
@@ -204,7 +204,7 @@ public class ShardSplitIntegrationTests
         await Task.Delay(100);
 
         // Drive a manual split of shard 0 to completion while readers run.
-        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>(treeId);
+        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
         Assert.That(await split.IsCompleteAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
@@ -287,7 +287,7 @@ public class ShardSplitIntegrationTests
         // Let writers warm up.
         await Task.Delay(100);
 
-        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>(treeId);
+        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
         Assert.That(await split.IsCompleteAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");

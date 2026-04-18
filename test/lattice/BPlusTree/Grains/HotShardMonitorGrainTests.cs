@@ -47,7 +47,7 @@ public class HotShardMonitorGrainTests
 
         var splitGrain = Substitute.For<ITreeShardSplitGrain>();
         splitGrain.IsCompleteAsync().Returns(true);
-        grainFactory.GetGrain<ITreeShardSplitGrain>(TreeId).Returns(splitGrain);
+        grainFactory.GetGrain<ITreeShardSplitGrain>(Arg.Any<string>()).Returns(splitGrain);
 
         var registry = Substitute.For<ILatticeRegistry>();
         registry.ResolveAsync(TreeId).Returns(TreeId);
@@ -141,18 +141,6 @@ public class HotShardMonitorGrainTests
     }
 
     [Test]
-    public async Task RunSamplingPass_suppressed_when_split_already_in_progress()
-    {
-        var (grain, _, _, splitGrain, _, shardOf, _) = CreateGrain();
-        splitGrain.IsCompleteAsync().Returns(false);
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-
-        await grain.RunSamplingPassAsync();
-
-        await splitGrain.DidNotReceive().SplitAsync(Arg.Any<int>());
-    }
-
-    [Test]
     public async Task RunSamplingPass_picks_hottest_shard_when_multiple_exceed_threshold()
     {
         var (grain, _, _, splitGrain, _, shardOf, _) = CreateGrain();
@@ -184,7 +172,7 @@ public class HotShardMonitorGrainTests
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
         var splitGrain = Substitute.For<ITreeShardSplitGrain>();
         splitGrain.IsCompleteAsync().Returns(true);
-        grainFactory.GetGrain<ITreeShardSplitGrain>(TreeId).Returns(splitGrain);
+        grainFactory.GetGrain<ITreeShardSplitGrain>(Arg.Any<string>()).Returns(splitGrain);
 
         var hotShard1 = Substitute.For<IShardRootGrain>();
         hotShard1.GetHotnessAsync().Returns(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
@@ -212,5 +200,73 @@ public class HotShardMonitorGrainTests
         await grain.RunSamplingPassAsync();
 
         await splitGrain.DidNotReceive().SplitAsync(Arg.Any<int>());
+    }
+
+    [Test]
+    public async Task RunSamplingPass_suppressed_when_max_concurrent_in_flight_already_reached()
+    {
+        var opts = new LatticeOptions
+        {
+            ShardCount = 2, VirtualShardCount = 16,
+            AutoSplitMinTreeAge = TimeSpan.Zero,
+            HotShardOpsPerSecondThreshold = 100,
+            MaxConcurrentAutoSplits = 1,
+        };
+        var (grain, _, _, splitGrain, _, shardOf, _) = CreateGrain(options: opts);
+        // Shard 0 is already splitting (counts as 1 in-flight). Shard 1 is hot
+        // but the cap is reached so no new split is triggered this tick.
+        shardOf(0).IsSplittingAsync().Returns(true);
+        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+
+        await grain.RunSamplingPassAsync();
+
+        await splitGrain.DidNotReceive().SplitAsync(Arg.Any<int>());
+    }
+
+    [Test]
+    public async Task RunSamplingPass_triggers_two_splits_when_two_shards_hot_and_MaxConcurrent_is_2()
+    {
+        var opts = new LatticeOptions
+        {
+            ShardCount = 4, VirtualShardCount = 16,
+            AutoSplitMinTreeAge = TimeSpan.Zero,
+            HotShardOpsPerSecondThreshold = 100,
+            MaxConcurrentAutoSplits = 2,
+        };
+        var (grain, _, _, splitGrain, _, shardOf, _) = CreateGrain(physicalShardCount: 4, options: opts);
+        // Two hot shards, two cold shards, no in-flight splits, cap = 2 → both hot ones split.
+        shardOf(0).GetHotnessAsync().Returns(new ShardHotness { Reads = 5_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 8_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(2).GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(3).GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+
+        await grain.RunSamplingPassAsync();
+
+        await splitGrain.Received(1).SplitAsync(0);
+        await splitGrain.Received(1).SplitAsync(1);
+    }
+
+    [Test]
+    public async Task RunSamplingPass_caps_concurrent_splits_at_MaxConcurrentAutoSplits()
+    {
+        var opts = new LatticeOptions
+        {
+            ShardCount = 4, VirtualShardCount = 16,
+            AutoSplitMinTreeAge = TimeSpan.Zero,
+            HotShardOpsPerSecondThreshold = 100,
+            MaxConcurrentAutoSplits = 2,
+        };
+        var (grain, _, _, splitGrain, _, shardOf, _) = CreateGrain(physicalShardCount: 4, options: opts);
+        // Three hot shards but cap = 2 → only the two hottest split.
+        shardOf(0).GetHotnessAsync().Returns(new ShardHotness { Reads = 5_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 8_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(2).GetHotnessAsync().Returns(new ShardHotness { Reads = 3_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(3).GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+
+        await grain.RunSamplingPassAsync();
+
+        await splitGrain.Received(1).SplitAsync(1); // hottest
+        await splitGrain.Received(1).SplitAsync(0); // second hottest
+        await splitGrain.DidNotReceive().SplitAsync(2); // third — over cap
     }
 }

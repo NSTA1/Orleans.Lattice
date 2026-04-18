@@ -127,6 +127,22 @@ internal sealed class LatticeRegistryGrain(
         await UpdateAsync(treeId, updated);
     }
 
+    public async Task<int> AllocateNextShardIndexAsync(string treeId, int currentMaxFromMap)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        // Atomic read-modify-write: this grain is non-reentrant and is a
+        // singleton (keyed by RegistryTreeId), so the entire method body runs
+        // without interleaving across concurrent callers, guaranteeing each
+        // split coordinator receives a distinct target shard index.
+        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var floor = Math.Max(existing.NextShardIndex ?? -1, currentMaxFromMap);
+        var allocated = floor + 1;
+        var updated = existing with { NextShardIndex = allocated };
+        await UpdateAsync(treeId, updated);
+        return allocated;
+    }
+
     private static byte[] SerializeEntry(TreeRegistryEntry entry) =>
         JsonSerializer.SerializeToUtf8Bytes(entry, RegistryEntryContext.Default.TreeRegistryEntry);
 

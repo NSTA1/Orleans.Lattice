@@ -41,4 +41,13 @@ public sealed record TreeRegistryEntry
     /// shard splits change the topology.
     /// </summary>
     [Id(4)] public ShardMap? ShardMap { get; init; }
+
+    /// <summary>
+    /// Highest physical shard index that has been allocated for this tree by
+    /// adaptive splits, or <c>null</c> if no split has yet occurred.
+    /// Used by <see cref="ILatticeRegistry.AllocateNextShardIndexAsync"/> to
+    /// hand out unique target shard indices when multiple splits run
+    /// concurrently for the same tree (F-011 — <c>MaxConcurrentAutoSplits</c> &gt; 1).
+    /// </summary>
+    [Id(5)] public int? NextShardIndex { get; init; }
 }

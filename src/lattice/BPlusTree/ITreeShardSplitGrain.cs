@@ -5,11 +5,13 @@ namespace Orleans.Lattice.BPlusTree;
 /// <summary>
 /// Coordinator grain that drives a single online adaptive split (F-011) for
 /// a tree: shadow-write → drain → swap → reject → cleanup → complete.
-/// One coordinator activation per tree; subsequent calls during an in-flight
-/// split are idempotent for matching parameters and rejected for differing
-/// parameters.
+/// One coordinator activation per (tree, source-shard) pair, so multiple
+/// splits can run in parallel for a single tree up to
+/// <see cref="LatticeOptions.MaxConcurrentAutoSplits"/>. Subsequent calls
+/// during an in-flight split are idempotent for matching parameters and
+/// rejected for differing parameters.
 /// <para>
-/// Key format: <c>{treeId}</c>.
+/// Key format: <c>{treeId}/{sourceShardIndex}</c>.
 /// </para>
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]

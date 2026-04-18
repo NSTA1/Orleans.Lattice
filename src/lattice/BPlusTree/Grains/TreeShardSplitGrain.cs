@@ -45,17 +45,65 @@ internal sealed class TreeShardSplitGrain(
 {
     private const string KeepaliveReminderName = "shard-split-keepalive";
 
-    private string TreeId => context.GrainId.Key.ToString()!;
+    /// <summary>
+    /// Parses the grain key as <c>{treeId}/{sourceShardIndex}</c>. The trailing
+    /// integer suffix is the source shard; everything before the final '/' is
+    /// the tree ID. A key without a '/' is treated as a tree-level coordinator
+    /// (legacy behaviour) — <see cref="SourceShardIndexFromKey"/> returns
+    /// <c>-1</c> in that case.
+    /// </summary>
+    private string TreeId
+    {
+        get
+        {
+            var key = context.GrainId.Key.ToString()!;
+            var slash = key.LastIndexOf('/');
+            return slash < 0 ? key : key[..slash];
+        }
+    }
+
+    /// <summary>
+    /// The source shard index encoded in the grain key, or <c>-1</c> for
+    /// keys without a slash separator. When non-negative,
+    /// <see cref="SplitAsync"/> validates that the caller-supplied source
+    /// shard matches this value.
+    /// </summary>
+    private int SourceShardIndexFromKey
+    {
+        get
+        {
+            var key = context.GrainId.Key.ToString()!;
+            var slash = key.LastIndexOf('/');
+            if (slash < 0 || slash == key.Length - 1) return -1;
+            return int.TryParse(key.AsSpan(slash + 1), out var idx) ? idx : -1;
+        }
+    }
+
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
     IGrainContext IGrainBase.GrainContext => context;
 
     private IGrainTimer? _splitTimer;
+    private string? _physicalTreeId;
+
+    private async Task<string> GetPhysicalTreeIdAsync()
+    {
+        if (_physicalTreeId is not null) return _physicalTreeId;
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        _physicalTreeId = await registry.ResolveAsync(TreeId);
+        return _physicalTreeId;
+    }
 
     /// <inheritdoc />
     public async Task SplitAsync(int sourceShardIndex)
     {
         if (sourceShardIndex < 0)
             throw new ArgumentOutOfRangeException(nameof(sourceShardIndex), "Must be non-negative.");
+
+        var keyShard = SourceShardIndexFromKey;
+        if (keyShard >= 0 && keyShard != sourceShardIndex)
+            throw new ArgumentException(
+                $"Source shard {sourceShardIndex} does not match coordinator key shard {keyShard} (key='{context.GrainId.Key}').",
+                nameof(sourceShardIndex));
 
         if (state.State.InProgress)
         {
@@ -92,11 +140,13 @@ internal sealed class TreeShardSplitGrain(
             throw new InvalidOperationException(
                 $"Shard {sourceShardIndex} cannot be split because it owns fewer than 2 virtual slots.");
 
-        // Move the upper half to a new physical shard. The new shard index is
-        // (max existing physical index + 1) so that no existing slot is disturbed.
+        // Atomically allocate a fresh target physical shard index via the
+        // registry — the registry's non-reentrant scheduling guarantees that
+        // concurrent split coordinators each receive a distinct index even
+        // when the persisted shard map is the same.
         var maxExisting = -1;
         foreach (var idx in currentMap.Slots) if (idx > maxExisting) maxExisting = idx;
-        var targetShardIndex = maxExisting + 1;
+        var targetShardIndex = await registry.AllocateNextShardIndexAsync(TreeId, maxExisting);
 
         var splitPoint = ownedSlots.Count / 2;
         var movedSlots = new int[ownedSlots.Count - splitPoint];
@@ -115,7 +165,7 @@ internal sealed class TreeShardSplitGrain(
         await state.WriteStateAsync();
 
         // Kick off shadow-writing on the source shard.
-        var physicalTreeId = await registry.ResolveAsync(TreeId);
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{sourceShardIndex}");
         await source.BeginSplitAsync(targetShardIndex, movedSlots, currentMap.Slots.Length);
 
@@ -133,8 +183,7 @@ internal sealed class TreeShardSplitGrain(
         {
             // Re-issue the shadow-write begin in case of a crash between persist
             // and the source-shard call. Idempotent on the source side.
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-            var physicalTreeId = await registry.ResolveAsync(TreeId);
+            var physicalTreeId = await GetPhysicalTreeIdAsync();
             var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
             await source.BeginSplitAsync(
                 state.State.TargetShardIndex,
@@ -257,7 +306,14 @@ internal sealed class TreeShardSplitGrain(
     internal async Task SwapAsync()
     {
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var newSlots = (int[])state.State.OriginalShardMap!.Slots.Clone();
+        // Re-read the current map so concurrent splits compose correctly:
+        // each swap applies its own moved-slot diff onto whatever is now
+        // persisted, preventing one coordinator from clobbering another's
+        // earlier swap. The registry grain is non-reentrant so the
+        // get-modify-set sequence is atomic across callers.
+        var currentMap = await registry.GetShardMapAsync(TreeId)
+            ?? state.State.OriginalShardMap!;
+        var newSlots = (int[])currentMap.Slots.Clone();
         foreach (var slot in state.State.MovedSlots)
             newSlots[slot] = state.State.TargetShardIndex;
         await registry.SetShardMapAsync(TreeId, new ShardMap { Slots = newSlots });
@@ -273,8 +329,7 @@ internal sealed class TreeShardSplitGrain(
     /// </summary>
     internal async Task EnterRejectAsync()
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var physicalTreeId = await registry.ResolveAsync(TreeId);
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
         await source.EnterRejectPhaseAsync();
 
@@ -292,8 +347,7 @@ internal sealed class TreeShardSplitGrain(
         // Final drain captures any deletes that occurred between drain and reject.
         await ForwardMovedSlotEntriesAsync();
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var physicalTreeId = await registry.ResolveAsync(TreeId);
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
         await source.CompleteSplitAsync();
 
@@ -320,11 +374,18 @@ internal sealed class TreeShardSplitGrain(
     /// original HLC timestamp. Tombstones are forwarded the same way (their
     /// <see cref="LwwValue{T}.IsTombstone"/> flag is preserved through
     /// <see cref="IShardRootGrain.MergeManyAsync"/>). Idempotent under retry.
+    /// <para>
+    /// Memory and message size are bounded by
+    /// <see cref="LatticeOptions.SplitDrainBatchSize"/>: entries are flushed
+    /// to the target whenever the in-flight batch reaches that size, and
+    /// each leaf is asked only for moved-slot entries via
+    /// <see cref="IBPlusLeafGrain.GetDeltaSinceForSlotsAsync"/> so unrelated
+    /// data is never serialised on the wire.
+    /// </para>
     /// </summary>
     private async Task ForwardMovedSlotEntriesAsync()
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var physicalTreeId = await registry.ResolveAsync(TreeId);
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
 
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
         var leafId = await source.GetLeftmostLeafIdAsync();
@@ -333,27 +394,35 @@ internal sealed class TreeShardSplitGrain(
         var movedSlotsArray = state.State.MovedSlots.ToArray();
         Array.Sort(movedSlotsArray);
         var virtualShardCount = state.State.OriginalShardMap!.Slots.Length;
+        var batchSize = Options.SplitDrainBatchSize;
+        if (batchSize <= 0) batchSize = LatticeOptions.DefaultSplitDrainBatchSize;
 
-        var batch = new Dictionary<string, LwwValue<byte[]>>();
+        var target = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.TargetShardIndex}");
+        var batch = new Dictionary<string, LwwValue<byte[]>>(batchSize);
         var emptyVector = new VersionVector();
 
         while (leafId is not null)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-            var delta = await leaf.GetDeltaSinceAsync(emptyVector);
+            // Slot filtering is pushed into the leaf so only moved-slot
+            // entries are serialised on the response — saves bandwidth and
+            // coordinator-side allocations on hot shards where moved slots
+            // are a minority of the keyspace.
+            var delta = await leaf.GetDeltaSinceForSlotsAsync(emptyVector, movedSlotsArray, virtualShardCount);
             foreach (var (key, lww) in delta.Entries)
             {
-                var slot = ShardMap.GetVirtualSlot(key, virtualShardCount);
-                if (Array.BinarySearch(movedSlotsArray, slot) < 0) continue;
                 batch[key] = lww;
+                if (batch.Count >= batchSize)
+                {
+                    await target.MergeManyAsync(batch);
+                    batch.Clear();
+                }
             }
             leafId = await leaf.GetNextSiblingAsync();
         }
 
-        if (batch.Count == 0) return;
-
-        var target = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.TargetShardIndex}");
-        await target.MergeManyAsync(batch);
+        if (batch.Count > 0)
+            await target.MergeManyAsync(batch);
     }
 
     private async Task UnregisterKeepaliveAsync()

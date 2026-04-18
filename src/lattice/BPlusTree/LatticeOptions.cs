@@ -156,12 +156,29 @@ public sealed class LatticeOptions
     /// <summary>
     /// Maximum number of autonomic splits that can be in flight concurrently
     /// for a single tree. The monitor refuses to start a new split while this
-    /// many are already active. Defaults to 1 to keep storage I/O bounded.
+    /// many are already active. Defaults to 2 — splits are I/O-bounded by the
+    /// drain phase but small enough that two parallel splits typically saturate
+    /// neither storage nor the coordinator silo. Set to <c>1</c> for the most
+    /// conservative behavior, or higher when many shards are simultaneously
+    /// hot and target storage can absorb the extra drain traffic.
     /// </summary>
     public int MaxConcurrentAutoSplits { get; set; } = DefaultMaxConcurrentAutoSplits;
 
-    /// <summary>Default value for <see cref="MaxConcurrentAutoSplits"/> (1).</summary>
-    public const int DefaultMaxConcurrentAutoSplits = 1;
+    /// <summary>Default value for <see cref="MaxConcurrentAutoSplits"/> (2).</summary>
+    public const int DefaultMaxConcurrentAutoSplits = 2;
+
+    /// <summary>
+    /// Maximum number of moved-slot entries the split coordinator accumulates
+    /// in a single <see cref="IShardRootGrain.MergeManyAsync"/> call to the
+    /// target shard during drain. Larger values reduce per-call overhead;
+    /// smaller values bound peak memory on the coordinator silo and the size
+    /// of the Orleans grain message. The drain phase remains idempotent under
+    /// any chunking — re-running converges via CRDT LWW.
+    /// </summary>
+    public int SplitDrainBatchSize { get; set; } = DefaultSplitDrainBatchSize;
+
+    /// <summary>Default value for <see cref="SplitDrainBatchSize"/> (1024 entries).</summary>
+    public const int DefaultSplitDrainBatchSize = 1024;
 
     /// <summary>
     /// Minimum age of a tree (since the monitor first activated) before
