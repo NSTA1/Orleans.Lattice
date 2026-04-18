@@ -5,7 +5,7 @@ using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
-public class LatticeRegistryGrainTests
+public partial class LatticeRegistryGrainTests
 {
     private static (LatticeRegistryGrain grain, ILattice registryTree) CreateGrain()
     {

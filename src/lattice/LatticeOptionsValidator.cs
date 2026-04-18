@@ -14,6 +14,10 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
             return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.MaxInternalChildren)} must be greater than 2.");
         if (options.KeysPageSize <= 0)
             return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.KeysPageSize)} must be greater than 0.");
+        if (options.VirtualShardCount < options.ShardCount)
+            return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.VirtualShardCount)} must be greater than or equal to {nameof(LatticeOptions.ShardCount)}.");
+        if (options.VirtualShardCount % options.ShardCount != 0)
+            return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.VirtualShardCount)} must be an integer multiple of {nameof(LatticeOptions.ShardCount)}.");
         return ValidateOptionsResult.Success;
     }
 }

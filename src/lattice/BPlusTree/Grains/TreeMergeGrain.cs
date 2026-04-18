@@ -226,12 +226,18 @@ internal sealed class TreeMergeGrain(
 
         if (allEntries.Count == 0) return;
 
-        // Group entries by target shard.
-        var targetShardCount = TargetOptions.ShardCount;
+        // Resolve the target tree's shard map (falling back to the default
+        // identity map when the tree has no custom map persisted).
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var targetOptions = TargetOptions;
+        var targetShardMap = await registry.GetShardMapAsync(TargetTreeId)
+            ?? ShardMap.CreateDefault(targetOptions.VirtualShardCount, targetOptions.ShardCount);
+
+        // Group entries by target physical shard.
         var targetBuckets = new Dictionary<int, Dictionary<string, LwwValue<byte[]>>>();
         foreach (var (key, lww) in allEntries)
         {
-            var targetIdx = LatticeSharding.GetShardIndex(key, targetShardCount);
+            var targetIdx = targetShardMap.Resolve(key);
             if (!targetBuckets.TryGetValue(targetIdx, out var bucket))
             {
                 bucket = [];

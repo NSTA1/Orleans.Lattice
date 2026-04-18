@@ -187,6 +187,7 @@ See [Configuration](configuration.md) for detailed guidance on each option, immu
 | `MaxLeafKeys` | `int` | 128 | Max keys per leaf before splitting. |
 | `MaxInternalChildren` | `int` | 128 | Max children per internal node before splitting. |
 | `ShardCount` | `int` | 64 | Number of independent shards. |
+| `VirtualShardCount` | `int` | 4096 | Size of the virtual shard space. Keys hash into `[0, VirtualShardCount)` and a per-tree `ShardMap` collapses virtual slots onto physical shards. Must be ≥ `ShardCount` and divisible by `ShardCount`. |
 | `KeysPageSize` | `int` | 512 | Keys per page in `KeysAsync` pagination. |
 | `TombstoneGracePeriod` | `TimeSpan` | 24 h | Minimum age before a tombstone is eligible for compaction. `InfiniteTimeSpan` disables compaction. |
 | `SoftDeleteDuration` | `TimeSpan` | 72 h | Retention window after soft-delete before purge fires. |
@@ -219,6 +220,7 @@ Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Nev
 | `VersionedValue` | `ol.vvl` | public (hidden) | A `byte[]` value paired with its `HybridLogicalClock` version for CAS reads. |
 | `Versioned<T>` | `ol.ver` | public (hidden) | A typed value paired with its `HybridLogicalClock` version (used by typed extensions). |
 | `ShardHotness` | `ol.sh` | public (hidden) | Volatile shard hotness counters (reads, writes, window) returned by `IShardRootGrain.GetHotnessAsync()`. |
+| `ShardMap` | `ol.sm` | public (hidden) | Per-tree mapping from virtual shard slots to physical shard indices. Persisted on `TreeRegistryEntry`. |
 
 ## Internal Grain Access Control
 

@@ -20,6 +20,20 @@ public sealed class LatticeOptions
     /// <summary>Number of independent shards the key space is divided into.</summary>
     public int ShardCount { get; set; } = DefaultShardCount;
 
+    /// <summary>
+    /// Size of the virtual shard space used for key routing. Keys are hashed
+    /// into one of <see cref="VirtualShardCount"/> virtual slots, and a per-tree
+    /// <c>ShardMap</c> collapses those virtual slots onto the
+    /// <see cref="ShardCount"/> physical shards. This indirection enables future
+    /// adaptive shard splitting (F-011) without rehashing existing keys.
+    /// <para>
+    /// Must be greater than or equal to <see cref="ShardCount"/>, and must be an
+    /// integer multiple of <see cref="ShardCount"/> so that the default identity
+    /// map preserves the legacy <c>hash % shardCount</c> routing.
+    /// </para>
+    /// </summary>
+    public int VirtualShardCount { get; set; } = DefaultVirtualShardCount;
+
     /// <summary>Number of keys per page returned by <see cref="IShardRootGrain.GetSortedKeysBatchAsync"/>.</summary>
     public int KeysPageSize { get; set; } = DefaultKeysPageSize;
 
@@ -68,6 +82,9 @@ public sealed class LatticeOptions
 
     /// <summary>Default value for <see cref="ShardCount"/>.</summary>
     public const int DefaultShardCount = 64;
+
+    /// <summary>Default value for <see cref="VirtualShardCount"/> (4096).</summary>
+    public const int DefaultVirtualShardCount = 4096;
 
     /// <summary>Default value for <see cref="KeysPageSize"/>.</summary>
     public const int DefaultKeysPageSize = 512;
