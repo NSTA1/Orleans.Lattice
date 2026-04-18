@@ -228,4 +228,14 @@ public interface ILattice : IGrainWithStringKey
     /// either the most recent resize has completed or no resize has ever been initiated.
     /// </summary>
     Task<bool> IsResizeCompleteAsync();
+
+    /// <summary>
+    /// Returns the effective routing context for this tree — the resolved
+    /// physical tree ID (after registry alias resolution) and the per-tree
+    /// <see cref="ShardMap"/>. Used by infrastructure helpers (e.g. the
+    /// streaming bulk loader) that need to address shard grains directly
+    /// without re-implementing alias resolution and shard-map fetching.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<RoutingInfo> GetRoutingAsync();
 }

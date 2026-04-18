@@ -390,10 +390,10 @@ internal sealed partial class LatticeGrain(
     /// <see cref="TryInvalidateStaleAlias"/> when a downstream shard reports
     /// the tree as deleted.
     /// </summary>
-    private async Task<(string PhysicalTreeId, ShardMap Map)> GetRoutingAsync()
+    public async Task<RoutingInfo> GetRoutingAsync()
     {
         var physicalTreeId = await GetPhysicalTreeIdAsync();
-        if (_shardMap is not null) return (physicalTreeId, _shardMap);
+        if (_shardMap is not null) return new RoutingInfo(physicalTreeId, _shardMap);
 
         var options = Options;
         if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
@@ -409,7 +409,7 @@ internal sealed partial class LatticeGrain(
                 ?? ShardMap.CreateDefault(options.VirtualShardCount, options.ShardCount);
         }
 
-        return (physicalTreeId, _shardMap);
+        return new RoutingInfo(physicalTreeId, _shardMap);
     }
 
     /// <summary>

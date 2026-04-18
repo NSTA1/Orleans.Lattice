@@ -43,4 +43,5 @@ internal static class TypeAliases
     internal const string VersionedValue = "ol.vvl";
     internal const string ShardHotness = "ol.sh";
     internal const string ShardMap = "ol.sm";
+    internal const string RoutingInfo = "ol.ri";
 }

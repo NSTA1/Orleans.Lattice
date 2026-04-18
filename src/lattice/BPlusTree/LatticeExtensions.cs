@@ -8,21 +8,113 @@ namespace Orleans.Lattice;
 public static class LatticeExtensions
 {
     /// <summary>
-    /// Streams sorted key-value pairs into the tree, partitioning by shard and
-    /// flushing chunks in parallel across shards. Each shard receives its entries
-    /// in key order via <see cref="IShardRootGrain.BulkAppendAsync"/>, which
-    /// appends to the right edge without splits.
+    /// Streams sorted key-value pairs into the tree, partitioning by physical
+    /// shard and flushing chunks in parallel across shards. Each shard receives
+    /// its entries in key order via <see cref="IShardRootGrain.BulkAppendAsync"/>,
+
+/// which appends to the right edge without splits.
     /// <para>
     /// The input <paramref name="sortedEntries"/> <b>must</b> be in ascending key order.
     /// Per-shard ordering is preserved because hash-partitioning a globally sorted
     /// stream preserves the relative order within each partition.
     /// </para>
+    /// <para>
+    /// Routing is resolved up front via <see cref="ILattice.GetRoutingAsync"/>,
+
+/// so entries are correctly partitioned by the tree's persisted
+    /// <see cref="ShardMap"/> — including non-default maps produced by adaptive
+    /// shard splits.
+    /// </para>
+    /// </summary>
+    /// <param name="lattice">The tree to load into.</param>
+    /// <param name="sortedEntries">Entries in ascending key order.</param>
+    /// <param name="grainFactory">The grain factory (needed to address shard grains directly).</param>
+    /// <param name="chunkSize">Max entries per shard before flushing (default 10 000).</param>
+    public static async Task BulkLoadAsync(
+        this ILattice lattice,
+        IAsyncEnumerable<KeyValuePair<string, byte[]>> sortedEntries,
+        IGrainFactory grainFactory,
+        int chunkSize = 10_000)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(sortedEntries);
+        ArgumentNullException.ThrowIfNull(grainFactory);
+
+        var routing = await lattice.GetRoutingAsync();
+        var physicalTreeId = routing.PhysicalTreeId;
+        var shardMap = routing.Map;
+        var physicalShards = shardMap.GetPhysicalShardIndices();
+
+        // Per-physical-shard buffers, in-flight tasks, chunk counters, and grain
+        // proxies. Keyed by physical shard index so sparse maps (post-split)
+        // don't allocate empty slots for non-existent shards. Proxies are cached
+        // once so repeated chunk flushes don't rebuild grain keys or re-hit
+        // the grain factory's lookup table.
+        var capacity = physicalShards.Count;
+        var buffers = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(capacity);
+        var inFlight = new Dictionary<int, Task>(capacity);
+        var chunkCounters = new Dictionary<int, int>(capacity);
+        var shards = new Dictionary<int, IShardRootGrain>(capacity);
+        var batchId = Guid.NewGuid().ToString("N");
+        foreach (var idx in physicalShards)
+        {
+            buffers[idx] = new(chunkSize);
+            inFlight[idx] = Task.CompletedTask;
+            chunkCounters[idx] = 0;
+            shards[idx] = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{idx}");
+        }
+
+        await foreach (var entry in sortedEntries)
+        {
+            var shardIdx = shardMap.Resolve(entry.Key);
+            var buffer = buffers[shardIdx];
+            buffer.Add(entry);
+
+            if (buffer.Count >= chunkSize)
+            {
+                // Wait for the previous flush to this shard to complete (preserves ordering).
+                await inFlight[shardIdx];
+
+                var opId = $"{batchId}-{shardIdx}-{chunkCounters[shardIdx]++}";
+                inFlight[shardIdx] = shards[shardIdx].BulkAppendAsync(opId, buffer);
+                buffers[shardIdx] = new(chunkSize);
+            }
+        }
+
+        // Flush remaining buffers.
+        var finalTasks = new List<Task>(capacity);
+        foreach (var idx in physicalShards)
+        {
+            if (buffers[idx].Count > 0)
+            {
+                // Wait for previous in-flight for this shard, then flush.
+                await inFlight[idx];
+                var opId = $"{batchId}-{idx}-{chunkCounters[idx]++}";
+                finalTasks.Add(shards[idx].BulkAppendAsync(opId, buffers[idx]));
+            }
+            else
+            {
+                finalTasks.Add(inFlight[idx]);
+            }
+        }
+
+        await Task.WhenAll(finalTasks);
+    }
+
+    /// <summary>
+    /// Legacy streaming bulk-load overload that accepts an explicit shard
+    /// count and routes via the legacy <c>XxHash32(key) % shardCount</c>
+    /// formula, bypassing the per-tree <see cref="ShardMap"/>. Use the
+    /// overload without <paramref name="shardCount"/> instead — it resolves
+    /// the tree's persisted shard map automatically and routes correctly
+    /// for trees with non-default maps (e.g. after an adaptive shard split).
     /// </summary>
     /// <param name="lattice">The tree to load into.</param>
     /// <param name="sortedEntries">Entries in ascending key order.</param>
     /// <param name="grainFactory">The grain factory (needed to address shard grains directly).</param>
     /// <param name="shardCount">Number of shards (must match <see cref="LatticeOptions.ShardCount"/>).</param>
     /// <param name="chunkSize">Max entries per shard before flushing (default 10 000).</param>
+    [Obsolete("Use the overload without 'shardCount' (F-030); this one bypasses the per-tree ShardMap and will mis-route entries on trees with non-default maps.")]
     public static async Task BulkLoadAsync(
         this ILattice lattice,
         IAsyncEnumerable<KeyValuePair<string, byte[]>> sortedEntries,
@@ -30,6 +122,10 @@ public static class LatticeExtensions
         int shardCount,
         int chunkSize = 10_000)
     {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(sortedEntries);
+        ArgumentNullException.ThrowIfNull(grainFactory);
+
         var treeId = lattice.GetPrimaryKeyString();
 
         // Per-shard buffers, in-flight tasks, and chunk counters for operation IDs.
