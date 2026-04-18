@@ -409,5 +409,34 @@ public class ShardRootGrainConsistentScanTests
         Assert.That(page.Entries, Is.All.Matches<KeyValuePair<string, byte[]>>(
             kv => ShardMap.GetVirtualSlot(kv.Key, VirtualShardCount) == slot));
     }
+
+    [Test]
+    public void GetSortedEntriesBatchForSlotsAsync_throws_when_sortedSlots_null()
+    {
+        var h = CreateHarness();
+        Assert.That(
+            () => h.Grain.GetSortedEntriesBatchForSlotsAsync(null, null, 100, null, null!, VirtualShardCount),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void GetSortedEntriesBatchForSlotsAsync_throws_when_virtualShardCount_non_positive()
+    {
+        var h = CreateHarness();
+        Assert.That(
+            () => h.Grain.GetSortedEntriesBatchForSlotsAsync(null, null, 100, null, [0], 0),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task GetSortedEntriesBatchForSlotsAsync_returns_empty_when_sortedSlots_empty()
+    {
+        var entries = KeysWithSlots(10).Select(k => new KeyValuePair<string, byte[]>(k, [1])).ToList();
+        var h = CreateHarness(leafEntries: entries);
+
+        var page = await h.Grain.GetSortedEntriesBatchForSlotsAsync(null, null, 100, null, [], VirtualShardCount);
+
+        Assert.That(page.Entries, Is.Empty);
+    }
 }
 

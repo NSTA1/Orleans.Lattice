@@ -22,6 +22,7 @@ The name comes from its use of **lattice-based state primitives** (hybrid logica
 | **Fast reads** | A `[StatelessWorker]` cache grain per silo serves reads via delta replication from the primary leaf. Cache misses cost a single version-vector comparison. |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on an existing tree. Takes an offline snapshot to a new physical tree, swaps the alias, and soft-deletes the old data. The tree is unavailable during the snapshot phase but immediately accessible after the swap. Undoable within the retention window. |
 | **Scalable writes** | Keys are hash-sharded across 64 independent sub-trees (configurable). No single-root bottleneck. |
+| **Strongly-consistent scans** | `CountAsync`, `KeysAsync`, and `EntriesAsync` return the exact live key set even during concurrent adaptive shard splits, via per-slot reconciliation against a monotonic `ShardMap.Version` and bounded optimistic retry. |
 | **Snapshots** | Create a point-in-time copy of a tree: offline (locked - tree unavailable during snapshot process) or online (best-effort), with optional sizing overrides for the destination. |
 | **Soft delete & recovery** | Trees can be soft-deleted with a configurable retention window. Recovery restores full access; purge permanently removes all data. |
 | **Tombstone cleanup** | Reminder-driven compaction removes expired tombstones shard-by-shard, with crash-safe progress tracking. |
@@ -43,7 +44,7 @@ Detailed design documentation is split by concept:
 | [Bulk Loading](docs/bulk-loading.md) | One-shot build, streaming ingestion, two-phase graft, recovery guarantees |
 | [Configuration](docs/configuration.md) | Options reference, per-tree overrides, immutability constraints, storage provider |
 | [Read Caching](docs/caching.md) | Delta-based `[StatelessWorker]` cache, split-aware pruning |
-| [Shard Splitting](docs/shard-splitting.md) | Adaptive online splits, shadow-write design, autonomic monitor, suppression rules, tunables |
+| [Shard Splitting](docs/shard-splitting.md) | Adaptive online splits, shadow-write design, autonomic monitor, suppression rules, scan semantics during splits, tunables |
 | [Snapshots](docs/snapshots.md) | Offline and online snapshot modes, crash safety, sizing overrides |
 | [State Primitives](docs/state-primitives.md) | Hybrid logical clocks, LWW registers, monotonic split state, version vectors, state deltas |
 | [Tombstone Compaction](docs/tombstone-compaction.md) | Reminder-driven cleanup, grace periods, configuration |
