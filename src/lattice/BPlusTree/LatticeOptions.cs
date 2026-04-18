@@ -191,6 +191,20 @@ public sealed class LatticeOptions
     public static readonly TimeSpan DefaultAutoSplitMinTreeAge = TimeSpan.FromSeconds(60);
 
     /// <summary>
+    /// Maximum number of times a strongly-consistent scan
+    /// (<c>ILattice.CountAsync</c>, <c>KeysAsync</c>, <c>EntriesAsync</c>)
+    /// will reconcile against newly-discovered shard-map changes before giving
+    /// up. Each retry only re-fetches data for the slots that actually moved
+    /// during the scan, so the cost is bounded by the number of in-flight
+    /// splits, not the size of the tree. Set to <c>1</c> to disable
+    /// reconciliation entirely (fall back to eventually-consistent scans).
+    /// </summary>
+    public int MaxScanRetries { get; set; } = DefaultMaxScanRetries;
+
+    /// <summary>Default value for <see cref="MaxScanRetries"/> (3).</summary>
+    public const int DefaultMaxScanRetries = 3;
+
+    /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.
     /// Used internally by <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
     /// and exposed for advanced scenarios where callers register storage directly.

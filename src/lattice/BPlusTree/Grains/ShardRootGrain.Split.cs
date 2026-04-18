@@ -355,4 +355,44 @@ internal sealed partial class ShardRootGrain
         var slot = ShardMap.GetVirtualSlot(key, vsc);
         return moved.ContainsKey(slot);
     }
+
+    /// <summary>
+    /// Slot-reporting variant of <see cref="IsSlotMovedAway"/>. When the key's
+    /// virtual slot is in the active-split moved set or the permanent
+    /// <see cref="ShardRootState.MovedAwaySlots"/> map, returns <c>true</c>
+    /// and outputs the slot index; otherwise returns <c>false</c> and
+    /// <paramref name="slot"/> is <c>-1</c>. Used by strongly-consistent scan
+    /// APIs (F-011) to both filter the entry and report the affected slot to
+    /// the orchestrator so it can re-fetch from the new owner.
+    /// </summary>
+    internal bool TryGetMovedAwaySlot(string key, out int slot)
+    {
+        var sip = state.State.SplitInProgress;
+        if (sip is not null
+            && (sip.Phase == ShardSplitPhase.Swap
+                || sip.Phase == ShardSplitPhase.Reject
+                || sip.Phase == ShardSplitPhase.Complete))
+        {
+            var s = ShardMap.GetVirtualSlot(key, sip.VirtualShardCount);
+            if (sip.IsMovedSlot(s))
+            {
+                slot = s;
+                return true;
+            }
+        }
+
+        var moved = state.State.MovedAwaySlots;
+        if (moved.Count > 0 && state.State.MovedAwayVirtualShardCount is { } vsc)
+        {
+            var s = ShardMap.GetVirtualSlot(key, vsc);
+            if (moved.ContainsKey(s))
+            {
+                slot = s;
+                return true;
+            }
+        }
+
+        slot = -1;
+        return false;
+    }
 }

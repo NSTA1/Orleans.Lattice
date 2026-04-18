@@ -346,233 +346,105 @@ internal sealed partial class ShardRootGrain(
         return total;
     }
 
-    public async Task<KeysPage> GetSortedKeysBatchAsync(
-        string? startInclusive,
-        string? endExclusive,
-        int pageSize,
-        string? continuationToken = null)
+    /// <inheritdoc />
+    public async Task<ShardCountResult> CountWithMovedAwayAsync()
     {
         await PrepareForOperationAsync();
         RecordRead();
 
-        // Determine the starting leaf.
-        var seekKey = continuationToken ?? startInclusive;
-        GrainId leafId;
-        if (state.State.RootIsLeaf)
-        {
-            leafId = state.State.RootNodeId!.Value;
-        }
-        else if (seekKey is not null)
-        {
-            leafId = await TraverseToLeafAsync(seekKey);
-        }
-        else
-        {
-            leafId = await TraverseToLeftmostLeafAsync();
-        }
+        if (state.State.RootNodeId is null)
+            return new ShardCountResult { Count = 0 };
 
-        // Walk the sibling chain, collecting keys until the page is full.
-        var keys = new List<string>(pageSize);
-        while (keys.Count < pageSize)
-        {
-            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            // Pass continuationToken as afterExclusive so the leaf filters
-            // at the source — avoids transferring keys that would be
-            // discarded here.
-            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, afterExclusive: continuationToken);
+        var leafId = await GetLeftmostLeafIdAsync();
+        if (leafId is null) return new ShardCountResult { Count = 0 };
 
-            foreach (var key in leafKeys)
+        var hasActiveSplit = state.State.SplitInProgress is { } sip
+            && (sip.Phase == ShardSplitPhase.Swap
+                || sip.Phase == ShardSplitPhase.Reject
+                || sip.Phase == ShardSplitPhase.Complete);
+        var hasMovedAway = state.State.MovedAwaySlots.Count > 0
+            && state.State.MovedAwayVirtualShardCount is not null;
+
+        var total = 0;
+        HashSet<int>? movedSet = null;
+        var currentId = leafId.Value;
+        while (true)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
+            if (hasActiveSplit || hasMovedAway)
             {
-                if (IsSlotMovedAway(key)) continue; // F-011: filter orphan moved-slot data
-                keys.Add(key);
-                if (keys.Count >= pageSize)
-                    break;
+                var keys = await leaf.GetKeysAsync(null, null);
+                for (int i = 0; i < keys.Count; i++)
+                {
+                    if (TryGetMovedAwaySlot(keys[i], out var movedSlot))
+                    {
+                        (movedSet ??= []).Add(movedSlot);
+                        continue;
+                    }
+                    total++;
+                }
+            }
+            else
+            {
+                total += await leaf.CountAsync();
             }
 
-            if (keys.Count >= pageSize)
-                break;
-
-            var nextSibling = await leafGrain.GetNextSiblingAsync();
-            if (nextSibling is null)
-                return new KeysPage { Keys = keys, HasMore = false };
-
-            leafId = nextSibling.Value;
+            var next = await leaf.GetNextSiblingAsync();
+            if (next is null) break;
+            currentId = next.Value;
         }
 
-        return new KeysPage { Keys = keys, HasMore = true };
+        return new ShardCountResult
+        {
+            Count = total,
+            MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+        };
     }
 
-    public async Task<KeysPage> GetSortedKeysBatchReverseAsync(
-        string? startInclusive,
-        string? endExclusive,
-        int pageSize,
-        string? continuationToken = null)
+    /// <inheritdoc />
+    public async Task<int> CountForSlotsAsync(int[] sortedSlots, int virtualShardCount)
     {
+        ArgumentNullException.ThrowIfNull(sortedSlots);
+        if (virtualShardCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
+
         await PrepareForOperationAsync();
         RecordRead();
 
-        // Determine the starting leaf (rightmost, or the leaf for the seek key).
-        var seekKey = continuationToken ?? endExclusive;
-        GrainId leafId;
-        if (state.State.RootIsLeaf)
-        {
-            leafId = state.State.RootNodeId!.Value;
-        }
-        else if (seekKey is not null)
-        {
-            leafId = await TraverseToLeafAsync(seekKey);
-        }
-        else
-        {
-            leafId = await TraverseToRightmostLeafAsync();
-        }
+        if (sortedSlots.Length == 0 || state.State.RootNodeId is null)
+            return 0;
 
-        // Walk the sibling chain backward, collecting keys in reverse until the page is full.
-        var keys = new List<string>(pageSize);
-        while (keys.Count < pageSize)
-        {
-            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            // Pass continuationToken as beforeExclusive so the leaf filters
-            // at the source — avoids transferring keys that would be
-            // discarded here.
-            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, beforeExclusive: continuationToken);
+        var leafId = await GetLeftmostLeafIdAsync();
+        if (leafId is null) return 0;
 
-            // Walk the leaf's keys in reverse order.
-            for (int i = leafKeys.Count - 1; i >= 0; i--)
+        var total = 0;
+        var currentId = leafId.Value;
+        while (true)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
+            var keys = await leaf.GetKeysAsync(null, null);
+            for (int i = 0; i < keys.Count; i++)
             {
-                var key = leafKeys[i];
-                if (IsSlotMovedAway(key)) continue; // F-011: filter orphan moved-slot data
-                keys.Add(key);
-                if (keys.Count >= pageSize)
-                    break;
+                var slot = ShardMap.GetVirtualSlot(keys[i], virtualShardCount);
+                if (Array.BinarySearch(sortedSlots, slot) >= 0)
+                    total++;
             }
 
-            if (keys.Count >= pageSize)
-                break;
-
-            var prevSibling = await leafGrain.GetPrevSiblingAsync();
-            if (prevSibling is null)
-                return new KeysPage { Keys = keys, HasMore = false };
-
-            leafId = prevSibling.Value;
+            var next = await leaf.GetNextSiblingAsync();
+            if (next is null) break;
+            currentId = next.Value;
         }
 
-        return new KeysPage { Keys = keys, HasMore = true };
+        return total;
     }
 
-    public async Task<EntriesPage> GetSortedEntriesBatchAsync(
-        string? startInclusive,
-        string? endExclusive,
-        int pageSize,
-        string? continuationToken = null)
+    private static int[] SortedSlotsArray(HashSet<int> set)
     {
-        await PrepareForOperationAsync();
-        RecordRead();
-
-        var seekKey = continuationToken ?? startInclusive;
-        GrainId leafId;
-        if (state.State.RootIsLeaf)
-        {
-            leafId = state.State.RootNodeId!.Value;
-        }
-        else if (seekKey is not null)
-        {
-            leafId = await TraverseToLeafAsync(seekKey);
-        }
-        else
-        {
-            leafId = await TraverseToLeftmostLeafAsync();
-        }
-
-        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
-        while (entries.Count < pageSize)
-        {
-            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            // Pass continuationToken as afterExclusive so the leaf filters
-            // at the source — avoids serializing byte[] values that would be
-            // discarded here.
-            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, continuationToken);
-
-            foreach (var entry in leafEntries)
-            {
-                if (IsSlotMovedAway(entry.Key)) continue; // F-011: filter orphan moved-slot data
-                entries.Add(entry);
-                if (entries.Count >= pageSize)
-                    break;
-            }
-
-            if (entries.Count >= pageSize)
-                break;
-
-            var nextSibling = await leafGrain.GetNextSiblingAsync();
-            if (nextSibling is null)
-                return new EntriesPage { Entries = entries, HasMore = false };
-
-            leafId = nextSibling.Value;
-        }
-
-        return new EntriesPage { Entries = entries, HasMore = true };
-    }
-
-    public async Task<EntriesPage> GetSortedEntriesBatchReverseAsync(
-        string? startInclusive,
-        string? endExclusive,
-        int pageSize,
-        string? continuationToken = null)
-    {
-        await PrepareForOperationAsync();
-        RecordRead();
-
-        var seekKey = continuationToken ?? endExclusive;
-        GrainId leafId;
-        if (state.State.RootIsLeaf)
-        {
-            leafId = state.State.RootNodeId!.Value;
-        }
-        else if (seekKey is not null)
-        {
-            leafId = await TraverseToLeafAsync(seekKey);
-        }
-        else
-        {
-            leafId = await TraverseToRightmostLeafAsync();
-        }
-
-        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
-        while (entries.Count < pageSize)
-        {
-            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            // Pass continuationToken as beforeExclusive so the leaf filters
-            // at the source — avoids serializing byte[] values that would be
-            // discarded here.
-            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, beforeExclusive: continuationToken);
-
-            for (int i = leafEntries.Count - 1; i >= 0; i--)
-            {
-                var entry = leafEntries[i];
-                if (IsSlotMovedAway(entry.Key)) continue; // F-011: filter orphan moved-slot data
-                entries.Add(entry);
-                if (entries.Count >= pageSize)
-                    break;
-            }
-
-            if (entries.Count >= pageSize)
-                break;
-
-            var prevSibling = await leafGrain.GetPrevSiblingAsync();
-            if (prevSibling is null)
-                return new EntriesPage { Entries = entries, HasMore = false };
-
-            leafId = prevSibling.Value;
-        }
-
-        return new EntriesPage { Entries = entries, HasMore = true };
-    }
-
-    public async Task<GrainId?> GetLeftmostLeafIdAsync()
-    {
-        if (state.State.RootNodeId is null) return null;
-        return await TraverseToLeftmostLeafAsync();
+        var arr = new int[set.Count];
+        var i = 0;
+        foreach (var v in set) arr[i++] = v;
+        Array.Sort(arr);
+        return arr;
     }
 
     private async Task EnsureRootAsync()
@@ -719,5 +591,418 @@ internal sealed partial class ShardRootGrain(
         {
             StackPool.Return(path);
         }
+    }
+
+    public async Task<KeysPage> GetSortedKeysBatchAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken = null)
+    {
+        await PrepareForOperationAsync();
+        RecordRead();
+
+        // Determine the starting leaf.
+        var seekKey = continuationToken ?? startInclusive;
+        GrainId leafId;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = state.State.RootNodeId!.Value;
+        }
+        else if (seekKey is not null)
+        {
+            leafId = await TraverseToLeafAsync(seekKey);
+        }
+        else
+        {
+            leafId = await TraverseToLeftmostLeafAsync();
+        }
+
+        // Walk the sibling chain, collecting keys until the page is full.
+        var keys = new List<string>(pageSize);
+        HashSet<int>? movedSet = null;
+        while (keys.Count < pageSize)
+        {
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            // Pass continuationToken as afterExclusive so the leaf filters
+            // at the source — avoids transferring keys that would be
+            // discarded here.
+            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, afterExclusive: continuationToken);
+
+            foreach (var key in leafKeys)
+            {
+                if (TryGetMovedAwaySlot(key, out var movedSlot))
+                {
+                    (movedSet ??= []).Add(movedSlot);
+                    continue;
+                }
+                keys.Add(key);
+                if (keys.Count >= pageSize)
+                    break;
+            }
+
+            if (keys.Count >= pageSize)
+                break;
+
+            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            if (nextSibling is null)
+                return new KeysPage
+                {
+                    Keys = keys,
+                    HasMore = false,
+                    MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                };
+
+            leafId = nextSibling.Value;
+        }
+
+        return new KeysPage
+        {
+            Keys = keys,
+            HasMore = true,
+            MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+        };
+    }
+
+    public async Task<KeysPage> GetSortedKeysBatchReverseAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken = null)
+    {
+        await PrepareForOperationAsync();
+        RecordRead();
+
+        // Determine the starting leaf (rightmost, or the leaf for the seek key).
+        var seekKey = continuationToken ?? endExclusive;
+        GrainId leafId;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = state.State.RootNodeId!.Value;
+        }
+        else if (seekKey is not null)
+        {
+            leafId = await TraverseToLeafAsync(seekKey);
+        }
+        else
+        {
+            leafId = await TraverseToRightmostLeafAsync();
+        }
+
+        // Walk the sibling chain backward, collecting keys in reverse until the page is full.
+        var keys = new List<string>(pageSize);
+        HashSet<int>? movedSet = null;
+        while (keys.Count < pageSize)
+        {
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            // Pass continuationToken as beforeExclusive so the leaf filters
+            // at the source — avoids transferring keys that would be
+            // discarded here.
+            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, beforeExclusive: continuationToken);
+
+            // Walk the leaf's keys in reverse order.
+            for (int i = leafKeys.Count - 1; i >= 0; i--)
+            {
+                var key = leafKeys[i];
+                if (TryGetMovedAwaySlot(key, out var movedSlot))
+                {
+                    (movedSet ??= []).Add(movedSlot);
+                    continue;
+                }
+                keys.Add(key);
+                if (keys.Count >= pageSize)
+                    break;
+            }
+
+            if (keys.Count >= pageSize)
+                break;
+
+            var prevSibling = await leafGrain.GetPrevSiblingAsync();
+            if (prevSibling is null)
+                return new KeysPage
+                {
+                    Keys = keys,
+                    HasMore = false,
+                    MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                };
+
+            leafId = prevSibling.Value;
+        }
+
+        return new KeysPage
+        {
+            Keys = keys,
+            HasMore = true,
+            MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+        };
+    }
+
+    public async Task<EntriesPage> GetSortedEntriesBatchAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken = null)
+    {
+        await PrepareForOperationAsync();
+        RecordRead();
+
+        var seekKey = continuationToken ?? startInclusive;
+        GrainId leafId;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = state.State.RootNodeId!.Value;
+        }
+        else if (seekKey is not null)
+        {
+            leafId = await TraverseToLeafAsync(seekKey);
+        }
+        else
+        {
+            leafId = await TraverseToLeftmostLeafAsync();
+        }
+
+        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        HashSet<int>? movedSet = null;
+        while (entries.Count < pageSize)
+        {
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            // Pass continuationToken as afterExclusive so the leaf filters
+            // at the source — avoids serializing byte[] values that would be
+            // discarded here.
+            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, continuationToken);
+
+            foreach (var entry in leafEntries)
+            {
+                if (TryGetMovedAwaySlot(entry.Key, out var movedSlot))
+                {
+                    (movedSet ??= []).Add(movedSlot);
+                    continue;
+                }
+                entries.Add(entry);
+                if (entries.Count >= pageSize)
+                    break;
+            }
+
+            if (entries.Count >= pageSize)
+                break;
+
+            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            if (nextSibling is null)
+                return new EntriesPage
+                {
+                    Entries = entries,
+                    HasMore = false,
+                    MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                };
+
+            leafId = nextSibling.Value;
+        }
+
+        return new EntriesPage
+        {
+            Entries = entries,
+            HasMore = true,
+            MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+        };
+    }
+
+    public async Task<EntriesPage> GetSortedEntriesBatchReverseAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken = null)
+    {
+        await PrepareForOperationAsync();
+        RecordRead();
+
+        var seekKey = continuationToken ?? endExclusive;
+        GrainId leafId;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = state.State.RootNodeId!.Value;
+        }
+        else if (seekKey is not null)
+        {
+            leafId = await TraverseToLeafAsync(seekKey);
+        }
+        else
+        {
+            leafId = await TraverseToRightmostLeafAsync();
+        }
+
+        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        HashSet<int>? movedSet = null;
+        while (entries.Count < pageSize)
+        {
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            // Pass continuationToken as beforeExclusive so the leaf filters
+            // at the source — avoids serializing byte[] values that would be
+            // discarded here.
+            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, beforeExclusive: continuationToken);
+
+            for (int i = leafEntries.Count - 1; i >= 0; i--)
+            {
+                var entry = leafEntries[i];
+                if (TryGetMovedAwaySlot(entry.Key, out var movedSlot))
+                {
+                    (movedSet ??= []).Add(movedSlot);
+                    continue;
+                }
+                entries.Add(entry);
+                if (entries.Count >= pageSize)
+                    break;
+            }
+
+            if (entries.Count >= pageSize)
+                break;
+
+            var prevSibling = await leafGrain.GetPrevSiblingAsync();
+            if (prevSibling is null)
+                return new EntriesPage
+                {
+                    Entries = entries,
+                    HasMore = false,
+                    MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                };
+
+            leafId = prevSibling.Value;
+        }
+
+        return new EntriesPage
+        {
+            Entries = entries,
+            HasMore = true,
+            MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<KeysPage> GetSortedKeysBatchForSlotsAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken,
+        int[] sortedSlots,
+        int virtualShardCount)
+    {
+        ArgumentNullException.ThrowIfNull(sortedSlots);
+        if (virtualShardCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
+
+        await PrepareForOperationAsync();
+        RecordRead();
+
+        if (sortedSlots.Length == 0 || state.State.RootNodeId is null)
+            return new KeysPage { Keys = [], HasMore = false };
+
+        var seekKey = continuationToken ?? startInclusive;
+        GrainId leafId;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = state.State.RootNodeId!.Value;
+        }
+        else if (seekKey is not null)
+        {
+            leafId = await TraverseToLeafAsync(seekKey);
+        }
+        else
+        {
+            leafId = await TraverseToLeftmostLeafAsync();
+        }
+
+        var keys = new List<string>(pageSize);
+        while (keys.Count < pageSize)
+        {
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, afterExclusive: continuationToken);
+
+            foreach (var key in leafKeys)
+            {
+                var slot = ShardMap.GetVirtualSlot(key, virtualShardCount);
+                if (Array.BinarySearch(sortedSlots, slot) < 0) continue;
+                keys.Add(key);
+                if (keys.Count >= pageSize) break;
+            }
+
+            if (keys.Count >= pageSize) break;
+
+            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            if (nextSibling is null)
+                return new KeysPage { Keys = keys, HasMore = false };
+
+            leafId = nextSibling.Value;
+        }
+
+        return new KeysPage { Keys = keys, HasMore = true };
+    }
+
+    /// <inheritdoc />
+    public async Task<EntriesPage> GetSortedEntriesBatchForSlotsAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken,
+        int[] sortedSlots,
+        int virtualShardCount)
+    {
+        ArgumentNullException.ThrowIfNull(sortedSlots);
+        if (virtualShardCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
+
+        await PrepareForOperationAsync();
+        RecordRead();
+
+        if (sortedSlots.Length == 0 || state.State.RootNodeId is null)
+            return new EntriesPage { Entries = [], HasMore = false };
+
+        var seekKey = continuationToken ?? startInclusive;
+        GrainId leafId;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = state.State.RootNodeId!.Value;
+        }
+        else if (seekKey is not null)
+        {
+            leafId = await TraverseToLeafAsync(seekKey);
+        }
+        else
+        {
+            leafId = await TraverseToLeftmostLeafAsync();
+        }
+
+        var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        while (entries.Count < pageSize)
+        {
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, continuationToken);
+
+            foreach (var entry in leafEntries)
+            {
+                var slot = ShardMap.GetVirtualSlot(entry.Key, virtualShardCount);
+                if (Array.BinarySearch(sortedSlots, slot) < 0) continue;
+                entries.Add(entry);
+                if (entries.Count >= pageSize) break;
+            }
+
+            if (entries.Count >= pageSize) break;
+
+            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            if (nextSibling is null)
+                return new EntriesPage { Entries = entries, HasMore = false };
+
+            leafId = nextSibling.Value;
+        }
+
+        return new EntriesPage { Entries = entries, HasMore = true };
+    }
+
+    public async Task<GrainId?> GetLeftmostLeafIdAsync()
+    {
+        // The leftmost leaf is the first in the chain, or the root if no chain exists.
+        return state.State.RootNodeId is null
+            ? null
+            : state.State.RootIsLeaf
+                ? state.State.RootNodeId
+                : await TraverseToLeftmostLeafAsync();
     }
 }

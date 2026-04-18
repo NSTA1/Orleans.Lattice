@@ -79,24 +79,58 @@ activations transparently retry against the correct shard. The post-Complete
 permanent `MovedAwaySlots` rejection extends this guarantee for the lifetime
 of the source shard.
 
-Scans (`KeysAsync`, `EntriesAsync`, `CountAsync`) are **eventually
-consistent** across a topology change. The source shard filters out moved
-virtual slots from scan results once the shard map swap has happened
-(phase ≥ `Swap`) so duplicates are never produced once the topology change
-is visible. However, a long-running scan that begins **before** the swap
-and ends **after** it may transiently miss or under-count entries in the
-moved slot range, because:
+Scans (`KeysAsync`, `EntriesAsync`, `CountAsync`) are **strongly consistent**
+across topology changes — including any number of concurrent splits. They
+return the exact live key set as observed at the moment each scan starts,
+with no missing or double-counted entries even when the shard map mutates
+mid-scan.
 
-* The scan iterates physical shards as discovered when it began.
-* If `S` was originally serving a slot but the swap moved it to `T`
-  mid-scan, neither S (which now filters) nor T (which the scan never
-  visited) yields those entries within that single scan pass.
+### How strong consistency is achieved
 
-Callers that require an exact snapshot during periods of expected
-topology change should re-run the scan after `IsSplittingAsync()` returns
-`false` for every physical shard, or pin to a tree that has not been
-splitting recently. Re-running the scan once the split has completed
-yields exactly the live key set.
+Each scan uses a per-slot reconciliation algorithm coordinated against the
+registry's monotonically-incrementing `ShardMap.Version`:
+
+1. **Pass 1 — fan out to current owners.** The orchestrator reads the shard
+   map, computes the current physical owner of every virtual slot, and asks
+   each owner for its data. Each shard root reports back two things:
+   * the keys/entries (or count) of all keys *not* in its
+     `MovedAwaySlots` table (entries it no longer authoritatively owns), and
+   * the set of `MovedAwaySlots` virtual slots it observed during the
+     traversal (used as a topology-stability hint).
+2. **Stability check.** The orchestrator re-reads `ShardMap.Version` from
+   the registry. If the version moved during pass 1, a concurrent split
+   committed its swap mid-scan and the per-shard view is potentially
+   inconsistent — the whole pass is discarded and retried. Bounded by
+   `LatticeOptions.MaxScanRetries` (default 3); throws
+   `InvalidOperationException` on exhaustion.
+3. **Pass 2 — reconcile (Keys/Entries only).** For `KeysAsync` and
+   `EntriesAsync`, the orchestrator compares the shard map at the start of
+   pass 1 against the current map and asks the new owners of any slots
+   that changed hands for the missing entries, using the slot-filtered
+   variants `GetSortedKeysBatchForSlotsAsync` /
+   `GetSortedEntriesBatchForSlotsAsync`. A `HashSet<string>` deduplicator
+   ensures no key is emitted twice. `CountAsync` does not need pass 2 —
+   pass 1 already polled every current owner and the source's
+   `MovedAwaySlots` filter prevents double counting.
+
+### Trade-offs
+
+* **Order**: Keys/Entries are streamed in sorted (or reverse) order
+  during pass 1. Reconciled entries from pass 2, when present, are
+  appended at the tail in unspecified order. Callers needing strict
+  global ordering across topology changes should sort the output, or
+  scan again after `IsSplittingAsync()` returns `false` on every shard.
+* **Memory**: scans allocate a `HashSet<string>` for dedup that grows
+  with the number of distinct keys observed in pass 1. For very large
+  trees, prefer the range-bounded overload of `KeysAsync` /
+  `EntriesAsync` to bound memory.
+* **Latency**: when no split has ever occurred, scans take the same
+  fast path as before (one round-trip per shard). The reconciliation
+  passes only run when a shard actually reports moved slots.
+* **System trees**: the lattice registry tree itself bypasses the
+  reconciliation path (it never participates in adaptive splits, and
+  reading its own shard map would deadlock). It uses the simple
+  fan-out-and-sum count instead.
 
 ## Autonomic detection
 
@@ -150,6 +184,7 @@ individually** when:
 | `MaxConcurrentAutoSplits` | `2` | Maximum concurrent splits per tree. Each split runs in its own per-shard coordinator activation; the cap bounds aggregate storage I/O. |
 | `SplitDrainBatchSize` | `1024` | Maximum number of moved-slot entries the drain accumulates in memory before flushing to the target shard. Caps coordinator allocation regardless of source shard size. |
 | `AutoSplitMinTreeAge` | `60 s` | Minimum tree age before autonomic splits are allowed; absorbs startup bursts. |
+| `MaxScanRetries` | `3` | Maximum bounded retries that a strongly-consistent scan (`CountAsync`, `KeysAsync`, `EntriesAsync`) performs when `ShardMap.Version` keeps moving mid-scan due to concurrent splits. Throws `InvalidOperationException` on exhaustion. Increase if scans run during very-high split churn. |
 
 ## Convergence guarantees
 

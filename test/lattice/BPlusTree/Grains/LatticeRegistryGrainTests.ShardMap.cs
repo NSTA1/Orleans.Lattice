@@ -99,4 +99,67 @@ public partial class LatticeRegistryGrainTests
             () => grain.SetShardMapAsync("my-tree", null!),
             Throws.ArgumentNullException);
     }
+
+    // --- F-011: Version stamping (strongly-consistent scan stability hint ---
+
+    [Test]
+    public async Task SetShardMapAsync_stamps_version_one_on_first_persist()
+    {
+        var (grain, tree) = CreateGrain();
+        byte[]? captured = null;
+        await tree.SetAsync(Arg.Any<string>(), Arg.Do<byte[]>(b => captured = b));
+        tree.GetAsync("my-tree").Returns(Task.FromResult<byte[]?>(null));
+
+        await grain.SetShardMapAsync("my-tree", ShardMap.CreateDefault(8, 4));
+
+        tree.GetAsync("my-tree").Returns(Task.FromResult(captured));
+        var roundtrip = await grain.GetShardMapAsync("my-tree");
+        Assert.That(roundtrip, Is.Not.Null);
+        Assert.That(roundtrip!.Version, Is.EqualTo(1L),
+            "First persist must stamp Version=1 (default identity map has Version=0).");
+    }
+
+    [Test]
+    public async Task SetShardMapAsync_increments_version_on_each_persist()
+    {
+        var (grain, tree) = CreateGrain();
+        byte[]? captured = null;
+        await tree.SetAsync(Arg.Any<string>(), Arg.Do<byte[]>(b => captured = b));
+
+        // 1st persist: empty → Version 1.
+        tree.GetAsync("my-tree").Returns(Task.FromResult<byte[]?>(null));
+        await grain.SetShardMapAsync("my-tree", ShardMap.CreateDefault(8, 4));
+
+        // 2nd persist: existing has Version 1 → Version 2.
+        tree.GetAsync("my-tree").Returns(Task.FromResult(captured));
+        await grain.SetShardMapAsync("my-tree", ShardMap.CreateDefault(8, 4));
+
+        // 3rd persist: existing has Version 2 → Version 3.
+        tree.GetAsync("my-tree").Returns(Task.FromResult(captured));
+        await grain.SetShardMapAsync("my-tree", ShardMap.CreateDefault(8, 4));
+
+        tree.GetAsync("my-tree").Returns(Task.FromResult(captured));
+        var roundtrip = await grain.GetShardMapAsync("my-tree");
+        Assert.That(roundtrip!.Version, Is.EqualTo(3L),
+            "Version must increment monotonically on every SetShardMapAsync call.");
+    }
+
+    [Test]
+    public async Task SetShardMapAsync_overwrites_caller_supplied_version()
+    {
+        var (grain, tree) = CreateGrain();
+        byte[]? captured = null;
+        await tree.SetAsync(Arg.Any<string>(), Arg.Do<byte[]>(b => captured = b));
+        tree.GetAsync("my-tree").Returns(Task.FromResult<byte[]?>(null));
+
+        // Caller supplies a stale/forged Version — registry must overwrite it.
+        var map = ShardMap.CreateDefault(8, 4);
+        map.Version = 9999L;
+        await grain.SetShardMapAsync("my-tree", map);
+
+        tree.GetAsync("my-tree").Returns(Task.FromResult(captured));
+        var roundtrip = await grain.GetShardMapAsync("my-tree");
+        Assert.That(roundtrip!.Version, Is.EqualTo(1L),
+            "Caller-supplied Version must be overwritten so callers cannot fake stability.");
+    }
 }
