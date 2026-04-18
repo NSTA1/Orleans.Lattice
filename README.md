@@ -95,6 +95,23 @@ Detailed design documentation is split by concept:
 | [Tree Sizing](docs/tree-sizing.md) | Per-provider storage limits, leaf/internal node size estimation, sizing recommendations, resizing existing trees |
 | [Tree Structure](docs/tree-structure.md) | Internal/leaf node layout, two-phase leaf splits, idempotent split propagation |
 
+## Performance Characteristics
+
+Orleans.Lattice inherits the asymptotic properties of a [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree). In a single shard containing *n* keys with branching factor *b*:
+
+| Operation | Time Complexity | What it means |
+|---|---|---|
+| Point read (`GetAsync`) | O(log<sub>b</sub> n) | Finding a key requires visiting one grain per tree level — typically 1–3 hops for millions of keys. |
+| Insert / update (`SetAsync`) | O(log<sub>b</sub> n) | Same traversal as a read, plus an occasional split that propagates upward (amortised O(1) extra work). |
+| Delete (`DeleteAsync`) | O(log<sub>b</sub> n) | Writes a tombstone at the leaf; no rebalancing. Tombstones are compacted in the background. |
+| Ordered scan (`KeysAsync`) | O(n) | Leaves are linked — once the first leaf is found, iteration walks sibling pointers without revisiting internal nodes. |
+| Count (`CountAsync`) | O(n / b) | Visits every leaf across all shards but skips internal nodes. |
+| Space | O(n) | Each key-value pair is stored exactly once in a leaf node. Internal nodes hold only separator keys. |
+
+**In plain terms:** because each node can hold ~128 children (the default branching factor), the tree is extremely shallow. A shard with two million keys is only three levels deep, so a single-key lookup crosses just three grains. Adding more data makes the tree wider, not deeper — doubling the key count adds at most one extra level. Scans are efficient because all values live in the leaves, which are chained together, so iterating a range never backtracks.
+
+With sharding, the *n* in each shard is reduced by a factor of `ShardCount` (default 64), making per-shard trees even shallower. The trade-off is that cross-shard operations (`CountAsync`, `KeysAsync`, `EntriesAsync`) scatter-gather across all shards and merge the results.
+
 ## Contributing
 
 Contributions are welcome! To get started:
