@@ -62,8 +62,11 @@ public interface ILattice : IGrainWithStringKey
     /// Returns all live keys in the tree as an ordered async stream.
     /// Keys are returned in lexicographic order (or reverse if <paramref name="reverse"/> is <c>true</c>).
     /// Optionally filters to keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
+    /// When <paramref name="prefetch"/> is <c>true</c> (or <c>null</c> and
+    /// <see cref="LatticeOptions.PrefetchKeysScan"/> is enabled), the next page from
+    /// each shard is fetched in parallel while the current page is being consumed.
     /// </summary>
-    IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false);
+    IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null);
 
     /// <summary>
     /// Returns all live key-value entries in the tree as an ordered async stream.
