@@ -99,18 +99,17 @@ These methods manage tree structure and lifecycle. Several of them **take the tr
 | `ResizeAsync` | `Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)` | Resizes the tree by creating an offline snapshot with new sizing into a new physical tree, swapping the tree alias, and soft-deleting the old data. The tree is unavailable during the snapshot phase but immediately accessible after the swap. Undoable within the `SoftDeleteDuration` retention window. See [Tree Sizing](tree-sizing.md#resizing-an-existing-tree). ⚠️ **Takes the tree offline** during the snapshot phase. |
 | `UndoResizeAsync` | `Task UndoResizeAsync()` | Undoes the most recent resize by recovering the old physical tree, removing the alias, restoring the original registry configuration, and deleting the new snapshot tree. Only available while the old tree is still within its `SoftDeleteDuration` window (before purge completes). |
 
+#### Merge
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `MergeAsync` | `Task MergeAsync(string sourceTreeId)` | Merges all entries from `sourceTreeId` into this tree using LWW semantics, preserving original timestamps. For each key present in both trees, the entry with the higher `HybridLogicalClock` timestamp wins. Tombstones are also merged, ensuring deletes propagate correctly. The source tree remains unmodified. Source and target trees may have different shard counts — entries are re-hashed to the correct target shard during merge. See [Architecture](architecture.md) for details on the CRDT merge primitives. |
+
 #### Snapshots
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `SnapshotAsync` | `Task SnapshotAsync(string destinationTreeId, SnapshotMode mode, int? maxLeafKeys, int? maxInternalChildren)` | Creates a point-in-time copy of the tree into `destinationTreeId`. In `Offline` mode the source is locked during the copy; in `Online` mode it remains available (best-effort consistency). Optional sizing overrides apply to the destination tree. ⚠️ **`Offline` mode takes the tree offline** — all reads and writes throw `InvalidOperationException` until the snapshot completes and shards are unmarked. See [Snapshots](snapshots.md). |
-
-#### Resize
-
-| Method | Signature | Description |
-|--------|-----------|-------------|
-| `ResizeAsync` | `Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)` | Resizes the tree by taking an offline snapshot with the new sizing, then swapping the tree alias so reads and writes target the resized tree. The old physical tree is soft-deleted. ⚠️ **Takes the tree offline** during the snapshot phase — all reads and writes throw `InvalidOperationException` until the alias swap completes. See [Tree Sizing](tree-sizing.md) for sizing guidance. |
-| `UndoResizeAsync` | `Task UndoResizeAsync()` | Undoes the most recent resize by recovering the old physical tree, removing the alias, restoring the original registry configuration, and deleting the snapshot tree. Only available while the old tree is within its `SoftDeleteDuration` window. |
 
 ## `SnapshotMode`
 
@@ -198,7 +197,7 @@ Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Nev
 | `TreeSnapshotState` | `ol.tss` | internal | Persistent state tracking snapshot progress across shards. |
 | `SnapshotPhase` | `ol.snp` | internal | Enum: `Locking`, `Copying`, `Unlocking`, `Completed`. |
 | `TreeDeletionState` | `ol.tds` | internal | Persistent state for soft-delete / purge tracking. |
-| `TombstoneCompactionState` | `ol.tcs` | internal | Persistent state for tombstone compaction progress. |
+| `TreeMergeState` | `ol.tms` | internal | Persistent state tracking merge progress across source shards. |
 
 ## Internal Grain Access Control
 

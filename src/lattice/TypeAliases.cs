@@ -31,6 +31,7 @@ internal static class TypeAliases
     internal const string TreeSnapshotState = "ol.tss";
     internal const string SnapshotPhase = "ol.snp";
     internal const string SnapshotMode = "ol.snm";
+    internal const string TreeMergeState = "ol.tms";
 
     // BPlusTree
     internal const string SplitResult = "ol.sr";

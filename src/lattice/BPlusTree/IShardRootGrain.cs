@@ -150,4 +150,12 @@ public interface IShardRootGrain : IGrainWithStringKey
     /// after the soft-delete window has elapsed.
     /// </summary>
     Task PurgeAsync();
+
+    /// <summary>
+    /// Merges entries into this shard using LWW semantics, preserving original
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> timestamps. Routes
+    /// each entry to the correct leaf via tree traversal and handles splits.
+    /// Used by the tree merge operation.
+    /// </summary>
+    Task MergeManyAsync(Dictionary<string, Orleans.Lattice.Primitives.LwwValue<byte[]>> entries);
 }

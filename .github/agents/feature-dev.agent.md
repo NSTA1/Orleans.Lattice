@@ -37,6 +37,7 @@ Follow these rules when writing code:
 - Use `Task.FromResult` over `ValueTask` for synchronous grain returns.
 - All serializable types must have `[GenerateSerializer]`, `[Alias(TypeAliases.X)]`, and `[Id(n)]` attributes. Add new aliases to `TypeAliases.cs`.
 - Grain interfaces: prefix `I`, suffix `Grain` (e.g. `IBPlusLeafGrain`). Async methods: suffix `Async`.
+- **Grain call filters**: When adding a new grain interface, add it to **both** `LatticeCallContextFilter.LatticeInterfaces` (outgoing — stamps the internal call token) **and** `InternalGrainGuardFilter.GuardedInterfaces` (incoming — blocks direct external calls). Only `ILattice` is excluded from the guard because it is the public entry point.
 - Follow the existing code style exactly — look at neighboring files for patterns before writing new code.
 
 #### Layered implementation order
@@ -84,7 +85,8 @@ Before telling the user the work is done, self-review:
 2. **Test coverage**: Verify every public method and overload has at least one test. Check for missing edge cases (null serializers, empty lists, value types returning `default`).
 3. **Doc accuracy**: Verify parameter nullability in docs matches the actual signatures. Check that code examples compile. Ensure doc tables include all new types.
 4. **Convention compliance**: Verify naming, attributes, XML docs, file placement, and namespace conventions all match the rules in `.github/copilot-instructions.md`.
-5. If any issues are found, fix them before declaring the work complete.
+5. **Grain guard check**: If any new grain interface was added, verify it appears in **both** `LatticeCallContextFilter.LatticeInterfaces` and `InternalGrainGuardFilter.GuardedInterfaces`. Missing either one is a security gap (external clients could call internal grains directly) or a functionality gap (inter-grain calls would be rejected).
+6. If any issues are found, fix them before declaring the work complete.
 
 ### Phase 8 — Deliver
 
