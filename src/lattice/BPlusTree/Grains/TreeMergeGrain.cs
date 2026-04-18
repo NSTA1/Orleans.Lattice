@@ -282,4 +282,8 @@ internal sealed class TreeMergeGrain(
             logger.LogWarning(ex, "Failed to unregister merge keepalive reminder for tree {TreeId}", TargetTreeId);
         }
     }
+
+    /// <inheritdoc />
+    public Task<bool> IsCompleteAsync() =>
+        Task.FromResult(!state.State.InProgress);
 }

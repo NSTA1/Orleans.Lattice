@@ -35,4 +35,10 @@ public interface ITreeSnapshotGrain : IGrainWithStringKey
     /// Used for testing and manual operations.
     /// </summary>
     Task RunSnapshotPassAsync();
+
+    /// <summary>
+    /// Returns <c>true</c> if no snapshot is in progress — either the most recent
+    /// snapshot has completed or no snapshot has ever been initiated (vacuously complete).
+    /// </summary>
+    Task<bool> IsCompleteAsync();
 }

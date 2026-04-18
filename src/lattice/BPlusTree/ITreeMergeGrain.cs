@@ -34,4 +34,10 @@ public interface ITreeMergeGrain : IGrainWithStringKey
     /// Used for testing and manual operations.
     /// </summary>
     Task RunMergePassAsync();
+
+    /// <summary>
+    /// Returns <c>true</c> if no merge is in progress — either the most recent
+    /// merge has completed or no merge has ever been initiated (vacuously complete).
+    /// </summary>
+    Task<bool> IsCompleteAsync();
 }

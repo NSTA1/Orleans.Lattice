@@ -189,4 +189,22 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     /// <param name="sourceTreeId">The tree to merge from. Must exist and differ from this tree.</param>
     Task MergeAsync(string sourceTreeId);
+
+    /// <summary>
+    /// Returns <c>true</c> if no merge operation is in progress for this tree —
+    /// either the most recent merge has completed or no merge has ever been initiated.
+    /// </summary>
+    Task<bool> IsMergeCompleteAsync();
+
+    /// <summary>
+    /// Returns <c>true</c> if no snapshot operation is in progress for this tree —
+    /// either the most recent snapshot has completed or no snapshot has ever been initiated.
+    /// </summary>
+    Task<bool> IsSnapshotCompleteAsync();
+
+    /// <summary>
+    /// Returns <c>true</c> if no resize operation is in progress for this tree —
+    /// either the most recent resize has completed or no resize has ever been initiated.
+    /// </summary>
+    Task<bool> IsResizeCompleteAsync();
 }

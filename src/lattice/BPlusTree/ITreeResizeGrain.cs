@@ -52,4 +52,10 @@ public interface ITreeResizeGrain : IGrainWithStringKey
     /// already been purged.
     /// </exception>
     Task UndoResizeAsync();
+
+    /// <summary>
+    /// Returns <c>true</c> if no resize is in progress — either the most recent
+    /// resize has completed or no resize has ever been initiated (vacuously complete).
+    /// </summary>
+    Task<bool> IsCompleteAsync();
 }
