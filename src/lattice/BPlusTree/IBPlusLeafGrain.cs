@@ -13,6 +13,14 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <summary>Gets the value for <paramref name="key"/>, or <c>null</c> if absent/tombstoned.</summary>
     Task<byte[]?> GetAsync(string key);
 
+    /// <summary>
+    /// Gets the value and its <see cref="Primitives.HybridLogicalClock"/> version for
+    /// <paramref name="key"/>. Returns a <see cref="VersionedValue"/> with
+    /// <c>null</c> value and <see cref="Primitives.HybridLogicalClock.Zero"/> version
+    /// when the key is absent or tombstoned.
+    /// </summary>
+    Task<VersionedValue> GetWithVersionAsync(string key);
+
     /// <summary>Returns <c>true</c> if <paramref name="key"/> exists and is not tombstoned.</summary>
     Task<bool> ExistsAsync(string key);
 
@@ -35,6 +43,13 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// write was performed.
     /// </summary>
     Task<GetOrSetResult> GetOrSetAsync(string key, byte[] value);
+
+    /// <summary>
+    /// Sets <paramref name="key"/> to <paramref name="value"/> only if the entry's
+    /// current <see cref="Primitives.HybridLogicalClock"/> matches <paramref name="expectedVersion"/>.
+    /// Returns a <see cref="CasResult"/> indicating whether the write was applied.
+    /// </summary>
+    Task<CasResult> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion);
 
     /// <summary>
     /// Inserts or updates multiple key-value pairs.

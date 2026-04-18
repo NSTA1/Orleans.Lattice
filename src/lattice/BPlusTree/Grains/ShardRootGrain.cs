@@ -78,6 +78,12 @@ internal sealed partial class ShardRootGrain(
         return await TraverseForReadAsync(key);
     }
 
+    public async Task<VersionedValue> GetWithVersionAsync(string key)
+    {
+        await PrepareForOperationAsync();
+        return await TraverseForReadWithVersionAsync(key);
+    }
+
     public async Task<bool> ExistsAsync(string key)
     {
         await PrepareForOperationAsync();
@@ -147,6 +153,36 @@ internal sealed partial class ShardRootGrain(
                 // The failed grain will be deactivated by Orleans. On retry, a fresh
                 // activation loads clean state and the recovery guards resume any
                 // interrupted split.
+            }
+        }
+    }
+
+    public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
+    {
+        await PrepareForOperationAsync();
+
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                var result = await TraverseForSetIfVersionAsync(key, value, expectedVersion);
+
+                if (!result.Success)
+                {
+                    return false;
+                }
+
+                // A write occurred — propagate any split.
+                var splitResult = result.Split;
+                while (splitResult is not null)
+                {
+                    splitResult = await PromoteRootAsync(splitResult);
+                }
+
+                return true;
+            }
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            {
             }
         }
     }

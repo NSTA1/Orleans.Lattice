@@ -1,3 +1,5 @@
+using Orleans.Lattice.Primitives;
+
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
@@ -19,6 +21,22 @@ internal sealed partial class ShardRootGrain
 
         var cache = grainFactory.GetGrain<ILeafCacheGrain>(leafId.ToString());
         return await cache.GetAsync(key);
+    }
+
+    private async Task<VersionedValue> TraverseForReadWithVersionAsync(string key)
+    {
+        GrainId leafId;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = state.State.RootNodeId!.Value;
+        }
+        else
+        {
+            leafId = await TraverseToLeafAsync(key);
+        }
+
+        var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+        return await leaf.GetWithVersionAsync(key);
     }
 
     private async Task<bool> TraverseForExistsAsync(string key)
@@ -172,6 +190,67 @@ internal sealed partial class ShardRootGrain
             }
 
             return new GetOrSetResult { Split = splitResult };
+        }
+        finally
+        {
+            StackPool.Return(path);
+        }
+    }
+
+    private async Task<CasResult> TraverseForSetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
+    {
+        if (state.State.RootIsLeaf)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
+            return await leaf.SetIfVersionAsync(key, value, expectedVersion);
+        }
+
+        var path = StackPool.Get();
+        try
+        {
+            var currentId = state.State.RootNodeId!.Value;
+
+            while (true)
+            {
+                var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+                var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
+
+                if (childrenAreLeaves)
+                {
+                    path.Push(currentId);
+                    path.Push(childId);
+                    break;
+                }
+
+                path.Push(currentId);
+                currentId = childId;
+            }
+
+            var leafId = path.Pop();
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var result = await leafGrain.SetIfVersionAsync(key, value, expectedVersion);
+
+            // If CAS failed, no write occurred — no splits to propagate.
+            if (!result.Success)
+            {
+                return result;
+            }
+
+            // Propagate splits up the tree.
+            var splitResult = result.Split;
+            while (splitResult is not null && path.Count > 0)
+            {
+                var parentId = path.Pop();
+                var parentGrain = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
+                splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
+            }
+
+            return new CasResult
+            {
+                Success = true,
+                CurrentVersion = result.CurrentVersion,
+                Split = splitResult
+            };
         }
         finally
         {

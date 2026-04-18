@@ -29,6 +29,16 @@ internal sealed partial class BPlusLeafGrain(
         return Task.FromResult<byte[]?>(null);
     }
 
+    public Task<VersionedValue> GetWithVersionAsync(string key)
+    {
+        if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone)
+        {
+            return Task.FromResult(new VersionedValue { Value = lww.Value, Version = lww.Timestamp });
+        }
+
+        return Task.FromResult(new VersionedValue());
+    }
+
     public Task<bool> ExistsAsync(string key)
     {
         return Task.FromResult(
@@ -51,6 +61,50 @@ internal sealed partial class BPlusLeafGrain(
     {
         var splitResult = await SetAsync(key, value);
         return new GetOrSetResult { Split = splitResult };
+    }
+
+    public Task<CasResult> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
+    {
+        // Check current entry version.
+        if (state.State.Entries.TryGetValue(key, out var existing) && !existing.IsTombstone)
+        {
+            if (existing.Timestamp != expectedVersion)
+            {
+                return Task.FromResult(new CasResult
+                {
+                    Success = false,
+                    CurrentVersion = existing.Timestamp
+                });
+            }
+        }
+        else
+        {
+            // Key is absent or tombstoned — expectedVersion must be Zero.
+            if (expectedVersion != HybridLogicalClock.Zero)
+            {
+                return Task.FromResult(new CasResult
+                {
+                    Success = false,
+                    CurrentVersion = HybridLogicalClock.Zero
+                });
+            }
+        }
+
+        // Version matches — delegate to the async write path.
+        return SetIfVersionWriteAsync(key, value);
+    }
+
+    private async Task<CasResult> SetIfVersionWriteAsync(string key, byte[] value)
+    {
+        var splitResult = await SetAsync(key, value);
+        // After SetAsync, the entry has a new timestamp.
+        var newVersion = state.State.Entries[key].Timestamp;
+        return new CasResult
+        {
+            Success = true,
+            CurrentVersion = newVersion,
+            Split = splitResult
+        };
     }
 
     public Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
