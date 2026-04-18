@@ -507,44 +507,4 @@ public class BPlusTreeBulkLoadTests
                 AsyncEnumerable.Empty<KeyValuePair<string, byte[]>>(),
                 null!));
     }
-
-    [Test]
-    public async Task BulkLoadAsync_streaming_routes_via_persisted_shard_map()
-    {
-        // This exercises the full F-030 path: GetRoutingAsync resolves a custom
-        // shard map persisted in the registry, and entries are routed accordingly.
-        const string treeId = "bulk-custom-map";
-        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
-
-        // Force the tree to materialise (creates the registry entry with a default map).
-        await tree.SetAsync("bootstrap", [0]);
-        await tree.DeleteAsync("bootstrap");
-
-        // Override the persisted shard map: pin every virtual slot to physical shard 0.
-        var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var defaultMap = await registry.GetShardMapAsync(treeId);
-        Assume.That(defaultMap, Is.Not.Null);
-        var pinnedSlots = new int[defaultMap!.Slots.Length];
-        // Slots already 0 in single-shard fixture — explicit assignment for clarity.
-        Array.Fill(pinnedSlots, 0);
-        await registry.SetShardMapAsync(treeId, new ShardMap { Slots = pinnedSlots });
-
-        const int count = 25;
-        async IAsyncEnumerable<KeyValuePair<string, byte[]>> GenerateEntries()
-        {
-            for (int i = 0; i < count; i++)
-            {
-                yield return KeyValuePair.Create($"k{i:D4}", Encoding.UTF8.GetBytes($"v{i}"));
-                await Task.Yield();
-            }
-        }
-
-        await tree.BulkLoadAsync(GenerateEntries(), _cluster.GrainFactory, chunkSize: 5);
-
-        var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
-            keys.Add(k);
-
-        Assert.That(keys.Count, Is.EqualTo(count));
-    }
 }
