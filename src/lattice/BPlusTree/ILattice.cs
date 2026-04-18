@@ -176,4 +176,17 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="SnapshotAsync"/> are included.
     /// </summary>
     Task<IReadOnlyList<string>> GetAllTreeIdsAsync();
+
+    /// <summary>
+    /// Merges all entries from <paramref name="sourceTreeId"/> into this tree
+    /// using LWW semantics, preserving original timestamps. For each key present
+    /// in both trees, the entry with the higher <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/>
+    /// timestamp wins. Tombstones are also merged, ensuring deletes propagate correctly.
+    /// <para>
+    /// The source tree remains unmodified. Source and target trees may have different
+    /// shard counts — entries are re-hashed to the correct target shard during merge.
+    /// </para>
+    /// </summary>
+    /// <param name="sourceTreeId">The tree to merge from. Must exist and differ from this tree.</param>
+    Task MergeAsync(string sourceTreeId);
 }

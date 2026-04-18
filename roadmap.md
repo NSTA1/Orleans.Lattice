@@ -9,6 +9,7 @@ Potential improvements and new features, organized by category.
 - [x] **F-003 — `GetOrSetAsync` (conditional write)**: Set a key only if it does not already exist, avoiding a read-then-write roundtrip. The leaf grain can short-circuit when a live value is present.
 - [x] **F-004 — Typed value helpers**: A thin generic wrapper `ILattice<T>` or extension methods that accept serializer/deserializer delegates (or default to `System.Text.Json`) to eliminate per-caller `byte[]` boilerplate.
 - [x] **F-005 — `EntriesAsync` (key + value scan)**: Stream `KeyValuePair<string, byte[]>` in sorted order, complementing the existing `KeysAsync`. Useful for exports, migrations, and analytics without a separate `GetAsync` per key.
+- [ ] **F-026 — Operation status queries**: Expose completion checks for long-running maintenance operations on `ILattice` so callers can poll for completion without reaching into coordination grains. Methods: `IsMergeCompleteAsync()`, `IsSnapshotCompleteAsync()`, `IsResizeCompleteAsync()`. Each delegates to the corresponding coordination grain's persisted state (`!InProgress && Complete`). Returns `true` when no operation has ever been initiated (vacuously complete). Since only one operation of each type can be in progress per tree, the tree ID is the implicit operation handle — no new identifier needed. Callers that need synchronous completion can poll these methods; callers that prefer fire-and-forget rely on the existing reminder-based crash recovery to drive the operation to completion.
 
 ## Performance & Scalability
 
@@ -20,6 +21,7 @@ Potential improvements and new features, organized by category.
 - [ ] **F-010 — Leaf-level write batching**: Coalesce concurrent `SetAsync` calls targeting the same leaf into a single `WriteStateAsync` (similar to a WAL flush group) to reduce storage I/O under write-heavy workloads.
 - [ ] **F-011 — Adaptive shard splitting**: Allow a hot shard to split into two at runtime without a full offline resize, enabling the tree to scale with workload growth.
 - [ ] **F-012 — Warm cache on silo startup**: Optionally pre-warm `LeafCacheGrain` activations for recently-accessed leaves after a silo restart to reduce cold-start read-latency spikes.
+- [ ] **F-027 — Leaf-grouped merge routing**: `ShardRootGrain.MergeManyAsync` currently traverses the B+ tree once per entry, sending a single-entry dictionary to each leaf. Group entries by target leaf before calling `MergeManyAsync`, reducing tree traversals from O(n) to O(leaves) and collapsing multiple `WriteStateAsync` calls per leaf into one.
 
 ## Reliability & Observability
 
@@ -33,7 +35,8 @@ Potential improvements and new features, organized by category.
 - [ ] **F-017 — Compare-and-swap (CAS)**: Optimistic concurrency via `SetIfVersionAsync(key, value, expectedVersion)` — the write succeeds only if the current entry's HLC matches, enabling safe read-modify-write patterns without distributed locks.
 - [ ] **F-018 — Secondary index / tag support**: Associate tags with keys and query by tag. Implementable as a secondary Lattice tree mapping `tag → Set<key>`, maintained alongside the primary write.
 - [ ] **F-019 — Online (non-blocking) resize**: Copy shards incrementally while the tree remains available (similar to `SnapshotMode.Online`), with only a brief lock for the final alias swap, to reduce maintenance downtime.
-- [ ] **F-020 — Merge trees (`MergeAsync`)**: Merge all entries from a source tree into the current tree using LWW semantics. Useful for combining snapshots, migrating data, or rejoining forked datasets.
+- [x] **F-020 — Merge trees (`MergeAsync`)**: Merge all entries from a source tree into the current tree using LWW semantics. Useful for combining snapshots, migrating data, or rejoining forked datasets.
+- [ ] **F-025 — Continuous merge (`ContinuousMergeAsync`)**: Build on F-020 to support incremental, ongoing merge from one or more source trees. Uses `VersionVector` to track a per-source high-water mark so each merge cycle transfers only entries newer than the last. Requires a delta-aware leaf scan (`GetEntriesNewerThanAsync(HybridLogicalClock threshold)`) and a merge-state tracking grain (or shard-root state) to persist the stored vector per source tree. Convergence is guaranteed by `LwwValue.Merge` and replay-safety by the idempotent pointwise-max join of `VersionVector.Merge`. Should also replace the current full-shard drain in `TreeMergeGrain.MergeShardAsync` with a chunked or cursor-based leaf-chain iteration to avoid loading all entries into memory at once.
 
 ## Documentation & Developer Experience
 

@@ -127,6 +127,14 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<Dictionary<string, byte[]>> GetLiveEntriesAsync();
 
     /// <summary>
+    /// Merges entries into this leaf using LWW semantics, preserving original
+    /// timestamps. Unlike <see cref="MergeEntriesAsync"/>, this method checks
+    /// for leaf overflow and triggers a split if needed.
+    /// Returns a <see cref="SplitResult"/> if the leaf split, otherwise <c>null</c>.
+    /// </summary>
+    Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries);
+
+    /// <summary>
     /// Clears all persistent state for this grain and deactivates it.
     /// Used during tree purge to permanently remove leaf data.
     /// </summary>

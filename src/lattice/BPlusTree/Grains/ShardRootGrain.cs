@@ -533,4 +533,87 @@ internal sealed partial class ShardRootGrain(
         await ResumePendingPromotionAsync();
         await ResumePendingBulkGraftAsync();
     }
+
+    public async Task MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries)
+    {
+        await PrepareForOperationAsync();
+
+        // Reuse a single dictionary to avoid per-entry allocation.
+        var single = new Dictionary<string, LwwValue<byte[]>>(1);
+        foreach (var (key, lww) in entries)
+        {
+            await MergeEntryAsync(key, lww, single);
+        }
+    }
+
+    private async Task MergeEntryAsync(string key, LwwValue<byte[]> lww, Dictionary<string, LwwValue<byte[]>> buffer)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                buffer.Clear();
+                buffer[key] = lww;
+                var splitResult = await TraverseForMergeAsync(key, buffer);
+
+                while (splitResult is not null)
+                {
+                    splitResult = await PromoteRootAsync(splitResult);
+                }
+
+                return;
+            }
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            {
+            }
+        }
+    }
+
+    private async Task<SplitResult?> TraverseForMergeAsync(string key, Dictionary<string, LwwValue<byte[]>> entries)
+    {
+        if (state.State.RootIsLeaf)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
+            return await leaf.MergeManyAsync(entries);
+        }
+
+        var path = StackPool.Get();
+        try
+        {
+            var currentId = state.State.RootNodeId!.Value;
+
+            while (true)
+            {
+                var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+                var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
+
+                if (childrenAreLeaves)
+                {
+                    path.Push(currentId);
+                    path.Push(childId);
+                    break;
+                }
+
+                path.Push(currentId);
+                currentId = childId;
+            }
+
+            var leafId = path.Pop();
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var splitResult = await leafGrain.MergeManyAsync(entries);
+
+            while (splitResult is not null && path.Count > 0)
+            {
+                var parentId = path.Pop();
+                var parentGrain = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
+                splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
+            }
+
+            return splitResult;
+        }
+        finally
+        {
+            StackPool.Return(path);
+        }
+    }
 }

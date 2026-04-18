@@ -382,6 +382,90 @@ internal sealed partial class BPlusLeafGrain(
         return Task.FromResult(result);
     }
 
+    /// <summary>
+    /// Returns all key-value entries in this leaf including tombstones,
+    /// preserving the original <see cref="LwwValue{T}"/> timestamps.
+    /// Internal method for unit testing — not exposed on the grain interface
+    /// to avoid Orleans generic type serialization issues.
+    /// </summary>
+    internal Task<Dictionary<string, LwwValue<byte[]>>> GetAllRawEntriesAsync()
+    {
+        return Task.FromResult(
+            new Dictionary<string, LwwValue<byte[]>>(state.State.Entries));
+    }
+
+    public async Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries)
+    {
+        // Recovery: if a previous split was interrupted, complete it first.
+        if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
+        {
+            var recovered = await CompleteSplitAsync();
+            await state.WriteStateAsync();
+
+            // Re-merge entries that belong to the new sibling.
+            var siblingEntries = new Dictionary<string, LwwValue<byte[]>>();
+            var localEntries = new Dictionary<string, LwwValue<byte[]>>();
+            foreach (var (key, lww) in entries)
+            {
+                if (string.Compare(key, state.State.SplitKey!, StringComparison.Ordinal) >= 0)
+                    siblingEntries[key] = lww;
+                else
+                    localEntries[key] = lww;
+            }
+
+            if (siblingEntries.Count > 0)
+            {
+                var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.SplitSiblingId!.Value);
+                await sibling.MergeManyAsync(siblingEntries);
+            }
+
+            // Merge remaining local entries.
+            if (localEntries.Count > 0)
+            {
+                MergeIntoState(localEntries);
+                await state.WriteStateAsync();
+            }
+
+            return recovered;
+        }
+
+        if (entries.Count == 0)
+        {
+            return null;
+        }
+
+        MergeIntoState(entries);
+
+        SplitResult? splitResult = null;
+        if (state.State.Entries.Count > Options.MaxLeafKeys)
+        {
+            splitResult = await SplitAsync();
+        }
+
+        await state.WriteStateAsync();
+        return splitResult;
+    }
+
+    private void MergeIntoState(Dictionary<string, LwwValue<byte[]>> entries)
+    {
+        foreach (var (key, incoming) in entries)
+        {
+            if (state.State.Entries.TryGetValue(key, out var existing))
+            {
+                state.State.Entries[key] = LwwValue<byte[]>.Merge(existing, incoming);
+            }
+            else
+            {
+                state.State.Entries[key] = incoming;
+            }
+        }
+
+        if (entries.Count > 0)
+        {
+            state.State.Version.Tick(ReplicaId);
+        }
+    }
+
     public async Task ClearGrainStateAsync()
     {
         await state.ClearStateAsync();
