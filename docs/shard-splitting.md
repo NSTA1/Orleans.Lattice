@@ -102,7 +102,12 @@ registry's monotonically-incrementing `ShardMap.Version`:
    committed its swap mid-scan and the per-shard view is potentially
    inconsistent — the whole pass is discarded and retried. Bounded by
    `LatticeOptions.MaxScanRetries` (default 3); throws
-   `InvalidOperationException` on exhaustion.
+   `InvalidOperationException` on exhaustion. Each retry re-fetches only
+   the virtual slots that actually moved, so the cost per retry is
+   O(moved slots), not O(all shards). Under the default configuration
+   (`MaxConcurrentAutoSplits` = 2, `HotShardSplitCooldown` = 2 minutes),
+   exhausting 3 retries would require an unusually sustained burst of
+   concurrent topology changes.
 3. **Pass 2 — reconcile (Keys/Entries only).** For `KeysAsync` and
    `EntriesAsync`, the orchestrator compares the shard map at the start of
    pass 1 against the current map and asks the new owners of any slots
@@ -117,9 +122,11 @@ registry's monotonically-incrementing `ShardMap.Version`:
 
 * **Order**: Keys/Entries are streamed in sorted (or reverse) order
   during pass 1. Reconciled entries from pass 2, when present, are
-  appended at the tail in unspecified order. Callers needing strict
+  appended at the tail in unspecified order — breaking the lexicographic
+  ordering guarantee for the affected scan. Callers requiring strict
   global ordering across topology changes should sort the output, or
   scan again after `IsSplittingAsync()` returns `false` on every shard.
+  Tracked by **F-032** (scan ordering preservation under topology change).
 * **Memory**: scans allocate a `HashSet<string>` for dedup that grows
   with the number of distinct keys observed in pass 1. For very large
   trees, prefer the range-bounded overload of `KeysAsync` /
@@ -139,9 +146,12 @@ re-anchored by a keepalive reminder. On each tick (default every 30 s) it:
 
 1. Polls every physical shard's `GetHotnessAsync()` in parallel (F-013).
 2. Computes ops/sec = `(reads + writes) / window.TotalSeconds`.
-3. Counts the cluster-wide number of in-flight splits by polling every
-   shard's `IsSplittingAsync()`. If that count is already
+3. Counts the number of in-flight splits **for this tree** by polling every
+   physical shard's `IsSplittingAsync()`. If that count is already
    `MaxConcurrentAutoSplits`, the pass returns without triggering anything.
+   Because `HotShardMonitorGrain` is keyed per-tree, the cap is enforced
+   independently per tree — in a multi-tree cluster each tree may have up
+   to `MaxConcurrentAutoSplits` concurrent splits running simultaneously.
 4. Selects the top-`(MaxConcurrentAutoSplits − inFlight)` hottest shards
    whose rate exceeds `HotShardOpsPerSecondThreshold` (default 200 ops/s),
    skipping any shard already splitting, on cooldown, or owning a single
