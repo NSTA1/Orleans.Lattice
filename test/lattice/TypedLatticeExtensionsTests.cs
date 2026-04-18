@@ -325,6 +325,102 @@ public class TypedLatticeExtensionsTests
         lattice.Received(1).EntriesAsync("k1", "k3", true);
     }
 
+    // ── GetWithVersionAsync ─────────────────────────────────────
+
+    [Test]
+    public async Task GetWithVersionAsync_deserializes_value_and_maps_version()
+    {
+        var lattice = CreateMock();
+        var item = new TestItem("alice", 10);
+        var hlc = new HybridLogicalClock { WallClockTicks = 42, Counter = 1 };
+        lattice.GetWithVersionAsync("k1").Returns(new VersionedValue
+        {
+            Value = JsonSerializer.SerializeToUtf8Bytes(item),
+            Version = hlc
+        });
+
+        var result = await lattice.GetWithVersionAsync("k1", Serializer);
+
+        Assert.That(result.Value, Is.EqualTo(item));
+        Assert.That(result.Version, Is.EqualTo(hlc));
+    }
+
+    [Test]
+    public async Task GetWithVersionAsync_returns_default_for_missing_key()
+    {
+        var lattice = CreateMock();
+        lattice.GetWithVersionAsync("k1").Returns(new VersionedValue());
+
+        var result = await lattice.GetWithVersionAsync<TestItem>("k1", Serializer);
+
+        Assert.That(result.Value, Is.Null);
+        Assert.That(result.Version, Is.EqualTo(HybridLogicalClock.Zero));
+    }
+
+    [Test]
+    public async Task GetWithVersionAsync_default_serializer_roundtrips()
+    {
+        var lattice = CreateMock();
+        var item = new TestItem("bob", 20);
+        var hlc = new HybridLogicalClock { WallClockTicks = 99, Counter = 0 };
+        lattice.GetWithVersionAsync("k1").Returns(new VersionedValue
+        {
+            Value = JsonSerializer.SerializeToUtf8Bytes(item),
+            Version = hlc
+        });
+
+        var result = await lattice.GetWithVersionAsync<TestItem>("k1");
+
+        Assert.That(result.Value, Is.EqualTo(item));
+        Assert.That(result.Version, Is.EqualTo(hlc));
+    }
+
+    [Test]
+    public void GetWithVersionAsync_throws_for_null_serializer()
+    {
+        var lattice = CreateMock();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.GetWithVersionAsync<TestItem>("k1", null!));
+    }
+
+    // ── SetIfVersionAsync ───────────────────────────────────────
+
+    [Test]
+    public async Task SetIfVersionAsync_serializes_value_and_delegates()
+    {
+        var lattice = CreateMock();
+        var item = new TestItem("alice", 10);
+        var hlc = new HybridLogicalClock { WallClockTicks = 42, Counter = 1 };
+        lattice.SetIfVersionAsync("k1", Arg.Any<byte[]>(), hlc).Returns(true);
+
+        var result = await lattice.SetIfVersionAsync("k1", item, hlc, Serializer);
+
+        Assert.That(result, Is.True);
+        await lattice.Received(1).SetIfVersionAsync("k1",
+            Arg.Is<byte[]>(b => JsonSerializer.Deserialize<TestItem>(b)! == item), hlc);
+    }
+
+    [Test]
+    public async Task SetIfVersionAsync_default_serializer_works()
+    {
+        var lattice = CreateMock();
+        var hlc = new HybridLogicalClock { WallClockTicks = 42, Counter = 1 };
+        lattice.SetIfVersionAsync("k1", Arg.Any<byte[]>(), hlc).Returns(false);
+
+        var result = await lattice.SetIfVersionAsync("k1", new TestItem("x", 0), hlc);
+
+        Assert.That(result, Is.False);
+        await lattice.Received(1).SetIfVersionAsync("k1", Arg.Any<byte[]>(), hlc);
+    }
+
+    [Test]
+    public void SetIfVersionAsync_throws_for_null_serializer()
+    {
+        var lattice = CreateMock();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetIfVersionAsync("k1", new TestItem("x", 0), HybridLogicalClock.Zero, null!));
+    }
+
     // ── Custom Serializer ───────────────────────────────────────
 
     [Test]
@@ -417,26 +513,17 @@ public class TypedLatticeExtensionsTests
     }
 
     [Test]
-    public async Task GetManyAsync_byte_array_delegates_to_interface()
+    public async Task GetWithVersionAsync_byte_array_delegates_to_interface()
     {
         var lattice = CreateMock();
-        var raw = new Dictionary<string, byte[]> { ["a"] = [1, 2] };
-        lattice.GetManyAsync(Arg.Any<List<string>>()).Returns(raw);
+        var data = new byte[] { 1, 2, 3 };
+        var hlc = new HybridLogicalClock { WallClockTicks = 42, Counter = 1 };
+        lattice.GetWithVersionAsync("k1").Returns(new VersionedValue { Value = data, Version = hlc });
 
-        var result = await lattice.GetManyAsync(["a"], PassthroughSerializer.Instance);
+        var result = await lattice.GetWithVersionAsync("k1", PassthroughSerializer.Instance);
 
-        Assert.That(result, Has.Count.EqualTo(1));
-        await lattice.Received(1).GetManyAsync(Arg.Any<List<string>>());
-    }
-
-    [Test]
-    public async Task SetManyAsync_byte_array_delegates_to_interface()
-    {
-        var lattice = CreateMock();
-        var entries = new List<KeyValuePair<string, byte[]>> { new("a", [1, 2]) };
-
-        await lattice.SetManyAsync(entries, PassthroughSerializer.Instance);
-
-        await lattice.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+        Assert.That(result.Value, Is.EqualTo(data));
+        Assert.That(result.Version, Is.EqualTo(hlc));
+        await lattice.Received(1).GetWithVersionAsync("k1");
     }
 }
