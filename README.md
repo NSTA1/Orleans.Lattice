@@ -51,12 +51,14 @@ without distributed locks or coordination protocols.
 
 | Property | How |
 |---|---|
+| **Adaptive shard splitting** | Hot shards split online via shadow-write + drain + swap + reject phases. Fully transparent: no downtime, no dropped writes, no coordination protocol. An autonomic monitor detects hot shards; splits can also be triggered manually for tooling. |
 | **Bulk loading** | One-shot bottom-up build or streaming `IAsyncEnumerable` ingestion with per-shard parallel flushing. Both modes are idempotent and retryable. |
 | **Conflict-free** | All state merges are monotonic. Concurrent writes to the same key resolve via last-writer-wins with hybrid logical clocks. |
 | **Crash-safe splits** | Every node split uses a two-phase pattern with persisted intent. Interrupted splits resume automatically on the next access. |
 | **Fast reads** | A `[StatelessWorker]` cache grain per silo serves reads via delta replication from the primary leaf. Cache misses cost a single version-vector comparison. |
+| **Fault-tolerant** | Validated end-to-end by a parametrized fault-injection chaos theory: random storage-write failures during concurrent reads, writes, scans, and splits converge to the correct state once faults stop. |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on an existing tree. Takes an offline snapshot to a new physical tree, swaps the alias, and soft-deletes the old data. The tree is unavailable during the snapshot phase but immediately accessible after the swap. Undoable within the retention window. |
-| **Scalable writes** | Keys are hash-sharded across 64 independent sub-trees (configurable). No single-root bottleneck. |
+| **Scalable writes** | Keys are hash-sharded across a configurable number of independent sub-trees (default 64). No single-root bottleneck. Shards split further at runtime as load grows. |
 | **Strongly-consistent scans** | `CountAsync`, `KeysAsync`, and `EntriesAsync` return the exact live key set even during concurrent adaptive shard splits, via per-slot reconciliation against a monotonic `ShardMap.Version` and bounded optimistic retry. |
 | **Snapshots** | Create a point-in-time copy of a tree: offline (locked - tree unavailable during snapshot process) or online (best-effort), with optional sizing overrides for the destination. |
 | **Soft delete & recovery** | Trees can be soft-deleted with a configurable retention window. Recovery restores full access; purge permanently removes all data. |
