@@ -113,6 +113,8 @@ public class LatticeCursorIntegrationTests
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>($"cur-null-{Guid.NewGuid():N}");
         Assert.ThrowsAsync<ArgumentNullException>(() => tree.NextKeysAsync(null!, 10));
+        Assert.ThrowsAsync<ArgumentNullException>(() => tree.NextEntriesAsync(null!, 10));
+        Assert.ThrowsAsync<ArgumentNullException>(() => tree.DeleteRangeStepAsync(null!, 10));
         Assert.ThrowsAsync<ArgumentNullException>(() => tree.CloseCursorAsync(null!));
     }
 

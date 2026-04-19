@@ -206,6 +206,8 @@ internal sealed class LatticeCursorGrain(
         // Probe the range: collect up to maxToDelete+1 keys so we can tell
         // whether this step exhausts the range. One-past-budget lets us pick
         // a correct sub-range end without an extra round-trip.
+        // Forward-only: OpenAsync rejects reverse DeleteRange specs, so the
+        // default KeysAsync direction is correct here.
         var probe = new List<string>(maxToDelete + 1);
         await foreach (var key in lattice.KeysAsync(effStart, effEnd))
         {
