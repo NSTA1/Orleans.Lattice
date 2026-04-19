@@ -41,6 +41,26 @@ Obtain an `ILattice` grain from the grain factory using the tree's logical name 
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 ```
 
+### Cancellation
+
+Every method on `ILattice` — including scans (`KeysAsync`, `EntriesAsync`),
+range deletes, counts, fan-out batch operations, bulk load, stateful
+cursors, and all tree-lifecycle orchestrators — accepts an optional
+trailing `CancellationToken cancellationToken = default` parameter. The
+signatures in the tables below omit the parameter for readability. The
+orchestrator checks the token at method entry, inside retry
+`when` filters, and at fan-out / pagination checkpoints, so a
+pre-cancelled token fails fast without contacting any shard. Scan
+iterators apply `[EnumeratorCancellation]` so
+`await foreach (...).WithCancellation(ct)` propagates into the
+orchestrator. Cooperative cancellation is scoped to the `LatticeGrain`
+orchestrator — once a long-running coordinator (saga, resize, snapshot,
+merge) has accepted a request it drives itself to a terminal state via
+reminders and is not cooperatively cancelled.
+
+The typed extensions in `TypedLatticeExtensions` and both streaming
+`BulkLoadAsync` overloads in `LatticeExtensions` also thread the token.
+
 ### Runtime Operations
 
 These methods are used during normal application flow to read, write, and enumerate data. They are safe to call concurrently and do not affect tree availability.
@@ -349,10 +369,12 @@ See [Configuration](configuration.md) for detailed guidance on each option, immu
 | `SplitDrainBatchSize` | `int` | 1024 | Entries per batch during the shadow-write drain phase of a split. |
 | `AutoSplitMinTreeAge` | `TimeSpan` | 60 s | Minimum tree age before the hot-shard monitor begins sampling. Prevents splits during initial bulk-load bursts. |
 | `MaxScanRetries` | `int` | 3 | Maximum bounded-retry passes for `CountAsync` / `KeysAsync` / `EntriesAsync` when the shard topology changes mid-scan. |
+| `CursorIdleTtl` | `TimeSpan` | 48 h | Sliding idle timeout for stateful cursors. `InfiniteTimeSpan` disables auto-cleanup. |
+| `AtomicWriteRetention` | `TimeSpan` | 48 h | Retention window for completed `SetManyAtomicAsync` saga state (idempotency window). `InfiniteTimeSpan` disables auto-cleanup. |
 
 ## Serializable Types
 
-All serializable types carry stable `[Alias]` attributes (prefixed with `ol.`) to ensure wire-format compatibility across versions and prevent collisions when Lattice is hosted alongside other Orleans grains.
+All serializable types — and every grain interface, including the public `ILattice` — carry stable `[Alias]` attributes (prefixed with `ol.`) to ensure wire-format and grain-manifest compatibility across versions and prevent collisions when Lattice is hosted alongside other Orleans grains. Alias constants live in `TypeAliases` and must never be renamed or removed: they are part of the public wire format.
 
 Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Never)]` — they remain `public` for Orleans code generation but are hidden from IntelliSense because they are internal implementation details not intended for direct use.
 
