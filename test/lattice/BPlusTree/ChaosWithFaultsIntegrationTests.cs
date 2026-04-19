@@ -46,7 +46,7 @@ public class ChaosWithFaultsIntegrationTests
     private const int BulkReaderCount = 2;
     private const int ScannerCount = 2;
     private const int CounterCount = 1;
-    private static readonly TimeSpan ChaosDuration = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan ChaosDuration = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan SplitInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan FaultInjectionInterval = TimeSpan.FromMilliseconds(20);
     private static readonly TimeSpan QuiescenceTimeout = TimeSpan.FromSeconds(15);
@@ -251,9 +251,9 @@ public class ChaosWithFaultsIntegrationTests
                 {
                     try
                     {
-                        var batch = new List<KeyValuePair<string, byte[]>>(4);
+                        var batch = new List<KeyValuePair<string, byte[]>>(2);
                         var seen = new HashSet<int>();
-                        while (batch.Count < 4)
+                        while (batch.Count < 2)
                         {
                             var idx = rng.Next(UniverseSize);
                             if (!seen.Add(idx)) continue;
