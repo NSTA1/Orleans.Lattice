@@ -5,10 +5,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class LatticeGrain
 {
-    public async Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries)
+    public async Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entries);
+        cancellationToken.ThrowIfCancellationRequested();
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap.GetPhysicalShardIndices();
         var operationId = Guid.NewGuid().ToString("N");
 
@@ -27,6 +29,7 @@ internal sealed partial class LatticeGrain
         {
             if (bucket.Count == 0) continue;
 
+            cancellationToken.ThrowIfCancellationRequested();
             bucket.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIdx}");
             tasks.Add(shard.BulkLoadAsync($"{operationId}-{shardIdx}", bucket));
@@ -35,75 +38,87 @@ internal sealed partial class LatticeGrain
         await Task.WhenAll(tasks);
     }
 
-    public async Task DeleteTreeAsync()
+    public async Task DeleteTreeAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await deletion.DeleteTreeAsync();
     }
 
-    public async Task RecoverTreeAsync()
+    public async Task RecoverTreeAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await deletion.RecoverAsync();
     }
 
-    public async Task PurgeTreeAsync()
+    public async Task PurgeTreeAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await deletion.PurgeNowAsync();
     }
 
-    public async Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)
+    public async Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         await resize.ResizeAsync(newMaxLeafKeys, newMaxInternalChildren);
     }
 
-    public async Task UndoResizeAsync()
+    public async Task UndoResizeAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         await resize.UndoResizeAsync();
     }
 
     public async Task SnapshotAsync(string destinationTreeId, SnapshotMode mode,
-        int? maxLeafKeys = null, int? maxInternalChildren = null)
+        int? maxLeafKeys = null, int? maxInternalChildren = null, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
         await snapshot.SnapshotAsync(destinationTreeId, mode, maxLeafKeys, maxInternalChildren);
     }
 
-    public async Task<bool> TreeExistsAsync()
+    public async Task<bool> TreeExistsAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         return await registry.ExistsAsync(TreeId);
     }
 
-    public async Task<IReadOnlyList<string>> GetAllTreeIdsAsync()
+    public async Task<IReadOnlyList<string>> GetAllTreeIdsAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         return await registry.GetAllTreeIdsAsync();
     }
 
-    public async Task MergeAsync(string sourceTreeId)
+    public async Task MergeAsync(string sourceTreeId, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var merge = grainFactory.GetGrain<ITreeMergeGrain>(TreeId);
         await merge.MergeAsync(sourceTreeId);
     }
 
-    public async Task<bool> IsMergeCompleteAsync()
+    public async Task<bool> IsMergeCompleteAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var merge = grainFactory.GetGrain<ITreeMergeGrain>(TreeId);
         return await merge.IsCompleteAsync();
     }
 
-    public async Task<bool> IsSnapshotCompleteAsync()
+    public async Task<bool> IsSnapshotCompleteAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
         return await snapshot.IsCompleteAsync();
     }
 
-    public async Task<bool> IsResizeCompleteAsync()
+    public async Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         return await resize.IsCompleteAsync();
     }

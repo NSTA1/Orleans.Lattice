@@ -8,6 +8,7 @@ using Orleans.Lattice.Primitives;
 /// <see cref="Primitives.LwwValue{T}"/> entries for monotonic conflict resolution.
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
+[Alias(TypeAliases.IBPlusLeafGrain)]
 public interface IBPlusLeafGrain : IGrainWithGuidKey
 {
     /// <summary>Gets the value for <paramref name="key"/>, or <c>null</c> if absent/tombstoned.</summary>

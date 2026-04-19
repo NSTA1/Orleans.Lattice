@@ -12,6 +12,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// all leaf and internal node state.
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
+[Alias(TypeAliases.ITreeDeletionGrain)]
 public interface ITreeDeletionGrain : IGrainWithStringKey
 {
     /// <summary>

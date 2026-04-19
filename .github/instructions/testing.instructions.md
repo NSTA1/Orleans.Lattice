@@ -77,3 +77,14 @@ Do **not** use classic assert (`Assert.AreEqual`, `Assert.IsNull`, etc.).
   - `src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs` → `test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.cs`
 - Primitive unit tests go under `test/lattice/Primitives/`.
 - Shared fixtures and fakes go under `test/lattice/BPlusTree/` or `test/lattice/Fakes/`.
+
+## Running Tests
+
+- When running tests during iterative development to verify ongoing work, **exclude the `Chaos` category**:
+
+  ```powershell
+  dotnet test --filter "TestCategory!=Chaos"
+  ```
+
+  Chaos tests are long-running stress/invariant suites and are not representative of correctness for normal code changes. They are expected to run in CI and before opening a PR, not on every inner-loop build.
+- Mark any new long-running stress or concurrency-fuzzing test with `[Category("Chaos")]` so it is excluded from the default dev loop.

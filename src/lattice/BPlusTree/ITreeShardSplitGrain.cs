@@ -15,6 +15,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// </para>
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
+[Alias(TypeAliases.ITreeShardSplitGrain)]
 public interface ITreeShardSplitGrain : IGrainWithStringKey
 {
     /// <summary>
