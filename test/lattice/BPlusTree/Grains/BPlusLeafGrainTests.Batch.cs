@@ -69,7 +69,7 @@ public partial class BPlusLeafGrainTests
     public async Task DeleteRange_returns_zero_for_empty_leaf()
     {
         var grain = CreateGrain();
-        var count = await grain.DeleteRangeAsync("a", "z");
+        var count = (await grain.DeleteRangeAsync("a", "z")).Deleted;
         Assert.That(count, Is.EqualTo(0));
     }
 
@@ -82,7 +82,7 @@ public partial class BPlusLeafGrainTests
         await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
         await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
 
-        var count = await grain.DeleteRangeAsync("b", "d");
+        var count = (await grain.DeleteRangeAsync("b", "d")).Deleted;
 
         Assert.That(count, Is.EqualTo(2));
         Assert.That(await grain.GetAsync("a"), Is.Not.Null);
@@ -99,7 +99,7 @@ public partial class BPlusLeafGrainTests
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
         await grain.DeleteAsync("b");
 
-        var count = await grain.DeleteRangeAsync("a", "c");
+        var count = (await grain.DeleteRangeAsync("a", "c")).Deleted;
 
         Assert.That(count, Is.EqualTo(1));
         Assert.That(await grain.GetAsync("a"), Is.Null);
@@ -111,7 +111,7 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain();
         await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
 
-        var count = await grain.DeleteRangeAsync("m", "z");
+        var count = (await grain.DeleteRangeAsync("m", "z")).Deleted;
 
         Assert.That(count, Is.EqualTo(0));
         Assert.That(await grain.GetAsync("a"), Is.Not.Null);
@@ -180,7 +180,7 @@ public partial class BPlusLeafGrainTests
         await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
         await grain.SetAsync("z", Encoding.UTF8.GetBytes("3"));
 
-        var count = await grain.DeleteRangeAsync("a", "zz");
+        var count = (await grain.DeleteRangeAsync("a", "zz")).Deleted;
 
         Assert.That(count, Is.EqualTo(3));
         Assert.That(await grain.GetAsync("a"), Is.Null);
@@ -195,10 +195,11 @@ public partial class BPlusLeafGrainTests
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("1"));
         await grain.SetAsync("c", Encoding.UTF8.GetBytes("2"));
 
-        var count = await grain.DeleteRangeAsync("b", "c");
+        var count = (await grain.DeleteRangeAsync("b", "c")).Deleted;
 
         Assert.That(count, Is.EqualTo(1));
         Assert.That(await grain.GetAsync("b"), Is.Null);
         Assert.That(await grain.GetAsync("c"), Is.Not.Null);
     }
 }
+

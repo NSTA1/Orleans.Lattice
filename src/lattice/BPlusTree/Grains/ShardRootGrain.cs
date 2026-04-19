@@ -277,18 +277,18 @@ internal sealed partial class ShardRootGrain(
         }
 
         // Walk the leaf chain, tombstoning matching entries in each leaf.
-        // We stop when a leaf deletes nothing and already has live keys at or
-        // beyond endExclusive — meaning the range is fully covered.
+        // Terminate on the first leaf that reports PastRange=true (FX-011):
+        // deleting zero is NOT a valid termination signal on multi-shard trees,
+        // where early leaves can be sparse yet later leaves contain range-matching
+        // entries.
         var totalDeleted = 0;
         while (true)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var deleted = await leafGrain.DeleteRangeAsync(startInclusive, endExclusive);
-            totalDeleted += deleted;
+            var result = await leafGrain.DeleteRangeAsync(startInclusive, endExclusive);
+            totalDeleted += result.Deleted;
 
-            // If nothing was deleted, all remaining keys in this leaf (and
-            // subsequent leaves) are outside the range — we can stop.
-            if (deleted == 0)
+            if (result.PastRange)
                 break;
 
             var nextSibling = await leafGrain.GetNextSiblingAsync();

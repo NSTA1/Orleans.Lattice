@@ -65,9 +65,14 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
 
     /// <summary>
     /// Tombstones all live keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
-    /// Returns the number of keys that were tombstoned.
+    /// Returns a <see cref="RangeDeleteResult"/> containing the number of tombstoned keys
+    /// and a <c>PastRange</c> flag indicating whether this leaf has observed any key
+    /// <c>&gt;= endExclusive</c>. The shard-root coordinator uses <c>PastRange</c> to
+    /// stop walking the leaf chain deterministically on sparse multi-shard trees, where
+    /// a leaf may legitimately delete zero keys even when later leaves contain
+    /// range-matching entries (FX-011).
     /// </summary>
-    Task<int> DeleteRangeAsync(string startInclusive, string endExclusive);
+    Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive);
 
     /// <summary>Returns the number of live (non-tombstoned) keys in this leaf.</summary>
     Task<int> CountAsync();

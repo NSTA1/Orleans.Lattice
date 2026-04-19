@@ -39,7 +39,7 @@ internal sealed class AtomicWriteGrain(
     ILogger<AtomicWriteGrain> logger,
     [PersistentState("atomic-write", LatticeOptions.StorageProviderName)]
     IPersistentState<AtomicWriteState> state)
-    : TtlGrain(context, reminderRegistry, logger), IAtomicWriteGrain
+    : TtlGrain<AtomicWriteGrain>(context, reminderRegistry, logger), IAtomicWriteGrain
 {
     private const string KeepaliveReminderName = "atomic-write-keepalive";
     private const string RetentionReminderName = "atomic-write-retention";
@@ -66,7 +66,7 @@ internal sealed class AtomicWriteGrain(
     /// <inheritdoc />
     protected override async Task OnTtlExpiredAsync()
     {
-        logger.LogInformation(
+        Logger.LogInformation(
             "Atomic-write saga {OperationKey}: retention window expired; clearing state.",
             OperationKey);
         await state.ClearStateAsync();
@@ -88,7 +88,7 @@ internal sealed class AtomicWriteGrain(
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex,
+                    Logger.LogWarning(ex,
                         "Atomic-write saga {OperationKey} failed on reminder-driven resume.",
                         OperationKey);
                 }
@@ -248,7 +248,7 @@ internal sealed class AtomicWriteGrain(
                 {
                     state.State.RetriesOnCurrentStep++;
                     await state.WriteStateAsync();
-                    logger.LogWarning(ex,
+                    Logger.LogWarning(ex,
                         "Atomic-write saga {OperationKey}: retrying step {Index} (attempt {Attempt}).",
                         OperationKey, state.State.NextIndex, state.State.RetriesOnCurrentStep);
                     continue;
@@ -313,7 +313,7 @@ internal sealed class AtomicWriteGrain(
             {
                 state.State.RetriesOnCurrentStep++;
                 await state.WriteStateAsync();
-                logger.LogWarning(ex,
+                Logger.LogWarning(ex,
                     "Atomic-write saga {OperationKey}: retrying compensation of step {Index} (attempt {Attempt}).",
                     OperationKey, index, state.State.RetriesOnCurrentStep);
             }
@@ -322,7 +322,7 @@ internal sealed class AtomicWriteGrain(
                 // Persistent compensation failure — log and stop. The saga is
                 // poisoned; state remains Compensate so a future reminder tick
                 // can retry once the underlying fault clears.
-                logger.LogError(ex,
+                Logger.LogError(ex,
                     "Atomic-write saga {OperationKey}: compensation of step {Index} failed after retries; saga is poisoned.",
                     OperationKey, index);
                 throw;
@@ -379,7 +379,7 @@ internal sealed class AtomicWriteGrain(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex,
+            Logger.LogWarning(ex,
                 "Atomic-write saga {OperationKey}: failed to unregister keepalive reminder.",
                 OperationKey);
         }

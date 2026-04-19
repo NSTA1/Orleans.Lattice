@@ -359,29 +359,18 @@ internal sealed partial class LatticeGrain(
     /// <summary>
     /// Strongly-consistent total live key count across all physical shards
     /// of this tree (F-011). Tolerates concurrent adaptive shard splits via
-    /// per-slot reconciliation:
-    /// <list type="number">
-    ///   <item>Pass 1 fans out <see cref="IShardRootGrain.CountWithMovedAwayAsync"/>
-    ///   to every physical shard owned by the snapshot of the shard map taken at
-    ///   scan start. Each shard returns its live count <em>excluding</em> any virtual
-    ///   slot that has moved (or is moving) to another physical shard, plus the
-    ///   set of slots it filtered.</item>
-    ///   <item>The orchestrator re-reads the shard map. If
-    ///   <see cref="ShardMap.Version"/> changed during pass 1, the per-shard
-    ///   counts may include keys whose slot has since moved (so the new owner
-    ///   would also count them); the iteration is discarded and the whole pass
-    ///   retries on a fresh map.</item>
-    ///   <item>If the version is stable and any slots were filtered, pass 2
-    ///   queries the same owners with <see cref="IShardRootGrain.CountForSlotsAsync"/>
-    ///   for those slots — these are exactly the slots that pass 1 excluded, so
-    ///   no double counting is possible.</item>
-    ///   <item>A final version re-read confirms stability across pass 2.</item>
-    /// </list>
+    /// an unconditional shard-map version re-read after each pass (FX-012):
+    /// if any split commits during the fan-out, per-shard counts may span
+    /// an inconsistent view (some sampled before the swap, some after, with
+    /// migrating-slot keys double-counted on the overlap). The count is
+    /// discarded and retried against a fresh map.
+    /// <para>
     /// Bounded by <see cref="LatticeOptions.MaxScanRetries"/>; throws
-    /// <see cref="InvalidOperationException"/> when topology changes faster than
-    /// the orchestrator can converge. System trees skip reconciliation (they
-    /// never participate in adaptive splits and the registry would deadlock
-    /// on itself).
+    /// <see cref="InvalidOperationException"/> when topology changes faster
+    /// than the orchestrator can converge. System trees skip reconciliation
+    /// (they never participate in adaptive splits and the registry would
+    /// deadlock on itself).
+    /// </para>
     /// </summary>
     private async Task<int> CountAsyncCore()
     {
@@ -411,14 +400,15 @@ internal sealed partial class LatticeGrain(
 
             // Single pass: count + moved-slot reports from every current owner.
             // The source of a completed split filters out keys belonging to
-            // moved slots (via MovedAwaySlots), and the target shard has those
+            // moved slots (via MovedAwaySlots); the target shard has those
             // keys after the drain. Polling every current physical owner therefore
-            // yields the exact total without double counting and without needing
-            // a follow-up reconciliation pass. The moved-slot reports are used
-            // only as a stability hint: if any shard reports moved slots, we
-            // re-check the registry's ShardMap.Version after polling to ensure
-            // no swap happened mid-scan that could have shifted authority for
-            // slots a shard didn't yet have stamped as moved.
+            // yields the exact total without double counting — provided the
+            // ShardMap does not change mid-pass. The post-pass version re-read
+            // is UNCONDITIONAL (FX-012): a swap that commits after the count
+            // leaves migrating-slot keys live on BOTH source (pre-MovedAway
+            // stamp) and target (post-drain), and the pre-FX-012 logic skipped
+            // the version check when no shard reported moved slots, admitting
+            // a double-count window.
             var pass1Tasks = new Task<ShardCountResult>[physicalShards.Count];
             for (int i = 0; i < physicalShards.Count; i++)
             {
@@ -428,23 +418,18 @@ internal sealed partial class LatticeGrain(
             await Task.WhenAll(pass1Tasks);
 
             var total = 0;
-            var anyMovedReported = false;
             for (int i = 0; i < pass1Tasks.Length; i++)
             {
                 var r = pass1Tasks[i].Result;
                 total += r.Count;
-                if (r.MovedAwaySlots is { Length: > 0 }) anyMovedReported = true;
             }
 
-            // Stability check: if the map version moved during pass 1, a swap
-            // happened concurrently and the per-shard counts may have been
-            // taken against an inconsistent view (some shards before the swap,
-            // some after). Discard and retry.
-            if (anyMovedReported)
-            {
-                var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
-                if (shardMapNow.Version != versionAtStart) continue;
-            }
+            // Unconditional stability check (FX-012): if the shard-map
+            // version moved while pass1 was in flight, the per-shard counts
+            // may have been taken against an inconsistent snapshot. Discard
+            // and retry on the fresh map.
+            var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
+            if (shardMapNow.Version != versionAtStart) continue;
 
             return total;
         }
@@ -533,21 +518,65 @@ internal sealed partial class LatticeGrain(
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
         var physicalShards = shardMap.GetPhysicalShardIndices();
 
-        var tasks = new Task<int>[physicalShards.Count];
-        for (int i = 0; i < physicalShards.Count; i++)
+        // System trees never participate in adaptive splits — fast path.
+        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
-            tasks[i] = shard.CountAsync();
+            var simpleTasks = new Task<int>[physicalShards.Count];
+            for (int i = 0; i < physicalShards.Count; i++)
+            {
+                var sh = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
+                simpleTasks[i] = sh.CountAsync();
+            }
+            await Task.WhenAll(simpleTasks);
+            var simple = new int[physicalShards.Count];
+            for (int i = 0; i < physicalShards.Count; i++) simple[i] = simpleTasks[i].Result;
+            return simple;
         }
 
-        await Task.WhenAll(tasks);
+        // FX-012: mirror CountAsyncCore's stability protocol — if a split
+        // commits mid-pass, per-shard counts can include migrating-slot
+        // keys on both the source (pre-MovedAway stamp) and the target
+        // (post-drain). Retry on a fresh map when the version moves.
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var maxRetries = Math.Max(1, Options.MaxScanRetries);
 
-        var counts = new int[physicalShards.Count];
-        for (int i = 0; i < physicalShards.Count; i++)
-            counts[i] = tasks[i].Result;
-        return counts;
+        for (int attempt = 0; attempt < maxRetries; attempt++)
+        {
+            if (attempt > 0)
+            {
+                InvalidateShardMap();
+                (physicalTreeId, shardMap) = await GetRoutingAsync();
+                physicalShards = shardMap.GetPhysicalShardIndices();
+            }
+
+            var versionAtStart = shardMap.Version;
+            var tasks = new Task<ShardCountResult>[physicalShards.Count];
+            for (int i = 0; i < physicalShards.Count; i++)
+            {
+                var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
+                tasks[i] = shard.CountWithMovedAwayAsync();
+            }
+            await Task.WhenAll(tasks);
+
+            var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap;
+            if (shardMapNow.Version != versionAtStart) continue;
+
+            var counts = new int[physicalShards.Count];
+            for (int i = 0; i < physicalShards.Count; i++)
+                counts[i] = tasks[i].Result.Count;
+            return counts;
+        }
+
+        throw new InvalidOperationException(
+            $"CountPerShardAsync exceeded {Options.MaxScanRetries} retries while topology kept changing. " +
+            "Increase LatticeOptions.MaxScanRetries or reduce concurrent split activity.");
     }
 
+    /// <summary>
+    /// Lazily ensures the tree's <c>TombstoneCompactionGrain</c> has a
+    /// registered reminder, on the first write to this tree. Subsequent
+    /// writes are no-ops.
+    /// </summary>
     private async Task EnsureCompactionReminderAsync()
     {
         if (_compactionEnsured) return;
@@ -579,12 +608,6 @@ internal sealed partial class LatticeGrain(
         _monitorEnsured = true;
     }
 
-    /// <summary>
-    /// Resolves the physical tree ID for this logical tree, caching the result
-    /// for the lifetime of this activation. Different physical tree IDs produce
-    /// different leaf <see cref="GrainId"/> values, which automatically creates
-    /// fresh <see cref="ILeafCacheGrain"/> instances — no cache invalidation needed.
-    /// </summary>
     private async Task<string> GetPhysicalTreeIdAsync()
     {
         if (_physicalTreeId is not null) return _physicalTreeId;

@@ -39,10 +39,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// refreshes on every call, which matches the pre-refactor behaviour.
 /// </para>
 /// </summary>
-internal abstract class TtlGrain(
+internal abstract class TtlGrain<TSelf>(
     IGrainContext grainContext,
     IReminderRegistry reminderRegistry,
-    ILogger logger) : IRemindable, IGrainBase
+    ILogger<TSelf> logger) : IRemindable, IGrainBase
+    where TSelf : TtlGrain<TSelf>
 {
     private DateTime _lastSlideAtUtc = DateTime.MinValue;
 
@@ -60,6 +61,13 @@ internal abstract class TtlGrain(
     /// re-capturing the primary-constructor parameter (CS9107).
     /// </summary>
     protected IReminderRegistry ReminderRegistry => reminderRegistry;
+
+    /// <summary>
+    /// Protected accessor for the logger, exposed so derived classes can
+    /// log without capturing their own <c>logger</c> primary-constructor
+    /// parameter (CS9107).
+    /// </summary>
+    protected ILogger<TSelf> Logger => logger;
 
     /// <summary>
     /// The name used to register this grain's TTL reminder. Must be

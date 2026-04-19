@@ -30,7 +30,17 @@ internal sealed class TreeMergeGrain(
     IPersistentState<TreeMergeState> state) : ITreeMergeGrain, IRemindable, IGrainBase
 {
     private const string KeepaliveReminderName = "merge-keepalive";
-    private const int MaxRetriesPerShard = 1;
+    /// <summary>
+    /// Maximum number of attempts (first try + retries combined) before a
+    /// source shard is poisoned and the merge advances to the next shard.
+    /// <para>
+    /// The retry counter is incremented BEFORE each attempt (FX-005) so that
+    /// a non-throwing crash mid-merge still counts against the budget. With
+    /// <c>MaxAttemptsPerShard = 2</c>, a shard gets its first try plus one
+    /// retry on reactivation after a silo crash.
+    /// </para>
+    /// </summary>
+    private const int MaxRetriesPerShard = 2;
 
     private string TargetTreeId => context.GrainId.Key.ToString()!;
     private LatticeOptions TargetOptions => optionsMonitor.Get(TargetTreeId);
@@ -119,6 +129,21 @@ internal sealed class TreeMergeGrain(
     {
         if (reminderName == KeepaliveReminderName)
         {
+            // FX-002: defensively re-register the keepalive if the current
+            // period drifts from the configured value. The keepalive period
+            // is a fixed 1-minute constant today, so this check is primarily
+            // a safety net for future constant bumps and for reminders that
+            // survive an Orleans upgrade.
+            var desired = TimeSpan.FromMinutes(1);
+            if (status.Period != desired && state.State.InProgress)
+            {
+                await reminderRegistry.RegisterOrUpdateReminder(
+                    callingGrainId: context.GrainId,
+                    reminderName: KeepaliveReminderName,
+                    dueTime: desired,
+                    period: desired);
+            }
+
             if (state.State.InProgress && _mergeTimer is null)
             {
                 await StartMergeTimerAsync();
@@ -189,9 +214,45 @@ internal sealed class TreeMergeGrain(
         await ProcessCurrentShardAsync();
     }
 
+    /// <summary>
+    /// Processes the current source shard, with crash-resume retry semantics (FX-005):
+    /// <list type="number">
+    ///   <item>Check the poison cap. If <see cref="TreeMergeState.ShardRetries"/>
+    ///   has reached <see cref="MaxRetriesPerShard"/>, skip the shard, reset the
+    ///   retry counter, and advance the cursor. The shard is considered poisoned
+    ///   and is logged at Warning level.</item>
+    ///   <item>Increment <c>ShardRetries</c> and persist BEFORE attempting the
+    ///   merge. This ensures that a non-throwing failure — a process crash or
+    ///   silo restart mid-merge — still counts against the retry budget on
+    ///   reactivation, preventing an infinite retry loop against a shard that
+    ///   deterministically kills the silo.</item>
+    ///   <item>Run the merge. On success, reset <c>ShardRetries</c> to 0 and
+    ///   advance the cursor. On exception, leave the incremented retry counter
+    ///   in place and surface the error; the next tick re-enters this method
+    ///   and either retries or skips per step 1.</item>
+    /// </list>
+    /// </summary>
     private async Task ProcessCurrentShardAsync()
     {
         var shardIndex = state.State.SourcePhysicalShards[state.State.NextShardIndex];
+
+        if (state.State.ShardRetries >= MaxRetriesPerShard)
+        {
+            logger.LogWarning(
+                "Poisoning source shard {ShardIndex} of tree {SourceTreeId} into {TargetTreeId} after {Retries} attempts; skipping.",
+                shardIndex, state.State.SourceTreeId, TargetTreeId, state.State.ShardRetries);
+            state.State.NextShardIndex++;
+            state.State.ShardRetries = 0;
+            await state.WriteStateAsync();
+            return;
+        }
+
+        // Increment the retry counter BEFORE attempting the merge so a
+        // non-throwing crash (silo restart, host kill) still burns budget
+        // on reactivation. Without this, ShardRetries stays at 0 across
+        // restarts and a deterministic-crash shard would loop forever.
+        state.State.ShardRetries++;
+        await state.WriteStateAsync();
 
         try
         {
@@ -203,18 +264,13 @@ internal sealed class TreeMergeGrain(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Merge failed for source shard {ShardIndex} of tree {SourceTreeId} into {TargetTreeId}",
-                shardIndex, state.State.SourceTreeId, TargetTreeId);
+            logger.LogWarning(ex, "Merge failed for source shard {ShardIndex} of tree {SourceTreeId} into {TargetTreeId} (attempt {Attempt}/{Max})",
+                shardIndex, state.State.SourceTreeId, TargetTreeId, state.State.ShardRetries, MaxRetriesPerShard);
 
-            if (state.State.ShardRetries < MaxRetriesPerShard)
-            {
-                state.State.ShardRetries++;
-                await state.WriteStateAsync();
-            }
-            else
-            {
-                throw;
-            }
+            // ShardRetries was already incremented above. The next tick
+            // will re-enter ProcessCurrentShardAsync which either retries
+            // this shard or poisons it per the top-of-method check.
+            throw;
         }
     }
 

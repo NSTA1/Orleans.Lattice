@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
 using Orleans.Timers;
 
@@ -35,7 +36,9 @@ internal sealed class HotShardMonitorGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
-    ILogger<HotShardMonitorGrain> logger) : IHotShardMonitorGrain, IRemindable, IGrainBase
+    ILogger<HotShardMonitorGrain> logger,
+    [PersistentState("hot-shard-monitor", LatticeOptions.StorageProviderName)]
+    IPersistentState<HotShardMonitorState> state) : IHotShardMonitorGrain, IRemindable, IGrainBase
 {
     private const string KeepaliveReminderName = "hot-shard-monitor";
 
@@ -44,16 +47,35 @@ internal sealed class HotShardMonitorGrain(
     IGrainContext IGrainBase.GrainContext => context;
 
     private IGrainTimer? _timer;
-    private DateTime? _activationUtc;
     private readonly Dictionary<int, DateTime> _shardCooldownUntilUtc = [];
     private bool _running;
+
+    /// <summary>
+    /// Returns the monitor's first-ever activation time for this tree,
+    /// loading and persisting the value on first use so it survives silo
+    /// restarts (FX-004). Without persistence, the
+    /// <see cref="LatticeOptions.AutoSplitMinTreeAge"/> grace period would
+    /// restart on every activation and a cluster with frequent restarts
+    /// would never trigger autonomic splits.
+    /// </summary>
+    /// <param name="nowUtc">
+    /// The "now" reference used by the caller so the persisted value is
+    /// never newer than the caller's own clock read. On first use this
+    /// becomes the stored activation time.
+    /// </param>
+    private async Task<DateTime> GetOrSetActivationUtcAsync(DateTime nowUtc)
+    {
+        if (state.State.ActivationUtc is DateTime v) return v;
+        state.State.ActivationUtc = nowUtc;
+        await state.WriteStateAsync();
+        return nowUtc;
+    }
 
     /// <inheritdoc />
     public async Task EnsureRunningAsync()
     {
         if (_running) return;
         _running = true;
-        _activationUtc ??= DateTime.UtcNow;
 
         var options = Options;
         if (!options.AutoSplitEnabled) return;
@@ -64,6 +86,8 @@ internal sealed class HotShardMonitorGrain(
             dueTime: TimeSpan.FromMinutes(1),
             period: TimeSpan.FromMinutes(1));
 
+        // Initialize the persisted activation time (FX-004) on first use.
+        await GetOrSetActivationUtcAsync(DateTime.UtcNow);
         StartTimer();
     }
 
@@ -92,11 +116,24 @@ internal sealed class HotShardMonitorGrain(
     public async Task ReceiveReminder(string reminderName, TickStatus status)
     {
         if (reminderName != KeepaliveReminderName) return;
-        _activationUtc ??= DateTime.UtcNow;
         if (!Options.AutoSplitEnabled) return;
+
+        // FX-002: defensively re-register the keepalive if the current
+        // period drifts from the configured value. Protects against
+        // stale-period reminders that survived option changes or Orleans
+        // upgrades.
+        var desired = TimeSpan.FromMinutes(1);
+        if (status.Period != desired)
+        {
+            await reminderRegistry.RegisterOrUpdateReminder(
+                callingGrainId: context.GrainId,
+                reminderName: KeepaliveReminderName,
+                dueTime: desired,
+                period: desired);
+        }
+
         if (_timer is null) StartTimer();
         _running = true;
-        await Task.CompletedTask;
     }
 
     private void StartTimer()
@@ -126,10 +163,13 @@ internal sealed class HotShardMonitorGrain(
         var options = Options;
         if (!options.AutoSplitEnabled) return;
 
-        _activationUtc ??= DateTime.UtcNow;
         var nowUtc = DateTime.UtcNow;
 
-        if (nowUtc - _activationUtc.Value < options.AutoSplitMinTreeAge) return;
+        // Use the persisted activation time, initializing it if first use.
+        var activationUtc = await GetOrSetActivationUtcAsync(nowUtc);
+
+        // Enforce the min-age grace period before allowing splits to trigger.
+        if (nowUtc - activationUtc < options.AutoSplitMinTreeAge) return;
 
         // Suppress while bulk maintenance is in flight.
         var lattice = grainFactory.GetGrain<ILattice>(TreeId);

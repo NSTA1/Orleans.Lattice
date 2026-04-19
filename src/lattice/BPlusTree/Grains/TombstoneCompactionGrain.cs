@@ -69,6 +69,21 @@ internal sealed class TombstoneCompactionGrain(
 
         if (reminderName == ReminderName)
         {
+            // FX-002: defensively re-register if the configured period drifts
+            // from whatever Orleans is firing. Compare against the
+            // TombstoneGracePeriod option each tick; if the effective period
+            // differs, RegisterOrUpdateReminder replaces the schedule.
+            var desired = ClampPeriod(Options.TombstoneGracePeriod);
+            var actualPeriod = status.Period;
+            if (actualPeriod != desired)
+            {
+                await reminderRegistry.RegisterOrUpdateReminder(
+                    callingGrainId: context.GrainId,
+                    reminderName: ReminderName,
+                    dueTime: desired,
+                    period: desired);
+            }
+
             // Periodic compaction trigger — start a new pass if idle.
             if (_compactionTimer is not null) return;
             await StartCompactionAsync(startFromShard: 0);
