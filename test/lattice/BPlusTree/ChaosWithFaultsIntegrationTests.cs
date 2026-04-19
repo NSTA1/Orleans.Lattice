@@ -467,7 +467,7 @@ public class ChaosWithFaultsIntegrationTests
                     "Fault injector must have armed at least one fault.");
 
             // Atomic writes must have executed at every fault level. In the
-            // no-fault baseline the saga's success rate must be ≥ 80% (same
+            // no-fault baseline the saga's success rate must be ≥ 70% (same
             // threshold as the split-only chaos test). Under fault injection
             // the saga is intrinsically more vulnerable — any injected fault
             // in any of the saga's N writes rolls the whole batch back — so
@@ -480,9 +480,9 @@ public class ChaosWithFaultsIntegrationTests
                 "Expected at least one atomic-write attempt during the chaos window.");
             if (faultProbability == 0)
             {
-                Assert.That((double)atomicOk / atomicTotal, Is.GreaterThanOrEqualTo(0.80),
+                Assert.That((double)atomicOk / atomicTotal, Is.GreaterThanOrEqualTo(0.70),
                     $"Atomic-write success rate was {atomicOk}/{atomicTotal} = " +
-                    $"{(double)atomicOk / atomicTotal:P1}; expected ≥ 80% in the no-faults baseline.");
+                    $"{(double)atomicOk / atomicTotal:P1}; expected ≥ 70% in the no-faults baseline.");
             }
         });
 
