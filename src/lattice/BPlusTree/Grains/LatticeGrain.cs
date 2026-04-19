@@ -358,12 +358,25 @@ internal sealed partial class LatticeGrain(
 
     /// <summary>
     /// Strongly-consistent total live key count across all physical shards
-    /// of this tree (F-011). Tolerates concurrent adaptive shard splits via
-    /// an unconditional shard-map version re-read after each pass (FX-012):
-    /// if any split commits during the fan-out, per-shard counts may span
-    /// an inconsistent view (some sampled before the swap, some after, with
-    /// migrating-slot keys double-counted on the overlap). The count is
-    /// discarded and retried against a fresh map.
+    /// of this tree (F-011). Tolerates concurrent adaptive shard splits by
+    /// asking every physical shard to count only the virtual slots it
+    /// currently owns per the authoritative <see cref="ShardMap"/>, then
+    /// re-reading the map after the fan-out and retrying on any version
+    /// change (FX-012 v2).
+    /// <para>
+    /// This supersedes the earlier (FX-012 v1) design that fanned out via
+    /// <see cref="IShardRootGrain.CountWithMovedAwayAsync"/> and relied on
+    /// each source shard filtering its moved-slot keys via
+    /// <c>SplitInProgress.Phase</c>. That protocol had a gap: the split
+    /// coordinator publishes the new <see cref="ShardMap"/> (including the
+    /// target shard) before advancing the source shard's persisted phase to
+    /// <c>Reject</c>. During that window the source did not filter
+    /// moved-slot keys while the target already held them, and a count
+    /// arriving in the window double-counted each migrating-slot key.
+    /// Routing per-slot through the current map closes that window by
+    /// construction: each virtual slot is counted exactly once, against the
+    /// shard the map identifies as its current owner.
+    /// </para>
     /// <para>
     /// Bounded by <see cref="LatticeOptions.MaxScanRetries"/>; throws
     /// <see cref="InvalidOperationException"/> when topology changes faster
@@ -397,37 +410,53 @@ internal sealed partial class LatticeGrain(
             }
 
             var versionAtStart = shardMap0.Version;
+            var virtualShardCount = shardMap0.Slots.Length;
 
-            // Single pass: count + moved-slot reports from every current owner.
-            // The source of a completed split filters out keys belonging to
-            // moved slots (via MovedAwaySlots); the target shard has those
-            // keys after the drain. Polling every current physical owner therefore
-            // yields the exact total without double counting — provided the
-            // ShardMap does not change mid-pass. The post-pass version re-read
-            // is UNCONDITIONAL (FX-012): a swap that commits after the count
-            // leaves migrating-slot keys live on BOTH source (pre-MovedAway
-            // stamp) and target (post-drain), and the pre-FX-012 logic skipped
-            // the version check when no shard reported moved slots, admitting
-            // a double-count window.
-            var pass1Tasks = new Task<ShardCountResult>[physicalShards.Count];
+            // Fast path: Version == 0 means the default identity map is in
+            // effect — no split has ever been persisted for this tree.
+            // ShardMap.Version is monotonically incremented on every persist,
+            // so if it is still 0 at the end of the call, no split can have
+            // started during our fan-out. Use the cheap leaf.CountAsync()
+            // path (O(1) per leaf) and avoid BuildOwnedSlotMap / per-key
+            // slot hashing / binary-search entirely.
+            if (versionAtStart == 0L)
+            {
+                var simple = await SimpleSumCountAsync(physicalTreeId, physicalShards);
+                var mapAfter = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
+                if (mapAfter.Version == 0L) return simple;
+                shardMap0 = mapAfter;
+                continue;
+            }
+
+            // FX-012 v2: partition virtual slots by current owner per the
+            // authoritative map and ask each physical shard to count only
+            // its owned slots. This makes the result topology-consistent
+            // with the observed map snapshot regardless of where each
+            // shard is in its per-split phase machine.
+            var ownedByShard = BuildOwnedSlotMap(shardMap0);
+            var pass1Tasks = new Task<int>[physicalShards.Count];
             for (int i = 0; i < physicalShards.Count; i++)
             {
-                var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
-                pass1Tasks[i] = shard.CountWithMovedAwayAsync();
+                var physicalIdx = physicalShards[i];
+                var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalIdx}");
+                if (!ownedByShard.TryGetValue(physicalIdx, out var owned) || owned.Length == 0)
+                {
+                    // Shard referenced by the map but owning no slots (pathological).
+                    pass1Tasks[i] = Task.FromResult(0);
+                    continue;
+                }
+                pass1Tasks[i] = shard.CountForSlotsAsync(owned, virtualShardCount);
             }
             await Task.WhenAll(pass1Tasks);
 
             var total = 0;
             for (int i = 0; i < pass1Tasks.Length; i++)
-            {
-                var r = pass1Tasks[i].Result;
-                total += r.Count;
-            }
+                total += pass1Tasks[i].Result;
 
-            // Unconditional stability check (FX-012): if the shard-map
-            // version moved while pass1 was in flight, the per-shard counts
-            // may have been taken against an inconsistent snapshot. Discard
-            // and retry on the fresh map.
+            // Unconditional stability check: if the shard-map version moved
+            // while pass1 was in flight, the per-shard counts may have
+            // spanned an inconsistent snapshot. Discard and retry against
+            // the fresh map.
             var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
             if (shardMapNow.Version != versionAtStart) continue;
 
@@ -451,6 +480,47 @@ internal sealed partial class LatticeGrain(
         var total = 0;
         for (int i = 0; i < tasks.Length; i++) total += tasks[i].Result;
         return total;
+    }
+
+    /// <summary>
+    /// Partitions the virtual slots of <paramref name="map"/> by their
+    /// currently-owning physical shard, returning a dictionary mapping
+    /// physical shard index to its sorted owned-slot array. Used by
+    /// <see cref="CountAsyncCore"/> and <see cref="CountPerShardAsyncCore"/>
+    /// to route per-slot count requests through the authoritative map.
+    /// </summary>
+    internal static Dictionary<int, int[]> BuildOwnedSlotMap(ShardMap map)
+    {
+        // Single-pass build. Slots are iterated in ascending order, so each
+        // per-owner array is naturally sorted without a secondary Array.Sort.
+        // First pass: count slots per owner so we can allocate each int[]
+        // at its final size (no List<int> growth cycle, no copy). Second
+        // pass: fill via per-owner write cursors.
+        var slots = map.Slots;
+        var counts = new Dictionary<int, int>();
+        for (int s = 0; s < slots.Length; s++)
+        {
+            var owner = slots[s];
+            counts.TryGetValue(owner, out var c);
+            counts[owner] = c + 1;
+        }
+
+        var result = new Dictionary<int, int[]>(counts.Count);
+        var cursors = new Dictionary<int, int>(counts.Count);
+        foreach (var kv in counts)
+        {
+            result[kv.Key] = new int[kv.Value];
+            cursors[kv.Key] = 0;
+        }
+
+        for (int s = 0; s < slots.Length; s++)
+        {
+            var owner = slots[s];
+            var pos = cursors[owner];
+            result[owner][pos] = s;
+            cursors[owner] = pos + 1;
+        }
+        return result;
     }
 
     /// <summary>
@@ -533,10 +603,10 @@ internal sealed partial class LatticeGrain(
             return simple;
         }
 
-        // FX-012: mirror CountAsyncCore's stability protocol — if a split
-        // commits mid-pass, per-shard counts can include migrating-slot
-        // keys on both the source (pre-MovedAway stamp) and the target
-        // (post-drain). Retry on a fresh map when the version moves.
+        // FX-012 v2: mirror CountAsyncCore's per-slot routing so per-shard
+        // counts are also topology-consistent with the observed map. Without
+        // this, a split mid-call would surface as a target-shard count
+        // inflated by double-counted migrating slots.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var maxRetries = Math.Max(1, Options.MaxScanRetries);
 
@@ -550,11 +620,43 @@ internal sealed partial class LatticeGrain(
             }
 
             var versionAtStart = shardMap.Version;
-            var tasks = new Task<ShardCountResult>[physicalShards.Count];
+            var virtualShardCount = shardMap.Slots.Length;
+
+            // Fast path: Version == 0 means no split has ever been persisted
+            // for this tree. Use the cheap per-shard CountAsync() path and
+            // confirm the map is still at Version 0 after fan-out.
+            if (versionAtStart == 0L)
+            {
+                var fastTasks = new Task<int>[physicalShards.Count];
+                for (int i = 0; i < physicalShards.Count; i++)
+                {
+                    var sh = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
+                    fastTasks[i] = sh.CountAsync();
+                }
+                await Task.WhenAll(fastTasks);
+                var mapAfter = await registry.GetShardMapAsync(TreeId) ?? shardMap;
+                if (mapAfter.Version == 0L)
+                {
+                    var fastCounts = new int[physicalShards.Count];
+                    for (int i = 0; i < physicalShards.Count; i++) fastCounts[i] = fastTasks[i].Result;
+                    return fastCounts;
+                }
+                shardMap = mapAfter;
+                continue;
+            }
+
+            var ownedByShard = BuildOwnedSlotMap(shardMap);
+            var tasks = new Task<int>[physicalShards.Count];
             for (int i = 0; i < physicalShards.Count; i++)
             {
-                var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
-                tasks[i] = shard.CountWithMovedAwayAsync();
+                var physicalIdx = physicalShards[i];
+                var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalIdx}");
+                if (!ownedByShard.TryGetValue(physicalIdx, out var owned) || owned.Length == 0)
+                {
+                    tasks[i] = Task.FromResult(0);
+                    continue;
+                }
+                tasks[i] = shard.CountForSlotsAsync(owned, virtualShardCount);
             }
             await Task.WhenAll(tasks);
 
@@ -563,7 +665,7 @@ internal sealed partial class LatticeGrain(
 
             var counts = new int[physicalShards.Count];
             for (int i = 0; i < physicalShards.Count; i++)
-                counts[i] = tasks[i].Result.Count;
+                counts[i] = tasks[i].Result;
             return counts;
         }
 
