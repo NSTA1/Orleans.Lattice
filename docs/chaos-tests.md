@@ -78,7 +78,7 @@ observes a fully consistent view of the tree.
 
 | Invariant | Mechanism under test |
 |---|---|
-| `CountAsync` returns the exact universe size, always | Per-slot reconciliation with `ShardMap.Version` stability check |
+| `CountAsync` returns the exact universe size, always | Per-slot routing via `CountForSlotsAsync` against the authoritative `ShardMap` plus version stability check |
 | `KeysAsync` / `EntriesAsync` yield exactly the universe, no duplicates, no unknowns, in strict sorted order | In-line reconciliation-cursor injection into the k-way merge + `HashSet` dedup |
 | `KeysAsync(null, null, reverse: true)` yields the full universe in reverse | Reverse-scan path also reconciles |
 | `KeysAsync(start, end)` yields exactly the in-range slice | Range pruning is slot-aware |
@@ -222,7 +222,7 @@ in [shard-splitting.md](shard-splitting.md) and the architecture notes:
 |---|:---:|:---:|
 | Concurrent reads/writes during split shadow phase | ✅ | ✅ |
 | `KeysAsync` / `EntriesAsync` in-line reconciliation | ✅ | ✅ |
-| `CountAsync` version stability check + bounded retry | ✅ | ✅ |
+| `CountAsync` per-slot routing + version stability check + bounded retry | ✅ | ✅ |
 | `StaleShardRoutingException` transparent retry | ✅ | ✅ |
 | Permanent `MovedAwaySlots` rejection after split completion | ✅ | ✅ |
 | Resumable `SplitInProgress` intent replay across crashes | — | ✅ |

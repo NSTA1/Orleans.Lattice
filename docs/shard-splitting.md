@@ -88,45 +88,48 @@ mid-scan.
 
 ### How strong consistency is achieved
 
-Each scan uses a per-slot reconciliation algorithm coordinated against the
-registry's monotonically-incrementing `ShardMap.Version`:
+Each scan uses a reconciliation algorithm coordinated against the
+registry's monotonically-incrementing `ShardMap.Version`, but `CountAsync`
+and the `KeysAsync` / `EntriesAsync` streams follow two different paths.
 
-1. **Pass 1 — fan out to current owners.** The orchestrator reads the shard
-   map, computes the current physical owner of every virtual slot, and asks
-   each owner for its data. Each shard root reports back two things:
-   * the keys/entries (or count) of all keys *not* in its
-     `MovedAwaySlots` table (entries it no longer authoritatively owns), and
-   * the set of `MovedAwaySlots` virtual slots it observed during the
-     traversal (used as a topology-stability hint).
-2. **Stability check (CountAsync).** For `CountAsync`, the orchestrator
-   re-reads `ShardMap.Version` from the registry after pass 1. If the
-   version moved during pass 1, a concurrent split committed its swap
-   mid-scan and the per-shard view is potentially inconsistent — the
-   whole pass is discarded and retried. Bounded by
-   `LatticeOptions.MaxScanRetries` (default 3); throws
-   `InvalidOperationException` on exhaustion. Under the default
-   configuration (`MaxConcurrentAutoSplits` = 2,
-   `HotShardSplitCooldown` = 2 minutes), exhausting 3 retries would
-   require an unusually sustained burst of concurrent topology changes.
-3. **In-line reconciliation (Keys/Entries only).** For `KeysAsync`,
-   and `EntriesAsync`, reconciliation is driven inside the main k-way
-   merge loop rather than as a separate pass. Before each priority-queue
-   dequeue, the orchestrator checks whether any live shard cursor has
-   reported new `MovedAwaySlots` since the last reconciliation step. If
-   so, it queries the current owners of the affected slots via the
-   slot-filtered variants `GetSortedKeysBatchForSlotsAsync` /
-   `GetSortedEntriesBatchForSlotsAsync`, loads the reconciled keys into
-   memory, sorts them with the same comparer, and injects them as an
-   additional in-memory cursor into the same priority queue. The merge
-   invariant (global minimum is yielded next) then carries ordering
-   across the topology boundary. A per-call `HashSet<string>` suppresses
-   duplicates across pre- and post-swap views. A final stability check
-   after the priority queue drains catches the edge case where a split
-   commits after all live cursors finished — reconciled entries from
-   this path are also sorted and injected as a cursor, not appended.
-   `CountAsync` does not need this step — its single pass already polls
-   every current owner and the source's `MovedAwaySlots` filter prevents
-   double counting.
+#### `CountAsync` / `CountPerShardAsync` — per-slot routing
+
+The orchestrator reads the authoritative `ShardMap`, partitions virtual
+slots by current owner (via `LatticeGrain.BuildOwnedSlotMap`), and asks
+each physical shard to count only its owned slots via
+`IShardRootGrain.CountForSlotsAsync(sortedSlots, virtualShardCount)`.
+Because each virtual slot is counted exactly once — against whichever
+shard the map identifies as its current owner — the result is
+topology-consistent by construction, independent of the source shard's
+per-split phase. The map version is re-read after the fan-out; if it
+moved, the count is discarded and retried on the fresh map, bounded by
+`LatticeOptions.MaxScanRetries` (default 3). Throws
+`InvalidOperationException` on retry exhaustion.
+
+#### `KeysAsync` / `EntriesAsync` — in-line reconciliation
+
+Reconciliation is driven inside the main k-way merge loop rather than
+as a separate pass. Each shard root reports back:
+
+* the keys/entries of all keys *not* in its `MovedAwaySlots` table
+  (entries it no longer authoritatively owns), and
+* the set of `MovedAwaySlots` virtual slots it observed during the
+  traversal (used as a topology-stability hint).
+
+Before each priority-queue dequeue, the orchestrator checks whether
+any live shard cursor has reported new `MovedAwaySlots` since the last
+reconciliation step. If so, it queries the current owners of the
+affected slots via the slot-filtered variants
+`GetSortedKeysBatchForSlotsAsync` / `GetSortedEntriesBatchForSlotsAsync`,
+loads the reconciled keys into memory, sorts them with the same
+comparer, and injects them as an additional in-memory cursor into the
+same priority queue. The merge invariant (global minimum is yielded
+next) then carries ordering across the topology boundary. A per-call
+`HashSet<string>` suppresses duplicates across pre- and post-swap
+views. A final stability check after the priority queue drains catches
+the edge case where a split commits after all live cursors finished —
+reconciled entries from this path are also sorted and injected as a
+cursor, not appended. Bounded by `LatticeOptions.MaxScanRetries`.
 
 ### Trade-offs
 
