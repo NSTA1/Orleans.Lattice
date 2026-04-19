@@ -9,6 +9,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// Multiple activations may exist across silos (stateless worker).
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
+[Alias(TypeAliases.ILeafCacheGrain)]
 public interface ILeafCacheGrain : IGrainWithStringKey
 {
     /// <summary>

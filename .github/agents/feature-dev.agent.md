@@ -75,7 +75,11 @@ Update documentation in the same change:
 
 1. Build the solution and confirm **zero errors and zero warnings**. Fix any nullable reference type warnings (`CS8604`, `CS8602`, `CS8625`) introduced by new or modified code.
 2. Run all tests related to the changed code and confirm they pass.
-3. Run the full test suite to ensure nothing is broken.
+3. Run the full test suite to ensure nothing is broken. **Exclude the `Chaos` test category** during iterative feature-dev verification — chaos tests are long-running stress suites reserved for CI and pre-PR runs, not every inner-loop check:
+
+   ```powershell
+   dotnet test --filter "TestCategory!=Chaos"
+   ```
 
 ### Phase 7 — Review
 

@@ -7,6 +7,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// and references to child grains (which may be internal or leaf nodes).
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
+[Alias(TypeAliases.IBPlusInternalGrain)]
 public interface IBPlusInternalGrain : IGrainWithGuidKey
 {
     /// <summary>Initialises this internal node with the result of a root split.</summary>

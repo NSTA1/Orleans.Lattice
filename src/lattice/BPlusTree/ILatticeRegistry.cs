@@ -15,6 +15,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// Key format: singleton — use <see cref="LatticeConstants.RegistryTreeId"/> as the grain key.
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
+[Alias(TypeAliases.ILatticeRegistry)]
 public interface ILatticeRegistry : IGrainWithStringKey
 {
     /// <summary>

@@ -15,6 +15,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// Key format: <c>{treeId}</c>.
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
+[Alias(TypeAliases.IHotShardMonitorGrain)]
 public interface IHotShardMonitorGrain : IGrainWithStringKey
 {
     /// <summary>

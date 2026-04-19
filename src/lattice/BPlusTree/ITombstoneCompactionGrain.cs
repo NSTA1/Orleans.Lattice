@@ -9,6 +9,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// <see cref="LatticeOptions.TombstoneGracePeriod"/>.
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
+[Alias(TypeAliases.ITombstoneCompactionGrain)]
 public interface ITombstoneCompactionGrain : IGrainWithStringKey
 {
     /// <summary>

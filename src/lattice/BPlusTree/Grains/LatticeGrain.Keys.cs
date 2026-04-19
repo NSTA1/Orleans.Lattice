@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -65,8 +66,10 @@ internal sealed partial class LatticeGrain
         string? startInclusive = null,
         string? endExclusive = null,
         bool reverse = false,
-        bool? prefetch = null)
+        bool? prefetch = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var (physicalTreeId, shardMap0) = await GetRoutingAsync();
         var physicalShards = shardMap0.GetPhysicalShardIndices();
         var pageSize = Options.KeysPageSize;
@@ -114,6 +117,7 @@ internal sealed partial class LatticeGrain
 
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             // Reconciliation check runs BEFORE each dequeue. This preserves
             // the k-way merge invariant: when a moved slot is first reported
             // by a shard's page, the corresponding live cursor's Current is

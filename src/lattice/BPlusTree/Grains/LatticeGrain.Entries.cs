@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -39,8 +40,10 @@ internal sealed partial class LatticeGrain
     public async IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(
         string? startInclusive = null,
         string? endExclusive = null,
-        bool reverse = false)
+        bool reverse = false,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var (physicalTreeId, shardMap0) = await GetRoutingAsync();
         var physicalShards = shardMap0.GetPhysicalShardIndices();
         var pageSize = Options.KeysPageSize;
@@ -84,6 +87,7 @@ internal sealed partial class LatticeGrain
 
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             // In-line reconciliation: run BEFORE each dequeue whenever a
             // live cursor has reported new moved slots since the last
             // reconciliation. See KeysAsync for the ordering proof.

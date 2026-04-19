@@ -82,3 +82,14 @@ Never rename or remove an alias — it is part of the wire format.
   - `dependencies` — dependency updates
   - `breaking` — breaking changes
 - Do not commit, push, or create PRs unless explicitly requested.
+
+## Testing
+
+- Every public type and member must have at least one test.
+- When running tests during iterative development to verify ongoing work, exclude the long-running chaos/stress suite:
+
+  ```powershell
+  dotnet test --filter "TestCategory!=Chaos"
+  ```
+
+  Chaos tests (`[Category("Chaos")]`) are reserved for CI and pre-PR runs. See `.github/instructions/testing.instructions.md` for the full testing conventions.

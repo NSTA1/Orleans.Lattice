@@ -10,6 +10,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// node or (initially) a leaf node.
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
+[Alias(TypeAliases.IShardRootGrain)]
 public interface IShardRootGrain : IGrainWithStringKey
 {
     Task<byte[]?> GetAsync(string key);

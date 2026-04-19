@@ -12,8 +12,10 @@ internal sealed partial class LatticeGrain
     public async Task<string> OpenKeyCursorAsync(
         string? startInclusive = null,
         string? endExclusive = null,
-        bool reverse = false)
+        bool reverse = false,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var cursorId = Guid.NewGuid().ToString("N");
         var cursor = grainFactory.GetGrain<ILatticeCursorGrain>(BuildCursorKey(cursorId));
         await cursor.OpenAsync(TreeId, new LatticeCursorSpec
@@ -30,8 +32,10 @@ internal sealed partial class LatticeGrain
     public async Task<string> OpenEntryCursorAsync(
         string? startInclusive = null,
         string? endExclusive = null,
-        bool reverse = false)
+        bool reverse = false,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var cursorId = Guid.NewGuid().ToString("N");
         var cursor = grainFactory.GetGrain<ILatticeCursorGrain>(BuildCursorKey(cursorId));
         await cursor.OpenAsync(TreeId, new LatticeCursorSpec
@@ -45,10 +49,11 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
-    public async Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive)
+    public async Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
+        cancellationToken.ThrowIfCancellationRequested();
         var cursorId = Guid.NewGuid().ToString("N");
         var cursor = grainFactory.GetGrain<ILatticeCursorGrain>(BuildCursorKey(cursorId));
         await cursor.OpenAsync(TreeId, new LatticeCursorSpec
@@ -62,33 +67,37 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
-    public Task<LatticeCursorKeysPage> NextKeysAsync(string cursorId, int pageSize)
+    public Task<LatticeCursorKeysPage> NextKeysAsync(string cursorId, int pageSize, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(cursorId);
+        cancellationToken.ThrowIfCancellationRequested();
         var cursor = grainFactory.GetGrain<ILatticeCursorGrain>(BuildCursorKey(cursorId));
         return cursor.NextKeysAsync(pageSize);
     }
 
     /// <inheritdoc />
-    public Task<LatticeCursorEntriesPage> NextEntriesAsync(string cursorId, int pageSize)
+    public Task<LatticeCursorEntriesPage> NextEntriesAsync(string cursorId, int pageSize, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(cursorId);
+        cancellationToken.ThrowIfCancellationRequested();
         var cursor = grainFactory.GetGrain<ILatticeCursorGrain>(BuildCursorKey(cursorId));
         return cursor.NextEntriesAsync(pageSize);
     }
 
     /// <inheritdoc />
-    public Task<LatticeCursorDeleteProgress> DeleteRangeStepAsync(string cursorId, int maxToDelete)
+    public Task<LatticeCursorDeleteProgress> DeleteRangeStepAsync(string cursorId, int maxToDelete, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(cursorId);
+        cancellationToken.ThrowIfCancellationRequested();
         var cursor = grainFactory.GetGrain<ILatticeCursorGrain>(BuildCursorKey(cursorId));
         return cursor.DeleteRangeStepAsync(maxToDelete);
     }
 
     /// <inheritdoc />
-    public Task CloseCursorAsync(string cursorId)
+    public Task CloseCursorAsync(string cursorId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(cursorId);
+        cancellationToken.ThrowIfCancellationRequested();
         var cursor = grainFactory.GetGrain<ILatticeCursorGrain>(BuildCursorKey(cursorId));
         return cursor.CloseAsync();
     }
