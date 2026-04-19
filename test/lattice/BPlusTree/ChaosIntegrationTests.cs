@@ -110,6 +110,33 @@ public class ChaosIntegrationTests
         // FX-006 (CancellationToken support on ILattice).
         || ex is TimeoutException;
 
+    /// <summary>
+    /// Drains every live key in <paramref name="tree"/> via
+    /// <see cref="ILattice.KeysAsync"/>, retrying on
+    /// <c>EnumerationAbortedException</c>. The post-chaos invariant scan
+    /// is long enough that the stateless-worker <c>LatticeGrain</c>
+    /// activation hosting the async enumerator may be collected by
+    /// Orleans' idle-activation GC between <c>MoveNextAsync</c> calls on
+    /// CI runners under memory pressure — even though the tree itself is
+    /// quiescent by this point. A fresh enumeration converges immediately.
+    /// </summary>
+    private static async Task<HashSet<string>> DrainKeysWithRetryAsync(ILattice tree, int maxAttempts)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            var keys = new HashSet<string>();
+            try
+            {
+                await foreach (var k in tree.KeysAsync()) keys.Add(k);
+                return keys;
+            }
+            catch (Exception ex) when (ex.GetType().Name == "EnumerationAbortedException" && attempt < maxAttempts)
+            {
+                // Retry with a fresh enumeration.
+            }
+        }
+    }
+
     [Test]
     public async Task Chaos_concurrent_reads_writes_scans_counts_and_splits_preserve_invariants()
     {
@@ -455,9 +482,14 @@ public class ChaosIntegrationTests
         await Task.WhenAll(workers);
 
         // After the chaos window closes, the universe must still be intact.
+        // The final drain scan is retried on EnumerationAbortedException:
+        // the stateless-worker LatticeGrain activation hosting the async
+        // enumerator can be collected by Orleans' idle-activation GC under
+        // CI memory pressure between MoveNextAsync calls, even though the
+        // tree itself is quiescent. With the chaos window closed, a fresh
+        // enumeration converges immediately.
         var finalCount = await tree.CountAsync();
-        var finalKeys = new HashSet<string>();
-        await foreach (var k in tree.KeysAsync()) finalKeys.Add(k);
+        var finalKeys = await DrainKeysWithRetryAsync(tree, maxAttempts: 5);
 
         Assert.Multiple(() =>
         {
