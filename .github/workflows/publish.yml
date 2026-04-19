@@ -30,8 +30,11 @@ jobs:
       - name: Build
         run: dotnet build --no-restore --configuration Release -p:Version=${{ steps.version.outputs.VERSION }}
 
-      - name: Test
-        run: dotnet test --no-build --configuration Release
+      - name: Test (chaos first — isolate flaky-prone surface)
+        run: dotnet test --no-build --configuration Release --filter "TestCategory=Chaos"
+
+      - name: Test (deterministic)
+        run: dotnet test --no-build --configuration Release --filter "TestCategory!=Chaos"
 
       - name: Pack
         run: dotnet pack src/lattice/Orleans.Lattice.csproj --no-build --configuration Release -p:PackageVersion=${{ steps.version.outputs.VERSION }} --output ./artifacts

@@ -3,8 +3,6 @@ name: CI
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
 
 # Least-privilege: this workflow only reads source code.
 permissions:
@@ -56,9 +54,13 @@ jobs:
         if: steps.filter.outputs.code == 'true'
         run: dotnet build --no-restore --configuration Release
 
-      - name: Test
+      - name: Test (chaos first — isolate flaky-prone surface)
         if: steps.filter.outputs.code == 'true'
-        run: dotnet test --no-build --configuration Release --logger "trx;LogFileName=results.trx"
+        run: dotnet test --no-build --configuration Release --filter "TestCategory=Chaos" --logger "trx;LogFileName=chaos.trx"
+
+      - name: Test (deterministic)
+        if: steps.filter.outputs.code == 'true'
+        run: dotnet test --no-build --configuration Release --filter "TestCategory!=Chaos" --logger "trx;LogFileName=results.trx"
 
       # Upload test results even if the Test step fails.
       - name: Upload test results
@@ -66,4 +68,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: "**/results.trx"
+          path: "**/*.trx"
