@@ -4,7 +4,7 @@
 all-or-nothing semantics: either every entry in the batch is durably written,
 or — on any failure — every already-committed entry in that batch is rolled
 back to its pre-saga value. The feature is implemented as a saga coordinator
-grain (F-031) that wraps the existing per-key `SetAsync` path.
+grain that wraps the existing per-key `SetAsync` path.
 
 The non-atomic `SetManyAsync` remains available for throughput-oriented use
 cases where partial application on failure is acceptable.

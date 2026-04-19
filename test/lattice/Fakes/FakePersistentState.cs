@@ -13,8 +13,27 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
     /// <summary>Number of times <see cref="WriteStateAsync"/> has been called.</summary>
     public int WriteCount { get; private set; }
 
+    /// <summary>
+    /// When set, the next call to <see cref="ClearStateAsync"/> throws this
+    /// exception instead of clearing state. Cleared after it fires so the
+    /// subsequent call succeeds.
+    /// </summary>
+    public Exception? ThrowOnClear { get; set; }
+
+    /// <summary>
+    /// When set, the next call to <see cref="WriteStateAsync"/> throws this
+    /// exception instead of incrementing <see cref="WriteCount"/>. Cleared
+    /// after it fires.
+    /// </summary>
+    public Exception? ThrowOnWrite { get; set; }
+
     public Task ClearStateAsync()
     {
+        if (ThrowOnClear is { } ex)
+        {
+            ThrowOnClear = null;
+            throw ex;
+        }
         State = new();
         return Task.CompletedTask;
     }
@@ -23,6 +42,11 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
 
     public Task WriteStateAsync()
     {
+        if (ThrowOnWrite is { } ex)
+        {
+            ThrowOnWrite = null;
+            throw ex;
+        }
         WriteCount++;
         return Task.CompletedTask;
     }
