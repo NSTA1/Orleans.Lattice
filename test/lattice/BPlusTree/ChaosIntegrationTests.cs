@@ -36,6 +36,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </summary>
 [TestFixture]
 [NonParallelizable]
+[Category("Chaos")]
 public class ChaosIntegrationTests
 {
     private FourShardClusterFixture _fixture = null!;
