@@ -275,12 +275,21 @@ internal sealed partial class BPlusLeafGrain(
 
         var cutoff = DateTimeOffset.UtcNow.Ticks - gracePeriod.Ticks;
         var toRemove = new List<string>();
+        var anyInGraceRemaining = false;
 
         foreach (var (key, lww) in state.State.Entries)
         {
-            if (lww.IsTombstone && lww.Timestamp.WallClockTicks <= cutoff)
+            if (!lww.IsTombstone) continue;
+
+            if (lww.Timestamp.WallClockTicks <= cutoff)
             {
                 toRemove.Add(key);
+            }
+            else
+            {
+                // Tombstone is still within the grace window — a future pass
+                // must re-scan it once the grace has elapsed.
+                anyInGraceRemaining = true;
             }
         }
 
@@ -292,7 +301,13 @@ internal sealed partial class BPlusLeafGrain(
             }
         }
 
-        state.State.LastCompactionVersion = state.State.Version.Clone();
+        // Only mark this version as "fully compacted" when no tombstones were
+        // left in the grace window. Stamping while tombstones remain would
+        // dead-end every subsequent pass until a new write ticks the version
+        // vector (audit bug #2).
+        if (!anyInGraceRemaining)
+            state.State.LastCompactionVersion = state.State.Version.Clone();
+
         await state.WriteStateAsync();
         return toRemove.Count;
     }
@@ -367,8 +382,12 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries)
     {
+        var maxIncoming = HybridLogicalClock.Zero;
         foreach (var (key, incoming) in entries)
         {
+            if (incoming.Timestamp > maxIncoming)
+                maxIncoming = incoming.Timestamp;
+
             if (state.State.Entries.TryGetValue(key, out var existing))
             {
                 state.State.Entries[key] = LwwValue<byte[]>.Merge(existing, incoming);
@@ -385,6 +404,13 @@ internal sealed partial class BPlusLeafGrain(
         // populating its local cache.
         if (entries.Count > 0)
         {
+            // Advance the local HLC past the highest incoming timestamp so a
+            // subsequent local write produces a stamp that dominates the just-
+            // merged values (audit bug #3). Without this, a merged future-dated
+            // entry silently wins LWW against every local write until wall clock
+            // catches up.
+            if (maxIncoming > state.State.Clock)
+                state.State.Clock = maxIncoming;
             state.State.Version.Tick(ReplicaId);
         }
 
@@ -536,8 +562,12 @@ internal sealed partial class BPlusLeafGrain(
 
     private void MergeIntoState(Dictionary<string, LwwValue<byte[]>> entries)
     {
+        var maxIncoming = HybridLogicalClock.Zero;
         foreach (var (key, incoming) in entries)
         {
+            if (incoming.Timestamp > maxIncoming)
+                maxIncoming = incoming.Timestamp;
+
             if (state.State.Entries.TryGetValue(key, out var existing))
             {
                 state.State.Entries[key] = LwwValue<byte[]>.Merge(existing, incoming);
@@ -550,6 +580,10 @@ internal sealed partial class BPlusLeafGrain(
 
         if (entries.Count > 0)
         {
+            // Advance the local HLC past the highest incoming timestamp so
+            // subsequent local writes dominate the merged values (audit bug #3).
+            if (maxIncoming > state.State.Clock)
+                state.State.Clock = maxIncoming;
             state.State.Version.Tick(ReplicaId);
         }
     }
