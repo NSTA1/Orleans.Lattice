@@ -32,6 +32,7 @@ internal static class TypeAliases
     internal const string SnapshotPhase = "ol.snp";
     internal const string SnapshotMode = "ol.snm";
     internal const string TreeMergeState = "ol.tms";
+    internal const string HotShardMonitorState = "ol.hms";
 
     // BPlusTree
     internal const string SplitResult = "ol.sr";
@@ -51,6 +52,9 @@ internal static class TypeAliases
     internal const string ShardSplitInProgress = "ol.sip";
     internal const string ShardSplitPhase = "ol.sph";
     internal const string StaleShardRouting = "ol.ssr";
+
+    // Range delete (FX-011)
+    internal const string RangeDeleteResult = "ol.rdr";
 
     // Atomic multi-key writes (F-031)
     internal const string AtomicWriteState = "ol.aws";

@@ -239,6 +239,35 @@ public sealed class LatticeOptions
     public static readonly TimeSpan DefaultAtomicWriteRetention = TimeSpan.FromHours(48);
 
     /// <summary>
+    /// Optional retention window for <see cref="Primitives.VersionVector"/>
+    /// entries (FX-003). When a merge pipeline calls
+    /// <see cref="Primitives.VersionVector.PruneOlderThan(long)"/> with
+    /// <c>UtcNow - VersionVectorRetention</c>, replica entries whose
+    /// wall-clock tick falls before the cutoff are dropped to bound the
+    /// vector's memory footprint.
+    /// <para>
+    /// Defaults to <see cref="Timeout.InfiniteTimeSpan"/> (no pruning) to
+    /// preserve wire and state compatibility. Pruning must be applied
+    /// consistently across replicas that merge against each other,
+    /// otherwise a short-retention replica will keep reinstating entries
+    /// from a long-retention peer. Values below
+    /// <see cref="DefaultMinVersionVectorRetention"/> are typically
+    /// unsafe on networks where clock skew exceeds the window.
+    /// </para>
+    /// </summary>
+    public TimeSpan VersionVectorRetention { get; set; } = DefaultVersionVectorRetention;
+
+    /// <summary>Default value for <see cref="VersionVectorRetention"/> (disabled).</summary>
+    public static readonly TimeSpan DefaultVersionVectorRetention = Timeout.InfiniteTimeSpan;
+
+    /// <summary>
+    /// Practical lower bound for <see cref="VersionVectorRetention"/> below
+    /// which pruning may drop entries that are still causally relevant. Not
+    /// enforced — provided as a reference constant.
+    /// </summary>
+    public static readonly TimeSpan DefaultMinVersionVectorRetention = TimeSpan.FromHours(1);
+
+    /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.
     /// Used internally by <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
     /// and exposed for advanced scenarios where callers register storage directly.

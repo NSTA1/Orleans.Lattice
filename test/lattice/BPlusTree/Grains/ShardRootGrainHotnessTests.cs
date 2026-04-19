@@ -45,7 +45,8 @@ public class ShardRootGrainHotnessTests
             .Returns(Task.FromResult(new GetOrSetResult { ExistingValue = null, Split = null }));
         leafGrain.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
             .Returns(Task.FromResult(new CasResult { Success = true, Split = null }));
-        leafGrain.DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>()).Returns(Task.FromResult(0));
+        leafGrain.DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>())
+            .Returns(Task.FromResult(new RangeDeleteResult { Deleted = 0, PastRange = true }));
         leafGrain.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
             .Returns(Task.FromResult<SplitResult?>(null));
         grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leafGrain);

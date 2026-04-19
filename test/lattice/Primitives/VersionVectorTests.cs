@@ -139,4 +139,52 @@ public class VersionVectorTests
         Assert.That(original.GetClock("r1").WallClockTicks, Is.EqualTo(10));
         Assert.That(clone.GetClock("r1").WallClockTicks, Is.EqualTo(99));
     }
+
+    [Test]
+    public void PruneOlderThan_removes_entries_below_cutoff()
+    {
+        var vv = new VersionVector();
+        vv.Entries["old"] = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 };
+        vv.Entries["mid"] = new HybridLogicalClock { WallClockTicks = 500, Counter = 0 };
+        vv.Entries["new"] = new HybridLogicalClock { WallClockTicks = 1_000, Counter = 0 };
+
+        var removed = vv.PruneOlderThan(500);
+
+        Assert.That(removed, Is.EqualTo(1));
+        Assert.That(vv.Entries.ContainsKey("old"), Is.False);
+        Assert.That(vv.Entries.ContainsKey("mid"), Is.True);
+        Assert.That(vv.Entries.ContainsKey("new"), Is.True);
+    }
+
+    [Test]
+    public void PruneOlderThan_returns_zero_on_empty_vector()
+    {
+        var vv = new VersionVector();
+        Assert.That(vv.PruneOlderThan(long.MaxValue), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void PruneOlderThan_keeps_entries_at_cutoff()
+    {
+        var vv = new VersionVector();
+        vv.Entries["r1"] = new HybridLogicalClock { WallClockTicks = 500, Counter = 0 };
+
+        var removed = vv.PruneOlderThan(500);
+
+        Assert.That(removed, Is.EqualTo(0));
+        Assert.That(vv.Entries.ContainsKey("r1"), Is.True);
+    }
+
+    [Test]
+    public void PruneOlderThan_drops_all_when_cutoff_high()
+    {
+        var vv = new VersionVector();
+        vv.Entries["r1"] = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
+        vv.Entries["r2"] = new HybridLogicalClock { WallClockTicks = 2, Counter = 0 };
+
+        var removed = vv.PruneOlderThan(long.MaxValue);
+
+        Assert.That(removed, Is.EqualTo(2));
+        Assert.That(vv.Entries, Is.Empty);
+    }
 }
