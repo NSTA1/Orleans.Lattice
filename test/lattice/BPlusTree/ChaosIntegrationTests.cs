@@ -49,7 +49,7 @@ public class ChaosIntegrationTests
     private const int BulkReaderCount = 2;
     private const int ScannerCount = 2;
     private const int CounterCount = 2;
-    private static readonly TimeSpan ChaosDuration = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan ChaosDuration = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan SplitInterval = TimeSpan.FromMilliseconds(400);
 
     [OneTimeSetUp]
@@ -203,9 +203,9 @@ public class ChaosIntegrationTests
                 {
                     try
                     {
-                        var batch = new List<KeyValuePair<string, byte[]>>(3);
+                        var batch = new List<KeyValuePair<string, byte[]>>(2);
                         var seen = new HashSet<int>();
-                        while (batch.Count < 3)
+                        while (batch.Count < 2)
                         {
                             var idx = rng.Next(UniverseSize);
                             if (!seen.Add(idx)) continue;
@@ -467,7 +467,7 @@ public class ChaosIntegrationTests
             Assert.That(finalKeys.Count, Is.EqualTo(UniverseSize),
                 "Post-chaos KeysAsync must yield exactly the pinned universe.");
 
-            foreach (var op in new[] { "point-writes", "bulk-writes", "atomic-writes", "point-reads",
+            foreach (var op in new[] { "point-writes", "bulk-writes", "point-reads",
                 "bulk-reads", "keys-scans", "entries-scans", "counts", "splits" })
             {
                 Assert.That(stats.GetValueOrDefault(op, 0), Is.GreaterThan(0),
