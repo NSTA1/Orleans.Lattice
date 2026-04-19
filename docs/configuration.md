@@ -66,6 +66,8 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | `SplitDrainBatchSize` | `int` | 1024 | Yes |
 | `AutoSplitMinTreeAge` | `TimeSpan` | 60 seconds | Yes |
 | `MaxScanRetries` | `int` | 3 | Yes |
+| `CursorIdleTtl` | `TimeSpan` | 48 hours | Yes |
+| `AtomicWriteRetention` | `TimeSpan` | 48 hours | Yes |
 
 ### `ShardCount`
 
@@ -222,6 +224,18 @@ This option can be changed freely at any time.
 ### `MaxScanRetries`
 
 Maximum bounded-retry passes for `CountAsync`, `KeysAsync`, and `EntriesAsync` when the shard topology changes mid-scan (default: 3). If the topology keeps mutating after every reconciliation step, the scan throws `InvalidOperationException` rather than returning a silently incomplete result. Under the default split rate-limits (`MaxConcurrentAutoSplits = 2`, `HotShardSplitCooldown = 2 minutes`), exhausting 3 retries is not a realistic operational concern. See [Scan reliability](api.md#scan-reliability).
+
+This option can be changed freely at any time.
+
+### `CursorIdleTtl`
+
+Sliding idle timeout for stateful cursors opened via `OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `OpenDeleteRangeCursorAsync` (default: 48 hours). Each successful cursor step refreshes the reminder; if it fires without intervening activity the cursor grain clears its persisted state, unregisters the reminder, and deactivates. Minimum effective interval is **1 minute** (Orleans reminder granularity); smaller values are clamped to the floor. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup — cursors then live until `CloseCursorAsync` is called. See [Durable Cursors](durable-cursors.md).
+
+This option can be changed freely at any time.
+
+### `AtomicWriteRetention`
+
+Retention window for completed `SetManyAtomicAsync` saga state (default: 48 hours). After a saga reaches a terminal state, its coordinator grain retains its persisted progress for this window so duplicate submissions with the same operation ID are idempotent. A retention reminder fires at the end of the window and clears the state. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup. See [Atomic Writes](atomic-writes.md).
 
 This option can be changed freely at any time.
 
