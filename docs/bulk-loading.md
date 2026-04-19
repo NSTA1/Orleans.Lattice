@@ -46,7 +46,7 @@ await tree.BulkLoadAsync(
 
 The extension method buffers entries per shard and flushes each shard independently when its buffer reaches `chunkSize`. Flushes to different shards run in parallel; flushes to the *same* shard are sequential (preserving key order). Each chunk gets a unique `operationId` for idempotent retries.
 
-Routing is resolved up front via `ILattice.GetRoutingAsync()` (introduced by F-030), which returns the per-tree `ShardMap` and physical tree id. Entries are then partitioned by physical shard via `ShardMap.Resolve(key)`, so the bulk loader honours non-default maps produced by future adaptive splits.
+Routing is resolved up front via `ILattice.GetRoutingAsync()`, which returns the per-tree `ShardMap` and physical tree id. Entries are then partitioned by physical shard via `ShardMap.Resolve(key)`, so the bulk loader honours non-default maps produced by future adaptive splits.
 
 > **Deprecated overload.** An older overload that takes an explicit `int shardCount` parameter is preserved for backward compatibility but marked `[Obsolete]`. It bypasses the persisted shard map and would mis-route entries on trees with non-default maps; new code should use the overload above.
 

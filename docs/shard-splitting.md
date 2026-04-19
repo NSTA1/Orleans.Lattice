@@ -108,7 +108,7 @@ registry's monotonically-incrementing `ShardMap.Version`:
    configuration (`MaxConcurrentAutoSplits` = 2,
    `HotShardSplitCooldown` = 2 minutes), exhausting 3 retries would
    require an unusually sustained burst of concurrent topology changes.
-3. **In-line reconciliation (Keys/Entries only, F-032).** For `KeysAsync`,
+3. **In-line reconciliation (Keys/Entries only).** For `KeysAsync`,
    and `EntriesAsync`, reconciliation is driven inside the main k-way
    merge loop rather than as a separate pass. Before each priority-queue
    dequeue, the orchestrator checks whether any live shard cursor has
@@ -153,7 +153,7 @@ registry's monotonically-incrementing `ShardMap.Version`:
 The per-tree `HotShardMonitorGrain` is started lazily on the first write and
 re-anchored by a keepalive reminder. On each tick (default every 30 s) it:
 
-1. Polls every physical shard's `GetHotnessAsync()` in parallel (F-013).
+1. Polls every physical shard's `GetHotnessAsync()` in parallel.
 2. Computes ops/sec = `(reads + writes) / window.TotalSeconds`.
 3. Counts the number of in-flight splits **for this tree** by polling every
    physical shard's `IsSplittingAsync()`. If that count is already

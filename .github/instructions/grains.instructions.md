@@ -37,6 +37,7 @@ Grain identity is embedded in the string key with `/` as separator:
 | `TreeSnapshotGrain` | `{sourceTreeId}` | `"my-tree"` |
 | `TreeMergeGrain` | `{targetTreeId}` | `"my-tree"` |
 | `AtomicWriteGrain` | `{treeId}/{operationId}` | `"my-tree/ab12…"` |
+| `LatticeCursorGrain` | `{treeId}/{cursorId}` | `"my-tree/ab12…"` |
 
 Parse the tree ID from the key using `key[..key.LastIndexOf('/')]` when needed.
 

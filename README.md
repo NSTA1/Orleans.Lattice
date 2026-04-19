@@ -60,6 +60,7 @@ without distributed locks or coordination protocols.
 | **Bulk loading** | One-shot bottom-up build or streaming `IAsyncEnumerable` ingestion with per-shard parallel flushing. Both modes are idempotent and retryable. |
 | **Conflict-free** | All state merges are monotonic. Concurrent writes to the same key resolve via last-writer-wins with hybrid logical clocks. |
 | **Crash-safe splits** | Every node split uses a two-phase pattern with persisted intent. Interrupted splits resume automatically on the next access. |
+| **Durable cursors** | `OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `OpenDeleteRangeCursorAsync` return a server-side checkpointed iterator that survives silo failovers, client restarts, and topology changes. Progress is persisted after every page; a new activation resumes from the last yielded key. Self-cleaning via sliding idle-TTL reminder. |
 | **Fast reads** | A `[StatelessWorker]` cache grain per silo serves reads via delta replication from the primary leaf. Cache misses cost a single version-vector comparison. |
 | **Fault-tolerant** | Validated end-to-end by a parametrized fault-injection chaos test: random storage-write failures during concurrent reads, writes, scans, and splits converge to the correct state once faults stop. |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on an existing tree. Takes an offline snapshot to a new physical tree, swaps the alias, and soft-deletes the old data. The tree is unavailable during the snapshot phase but immediately accessible after the swap. Undoable within the retention window. |
@@ -87,6 +88,7 @@ Detailed design documentation is split by concept:
 | [Bulk Loading](docs/bulk-loading.md) | One-shot build, streaming ingestion, two-phase graft, recovery guarantees |
 | [Chaos Tests](docs/chaos-tests.md) | Happy-path and fault-injection chaos integration tests, invariants proven, recovery surfaces exercised |
 | [Configuration](docs/configuration.md) | Options reference, per-tree overrides, immutability constraints, storage provider |
+| [Durable Cursors](docs/durable-cursors.md) | Stateful `ILatticeCursorGrain` design, grain lifecycle, effective-range resumption, idle-TTL self-cleanup, performance characteristics |
 | [Read Caching](docs/caching.md) | Delta-based `[StatelessWorker]` cache, split-aware pruning |
 | [Shard Splitting](docs/shard-splitting.md) | Adaptive online splits, shadow-write design, autonomic monitor, suppression rules, scan semantics during splits, tunables |
 | [Snapshots](docs/snapshots.md) | Offline and online snapshot modes, crash safety, sizing overrides |

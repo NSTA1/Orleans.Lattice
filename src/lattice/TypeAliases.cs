@@ -56,4 +56,13 @@ internal static class TypeAliases
     internal const string AtomicWriteState = "ol.aws";
     internal const string AtomicWritePhase = "ol.awp";
     internal const string AtomicPreValue = "ol.apv";
+
+    // Stateful cursor / iterator (F-033)
+    internal const string LatticeCursorKind = "ol.lck";
+    internal const string LatticeCursorSpec = "ol.lcu";
+    internal const string LatticeCursorPhase = "ol.lcp";
+    internal const string LatticeCursorState = "ol.lcs";
+    internal const string LatticeCursorKeysPage = "ol.lkp";
+    internal const string LatticeCursorEntriesPage = "ol.lep";
+    internal const string LatticeCursorDeleteProgress = "ol.ldp";
 }

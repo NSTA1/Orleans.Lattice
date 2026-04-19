@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
 using Orleans.Timers;
@@ -17,24 +18,88 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// partial write. Readers may observe a brief partial-visibility window during
 /// execution and during compensation; this is inherent to the saga pattern.
 /// </para>
+/// <para>
+/// <b>Retention cleanup.</b> After the saga reaches a terminal state
+/// (<c>Completed</c>), the grain registers a one-shot retention reminder
+/// (<c>atomic-write-retention</c>) configured by
+/// <see cref="LatticeOptions.AtomicWriteRetention"/> (default 48h). When the
+/// reminder fires, the grain clears its persisted state, unregisters the
+/// reminder, and deactivates. This lets a client that re-issues the same
+/// <c>operationId</c> within the retention window observe the original
+/// outcome (idempotent re-invocation), while guaranteeing that saga state
+/// does not leak forever. Set the option to
+/// <see cref="Timeout.InfiniteTimeSpan"/> to disable retention cleanup.
+/// </para>
 /// </summary>
 internal sealed class AtomicWriteGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
+    IOptionsMonitor<LatticeOptions> optionsMonitor,
     ILogger<AtomicWriteGrain> logger,
     [PersistentState("atomic-write", LatticeOptions.StorageProviderName)]
-    IPersistentState<AtomicWriteState> state) : IAtomicWriteGrain, IRemindable, IGrainBase
+    IPersistentState<AtomicWriteState> state)
+    : TtlGrain(context, reminderRegistry, logger), IAtomicWriteGrain
 {
     private const string KeepaliveReminderName = "atomic-write-keepalive";
+    private const string RetentionReminderName = "atomic-write-retention";
     private const int MaxRetriesPerStep = 1;
-
-    IGrainContext IGrainBase.GrainContext => context;
 
     /// <summary>
     /// Composite grain key (<c>{treeId}/{operationId}</c>); used for logging.
     /// </summary>
-    private string OperationKey => context.GrainId.Key.ToString()!;
+    private string OperationKey => GrainContext.GrainId.Key.ToString()!;
+
+    /// <inheritdoc />
+    protected override string TtlReminderName => RetentionReminderName;
+
+    /// <inheritdoc />
+    protected override TimeSpan ResolveTtl()
+    {
+        var treeId = state.State.TreeId;
+        var options = string.IsNullOrEmpty(treeId)
+            ? optionsMonitor.CurrentValue
+            : optionsMonitor.Get(treeId);
+        return options.AtomicWriteRetention;
+    }
+
+    /// <inheritdoc />
+    protected override async Task OnTtlExpiredAsync()
+    {
+        logger.LogInformation(
+            "Atomic-write saga {OperationKey}: retention window expired; clearing state.",
+            OperationKey);
+        await state.ClearStateAsync();
+    }
+
+    /// <inheritdoc />
+    protected override async Task OnOtherReminderAsync(string reminderName, TickStatus status)
+    {
+        if (reminderName != KeepaliveReminderName) return;
+
+        switch (state.State.Phase)
+        {
+            case AtomicWritePhase.Prepare:
+            case AtomicWritePhase.Execute:
+            case AtomicWritePhase.Compensate:
+                try
+                {
+                    await RunSagaAsync();
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex,
+                        "Atomic-write saga {OperationKey} failed on reminder-driven resume.",
+                        OperationKey);
+                }
+                break;
+            case AtomicWritePhase.Completed:
+            case AtomicWritePhase.NotStarted:
+                await UnregisterKeepaliveAsync();
+                this.DeactivateOnIdle();
+                break;
+        }
+    }
 
     /// <inheritdoc />
     public async Task ExecuteAsync(string treeId, List<KeyValuePair<string, byte[]>> entries)
@@ -71,35 +136,6 @@ internal sealed class AtomicWriteGrain(
         Task.FromResult(
             state.State.Phase == AtomicWritePhase.NotStarted ||
             state.State.Phase == AtomicWritePhase.Completed);
-
-    /// <inheritdoc />
-    public async Task ReceiveReminder(string reminderName, TickStatus status)
-    {
-        if (reminderName != KeepaliveReminderName) return;
-
-        switch (state.State.Phase)
-        {
-            case AtomicWritePhase.Prepare:
-            case AtomicWritePhase.Execute:
-            case AtomicWritePhase.Compensate:
-                try
-                {
-                    await RunSagaAsync();
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex,
-                        "Atomic-write saga {OperationKey} failed on reminder-driven resume.",
-                        OperationKey);
-                }
-                break;
-            case AtomicWritePhase.Completed:
-            case AtomicWritePhase.NotStarted:
-                await UnregisterKeepaliveAsync();
-                this.DeactivateOnIdle();
-                break;
-        }
-    }
 
     /// <summary>
     /// Validates the batch: non-null values and no duplicate keys.
@@ -295,9 +331,10 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
-    /// Marks the saga Completed, unregisters the keepalive reminder, and
-    /// requests deactivation. Safe to call in both success and post-compensation
-    /// paths.
+    /// Marks the saga Completed, unregisters the keepalive reminder, arms the
+    /// retention reminder (via the shared TtlGrain base) for delayed state
+    /// cleanup, and requests deactivation. Safe to call in both success and
+    /// post-compensation paths.
     /// </summary>
     private async Task CompleteSagaAsync()
     {
@@ -305,6 +342,7 @@ internal sealed class AtomicWriteGrain(
         state.State.RetriesOnCurrentStep = 0;
         await state.WriteStateAsync();
         await UnregisterKeepaliveAsync();
+        await SlideTtlAsync();
         this.DeactivateOnIdle();
     }
 
@@ -325,8 +363,8 @@ internal sealed class AtomicWriteGrain(
     }
 
     private Task RegisterKeepaliveAsync() =>
-        reminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: context.GrainId,
+        ReminderRegistry.RegisterOrUpdateReminder(
+            callingGrainId: GrainContext.GrainId,
             reminderName: KeepaliveReminderName,
             dueTime: TimeSpan.FromMinutes(1),
             period: TimeSpan.FromMinutes(1));
@@ -335,9 +373,9 @@ internal sealed class AtomicWriteGrain(
     {
         try
         {
-            var reminder = await reminderRegistry.GetReminder(context.GrainId, KeepaliveReminderName);
+            var reminder = await ReminderRegistry.GetReminder(GrainContext.GrainId, KeepaliveReminderName);
             if (reminder is not null)
-                await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
+                await ReminderRegistry.UnregisterReminder(GrainContext.GrainId, reminder);
         }
         catch (Exception ex)
         {

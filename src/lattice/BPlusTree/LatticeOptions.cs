@@ -204,6 +204,41 @@ public sealed class LatticeOptions
     public const int DefaultMaxScanRetries = 3;
 
     /// <summary>
+    /// How long an open stateful cursor (F-033) may remain idle before it is
+    /// automatically cleaned up. On every <c>Open</c> / <c>Next</c> /
+    /// <c>DeleteRangeStep</c> call, the cursor grain refreshes a grain
+    /// reminder set to fire after this interval; if the reminder ever fires
+    /// (no activity for the full window) the grain clears its persisted
+    /// state, unregisters the reminder, and deactivates. Protects against
+    /// leaked cursor state from clients that open a cursor and never call
+    /// <c>CloseCursorAsync</c>. Set to <see cref="Timeout.InfiniteTimeSpan"/>
+    /// to disable automatic cleanup. Minimum effective interval is
+    /// <c>1 minute</c> (Orleans reminder granularity).
+    /// </summary>
+    public TimeSpan CursorIdleTtl { get; set; } = DefaultCursorIdleTtl;
+
+    /// <summary>Default value for <see cref="CursorIdleTtl"/> (48 hours).</summary>
+    public static readonly TimeSpan DefaultCursorIdleTtl = TimeSpan.FromHours(48);
+
+    /// <summary>
+    /// How long a completed atomic-write saga (F-031) retains its persisted
+    /// state for idempotent re-invocation by the client. After the retention
+    /// window elapses, a grain reminder fires, the saga's state is cleared,
+    /// and the coordinator grain deactivates. A client that re-issues a
+    /// <c>SetManyAtomicAsync</c> call with the same <c>operationId</c>
+    /// within this window will see the original result (success or the
+    /// original failure exception); after the window expires, a re-issue
+    /// starts a new saga. Set to <see cref="Timeout.InfiniteTimeSpan"/> to
+    /// disable automatic cleanup and retain saga state indefinitely.
+    /// Minimum effective interval is <c>1 minute</c> (Orleans reminder
+    /// granularity).
+    /// </summary>
+    public TimeSpan AtomicWriteRetention { get; set; } = DefaultAtomicWriteRetention;
+
+    /// <summary>Default value for <see cref="AtomicWriteRetention"/> (48 hours).</summary>
+    public static readonly TimeSpan DefaultAtomicWriteRetention = TimeSpan.FromHours(48);
+
+    /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.
     /// Used internally by <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
     /// and exposed for advanced scenarios where callers register storage directly.

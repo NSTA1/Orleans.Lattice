@@ -32,6 +32,7 @@ Potential improvements and new features.
 
 - [x] **F-020 — Merge trees (`MergeAsync`)**: Merge all entries from a source tree into the current tree using LWW semantics. Useful for combining snapshots, migrating data, or rejoining forked datasets.
 - [x] **F-031 — Atomic multi-key writes (saga)** *(covers audit #6 — `SetMany` atomicity)*: `ILattice.SetManyAtomicAsync` routes a batch of key-value pairs through a dedicated `IAtomicWriteGrain` saga coordinator (keyed per `{treeId}/{operationId}`). The saga reads pre-saga values, applies writes sequentially, and — on any failure — compensates already-committed entries by rewriting their pre-saga values (or tombstoning previously-absent keys) with fresh HLC ticks, relying on LWW to win over the partial write. A keepalive reminder registered at saga start drives reminder-based crash recovery: on reactivation the grain consults its persisted phase (`Prepare` / `Execute` / `Compensate` / `Completed`) and resumes. Duplicate keys and null values fail fast with `ArgumentException`; post-compensation failures surface as `InvalidOperationException` with the original failure's message preserved. `SetManyAsync` (the non-atomic, parallel fan-out path) is retained and now documents its non-atomicity. Readers may observe a partial-visibility window between the first and last committed write — inherent to the saga pattern and documented in `docs/api.md`.
+- [x] **F-033 — Stateful cursor / iterator grain** *(covers audit #10 `DeleteRange` pagination and #15 scan fallback; completes scan liveness story started by F-032)*: `ILatticeCursorGrain` checkpoints scan progress server-side after every page so multi-minute exports and resumable range deletes survive silo failover, client restarts, and topology changes. Exposed via `ILattice.OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `OpenDeleteRangeCursorAsync` / `NextKeysAsync` / `NextEntriesAsync` / `DeleteRangeStepAsync` / `CloseCursorAsync`; the cursor grain is keyed `{treeId}/{cursorId}` and persists `LastYieldedKey` plus phase so a new activation resumes exactly where it left off. Each step is routed through the normal `ILattice.KeysAsync` / `EntriesAsync` / `DeleteRangeAsync` path, inheriting F-032 ordering preservation under concurrent shard splits. **Self-cleaning:** the grain registers a sliding idle-TTL reminder (`cursor-ttl`) refreshed on every call; if it fires without activity, the grain clears state, unregisters the reminder, and deactivates. Interval is configured by `LatticeOptions.CursorIdleTtl` (default 48h, clamped to a 1-minute floor, disabled with `Timeout.InfiniteTimeSpan`). The same retention-reminder pattern was layered onto `AtomicWriteGrain` (F-031) via `LatticeOptions.AtomicWriteRetention` (default 48h) so completed saga state does not leak indefinitely. Public DTOs (`LatticeCursorSpec`, `LatticeCursorKeysPage`, `LatticeCursorEntriesPage`, `LatticeCursorDeleteProgress`, `LatticeCursorKind`) are visible to IntelliSense as first-class public API; only the internal `ILatticeCursorGrain` is marked `[EditorBrowsable(Never)]`. Stateless `KeysAsync` / `EntriesAsync` / `DeleteRangeAsync` overloads are retained for short scans.
 
 ---
 
@@ -41,21 +42,7 @@ Items are ordered by estimated impact. Dependencies on completed features are no
 
 Audit follow-up fixes (`FX-###`) are tracked in a [dedicated section below](#-audit-follow-up-fixes) and take operational precedence over feature work when they touch data-loss or liveness risks.
 
-### 1 · F-033 — Stateful cursor / iterator grain *(covers audit #10 `DeleteRange` pagination and #15 scan fallback; completes scan liveness story started by F-032)*
-**Fix / reliability — high impact**
-
-Pagination today is stateless: the client holds a per-shard continuation token and scans are bounded by `LatticeOptions.MaxScanRetries` (throwing `InvalidOperationException` on exhaustion — see [`docs/api.md#scan-reliability`](docs/api.md#scan-reliability)). For multi-minute export pipelines, scans that must survive silo failover and client restarts, and for unbounded `DeleteRangeAsync` traversals that currently have no continuation token or server-side budget, an `ILatticeCursorGrain` that checkpoints scan progress server-side would:
-
-- Replace the current retry-budget failure mode with a resumable cursor (client re-attaches to the same cursor grain after any transient fault).
-- Persist the last-yielded key plus the set of reconciled virtual slots, so a resumption after a topology change picks up exactly where it left off rather than replaying the whole scan.
-- Expose `OpenAsync(scanSpec)`, `NextAsync(pageSize)`, `CloseAsync()` on `ILattice`, keeping the stateless `KeysAsync` / `EntriesAsync` overloads for short scans.
-- Provide a cursor-backed `DeleteRangeAsync` variant that bounds per-call work and is resumable across grain deactivations.
-
-Completes the scan-liveness story that F-032 began (F-032 delivers ordering under topology change; F-033 delivers unbounded resumability). Also subsumes the audit #15 concern that the leaf-scan fallback re-traverses from the root without explicit loop/retry caps by routing long scans through a checkpointed cursor instead of the stateless retry budget.
-
----
-
-### 2 · F-029 — External metrics / telemetry export *(prereq F-013 ✓ — unblocked)*
+### 1 · F-029 — External metrics / telemetry export *(prereq F-013 ✓ — unblocked)*
 **Observability / high impact**
 
 Publish `System.Diagnostics.Metrics` counters and histograms for OpenTelemetry-compatible dashboards. Instruments fall into two tiers:
@@ -67,21 +54,21 @@ The leaf-level instruments cannot be inferred from F-013's shard-root counters �
 
 ---
 
-### 3 · F-016
+### 2 · F-016
 **Feature / high impact**
 
 Accept an optional `TimeSpan ttl` on `SetAsync`. Expired keys are treated as tombstoned during reads and cleaned up by existing compaction infrastructure. Requires an `ExpiresAtTicks` field on `LwwValue`. No dependencies; highly requested pattern for caching use cases.
 
 ---
 
-### 4 · F-019 — Online (non-blocking) resize
+### 3 · F-019 — Online (non-blocking) resize
 **Reliability / high impact**
 
 During a resize operation, redistribute shard data incrementally in the background while the tree continues to serve reads and writes, with only a brief lock for the final shard map swap. Mirrors the `SnapshotMode.Online` approach: new physical shards are seeded from the existing layout slot-by-slot, and live traffic routes through the old map until the cutover. The shard map indirection from F-028 makes the final cutover a single atomic map swap rather than a coordinated shutdown.
 
 ---
 
-### 5 · F-025
+### 4 · F-025
 **Feature / high impact**
 
 Incremental, ongoing merge from one or more source trees using `VersionVector` to track a per-source high-water mark, so each cycle transfers only entries newer than the last. Requires a delta-aware leaf scan (`GetEntriesNewerThanAsync(HybridLogicalClock threshold)`) and a merge-state tracking grain to persist the vector per source tree. Should replace the current full-shard drain in `TreeMergeGrain.MergeShardAsync` with a chunked or cursor-based leaf-chain iteration.
@@ -90,14 +77,14 @@ Incremental, ongoing merge from one or more source trees using `VersionVector` t
 
 ---
 
-### 6 · F-024
+### 5 · F-024
 **Performance / medium-high impact**
 
 Extend the F-009 double-buffering strategy to `EntriesAsync`. Because entries carry `byte[]` values, pre-fetched pages increase in-flight memory proportionally to `shardCount × pageSize × avgValueSize`. Gate behind a dedicated `PrefetchEntriesScan` option or an optional `prefetch` parameter so callers opt in only when the memory trade-off is acceptable.
 
 ---
 
-### 7 · F-014
+### 6 · F-014
 **Observability / medium impact**
 
 Return per-shard health information — depth, live key count, tombstone ratio, pending splits/promotions — via an `ILatticeAdmin` interface or a method on `ILattice`.
@@ -106,28 +93,28 @@ Return per-shard health information — depth, live key count, tombstone ratio, 
 
 ---
 
-### 8 · F-012
+### 7 · F-012
 **Reliability / medium impact**
 
 Optionally pre-warm `LeafCacheGrain` activations for recently-accessed leaves after a silo restart to reduce cold-start read-latency spikes. No dependencies.
 
 ---
 
-### 9 · F-015
+### 8 · F-015
 **Feature / medium impact**
 
 Publish tree events (key written, tree deleted, split occurred, compaction completed) via an `ILatticeObserver` interface or Orleans Streams integration for event-driven architectures.
 
 ---
 
-### 10 · F-018
+### 9 · F-018
 **Feature / lower impact (complex)**
 
 Associate tags with keys and query by tag. Implementable as a secondary Lattice tree mapping `tag → Set<key>`, maintained transactionally alongside the primary write. High complexity; deferred until core feature set is stable.
 
 ---
 
-### 11 · Documentation & Developer Experience
+### 10 · Documentation & Developer Experience
 
 - [ ] **F-021 — Migration guide**: Document how to migrate data from external stores (Redis, SQL, Cosmos DB) into Lattice using the streaming bulk-load API, including key-design and value-serialization best practices.
 - [ ] **F-023 — Sample applications (`samples/`)**: End-to-end examples (e.g. ASP.NET Core session store, leaderboard, distributed configuration service) showing real integration patterns beyond the Quick Start snippet.
@@ -136,8 +123,7 @@ Associate tags with keys and query by tag. Implementable as a secondary Lattice 
 
 ## 🛠 Audit Follow-up Fixes
 
-Reliability and hygiene fixes surfaced by the repository audit. Items tagged **Fix** here are distinct from feature work (`F-###`) — they address latent bugs or robustness gaps rather than adding new capability. The highest-severity audit items (data-loss / liveness) are already addressed: F-031 (atomic multi-key writes saga) is complete, and F-033 (stateful cursor) is the remaining high-priority item in the Outstanding list above.
-
+Reliability and hygiene fixes surfaced by the repository audit. Items tagged **Fix** here are distinct from feature work (`F-###`) — they address latent bugs or robustness gaps rather than adding new capability. The highest-severity audit items (data-loss / liveness) are already addressed: F-031 (atomic multi-key writes saga) and F-033 (stateful cursor grain) are both complete.
 PR #47 landed the first batch of audit fixes (HLC merge clock advancement, compaction short-circuit, alias / physical-shard resolution in `TombstoneCompactionGrain` and `TreeMergeGrain`, streaming per-leaf merge, and `HotShardMonitor` cooldown pruning) with 12 regression tests; the items below are what remains.
 
 ### FX-001 — Leaf split publish ordering *(audit #8 — reliability / medium)*
@@ -170,7 +156,11 @@ The alias table is not mechanically checked against the set of `[Alias]`-decorat
 ### FX-010 — Docs drift guard *(audit #24 — docs / low)*
 Several `docs/*.md` files reference option names and method shapes that have since been renamed; no CI check guards this. Fix: add a docs-verify step to the build that compiles the code snippets in `docs/*.md` against the public surface (either via DocFX or a lightweight Roslyn snippet runner) so renames break the build instead of rotting silently.
 
-**Audit items intentionally not listed here** (verified during PR planning as already implemented or inapplicable): `IValidateOptions<LatticeOptions>` is already registered (`LatticeOptionsValidator`), `SnapshotMode` default is the safe `Offline` mode, and the `LeafCacheGrain` TTL XML doc matches the implementation.
+### FX-011 — `ShardRootGrain.DeleteRangeAsync` under-deletion on sparse multi-shard trees *(discovered during F-033 split-test authoring — reliability / high, data-loss)*
+When `TraverseToLeafAsync(startInclusive)` lands on a leaf whose live keys are all strictly less than `startInclusive` (common on multi-shard trees with small leaves and sparse key distribution), the leaf's `DeleteRangeAsync` correctly returns `0`, but the shard-root loop then hits its `if (deleted == 0) break;` shortcut and aborts **before** walking forward to later leaves that do contain range-matching keys. Reproduces reliably with `MaxLeafKeys=4` and 4 shards of ~50 keys each: a `DeleteRangeAsync("k-0050","k-0060")` call returns ~5 instead of 10. The range-delete completeness assumption in the existing `DeleteRange_spans_multiple_leaves` test is masked because that test uses a single shard. Fix: replace the `deleted == 0` short-circuit with an explicit "we are past `endExclusive`" check — either by extending `IBPlusLeafGrain.DeleteRangeAsync` to also return a `pastRange` flag (the leaf already iterates its sorted keys and knows when it has seen a key ≥ `endExclusive`), or by calling a lightweight `MinKeyAsync()` on the next sibling and stopping only when that min-key is ≥ `endExclusive`. Until fixed, `DeleteRangeAsync` (and the F-033 `DeleteRangeStepAsync` cursor built on top of it) under-delete on multi-shard trees.
+
+### FX-012 — `CountAsync` over-counts during concurrent shard splits *(discovered by chaos test `Chaos_concurrent_reads_writes_scans_counts_and_splits_preserve_invariants` — reliability / high, correctness)*
+`CountAsync` reduces per-shard counts without participating in the F-032 reconciliation path that keeps `KeysAsync` / `EntriesAsync` deduplicated across a mid-query split. During the window between a split committing the destination shard and tombstones settling on the source shard, keys in migrating virtual slots are live on **both** shards; summing per-shard counts double-counts them, yielding a count that exceeds the true live-key total. Symptom: chaos-test failure of the form `counter1: CountAsync=558, expected 500` — the delta is always positive (over-count, never under) and correlates with concurrent `SplitAsync` activity. Reproduces non-deterministically under the chaos harness; a deterministic reproducer can be built with `FourShardClusterFixture` by interleaving a `RunSplitPassAsync` pre-swap with a `CountAsync` call. Fix: route `CountAsync` through the same per-slot ownership reconciliation used by `KeysAsync` (deduplicate counts by virtual-slot ownership at count-time), or count from a consistent shard-map snapshot taken before the split commits. `CountPerShardAsync` has the same exposure and needs the same fix.
 
 ---
 
@@ -187,7 +177,7 @@ F-016 (TTL) assumes that "existing compaction infrastructure" handles expired-ke
 ### G-003 — Stateful cursor / iterator grain
 Pagination today is stateless (client holds a token per shard). For long-running scans that span many pages, or scans that need to survive client restarts, a stateful cursor grain that checkpoints scan progress server-side would significantly simplify client code and enable reliable export pipelines without external state management.
 
-*Promoted to the outstanding list as **F-033** — see priority 2 above.*
+*✅ Delivered as **F-033** — see Completed / Reliability above.*
 
 ### G-004 — Geo-replication / multi-cluster
 The CRDT (LWW + HLC) nature of Lattice makes cross-cluster replication architecturally feasible: because `LwwValue.Merge` is idempotent and commutative, a replication link is just a continuous merge (F-025) operating across Orleans cluster boundaries. A dedicated item to define the multi-cluster topology, conflict resolution surface, and network transport (e.g. gRPC bridge grain) would be valuable for disaster-recovery and read-local query patterns.
@@ -229,5 +219,5 @@ Each `ShardRootGrain` is currently placed by Orleans' default random placement d
 | F-024 (Entry pre-fetch) | F-009 (Key pre-fetch) | ✅ Prereq complete — F-024 unblocked |
 | F-022 (Troubleshooting guide) | F-014 (Tree diagnostics) | 🔲 Guide should follow diagnostics implementation |
 | F-031 (Atomic multi-key writes) | F-017 (CAS) | ✅ Both complete |
-| F-032 (Scan ordering under topology change) | F-011 (Adaptive shard splitting) | ✅ Prereq complete — F-032 complete |
-| F-033 (Stateful cursor grain) | F-032 (Scan ordering under topology change) | ✅ Prereq complete — F-033 completes the scan-liveness story |
+| F-032 (Scan ordering under topology change) | F-011 (Adaptive shard splitting) | ✅ Both complete |
+| F-033 (Stateful cursor grain) | F-032 (Scan ordering under topology change) | ✅ Both complete |
