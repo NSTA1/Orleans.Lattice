@@ -41,6 +41,7 @@ public class ChaosWithFaultsIntegrationTests
     private const int UniverseSize = 200;
     private const int WriterCount = 3;
     private const int BulkWriterCount = 2;
+    private const int AtomicWriterCount = 1;
     private const int ReaderCount = 2;
     private const int BulkReaderCount = 2;
     private const int ScannerCount = 2;
@@ -231,6 +232,41 @@ public class ChaosWithFaultsIntegrationTests
                     catch (Exception ex) when (IsToleratedDuringFaults(ex))
                     {
                         Bump(stats, "tolerated-write-errors");
+                    }
+                }
+            }, ct));
+        }
+
+        // ---- Atomic writers: F-031 saga batch writes under fault injection.
+        // Storage faults may cause saga rollback; post-quiescence healing
+        // restores envelope-valid values for every universe key.
+        for (int w = 0; w < AtomicWriterCount; w++)
+        {
+            var writerId = w;
+            workers.Add(Task.Run(async () =>
+            {
+                var rng = new Random(writerId * 1299709 + 13);
+                int seq = 0;
+                while (!ct.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var batch = new List<KeyValuePair<string, byte[]>>(4);
+                        var seen = new HashSet<int>();
+                        while (batch.Count < 4)
+                        {
+                            var idx = rng.Next(UniverseSize);
+                            if (!seen.Add(idx)) continue;
+                            batch.Add(new(KeyOf(idx),
+                                Encoding.UTF8.GetBytes($"v-{idx}-atomic{writerId}-{++seq}")));
+                        }
+                        await tree.SetManyAtomicAsync(batch);
+                        Bump(stats, "atomic-writes");
+                    }
+                    catch (OperationCanceledException) { }
+                    catch (Exception ex) when (IsToleratedDuringFaults(ex))
+                    {
+                        Bump(stats, "tolerated-atomic-write-errors");
                     }
                 }
             }, ct));
@@ -429,6 +465,25 @@ public class ChaosWithFaultsIntegrationTests
             if (faultProbability > 0)
                 Assert.That(stats.GetValueOrDefault("faults-armed", 0), Is.GreaterThan(0),
                     "Fault injector must have armed at least one fault.");
+
+            // Atomic writes must have executed at every fault level. In the
+            // no-fault baseline the saga's success rate must be ≥ 80% (same
+            // threshold as the split-only chaos test). Under fault injection
+            // the saga is intrinsically more vulnerable — any injected fault
+            // in any of the saga's N writes rolls the whole batch back — so
+            // the baseline-rate assertion does not apply; we only require
+            // that the workload did not completely starve.
+            var atomicOk = stats.GetValueOrDefault("atomic-writes", 0);
+            var atomicTolerated = stats.GetValueOrDefault("tolerated-atomic-write-errors", 0);
+            var atomicTotal = atomicOk + atomicTolerated;
+            Assert.That(atomicTotal, Is.GreaterThan(0),
+                "Expected at least one atomic-write attempt during the chaos window.");
+            if (faultProbability == 0)
+            {
+                Assert.That((double)atomicOk / atomicTotal, Is.GreaterThanOrEqualTo(0.80),
+                    $"Atomic-write success rate was {atomicOk}/{atomicTotal} = " +
+                    $"{(double)atomicOk / atomicTotal:P1}; expected ≥ 80% in the no-faults baseline.");
+            }
         });
 
         TestContext.Out.WriteLine($"ChaosWithFaults stats (p={faultProbability}):");

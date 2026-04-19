@@ -53,8 +53,39 @@ public interface ILattice : IGrainWithStringKey
 
     /// <summary>
     /// Inserts or updates multiple key-value pairs, fanning out to shards in parallel.
+    /// <para>
+    /// <b>Not atomic.</b> A partial failure leaves the batch half-applied with no
+    /// compensating rollback. Use <see cref="SetManyAtomicAsync"/> when all-or-nothing
+    /// semantics are required.
+    /// </para>
     /// </summary>
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
+
+    /// <summary>
+    /// Atomically writes <paramref name="entries"/> as a saga: reads each key's
+    /// pre-saga value up front, applies the writes sequentially, and
+    /// compensates (reverts) any already-committed entries if a subsequent
+    /// write fails — so the batch is either fully applied or fully rolled back
+    /// from the caller's perspective. Crash-recovery is reminder-driven: a
+    /// silo failure mid-saga reactivates the coordinator grain on another silo
+    /// which resumes from its persisted progress, optionally compensating.
+    /// <para>
+    /// <b>Partial-visibility window.</b> Readers observing the tree between the
+    /// first and last committed write may see a partial view of the batch.
+    /// This is inherent to the saga pattern; callers needing strict isolation
+    /// should layer version-guarded reads
+    /// (<see cref="GetWithVersionAsync"/> + <see cref="SetIfVersionAsync"/>)
+    /// on top.
+    /// </para>
+    /// <para>
+    /// Throws <see cref="ArgumentException"/> when <paramref name="entries"/>
+    /// contains duplicate keys or null values. Throws
+    /// <see cref="InvalidOperationException"/> if a write fails and compensation
+    /// completes — the original failure's message is included.
+    /// </para>
+    /// </summary>
+    /// <param name="entries">The key-value pairs to write atomically.</param>
+    Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries);
 
     /// <summary>Deletes the value for <paramref name="key"/>. Returns <c>true</c> if it existed.</summary>
     Task<bool> DeleteAsync(string key);
