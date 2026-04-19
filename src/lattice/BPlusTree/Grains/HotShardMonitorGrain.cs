@@ -144,6 +144,24 @@ internal sealed class HotShardMonitorGrain(
             ?? ShardMap.CreateDefault(options.VirtualShardCount, options.ShardCount);
         var physicalShards = map.GetPhysicalShardIndices();
 
+        // Prune cooldown entries for shards no longer present in the current
+        // map. Without this, the dictionary grows unbounded over the monitor's
+        // lifetime as shards are retired by resizes or merges (audit bug #12).
+        if (_shardCooldownUntilUtc.Count > 0)
+        {
+            List<int>? stale = null;
+            foreach (var key in _shardCooldownUntilUtc.Keys)
+            {
+                if (!physicalShards.Contains(key))
+                    (stale ??= []).Add(key);
+            }
+            if (stale is not null)
+            {
+                foreach (var key in stale)
+                    _shardCooldownUntilUtc.Remove(key);
+            }
+        }
+
         // Poll hotness in parallel, plus pending-bulk + splitting status.
         var hotnessTasks = new Task<ShardHotness>[physicalShards.Count];
         var pendingBulkTasks = new Task<bool>[physicalShards.Count];

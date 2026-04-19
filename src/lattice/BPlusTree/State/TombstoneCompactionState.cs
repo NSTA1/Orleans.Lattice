@@ -22,4 +22,20 @@ internal sealed class TombstoneCompactionState
     /// Reset to 0 when the shard succeeds or is skipped.
     /// </summary>
     [Id(2)] public int ShardRetries { get; set; }
+
+    /// <summary>
+    /// The list of physical shard indices to compact, captured at the start of
+    /// the current pass by resolving the tree's shard map. This is persisted
+    /// so that the pass is resumable after a silo restart even if the shard
+    /// map changes mid-pass (e.g. due to an adaptive split). When empty, the
+    /// grain falls back to resolving the shard map on-demand.
+    /// </summary>
+    [Id(3)] public int[] PhysicalShardIndices { get; set; } = [];
+
+    /// <summary>
+    /// The resolved physical tree id (alias target) for the current pass.
+    /// Persisted so that mid-pass alias rebinds don't mis-route subsequent
+    /// ticks. <c>null</c> when no pass is in flight.
+    /// </summary>
+    [Id(4)] public string? PhysicalTreeId { get; set; }
 }
