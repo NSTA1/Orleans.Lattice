@@ -266,6 +266,23 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    /// <summary>
+    /// Atomic multi-key write (F-031). Activates a dedicated
+    /// <see cref="IAtomicWriteGrain"/> keyed by <c>{treeId}/{operationId}</c>
+    /// and awaits saga completion. Duplicate-key and null-value validation is
+    /// done inside the saga grain; no routing is needed here because the saga
+    /// itself calls back through <see cref="ILattice"/> for each write.
+    /// </summary>
+    public Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        if (entries.Count == 0) return Task.CompletedTask;
+
+        var operationId = Guid.NewGuid().ToString("N");
+        var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
+        return saga.ExecuteAsync(TreeId, entries);
+    }
+
     public async Task<bool> DeleteAsync(string key)
     {
         ArgumentNullException.ThrowIfNull(key);

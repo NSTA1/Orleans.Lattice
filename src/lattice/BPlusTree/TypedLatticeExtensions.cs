@@ -136,6 +136,29 @@ public static class TypedLatticeExtensions
         List<KeyValuePair<string, T>> entries) =>
         lattice.SetManyAsync(entries, JsonLatticeSerializer<T>.Default);
 
+    /// <summary>
+    /// Serializes and atomically writes multiple key-value pairs via the F-031
+    /// saga. See <see cref="ILattice.SetManyAtomicAsync"/> for full semantics
+    /// (all-or-nothing commit, partial-visibility window, compensation on failure).
+    /// </summary>
+    public static Task SetManyAtomicAsync<T>(
+        this ILattice lattice,
+        List<KeyValuePair<string, T>> entries,
+        ILatticeSerializer<T> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+        var raw = new List<KeyValuePair<string, byte[]>>(entries.Count);
+        foreach (var (k, v) in entries)
+            raw.Add(new KeyValuePair<string, byte[]>(k, serializer.Serialize(v)));
+        return lattice.SetManyAtomicAsync(raw);
+    }
+
+    /// <inheritdoc cref="SetManyAtomicAsync{T}(ILattice, List{KeyValuePair{string, T}}, ILatticeSerializer{T})"/>
+    public static Task SetManyAtomicAsync<T>(
+        this ILattice lattice,
+        List<KeyValuePair<string, T>> entries) =>
+        lattice.SetManyAtomicAsync(entries, JsonLatticeSerializer<T>.Default);
+
     // ── Bulk Loading ────────────────────────────────────────────
 
     /// <summary>
