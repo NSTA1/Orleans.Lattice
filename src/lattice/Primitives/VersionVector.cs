@@ -105,4 +105,38 @@ public sealed class VersionVector
         }
         return copy;
     }
+
+    /// <summary>
+    /// Removes entries whose <see cref="HybridLogicalClock.WallTimeTicks"/>
+    /// is older than <paramref name="minRetainedUtcTicks"/> (FX-003).
+    /// <para>
+    /// Pruning prevents unbounded growth of this vector when replicas
+    /// enter and leave the cluster over long time horizons. Because a
+    /// pruned entry is dropped entirely, the next merge with a replica
+    /// whose clock still lives before the cutoff will reinstate it —
+    /// pruning must therefore be applied consistently across all
+    /// replicas (typically via a per-tree option on continuous-merge
+    /// pipelines) to avoid oscillation.
+    /// </para>
+    /// <para>
+    /// Commutativity / associativity are preserved only across replicas
+    /// that use the same cutoff; applying a cutoff of <c>0</c> (or never
+    /// pruning) is always safe. Returns the number of entries removed.
+    /// </para>
+    /// </summary>
+    public int PruneOlderThan(long minRetainedUtcTicks)
+    {
+        if (Entries.Count == 0) return 0;
+
+        List<string>? toRemove = null;
+        foreach (var (id, clock) in Entries)
+        {
+            if (clock.WallClockTicks < minRetainedUtcTicks)
+                (toRemove ??= []).Add(id);
+        }
+
+        if (toRemove is null) return 0;
+        foreach (var id in toRemove) Entries.Remove(id);
+        return toRemove.Count;
+    }
 }

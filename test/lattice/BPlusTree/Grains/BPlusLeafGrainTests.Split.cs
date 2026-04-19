@@ -1,9 +1,11 @@
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Orleans;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Tests.Fakes;
+using Orleans.Runtime;
 using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -362,5 +364,56 @@ public partial class BPlusLeafGrainTests
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("3"));
 
         await siblingMock.Received().SetNextSiblingAsync(null);
+    }
+
+    [Test]
+    public async Task Split_flushes_source_state_before_returning_SplitResult()
+    {
+        // FX-001 regression: the source leaf's trimmed state must be persisted
+        // before the SplitResult is returned to the caller (which in turn
+        // publishes the new sibling to the parent node). If the caller
+        // crashes after receiving SplitResult but before the source's
+        // trimmed state is persisted, the parent would route lookups to
+        // the new sibling while the unflushed source still holds the
+        // (now-moved) keys — producing a visible "duplicated keys"
+        // state in the tree.
+        var state = new FakePersistentState<LeafNodeState>();
+        var opts = new LatticeOptions { MaxLeafKeys = 3 };
+        var siblingContext = Substitute.For<IGrainContext>();
+        siblingContext.GrainId.Returns(GrainId.Create("leaf", Guid.NewGuid().ToString()));
+        var sibling = Substitute.For<IBPlusLeafGrain, IGrainBase>();
+        ((IGrainBase)sibling).GrainContext.Returns(siblingContext);
+        sibling.MergeEntriesAsync(Arg.Any<Dictionary<string, Orleans.Lattice.Primitives.LwwValue<byte[]>>>())
+            .Returns(Task.FromResult<SplitResult?>(null));
+        sibling.SetTreeIdAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
+        sibling.SetNextSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
+        sibling.SetPrevSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
+
+        var grain = CreateGrain(state, options: opts, siblingStub: sibling);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+
+        var result = await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        Assert.That(result, Is.Not.Null, "split should have occurred");
+
+        // Invariant 1: source's post-split persisted Entries must not
+        // contain any key >= the promoted split key (which now lives on
+        // the sibling). If the source's trim was never flushed, those
+        // keys would still appear here.
+        var splitKey = result!.PromotedKey;
+        foreach (var key in state.State.Entries.Keys)
+        {
+            Assert.That(string.Compare(key, splitKey, StringComparison.Ordinal), Is.LessThan(0),
+                $"source still holds {key} which should have moved to the sibling");
+        }
+
+        // Invariant 2: source's persisted NextSibling points at the new
+        // sibling, and SplitState is SplitComplete. Both prove the
+        // flush happened.
+        Assert.That(state.State.SplitState, Is.EqualTo(Orleans.Lattice.Primitives.SplitState.SplitComplete));
+        Assert.That(state.State.NextSibling, Is.EqualTo(result.NewSiblingId));
     }
 }

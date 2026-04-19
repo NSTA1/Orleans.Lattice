@@ -200,21 +200,28 @@ internal sealed partial class BPlusLeafGrain(
         return true;
     }
 
-    public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive)
+    public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive)
     {
         // Collect matching keys. Entries is a SortedDictionary so we can
-        // break early once we pass endExclusive.
+        // break early once we pass endExclusive — but we must still report
+        // whether we observed a key >= endExclusive (FX-011) so the shard
+        // coordinator can terminate the chain walk deterministically.
         List<string>? keysToDelete = null;
+        var pastRange = false;
         foreach (var (key, lww) in state.State.Entries)
         {
             if (string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+            {
+                pastRange = true;
                 break;
+            }
 
             if (string.Compare(key, startInclusive, StringComparison.Ordinal) >= 0 && !lww.IsTombstone)
                 (keysToDelete ??= []).Add(key);
         }
 
-        if (keysToDelete is null) return 0;
+        if (keysToDelete is null)
+            return new RangeDeleteResult { Deleted = 0, PastRange = pastRange };
 
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
         state.State.Version.Tick(ReplicaId);
@@ -226,7 +233,7 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         await state.WriteStateAsync();
-        return keysToDelete.Count;
+        return new RangeDeleteResult { Deleted = keysToDelete.Count, PastRange = pastRange };
     }
 
     public Task<int> CountAsync()

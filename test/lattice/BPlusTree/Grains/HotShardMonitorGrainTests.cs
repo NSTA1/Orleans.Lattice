@@ -3,6 +3,8 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
 using Orleans.Timers;
 
@@ -75,7 +77,8 @@ public partial class HotShardMonitorGrainTests
 
         var grain = new HotShardMonitorGrain(
             context, grainFactory, reminderRegistry, optionsMonitor,
-            new LoggerFactory().CreateLogger<HotShardMonitorGrain>());
+            new LoggerFactory().CreateLogger<HotShardMonitorGrain>(),
+            new FakePersistentState<HotShardMonitorState>());
         return (grain, grainFactory, lattice, splitGrain, registry, Shard, options);
     }
 
@@ -195,7 +198,8 @@ public partial class HotShardMonitorGrainTests
 
         var grain = new HotShardMonitorGrain(
             context, grainFactory, Substitute.For<IReminderRegistry>(), optionsMonitor,
-            new LoggerFactory().CreateLogger<HotShardMonitorGrain>());
+            new LoggerFactory().CreateLogger<HotShardMonitorGrain>(),
+            new FakePersistentState<HotShardMonitorState>());
 
         await grain.RunSamplingPassAsync();
 
@@ -268,5 +272,72 @@ public partial class HotShardMonitorGrainTests
         await splitGrain.Received(1).SplitAsync(1); // hottest
         await splitGrain.Received(1).SplitAsync(0); // second hottest
         await splitGrain.DidNotReceive().SplitAsync(2); // third — over cap
+    }
+
+    [Test]
+    public async Task ActivationUtc_persists_and_survives_reactivation()
+    {
+        // FX-004 regression: the monitor's first-ever activation time must
+        // be persisted so the AutoSplitMinTreeAge grace period is
+        // anchored to the tree's first activation, not the current silo
+        // restart. Without this, a cluster that restarts silos more
+        // often than the grace window would never trigger an autonomic
+        // split.
+        var sharedState = new FakePersistentState<HotShardMonitorState>();
+        LatticeOptions opts = new()
+        {
+            ShardCount = 2, VirtualShardCount = 16,
+            AutoSplitMinTreeAge = TimeSpan.FromMinutes(5),
+            HotShardOpsPerSecondThreshold = 100,
+            MaxConcurrentAutoSplits = 1,
+        };
+
+        // --- First activation: writes the activation time to state.
+        var (_, _, _, splitGrain1, _, shardOf1, _) = CreateGrain(options: opts);
+        // Patch the grain instance to use the shared state so a second
+        // activation can read it back. We rebuild the grain manually for
+        // this scenario because CreateGrain allocates an isolated state.
+        var ctx = Substitute.For<IGrainContext>();
+        ctx.GrainId.Returns(GrainId.Create("monitor", TreeId));
+        var gf = Substitute.For<IGrainFactory>();
+        var om = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        om.Get(Arg.Any<string>()).Returns(opts);
+        var lattice = Substitute.For<ILattice>();
+        lattice.IsResizeCompleteAsync().Returns(true);
+        lattice.IsMergeCompleteAsync().Returns(true);
+        lattice.IsSnapshotCompleteAsync().Returns(true);
+        gf.GetGrain<ILattice>(TreeId).Returns(lattice);
+        var reg = Substitute.For<ILatticeRegistry>();
+        reg.ResolveAsync(TreeId).Returns(TreeId);
+        reg.GetShardMapAsync(TreeId).Returns(ShardMap.CreateDefault(16, 2));
+        gf.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(reg);
+        var split = Substitute.For<ITreeShardSplitGrain>();
+        split.IsCompleteAsync().Returns(true);
+        gf.GetGrain<ITreeShardSplitGrain>(Arg.Any<string>()).Returns(split);
+        var hotShard = Substitute.For<IShardRootGrain>();
+        hotShard.GetHotnessAsync().Returns(new ShardHotness { Reads = 50_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        hotShard.HasPendingBulkOperationAsync().Returns(false);
+        hotShard.IsSplittingAsync().Returns(false);
+        gf.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(hotShard);
+
+        var first = new HotShardMonitorGrain(
+            ctx, gf, Substitute.For<IReminderRegistry>(), om,
+            new LoggerFactory().CreateLogger<HotShardMonitorGrain>(), sharedState);
+        await first.RunSamplingPassAsync();
+
+        Assert.That(sharedState.State.ActivationUtc, Is.Not.Null, "first activation should persist ActivationUtc");
+        var persistedTime = sharedState.State.ActivationUtc!.Value;
+
+        // Grace window is 5min and ActivationUtc was just written → no split.
+        await split.DidNotReceive().SplitAsync(Arg.Any<int>());
+
+        // --- Second activation (simulated restart): reuses persisted time.
+        var second = new HotShardMonitorGrain(
+            ctx, gf, Substitute.For<IReminderRegistry>(), om,
+            new LoggerFactory().CreateLogger<HotShardMonitorGrain>(), sharedState);
+        await second.RunSamplingPassAsync();
+
+        Assert.That(sharedState.State.ActivationUtc, Is.EqualTo(persistedTime),
+            "second activation must not overwrite the persisted ActivationUtc");
     }
 }

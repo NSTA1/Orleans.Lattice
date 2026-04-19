@@ -13,14 +13,21 @@ public partial class BPlusLeafGrainTests
 {
     private static BPlusLeafGrain CreateGrain(
         FakePersistentState<LeafNodeState>? state = null,
-        string replicaId = "test-leaf")
+        string replicaId = "test-leaf",
+        LatticeOptions? options = null,
+        IBPlusLeafGrain? siblingStub = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", replicaId));
         state ??= new FakePersistentState<LeafNodeState>();
         var grainFactory = Substitute.For<IGrainFactory>();
+        if (siblingStub is not null)
+        {
+            grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(siblingStub);
+            grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(siblingStub);
+        }
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        optionsMonitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions());
         return new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
     }
 

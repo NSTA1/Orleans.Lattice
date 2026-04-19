@@ -86,4 +86,82 @@ public partial class TombstoneCompactionGrainTests
         Assert.That(state.State.InProgress, Is.False,
             "Pass must complete after covering every physical shard in the map.");
     }
+
+    [Test]
+    public async Task ReceiveReminder_reregisters_when_period_drifts_from_options()
+    {
+        // FX-002: when a stale reminder period survives an options change
+        // (or an Orleans upgrade), the next tick must re-register with
+        // the currently configured period.
+        var options = new LatticeOptions
+        {
+            ShardCount = ShardCount,
+            TombstoneGracePeriod = TimeSpan.FromHours(12),
+        };
+        var (grain, _, reminderRegistry, grainFactory, _) = CreateGrain(options);
+
+        // Stub registry so the reminder callback doesn't null-ref.
+        var registry = Substitute.For<ILatticeRegistry>();
+        registry.ResolveAsync(TreeId).Returns(TreeId);
+        registry.GetShardMapAsync(TreeId).Returns(Task.FromResult<ShardMap?>(
+            ShardMap.CreateDefault(4, ShardCount)));
+        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        for (int i = 0; i < ShardCount; i++)
+        {
+            var shard = Substitute.For<IShardRootGrain>();
+            shard.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(null));
+            grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}").Returns(shard);
+        }
+
+        // Fire the periodic compaction reminder with a stale period.
+        var stalePeriod = TimeSpan.FromHours(1);
+        var staleStatus = new TickStatus(DateTime.UtcNow, stalePeriod, DateTime.UtcNow);
+        // ReceiveReminder triggers StartCompactionAsync after the drift check, which
+        // requires a real grain-timer service provider; we only care that the
+        // drift-detection branch calls RegisterOrUpdateReminder before that point.
+        try { await grain.ReceiveReminder("tombstone-compaction", staleStatus); }
+        catch (InvalidOperationException) { /* expected: no grain context timer service */ }
+
+        // Grain must have re-registered with the configured 12h period.
+        await reminderRegistry.Received().RegisterOrUpdateReminder(
+            callingGrainId: Arg.Any<GrainId>(),
+            reminderName: "tombstone-compaction",
+            dueTime: TimeSpan.FromHours(12),
+            period: TimeSpan.FromHours(12));
+    }
+
+    [Test]
+    public async Task ReceiveReminder_does_not_reregister_when_period_matches()
+    {
+        var options = new LatticeOptions
+        {
+            ShardCount = ShardCount,
+            TombstoneGracePeriod = TimeSpan.FromHours(2),
+        };
+        var (grain, _, reminderRegistry, grainFactory, _) = CreateGrain(options);
+
+        var registry = Substitute.For<ILatticeRegistry>();
+        registry.ResolveAsync(TreeId).Returns(TreeId);
+        registry.GetShardMapAsync(TreeId).Returns(Task.FromResult<ShardMap?>(
+            ShardMap.CreateDefault(4, ShardCount)));
+        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        for (int i = 0; i < ShardCount; i++)
+        {
+            var shard = Substitute.For<IShardRootGrain>();
+            shard.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(null));
+            grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}").Returns(shard);
+        }
+
+        // Matching period → no re-register.
+        var status = new TickStatus(DateTime.UtcNow, TimeSpan.FromHours(2), DateTime.UtcNow);
+        reminderRegistry.ClearReceivedCalls();
+        try { await grain.ReceiveReminder("tombstone-compaction", status); }
+        catch (InvalidOperationException) { /* expected: StartCompactionAsync needs grain timer svc */ }
+
+        await reminderRegistry.DidNotReceive().RegisterOrUpdateReminder(
+            callingGrainId: Arg.Any<GrainId>(),
+            reminderName: "tombstone-compaction",
+            dueTime: Arg.Any<TimeSpan>(),
+            period: Arg.Any<TimeSpan>());
+    }
 }

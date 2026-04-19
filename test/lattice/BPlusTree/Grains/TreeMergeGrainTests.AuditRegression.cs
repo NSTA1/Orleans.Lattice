@@ -218,4 +218,97 @@ public partial class TreeMergeGrainTests
         await shard0.Received().GetLeftmostLeafIdAsync();
         await shard7.Received().GetLeftmostLeafIdAsync();
     }
+
+    [Test]
+    public async Task ProcessNextShardAsync_poisons_shard_after_retry_budget_exhausted()
+    {
+        // FX-005 regression: when a source shard's merge has failed and
+        // <see cref="TreeMergeState.ShardRetries"/> has reached the poison
+        // cap (MaxRetriesPerShard = 2), the next tick must SKIP the shard,
+        // advance the cursor, and reset the retry counter — without
+        // running another merge attempt. Before the fix, the grain's
+        // cursor advanced past failing shards immediately on the first
+        // exception, so a single transient storage hiccup silently
+        // dropped that shard from the merge.
+        var (grain, state, reminderRegistry, grainFactory, _) = CreateGrain();
+        SetupKeepalive(reminderRegistry);
+
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        registry.ResolveAsync(SourceTreeId).Returns(SourceTreeId);
+        registry.ResolveAsync(TargetTreeId).Returns(TargetTreeId);
+        registry.GetShardMapAsync(TargetTreeId)
+            .Returns(Task.FromResult<ShardMap?>(ShardMap.CreateDefault(4, ShardCount)));
+        registry.GetShardMapAsync(SourceTreeId)
+            .Returns(Task.FromResult<ShardMap?>(ShardMap.CreateDefault(4, ShardCount)));
+
+        var sourceShard = Substitute.For<IShardRootGrain>();
+        // Throwing from GetLeftmostLeafIdAsync would normally burn a retry,
+        // but we seed ShardRetries at the cap so the grain must NOT call it.
+        sourceShard.GetLeftmostLeafIdAsync().Returns<Task<GrainId?>>(
+            _ => throw new InvalidOperationException("should not be called — shard is poisoned"));
+        grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/0").Returns(sourceShard);
+        SetupTargetShardMocks(grainFactory, TargetTreeId, ShardCount);
+
+        state.State.InProgress = true;
+        state.State.SourceTreeId = SourceTreeId;
+        state.State.SourcePhysicalShards = [0, 1];
+        state.State.NextShardIndex = 0;
+        state.State.ShardRetries = 2; // == MaxRetriesPerShard
+
+        await grain.ProcessNextShardAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.NextShardIndex, Is.EqualTo(1),
+                "Poisoned shard must be skipped and cursor advanced.");
+            Assert.That(state.State.ShardRetries, Is.EqualTo(0),
+                "Retry counter must reset for the next shard.");
+        });
+        await sourceShard.DidNotReceive().GetLeftmostLeafIdAsync();
+    }
+
+    [Test]
+    public async Task ProcessNextShardAsync_preincrements_retry_counter_before_attempt()
+    {
+        // FX-005 regression: the retry counter must be incremented BEFORE
+        // the merge attempt and persisted, so that a non-throwing crash
+        // (silo restart, host kill mid-merge) still burns budget on
+        // reactivation. Without pre-increment, a deterministic-crash
+        // shard would loop forever because ShardRetries stays at 0
+        // across restarts.
+        var (grain, state, reminderRegistry, grainFactory, _) = CreateGrain();
+        SetupKeepalive(reminderRegistry);
+
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        registry.ResolveAsync(SourceTreeId).Returns(SourceTreeId);
+        registry.ResolveAsync(TargetTreeId).Returns(TargetTreeId);
+        registry.GetShardMapAsync(TargetTreeId)
+            .Returns(Task.FromResult<ShardMap?>(ShardMap.CreateDefault(4, ShardCount)));
+        registry.GetShardMapAsync(SourceTreeId)
+            .Returns(Task.FromResult<ShardMap?>(ShardMap.CreateDefault(4, ShardCount)));
+
+        var sourceShard = Substitute.For<IShardRootGrain>();
+        sourceShard.GetLeftmostLeafIdAsync()
+            .Returns<Task<GrainId?>>(_ => throw new InvalidOperationException("transient"));
+        grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/0").Returns(sourceShard);
+        SetupTargetShardMocks(grainFactory, TargetTreeId, ShardCount);
+
+        state.State.InProgress = true;
+        state.State.SourceTreeId = SourceTreeId;
+        state.State.SourcePhysicalShards = [0, 1];
+        state.State.NextShardIndex = 0;
+        state.State.ShardRetries = 0;
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => grain.ProcessNextShardAsync());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ShardRetries, Is.EqualTo(1),
+                "Retry counter must be pre-incremented AND persisted before the attempt.");
+            Assert.That(state.State.NextShardIndex, Is.EqualTo(0),
+                "Cursor must not advance on a failing shard (until poison cap).");
+            Assert.That(state.WriteCount, Is.GreaterThanOrEqualTo(1),
+                "Pre-increment must be persisted so crash-recovery sees it.");
+        });
+    }
 }

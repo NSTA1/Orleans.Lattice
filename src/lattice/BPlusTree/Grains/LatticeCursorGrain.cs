@@ -40,7 +40,7 @@ internal sealed class LatticeCursorGrain(
     ILogger<LatticeCursorGrain> logger,
     [PersistentState("lattice-cursor", LatticeOptions.StorageProviderName)]
     IPersistentState<LatticeCursorState> state)
-    : TtlGrain(context, reminderRegistry, logger), ILatticeCursorGrain
+    : TtlGrain<LatticeCursorGrain>(context, reminderRegistry, logger), ILatticeCursorGrain
 {
     private const string IdleReminderName = "cursor-ttl";
 
@@ -63,7 +63,7 @@ internal sealed class LatticeCursorGrain(
     /// <inheritdoc />
     protected override async Task OnTtlExpiredAsync()
     {
-        logger.LogInformation(
+        Logger.LogInformation(
             "Cursor {CursorKey}: idle TTL expired; clearing persisted state.",
             CursorKey);
         await state.ClearStateAsync();
@@ -283,7 +283,7 @@ internal sealed class LatticeCursorGrain(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex,
+            Logger.LogWarning(ex,
                 "Cursor {CursorKey}: failed to clear state on close; marking closed in-memory only.",
                 CursorKey);
             state.State.Phase = LatticeCursorPhase.Closed;
