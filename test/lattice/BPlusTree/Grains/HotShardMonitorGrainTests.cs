@@ -9,7 +9,7 @@ using Orleans.Timers;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 [TestFixture]
-public class HotShardMonitorGrainTests
+public partial class HotShardMonitorGrainTests
 {
     private const string TreeId = "monitor-test-tree";
 

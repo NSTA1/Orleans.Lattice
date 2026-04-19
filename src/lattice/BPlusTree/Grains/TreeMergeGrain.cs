@@ -75,11 +75,28 @@ internal sealed class TreeMergeGrain(
     /// </summary>
     internal async Task InitiateMergeStateAsync(string sourceTreeId, int sourceShardCount)
     {
+        // Resolve both aliases and the source's current physical shard list
+        // from the registry so that mid-merge map mutations (e.g. adaptive
+        // splits on either side) can't mis-route subsequent ticks (audit bug #5).
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var sourceResolved = await registry.ResolveAsync(sourceTreeId);
+        var targetResolved = await registry.ResolveAsync(TargetTreeId);
+        var sourcePhysicalTreeId = string.IsNullOrEmpty(sourceResolved) ? sourceTreeId : sourceResolved;
+        var targetPhysicalTreeId = string.IsNullOrEmpty(targetResolved) ? TargetTreeId : targetResolved;
+
+        var sourceOptions = optionsMonitor.Get(sourceTreeId);
+        var sourceMap = await registry.GetShardMapAsync(sourceTreeId)
+            ?? ShardMap.CreateDefault(sourceOptions.VirtualShardCount, sourceOptions.ShardCount);
+        var sourcePhysicalShards = sourceMap.GetPhysicalShardIndices();
+
         state.State.InProgress = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
         state.State.SourceTreeId = sourceTreeId;
         state.State.SourceShardCount = sourceShardCount;
+        state.State.SourcePhysicalTreeId = sourcePhysicalTreeId;
+        state.State.TargetPhysicalTreeId = targetPhysicalTreeId;
+        state.State.SourcePhysicalShards = [.. sourcePhysicalShards];
         state.State.Complete = false;
         await state.WriteStateAsync();
     }
@@ -88,7 +105,9 @@ internal sealed class TreeMergeGrain(
     {
         if (!state.State.InProgress) return;
 
-        while (state.State.NextShardIndex < state.State.SourceShardCount)
+        await EnsureTopologyResolvedAsync();
+
+        while (state.State.NextShardIndex < state.State.SourcePhysicalShards.Length)
         {
             await ProcessCurrentShardAsync();
         }
@@ -159,7 +178,9 @@ internal sealed class TreeMergeGrain(
     /// </summary>
     internal async Task ProcessNextShardAsync()
     {
-        if (state.State.NextShardIndex >= state.State.SourceShardCount)
+        await EnsureTopologyResolvedAsync();
+
+        if (state.State.NextShardIndex >= state.State.SourcePhysicalShards.Length)
         {
             await CompleteMergeAsync();
             return;
@@ -170,7 +191,7 @@ internal sealed class TreeMergeGrain(
 
     private async Task ProcessCurrentShardAsync()
     {
-        var shardIndex = state.State.NextShardIndex;
+        var shardIndex = state.State.SourcePhysicalShards[state.State.NextShardIndex];
 
         try
         {
@@ -198,33 +219,54 @@ internal sealed class TreeMergeGrain(
     }
 
     /// <summary>
+    /// Ensures that the aliased physical tree ids and the source physical shard
+    /// list have been resolved for the current pass. Back-fills state persisted
+    /// by pre-fix versions or by tests that only set <see cref="TreeMergeState.SourceShardCount"/>.
+    /// </summary>
+    private async Task EnsureTopologyResolvedAsync()
+    {
+        var needsResolve =
+            state.State.SourcePhysicalShards is null ||
+            state.State.SourcePhysicalShards.Length == 0 ||
+            string.IsNullOrEmpty(state.State.SourcePhysicalTreeId) ||
+            string.IsNullOrEmpty(state.State.TargetPhysicalTreeId);
+
+        if (!needsResolve) return;
+
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var sourceTreeId = state.State.SourceTreeId
+            ?? throw new InvalidOperationException("Cannot resolve topology without a source tree id.");
+        if (string.IsNullOrEmpty(state.State.SourcePhysicalTreeId))
+        {
+            var resolved = await registry.ResolveAsync(sourceTreeId);
+            state.State.SourcePhysicalTreeId = string.IsNullOrEmpty(resolved) ? sourceTreeId : resolved;
+        }
+        if (string.IsNullOrEmpty(state.State.TargetPhysicalTreeId))
+        {
+            var resolved = await registry.ResolveAsync(TargetTreeId);
+            state.State.TargetPhysicalTreeId = string.IsNullOrEmpty(resolved) ? TargetTreeId : resolved;
+        }
+
+        var sourceOptions = optionsMonitor.Get(sourceTreeId);
+        var sourceMap = await registry.GetShardMapAsync(sourceTreeId)
+            ?? ShardMap.CreateDefault(sourceOptions.VirtualShardCount, sourceOptions.ShardCount);
+        state.State.SourcePhysicalShards = [.. sourceMap.GetPhysicalShardIndices()];
+    }
+
+    /// <summary>
     /// Drains all entries (including tombstones) from the source shard's leaf chain,
-    /// groups them by target shard, and merges into each target shard.
+    /// streaming each leaf's delta to the target shards before loading the next
+    /// leaf. Streaming (rather than buffering the entire shard) bounds peak memory
+    /// for shards holding millions of keys (audit bug #4).
     /// </summary>
     private async Task MergeShardAsync(int sourceShardIndex)
     {
         var sourceTreeId = state.State.SourceTreeId!;
-        var sourceShardKey = $"{sourceTreeId}/{sourceShardIndex}";
+        var sourcePhysicalTreeId = state.State.SourcePhysicalTreeId ?? sourceTreeId;
+        var targetPhysicalTreeId = state.State.TargetPhysicalTreeId ?? TargetTreeId;
+        var sourceShardKey = $"{sourcePhysicalTreeId}/{sourceShardIndex}";
         var sourceShard = grainFactory.GetGrain<IShardRootGrain>(sourceShardKey);
         var leafId = await sourceShard.GetLeftmostLeafIdAsync();
-
-        // Collect all raw entries from this source shard using delta extraction
-        // with an empty version vector (returns all entries since everything is
-        // newer than zero).
-        var emptyVector = new VersionVector();
-        var allEntries = new Dictionary<string, LwwValue<byte[]>>();
-        while (leafId is not null)
-        {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-            var delta = await leaf.GetDeltaSinceAsync(emptyVector);
-            foreach (var (key, lww) in delta.Entries)
-            {
-                allEntries[key] = lww;
-            }
-            leafId = await leaf.GetNextSiblingAsync();
-        }
-
-        if (allEntries.Count == 0) return;
 
         // Resolve the target tree's shard map (falling back to the default
         // identity map when the tree has no custom map persisted).
@@ -233,29 +275,42 @@ internal sealed class TreeMergeGrain(
         var targetShardMap = await registry.GetShardMapAsync(TargetTreeId)
             ?? ShardMap.CreateDefault(targetOptions.VirtualShardCount, targetOptions.ShardCount);
 
-        // Group entries by target physical shard.
-        var targetBuckets = new Dictionary<int, Dictionary<string, LwwValue<byte[]>>>();
-        foreach (var (key, lww) in allEntries)
+        // Walk the source leaf chain, flushing each leaf's delta through the
+        // target shard map before loading the next leaf.
+        var emptyVector = new VersionVector();
+        while (leafId is not null)
         {
-            var targetIdx = targetShardMap.Resolve(key);
-            if (!targetBuckets.TryGetValue(targetIdx, out var bucket))
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+            var delta = await leaf.GetDeltaSinceAsync(emptyVector);
+
+            if (delta.Entries.Count > 0)
             {
-                bucket = [];
-                targetBuckets[targetIdx] = bucket;
+                // Group this leaf's entries by target physical shard.
+                var targetBuckets = new Dictionary<int, Dictionary<string, LwwValue<byte[]>>>();
+                foreach (var (key, lww) in delta.Entries)
+                {
+                    var targetIdx = targetShardMap.Resolve(key);
+                    if (!targetBuckets.TryGetValue(targetIdx, out var bucket))
+                    {
+                        bucket = [];
+                        targetBuckets[targetIdx] = bucket;
+                    }
+                    bucket[key] = lww;
+                }
+
+                // Merge this leaf's buckets into each target shard in parallel.
+                var tasks = new List<Task>(targetBuckets.Count);
+                foreach (var (targetIdx, bucket) in targetBuckets)
+                {
+                    var targetShardKey = $"{targetPhysicalTreeId}/{targetIdx}";
+                    var targetShard = grainFactory.GetGrain<IShardRootGrain>(targetShardKey);
+                    tasks.Add(targetShard.MergeManyAsync(bucket));
+                }
+                await Task.WhenAll(tasks);
             }
-            bucket[key] = lww;
-        }
 
-        // Merge into each target shard.
-        var tasks = new List<Task>(targetBuckets.Count);
-        foreach (var (targetIdx, bucket) in targetBuckets)
-        {
-            var targetShardKey = $"{TargetTreeId}/{targetIdx}";
-            var targetShard = grainFactory.GetGrain<IShardRootGrain>(targetShardKey);
-            tasks.Add(targetShard.MergeManyAsync(bucket));
+            leafId = await leaf.GetNextSiblingAsync();
         }
-
-        await Task.WhenAll(tasks);
     }
 
     internal async Task CompleteMergeAsync()

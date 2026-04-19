@@ -34,4 +34,24 @@ internal sealed class TreeMergeState
 
     /// <summary>Whether the merge has fully completed.</summary>
     [Id(5)] public bool Complete { get; set; }
+
+    /// <summary>
+    /// The resolved physical tree id of the source, captured at merge start.
+    /// Persisted so mid-merge alias rebinds don't mis-route subsequent ticks.
+    /// </summary>
+    [Id(6)] public string? SourcePhysicalTreeId { get; set; }
+
+    /// <summary>
+    /// The resolved physical tree id of the target (this grain's tree),
+    /// captured at merge start.
+    /// </summary>
+    [Id(7)] public string? TargetPhysicalTreeId { get; set; }
+
+    /// <summary>
+    /// The list of distinct physical shard indices to drain from the source,
+    /// captured at merge start from the source tree's current shard map.
+    /// When empty, the grain resolves them on-demand (for forward compatibility
+    /// with state persisted before this field existed).
+    /// </summary>
+    [Id(8)] public int[] SourcePhysicalShards { get; set; } = [];
 }

@@ -56,10 +56,10 @@ internal sealed class TombstoneCompactionGrain(
     {
         if (IsCompactionDisabled) return;
 
-        var options = Options;
-        for (int i = 0; i < options.ShardCount; i++)
+        var (physicalTreeId, physicalShards) = await ResolveShardTopologyAsync();
+        foreach (var shardIndex in physicalShards)
         {
-            await CompactShardAsync(i, options.TombstoneGracePeriod);
+            await CompactShardAsync(physicalTreeId, shardIndex, Options.TombstoneGracePeriod);
         }
     }
 
@@ -112,10 +112,16 @@ internal sealed class TombstoneCompactionGrain(
     /// </summary>
     internal async Task BeginCompactionStateAsync(int startFromShard)
     {
-        // Persist in-progress state before starting.
+        // Resolve the current shard topology (alias + physical shard list) and
+        // persist it so the pass is resumable across silo restarts and immune
+        // to mid-pass shard-map mutations (audit bug #1).
+        var (physicalTreeId, physicalShards) = await ResolveShardTopologyAsync();
+
         state.State.InProgress = true;
         state.State.NextShardIndex = startFromShard;
         state.State.ShardRetries = 0;
+        state.State.PhysicalTreeId = physicalTreeId;
+        state.State.PhysicalShardIndices = [.. physicalShards];
         await state.WriteStateAsync();
 
         // Register a 1-minute keepalive so the grain is reactivated after a
@@ -139,25 +145,35 @@ internal sealed class TombstoneCompactionGrain(
     /// </summary>
     internal async Task ProcessNextShardAsync()
     {
-        var options = Options;
-        var shardCount = options.ShardCount;
+        var physicalShards = state.State.PhysicalShardIndices;
+        if (physicalShards is null || physicalShards.Length == 0)
+        {
+            // State pre-dates the fix — refresh from the registry.
+            var (physTreeId, shards) = await ResolveShardTopologyAsync();
+            state.State.PhysicalTreeId = physTreeId;
+            state.State.PhysicalShardIndices = [.. shards];
+            physicalShards = state.State.PhysicalShardIndices;
+        }
 
-        if (state.State.NextShardIndex >= shardCount)
+        if (state.State.NextShardIndex >= physicalShards.Length)
         {
             await CompleteCompactionAsync();
             return;
         }
 
+        var physicalTreeId = state.State.PhysicalTreeId ?? TreeId;
+        var shardIndex = physicalShards[state.State.NextShardIndex];
+
         try
         {
-            await CompactShardAsync(state.State.NextShardIndex, options.TombstoneGracePeriod);
+            await CompactShardAsync(physicalTreeId, shardIndex, Options.TombstoneGracePeriod);
             state.State.NextShardIndex++;
             state.State.ShardRetries = 0;
             await state.WriteStateAsync();
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Tombstone compaction failed for shard {ShardIndex} of tree {TreeId}", state.State.NextShardIndex, TreeId);
+            logger.LogWarning(ex, "Tombstone compaction failed for shard {ShardIndex} of tree {TreeId}", shardIndex, TreeId);
             if (state.State.ShardRetries < MaxRetriesPerShard)
             {
                 state.State.ShardRetries++;
@@ -181,6 +197,8 @@ internal sealed class TombstoneCompactionGrain(
         state.State.InProgress = false;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
+        state.State.PhysicalTreeId = null;
+        state.State.PhysicalShardIndices = [];
         await state.WriteStateAsync();
 
         await UnregisterKeepaliveAsync();
@@ -226,9 +244,9 @@ internal sealed class TombstoneCompactionGrain(
         this.DeactivateOnIdle();
     }
 
-    private async Task CompactShardAsync(int shardIndex, TimeSpan gracePeriod)
+    private async Task CompactShardAsync(string physicalTreeId, int shardIndex, TimeSpan gracePeriod)
     {
-        var shardKey = $"{TreeId}/{shardIndex}";
+        var shardKey = $"{physicalTreeId}/{shardIndex}";
         var shardRoot = grainFactory.GetGrain<IShardRootGrain>(shardKey);
 
         var leafId = await shardRoot.GetLeftmostLeafIdAsync();
@@ -239,6 +257,24 @@ internal sealed class TombstoneCompactionGrain(
             await leaf.CompactTombstonesAsync(gracePeriod);
             leafId = await leaf.GetNextSiblingAsync();
         }
+    }
+
+    /// <summary>
+    /// Resolves the physical tree id and the list of distinct physical shard
+    /// indices for the current tree from the registry. Falls back to the
+    /// logical tree id and a default identity <see cref="ShardMap"/> when
+    /// the registry has no record (e.g. an unregistered tree in a test
+    /// harness).
+    /// </summary>
+    private async Task<(string physicalTreeId, IReadOnlyList<int> physicalShards)> ResolveShardTopologyAsync()
+    {
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var resolved = await registry.ResolveAsync(TreeId);
+        var physicalTreeId = string.IsNullOrEmpty(resolved) ? TreeId : resolved;
+        var options = Options;
+        var map = await registry.GetShardMapAsync(TreeId)
+            ?? ShardMap.CreateDefault(options.VirtualShardCount, options.ShardCount);
+        return (physicalTreeId, map.GetPhysicalShardIndices());
     }
 
     private static TimeSpan ClampPeriod(TimeSpan gracePeriod) =>
