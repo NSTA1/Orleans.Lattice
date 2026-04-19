@@ -8,6 +8,7 @@ using Orleans.Lattice.Primitives;
 /// based on a stable hash of the key.
 /// Key format: <c>{treeId}</c> — the tree this grain manages.
 /// </summary>
+[Alias(TypeAliases.ILattice)]
 public interface ILattice : IGrainWithStringKey
 {
     /// <summary>Gets the value associated with <paramref name="key"/>, or <c>null</c> if not found.</summary>

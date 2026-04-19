@@ -15,6 +15,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// </para>
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
+[Alias(TypeAliases.ITreeResizeGrain)]
 public interface ITreeResizeGrain : IGrainWithStringKey
 {
     /// <summary>

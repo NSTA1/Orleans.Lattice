@@ -22,6 +22,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// </para>
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
+[Alias(TypeAliases.ILatticeCursorGrain)]
 public interface ILatticeCursorGrain : IGrainWithStringKey
 {
     /// <summary>

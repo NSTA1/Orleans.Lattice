@@ -1,5 +1,6 @@
 using System.Reflection;
 using Orleans.Lattice;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.Tests;
 
@@ -113,5 +114,66 @@ public class TypeAliasesTests
             .GetFields(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)
             .Where(f => f.IsLiteral && f.FieldType == typeof(string))
             .ToDictionary(f => f.Name, f => (string)f.GetValue(null)!, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Every grain interface declared in the production assembly must carry an
+    /// <c>[Alias(TypeAliases.X)]</c> attribute so the Orleans manifest has a
+    /// stable, short wire-format identity independent of CLR type names.
+    /// </summary>
+    [Test]
+    public void All_grain_interfaces_have_alias_attribute()
+    {
+        var grainInterfaces = GetGrainInterfaces();
+
+        Assert.That(grainInterfaces, Is.Not.Empty,
+            "Expected at least one grain interface in the production assembly.");
+
+        var missing = grainInterfaces
+            .Where(t => t.GetCustomAttribute<AliasAttribute>(inherit: false) is null)
+            .Select(t => t.FullName ?? t.Name)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.That(missing, Is.Empty,
+            $"Grain interfaces missing [Alias(TypeAliases.X)] attribute: {string.Join(", ", missing)}");
+    }
+
+    /// <summary>
+    /// Every grain interface's <c>[Alias(...)]</c> value must reference a
+    /// constant declared on <see cref="TypeAliases"/> (no hard-coded strings).
+    /// </summary>
+    [Test]
+    public void All_grain_interface_aliases_reference_type_aliases_constants()
+    {
+        var declared = new HashSet<string>(GetAliasConstants().Values, StringComparer.Ordinal);
+
+        var offenders = GetGrainInterfaces()
+            .Select(t => (Type: t, Attr: t.GetCustomAttribute<AliasAttribute>(inherit: false)))
+            .Where(x => x.Attr is not null && !declared.Contains(x.Attr!.Alias))
+            .Select(x => $"{x.Type.FullName}=\"{x.Attr!.Alias}\"")
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.That(offenders, Is.Empty,
+            $"Grain interfaces using hard-coded alias values (not declared in TypeAliases): {string.Join(", ", offenders)}");
+    }
+
+    private static List<Type> GetGrainInterfaces()
+    {
+        var addressable = typeof(IAddressable);
+        return typeof(TypeAliases).Assembly
+            .GetTypes()
+            .Where(t => t.IsInterface
+                && addressable.IsAssignableFrom(t)
+                && t != addressable
+                && t != typeof(IGrain)
+                && t != typeof(IGrainWithStringKey)
+                && t != typeof(IGrainWithGuidKey)
+                && t != typeof(IGrainWithIntegerKey)
+                && t != typeof(IGrainWithGuidCompoundKey)
+                && t != typeof(IGrainWithIntegerCompoundKey)
+                && t != typeof(IGrainObserver))
+            .ToList();
     }
 }
