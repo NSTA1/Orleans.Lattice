@@ -12,7 +12,7 @@ using Orleans.Lattice.Primitives;
 public interface ILattice : IGrainWithStringKey
 {
     /// <summary>Gets the value associated with <paramref name="key"/>, or <c>null</c> if not found.</summary>
-    Task<byte[]?> GetAsync(string key);
+    Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets the value and its <see cref="HybridLogicalClock"/> version for
@@ -21,19 +21,19 @@ public interface ILattice : IGrainWithStringKey
     /// or tombstoned. Use the returned version with <see cref="SetIfVersionAsync"/>
     /// for optimistic concurrency.
     /// </summary>
-    Task<VersionedValue> GetWithVersionAsync(string key);
+    Task<VersionedValue> GetWithVersionAsync(string key, CancellationToken cancellationToken = default);
 
     /// <summary>Returns <c>true</c> if <paramref name="key"/> exists and is not tombstoned.</summary>
-    Task<bool> ExistsAsync(string key);
+    Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the values for the given <paramref name="keys"/>, fanning out to shards in parallel.
     /// Keys that do not exist or are tombstoned are omitted from the result.
     /// </summary>
-    Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys);
+    Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default);
 
     /// <summary>Inserts or updates the value for <paramref name="key"/>.</summary>
-    Task SetAsync(string key, byte[] value);
+    Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the entry's
@@ -43,14 +43,14 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="GetWithVersionAsync"/> to obtain the current version for the first attempt.
     /// For a new key, pass <see cref="HybridLogicalClock.Zero"/> as the expected version.
     /// </summary>
-    Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion);
+    Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
     /// already exist (or is tombstoned). Returns the existing value when the key is
     /// already live, or <c>null</c> when the value was newly written.
     /// </summary>
-    Task<byte[]?> GetOrSetAsync(string key, byte[] value);
+    Task<byte[]?> GetOrSetAsync(string key, byte[] value, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Inserts or updates multiple key-value pairs, fanning out to shards in parallel.
@@ -60,7 +60,7 @@ public interface ILattice : IGrainWithStringKey
     /// semantics are required.
     /// </para>
     /// </summary>
-    Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
+    Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Atomically writes <paramref name="entries"/> as a saga: reads each key's
@@ -86,30 +86,31 @@ public interface ILattice : IGrainWithStringKey
     /// </para>
     /// </summary>
     /// <param name="entries">The key-value pairs to write atomically.</param>
-    Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries);
+    /// <param name="cancellationToken">Cancels orchestration before the saga is submitted. Once the saga has accepted the batch it drives itself to a terminal state via reminders and is not cooperatively cancelled.</param>
+    Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
 
     /// <summary>Deletes the value for <paramref name="key"/>. Returns <c>true</c> if it existed.</summary>
-    Task<bool> DeleteAsync(string key);
+    Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Deletes all keys within the lexicographic range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>)
     /// by walking the leaf chain and tombstoning matching entries in bulk.
     /// Returns the total number of keys that were tombstoned across all shards.
     /// </summary>
-    Task<int> DeleteRangeAsync(string startInclusive, string endExclusive);
+    Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the total number of live (non-tombstoned) keys across all shards.
     /// Fans out to every shard in parallel and sums the per-shard counts.
     /// </summary>
-    Task<int> CountAsync();
+    Task<int> CountAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the number of live (non-tombstoned) keys in each shard as an ordered list.
     /// The list index corresponds to the shard index (0-based).
     /// Useful for diagnostics and load-balancing analysis.
     /// </summary>
-    Task<IReadOnlyList<int>> CountPerShardAsync();
+    Task<IReadOnlyList<int>> CountPerShardAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns all live keys in the tree as an ordered async stream.
@@ -119,14 +120,14 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="LatticeOptions.PrefetchKeysScan"/> is enabled), the next page from
     /// each shard is fetched in parallel while the current page is being consumed.
     /// </summary>
-    IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null);
+    IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns all live key-value entries in the tree as an ordered async stream.
     /// Entries are returned in lexicographic key order (or reverse if <paramref name="reverse"/> is <c>true</c>).
     /// Optionally filters to keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
     /// </summary>
-    IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false);
+    IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Bulk-loads key-value pairs into an empty tree, building leaves and
@@ -135,7 +136,7 @@ public interface ILattice : IGrainWithStringKey
     /// Entries do not need to be pre-sorted; the implementation sorts them internally.
     /// Throws <see cref="InvalidOperationException"/> if any shard already contains data.
     /// </summary>
-    Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries);
+    Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Soft-deletes the entire tree. All shards are immediately marked as deleted,
@@ -144,7 +145,7 @@ public interface ILattice : IGrainWithStringKey
     /// configured <see cref="LatticeOptions.SoftDeleteDuration"/> has elapsed.
     /// Idempotent — calling on an already-deleted tree is a no-op.
     /// </summary>
-    Task DeleteTreeAsync();
+    Task DeleteTreeAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Recovers a soft-deleted tree, restoring it to normal operation.
@@ -152,7 +153,7 @@ public interface ILattice : IGrainWithStringKey
     /// Throws <see cref="InvalidOperationException"/> if the tree has not been
     /// deleted, or if the purge has already completed (data is gone).
     /// </summary>
-    Task RecoverTreeAsync();
+    Task RecoverTreeAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Immediately purges a soft-deleted tree without waiting for the
@@ -161,7 +162,7 @@ public interface ILattice : IGrainWithStringKey
     /// Throws <see cref="InvalidOperationException"/> if the tree has not been
     /// deleted, or if the purge has already completed.
     /// </summary>
-    Task PurgeTreeAsync();
+    Task PurgeTreeAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Resizes the tree by creating an offline snapshot with new
@@ -180,7 +181,8 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     /// <param name="newMaxLeafKeys">The new maximum number of keys per leaf node. Must be greater than 1.</param>
     /// <param name="newMaxInternalChildren">The new maximum number of children per internal node. Must be greater than 2.</param>
-    Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren);
+    /// <param name="cancellationToken">Cancels orchestration before the resize coordinator is submitted. Once the coordinator accepts the request it runs to completion via reminders.</param>
+    Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Undoes the most recent resize by recovering the old physical tree,
@@ -193,7 +195,7 @@ public interface ILattice : IGrainWithStringKey
     /// Thrown if no completed resize exists to undo, or if the old tree has
     /// already been purged.
     /// </exception>
-    Task UndoResizeAsync();
+    Task UndoResizeAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Creates a snapshot of this tree into a new tree with the given
@@ -214,13 +216,14 @@ public interface ILattice : IGrainWithStringKey
     /// <param name="mode">Whether to lock the source tree during the snapshot.</param>
     /// <param name="maxLeafKeys">Optional leaf sizing for the destination. If <c>null</c>, uses the source tree's configured value.</param>
     /// <param name="maxInternalChildren">Optional internal node sizing for the destination. If <c>null</c>, uses the source tree's configured value.</param>
-    Task SnapshotAsync(string destinationTreeId, SnapshotMode mode, int? maxLeafKeys = null, int? maxInternalChildren = null);
+    /// <param name="cancellationToken">Cancels orchestration before the snapshot coordinator is submitted. Once the coordinator accepts the request it runs to completion via reminders.</param>
+    Task SnapshotAsync(string destinationTreeId, SnapshotMode mode, int? maxLeafKeys = null, int? maxInternalChildren = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns <c>true</c> if this tree is registered in the internal tree registry.
     /// A tree is registered on its first write and unregistered when its purge completes.
     /// </summary>
-    Task<bool> TreeExistsAsync();
+    Task<bool> TreeExistsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the IDs of all registered trees in sorted order.
@@ -228,7 +231,7 @@ public interface ILattice : IGrainWithStringKey
     /// Physical trees created by <see cref="ResizeAsync"/> and
     /// <see cref="SnapshotAsync"/> are included.
     /// </summary>
-    Task<IReadOnlyList<string>> GetAllTreeIdsAsync();
+    Task<IReadOnlyList<string>> GetAllTreeIdsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Merges all entries from <paramref name="sourceTreeId"/> into this tree
@@ -241,25 +244,26 @@ public interface ILattice : IGrainWithStringKey
     /// </para>
     /// </summary>
     /// <param name="sourceTreeId">The tree to merge from. Must exist and differ from this tree.</param>
-    Task MergeAsync(string sourceTreeId);
+    /// <param name="cancellationToken">Cancels orchestration before the merge coordinator is submitted. Once the coordinator accepts the request it runs to completion via reminders.</param>
+    Task MergeAsync(string sourceTreeId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns <c>true</c> if no merge operation is in progress for this tree —
     /// either the most recent merge has completed or no merge has ever been initiated.
     /// </summary>
-    Task<bool> IsMergeCompleteAsync();
+    Task<bool> IsMergeCompleteAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns <c>true</c> if no snapshot operation is in progress for this tree —
     /// either the most recent snapshot has completed or no snapshot has ever been initiated.
     /// </summary>
-    Task<bool> IsSnapshotCompleteAsync();
+    Task<bool> IsSnapshotCompleteAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns <c>true</c> if no resize operation is in progress for this tree —
     /// either the most recent resize has completed or no resize has ever been initiated.
     /// </summary>
-    Task<bool> IsResizeCompleteAsync();
+    Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the effective routing context for this tree — the resolved
@@ -269,7 +273,7 @@ public interface ILattice : IGrainWithStringKey
     /// without re-implementing alias resolution and shard-map fetching.
     /// </summary>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
-    Task<RoutingInfo> GetRoutingAsync();
+    Task<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default);
 
     // ── Stateful cursors (F-033) ────────────────────────────────
 
@@ -286,14 +290,14 @@ public interface ILattice : IGrainWithStringKey
     /// <param name="endExclusive">Exclusive upper bound, or <c>null</c> for the end of the tree.</param>
     /// <param name="reverse">When <c>true</c>, the cursor walks keys in descending lexicographic order.</param>
     /// <returns>An opaque cursor handle scoped to this tree.</returns>
-    Task<string> OpenKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false);
+    Task<string> OpenKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Opens a stateful entry-enumeration cursor. Semantically identical to
     /// <see cref="OpenKeyCursorAsync"/> but yields
     /// <see cref="KeyValuePair{TKey,TValue}"/> via <see cref="NextEntriesAsync"/>.
     /// </summary>
-    Task<string> OpenEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false);
+    Task<string> OpenEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Opens a stateful, resumable range-delete cursor over
@@ -303,7 +307,7 @@ public interface ILattice : IGrainWithStringKey
     /// resumed across silo failovers. The unbounded
     /// <see cref="DeleteRangeAsync"/> remains available for short ranges.
     /// </summary>
-    Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive);
+    Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the next page of up to <paramref name="pageSize"/> keys from
@@ -313,14 +317,14 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="InvalidOperationException"/> if the cursor was not opened,
     /// has been closed, or was opened for a different kind of scan.
     /// </summary>
-    Task<LatticeCursorKeysPage> NextKeysAsync(string cursorId, int pageSize);
+    Task<LatticeCursorKeysPage> NextKeysAsync(string cursorId, int pageSize, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the next page of up to <paramref name="pageSize"/> entries
     /// from the cursor identified by <paramref name="cursorId"/>. See
     /// <see cref="NextKeysAsync"/> for exhaustion and error semantics.
     /// </summary>
-    Task<LatticeCursorEntriesPage> NextEntriesAsync(string cursorId, int pageSize);
+    Task<LatticeCursorEntriesPage> NextEntriesAsync(string cursorId, int pageSize, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Advances a delete-range cursor by up to <paramref name="maxToDelete"/>
@@ -328,7 +332,7 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="LatticeCursorDeleteProgress.IsComplete"/> becomes <c>true</c> —
     /// subsequent calls are idempotent no-ops.
     /// </summary>
-    Task<LatticeCursorDeleteProgress> DeleteRangeStepAsync(string cursorId, int maxToDelete);
+    Task<LatticeCursorDeleteProgress> DeleteRangeStepAsync(string cursorId, int maxToDelete, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Closes the cursor identified by <paramref name="cursorId"/>, clears
@@ -336,5 +340,5 @@ public interface ILattice : IGrainWithStringKey
     /// Idempotent — calling on an unknown or already-closed cursor is a
     /// no-op.
     /// </summary>
-    Task CloseCursorAsync(string cursorId);
+    Task CloseCursorAsync(string cursorId, CancellationToken cancellationToken = default);
 }

@@ -30,17 +30,20 @@ public static class LatticeExtensions
     /// <param name="sortedEntries">Entries in ascending key order.</param>
     /// <param name="grainFactory">The grain factory (needed to address shard grains directly).</param>
     /// <param name="chunkSize">Max entries per shard before flushing (default 10 000).</param>
+    /// <param name="cancellationToken">Cancellation token checked between entry enqueues and between flushes.</param>
     public static async Task BulkLoadAsync(
         this ILattice lattice,
         IAsyncEnumerable<KeyValuePair<string, byte[]>> sortedEntries,
         IGrainFactory grainFactory,
-        int chunkSize = 10_000)
+        int chunkSize = 10_000,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(lattice);
         ArgumentNullException.ThrowIfNull(sortedEntries);
         ArgumentNullException.ThrowIfNull(grainFactory);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        var routing = await lattice.GetRoutingAsync();
+        var routing = await lattice.GetRoutingAsync(cancellationToken);
         var physicalTreeId = routing.PhysicalTreeId;
         var shardMap = routing.Map;
         var physicalShards = shardMap.GetPhysicalShardIndices();
@@ -64,8 +67,9 @@ public static class LatticeExtensions
             shards[idx] = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{idx}");
         }
 
-        await foreach (var entry in sortedEntries)
+        await foreach (var entry in sortedEntries.WithCancellation(cancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var shardIdx = shardMap.Resolve(entry.Key);
             var buffer = buffers[shardIdx];
             buffer.Add(entry);
@@ -114,17 +118,20 @@ public static class LatticeExtensions
     /// <param name="grainFactory">The grain factory (needed to address shard grains directly).</param>
     /// <param name="shardCount">Number of shards (must match <see cref="LatticeOptions.ShardCount"/>).</param>
     /// <param name="chunkSize">Max entries per shard before flushing (default 10 000).</param>
+    /// <param name="cancellationToken">Cancellation token checked between entry enqueues and between flushes.</param>
     [Obsolete("Use the overload without 'shardCount' (F-030); this one bypasses the per-tree ShardMap and will mis-route entries on trees with non-default maps.")]
     public static async Task BulkLoadAsync(
         this ILattice lattice,
         IAsyncEnumerable<KeyValuePair<string, byte[]>> sortedEntries,
         IGrainFactory grainFactory,
         int shardCount,
-        int chunkSize = 10_000)
+        int chunkSize = 10_000,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(lattice);
         ArgumentNullException.ThrowIfNull(sortedEntries);
         ArgumentNullException.ThrowIfNull(grainFactory);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var treeId = lattice.GetPrimaryKeyString();
 
@@ -139,8 +146,9 @@ public static class LatticeExtensions
             inFlight[i] = Task.CompletedTask;
         }
 
-        await foreach (var entry in sortedEntries)
+        await foreach (var entry in sortedEntries.WithCancellation(cancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var shardIdx = LatticeSharding.GetShardIndex(entry.Key, shardCount);
             buffers[shardIdx].Add(entry);
 
