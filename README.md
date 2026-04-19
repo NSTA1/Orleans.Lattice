@@ -56,6 +56,7 @@ without distributed locks or coordination protocols.
 | Property | How |
 |---|---|
 | **Adaptive shard splitting** | Hot shards split online via shadow-write + drain + swap + reject phases. Fully transparent: no downtime, no dropped writes, no coordination protocol. An autonomic monitor detects hot shards and triggers splits; shard splitting is not part of the public API and cannot be invoked externally. |
+| **Atomic writes** | `SetManyAtomicAsync` provides all-or-nothing guarantees across multiple keys. If a write fails, the system automatically compensates using last-writer-wins with hybrid logical clocks. |
 | **Bulk loading** | One-shot bottom-up build or streaming `IAsyncEnumerable` ingestion with per-shard parallel flushing. Both modes are idempotent and retryable. |
 | **Conflict-free** | All state merges are monotonic. Concurrent writes to the same key resolve via last-writer-wins with hybrid logical clocks. |
 | **Crash-safe splits** | Every node split uses a two-phase pattern with persisted intent. Interrupted splits resume automatically on the next access. |
@@ -81,6 +82,7 @@ Detailed design documentation is split by concept:
 |---|---|
 | [API Reference](docs/api.md) | Public `ILattice` interface, batch operations, options, serializable types |
 | [Architecture](docs/architecture.md) | Grain layers, sharding, root promotion, bounded retry, grain mapping, capacity |
+| [Atomic Writes](docs/atomic-writes.md) | `SetManyAtomicAsync` all-or-nothing guarantees, saga coordinator, compensation via LWW, crash recovery |
 | [Benchmarks](docs/benchmarks.md) | Prerequisites, running benchmarks, interpreting results |
 | [Bulk Loading](docs/bulk-loading.md) | One-shot build, streaming ingestion, two-phase graft, recovery guarantees |
 | [Chaos Tests](docs/chaos-tests.md) | Happy-path and fault-injection chaos integration tests, invariants proven, recovery surfaces exercised |

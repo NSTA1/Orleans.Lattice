@@ -35,6 +35,7 @@ internal sealed class LatticeCallContextFilter(IServiceProvider serviceProvider)
         typeof(ITreeMergeGrain),
         typeof(ITreeShardSplitGrain),
         typeof(IHotShardMonitorGrain),
+        typeof(IAtomicWriteGrain),
     ];
 
     private static readonly ConcurrentDictionary<Type, bool> LatticeTypeCache = new();

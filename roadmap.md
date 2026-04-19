@@ -31,6 +31,7 @@ Potential improvements and new features.
 ### Reliability
 
 - [x] **F-020 — Merge trees (`MergeAsync`)**: Merge all entries from a source tree into the current tree using LWW semantics. Useful for combining snapshots, migrating data, or rejoining forked datasets.
+- [x] **F-031 — Atomic multi-key writes (saga)** *(covers audit #6 — `SetMany` atomicity)*: `ILattice.SetManyAtomicAsync` routes a batch of key-value pairs through a dedicated `IAtomicWriteGrain` saga coordinator (keyed per `{treeId}/{operationId}`). The saga reads pre-saga values, applies writes sequentially, and — on any failure — compensates already-committed entries by rewriting their pre-saga values (or tombstoning previously-absent keys) with fresh HLC ticks, relying on LWW to win over the partial write. A keepalive reminder registered at saga start drives reminder-based crash recovery: on reactivation the grain consults its persisted phase (`Prepare` / `Execute` / `Compensate` / `Completed`) and resumes. Duplicate keys and null values fail fast with `ArgumentException`; post-compensation failures surface as `InvalidOperationException` with the original failure's message preserved. `SetManyAsync` (the non-atomic, parallel fan-out path) is retained and now documents its non-atomicity. Readers may observe a partial-visibility window between the first and last committed write — inherent to the saga pattern and documented in `docs/api.md`.
 
 ---
 
@@ -40,16 +41,7 @@ Items are ordered by estimated impact. Dependencies on completed features are no
 
 Audit follow-up fixes (`FX-###`) are tracked in a [dedicated section below](#-audit-follow-up-fixes) and take operational precedence over feature work when they touch data-loss or liveness risks.
 
-### 1 · F-031 — Atomic multi-key writes (saga) *(covers audit #6 — `SetMany` atomicity)*
-**Fix / feature — high impact**
-
-Write two or more keys atomically using a saga coordination grain (`IAtomicWriteGrain`) that accepts a batch of key-value pairs and applies them sequentially to their respective leaf grains. Each step of the saga persists its progress so that a reminder-driven crash-recovery path can resume or compensate after a silo failure. Compensation works by re-writing the pre-saga value of each already-written key with a fresh HLC tick, relying on LWW semantics to win over the partial write — which requires reading current values before the saga begins. Readers may observe a brief window of partial visibility between the first and last key write; this is inherent to the saga pattern and must be documented. Orleans `ITransactionalState<T>` is explicitly out of scope — it requires a separate storage mechanism incompatible with the current `IPersistentState<T>` leaf grain model. A design spike is needed to settle the compensation strategy and partial-visibility contract before implementation begins.
-
-**Audit coverage:** the current `SetMany` surface applies writes non-transactionally, so a partial failure leaves the batch half-applied with no compensating rollback or idempotency token. F-031 is the long-form fix.
-
----
-
-### 2 · F-033 — Stateful cursor / iterator grain *(covers audit #10 `DeleteRange` pagination and #15 scan fallback; completes scan liveness story started by F-032)*
+### 1 · F-033 — Stateful cursor / iterator grain *(covers audit #10 `DeleteRange` pagination and #15 scan fallback; completes scan liveness story started by F-032)*
 **Fix / reliability — high impact**
 
 Pagination today is stateless: the client holds a per-shard continuation token and scans are bounded by `LatticeOptions.MaxScanRetries` (throwing `InvalidOperationException` on exhaustion — see [`docs/api.md#scan-reliability`](docs/api.md#scan-reliability)). For multi-minute export pipelines, scans that must survive silo failover and client restarts, and for unbounded `DeleteRangeAsync` traversals that currently have no continuation token or server-side budget, an `ILatticeCursorGrain` that checkpoints scan progress server-side would:
@@ -63,7 +55,7 @@ Completes the scan-liveness story that F-032 began (F-032 delivers ordering unde
 
 ---
 
-### 3 · F-029 — External metrics / telemetry export *(prereq F-013 ✓ — unblocked)*
+### 2 · F-029 — External metrics / telemetry export *(prereq F-013 ✓ — unblocked)*
 **Observability / high impact**
 
 Publish `System.Diagnostics.Metrics` counters and histograms for OpenTelemetry-compatible dashboards. Instruments fall into two tiers:
@@ -75,21 +67,21 @@ The leaf-level instruments cannot be inferred from F-013's shard-root counters �
 
 ---
 
-### 4 · F-016
+### 3 · F-016
 **Feature / high impact**
 
 Accept an optional `TimeSpan ttl` on `SetAsync`. Expired keys are treated as tombstoned during reads and cleaned up by existing compaction infrastructure. Requires an `ExpiresAtTicks` field on `LwwValue`. No dependencies; highly requested pattern for caching use cases.
 
 ---
 
-### 5 · F-019 — Online (non-blocking) resize
+### 4 · F-019 — Online (non-blocking) resize
 **Reliability / high impact**
 
 During a resize operation, redistribute shard data incrementally in the background while the tree continues to serve reads and writes, with only a brief lock for the final shard map swap. Mirrors the `SnapshotMode.Online` approach: new physical shards are seeded from the existing layout slot-by-slot, and live traffic routes through the old map until the cutover. The shard map indirection from F-028 makes the final cutover a single atomic map swap rather than a coordinated shutdown.
 
 ---
 
-### 6 · F-025
+### 5 · F-025
 **Feature / high impact**
 
 Incremental, ongoing merge from one or more source trees using `VersionVector` to track a per-source high-water mark, so each cycle transfers only entries newer than the last. Requires a delta-aware leaf scan (`GetEntriesNewerThanAsync(HybridLogicalClock threshold)`) and a merge-state tracking grain to persist the vector per source tree. Should replace the current full-shard drain in `TreeMergeGrain.MergeShardAsync` with a chunked or cursor-based leaf-chain iteration.
@@ -98,14 +90,14 @@ Incremental, ongoing merge from one or more source trees using `VersionVector` t
 
 ---
 
-### 7 · F-024
+### 6 · F-024
 **Performance / medium-high impact**
 
 Extend the F-009 double-buffering strategy to `EntriesAsync`. Because entries carry `byte[]` values, pre-fetched pages increase in-flight memory proportionally to `shardCount × pageSize × avgValueSize`. Gate behind a dedicated `PrefetchEntriesScan` option or an optional `prefetch` parameter so callers opt in only when the memory trade-off is acceptable.
 
 ---
 
-### 8 · F-014
+### 7 · F-014
 **Observability / medium impact**
 
 Return per-shard health information — depth, live key count, tombstone ratio, pending splits/promotions — via an `ILatticeAdmin` interface or a method on `ILattice`.
@@ -114,28 +106,28 @@ Return per-shard health information — depth, live key count, tombstone ratio, 
 
 ---
 
-### 9 · F-012
+### 8 · F-012
 **Reliability / medium impact**
 
 Optionally pre-warm `LeafCacheGrain` activations for recently-accessed leaves after a silo restart to reduce cold-start read-latency spikes. No dependencies.
 
 ---
 
-### 10 · F-015
+### 9 · F-015
 **Feature / medium impact**
 
 Publish tree events (key written, tree deleted, split occurred, compaction completed) via an `ILatticeObserver` interface or Orleans Streams integration for event-driven architectures.
 
 ---
 
-### 11 · F-018
+### 10 · F-018
 **Feature / lower impact (complex)**
 
 Associate tags with keys and query by tag. Implementable as a secondary Lattice tree mapping `tag → Set<key>`, maintained transactionally alongside the primary write. High complexity; deferred until core feature set is stable.
 
 ---
 
-### 12 · Documentation & Developer Experience
+### 11 · Documentation & Developer Experience
 
 - [ ] **F-021 — Migration guide**: Document how to migrate data from external stores (Redis, SQL, Cosmos DB) into Lattice using the streaming bulk-load API, including key-design and value-serialization best practices.
 - [ ] **F-023 — Sample applications (`samples/`)**: End-to-end examples (e.g. ASP.NET Core session store, leaderboard, distributed configuration service) showing real integration patterns beyond the Quick Start snippet.
@@ -144,7 +136,7 @@ Associate tags with keys and query by tag. Implementable as a secondary Lattice 
 
 ## 🛠 Audit Follow-up Fixes
 
-Reliability and hygiene fixes surfaced by the repository audit. Items tagged **Fix** here are distinct from feature work (`F-###`) — they address latent bugs or robustness gaps rather than adding new capability. The highest-severity audit items (data-loss / liveness) are already promoted into the Outstanding list above as F-031 and F-033.
+Reliability and hygiene fixes surfaced by the repository audit. Items tagged **Fix** here are distinct from feature work (`F-###`) — they address latent bugs or robustness gaps rather than adding new capability. The highest-severity audit items (data-loss / liveness) are already addressed: F-031 (atomic multi-key writes saga) is complete, and F-033 (stateful cursor) is the remaining high-priority item in the Outstanding list above.
 
 PR #47 landed the first batch of audit fixes (HLC merge clock advancement, compaction short-circuit, alias / physical-shard resolution in `TombstoneCompactionGrain` and `TreeMergeGrain`, streaming per-leaf merge, and `HotShardMonitor` cooldown pruning) with 12 regression tests; the items below are what remains.
 
@@ -187,7 +179,7 @@ Several `docs/*.md` files reference option names and method shapes that have sin
 The following areas are not currently on the roadmap but represent meaningful opportunities, particularly as the library moves toward production adoption.
 
 ### G-001 — Leaf-level write batching (investigate before committing)
-Sharding and adaptive splitting (F-011) already distribute write load across leaf grains, progressively undermining the need for in-grain write coalescing. The changes required for safe batching — `[Reentrant]` leaf grains, a `FlushAsync` drain contract for split/merge/snapshot coordinators, and an explicit `WriteMode` API to surface the weakened durability guarantee — touch almost every major system component. The failure modes (silent data loss on crash, stale state seeded into a new shard post-split) are hard to detect in tests and severe in production. Before pursuing, profile under realistic write-skew conditions with adaptive splitting active and confirm that leaf-level hotness persists after splits have stabilised. If poor key entropy is the root cause, key-design guidance is a lower-risk remedy. Only implement if profiling proves the leaf grain itself is the bottleneck.
+Sharding and adaptive splitting (F-011) already distribute write load across leaf grains, progressively undermining the need for in-grain write coalescing. The changes required for safe batching — `[Reentrant]` leaf grains, a `FlushAsync` drain contract for split/merge/snapshot coordinators, and an explicit `WriteMode` API to surface the weakened durability guarantee — touch almost every major system component. The failure modes (silent data loss on crash, stale state seeded into a new shard post-split) are hard to detect in tests and severe in production. Before pursuing, profile under realistic write-skew conditions with adaptive splitting active and confirm that leaf-level hotness persists after splits have stabilized. If poor key entropy is the root cause, key-design guidance is a lower-risk remedy. Only implement if profiling proves the leaf grain itself is the bottleneck.
 
 ### G-002 — Compaction policy controls
 F-016 (TTL) assumes that "existing compaction infrastructure" handles expired-key reaping, but there is no roadmap item covering compaction itself as a configurable feature. Operators have no way to tune tombstone reaping thresholds, set compaction schedules, or observe space amplification (beyond the tombstone ratio in F-014). Compaction policy controls — minimum tombstone ratio before reaping, maximum leaf size before forced compaction, and a compaction telemetry hook for F-029 — warrant a dedicated item.
@@ -233,6 +225,6 @@ Each `ShardRootGrain` is currently placed by Orleans' default random placement d
 | F-019 (Online resize) | F-028 (Shard map indirection) | ✅ Prereq complete — F-019 unblocked |
 | F-024 (Entry pre-fetch) | F-009 (Key pre-fetch) | ✅ Prereq complete — F-024 unblocked |
 | F-022 (Troubleshooting guide) | F-014 (Tree diagnostics) | 🔲 Guide should follow diagnostics implementation |
-| F-031 (Atomic multi-key writes) | F-017 (CAS) | 🔲 Single-key CAS is the building block; F-031 extends atomicity across keys via saga |
+| F-031 (Atomic multi-key writes) | F-017 (CAS) | ✅ Both complete |
 | F-032 (Scan ordering under topology change) | F-011 (Adaptive shard splitting) | ✅ Prereq complete — F-032 complete |
 | F-033 (Stateful cursor grain) | F-032 (Scan ordering under topology change) | ✅ Prereq complete — F-033 completes the scan-liveness story |

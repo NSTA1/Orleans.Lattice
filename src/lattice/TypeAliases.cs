@@ -51,4 +51,9 @@ internal static class TypeAliases
     internal const string ShardSplitInProgress = "ol.sip";
     internal const string ShardSplitPhase = "ol.sph";
     internal const string StaleShardRouting = "ol.ssr";
+
+    // Atomic multi-key writes (F-031)
+    internal const string AtomicWriteState = "ol.aws";
+    internal const string AtomicWritePhase = "ol.awp";
+    internal const string AtomicPreValue = "ol.apv";
 }
