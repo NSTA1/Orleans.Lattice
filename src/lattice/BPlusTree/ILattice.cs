@@ -269,4 +269,71 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     Task<RoutingInfo> GetRoutingAsync();
+
+    // ── Stateful cursors (F-033) ────────────────────────────────
+
+    /// <summary>
+    /// Opens a stateful key-enumeration cursor over the given range and
+    /// returns an opaque cursor ID that callers pass to
+    /// <see cref="NextKeysAsync"/> and <see cref="CloseCursorAsync"/>.
+    /// Unlike <see cref="KeysAsync"/> (stateless, bounded by
+    /// <see cref="LatticeOptions.MaxScanRetries"/>), a cursor checkpoints its
+    /// progress server-side after every page so long-running scans survive
+    /// silo failovers, client restarts, and topology changes (shard splits).
+    /// </summary>
+    /// <param name="startInclusive">Inclusive lower bound, or <c>null</c> for the first key.</param>
+    /// <param name="endExclusive">Exclusive upper bound, or <c>null</c> for the end of the tree.</param>
+    /// <param name="reverse">When <c>true</c>, the cursor walks keys in descending lexicographic order.</param>
+    /// <returns>An opaque cursor handle scoped to this tree.</returns>
+    Task<string> OpenKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false);
+
+    /// <summary>
+    /// Opens a stateful entry-enumeration cursor. Semantically identical to
+    /// <see cref="OpenKeyCursorAsync"/> but yields
+    /// <see cref="KeyValuePair{TKey,TValue}"/> via <see cref="NextEntriesAsync"/>.
+    /// </summary>
+    Task<string> OpenEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false);
+
+    /// <summary>
+    /// Opens a stateful, resumable range-delete cursor over
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
+    /// Each <see cref="DeleteRangeStepAsync"/> call tombstones at most
+    /// <c>maxToDelete</c> keys and persists progress so the operation can be
+    /// resumed across silo failovers. The unbounded
+    /// <see cref="DeleteRangeAsync"/> remains available for short ranges.
+    /// </summary>
+    Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive);
+
+    /// <summary>
+    /// Returns the next page of up to <paramref name="pageSize"/> keys from
+    /// the cursor identified by <paramref name="cursorId"/>. Returns an empty
+    /// page with <see cref="LatticeCursorKeysPage.HasMore"/> <c>false</c>
+    /// once the cursor is fully drained. Throws
+    /// <see cref="InvalidOperationException"/> if the cursor was not opened,
+    /// has been closed, or was opened for a different kind of scan.
+    /// </summary>
+    Task<LatticeCursorKeysPage> NextKeysAsync(string cursorId, int pageSize);
+
+    /// <summary>
+    /// Returns the next page of up to <paramref name="pageSize"/> entries
+    /// from the cursor identified by <paramref name="cursorId"/>. See
+    /// <see cref="NextKeysAsync"/> for exhaustion and error semantics.
+    /// </summary>
+    Task<LatticeCursorEntriesPage> NextEntriesAsync(string cursorId, int pageSize);
+
+    /// <summary>
+    /// Advances a delete-range cursor by up to <paramref name="maxToDelete"/>
+    /// keys and returns the resulting progress. Safe to call again after
+    /// <see cref="LatticeCursorDeleteProgress.IsComplete"/> becomes <c>true</c> —
+    /// subsequent calls are idempotent no-ops.
+    /// </summary>
+    Task<LatticeCursorDeleteProgress> DeleteRangeStepAsync(string cursorId, int maxToDelete);
+
+    /// <summary>
+    /// Closes the cursor identified by <paramref name="cursorId"/>, clears
+    /// its persisted state, and releases the underlying grain activation.
+    /// Idempotent — calling on an unknown or already-closed cursor is a
+    /// no-op.
+    /// </summary>
+    Task CloseCursorAsync(string cursorId);
 }

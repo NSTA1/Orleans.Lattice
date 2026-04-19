@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
@@ -20,7 +21,8 @@ public class AtomicWriteGrainTests
                      FakePersistentState<AtomicWriteState> state,
                      IReminderRegistry reminderRegistry,
                      ILattice lattice) CreateGrain(
-        FakePersistentState<AtomicWriteState>? existingState = null)
+        FakePersistentState<AtomicWriteState>? existingState = null,
+        LatticeOptions? options = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("atomic-write", $"{TreeId}/{OperationId}"));
@@ -33,12 +35,18 @@ public class AtomicWriteGrainTests
         reminderRegistry.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
             .Returns(Task.FromResult(Substitute.For<IGrainReminder>()));
 
+        var opts = options ?? new LatticeOptions();
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.CurrentValue.Returns(opts);
+        optionsMonitor.Get(Arg.Any<string>()).Returns(opts);
+
         var state = existingState ?? new FakePersistentState<AtomicWriteState>();
 
         var grain = new AtomicWriteGrain(
             context,
             grainFactory,
             reminderRegistry,
+            optionsMonitor,
             new LoggerFactory().CreateLogger<AtomicWriteGrain>(),
             state);
         return (grain, state, reminderRegistry, lattice);
@@ -375,95 +383,67 @@ public class AtomicWriteGrainTests
         Assert.That(state.State.RetriesOnCurrentStep, Is.Zero);
     }
 
-    // --- Retry semantics ---
+    // --- Retention reminder self-cleanup ---
 
     [Test]
-    public async Task ExecuteAsync_retries_step_once_before_compensating()
+    public async Task ExecuteAsync_success_registers_retention_reminder()
     {
-        var (grain, state, _, lattice) = CreateGrain();
-        lattice.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<byte[]?>(null));
+        var (grain, _, registry, _) = CreateGrain();
 
-        // First SetAsync on "a" fails once; retry succeeds. "b" also succeeds.
-        int aAttempts = 0;
-        lattice.SetAsync("a", Arg.Any<byte[]>())
-            .Returns(_ =>
-            {
-                aAttempts++;
-                return aAttempts == 1
-                    ? Task.FromException(new InvalidOperationException("transient"))
-                    : Task.CompletedTask;
-            });
+        await grain.ExecuteAsync(TreeId, MakeEntries(("k", [1])));
 
-        var entries = MakeEntries(("a", [1]), ("b", [2]));
-        await grain.ExecuteAsync(TreeId, entries);
-
-        Assert.That(aAttempts, Is.EqualTo(2), "Step should be retried once.");
-        Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
-        Assert.That(state.State.FailureMessage, Is.Null, "Success path leaves no failure message.");
-        await lattice.Received().SetAsync("b", Arg.Any<byte[]>());
+        await registry.Received(1).RegisterOrUpdateReminder(
+            Arg.Any<GrainId>(),
+            "atomic-write-retention",
+            Arg.Any<TimeSpan>(),
+            Arg.Any<TimeSpan>());
     }
 
-    // --- Re-entry on a terminal-failed saga ---
+    [Test]
+    public async Task ExecuteAsync_skips_retention_when_infinite()
+    {
+        var opts = new LatticeOptions { AtomicWriteRetention = Timeout.InfiniteTimeSpan };
+        var (grain, _, registry, _) = CreateGrain(options: opts);
+
+        await grain.ExecuteAsync(TreeId, MakeEntries(("k", [1])));
+
+        await registry.DidNotReceive().RegisterOrUpdateReminder(
+            Arg.Any<GrainId>(),
+            "atomic-write-retention",
+            Arg.Any<TimeSpan>(),
+            Arg.Any<TimeSpan>());
+    }
 
     [Test]
-    public void ExecuteAsync_re_throws_persisted_failure_on_completed_and_failed_state()
+    public async Task ExecuteAsync_clamps_small_retention_to_one_minute_floor()
     {
-        // A previous saga completed after rollback. On client re-invocation,
-        // the grain must surface the original failure rather than silently
-        // succeed.
+        var opts = new LatticeOptions { AtomicWriteRetention = TimeSpan.FromSeconds(5) };
+        var (grain, _, registry, _) = CreateGrain(options: opts);
+
+        await grain.ExecuteAsync(TreeId, MakeEntries(("k", [1])));
+
+        await registry.Received(1).RegisterOrUpdateReminder(
+            Arg.Any<GrainId>(), "atomic-write-retention",
+            TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+    }
+
+    [Test]
+    public async Task ReceiveReminder_retention_clears_state_and_unregisters()
+    {
         var state = new FakePersistentState<AtomicWriteState>();
         state.State.Phase = AtomicWritePhase.Completed;
         state.State.TreeId = TreeId;
-        state.State.FailureMessage = "original failure";
+        state.State.Entries = MakeEntries(("k", [1]));
 
-        var (grain, _, _, _) = CreateGrain(state);
+        var reminder = Substitute.For<IGrainReminder>();
+        var (grain, persisted, registry, _) = CreateGrain(state);
+        registry.GetReminder(Arg.Any<GrainId>(), "atomic-write-retention")
+            .Returns(Task.FromResult<IGrainReminder?>(reminder));
 
-        var ex = Assert.ThrowsAsync<InvalidOperationException>(
-            () => grain.ExecuteAsync(TreeId, MakeEntries(("a", [1]))));
-        Assert.That(ex!.Message, Does.Contain("original failure"));
-    }
+        await grain.ReceiveReminder("atomic-write-retention", new TickStatus());
 
-    [Test]
-    public async Task ExecuteAsync_returns_success_on_completed_state_without_failure()
-    {
-        // Normal idempotent re-entry: prior saga completed successfully.
-        var state = new FakePersistentState<AtomicWriteState>();
-        state.State.Phase = AtomicWritePhase.Completed;
-        state.State.TreeId = TreeId;
-        state.State.FailureMessage = null;
-
-        var (grain, _, _, lattice) = CreateGrain(state);
-
-        await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
-
-        await lattice.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
-    }
-
-    // --- Reminder ordering ---
-
-    [Test]
-    public async Task ExecuteAsync_registers_keepalive_before_persisting_prepare()
-    {
-        // Regression: the reminder must be armed BEFORE PrepareAsync persists
-        // the Execute phase, so a crash in the Prepare-to-register window
-        // still has a reminder-driven recovery path.
-        var (grain, _, reminder, lattice) = CreateGrain();
-        lattice.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<byte[]?>(null));
-
-        int registerCallOrder = 0;
-        int getCallOrder = 0;
-        int counter = 0;
-        reminder.RegisterOrUpdateReminder(
-            Arg.Any<GrainId>(), "atomic-write-keepalive", Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>())
-            .Returns(_ => { registerCallOrder = ++counter; return Task.FromResult(Substitute.For<IGrainReminder>()); });
-        lattice.When(l => l.GetAsync(Arg.Any<string>()))
-            .Do(_ => { if (getCallOrder == 0) getCallOrder = ++counter; });
-
-        await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
-
-        Assert.That(registerCallOrder, Is.GreaterThan(0), "Register must be called.");
-        Assert.That(getCallOrder, Is.GreaterThan(0), "Prepare must read pre-saga values.");
-        Assert.That(registerCallOrder, Is.LessThan(getCallOrder),
-            "Keepalive reminder must be registered BEFORE Prepare captures pre-saga state.");
+        Assert.That(persisted.State.Phase, Is.EqualTo(AtomicWritePhase.NotStarted),
+            "ClearStateAsync resets state to its default (NotStarted).");
+        await registry.Received().UnregisterReminder(Arg.Any<GrainId>(), reminder);
     }
 }

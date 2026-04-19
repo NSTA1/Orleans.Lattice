@@ -1,6 +1,6 @@
 # Lattice Public API Reference
 
-Lattice is a distributed, CRDT-based B+ tree built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/). It exposes a single entry-point grain interface, `ILattice`, that routes operations to sharded internal storage. See [Architecture](architecture.md) for the full grain layer design.
+Lattice is a distributed, CRDI-bsaed B+ tree built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/). It exposes a single entry-point grain interface, `ILattice`, that routes operations to sharded internal storage. See [Architecture](architecture.md) for the full grain layer design.
 
 ## Setup
 
@@ -63,7 +63,7 @@ These methods are used during normal application flow to read, write, and enumer
 |--------|-----------|-------------|
 | `GetManyAsync` | `Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)` | Fetches multiple keys in parallel across shards. Missing/tombstoned keys are omitted from the result. |
 | `SetManyAsync` | `Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)` | Inserts or updates multiple entries in parallel across shards. **Not atomic** — a partial failure leaves the batch half-applied with no compensating rollback. Use `SetManyAtomicAsync` when all-or-nothing semantics are required. |
-| `SetManyAtomicAsync` | `Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries)` | Atomically writes multiple entries via a saga coordinator grain (F-031). Reads each key's pre-saga value up front, applies writes sequentially, and compensates (reverts) already-committed entries with a freshly-ticked HLC if a subsequent write fails — LWW merge guarantees the rollback wins. Crash-recovery is reminder-driven. Throws `ArgumentException` on duplicate keys or null values, and `InvalidOperationException` after compensation completes for a failed write. **Partial-visibility window:** readers between the first and last committed write may see a partial view of the batch; layer version-guarded reads (`GetWithVersionAsync` + `SetIfVersionAsync`) on top for strict isolation. |
+| `SetManyAtomicAsync` | `Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries)` | Atomically writes multiple entries via a saga coordinator grain (F-031). Reads each key's pre-saga value up front, applies writes sequentially, and compensates (reverts) already-committed entries with a freshly-ticked HLC if a subsequent write fails — LWW merge guarantees the rollback wins. Crash-recovery is reminder-driven. Throws `ArgumentException` on duplicate keys or null values, and `InvalidOperationException` after compensation completes for a failed write. **Partial-visibility window:** readers between the first and last committed write may see a partial view of the batch; layer version-guarded reads (`GetWithVersionAsync` + `SetIfVersionAsync`) on top for strict isolation. After completion, saga state is retained for `LatticeOptions.AtomicWriteRetention` (default 48h) for idempotent re-invocation, then automatically cleared by a retention reminder. |
 | `DeleteRangeAsync` | `Task<int> DeleteRangeAsync(string startInclusive, string endExclusive)` | Tombstones all live keys in the lexicographic range [`startInclusive`, `endExclusive`] by walking the leaf chain in each shard. Returns the total number of keys tombstoned. |
 | `CountAsync` | `Task<int> CountAsync()` | Returns the total number of live (non-tombstoned) keys across all shards by fanning out in parallel. **Strongly consistent during shard splits**: uses per-slot reconciliation against the registry's monotonic `ShardMap.Version` plus bounded optimistic retry (`LatticeOptions.MaxScanRetries`, default 3) so the result reflects the exact live key set even when concurrent splits move slots between shards mid-scan. Throws `InvalidOperationException` if the topology keeps mutating beyond the retry budget. |
 | `CountPerShardAsync` | `Task<IReadOnlyList<int>> CountPerShardAsync()` | Returns the number of live keys in each shard as an ordered list (index = shard index). Useful for diagnostics and load-balancing analysis. |
@@ -72,8 +72,8 @@ These methods are used during normal application flow to read, write, and enumer
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `KeysAsync` | `IAsyncEnumerable<string> KeysAsync(string? startInclusive, string? endExclusive, bool reverse, bool? prefetch)` | Streams live keys in strict lexicographic order via paginated k-way merge across shards. When `prefetch` is `true` (or `null` with `PrefetchKeysScan` enabled), the next page from each shard is fetched in parallel while the current page is consumed, hiding grain-call latency during large scans. **Strongly consistent and strictly ordered during shard splits (F-032)**: when a shard reports moved-away slots or the `ShardMap` version advances mid-scan, the orchestrator drains the affected slots from their current owners into a sorted in-memory cursor and injects it into the same k-way merge priority queue, so output remains globally sorted end-to-end. A per-call `HashSet<string>` suppresses duplicates across pre- and post-swap views. Reconciliation is bounded by `LatticeOptions.MaxScanRetries`; throws `InvalidOperationException` if the topology keeps mutating beyond that budget (see [Scan reliability](#scan-reliability) below). See [`docs/shard-splitting.md`](shard-splitting.md). |
-| `EntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive, string? endExclusive, bool reverse)` | Streams live key-value entries in strict lexicographic key order via paginated k-way merge across shards. Useful for exports, migrations, and analytics without a separate `GetAsync` per key. **Strongly consistent and strictly ordered during shard splits (F-032)** with the same reconciliation-cursor injection algorithm as `KeysAsync`. Subject to the same `InvalidOperationException` contract on retry exhaustion — see [Scan reliability](#scan-reliability). |
+| `KeysAsync` | `IAsyncEnumerable<string> KeysAsync(string? startInclusive, string? endExclusive, bool reverse, bool? prefetch)` | Streams live keys in strict lexicographic order via paginated k-way merge across shards. When `prefetch` is `true` (or `null` with `PrefetchKeysScan` enabled), the next page from each shard is fetched in parallel while the current page is consumed, hiding grain-call latency during large scans. **Strongly consistent and strictly ordered during shard splits**: when a shard reports moved-away slots or the `ShardMap` version advances mid-scan, the orchestrator drains the affected slots from their current owners into a sorted in-memory cursor and injects it into the same k-way merge priority queue, so output remains globally sorted end-to-end. A per-call `HashSet<string>` suppresses duplicates across pre- and post-swap views. Reconciliation is bounded by `LatticeOptions.MaxScanRetries`; throws `InvalidOperationException` if the topology keeps mutating beyond that budget (see [Scan reliability](#scan-reliability) below). See [`docs/shard-splitting.md`](shard-splitting.md). |
+| `EntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive, string? endExclusive, bool reverse)` | Streams live key-value entries in strict lexicographic key order via paginated k-way merge across shards. Useful for exports, migrations, and analytics without a separate `GetAsync` per key. **Strongly consistent and strictly ordered during shard splits** with the same reconciliation-cursor injection algorithm as `KeysAsync`. Subject to the same `InvalidOperationException` contract on retry exhaustion — see [Scan reliability](#scan-reliability). |
 
 ### Scan reliability
 
@@ -99,10 +99,126 @@ workloads have three options:
 2. Wrap the scan in an application-level retry with exponential backoff
    and resume from the last successfully yielded key (using
    `startInclusive`).
-3. Wait for **G-003 (Stateful cursor grain)** — server-side checkpointed
-   iteration designed for long-running exports that survive topology
-   changes, silo failover, and client restarts without caller retry
-   code.
+3. Use **stateful cursors** — `OpenKeyCursorAsync` /
+   `OpenEntryCursorAsync` return a server-side checkpointed iterator
+   that survives topology changes, silo failover, and client restarts
+   without caller retry code. See
+   [Stateful cursors](#stateful-cursors) below.
+
+### Stateful Cursors
+
+`ILattice` exposes a stateful cursor API for long-running scans and
+resumable range deletes that survive silo failovers, client restarts,
+and topology changes (shard splits). Unlike the stateless `KeysAsync`
+/ `EntriesAsync` / `DeleteRangeAsync` methods — bounded by
+`LatticeOptions.MaxScanRetries` — a cursor checkpoints its progress
+server-side after every page: a new grain activation reads its
+persisted state and resumes from the last yielded key.
+
+Each cursor is backed by a single per-tree grain activation keyed
+`{treeId}/{cursorId}`. The grain persists the scan spec, current
+phase (`NotStarted` / `Open` / `Exhausted` / `Closed`), and the last
+key it yielded (or tombstoned). On reactivation it rebuilds the
+next-step range from that checkpoint and continues.
+
+#### Method reference
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `OpenKeyCursorAsync` | `Task<string> OpenKeyCursorAsync(string? startInclusive, string? endExclusive, bool reverse)` | Opens a key-enumeration cursor and returns a server-assigned opaque cursor ID (GUID). `startInclusive` / `endExclusive` may be `null` for unbounded; `reverse=true` walks keys in descending lex order. |
+| `OpenEntryCursorAsync` | `Task<string> OpenEntryCursorAsync(string? startInclusive, string? endExclusive, bool reverse)` | Opens an entry-enumeration cursor (key + value pairs). Same bounds / direction semantics as `OpenKeyCursorAsync`. |
+| `OpenDeleteRangeCursorAsync` | `Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive)` | Opens a resumable range-delete cursor. Both bounds are **required** (non-null). Reverse is not supported — range deletes are always forward. Throws `ArgumentException` for null bounds or a reverse spec. |
+| `NextKeysAsync` | `Task<LatticeCursorKeysPage> NextKeysAsync(string cursorId, int pageSize)` | Returns up to `pageSize` keys and advances the cursor. Throws `ArgumentOutOfRangeException` for non-positive `pageSize`; throws `InvalidOperationException` if the cursor was opened for a different kind (e.g. `Entries` or `DeleteRange`), or if it has been closed. `HasMore=false` signals exhaustion. |
+| `NextEntriesAsync` | `Task<LatticeCursorEntriesPage> NextEntriesAsync(string cursorId, int pageSize)` | Returns up to `pageSize` key-value entries and advances the cursor. Same error surface as `NextKeysAsync` with the expected kind `Entries`. |
+| `DeleteRangeStepAsync` | `Task<LatticeCursorDeleteProgress> DeleteRangeStepAsync(string cursorId, int maxToDelete)` | Deletes up to `maxToDelete` keys in a single step and returns progress. `IsComplete=true` when the full range has been drained; subsequent calls are idempotent no-ops returning `DeletedThisStep=0`. Throws `InvalidOperationException` if the cursor is not of kind `DeleteRange`. |
+| `CloseCursorAsync` | `Task CloseCursorAsync(string cursorId)` | Closes the cursor, clears its persisted state, unregisters its idle-TTL reminder, and deactivates the grain. Idempotent — safe to call on an already-closed or never-opened cursor. |
+
+#### Return types
+
+| Type | Members | Description |
+|------|---------|-------------|
+| `LatticeCursorKeysPage` | `IReadOnlyList<string> Keys`, `bool HasMore` | A page returned by `NextKeysAsync`. Keys are in the cursor's scan order. When `HasMore=false` the cursor has reached its end; no further keys remain. |
+| `LatticeCursorEntriesPage` | `IReadOnlyList<KeyValuePair<string, T>> Entries`, `bool HasMore` | A page returned by `NextEntriesAsync`. Same semantics as `LatticeCursorKeysPage`. |
+| `LatticeCursorDeleteProgress` | `int DeletedThisStep`, `int DeletedTotal`, `bool IsComplete` | Returned by `DeleteRangeStepAsync`. `DeletedTotal` accumulates across every step; check `IsComplete` to terminate the loop. |
+| `LatticeCursorKind` | `Keys`, `Entries`, `DeleteRange` | The kind of scan a cursor performs. Returned via `LatticeCursorSpec.Kind` on internal flows; most callers use the typed `Open*` helpers and never touch this directly. |
+| `LatticeCursorSpec` | `Kind`, `StartInclusive`, `EndExclusive`, `Reverse` | Immutable scan specification. Captured at `Open*Async` time and persisted by the cursor grain for resumption after silo failover. |
+
+#### Ordering and consistency
+
+- Each step goes through the normal `ILattice.KeysAsync` /
+  `EntriesAsync` / `DeleteRangeAsync` path, so strict lexicographic
+  ordering under concurrent shard splits applies within each page.
+- Across steps, global ordering is preserved because the step's
+  effective range strictly excludes every previously-yielded key
+  (`startInclusive = LastYieldedKey + "\0"` for forward scans,
+  `endExclusive = LastYieldedKey` for reverse scans).
+- Values are snapshot-as-read per step, not per cursor — a value
+  updated between two steps will reflect the new value when the entry
+  is re-visited on a subsequent open of a new cursor, but once a key
+  has been yielded by a cursor it is never re-yielded by the same
+  cursor.
+
+#### Idle TTL and self-cleanup
+
+To prevent cursor state leaking when a client forgets to call
+`CloseCursorAsync`, every cursor grain registers a sliding idle-TTL
+reminder on each successful call. If the reminder fires without any
+intervening activity, the grain clears its persisted state, unregisters
+the reminder, and deactivates. The default window is **48 hours** and
+is configurable:
+
+```csharp
+siloBuilder.ConfigureLattice(o => o.CursorIdleTtl = TimeSpan.FromHours(6));
+```
+
+Minimum effective interval is **1 minute** (Orleans reminder
+granularity); smaller values are clamped to the floor. Set
+`CursorIdleTtl = Timeout.InfiniteTimeSpan` to disable automatic
+cleanup (cursors then live until `CloseCursorAsync` is called).
+
+#### Example — resumable export across a silo failover
+
+```csharp
+var cursorId = await tree.OpenEntryCursorAsync();
+while (true)
+{
+    var page = await tree.NextEntriesAsync(cursorId, pageSize: 500);
+    foreach (var (k, v) in page.Entries)
+        await sink.WriteAsync(k, v);
+    if (!page.HasMore) break;
+}
+await tree.CloseCursorAsync(cursorId);
+```
+
+If the client crashes mid-export it can persist the `cursorId` and
+resume on restart — the cursor grain reactivates on demand and
+continues from its persisted last-yielded key.
+
+#### Example — bounded, resumable range delete
+
+```csharp
+var cursorId = await tree.OpenDeleteRangeCursorAsync("2024/", "2025/");
+int total = 0;
+while (true)
+{
+    var progress = await tree.DeleteRangeStepAsync(cursorId, maxToDelete: 1000);
+    total = progress.DeletedTotal;
+    if (progress.IsComplete) break;
+}
+await tree.CloseCursorAsync(cursorId);
+logger.LogInformation("Deleted {Count} keys.", total);
+```
+
+#### Error surface
+
+| Call | Condition | Exception |
+|------|-----------|-----------|
+| `OpenDeleteRangeCursorAsync` | `startInclusive` or `endExclusive` is `null` | `ArgumentException` |
+| `OpenDeleteRangeCursorAsync` | `reverse=true` passed through the internal spec | `ArgumentException` |
+| Any `Open*` | Re-open with a different spec on the same cursor ID | `InvalidOperationException` |
+| `Next*` / `DeleteRangeStep*` | Kind mismatch (e.g. `NextEntriesAsync` on a key cursor) | `InvalidOperationException` |
+| `Next*` / `DeleteRangeStep*` | Cursor was closed | `InvalidOperationException` |
+| `Next*` / `DeleteRangeStep*` | `pageSize` / `maxToDelete` ≤ 0 | `ArgumentOutOfRangeException` |
 
 ### Maintenance Operations
 
@@ -195,7 +311,7 @@ bool success = await tree.SetIfVersionAsync("user:1", updated, versioned.Version
 | `SetIfVersionAsync<T>` | `Task<bool> SetIfVersionAsync<T>(this ILattice, string key, T value, HybridLogicalClock expectedVersion, ILatticeSerializer<T>)` | Serializes and conditionally writes `value` only if the entry's current version matches `expectedVersion`. Returns `true` if applied. |
 | `GetManyAsync<T>` | `Task<Dictionary<string, T>> GetManyAsync<T>(this ILattice, List<string> keys, ILatticeSerializer<T>)` | Fetches and deserializes multiple keys. Missing/tombstoned keys are omitted. |
 | `SetManyAsync<T>` | `Task SetManyAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and inserts/updates multiple entries in parallel. Not atomic — see `SetManyAtomicAsync<T>`. |
-| `SetManyAtomicAsync<T>` | `Task SetManyAtomicAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and atomically writes multiple entries via the F-031 saga. See `ILattice.SetManyAtomicAsync` for full semantics. |
+| `SetManyAtomicAsync<T>` | `Task SetManyAtomicAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and atomically writes multiple entries via the saga coordinator. See `ILattice.SetManyAtomicAsync` for full semantics. |
 | `BulkLoadAsync<T>` | `Task BulkLoadAsync<T>(this ILattice, IReadOnlyList<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and bulk-loads entries into an empty tree. |
 | `EntriesAsync<T>` | `IAsyncEnumerable<KeyValuePair<string, T>> EntriesAsync<T>(this ILattice, ILatticeSerializer<T>, string?, string?, bool)` | Streams live entries, deserializing values via the provided serializer. |
 
