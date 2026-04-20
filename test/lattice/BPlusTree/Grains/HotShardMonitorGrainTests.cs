@@ -43,6 +43,7 @@ public partial class HotShardMonitorGrainTests
 
         var lattice = Substitute.For<ILattice>();
         lattice.IsResizeCompleteAsync().Returns(true);
+        lattice.IsReshardCompleteAsync().Returns(true);
         lattice.IsMergeCompleteAsync().Returns(true);
         lattice.IsSnapshotCompleteAsync().Returns(true);
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
@@ -170,6 +171,7 @@ public partial class HotShardMonitorGrainTests
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         var lattice = Substitute.For<ILattice>();
         lattice.IsResizeCompleteAsync().Returns(true);
+        lattice.IsReshardCompleteAsync().Returns(true);
         lattice.IsMergeCompleteAsync().Returns(true);
         lattice.IsSnapshotCompleteAsync().Returns(true);
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
@@ -304,6 +306,7 @@ public partial class HotShardMonitorGrainTests
         om.Get(Arg.Any<string>()).Returns(opts);
         var lattice = Substitute.For<ILattice>();
         lattice.IsResizeCompleteAsync().Returns(true);
+        lattice.IsReshardCompleteAsync().Returns(true);
         lattice.IsMergeCompleteAsync().Returns(true);
         lattice.IsSnapshotCompleteAsync().Returns(true);
         gf.GetGrain<ILattice>(TreeId).Returns(lattice);

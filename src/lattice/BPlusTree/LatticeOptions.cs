@@ -167,6 +167,21 @@ public sealed class LatticeOptions
     public const int DefaultMaxConcurrentAutoSplits = 2;
 
     /// <summary>
+    /// Maximum number of parallel <see cref="ITreeShardSplitGrain"/> splits
+    /// that an online reshard (<see cref="ILattice.ReshardAsync"/>) may drive
+    /// concurrently. Each split drains one physical shard's upper-half
+    /// virtual slots into a newly allocated target shard; running several
+    /// in parallel shortens total reshard time at the cost of proportionally
+    /// higher background drain I/O. Splits dispatched by the reshard
+    /// coordinator operate independently of those triggered autonomically
+    /// by <c>HotShardMonitorGrain</c> — the two caps compose additively.
+    /// </summary>
+    public int MaxConcurrentMigrations { get; set; } = DefaultMaxConcurrentMigrations;
+
+    /// <summary>Default value for <see cref="MaxConcurrentMigrations"/> (4).</summary>
+    public const int DefaultMaxConcurrentMigrations = 4;
+
+    /// <summary>
     /// Maximum number of moved-slot entries the split coordinator accumulates
     /// in a single <see cref="IShardRootGrain.MergeManyAsync"/> call to the
     /// target shard during drain. Larger values reduce per-call overhead;
