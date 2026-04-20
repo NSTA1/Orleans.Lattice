@@ -53,6 +53,10 @@ internal static class TypeAliases
     internal const string ShardSplitPhase = "ol.sph";
     internal const string StaleShardRouting = "ol.ssr";
 
+    // Online reshard (F-019)
+    internal const string TreeReshardState = "ol.txs";
+    internal const string ReshardPhase = "ol.rxp";
+
     // Range delete (FX-011)
     internal const string RangeDeleteResult = "ol.rdr";
 
@@ -91,4 +95,5 @@ internal static class TypeAliases
     internal const string ITreeResizeGrain = "ol.gtr";
     internal const string ITreeShardSplitGrain = "ol.gss";
     internal const string ITreeSnapshotGrain = "ol.gsn";
+    internal const string ITreeReshardGrain = "ol.gtx";
 }

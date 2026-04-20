@@ -267,6 +267,7 @@ These methods manage tree structure and lifecycle. Several of them **take the tr
 |--------|-----------|-------------|
 | `ResizeAsync` | `Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)` | Resizes the tree by creating an offline snapshot with new sizing into a new physical tree, swapping the tree alias, and soft-deleting the old data. The tree is unavailable during the snapshot phase but immediately accessible after the swap. Undoable within the `SoftDeleteDuration` retention window. See [Tree Sizing](tree-sizing.md#resizing-an_existing_tree). ⚠️ **Takes the tree offline** during the snapshot phase. |
 | `UndoResizeAsync` | `Task UndoResizeAsync()` | Undoes the most recent resize by recovering the old physical tree, removing the alias, restoring the original registry configuration, and deleting the new snapshot tree. Only available while the old tree is still within its `SoftDeleteDuration` window (before purge completes). |
+| `ReshardAsync` | `Task ReshardAsync(int newShardCount, CancellationToken cancellationToken = default)` | **Online** — grows the tree's physical shard count to at least `newShardCount` while the tree continues to serve reads and writes. Internally dispatches up to `LatticeOptions.MaxConcurrentMigrations` (default 4) concurrent per-shard splits, each of which atomically grows the `ShardMap` via its own shadow-write + swap phases. Grow-only: `newShardCount` must be strictly greater than the current distinct-shard count and ≤ `LatticeOptions.VirtualShardCount` (`ArgumentOutOfRangeException` otherwise). Idempotent for the same target while in progress; `InvalidOperationException` when a different target is already running. Returns once the intent is persisted — use `IsReshardCompleteAsync` to poll for completion. Crash-safe via reminder-anchored coordinator. See [Online Reshard](online-reshard.md). |
 
 #### Merge
 
@@ -286,7 +287,8 @@ These methods manage tree structure and lifecycle. Several of them **take the tr
 |--------|-----------|-------------|
 | `IsMergeCompleteAsync` | `Task<bool> IsMergeCompleteAsync()` | Returns `true` if no merge operation is in progress — either the most recent merge has completed or no merge has ever been initiated (vacuously complete). |
 | `IsSnapshotCompleteAsync` | `Task<bool> IsSnapshotCompleteAsync()` | Returns `true` if no snapshot operation is in progress — either the most recent snapshot has completed or no snapshot has ever been initiated (vacuously complete). |
-| `IsResizeCompleteAsync` | `Task<bool> IsResizeCompleteAsync()` | Returns `true` if no resize operation is in progress — either the most recent resize has completed or no resize has ever been initiated (vacuously complete). |
+| `IsResizeCompleteAsync` | `Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default)` | Returns `true` if no resize operation is in progress — either the most recent resize has completed or no resize has ever been initiated (vacuously complete). |
+| `IsReshardCompleteAsync` | `Task<bool> IsReshardCompleteAsync(CancellationToken cancellationToken = default)` | Returns `true` if no online reshard operation is in progress — either the most recent reshard has completed or no reshard has ever been initiated (vacuously complete). |
 
 ## `SnapshotMode`
 

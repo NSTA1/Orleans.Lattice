@@ -174,6 +174,7 @@ internal sealed class HotShardMonitorGrain(
         // Suppress while bulk maintenance is in flight.
         var lattice = grainFactory.GetGrain<ILattice>(TreeId);
         if (!await lattice.IsResizeCompleteAsync()) return;
+        if (!await lattice.IsReshardCompleteAsync()) return;
         if (!await lattice.IsMergeCompleteAsync()) return;
         if (!await lattice.IsSnapshotCompleteAsync()) return;
 

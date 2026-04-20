@@ -34,6 +34,7 @@ Grain identity is embedded in the string key with `/` as separator:
 | `TombstoneCompactionGrain` | `{treeId}` | `"my-tree"` |
 | `TreeDeletionGrain` | `{treeId}` | `"my-tree"` |
 | `TreeResizeGrain` | `{treeId}` | `"my-tree"` |
+| `TreeReshardGrain` | `{treeId}` | `"my-tree"` |
 | `TreeSnapshotGrain` | `{sourceTreeId}` | `"my-tree"` |
 | `TreeMergeGrain` | `{targetTreeId}` | `"my-tree"` |
 | `AtomicWriteGrain` | `{treeId}/{operationId}` | `"my-tree/ab12…"` |
