@@ -332,4 +332,66 @@ public interface IShardRootGrain : IGrainWithStringKey
         string? continuationToken,
         int[] sortedSlots,
         int virtualShardCount);
+
+    // ==========================================================================
+    //  Online shadow-forwarding primitive
+    // ==========================================================================
+    //  Used by the coordinator that drives an online copy between physical
+    //  trees (e.g. online resize). During the operation, every accepted
+    //  mutation on this shard is mirrored in parallel to the corresponding
+    //  shard on the destination tree. After the registry alias has been
+    //  atomically swapped, the shard rejects new operations with
+    //  StaleTreeRoutingException so the caller's LatticeGrain can refresh
+    //  its cached routing snapshot and retry against the destination tree.
+    //  The four transitions are idempotent under a matching operationId and
+    //  refused under a mismatched one.
+
+    /// <summary>
+    /// Transitions this shard into the <see cref="ShadowForwardPhase.Draining"/>
+    /// phase, mirroring every accepted mutation to the corresponding shard on
+    /// <paramref name="destinationPhysicalTreeId"/>. Idempotent for a matching
+    /// <paramref name="operationId"/> — repeated calls are no-ops. Refused with
+    /// <see cref="InvalidOperationException"/> if the shard is already in a
+    /// shadow-forward lifecycle under a different <paramref name="operationId"/>.
+    /// </summary>
+    /// <param name="destinationPhysicalTreeId">Destination physical tree ID
+    /// whose same-indexed shard receives every mirrored mutation.</param>
+    /// <param name="operationId">Coordinator-supplied operation ID. Used for
+    /// idempotent re-entry and to refuse interference from a stale coordinator.</param>
+    /// <param name="logicalTreeId">User-visible logical tree ID. Stamped into
+    /// <see cref="StaleTreeRoutingException.LogicalTreeId"/> when the shard
+    /// later transitions to <see cref="ShadowForwardPhase.Rejecting"/>, so
+    /// callers receive the correct tree name to refresh. May be an empty
+    /// string, in which case the physical tree ID is used as a fallback.</param>
+    Task BeginShadowForwardAsync(string destinationPhysicalTreeId, string operationId, string logicalTreeId);
+
+    /// <summary>
+    /// Transitions this shard from <see cref="ShadowForwardPhase.Draining"/>
+    /// to <see cref="ShadowForwardPhase.Drained"/>. Called by the coordinator
+    /// after the background drain for this shard has completed. Mutation
+    /// forwarding continues until <see cref="EnterRejectingAsync"/> is called.
+    /// Idempotent; refused with <see cref="InvalidOperationException"/> on an
+    /// <paramref name="operationId"/> mismatch.
+    /// </summary>
+    Task MarkDrainedAsync(string operationId);
+
+    /// <summary>
+    /// Transitions this shard into <see cref="ShadowForwardPhase.Rejecting"/>.
+    /// Called by the coordinator after the registry alias has been atomically
+    /// redirected to the destination tree. Subsequent operations against this
+    /// shard throw <see cref="StaleTreeRoutingException"/>. Idempotent;
+    /// refused with <see cref="InvalidOperationException"/> on an
+    /// <paramref name="operationId"/> mismatch.
+    /// </summary>
+    Task EnterRejectingAsync(string operationId);
+
+    /// <summary>
+    /// Clears this shard's shadow-forward state entirely. Used by the
+    /// coordinator during undo, or at the end of the operation once the
+    /// destination tree has fully taken over and the source is about to be
+    /// torn down. Idempotent; refused with <see cref="InvalidOperationException"/>
+    /// if the persisted state has a different <paramref name="operationId"/>
+    /// (so a stale coordinator cannot wipe a newer operation's state).
+    /// </summary>
+    Task ClearShadowForwardAsync(string operationId);
 }

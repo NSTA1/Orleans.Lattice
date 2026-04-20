@@ -3,6 +3,7 @@ using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -91,8 +92,12 @@ public partial class TreeSnapshotGrainTests
     // --- Copy phase ---
 
     [Test]
-    public async Task Copy_drains_source_and_bulk_loads_destination()
+    public async Task Copy_drains_source_and_merges_destination_in_online_mode()
     {
+        // Online drain must use MergeManyAsync (not BulkLoadRawAsync) so
+        // concurrent shadow-forward writes that have already populated the
+        // destination shard converge with the drain batch via LWW rather
+        // than violating BulkLoadRawAsync's empty-shard precondition.
         var (grain, state, reminderRegistry, grainFactory, _) = CreateGrain();
         SetupKeepalive(reminderRegistry);
 
@@ -116,17 +121,29 @@ public partial class TreeSnapshotGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await grainFactory.GetGrain<IShardRootGrain>($"{DestTreeId}/0")
-            .Received(1).BulkLoadRawAsync("test-op-snapshot-0", Arg.Is<List<LwwEntry>>(e => e.Count == 2));
+        var destShard = grainFactory.GetGrain<IShardRootGrain>($"{DestTreeId}/0");
+        await destShard.Received(1).MergeManyAsync(
+            Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => d.Count == 2
+                && d.ContainsKey("key-a") && d.ContainsKey("key-b")));
+        await destShard.DidNotReceive().BulkLoadRawAsync(
+            Arg.Any<string>(), Arg.Any<List<LwwEntry>>());
     }
 
     [Test]
-    public async Task Copy_skips_bulk_load_for_empty_shard()
+    public async Task Copy_drains_source_and_bulk_loads_destination_in_offline_mode()
     {
+        // Offline drain: source is locked, destination is guaranteed empty,
+        // so the efficient bottom-up BulkLoadRawAsync path is used.
         var (grain, state, reminderRegistry, grainFactory, _) = CreateGrain();
         SetupKeepalive(reminderRegistry);
 
-        SetupShardForSnapshot(grainFactory, SourceTreeId, 0);
+        var leafId = GrainId.Create("leaf", Guid.NewGuid().ToString());
+        var entries = new Dictionary<string, byte[]>
+        {
+            ["key-a"] = [1, 2, 3],
+            ["key-b"] = [4, 5, 6]
+        };
+        SetupShardForSnapshot(grainFactory, SourceTreeId, 0, entries, leafId);
         SetupShardForSnapshot(grainFactory, SourceTreeId, 1);
         SetupShardMocks(grainFactory, DestTreeId);
 
@@ -135,13 +152,16 @@ public partial class TreeSnapshotGrainTests
         state.State.NextShardIndex = 0;
         state.State.ShardCount = ShardCount;
         state.State.DestinationTreeId = DestTreeId;
-        state.State.Mode = SnapshotMode.Online;
+        state.State.Mode = SnapshotMode.Offline;
         state.State.OperationId = "test-op";
 
         await grain.ProcessNextPhaseAsync();
 
-        await grainFactory.GetGrain<IShardRootGrain>($"{DestTreeId}/0")
-            .DidNotReceive().BulkLoadRawAsync(Arg.Any<string>(), Arg.Any<List<LwwEntry>>());
+        var destShard = grainFactory.GetGrain<IShardRootGrain>($"{DestTreeId}/0");
+        await destShard.Received(1).BulkLoadRawAsync("test-op-snapshot-0",
+            Arg.Is<List<LwwEntry>>(e => e.Count == 2));
+        await destShard.DidNotReceive().MergeManyAsync(
+            Arg.Any<Dictionary<string, LwwValue<byte[]>>>());
     }
 
     // --- Online vs Offline phase flow ---

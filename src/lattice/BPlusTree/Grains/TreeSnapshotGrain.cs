@@ -40,7 +40,17 @@ internal sealed class TreeSnapshotGrain(
     public async Task SnapshotAsync(string destinationTreeId, SnapshotMode mode,
         int? maxLeafKeys = null, int? maxInternalChildren = null)
     {
+        await SnapshotWithOperationIdAsync(destinationTreeId, mode, maxLeafKeys, maxInternalChildren,
+            Guid.NewGuid().ToString("N"), SourceTreeId);
+    }
+
+    /// <inheritdoc />
+    public async Task SnapshotWithOperationIdAsync(string destinationTreeId, SnapshotMode mode,
+        int? maxLeafKeys, int? maxInternalChildren, string operationId, string logicalTreeId)
+    {
         ArgumentNullException.ThrowIfNull(destinationTreeId);
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        ArgumentNullException.ThrowIfNull(logicalTreeId);
 
         if (maxLeafKeys is not null && maxLeafKeys <= 1)
             throw new ArgumentOutOfRangeException(nameof(maxLeafKeys), "Must be greater than 1.");
@@ -86,7 +96,7 @@ internal sealed class TreeSnapshotGrain(
                 $"Destination tree '{destinationTreeId}' already exists. Choose a new tree ID.");
 
         await InitiateSnapshotStateAsync(destinationTreeId, mode, sourceOptions.ShardCount,
-            maxLeafKeys, maxInternalChildren);
+            maxLeafKeys, maxInternalChildren, operationId, logicalTreeId);
         await StartSnapshotAsync();
     }
 
@@ -97,7 +107,8 @@ internal sealed class TreeSnapshotGrain(
     /// for unit testing.
     /// </summary>
     internal async Task InitiateSnapshotStateAsync(string destinationTreeId, SnapshotMode mode,
-        int shardCount, int? maxLeafKeys = null, int? maxInternalChildren = null)
+        int shardCount, int? maxLeafKeys = null, int? maxInternalChildren = null,
+        string? operationId = null, string? logicalTreeId = null)
     {
         // Register the destination tree in the registry before any data is written.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
@@ -112,16 +123,22 @@ internal sealed class TreeSnapshotGrain(
 
         // Persist intent BEFORE any shard-marking side effects.
         state.State.InProgress = true;
-        state.State.Phase = mode == SnapshotMode.Offline ? SnapshotPhase.Lock : SnapshotPhase.Copy;
+        state.State.Phase = mode switch
+        {
+            SnapshotMode.Offline => SnapshotPhase.Lock,
+            SnapshotMode.Online => SnapshotPhase.ShadowBegin,
+            _ => throw new ArgumentOutOfRangeException(nameof(mode)),
+        };
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
         state.State.DestinationTreeId = destinationTreeId;
         state.State.Mode = mode;
-        state.State.OperationId = Guid.NewGuid().ToString("N");
+        state.State.OperationId = operationId ?? Guid.NewGuid().ToString("N");
         state.State.ShardCount = shardCount;
         state.State.MaxLeafKeys = maxLeafKeys;
         state.State.MaxInternalChildren = maxInternalChildren;
         state.State.Complete = false;
+        state.State.LogicalTreeId = logicalTreeId ?? "";
         await state.WriteStateAsync();
     }
 
@@ -155,9 +172,23 @@ internal sealed class TreeSnapshotGrain(
             await LockSourceShardsAsync();
         }
 
-        while (state.State.NextShardIndex < state.State.ShardCount)
+        if (state.State.Phase == SnapshotPhase.ShadowBegin)
         {
-            await ProcessCurrentPhaseAsync();
+            await BeginShadowForwardAllShardsAsync();
+        }
+
+        if (state.State.Mode == SnapshotMode.Online
+            && state.State.Phase == SnapshotPhase.Copy
+            && state.State.NextShardIndex < state.State.ShardCount)
+        {
+            await DrainAllShardsOnlineAsync();
+        }
+        else
+        {
+            while (state.State.NextShardIndex < state.State.ShardCount)
+            {
+                await ProcessCurrentPhaseAsync();
+            }
         }
 
         await CompleteSnapshotAsync();
@@ -232,6 +263,12 @@ internal sealed class TreeSnapshotGrain(
             return;
         }
 
+        if (state.State.Phase == SnapshotPhase.ShadowBegin)
+        {
+            await BeginShadowForwardAllShardsAsync();
+            return;
+        }
+
         if (state.State.NextShardIndex >= state.State.ShardCount)
         {
             await CompleteSnapshotAsync();
@@ -258,7 +295,10 @@ internal sealed class TreeSnapshotGrain(
                     }
                     else
                     {
-                        // Online mode: skip unmark, advance to next shard.
+                        // Online mode: mark this shard drained (shadow-forward
+                        // continues until the coordinator transitions to
+                        // Rejecting), advance to the next shard.
+                        await MarkShardDrainedAsync(shardIndex);
                         state.State.NextShardIndex++;
                         state.State.Phase = SnapshotPhase.Copy;
                     }
@@ -293,12 +333,26 @@ internal sealed class TreeSnapshotGrain(
     }
 
     /// <summary>
-    /// Drains live entries from the source shard's leaf chain and bulk-loads
-    /// them into the destination shard. Uses the raw-LwwValue drain and
-    /// bulk-load paths so TTL (<c>ExpiresAtTicks</c>) and source HLC
-    /// metadata are preserved on the destination tree — a snapshot of a key
-    /// with remaining TTL reappears on the destination with the same absolute
-    /// expiry, not a fresh zero-expiry entry.
+    /// Drains live entries from the source shard's leaf chain into the
+    /// destination shard. Uses the raw-LwwValue drain path so TTL
+    /// (<c>ExpiresAtTicks</c>) and source HLC metadata are preserved on the
+    /// destination tree — a snapshot of a key with remaining TTL reappears
+    /// on the destination with the same absolute expiry, not a fresh
+    /// zero-expiry entry.
+    /// <para>
+    /// For offline snapshots, the source shards are quiesced via
+    /// <see cref="IShardRootGrain.MarkDeletedAsync"/> before drain begins,
+    /// so the destination shard is guaranteed empty and we can use the
+    /// efficient bottom-up <see cref="IShardRootGrain.BulkLoadRawAsync"/>
+    /// path. For online snapshots, shadow-forwarding is active on every
+    /// source shard before drain starts, so concurrent writes land on the
+    /// destination shard via
+    /// <see cref="IShardRootGrain.MergeManyAsync"/> before drain's batch
+    /// arrives. We therefore use <see cref="IShardRootGrain.MergeManyAsync"/>
+    /// for online mode too — its LWW semantics guarantee convergence
+    /// regardless of which write wins the race: whichever carries the
+    /// higher HLC is observable in the final destination state.
+    /// </para>
     /// </summary>
     private async Task CopyShardAsync(int shardIndex)
     {
@@ -317,11 +371,25 @@ internal sealed class TreeSnapshotGrain(
 
         if (entries.Count == 0) return;
 
-        // Sort by key for bulk load.
-        entries.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
-
         var destShardKey = $"{state.State.DestinationTreeId}/{shardIndex}";
         var destShard = grainFactory.GetGrain<IShardRootGrain>(destShardKey);
+
+        if (state.State.Mode == SnapshotMode.Online)
+        {
+            // Online drain: destination shard may already have entries from
+            // concurrent shadow-forward writes. Use LWW MergeManyAsync so
+            // the two populate streams converge — whichever entry carries
+            // the higher HLC wins, per the CRDT invariant.
+            var merge = new Dictionary<string, LwwValue<byte[]>>(entries.Count);
+            foreach (var e in entries)
+                merge[e.Key] = e.ToLwwValue();
+            await destShard.MergeManyAsync(merge);
+            return;
+        }
+
+        // Offline drain: source is locked, destination is guaranteed empty.
+        // Use the bottom-up bulk-load path for minimal storage I/O.
+        entries.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
         var operationId = $"{state.State.OperationId}-snapshot-{shardIndex}";
         await destShard.BulkLoadRawAsync(operationId, entries);
     }
@@ -331,6 +399,98 @@ internal sealed class TreeSnapshotGrain(
         var shardKey = $"{SourceTreeId}/{shardIndex}";
         var shard = grainFactory.GetGrain<IShardRootGrain>(shardKey);
         await shard.UnmarkDeletedAsync();
+    }
+
+    /// <summary>
+    /// Begins shadow-forwarding on every source shard. Must complete before
+    /// any drain reader starts so that live writes landing during drain are
+    /// mirrored to the destination tree. Exposed as <c>internal</c> for unit
+    /// testing.
+    /// </summary>
+    internal async Task BeginShadowForwardAllShardsAsync()
+    {
+        var opId = state.State.OperationId
+            ?? throw new InvalidOperationException(
+                $"Snapshot state for tree '{SourceTreeId}' has no OperationId; cannot begin shadow forward.");
+        var destinationTreeId = state.State.DestinationTreeId
+            ?? throw new InvalidOperationException(
+                $"Snapshot state for tree '{SourceTreeId}' has no DestinationTreeId; cannot begin shadow forward.");
+
+        // Fall back to SourceTreeId when no logical name was threaded in —
+        // preserves offline/standalone-snapshot behaviour where the source
+        // grain key already IS the user-visible name.
+        var logicalTreeId = string.IsNullOrEmpty(state.State.LogicalTreeId)
+            ? SourceTreeId
+            : state.State.LogicalTreeId;
+
+        var shardCount = state.State.ShardCount;
+        var tasks = new Task[shardCount];
+        for (int i = 0; i < shardCount; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}");
+            tasks[i] = shard.BeginShadowForwardAsync(destinationTreeId, opId, logicalTreeId);
+        }
+        await Task.WhenAll(tasks);
+
+        state.State.Phase = SnapshotPhase.Copy;
+        state.State.NextShardIndex = 0;
+        state.State.ShardRetries = 0;
+        await state.WriteStateAsync();
+    }
+
+    /// <summary>
+    /// Drains every remaining source shard into the destination with bounded
+    /// concurrency (<see cref="LatticeOptions.MaxConcurrentDrains"/>). Each
+    /// shard is copied then transitioned to
+    /// <c>ShadowForwardPhase.Drained</c>. Online-mode only. Exposed as
+    /// <c>internal</c> for unit testing.
+    /// </summary>
+    internal async Task DrainAllShardsOnlineAsync()
+    {
+        var shardCount = state.State.ShardCount;
+        var start = state.State.NextShardIndex;
+        var cap = Math.Max(1, Options.MaxConcurrentDrains);
+
+        using var sem = new SemaphoreSlim(cap);
+        var tasks = new List<Task>(shardCount - start);
+        for (int i = start; i < shardCount; i++)
+        {
+            var idx = i;
+            await sem.WaitAsync();
+            tasks.Add(DrainOneShardOnlineAsync(idx, sem));
+        }
+        await Task.WhenAll(tasks);
+
+        state.State.NextShardIndex = shardCount;
+        state.State.ShardRetries = 0;
+        await state.WriteStateAsync();
+    }
+
+    private async Task DrainOneShardOnlineAsync(int shardIndex, SemaphoreSlim sem)
+    {
+        try
+        {
+            await CopyShardAsync(shardIndex);
+            await MarkShardDrainedAsync(shardIndex);
+        }
+        finally
+        {
+            sem.Release();
+        }
+    }
+
+    /// <summary>
+    /// Transitions a single source shard from
+    /// <c>ShadowForwardPhase.Draining</c> to <c>ShadowForwardPhase.Drained</c>.
+    /// Online-mode only.
+    /// </summary>
+    private async Task MarkShardDrainedAsync(int shardIndex)
+    {
+        var opId = state.State.OperationId
+            ?? throw new InvalidOperationException(
+                $"Snapshot state for tree '{SourceTreeId}' has no OperationId; cannot mark shard drained.");
+        var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{shardIndex}");
+        await shard.MarkDrainedAsync(opId);
     }
 
     internal async Task CompleteSnapshotAsync()
@@ -368,6 +528,43 @@ internal sealed class TreeSnapshotGrain(
         {
             logger.LogWarning(ex, "Failed to unregister snapshot keepalive reminder for tree {TreeId}", SourceTreeId);
         }
+    }
+
+    /// <inheritdoc />
+    public async Task AbortAsync(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+
+        // Idempotent — nothing to abort.
+        if (!state.State.InProgress) return;
+
+        // Refuse to abort a snapshot started under a different operationId.
+        // This prevents a stale coordinator from tearing down a newer operation.
+        if (!string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal))
+            return;
+
+        _snapshotTimer?.Dispose();
+        _snapshotTimer = null;
+
+        // Clear all in-flight state so the grain deactivates cleanly. Shadow-
+        // forward state on the source shards is the coordinator's responsibility
+        // to clear (via ClearShadowForwardAsync); the snapshot grain does not
+        // touch it here because the coordinator may want to preserve it across
+        // retries.
+        state.State.InProgress = false;
+        state.State.Complete = false;
+        state.State.NextShardIndex = 0;
+        state.State.ShardRetries = 0;
+        state.State.Phase = SnapshotPhase.Lock;
+        state.State.DestinationTreeId = null;
+        state.State.OperationId = null;
+        state.State.MaxLeafKeys = null;
+        state.State.MaxInternalChildren = null;
+        state.State.LogicalTreeId = "";
+        await state.WriteStateAsync();
+
+        await UnregisterKeepaliveAsync();
+        this.DeactivateOnIdle();
     }
 
     /// <inheritdoc />

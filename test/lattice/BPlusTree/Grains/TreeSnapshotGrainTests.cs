@@ -249,7 +249,7 @@ public partial class TreeSnapshotGrainTests
 
         await grain.InitiateSnapshotStateAsync(DestTreeId, SnapshotMode.Online, ShardCount);
 
-        Assert.That(state.State.Phase, Is.EqualTo(SnapshotPhase.Copy));
+        Assert.That(state.State.Phase, Is.EqualTo(SnapshotPhase.ShadowBegin));
         for (int i = 0; i < ShardCount; i++)
         {
             await grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}")
@@ -271,7 +271,7 @@ public partial class TreeSnapshotGrainTests
         Assert.That(state.State.Mode, Is.EqualTo(SnapshotMode.Online));
         Assert.That(state.State.ShardCount, Is.EqualTo(ShardCount));
         Assert.That(state.State.OperationId, Is.Not.Null.And.Not.Empty);
-        Assert.That(state.State.Phase, Is.EqualTo(SnapshotPhase.Copy));
+        Assert.That(state.State.Phase, Is.EqualTo(SnapshotPhase.ShadowBegin));
         Assert.That(state.State.MaxLeafKeys, Is.EqualTo(256));
         Assert.That(state.State.MaxInternalChildren, Is.EqualTo(64));
     }

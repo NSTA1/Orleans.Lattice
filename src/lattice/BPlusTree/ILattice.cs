@@ -226,7 +226,9 @@ public interface ILattice : IGrainWithStringKey
     /// In <see cref="SnapshotMode.Offline"/> mode, the source tree is locked
     /// (marked deleted) during the copy, guaranteeing a consistent snapshot.
     /// In <see cref="SnapshotMode.Online"/> mode, the source tree remains
-    /// available; the result is a best-effort point-in-time copy.
+    /// available for reads and writes throughout; the result is strictly
+    /// consistent via shadow forwarding — every write accepted on the source
+    /// before the snapshot completes is reflected on the destination.
     /// </para>
     /// <para>
     /// The source and destination trees must have the same <see cref="LatticeOptions.ShardCount"/>.

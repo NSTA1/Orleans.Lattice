@@ -57,6 +57,11 @@ internal static class TypeAliases
     internal const string TreeReshardState = "ol.txs";
     internal const string ReshardPhase = "ol.rxp";
 
+    // Online resize — shadow-forwarding primitive
+    internal const string ShadowForwardState = "ol.sfs";
+    internal const string ShadowForwardPhase = "ol.sfp";
+    internal const string StaleTreeRouting = "ol.str";
+
     // Range delete (FX-011)
     internal const string RangeDeleteResult = "ol.rdr";
 
