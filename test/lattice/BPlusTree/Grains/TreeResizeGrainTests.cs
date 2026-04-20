@@ -151,7 +151,8 @@ public partial class TreeResizeGrainTests
             state.State.SnapshotTreeId!,
             SnapshotMode.Online,
             256, 64,
-            state.State.OperationId!);
+            state.State.OperationId!,
+            Arg.Any<string>());
     }
 
     [Test]

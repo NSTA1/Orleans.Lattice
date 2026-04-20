@@ -45,25 +45,15 @@ internal sealed partial class ShardRootGrain
         var sf = state.State.ShadowForward;
         if (sf is null) return;
         if (sf.Phase != ShadowForwardPhase.Rejecting) return;
+        // Prefer the coordinator-stamped logical tree ID when present. The
+        // shard's grain key only encodes the physical tree ID, so without
+        // this field the diagnostic would misreport a physical ID as the
+        // caller's logical name during resize (where they differ).
+        var logical = string.IsNullOrEmpty(sf.LogicalTreeId) ? TreeId : sf.LogicalTreeId;
         throw new StaleTreeRoutingException(
-            logicalTreeId: TreeId, // best-effort: during resize the physical tree ID may differ from the user's logical name
+            logicalTreeId: logical,
             stalePhysicalTreeId: TreeId,
             destinationPhysicalTreeId: sf.DestinationPhysicalTreeId);
-    }
-
-    /// <summary>
-    /// Returns <c>true</c> when mutations on this shard should be mirrored to
-    /// a shadow target. <c>false</c> when no shadow-forward is in flight or
-    /// the shard has already transitioned to <see cref="ShadowForwardPhase.Rejecting"/>
-    /// (in which case no operation should reach the forward path because
-    /// <see cref="ThrowIfTreeRejecting"/> will have thrown first).
-    /// </summary>
-    private bool ShouldForwardShadow()
-    {
-        var sf = state.State.ShadowForward;
-        return sf is not null
-            && (sf.Phase == ShadowForwardPhase.Draining
-                || sf.Phase == ShadowForwardPhase.Drained);
     }
 
     /// <summary>
@@ -99,10 +89,11 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
-    public async Task BeginShadowForwardAsync(string destinationPhysicalTreeId, string operationId)
+    public async Task BeginShadowForwardAsync(string destinationPhysicalTreeId, string operationId, string logicalTreeId)
     {
         ArgumentException.ThrowIfNullOrEmpty(destinationPhysicalTreeId);
         ArgumentException.ThrowIfNullOrEmpty(operationId);
+        ArgumentNullException.ThrowIfNull(logicalTreeId);
         if (string.Equals(destinationPhysicalTreeId, TreeId, StringComparison.Ordinal))
             throw new ArgumentException(
                 "Destination tree ID must differ from the source tree ID.",
@@ -132,6 +123,7 @@ internal sealed partial class ShardRootGrain
             DestinationPhysicalTreeId = destinationPhysicalTreeId,
             Phase = ShadowForwardPhase.Draining,
             OperationId = operationId,
+            LogicalTreeId = logicalTreeId,
         };
         await state.WriteStateAsync();
     }

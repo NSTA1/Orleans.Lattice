@@ -109,7 +109,7 @@ public class ShardRootGrainShadowForwardTests
     public void BeginShadowForwardAsync_throws_when_destinationTreeId_is_null()
     {
         var h = CreateHarness();
-        Assert.That(async () => await h.Grain.BeginShadowForwardAsync(null!, OperationId),
+        Assert.That(async () => await h.Grain.BeginShadowForwardAsync(null!, OperationId, "logical-tree"),
             Throws.InstanceOf<ArgumentException>());
     }
 
@@ -117,7 +117,7 @@ public class ShardRootGrainShadowForwardTests
     public void BeginShadowForwardAsync_throws_when_destinationTreeId_is_empty()
     {
         var h = CreateHarness();
-        Assert.That(async () => await h.Grain.BeginShadowForwardAsync("", OperationId),
+        Assert.That(async () => await h.Grain.BeginShadowForwardAsync("", OperationId, "logical-tree"),
             Throws.InstanceOf<ArgumentException>());
     }
 
@@ -125,7 +125,7 @@ public class ShardRootGrainShadowForwardTests
     public void BeginShadowForwardAsync_throws_when_operationId_is_null()
     {
         var h = CreateHarness();
-        Assert.That(async () => await h.Grain.BeginShadowForwardAsync(DestTreeId, null!),
+        Assert.That(async () => await h.Grain.BeginShadowForwardAsync(DestTreeId, null!, "logical-tree"),
             Throws.InstanceOf<ArgumentException>());
     }
 
@@ -133,7 +133,7 @@ public class ShardRootGrainShadowForwardTests
     public void BeginShadowForwardAsync_throws_when_operationId_is_empty()
     {
         var h = CreateHarness();
-        Assert.That(async () => await h.Grain.BeginShadowForwardAsync(DestTreeId, ""),
+        Assert.That(async () => await h.Grain.BeginShadowForwardAsync(DestTreeId, "", "logical-tree"),
             Throws.InstanceOf<ArgumentException>());
     }
 
@@ -141,7 +141,7 @@ public class ShardRootGrainShadowForwardTests
     public void BeginShadowForwardAsync_throws_when_destination_equals_source()
     {
         var h = CreateHarness();
-        Assert.That(async () => await h.Grain.BeginShadowForwardAsync(TreeId, OperationId),
+        Assert.That(async () => await h.Grain.BeginShadowForwardAsync(TreeId, OperationId, "logical-tree"),
             Throws.InstanceOf<ArgumentException>());
     }
 
@@ -149,7 +149,7 @@ public class ShardRootGrainShadowForwardTests
     public async Task BeginShadowForwardAsync_persists_draining_state_on_first_call()
     {
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
 
         Assert.That(h.State.State.ShadowForward, Is.Not.Null);
         Assert.That(h.State.State.ShadowForward!.DestinationPhysicalTreeId, Is.EqualTo(DestTreeId));
@@ -162,10 +162,10 @@ public class ShardRootGrainShadowForwardTests
     public async Task BeginShadowForwardAsync_is_idempotent_for_same_destination_and_operationId()
     {
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
         var writesAfterFirst = h.State.WriteCount;
 
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
 
         Assert.That(h.State.WriteCount, Is.EqualTo(writesAfterFirst), "no additional write on idempotent re-entry");
     }
@@ -175,11 +175,11 @@ public class ShardRootGrainShadowForwardTests
     {
         // Re-entry during Drained is legal — returns silently without regressing the phase.
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
         await h.Grain.MarkDrainedAsync(OperationId);
         var writesBefore = h.State.WriteCount;
 
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
 
         Assert.That(h.State.State.ShadowForward!.Phase, Is.EqualTo(ShadowForwardPhase.Drained));
         Assert.That(h.State.WriteCount, Is.EqualTo(writesBefore), "idempotent — no phase regression");
@@ -189,9 +189,9 @@ public class ShardRootGrainShadowForwardTests
     public async Task BeginShadowForwardAsync_refuses_different_operationId()
     {
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
 
-        Assert.That(async () => await h.Grain.BeginShadowForwardAsync(DestTreeId, "op-2"),
+        Assert.That(async () => await h.Grain.BeginShadowForwardAsync(DestTreeId, "op-2", "logical-tree"),
             Throws.InstanceOf<InvalidOperationException>());
     }
 
@@ -199,9 +199,9 @@ public class ShardRootGrainShadowForwardTests
     public async Task BeginShadowForwardAsync_refuses_different_destination_under_same_operationId()
     {
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
 
-        Assert.That(async () => await h.Grain.BeginShadowForwardAsync("other-dest", OperationId),
+        Assert.That(async () => await h.Grain.BeginShadowForwardAsync("other-dest", OperationId, "logical-tree"),
             Throws.InstanceOf<InvalidOperationException>());
     }
 
@@ -229,7 +229,7 @@ public class ShardRootGrainShadowForwardTests
     public async Task MarkDrainedAsync_transitions_from_draining_to_drained()
     {
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
 
         await h.Grain.MarkDrainedAsync(OperationId);
 
@@ -240,7 +240,7 @@ public class ShardRootGrainShadowForwardTests
     public async Task MarkDrainedAsync_is_idempotent_when_already_drained()
     {
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
         await h.Grain.MarkDrainedAsync(OperationId);
         var writesBefore = h.State.WriteCount;
 
@@ -253,7 +253,7 @@ public class ShardRootGrainShadowForwardTests
     public async Task MarkDrainedAsync_is_idempotent_when_already_rejecting()
     {
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
         await h.Grain.MarkDrainedAsync(OperationId);
         await h.Grain.EnterRejectingAsync(OperationId);
         var phaseBefore = h.State.State.ShadowForward!.Phase;
@@ -267,7 +267,7 @@ public class ShardRootGrainShadowForwardTests
     public async Task MarkDrainedAsync_refuses_different_operationId()
     {
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
 
         Assert.That(async () => await h.Grain.MarkDrainedAsync("op-other"),
             Throws.InstanceOf<InvalidOperationException>());
@@ -297,7 +297,7 @@ public class ShardRootGrainShadowForwardTests
     public async Task EnterRejectingAsync_transitions_from_drained_to_rejecting()
     {
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
         await h.Grain.MarkDrainedAsync(OperationId);
 
         await h.Grain.EnterRejectingAsync(OperationId);
@@ -311,7 +311,7 @@ public class ShardRootGrainShadowForwardTests
         // Defensive: if a coordinator invokes the swap without calling MarkDrained first
         // (e.g. pathological restart path), the transition must still be allowed.
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
 
         await h.Grain.EnterRejectingAsync(OperationId);
 
@@ -322,7 +322,7 @@ public class ShardRootGrainShadowForwardTests
     public async Task EnterRejectingAsync_is_idempotent_when_already_rejecting()
     {
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
         await h.Grain.EnterRejectingAsync(OperationId);
         var writesBefore = h.State.WriteCount;
 
@@ -335,7 +335,7 @@ public class ShardRootGrainShadowForwardTests
     public async Task EnterRejectingAsync_refuses_different_operationId()
     {
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
 
         Assert.That(async () => await h.Grain.EnterRejectingAsync("op-other"),
             Throws.InstanceOf<InvalidOperationException>());
@@ -369,7 +369,7 @@ public class ShardRootGrainShadowForwardTests
     public async Task ClearShadowForwardAsync_clears_state_on_matching_operationId()
     {
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
 
         await h.Grain.ClearShadowForwardAsync(OperationId);
 
@@ -380,7 +380,7 @@ public class ShardRootGrainShadowForwardTests
     public async Task ClearShadowForwardAsync_refuses_different_operationId()
     {
         var h = CreateHarness();
-        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId);
+        await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
 
         Assert.That(async () => await h.Grain.ClearShadowForwardAsync("op-other"),
             Throws.InstanceOf<InvalidOperationException>());

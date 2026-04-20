@@ -49,7 +49,7 @@ public partial class TreeSnapshotGrainTests
         for (int i = 0; i < ShardCount; i++)
         {
             await grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}")
-                .Received(1).BeginShadowForwardAsync(DestTreeId, "op-1");
+                .Received(1).BeginShadowForwardAsync(DestTreeId, "op-1", SourceTreeId);
         }
     }
 
@@ -126,7 +126,7 @@ public partial class TreeSnapshotGrainTests
         for (int i = 0; i < ShardCount; i++)
         {
             await grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}")
-                .Received(1).BeginShadowForwardAsync(DestTreeId, "op-1");
+                .Received(1).BeginShadowForwardAsync(DestTreeId, "op-1", SourceTreeId);
         }
     }
 
@@ -283,7 +283,7 @@ public partial class TreeSnapshotGrainTests
         for (int i = 0; i < ShardCount; i++)
         {
             await grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}")
-                .Received(1).BeginShadowForwardAsync(DestTreeId, "op-e2e");
+                .Received(1).BeginShadowForwardAsync(DestTreeId, "op-e2e", SourceTreeId);
             await grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}")
                 .Received(1).MarkDrainedAsync("op-e2e");
         }
@@ -317,7 +317,7 @@ public partial class TreeSnapshotGrainTests
             await grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}")
                 .Received(1).UnmarkDeletedAsync();
             await grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}")
-                .DidNotReceive().BeginShadowForwardAsync(Arg.Any<string>(), Arg.Any<string>());
+                .DidNotReceive().BeginShadowForwardAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>());
             await grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}")
                 .DidNotReceive().MarkDrainedAsync(Arg.Any<string>());
         }

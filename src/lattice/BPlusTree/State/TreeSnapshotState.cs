@@ -52,6 +52,18 @@ internal sealed class TreeSnapshotState
 
     /// <summary>Optional internal node sizing override for the destination tree. Stored for idempotency checks.</summary>
     [Id(10)] public int? MaxInternalChildren { get; set; }
+
+    /// <summary>
+    /// User-visible logical tree ID that this snapshot is being taken on
+    /// behalf of. In offline snapshots this equals <c>SourceTreeId</c>
+    /// (the source grain's key). In online resize, the source tree is a
+    /// physical tree whose logical alias is the user-facing name — the
+    /// coordinator passes the logical name here so each source shard's
+    /// shadow-forward state carries the correct logical ID for
+    /// <see cref="StaleTreeRoutingException"/> diagnostics after the alias
+    /// swap. Empty falls back to <c>SourceTreeId</c>.
+    /// </summary>
+    [Id(11)] public string LogicalTreeId { get; set; } = "";
 }
 
 /// <summary>

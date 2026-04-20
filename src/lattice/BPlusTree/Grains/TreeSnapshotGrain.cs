@@ -41,15 +41,16 @@ internal sealed class TreeSnapshotGrain(
         int? maxLeafKeys = null, int? maxInternalChildren = null)
     {
         await SnapshotWithOperationIdAsync(destinationTreeId, mode, maxLeafKeys, maxInternalChildren,
-            Guid.NewGuid().ToString("N"));
+            Guid.NewGuid().ToString("N"), SourceTreeId);
     }
 
     /// <inheritdoc />
     public async Task SnapshotWithOperationIdAsync(string destinationTreeId, SnapshotMode mode,
-        int? maxLeafKeys, int? maxInternalChildren, string operationId)
+        int? maxLeafKeys, int? maxInternalChildren, string operationId, string logicalTreeId)
     {
         ArgumentNullException.ThrowIfNull(destinationTreeId);
         ArgumentException.ThrowIfNullOrEmpty(operationId);
+        ArgumentNullException.ThrowIfNull(logicalTreeId);
 
         if (maxLeafKeys is not null && maxLeafKeys <= 1)
             throw new ArgumentOutOfRangeException(nameof(maxLeafKeys), "Must be greater than 1.");
@@ -95,7 +96,7 @@ internal sealed class TreeSnapshotGrain(
                 $"Destination tree '{destinationTreeId}' already exists. Choose a new tree ID.");
 
         await InitiateSnapshotStateAsync(destinationTreeId, mode, sourceOptions.ShardCount,
-            maxLeafKeys, maxInternalChildren, operationId);
+            maxLeafKeys, maxInternalChildren, operationId, logicalTreeId);
         await StartSnapshotAsync();
     }
 
@@ -107,7 +108,7 @@ internal sealed class TreeSnapshotGrain(
     /// </summary>
     internal async Task InitiateSnapshotStateAsync(string destinationTreeId, SnapshotMode mode,
         int shardCount, int? maxLeafKeys = null, int? maxInternalChildren = null,
-        string? operationId = null)
+        string? operationId = null, string? logicalTreeId = null)
     {
         // Register the destination tree in the registry before any data is written.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
@@ -137,6 +138,7 @@ internal sealed class TreeSnapshotGrain(
         state.State.MaxLeafKeys = maxLeafKeys;
         state.State.MaxInternalChildren = maxInternalChildren;
         state.State.Complete = false;
+        state.State.LogicalTreeId = logicalTreeId ?? "";
         await state.WriteStateAsync();
     }
 
@@ -386,12 +388,19 @@ internal sealed class TreeSnapshotGrain(
             ?? throw new InvalidOperationException(
                 $"Snapshot state for tree '{SourceTreeId}' has no DestinationTreeId; cannot begin shadow forward.");
 
+        // Fall back to SourceTreeId when no logical name was threaded in —
+        // preserves offline/standalone-snapshot behaviour where the source
+        // grain key already IS the user-visible name.
+        var logicalTreeId = string.IsNullOrEmpty(state.State.LogicalTreeId)
+            ? SourceTreeId
+            : state.State.LogicalTreeId;
+
         var shardCount = state.State.ShardCount;
         var tasks = new Task[shardCount];
         for (int i = 0; i < shardCount; i++)
         {
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}");
-            tasks[i] = shard.BeginShadowForwardAsync(destinationTreeId, opId);
+            tasks[i] = shard.BeginShadowForwardAsync(destinationTreeId, opId, logicalTreeId);
         }
         await Task.WhenAll(tasks);
 
@@ -491,6 +500,43 @@ internal sealed class TreeSnapshotGrain(
         {
             logger.LogWarning(ex, "Failed to unregister snapshot keepalive reminder for tree {TreeId}", SourceTreeId);
         }
+    }
+
+    /// <inheritdoc />
+    public async Task AbortAsync(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+
+        // Idempotent — nothing to abort.
+        if (!state.State.InProgress) return;
+
+        // Refuse to abort a snapshot started under a different operationId.
+        // This prevents a stale coordinator from tearing down a newer operation.
+        if (!string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal))
+            return;
+
+        _snapshotTimer?.Dispose();
+        _snapshotTimer = null;
+
+        // Clear all in-flight state so the grain deactivates cleanly. Shadow-
+        // forward state on the source shards is the coordinator's responsibility
+        // to clear (via ClearShadowForwardAsync); the snapshot grain does not
+        // touch it here because the coordinator may want to preserve it across
+        // retries.
+        state.State.InProgress = false;
+        state.State.Complete = false;
+        state.State.NextShardIndex = 0;
+        state.State.ShardRetries = 0;
+        state.State.Phase = SnapshotPhase.Lock;
+        state.State.DestinationTreeId = null;
+        state.State.OperationId = null;
+        state.State.MaxLeafKeys = null;
+        state.State.MaxInternalChildren = null;
+        state.State.LogicalTreeId = "";
+        await state.WriteStateAsync();
+
+        await UnregisterKeepaliveAsync();
+        this.DeactivateOnIdle();
     }
 
     /// <inheritdoc />

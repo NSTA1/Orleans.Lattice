@@ -127,7 +127,7 @@ internal sealed class TreeResizeGrain(
         // EnterRejectingAsync / ClearShadowForwardAsync with this same id.
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(currentPhysical);
         await snapshot.SnapshotWithOperationIdAsync(snapshotTreeId, SnapshotMode.Online,
-            newMaxLeafKeys, newMaxInternalChildren, operationId);
+            newMaxLeafKeys, newMaxInternalChildren, operationId, TreeId);
     }
 
     public async Task RunResizePassAsync()
@@ -201,8 +201,22 @@ internal sealed class TreeResizeGrain(
         if (state.State.InProgress)
         {
             // ---- Undo during drain (before swap). ----
-            // Cancel the in-flight snapshot by clearing shadow-forward on
-            // every old-tree shard and deleting the destination tree.
+            // Cancel the in-flight snapshot by telling its coordinator to
+            // tear itself down, then clear shadow-forward on every old-tree
+            // shard and delete the destination tree. No alias was ever set
+            // so no recovery or alias removal needed.
+            //
+            // Race note: a ClearShadowForwardAsync that lands between a
+            // shard's TryGetShadowTarget resolving and its forward task
+            // running may still result in a write landing on the destination
+            // tree just before DeleteTreeAsync is processed. This is safe —
+            // the destination is being torn down, so the leaked write is
+            // discarded, and forward writes are LWW-idempotent so no
+            // source-tree state is corrupted even if that write is later
+            // retried against a recovered destination.
+            var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(oldPhysical);
+            await snapshot.AbortAsync(opId);
+
             // No alias was ever set so no recovery or alias removal needed.
             var clearTasks = new Task[shardCount];
             for (int i = 0; i < shardCount; i++)
@@ -226,6 +240,12 @@ internal sealed class TreeResizeGrain(
         }
 
         // ---- Undo after swap. ----
+        // Defensively abort any snapshot activation that may have been
+        // resurrected by crash recovery — a no-op when the snapshot has
+        // already completed or when the opId no longer matches.
+        var postSwapSnapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(oldPhysical);
+        await postSwapSnapshot.AbortAsync(opId);
+
         // 1. Recover the old physical tree from soft-delete.
         var oldDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(oldPhysical);
         await oldDeletion.RecoverAsync();
@@ -396,9 +416,10 @@ internal sealed class TreeResizeGrain(
     {
         var oldPhysical = state.State.OldPhysicalTreeId!;
 
-        // Only soft-delete if the old physical differs from the logical tree ID.
-        // If they're the same, the old tree's shards are the ones being aliased away
-        // from — soft-delete them.
+        // The alias now repoints the logical tree to SnapshotTreeId, so the
+        // old physical tree receives no further public traffic — soft-delete
+        // it to reclaim storage. The SoftDeleteDuration window keeps the
+        // data intact so UndoResizeAsync can still restore it.
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(oldPhysical);
         await deletion.DeleteTreeAsync();
     }

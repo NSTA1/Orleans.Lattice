@@ -277,12 +277,57 @@ internal sealed partial class ShardRootGrain(
 
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
+        await PrepareForOperationAsync();
         // Reject-check up-front so the batch fails fast rather than partially applying.
         ThrowIfRejectedForAnyKey(entries.Select(e => e.Key));
-        // SetAsync internally re-checks reject + shadow-forwards each entry.
-        foreach (var entry in entries)
+        RecordWrite();
+
+        if (entries.Count == 0) return;
+
+        // Online-resize shadow-forward: forward the whole batch once in parallel
+        // with the local apply. Without batched forward, a single SetManyAsync
+        // of N entries would pay N sequential shadow-forward RTTs. Mirrors
+        // MergeManyAsync's pattern. LWW on the destination absorbs any
+        // interleaving with the drain reader.
+        var forwardTask = ForwardShadowAsync(t => t.SetManyAsync(entries));
+
+        try
         {
-            await SetAsync(entry.Key, entry.Value);
+            foreach (var entry in entries)
+            {
+                await SetAsyncLocalOnly(entry.Key, entry.Value);
+            }
+        }
+        finally
+        {
+            await forwardTask;
+        }
+    }
+
+    /// <summary>
+    /// Same as <see cref="SetAsync(string, byte[])"/> but skips the per-entry
+    /// shadow-forward so the caller can issue a single batched forward.
+    /// Used exclusively by <see cref="SetManyAsync"/>.
+    /// </summary>
+    private async Task SetAsyncLocalOnly(string key, byte[] value)
+    {
+        ThrowIfRejectedForKey(key);
+
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                var splitResult = await TraverseForWriteAsync(key, value);
+                while (splitResult is not null)
+                {
+                    splitResult = await PromoteRootAsync(splitResult);
+                }
+                await ForwardLocalWriteToShadowIfNeededAsync(key);
+                return;
+            }
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            {
+            }
         }
     }
 
@@ -344,6 +389,14 @@ internal sealed partial class ShardRootGrain(
         // For online resize, forward the same range delete to the destination
         // in parallel — LWW on the destination shard absorbs any interleaving
         // with drain and live forwards.
+        //
+        // Correctness note: this forward assumes the destination tree shares
+        // the source tree's ShardMap (the shadow-forwarding primitive's
+        // invariant). If the primitive is ever reused for an operation where
+        // source and destination shard layouts differ, the destination shard
+        // at the same physical index may not own the full range — the
+        // coordinator would then need to fan the range delete out across
+        // every destination shard rather than routing by identity projection.
         var forwardTask = ForwardShadowAsync(t => t.DeleteRangeAsync(startInclusive, endExclusive));
 
         // Find the starting leaf for the range.

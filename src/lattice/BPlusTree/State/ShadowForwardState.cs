@@ -44,4 +44,16 @@ internal sealed class ShadowForwardState
     /// operation.
     /// </summary>
     [Id(2)] public string OperationId { get; set; } = "";
+
+    /// <summary>
+    /// User-visible logical tree ID (the name the caller passed to
+    /// <c>ILattice</c>) for which this shard is participating in an online
+    /// copy. Stamped here so that, when the shard later transitions to
+    /// <see cref="ShadowForwardPhase.Rejecting"/>, the thrown
+    /// <see cref="StaleTreeRoutingException"/> can carry the correct
+    /// logical name even though the shard's own grain key is keyed on the
+    /// physical tree ID. Empty on pre-existing state; a blank value
+    /// falls back to the shard's physical tree ID in error messages.
+    /// </summary>
+    [Id(3)] public string LogicalTreeId { get; set; } = "";
 }

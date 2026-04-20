@@ -354,7 +354,16 @@ public interface IShardRootGrain : IGrainWithStringKey
     /// <see cref="InvalidOperationException"/> if the shard is already in a
     /// shadow-forward lifecycle under a different <paramref name="operationId"/>.
     /// </summary>
-    Task BeginShadowForwardAsync(string destinationPhysicalTreeId, string operationId);
+    /// <param name="destinationPhysicalTreeId">Destination physical tree ID
+    /// whose same-indexed shard receives every mirrored mutation.</param>
+    /// <param name="operationId">Coordinator-supplied operation ID. Used for
+    /// idempotent re-entry and to refuse interference from a stale coordinator.</param>
+    /// <param name="logicalTreeId">User-visible logical tree ID. Stamped into
+    /// <see cref="StaleTreeRoutingException.LogicalTreeId"/> when the shard
+    /// later transitions to <see cref="ShadowForwardPhase.Rejecting"/>, so
+    /// callers receive the correct tree name to refresh. May be an empty
+    /// string, in which case the physical tree ID is used as a fallback.</param>
+    Task BeginShadowForwardAsync(string destinationPhysicalTreeId, string operationId, string logicalTreeId);
 
     /// <summary>
     /// Transitions this shard from <see cref="ShadowForwardPhase.Draining"/>

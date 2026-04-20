@@ -45,8 +45,27 @@ public interface ITreeSnapshotGrain : IGrainWithStringKey
     /// <param name="maxLeafKeys">Optional sizing override for the destination tree.</param>
     /// <param name="maxInternalChildren">Optional sizing override for the destination tree.</param>
     /// <param name="operationId">Externally allocated shadow-forward operation id. Must be non-empty.</param>
+    /// <param name="logicalTreeId">User-visible logical tree ID associated
+    /// with this snapshot. Stamped onto each source shard's shadow-forward
+    /// state so a post-swap <see cref="StaleTreeRoutingException"/> carries
+    /// the caller's logical name. May be empty to fall back to the source
+    /// physical tree ID.</param>
     Task SnapshotWithOperationIdAsync(string destinationTreeId, SnapshotMode mode,
-        int? maxLeafKeys, int? maxInternalChildren, string operationId);
+        int? maxLeafKeys, int? maxInternalChildren, string operationId, string logicalTreeId);
+
+    /// <summary>
+    /// Aborts an in-flight snapshot under the given <paramref name="operationId"/>.
+    /// Used by coordinator grains (e.g. <c>TreeResizeGrain.UndoResizeAsync</c>)
+    /// that manage the snapshot's lifetime and need to tear it down before it
+    /// completes. Disposes the snapshot's internal timer, unregisters the
+    /// keepalive reminder, and clears all snapshot state so the grain
+    /// deactivates. Idempotent — a no-op if no snapshot is in progress or if
+    /// the in-progress snapshot's <c>OperationId</c> doesn't match (so a stale
+    /// coordinator cannot abort a newer operation).
+    /// </summary>
+    /// <param name="operationId">Operation ID the snapshot was started with.
+    /// Must match the persisted <c>OperationId</c>, otherwise the call is a no-op.</param>
+    Task AbortAsync(string operationId);
 
     /// <summary>
     /// Processes all remaining shards synchronously in a single call.
