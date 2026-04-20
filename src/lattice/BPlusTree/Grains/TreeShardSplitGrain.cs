@@ -8,7 +8,7 @@ using Orleans.Timers;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Coordinator that drives an online adaptive shard split (F-011) end-to-end.
+/// Coordinator that drives an online adaptive shard split end-to-end.
 /// <para>
 /// Phase machine:
 /// </para>

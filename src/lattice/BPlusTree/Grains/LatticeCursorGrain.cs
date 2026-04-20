@@ -8,7 +8,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Implementation of <see cref="ILatticeCursorGrain"/> — a stateful cursor
-/// grain (F-033) that checkpoints scan progress server-side. Each
+/// grain that checkpoints scan progress server-side. Each
 /// <c>NextAsync</c> / <c>DeleteRangeStepAsync</c> call runs a bounded
 /// sub-scan through the tree's public <see cref="ILattice"/> API using the
 /// persisted <see cref="LatticeCursorState.LastYieldedKey"/> as a
@@ -17,7 +17,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// Because each step goes through the normal <see cref="ILattice.KeysAsync"/>
 /// / <see cref="ILattice.EntriesAsync"/> path, topology-change reconciliation
-/// (F-032) is automatic within each step. Global ordering is preserved
+/// is automatic within each step. Global ordering is preserved
 /// across steps because the continuation bounds strictly exclude every
 /// previously-yielded key.
 /// </para>

@@ -5,6 +5,7 @@ using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
 using Orleans.Timers;
@@ -80,6 +81,17 @@ public partial class TreeSnapshotGrainTests
         {
             var leafMock = Substitute.For<IBPlusLeafGrain>();
             grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leafMock);
+
+            // snapshot TTL preservation: snapshot now drains raw LwwValue
+            // entries via GetLiveRawEntriesAsync. Stub the raw method so tests
+            // exercise the new snapshot path.
+            var rawPerLeaf = new List<LwwEntry>(entriesPerLeaf[i].Count);
+            foreach (var kvp in entriesPerLeaf[i])
+            {
+                var hlc = new HybridLogicalClock { WallClockTicks = DateTimeOffset.UtcNow.UtcTicks, Counter = 0 };
+                rawPerLeaf.Add(new LwwEntry(kvp.Key, LwwValue<byte[]>.Create(kvp.Value, hlc)));
+            }
+            leafMock.GetLiveRawEntriesAsync().Returns(Task.FromResult(rawPerLeaf));
             leafMock.GetLiveEntriesAsync().Returns(Task.FromResult(entriesPerLeaf[i]));
 
             var nextId = i + 1 < leafIds.Length ? (GrainId?)leafIds[i + 1] : null;

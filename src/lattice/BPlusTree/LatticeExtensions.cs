@@ -119,7 +119,7 @@ public static class LatticeExtensions
     /// <param name="shardCount">Number of shards (must match <see cref="LatticeOptions.ShardCount"/>).</param>
     /// <param name="chunkSize">Max entries per shard before flushing (default 10 000).</param>
     /// <param name="cancellationToken">Cancellation token checked between entry enqueues and between flushes.</param>
-    [Obsolete("Use the overload without 'shardCount' (F-030); this one bypasses the per-tree ShardMap and will mis-route entries on trees with non-default maps.")]
+    [Obsolete("Use the overload without 'shardCount'; this one bypasses the per-tree ShardMap and will mis-route entries on trees with non-default maps.")]
     public static async Task BulkLoadAsync(
         this ILattice lattice,
         IAsyncEnumerable<KeyValuePair<string, byte[]>> sortedEntries,

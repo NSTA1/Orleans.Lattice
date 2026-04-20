@@ -3,7 +3,7 @@ using System.ComponentModel;
 namespace Orleans.Lattice;
 
 /// <summary>
-/// The kind of scan a <see cref="ILattice"/> stateful cursor (F-033)
+/// The kind of scan a <see cref="ILattice"/> stateful cursor
 /// performs when opened.
 /// </summary>
 [GenerateSerializer]

@@ -130,6 +130,83 @@ public class LeafCacheGrainTests
         Assert.That(result, Is.Null);
     }
 
+    // --- TTL filtering on cached reads ---
+
+    [Test]
+    public async Task Get_returns_null_for_expired_cached_entry()
+    {
+        var (grain, leaf) = CreateGrain();
+
+        // Primary replicates a live entry whose TTL has already elapsed.
+        var clock = HybridLogicalClock.Tick(default);
+        var expiredTicks = DateTimeOffset.UtcNow.Ticks - TimeSpan.FromMinutes(1).Ticks;
+        var expiredDelta = new StateDelta
+        {
+            Entries = new Dictionary<string, LwwValue<byte[]>>
+            {
+                ["k1"] = LwwValue<byte[]>.CreateWithExpiry(
+                    Encoding.UTF8.GetBytes("v1"), clock, expiredTicks)
+            },
+            Version = new VersionVector()
+        };
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(expiredDelta);
+
+        // Cache must filter the expired entry on read even though it was
+        // merged into the local cache during refresh.
+        var result = await grain.GetAsync("k1");
+        Assert.That(result, Is.Null);
+    }
+
+    [Test]
+    public async Task Exists_returns_false_for_expired_cached_entry()
+    {
+        var (grain, leaf) = CreateGrain();
+
+        var clock = HybridLogicalClock.Tick(default);
+        var expiredTicks = DateTimeOffset.UtcNow.Ticks - TimeSpan.FromMinutes(1).Ticks;
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(new StateDelta
+        {
+            Entries = new Dictionary<string, LwwValue<byte[]>>
+            {
+                ["k1"] = LwwValue<byte[]>.CreateWithExpiry(
+                    Encoding.UTF8.GetBytes("v1"), clock, expiredTicks)
+            },
+            Version = new VersionVector()
+        });
+
+        Assert.That(await grain.ExistsAsync("k1"), Is.False);
+    }
+
+    [Test]
+    public async Task GetMany_omits_expired_cached_entries()
+    {
+        var (grain, leaf) = CreateGrain();
+
+        var clock = HybridLogicalClock.Tick(default);
+        var clock2 = HybridLogicalClock.Tick(clock);
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        var expiredTicks = nowTicks - TimeSpan.FromMinutes(1).Ticks;
+        var futureTicks = nowTicks + TimeSpan.FromHours(1).Ticks;
+
+        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(new StateDelta
+        {
+            Entries = new Dictionary<string, LwwValue<byte[]>>
+            {
+                ["expired"] = LwwValue<byte[]>.CreateWithExpiry(
+                    Encoding.UTF8.GetBytes("x"), clock, expiredTicks),
+                ["live"] = LwwValue<byte[]>.CreateWithExpiry(
+                    Encoding.UTF8.GetBytes("v"), clock2, futureTicks)
+            },
+            Version = new VersionVector()
+        });
+
+        var result = await grain.GetManyAsync(new List<string> { "expired", "live" });
+        Assert.That(result.ContainsKey("expired"), Is.False,
+            "Expired entry must be hidden from GetMany results.");
+        Assert.That(result.ContainsKey("live"), Is.True);
+        Assert.That(Encoding.UTF8.GetString(result["live"]), Is.EqualTo("v"));
+    }
+
     // --- Delta refresh ---
 
     [Test]
@@ -301,7 +378,10 @@ public class LeafCacheGrainTests
         // Report split key multiple times — should not crash or remove "a".
         var splitDelta = new StateDelta
         {
-            Entries = new Dictionary<string, LwwValue<byte[]>>(),
+            Entries = new Dictionary<string, LwwValue<byte[]>>
+            {
+                ["m"] = LwwValue<byte[]>.Tombstone(HybridLogicalClock.Tick(default))
+            },
             Version = new VersionVector(),
             SplitKey = "m"
         };

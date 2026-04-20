@@ -141,6 +141,59 @@ internal sealed partial class ShardRootGrain
         }
     }
 
+    /// <summary>
+    /// Write path used by <see cref="ShardRootGrain.SetAsync(string, byte[], long)"/>
+    ///. Identical to <see cref="TraverseForWriteAsync"/> except the
+    /// final leaf write carries an absolute expiry.
+    /// </summary>
+    private async Task<SplitResult?> TraverseForWriteWithExpiryAsync(string key, byte[] value, long expiresAtTicks)
+    {
+        if (state.State.RootIsLeaf)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
+            return await leaf.SetAsync(key, value, expiresAtTicks);
+        }
+
+        var path = StackPool.Get();
+        try
+        {
+            var currentId = state.State.RootNodeId!.Value;
+
+            while (true)
+            {
+                var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+                var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
+
+                if (childrenAreLeaves)
+                {
+                    path.Push(currentId);
+                    path.Push(childId);
+                    break;
+                }
+
+                path.Push(currentId);
+                currentId = childId;
+            }
+
+            var leafId = path.Pop();
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var splitResult = await leafGrain.SetAsync(key, value, expiresAtTicks);
+
+            while (splitResult is not null && path.Count > 0)
+            {
+                var parentId = path.Pop();
+                var parentGrain = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
+                splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
+            }
+
+            return splitResult;
+        }
+        finally
+        {
+            StackPool.Return(path);
+        }
+    }
+
     private async Task<GetOrSetResult> TraverseForGetOrSetAsync(string key, byte[] value)
     {
         if (state.State.RootIsLeaf)

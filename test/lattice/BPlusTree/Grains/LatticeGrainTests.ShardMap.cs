@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 public partial class LatticeGrainTests
 {
-    // --- Shard map indirection tests (F-028) ---
+    // --- Shard map indirection tests ---
 
     private static (LatticeGrain grain, IGrainFactory factory, ILatticeRegistry registry)
         CreateGrainWithRegistry(string treeId, LatticeOptions? options = null)

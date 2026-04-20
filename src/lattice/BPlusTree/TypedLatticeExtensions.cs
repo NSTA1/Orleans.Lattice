@@ -75,6 +75,21 @@ public static class TypedLatticeExtensions
         lattice.SetAsync(key, value, JsonLatticeSerializer<T>.Default, cancellationToken);
 
     /// <summary>
+    /// Serializes <paramref name="value"/> and stores it under <paramref name="key"/>
+    /// with a time-to-live. See <see cref="ILattice.SetAsync(string, byte[], TimeSpan, CancellationToken)"/>
+    /// for expiry semantics.
+    /// </summary>
+    public static Task SetAsync<T>(this ILattice lattice, string key, T value, TimeSpan ttl, ILatticeSerializer<T> serializer, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+        return lattice.SetAsync(key, serializer.Serialize(value), ttl, cancellationToken);
+    }
+
+    /// <inheritdoc cref="SetAsync{T}(ILattice, string, T, TimeSpan, ILatticeSerializer{T}, CancellationToken)"/>
+    public static Task SetAsync<T>(this ILattice lattice, string key, T value, TimeSpan ttl, CancellationToken cancellationToken = default) =>
+        lattice.SetAsync(key, value, ttl, JsonLatticeSerializer<T>.Default, cancellationToken);
+
+    /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the entry's
     /// current <see cref="HybridLogicalClock"/> matches <paramref name="expectedVersion"/>.
     /// Returns <c>true</c> if the write was applied. See <see cref="ILattice.SetIfVersionAsync"/>
@@ -141,7 +156,7 @@ public static class TypedLatticeExtensions
         lattice.SetManyAsync(entries, JsonLatticeSerializer<T>.Default, cancellationToken);
 
     /// <summary>
-    /// Serializes and atomically writes multiple key-value pairs via the F-031
+    /// Serializes and atomically writes multiple key-value pairs via the
     /// saga. See <see cref="ILattice.SetManyAtomicAsync"/> for full semantics
     /// (all-or-nothing commit, partial-visibility window, compensation on failure).
     /// </summary>

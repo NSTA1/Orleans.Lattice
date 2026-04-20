@@ -5,6 +5,7 @@ using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
 using Orleans.Timers;
@@ -20,7 +21,8 @@ public class AtomicWriteGrainTests
     private static (AtomicWriteGrain grain,
                      FakePersistentState<AtomicWriteState> state,
                      IReminderRegistry reminderRegistry,
-                     ILattice lattice) CreateGrain(
+                     ILattice lattice,
+                     IShardRootGrain shard) CreateGrain(
         FakePersistentState<AtomicWriteState>? existingState = null,
         LatticeOptions? options = null)
     {
@@ -31,11 +33,28 @@ public class AtomicWriteGrainTests
         var lattice = Substitute.For<ILattice>();
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
 
+        // Raw-entry reads now flow saga → IShardRootGrain directly (not through
+        // ILattice), so the test harness mocks a single shard substitute and
+        // stubs routing to resolve every key to it. This mirrors the production
+        // path where AtomicWriteGrain.PrepareAsync calls
+        // lattice.GetRoutingAsync() once and then addresses IShardRootGrain
+        // via grainFactory.GetGrain<IShardRootGrain>("{physicalTreeId}/{idx}").
+        var shard = Substitute.For<IShardRootGrain>();
+        grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shard);
+        shard.GetRawEntryAsync(Arg.Any<string>())
+            .Returns(Task.FromResult<LwwEntry?>(null));
+
+        var opts = options ?? new LatticeOptions();
+        var routing = new RoutingInfo(
+            TreeId,
+            ShardMap.CreateDefault(opts.VirtualShardCount, opts.ShardCount));
+        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(routing));
+
         var reminderRegistry = Substitute.For<IReminderRegistry>();
         reminderRegistry.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
             .Returns(Task.FromResult(Substitute.For<IGrainReminder>()));
 
-        var opts = options ?? new LatticeOptions();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.CurrentValue.Returns(opts);
         optionsMonitor.Get(Arg.Any<string>()).Returns(opts);
@@ -49,7 +68,40 @@ public class AtomicWriteGrainTests
             optionsMonitor,
             new LoggerFactory().CreateLogger<AtomicWriteGrain>(),
             state);
-        return (grain, state, reminderRegistry, lattice);
+        return (grain, state, reminderRegistry, lattice, shard);
+    }
+
+    /// <summary>
+    /// Stubs <see cref="IShardRootGrain.GetRawEntryAsync"/> for the given key
+    /// to return an <see cref="LwwEntry"/> carrying <paramref name="value"/>
+    /// with a fresh HLC and no TTL — the non-TTL equivalent of the old
+    /// <c>lattice.GetAsync(key).Returns(value)</c> stub.
+    /// </summary>
+    private static void StubPreValue(IShardRootGrain shard, string key, byte[]? value)
+    {
+        if (value is null)
+        {
+            shard.GetRawEntryAsync(key).Returns(Task.FromResult<LwwEntry?>(null));
+        }
+        else
+        {
+            var hlc = new HybridLogicalClock { WallClockTicks = DateTimeOffset.UtcNow.UtcTicks, Counter = 0 };
+            shard.GetRawEntryAsync(key).Returns(
+                Task.FromResult<LwwEntry?>(new LwwEntry(key, LwwValue<byte[]>.Create(value, hlc))));
+        }
+    }
+
+    /// <summary>
+    /// Stubs <see cref="IShardRootGrain.GetRawEntryAsync"/> for the given key
+    /// to return an <see cref="LwwEntry"/> carrying <paramref name="value"/>
+    /// with a fresh HLC and an explicit absolute <paramref name="expiresAtTicks"/>
+    /// ( TTL). Used to verify compensation preserves TTL metadata.
+    /// </summary>
+    private static void StubPreValueWithExpiry(IShardRootGrain shard, string key, byte[] value, long expiresAtTicks)
+    {
+        var hlc = new HybridLogicalClock { WallClockTicks = DateTimeOffset.UtcNow.UtcTicks, Counter = 0 };
+        var lww = LwwValue<byte[]>.CreateWithExpiry(value, hlc, expiresAtTicks);
+        shard.GetRawEntryAsync(key).Returns(Task.FromResult<LwwEntry?>(new LwwEntry(key, lww)));
     }
 
     private static List<KeyValuePair<string, byte[]>> MakeEntries(params (string, byte[])[] pairs)
@@ -65,7 +117,7 @@ public class AtomicWriteGrainTests
     [Test]
     public void ExecuteAsync_throws_on_null_treeId()
     {
-        var (grain, _, _, _) = CreateGrain();
+        var (grain, _, _, _, _) = CreateGrain();
         Assert.ThrowsAsync<ArgumentNullException>(
             () => grain.ExecuteAsync(null!, MakeEntries(("k", [1]))));
     }
@@ -73,7 +125,7 @@ public class AtomicWriteGrainTests
     [Test]
     public void ExecuteAsync_throws_on_null_entries()
     {
-        var (grain, _, _, _) = CreateGrain();
+        var (grain, _, _, _, _) = CreateGrain();
         Assert.ThrowsAsync<ArgumentNullException>(
             () => grain.ExecuteAsync(TreeId, null!));
     }
@@ -81,7 +133,7 @@ public class AtomicWriteGrainTests
     [Test]
     public async Task ExecuteAsync_empty_batch_is_noop()
     {
-        var (grain, state, _, lattice) = CreateGrain();
+        var (grain, state, _, lattice, _) = CreateGrain();
 
         await grain.ExecuteAsync(TreeId, MakeEntries());
 
@@ -92,7 +144,7 @@ public class AtomicWriteGrainTests
     [Test]
     public void ExecuteAsync_throws_on_duplicate_keys()
     {
-        var (grain, _, _, _) = CreateGrain();
+        var (grain, _, _, _, _) = CreateGrain();
         var entries = MakeEntries(("a", [1]), ("a", [2]));
         Assert.ThrowsAsync<ArgumentException>(
             () => grain.ExecuteAsync(TreeId, entries));
@@ -101,7 +153,7 @@ public class AtomicWriteGrainTests
     [Test]
     public void ExecuteAsync_throws_on_null_value()
     {
-        var (grain, _, _, _) = CreateGrain();
+        var (grain, _, _, _, _) = CreateGrain();
         var entries = new List<KeyValuePair<string, byte[]>>
         {
             new("a", null!),
@@ -115,8 +167,8 @@ public class AtomicWriteGrainTests
     [Test]
     public async Task ExecuteAsync_commits_all_entries_in_order()
     {
-        var (grain, state, _, lattice) = CreateGrain();
-        lattice.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<byte[]?>(null));
+        var (grain, state, _, lattice, shard) = CreateGrain();
+        shard.GetRawEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<LwwEntry?>(null));
 
         var entries = MakeEntries(("a", [1]), ("b", [2]), ("c", [3]));
 
@@ -136,9 +188,9 @@ public class AtomicWriteGrainTests
     [Test]
     public async Task ExecuteAsync_captures_pre_saga_values()
     {
-        var (grain, state, _, lattice) = CreateGrain();
-        lattice.GetAsync("a").Returns(Task.FromResult<byte[]?>([9, 9]));
-        lattice.GetAsync("b").Returns(Task.FromResult<byte[]?>(null));
+        var (grain, state, _, _, shard) = CreateGrain();
+        StubPreValue(shard, "a", [9, 9]);
+        StubPreValue(shard, "b", null);
 
         var entries = MakeEntries(("a", [1]), ("b", [2]));
         await grain.ExecuteAsync(TreeId, entries);
@@ -155,8 +207,8 @@ public class AtomicWriteGrainTests
     [Test]
     public async Task ExecuteAsync_registers_keepalive_reminder_on_start()
     {
-        var (grain, _, reminder, lattice) = CreateGrain();
-        lattice.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<byte[]?>(null));
+        var (grain, _, reminder, _, shard) = CreateGrain();
+        shard.GetRawEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<LwwEntry?>(null));
 
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
 
@@ -170,8 +222,8 @@ public class AtomicWriteGrainTests
     [Test]
     public async Task ExecuteAsync_unregisters_keepalive_on_success()
     {
-        var (grain, _, reminder, lattice) = CreateGrain();
-        lattice.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<byte[]?>(null));
+        var (grain, _, reminder, _, shard) = CreateGrain();
+        shard.GetRawEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<LwwEntry?>(null));
 
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
 
@@ -183,10 +235,10 @@ public class AtomicWriteGrainTests
     [Test]
     public void ExecuteAsync_throws_and_compensates_on_failure_mid_batch()
     {
-        var (grain, state, _, lattice) = CreateGrain();
-        lattice.GetAsync("a").Returns(Task.FromResult<byte[]?>([9]));
-        lattice.GetAsync("b").Returns(Task.FromResult<byte[]?>(null));
-        lattice.GetAsync("c").Returns(Task.FromResult<byte[]?>(null));
+        var (grain, state, _, lattice, shard) = CreateGrain();
+        StubPreValue(shard, "a", [9]);
+        StubPreValue(shard, "b", null);
+        StubPreValue(shard, "c", null);
 
         // Fail on the third write (and its retry).
         lattice.SetAsync("c", Arg.Any<byte[]>()).Throws(new InvalidOperationException("shard down"));
@@ -203,9 +255,9 @@ public class AtomicWriteGrainTests
     [Test]
     public async Task ExecuteAsync_compensation_restores_existing_pre_saga_value()
     {
-        var (grain, _, _, lattice) = CreateGrain();
-        lattice.GetAsync("a").Returns(Task.FromResult<byte[]?>([9, 9]));
-        lattice.GetAsync("b").Returns(Task.FromResult<byte[]?>(null));
+        var (grain, _, _, lattice, shard) = CreateGrain();
+        StubPreValue(shard, "a", [9, 9]);
+        StubPreValue(shard, "b", null);
         // Fail the 2nd write.
         lattice.SetAsync("b", Arg.Any<byte[]>()).Throws(new InvalidOperationException("boom"));
 
@@ -220,9 +272,9 @@ public class AtomicWriteGrainTests
     [Test]
     public async Task ExecuteAsync_compensation_deletes_previously_absent_keys()
     {
-        var (grain, _, _, lattice) = CreateGrain();
-        lattice.GetAsync("a").Returns(Task.FromResult<byte[]?>(null));
-        lattice.GetAsync("b").Returns(Task.FromResult<byte[]?>(null));
+        var (grain, _, _, lattice, shard) = CreateGrain();
+        StubPreValue(shard, "a", null);
+        StubPreValue(shard, "b", null);
         lattice.SetAsync("b", Arg.Any<byte[]>()).Throws(new InvalidOperationException("boom"));
 
         var entries = MakeEntries(("a", [1]), ("b", [2]));
@@ -234,10 +286,53 @@ public class AtomicWriteGrainTests
     }
 
     [Test]
+    public async Task ExecuteAsync_compensation_preserves_TTL_on_rollback()
+    {
+        // a pre-saga entry with TTL must survive rollback —
+        // compensation re-writes it through the TTL-aware SetAsync overload
+        // with the remaining lifetime, not through the plain SetAsync which
+        // would drop ExpiresAtTicks.
+        var (grain, _, _, lattice, shard) = CreateGrain();
+        var expiresAt = DateTimeOffset.UtcNow.UtcTicks + TimeSpan.FromHours(1).Ticks;
+        StubPreValueWithExpiry(shard, "a", [9, 9], expiresAt);
+        StubPreValue(shard, "b", null);
+        lattice.SetAsync("b", Arg.Any<byte[]>()).Throws(new InvalidOperationException("boom"));
+
+        var entries = MakeEntries(("a", [1]), ("b", [2]));
+        try { await grain.ExecuteAsync(TreeId, entries); } catch { /* expected */ }
+
+        // Compensation must have restored 'a' via the TTL overload with a
+        // positive remaining ttl (< 1 hour because wall-clock has advanced).
+        await lattice.Received().SetAsync(
+            "a",
+            Arg.Is<byte[]>(v => v.Length == 2 && v[0] == 9 && v[1] == 9),
+            Arg.Is<TimeSpan>(ttl => ttl > TimeSpan.Zero && ttl <= TimeSpan.FromHours(1)));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_compensation_deletes_past_due_pre_saga_entry()
+    {
+        // a pre-saga entry whose TTL has already lapsed by the time
+        // compensation runs should be tombstoned, not resurrected.
+        var (grain, _, _, lattice, shard) = CreateGrain();
+        var pastExpiry = DateTimeOffset.UtcNow.UtcTicks - TimeSpan.FromMinutes(5).Ticks;
+        StubPreValueWithExpiry(shard, "a", [9, 9], pastExpiry);
+        StubPreValue(shard, "b", null);
+        lattice.SetAsync("b", Arg.Any<byte[]>()).Throws(new InvalidOperationException("boom"));
+
+        var entries = MakeEntries(("a", [1]), ("b", [2]));
+        try { await grain.ExecuteAsync(TreeId, entries); } catch { /* expected */ }
+
+        // Past-due pre-saga entry is equivalent to "absent" — compensation
+        // should tombstone 'a', not restore a stale value.
+        await lattice.Received().DeleteAsync("a");
+    }
+
+    [Test]
     public async Task ExecuteAsync_compensation_preserves_failure_message()
     {
-        var (grain, _, _, lattice) = CreateGrain();
-        lattice.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<byte[]?>(null));
+        var (grain, _, _, lattice, shard) = CreateGrain();
+        shard.GetRawEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<LwwEntry?>(null));
         lattice.SetAsync("b", Arg.Any<byte[]>()).Throws(new InvalidOperationException("specific failure"));
 
         var entries = MakeEntries(("a", [1]), ("b", [2]));
@@ -254,7 +349,7 @@ public class AtomicWriteGrainTests
     [Test]
     public async Task IsCompleteAsync_returns_true_for_fresh_grain()
     {
-        var (grain, _, _, _) = CreateGrain();
+        var (grain, _, _, _, _) = CreateGrain();
         Assert.That(await grain.IsCompleteAsync(), Is.True);
     }
 
@@ -263,7 +358,7 @@ public class AtomicWriteGrainTests
     {
         var state = new FakePersistentState<AtomicWriteState>();
         state.State.Phase = AtomicWritePhase.Execute;
-        var (grain, _, _, _) = CreateGrain(state);
+        var (grain, _, _, _, _) = CreateGrain(state);
 
         Assert.That(await grain.IsCompleteAsync(), Is.False);
     }
@@ -273,7 +368,7 @@ public class AtomicWriteGrainTests
     {
         var state = new FakePersistentState<AtomicWriteState>();
         state.State.Phase = AtomicWritePhase.Completed;
-        var (grain, _, _, _) = CreateGrain(state);
+        var (grain, _, _, _, _) = CreateGrain(state);
 
         Assert.That(await grain.IsCompleteAsync(), Is.True);
     }
@@ -285,7 +380,7 @@ public class AtomicWriteGrainTests
     {
         var state = new FakePersistentState<AtomicWriteState>();
         state.State.Phase = AtomicWritePhase.Completed;
-        var (grain, _, reminder, _) = CreateGrain(state);
+        var (grain, _, reminder, _, _) = CreateGrain(state);
 
         await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
 
@@ -295,7 +390,7 @@ public class AtomicWriteGrainTests
     [Test]
     public async Task ReceiveReminder_ignores_unrelated_reminder_names()
     {
-        var (grain, state, _, _) = CreateGrain();
+        var (grain, state, _, _, _) = CreateGrain();
         state.State.Phase = AtomicWritePhase.Execute;
 
         await grain.ReceiveReminder("other-reminder", new TickStatus());
@@ -318,7 +413,7 @@ public class AtomicWriteGrainTests
         };
         state.State.NextIndex = 1;
 
-        var (grain, _, _, lattice) = CreateGrain(state);
+        var (grain, _, _, lattice, _) = CreateGrain(state);
 
         await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
 
@@ -347,7 +442,7 @@ public class AtomicWriteGrainTests
         state.State.NextIndex = 1;
         state.State.FailureMessage = "boom";
 
-        var (grain, _, _, lattice) = CreateGrain(state);
+        var (grain, _, _, lattice, _) = CreateGrain(state);
 
         await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
 
@@ -374,7 +469,7 @@ public class AtomicWriteGrainTests
         state.State.RetriesOnCurrentStep = 1; // already at the cap
         state.State.FailureMessage = "boom";
 
-        var (grain, _, _, lattice) = CreateGrain(state);
+        var (grain, _, _, lattice, _) = CreateGrain(state);
 
         await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
 
@@ -388,7 +483,7 @@ public class AtomicWriteGrainTests
     [Test]
     public async Task ExecuteAsync_success_registers_retention_reminder()
     {
-        var (grain, _, registry, _) = CreateGrain();
+        var (grain, _, registry, _, _) = CreateGrain();
 
         await grain.ExecuteAsync(TreeId, MakeEntries(("k", [1])));
 
@@ -403,7 +498,7 @@ public class AtomicWriteGrainTests
     public async Task ExecuteAsync_skips_retention_when_infinite()
     {
         var opts = new LatticeOptions { AtomicWriteRetention = Timeout.InfiniteTimeSpan };
-        var (grain, _, registry, _) = CreateGrain(options: opts);
+        var (grain, _, registry, _, _) = CreateGrain(options: opts);
 
         await grain.ExecuteAsync(TreeId, MakeEntries(("k", [1])));
 
@@ -418,7 +513,7 @@ public class AtomicWriteGrainTests
     public async Task ExecuteAsync_clamps_small_retention_to_one_minute_floor()
     {
         var opts = new LatticeOptions { AtomicWriteRetention = TimeSpan.FromSeconds(5) };
-        var (grain, _, registry, _) = CreateGrain(options: opts);
+        var (grain, _, registry, _, _) = CreateGrain(options: opts);
 
         await grain.ExecuteAsync(TreeId, MakeEntries(("k", [1])));
 
@@ -436,7 +531,7 @@ public class AtomicWriteGrainTests
         state.State.Entries = MakeEntries(("k", [1]));
 
         var reminder = Substitute.For<IGrainReminder>();
-        var (grain, persisted, registry, _) = CreateGrain(state);
+        var (grain, persisted, registry, _, _) = CreateGrain(state);
         registry.GetReminder(Arg.Any<GrainId>(), "atomic-write-retention")
             .Returns(Task.FromResult<IGrainReminder?>(reminder));
 

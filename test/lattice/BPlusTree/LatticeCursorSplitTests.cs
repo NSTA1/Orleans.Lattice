@@ -5,8 +5,8 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// Integration tests for stateful cursors (F-033) across adaptive shard
-/// splits (F-011). Proves that a cursor paused mid-scan still returns the
+/// Integration tests for stateful cursors across adaptive shard
+/// splits. Proves that a cursor paused mid-scan still returns the
 /// complete, correctly-ordered, de-duplicated key / entry set when a
 /// manual split commits between two cursor steps.
 /// <para>

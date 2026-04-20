@@ -6,7 +6,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// Strongly-consistent, globally-sorted entry enumeration via paginated k-way
 /// merge across shards with in-line reconciliation against concurrent
-/// adaptive splits (F-011, F-032).
+/// adaptive splits.
 /// </summary>
 internal sealed partial class LatticeGrain
 {
@@ -275,7 +275,7 @@ internal sealed partial class LatticeGrain
     /// Lazily paginates through a single shard's entries, accumulating
     /// reported <see cref="EntriesPage.MovedAwaySlots"/> into
     /// <paramref name="movedSlotSink"/> for the orchestrator's reconciliation
-    /// (F-011).
+    ///.
     /// </summary>
     private sealed class EntriesCursor(
         IShardRootGrain shard,

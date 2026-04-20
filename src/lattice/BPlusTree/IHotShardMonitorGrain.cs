@@ -5,7 +5,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// <summary>
 /// Per-tree autonomic monitor that periodically samples each physical shard's
 /// hotness counters (<see cref="IShardRootGrain.GetHotnessAsync"/>) and
-/// triggers an online adaptive split (F-011) on any shard whose observed
+/// triggers an online adaptive split on any shard whose observed
 /// operations-per-second exceeds <see cref="LatticeOptions.HotShardOpsPerSecondThreshold"/>.
 /// <para>
 /// Activation is started lazily by <c>LatticeGrain</c> on the first write to

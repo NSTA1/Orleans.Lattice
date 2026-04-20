@@ -23,6 +23,15 @@ internal sealed class AtomicPreValue
     /// <c>false</c> if it was absent or tombstoned.
     /// </summary>
     [Id(2)] public bool Existed { get; set; }
+
+    /// <summary>
+    /// The absolute UTC <c>DateTimeOffset.UtcTicks</c> at which the pre-saga
+    /// entry was set to expire ( TTL), or <c>0</c> if the entry had no
+    /// TTL. Defaulting to <c>0</c> keeps persisted pre-saga state from earlier
+    /// versions wire-compatible (a missing <see cref="Id"/>-3 field decodes
+    /// to <c>0</c>, matching a no-TTL entry).
+    /// </summary>
+    [Id(3)] public long ExpiresAtTicks { get; set; }
 }
 
 /// <summary>

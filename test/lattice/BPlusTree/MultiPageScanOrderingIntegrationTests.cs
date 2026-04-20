@@ -6,7 +6,7 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// F-032 multi-page / range / prefetch ordering tests. The default
+/// multi-page / range / prefetch ordering tests. The default
 /// <see cref="FourShardClusterFixture"/> uses <c>KeysPageSize=512</c>,
 /// which means a 400-key seed set fits in a single page per shard — the
 /// in-line reconciliation path never fires on a non-first page. This
@@ -110,7 +110,7 @@ public class MultiPageScanOrderingIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(failures, Is.Empty,
-                $"Ordering failures during concurrent split:\n  {string.Join("\n  ", failures.Take(20))}");
+                $"Ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
             Assert.That(completedScans, Is.GreaterThan(0));
         });
     }
@@ -191,7 +191,7 @@ public class MultiPageScanOrderingIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(failures, Is.Empty,
-                $"Ordering failures:\n  {string.Join("\n  ", failures.Take(20))}");
+                $"Ordering failures:\n {string.Join("\n ", failures.Take(20))}");
             Assert.That(completedScans, Is.GreaterThan(0));
         });
     }
@@ -257,7 +257,7 @@ public class MultiPageScanOrderingIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(failures, Is.Empty,
-                $"Range-scan ordering failures:\n  {string.Join("\n  ", failures.Take(20))}");
+                $"Range-scan ordering failures:\n {string.Join("\n ", failures.Take(20))}");
             Assert.That(completedScans, Is.GreaterThan(0));
         });
     }

@@ -2,7 +2,7 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Telemetry naming conventions for Orleans.Lattice instruments.
-/// Standardises on the orleans.lattice.* prefix before F-029 bakes in the public instrument names.
+/// Standardises on the orleans.lattice.* prefix before bakes in the public instrument names.
 /// </summary>
 public static class LatticeMetrics
 {

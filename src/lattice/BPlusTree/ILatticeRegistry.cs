@@ -95,7 +95,7 @@ public interface ILatticeRegistry : IGrainWithStringKey
 
     /// <summary>
     /// Atomically allocates a fresh physical shard index for an adaptive split
-    /// (F-011). Returns <c>max(currentMaxFromMap, persisted) + 1</c> and
+    ///. Returns <c>max(currentMaxFromMap, persisted) + 1</c> and
     /// persists the new high-water mark so concurrent split coordinators each
     /// receive a unique target shard index. The registry grain's non-reentrant
     /// scheduling guarantees the read-modify-write is atomic across callers.

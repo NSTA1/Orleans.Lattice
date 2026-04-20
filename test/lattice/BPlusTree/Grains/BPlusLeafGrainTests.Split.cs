@@ -191,7 +191,7 @@ public partial class BPlusLeafGrainTests
         // The write was NOT applied to this leaf.
         Assert.That(state.State.Entries.ContainsKey("z"), Is.False);
         // The sibling's SetAsync was called.
-        await siblingMock.Received(1).SetAsync("z", Arg.Any<byte[]>());
+        await siblingMock.Received(1).SetAsync("z", Arg.Any<byte[]>(), 0L);
     }
 
     // --- Split doubly-linked list maintenance ---

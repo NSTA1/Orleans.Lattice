@@ -1,7 +1,7 @@
 namespace Orleans.Lattice.BPlusTree.State;
 
 /// <summary>
-/// Lifecycle phase of a stateful cursor (F-033). Persisted so that a
+/// Lifecycle phase of a stateful cursor. Persisted so that a
 /// reactivated cursor grain can resume exactly where it left off, even across
 /// silo failovers.
 /// </summary>
