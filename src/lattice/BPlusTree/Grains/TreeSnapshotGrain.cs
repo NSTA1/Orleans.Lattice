@@ -112,7 +112,12 @@ internal sealed class TreeSnapshotGrain(
 
         // Persist intent BEFORE any shard-marking side effects.
         state.State.InProgress = true;
-        state.State.Phase = mode == SnapshotMode.Offline ? SnapshotPhase.Lock : SnapshotPhase.Copy;
+        state.State.Phase = mode switch
+        {
+            SnapshotMode.Offline => SnapshotPhase.Lock,
+            SnapshotMode.Online => SnapshotPhase.ShadowBegin,
+            _ => throw new ArgumentOutOfRangeException(nameof(mode)),
+        };
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
         state.State.DestinationTreeId = destinationTreeId;
@@ -155,9 +160,23 @@ internal sealed class TreeSnapshotGrain(
             await LockSourceShardsAsync();
         }
 
-        while (state.State.NextShardIndex < state.State.ShardCount)
+        if (state.State.Phase == SnapshotPhase.ShadowBegin)
         {
-            await ProcessCurrentPhaseAsync();
+            await BeginShadowForwardAllShardsAsync();
+        }
+
+        if (state.State.Mode == SnapshotMode.Online
+            && state.State.Phase == SnapshotPhase.Copy
+            && state.State.NextShardIndex < state.State.ShardCount)
+        {
+            await DrainAllShardsOnlineAsync();
+        }
+        else
+        {
+            while (state.State.NextShardIndex < state.State.ShardCount)
+            {
+                await ProcessCurrentPhaseAsync();
+            }
         }
 
         await CompleteSnapshotAsync();
@@ -232,6 +251,12 @@ internal sealed class TreeSnapshotGrain(
             return;
         }
 
+        if (state.State.Phase == SnapshotPhase.ShadowBegin)
+        {
+            await BeginShadowForwardAllShardsAsync();
+            return;
+        }
+
         if (state.State.NextShardIndex >= state.State.ShardCount)
         {
             await CompleteSnapshotAsync();
@@ -258,7 +283,10 @@ internal sealed class TreeSnapshotGrain(
                     }
                     else
                     {
-                        // Online mode: skip unmark, advance to next shard.
+                        // Online mode: mark this shard drained (shadow-forward
+                        // continues until the coordinator transitions to
+                        // Rejecting), advance to the next shard.
+                        await MarkShardDrainedAsync(shardIndex);
                         state.State.NextShardIndex++;
                         state.State.Phase = SnapshotPhase.Copy;
                     }
@@ -331,6 +359,91 @@ internal sealed class TreeSnapshotGrain(
         var shardKey = $"{SourceTreeId}/{shardIndex}";
         var shard = grainFactory.GetGrain<IShardRootGrain>(shardKey);
         await shard.UnmarkDeletedAsync();
+    }
+
+    /// <summary>
+    /// Begins shadow-forwarding on every source shard. Must complete before
+    /// any drain reader starts so that live writes landing during drain are
+    /// mirrored to the destination tree. Exposed as <c>internal</c> for unit
+    /// testing.
+    /// </summary>
+    internal async Task BeginShadowForwardAllShardsAsync()
+    {
+        var opId = state.State.OperationId
+            ?? throw new InvalidOperationException(
+                $"Snapshot state for tree '{SourceTreeId}' has no OperationId; cannot begin shadow forward.");
+        var destinationTreeId = state.State.DestinationTreeId
+            ?? throw new InvalidOperationException(
+                $"Snapshot state for tree '{SourceTreeId}' has no DestinationTreeId; cannot begin shadow forward.");
+
+        var shardCount = state.State.ShardCount;
+        var tasks = new Task[shardCount];
+        for (int i = 0; i < shardCount; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}");
+            tasks[i] = shard.BeginShadowForwardAsync(destinationTreeId, opId);
+        }
+        await Task.WhenAll(tasks);
+
+        state.State.Phase = SnapshotPhase.Copy;
+        state.State.NextShardIndex = 0;
+        state.State.ShardRetries = 0;
+        await state.WriteStateAsync();
+    }
+
+    /// <summary>
+    /// Drains every remaining source shard into the destination with bounded
+    /// concurrency (<see cref="LatticeOptions.MaxConcurrentDrains"/>). Each
+    /// shard is copied then transitioned to
+    /// <c>ShadowForwardPhase.Drained</c>. Online-mode only. Exposed as
+    /// <c>internal</c> for unit testing.
+    /// </summary>
+    internal async Task DrainAllShardsOnlineAsync()
+    {
+        var shardCount = state.State.ShardCount;
+        var start = state.State.NextShardIndex;
+        var cap = Math.Max(1, Options.MaxConcurrentDrains);
+
+        using var sem = new SemaphoreSlim(cap);
+        var tasks = new List<Task>(shardCount - start);
+        for (int i = start; i < shardCount; i++)
+        {
+            var idx = i;
+            await sem.WaitAsync();
+            tasks.Add(DrainOneShardOnlineAsync(idx, sem));
+        }
+        await Task.WhenAll(tasks);
+
+        state.State.NextShardIndex = shardCount;
+        state.State.ShardRetries = 0;
+        await state.WriteStateAsync();
+    }
+
+    private async Task DrainOneShardOnlineAsync(int shardIndex, SemaphoreSlim sem)
+    {
+        try
+        {
+            await CopyShardAsync(shardIndex);
+            await MarkShardDrainedAsync(shardIndex);
+        }
+        finally
+        {
+            sem.Release();
+        }
+    }
+
+    /// <summary>
+    /// Transitions a single source shard from
+    /// <c>ShadowForwardPhase.Draining</c> to <c>ShadowForwardPhase.Drained</c>.
+    /// Online-mode only.
+    /// </summary>
+    private async Task MarkShardDrainedAsync(int shardIndex)
+    {
+        var opId = state.State.OperationId
+            ?? throw new InvalidOperationException(
+                $"Snapshot state for tree '{SourceTreeId}' has no OperationId; cannot mark shard drained.");
+        var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{shardIndex}");
+        await shard.MarkDrainedAsync(opId);
     }
 
     internal async Task CompleteSnapshotAsync()

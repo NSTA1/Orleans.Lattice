@@ -78,5 +78,15 @@ internal enum SnapshotPhase
     /// The source shard needs to be unmarked as deleted (offline mode only).
     /// In online mode this phase is skipped.
     /// </summary>
-    Unmark = 2
+    Unmark = 2,
+
+    /// <summary>
+    /// All source shards need to begin shadow-forwarding to the destination
+    /// tree (online mode only). This is the initial phase for online
+    /// snapshots — every shard must transition to
+    /// <c>ShadowForwardPhase.Draining</c> before any drain reader starts,
+    /// so that live writes landing during drain are mirrored to the
+    /// destination.
+    /// </summary>
+    ShadowBegin = 3,
 }
