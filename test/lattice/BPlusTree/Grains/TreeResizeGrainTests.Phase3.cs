@@ -230,4 +230,48 @@ public partial class TreeResizeGrainTests
         Assert.ThrowsAsync<InvalidOperationException>(
             () => grain.UndoResizeAsync());
     }
+
+    // --- UndoResizeAsync phase-aware routing (T-7) ---
+
+    [Test]
+    public async Task UndoResize_during_reject_phase_routes_through_after_swap_recovery()
+    {
+        // During Phase == Reject the alias has already been flipped to the
+        // destination tree, so undo must take the after-swap path: recover
+        // the old physical tree, remove the alias, clear shadow-forward on
+        // every old-tree shard, and delete the snapshot (destination) tree.
+        // Routing through the drain branch would erroneously delete the
+        // live destination that the alias now points at.
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+
+        state.State.InProgress = true;
+        state.State.Complete = false;
+        state.State.Phase = ResizePhase.Reject;
+        state.State.OperationId = "undo-reject";
+        state.State.ShardCount = ShardCount;
+        state.State.OldPhysicalTreeId = TreeId;
+        state.State.SnapshotTreeId = $"{TreeId}/resized/undo-reject";
+
+        await grain.UndoResizeAsync();
+
+        // After-swap branch: recover old tree, delete snapshot (destination) tree.
+        var oldDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
+        var newDeletion = grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/undo-reject");
+        await oldDeletion.Received().RecoverAsync();
+        await newDeletion.Received().DeleteTreeAsync();
+
+        // Alias removed so the logical tree maps back to the old physical tree.
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.Received().RemoveAliasAsync(TreeId);
+
+        // Shadow-forward cleared on every old-tree shard.
+        for (int i = 0; i < ShardCount; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
+            await shard.Received(1).ClearShadowForwardAsync("undo-reject");
+        }
+
+        Assert.That(state.State.InProgress, Is.False);
+        Assert.That(state.State.Complete, Is.False);
+    }
 }

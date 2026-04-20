@@ -179,12 +179,14 @@ internal sealed class TreeResizeGrain(
         //   1. Before swap — while the online snapshot is draining and the
         //      alias has not yet been updated. Shadow-forwarding is active
         //      but discardable: clearing it and deleting the draft
-        //      destination tree leaves the source fully intact.
-        //   2. After swap — during the SoftDeleteDuration window. Recover
-        //      the old physical tree, remove the alias, restore registry
-        //      entry, and delete the destination tree. Shadow-forward
-        //      state on the old-tree shards must also be cleared so the
-        //      tree becomes writable again.
+        //      destination tree leaves the source fully intact. This window
+        //      corresponds strictly to Phase == Snapshot; once Swap begins
+        //      the alias has been flipped and the destination is live.
+        //   2. After swap — during the SoftDeleteDuration window, or mid
+        //      Swap/Reject/Cleanup. Recover the old physical tree, remove
+        //      the alias, restore registry entry, and delete the destination
+        //      tree. Shadow-forward state on the old-tree shards must also
+        //      be cleared so the tree becomes writable again.
         if (!state.State.InProgress && !state.State.Complete)
             throw new InvalidOperationException(
                 $"No resize exists for tree '{TreeId}' that can be undone.");
@@ -198,7 +200,12 @@ internal sealed class TreeResizeGrain(
         var opId = state.State.OperationId!;
         var shardCount = state.State.ShardCount;
 
-        if (state.State.InProgress)
+        // Drain-window undo applies only while Phase == Snapshot. Phases Swap,
+        // Reject, and Cleanup all occur after the alias flip, and must follow
+        // the after-swap recovery path — routing them through the drain
+        // branch would erroneously delete the live destination tree.
+        var isBeforeSwap = state.State.InProgress && state.State.Phase == ResizePhase.Snapshot;
+        if (isBeforeSwap)
         {
             // ---- Undo during drain (before swap). ----
             // Cancel the in-flight snapshot by telling its coordinator to
