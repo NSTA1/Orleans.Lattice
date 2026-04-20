@@ -53,7 +53,7 @@ internal static class TypeAliases
     internal const string ShardSplitPhase = "ol.sph";
     internal const string StaleShardRouting = "ol.ssr";
 
-    // Online reshard (F-019)
+    // Online reshard
     internal const string TreeReshardState = "ol.txs";
     internal const string ReshardPhase = "ol.rxp";
 

@@ -1,7 +1,7 @@
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Online reshard (F-019) orchestration entry points on the public
+/// Online reshard orchestration entry points on the public
 /// <see cref="ILattice"/> surface. Delegates to the per-tree
 /// <see cref="ITreeReshardGrain"/> coordinator, which drives the migration
 /// asynchronously via reminders.

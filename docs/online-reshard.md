@@ -90,5 +90,5 @@ Splits halve the source shard's virtual-slot ownership. Starting from `ShardCoun
 ## Limitations and future work
 
 - **Grow-only.** Shrinking a tree (merging shards) is not supported. The underlying `ShardMap` primitive can represent any slot-to-shard mapping, but no coordinator currently implements the merge-and-drop flow.
-- **Shard-count only.** The existing `ILattice.ResizeAsync(newMaxLeafKeys, newMaxInternalChildren)` tree-sizing path remains offline (snapshot + swap). An online version is planned as the follow-up to F-019.
+- **Shard-count only.** The existing `ILattice.ResizeAsync(newMaxLeafKeys, newMaxInternalChildren)` tree-sizing path remains offline (snapshot + swap). An online version is planned as a follow-up.
 - **Node-count policy is heuristic.** The coordinator picks the largest-slot owners as split sources; it does not currently read hotness counters. Hot-shard-aware source selection would fit neatly into the same loop.
