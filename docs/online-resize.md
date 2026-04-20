@@ -1,8 +1,8 @@
 # Online Resize — Design
 
-> **Status:** Design. Not yet implemented.
-> **Target feature:** the second half of F-019 — replace the currently-offline `ILattice.ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)` snapshot + swap path with an online variant that serves reads and writes throughout, with no data loss.
-> **Scope:** This doc defines the design, failure model, and a phased implementation plan. Each phase is an independently shippable PR.
+> **Status:** ✅ Phases 1–3 delivered. Phase 4 (chaos coverage + promotion to user-guide prose) outstanding.
+> **Feature:** second half of F-019. `ILattice.ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)` runs online — reads and writes continue throughout, with zero data loss, and a brief per-shard `Rejecting` window at the swap point that the stateless-worker `LatticeGrain` absorbs transparently via `StaleTreeRoutingException` retry.
+> **Scope:** This doc defines the design, failure model, and the phased implementation plan. Phases 1–3 are shipped and referenced from `TreeResizeGrain`, `TreeSnapshotGrain`, and `ShardRootGrain`; Phase 4 remains design-only.
 
 ---
 
@@ -220,6 +220,8 @@ Four PRs. Each stands alone, is independently mergeable, and ships with its own 
 
 ### Phase 1 — Shadow-forwarding primitive (biggest PR)
 
+**Status:** ✅ Shipped.
+
 **Scope.** The reusable building block. After this PR, nothing in the public API observes online resize — the primitive exists and is tested in isolation.
 
 - New `StaleTreeRoutingException`.
@@ -239,6 +241,8 @@ Four PRs. Each stands alone, is independently mergeable, and ships with its own 
 
 ### Phase 2 — Consistent online snapshot mode
 
+**Status:** ✅ Shipped.
+
 **Scope.** `SnapshotMode.Online` semantics tightened.
 
 - Upgrade `TreeSnapshotGrain` to drive `BeginShadowForwardAsync` → drain → `MarkDrainedAsync` on each shard (bounded by `LatticeOptions.MaxConcurrentDrains`). Wait for all shards `Drained` before returning.
@@ -253,6 +257,8 @@ Four PRs. Each stands alone, is independently mergeable, and ships with its own 
 
 ### Phase 3 — Wire into `ResizeAsync`
 
+**Status:** ✅ Shipped. `TreeResizeGrain` now drives an online snapshot, adds a `ResizePhase.Reject` transition and dual-path undo (before-swap: drain + abort snapshot + clear shadow state; after-swap: existing recovery flow plus defensive `snapshot.AbortAsync`), and threads a `logicalTreeId` through `SnapshotWithOperationIdAsync` so `StaleTreeRoutingException` carries the caller's logical name rather than the internal physical ID. `HotShardMonitorGrain` polls `ITreeResizeGrain.IsCompleteAsync`; `TreeReshardGrain.ReshardAsync` rejects while a resize is in flight.
+
 **Scope.** Flip `TreeResizeGrain` from `SnapshotMode.Offline` to `SnapshotMode.Online`. Wire `EnterRejectingAsync` post-swap. Wire `ClearShadowForwardAsync` into `UndoResizeAsync`.
 
 - Add interlock suppression: `HotShardMonitorGrain` polls `ITreeResizeGrain.IsCompleteAsync`; `TreeReshardGrain.ReshardAsync` throws while a resize is in flight.
@@ -261,6 +267,8 @@ Four PRs. Each stands alone, is independently mergeable, and ships with its own 
 **Estimated size:** ~400 LOC + 10 tests.
 
 ### Phase 4 — Chaos coverage + docs
+
+**Status:** ⬜ Not started.
 
 **Scope.** Promote the design to user docs and verify under stress.
 

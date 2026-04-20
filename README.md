@@ -64,6 +64,7 @@ without distributed locks or coordination protocols.
 | **Fast reads** | A `[StatelessWorker]` cache grain per silo serves reads via delta replication from the primary leaf. Cache misses cost a single version-vector comparison. |
 | **Fault-tolerant** | Validated end-to-end by a parametrized fault-injection chaos test: random storage-write failures during concurrent reads, writes, scans, and splits converge to the correct state once faults stop. |
 | **Online Reshard** | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
+| **Online Resize** | `ResizeAsync` online node fan-out change via shadow-forwarding primitive, consistent `SnapshotMode.Online`, dual-window undo, crash safety |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on an existing tree. Takes an offline snapshot to a new physical tree, swaps the alias, and soft-deletes the old data. The tree is unavailable during the snapshot phase but immediately accessible after the swap. Undoable within the retention window. |
 | **Scalable writes** | Keys are hash-sharded across a configurable number of independent sub-trees (default 64). No single-root bottleneck. Shards split further at runtime as load grows. |
 | **Strongly-consistent scans** | `CountAsync`, `KeysAsync`, and `EntriesAsync` return the exact live key set even during concurrent adaptive shard splits, via per-slot reconciliation against a monotonic `ShardMap.Version` and bounded optimistic retry. |
@@ -92,6 +93,7 @@ Detailed design documentation is split by concept:
 | [Configuration](docs/configuration.md) | Options reference, per-tree overrides, immutability constraints, storage provider |
 | [Durable Cursors](docs/durable-cursors.md) | Stateful `ILatticeCursorGrain` design, grain lifecycle, effective-range resumption, idle-TTL self-cleanup, performance characteristics |
 | [Online Reshard](docs/online-reshard.md) | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
+| [Online Resize](docs/online-resize.md) | `ResizeAsync` online node fan-out change via shadow-forwarding primitive, consistent `SnapshotMode.Online`, dual-window undo, crash safety |
 | [Read Caching](docs/caching.md) | Delta-based `[StatelessWorker]` cache, split-aware pruning |
 | [Shard Splitting](docs/shard-splitting.md) | Adaptive online splits, shadow-write design, autonomic monitor, suppression rules, scan semantics during splits, tunables |
 | [Snapshots](docs/snapshots.md) | Offline and online snapshot modes, crash safety, sizing overrides |
