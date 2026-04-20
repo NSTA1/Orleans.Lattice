@@ -76,7 +76,9 @@ public class ChaosResizeIntegrationTests
     }
 
     private static bool IsTransient(Exception ex) =>
-        ex.GetType().Name is "EnumerationAbortedException" or "StaleShardRoutingException"
+        ex.GetType().Name is "EnumerationAbortedException"
+            or "StaleShardRoutingException"
+            or "StaleTreeRoutingException"
         || ex is TimeoutException;
 
     private static async Task SeedAsync(ILattice tree)

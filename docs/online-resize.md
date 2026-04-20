@@ -1,8 +1,8 @@
 # Online Resize — Design
 
-> **Status:** ✅ Phases 1–3 delivered. Phase 4 (chaos coverage + promotion to user-guide prose) outstanding.
+> **Status:** ✅ Phases 1–4 delivered. F-019 complete.
 > **Feature:** second half of F-019. `ILattice.ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)` runs online — reads and writes continue throughout, with zero data loss, and a brief per-shard `Rejecting` window at the swap point that the stateless-worker `LatticeGrain` absorbs transparently via `StaleTreeRoutingException` retry.
-> **Scope:** This doc defines the design, failure model, and the phased implementation plan. Phases 1–3 are shipped and referenced from `TreeResizeGrain`, `TreeSnapshotGrain`, and `ShardRootGrain`; Phase 4 remains design-only.
+> **Scope:** This doc defines the design, failure model, and the phased implementation plan. All four phases are shipped and referenced from `TreeResizeGrain`, `TreeSnapshotGrain`, and `ShardRootGrain`; Phase 4 remains design-only.
 
 ---
 
@@ -118,16 +118,18 @@ This is the pivotal simplification that falls out of LWW: **every write the clie
 
 ### 4.4 · Drain path
 
-`TreeSnapshotGrain` in the new consistent-online mode drains each shard of `T` into `T'` using the existing raw-entry bulk-load primitive (which preserves HLCs). Per-shard drain is orchestrated by the source tree's `ShardRootGrain`, which already owns shard-level coordination.
+`TreeSnapshotGrain` in the consistent-online mode drains each shard of `T` into `T'` using `IShardRootGrain.MergeManyAsync`, which performs per-key LWW merge on the destination. The raw `LwwEntry` payload flows through verbatim — HLC timestamps, tombstone flags, and TTL (`ExpiresAtTicks`) are preserved. Per-shard drain is orchestrated by the source tree's `ShardRootGrain`, which already owns shard-level coordination.
 
 Ordering per shard:
 
 1. **Prepare.** `TreeResizeGrain` → `ShardRootGrain.BeginShadowForwardAsync(destinationTreeId, operationId)`. Shard root persists `ShadowForwardState { Phase = Draining }` before returning. Subsequent writes are mirrored.
-2. **Drain.** `TreeSnapshotGrain` reads the shard's current entries and bulk-loads them into `T'/S`. The drain uses a point-in-time read — not a snapshot lock, just "whatever's there now". Writes that land during the drain are handled by the shadow-forward path in §4.3.
+2. **Drain.** `TreeSnapshotGrain` reads the shard's current entries and merges them into `T'/S` via `MergeManyAsync`. The drain uses a point-in-time read — not a snapshot lock, just "whatever's there now". Writes that land during the drain are handled by the shadow-forward path in §4.3.
 3. **Quiesce.** Shard root transitions `Phase = Drained`. No new background work; continues to mirror live writes.
 4. Wait for every shard to reach `Drained`.
 
 There is **no per-shard "wait for in-flight shadow forwards"** gate — see §4.3.
+
+> **Why `MergeManyAsync` instead of `BulkLoadRawAsync`?** Shadow-forwarding is active on every source shard *before* drain begins, so writes landing during drain can populate the destination shard ahead of the drain batch. `BulkLoadRawAsync` requires an empty shard (bottom-up construction) and would throw on the second populate. `MergeManyAsync` is LWW-safe: whichever entry carries the higher HLC wins, guaranteeing convergence regardless of race order. The offline snapshot path still uses `BulkLoadRawAsync` because source shards are locked before drain, so the destination is guaranteed empty.
 
 ### 4.5 · Swap
 
@@ -268,14 +270,13 @@ Four PRs. Each stands alone, is independently mergeable, and ships with its own 
 
 ### Phase 4 — Chaos coverage + docs
 
-**Status:** ⬜ Not started.
+**Status:** ✅ Shipped.
 
-**Scope.** Promote the design to user docs and verify under stress.
+**Scope.** Verify online resize under stress and keep docs current.
 
-- Convert this design doc into a user-facing `docs/online-resize.md` guide (drop the "Status: Design" header, keep sections 1, 3, 4, 5, 7, and Tuning).
-- Update `docs/api.md` if any public surface changed (probably just `LatticeOptions.MaxConcurrentDrains`).
-- Update `roadmap.md`, `README.md` docs table.
-- New `ChaosResizeIntegrationTests.Chaos_resize_under_concurrent_load_preserves_all_data` modelled on the reshard chaos test.
+- `ChaosResizeIntegrationTests.Chaos_resize_under_concurrent_load_preserves_all_data` — 20 s concurrent workload (writers + readers + scanners + counters) racing against an online `ResizeAsync` driven through `Snapshot → Swap → Reject → Cleanup` to completion. Universe pinned; final `CountAsync` and `KeysAsync` must match exactly. Tagged `[Category("Chaos")]`.
+- Surfaced and fixed a latent collision between shadow-forward writes and the drain's `BulkLoadRawAsync` on the destination shard. Online mode now merges via `MergeManyAsync` (LWW-safe); offline mode still uses the efficient bottom-up `BulkLoadRawAsync`. See §4.4.
+- Surfaced and fixed a phase-handling gap in `TreeResizeGrain.UndoResizeAsync` — drain-window branch now requires `Phase == Snapshot`. Phases `Swap`, `Reject`, and `Cleanup` all route through after-swap recovery.
 
 **Estimated size:** ~400 LOC + 1 chaos test.
 

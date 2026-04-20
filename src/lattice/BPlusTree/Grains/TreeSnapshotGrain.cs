@@ -333,12 +333,26 @@ internal sealed class TreeSnapshotGrain(
     }
 
     /// <summary>
-    /// Drains live entries from the source shard's leaf chain and bulk-loads
-    /// them into the destination shard. Uses the raw-LwwValue drain and
-    /// bulk-load paths so TTL (<c>ExpiresAtTicks</c>) and source HLC
-    /// metadata are preserved on the destination tree — a snapshot of a key
-    /// with remaining TTL reappears on the destination with the same absolute
-    /// expiry, not a fresh zero-expiry entry.
+    /// Drains live entries from the source shard's leaf chain into the
+    /// destination shard. Uses the raw-LwwValue drain path so TTL
+    /// (<c>ExpiresAtTicks</c>) and source HLC metadata are preserved on the
+    /// destination tree — a snapshot of a key with remaining TTL reappears
+    /// on the destination with the same absolute expiry, not a fresh
+    /// zero-expiry entry.
+    /// <para>
+    /// For offline snapshots, the source shards are quiesced via
+    /// <see cref="IShardRootGrain.MarkDeletedAsync"/> before drain begins,
+    /// so the destination shard is guaranteed empty and we can use the
+    /// efficient bottom-up <see cref="IShardRootGrain.BulkLoadRawAsync"/>
+    /// path. For online snapshots, shadow-forwarding is active on every
+    /// source shard before drain starts, so concurrent writes land on the
+    /// destination shard via
+    /// <see cref="IShardRootGrain.MergeManyAsync"/> before drain's batch
+    /// arrives. We therefore use <see cref="IShardRootGrain.MergeManyAsync"/>
+    /// for online mode too — its LWW semantics guarantee convergence
+    /// regardless of which write wins the race: whichever carries the
+    /// higher HLC is observable in the final destination state.
+    /// </para>
     /// </summary>
     private async Task CopyShardAsync(int shardIndex)
     {
@@ -357,11 +371,25 @@ internal sealed class TreeSnapshotGrain(
 
         if (entries.Count == 0) return;
 
-        // Sort by key for bulk load.
-        entries.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
-
         var destShardKey = $"{state.State.DestinationTreeId}/{shardIndex}";
         var destShard = grainFactory.GetGrain<IShardRootGrain>(destShardKey);
+
+        if (state.State.Mode == SnapshotMode.Online)
+        {
+            // Online drain: destination shard may already have entries from
+            // concurrent shadow-forward writes. Use LWW MergeManyAsync so
+            // the two populate streams converge — whichever entry carries
+            // the higher HLC wins, per the CRDT invariant.
+            var merge = new Dictionary<string, LwwValue<byte[]>>(entries.Count);
+            foreach (var e in entries)
+                merge[e.Key] = e.ToLwwValue();
+            await destShard.MergeManyAsync(merge);
+            return;
+        }
+
+        // Offline drain: source is locked, destination is guaranteed empty.
+        // Use the bottom-up bulk-load path for minimal storage I/O.
+        entries.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
         var operationId = $"{state.State.OperationId}-snapshot-{shardIndex}";
         await destShard.BulkLoadRawAsync(operationId, entries);
     }
