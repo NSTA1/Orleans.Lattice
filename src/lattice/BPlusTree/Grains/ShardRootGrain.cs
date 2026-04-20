@@ -562,23 +562,93 @@ internal sealed partial class ShardRootGrain(
         await PrepareForOperationAsync();
         RecordWrite();
 
-        // Reuse a single dictionary to avoid per-entry allocation.
-        var single = new Dictionary<string, LwwValue<byte[]>>(1);
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        // Root-is-leaf fast path: route the entire batch to the single leaf
+        // in one grain call and one WriteStateAsync.
+        if (state.State.RootIsLeaf)
+        {
+            await MergeGroupAsync(entries);
+            return;
+        }
+
+        // Group entries by target leaf so each leaf is called exactly once.
+        // Per-leaf WriteStateAsync collapses from O(entries) to O(leaves) —
+        // the dominant storage-I/O win. Internal-node routing RPCs are still
+        // paid during grouping and re-paid during apply (the apply phase
+        // re-traverses so that a split produced by an earlier group is
+        // observed by later groups) — that cost is O((N+L)·D) lightweight
+        // in-memory reads against the persisted internal nodes, dominated
+        // in practice by the O(L) storage writes.
+        //
+        // Distinct groups target distinct leaves, so a split produced by one
+        // group cannot re-route another group's keys (internal splits create
+        // sibling internals but preserve child GrainIds; leaf splits only
+        // affect the one leaf being written to).
+        var groups = new Dictionary<GrainId, Dictionary<string, LwwValue<byte[]>>>();
         foreach (var (key, lww) in entries)
         {
-            await MergeEntryAsync(key, lww, single);
+            var leafId = await TraverseToLeafWithRetryAsync(key);
+            if (!groups.TryGetValue(leafId, out var group))
+            {
+                // Pre-size conservatively: if entries spread evenly across
+                // leaves the per-group size is entries.Count / expected-leaves;
+                // we cap at the incoming count to avoid over-allocating on
+                // tiny batches.
+                group = new Dictionary<string, LwwValue<byte[]>>(
+                    capacity: Math.Min(entries.Count, 16));
+                groups[leafId] = group;
+            }
+            group[key] = lww;
+        }
+
+        foreach (var group in groups.Values)
+        {
+            await MergeGroupAsync(group);
         }
     }
 
-    private async Task MergeEntryAsync(string key, LwwValue<byte[]> lww, Dictionary<string, LwwValue<byte[]>> buffer)
+    /// <summary>
+    /// Traverses to the leaf owning <paramref name="key"/> with transient-exception retry.
+    /// Mirrors the resilience the per-entry path had before leaf-grouped routing.
+    /// </summary>
+    private async Task<GrainId> TraverseToLeafWithRetryAsync(string key)
     {
         for (int attempt = 0; ; attempt++)
         {
             try
             {
-                buffer.Clear();
-                buffer[key] = lww;
-                var splitResult = await TraverseForMergeAsync(key, buffer);
+                return await TraverseToLeafAsync(key);
+            }
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies a pre-grouped batch of entries to a single leaf, re-traversing
+    /// against the current topology and propagating any resulting split up to
+    /// the root. Retries on transient Orleans / storage exceptions; the leaf's
+    /// <c>MergeManyAsync</c> is LWW-idempotent, so replay is safe.
+    /// </summary>
+    private async Task MergeGroupAsync(Dictionary<string, LwwValue<byte[]>> group)
+    {
+        // Any key in the group routes to the same leaf under the current
+        // topology; pick one via foreach-break to avoid the LINQ enumerator
+        // boxing allocation of entries.Keys.First().
+        string? pivotKey = null;
+        foreach (var k in group.Keys) { pivotKey = k; break; }
+        // group is never empty here (callers only invoke with non-empty groups).
+
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                var splitResult = await TraverseForMergeAsync(pivotKey!, group);
 
                 while (splitResult is not null)
                 {
