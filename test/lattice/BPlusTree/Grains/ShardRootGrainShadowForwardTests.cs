@@ -625,4 +625,41 @@ public class ShardRootGrainShadowForwardTests
         await h.ShadowTarget.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
         await h.ShadowTarget.DidNotReceive().DeleteAsync(Arg.Any<string>());
     }
+
+    [Test]
+    public async Task SetManyAsync_forwards_full_batch_in_single_call_to_destination()
+    {
+        var h = CreateHarness();
+        h.ShadowTarget.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+        SetShadowPhase(h.State, ShadowForwardPhase.Draining);
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k1", [1]),
+            new("k2", [2]),
+            new("k3", [3]),
+        };
+
+        await h.Grain.SetManyAsync(entries);
+
+        // Batched-forward contract: exactly one t.SetManyAsync call for the whole
+        // batch, not one per entry. Per-entry t.SetAsync calls must not occur.
+        await h.ShadowTarget.Received(1).SetManyAsync(
+            Arg.Is<List<KeyValuePair<string, byte[]>>>(l => l.Count == 3));
+        await h.ShadowTarget.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+    }
+
+    [Test]
+    public void DeleteRangeAsync_throws_in_rejecting_phase_like_other_writes()
+    {
+        var h = CreateHarness();
+        SetShadowPhase(h.State, ShadowForwardPhase.Rejecting);
+
+        // PrepareForOperationAsync universally rejects in the Rejecting phase.
+        // DeleteRangeAsync skips per-key routing but still goes through the
+        // shared preamble — confirming uniform behaviour across all writes.
+        Assert.That(
+            async () => await h.Grain.DeleteRangeAsync("a", "z"),
+            Throws.InstanceOf<StaleTreeRoutingException>());
+    }
 }

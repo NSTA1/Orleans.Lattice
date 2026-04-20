@@ -50,4 +50,26 @@ public class ShadowForwardStateTests
         var values = Enum.GetValues<ShadowForwardPhase>();
         Assert.That(values.Length, Is.EqualTo(3));
     }
+
+    [Test]
+    public void ShadowForwardState_LogicalTreeId_defaults_to_empty_string()
+    {
+        var sf = new ShadowForwardState();
+
+        Assert.That(sf.LogicalTreeId, Is.EqualTo(""));
+    }
+
+    [Test]
+    public void ShadowForwardState_LogicalTreeId_is_assignable()
+    {
+        var sf = new ShadowForwardState
+        {
+            DestinationPhysicalTreeId = "my-tree/resized/abc",
+            OperationId = "op-1",
+            Phase = ShadowForwardPhase.Draining,
+            LogicalTreeId = "my-tree",
+        };
+
+        Assert.That(sf.LogicalTreeId, Is.EqualTo("my-tree"));
+    }
 }
