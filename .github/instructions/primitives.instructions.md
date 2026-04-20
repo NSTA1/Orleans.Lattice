@@ -49,7 +49,7 @@ public sealed class MyAggregate
 | Type | Purpose |
 |---|---|
 | `HybridLogicalClock` | Totally-ordered timestamp (wall clock + counter) |
-| `LwwValue<T>` | Last-writer-wins register resolved by HLC |
+| `LwwValue<T>` | Last-writer-wins register resolved by HLC. Carries optional `ExpiresAtTicks` ( TTL) — `0` means no expiry; reads filter entries where `IsExpired(nowUtcTicks)` returns `true`. |
 | `VersionVector` | Per-replica version tracking for delta extraction |
 | `StateDelta` | Captures entries changed since a given version vector |
 | `SplitState` | Enum tracking leaf/internal split lifecycle |

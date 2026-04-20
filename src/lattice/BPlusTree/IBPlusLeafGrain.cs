@@ -38,6 +38,37 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<SplitResult?> SetAsync(string key, byte[] value);
 
     /// <summary>
+    /// Inserts or updates a key-value pair with an absolute expiry
+    ///. The entry's <see cref="Orleans.Lattice.Primitives.LwwValue{T}.ExpiresAtTicks"/>
+    /// is set to <paramref name="expiresAtTicks"/>; once the current UTC wall
+    /// clock passes that value the entry is treated as tombstoned on reads
+    /// and reaped by background compaction after the configured grace
+    /// period. Pass <c>0</c> to write a non-expiring entry (equivalent to
+    /// <see cref="SetAsync(string, byte[])"/>).
+    /// </summary>
+    Task<SplitResult?> SetAsync(string key, byte[] value, long expiresAtTicks);
+
+    /// <summary>
+    /// Returns the raw persisted entry for <paramref name="key"/> exactly as
+    /// stored — including expiry metadata and tombstone flag — or
+    /// <c>null</c> if the key has never been written to this leaf. Does
+    /// <b>not</b> filter expired entries: this method is used by replication
+    /// and split-shadow paths that must forward the authoritative record to
+    /// another shard without stripping its TTL. Not for general reads — use
+    /// <see cref="GetAsync"/> or <see cref="GetWithVersionAsync"/> instead.
+    /// <para>
+    /// Returns an <see cref="LwwEntry"/> rather than
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> directly because
+    /// the Orleans type-alias encoder has a codec-generation race when a
+    /// grain-interface signature uses
+    /// <c>Task&lt;LwwValue&lt;byte[]&gt;?&gt;</c> — it intermittently emits
+    /// malformed alias strings like <c>ol.lwv[[byte[]]]]]</c>. Wrapping in
+    /// the flat <see cref="LwwEntry"/> DTO sidesteps the race.
+    /// </para>
+    /// </summary>
+    Task<LwwEntry?> GetRawEntryAsync(string key);
+
+    /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
     /// already exist (or is tombstoned). Returns a <see cref="GetOrSetResult"/> containing
     /// the existing value when the key is live, or <c>null</c> existing value when the
@@ -110,7 +141,7 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Returns a <see cref="StateDelta"/> containing only the entries whose
     /// virtual slot is in <paramref name="sortedMovedSlots"/> and whose
     /// timestamp is newer than what <paramref name="sinceVersion"/> has seen.
-    /// Used by the adaptive split coordinator (F-011) to drain only moved-slot
+    /// Used by the adaptive split coordinator to drain only moved-slot
     /// data from each leaf, eliminating the cost of serialising entries the
     /// coordinator would otherwise discard. The slot list must be sorted in
     /// ascending order; lookup uses binary search.
@@ -157,6 +188,20 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Used by the tree resize operation to drain entries before purging.
     /// </summary>
     Task<Dictionary<string, byte[]>> GetLiveEntriesAsync();
+
+    /// <summary>
+    /// Returns all live (non-tombstoned, non-expired) entries in this leaf as
+    /// raw <see cref="LwwValue{T}"/> records, preserving both the source
+    /// <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/> version and
+    /// the absolute <c>ExpiresAtTicks</c> ( TTL). Used by snapshot /
+    /// restore paths that must not lose TTL metadata when transferring entries
+    /// between shards or trees. Not a read-path API: public read contracts
+    /// continue to filter expired entries via <see cref="GetLiveEntriesAsync"/>.
+    /// Returns a <see cref="List{T}"/> of <see cref="LwwEntry"/> rather than a
+    /// <c>Dictionary&lt;string, LwwValue&lt;byte[]&gt;&gt;</c> to avoid Orleans
+    /// type-alias encoding issues with nested-generic return shapes.
+    /// </summary>
+    Task<List<LwwEntry>> GetLiveRawEntriesAsync();
 
     /// <summary>
     /// Merges entries into this leaf using LWW semantics, preserving original

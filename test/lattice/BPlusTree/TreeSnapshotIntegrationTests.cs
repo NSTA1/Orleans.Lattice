@@ -195,4 +195,53 @@ public class TreeSnapshotIntegrationTests
         var dest = _cluster.GrainFactory.GetGrain<ILattice>(destTree);
         Assert.That(await dest.TreeExistsAsync(), Is.True);
     }
+
+    [Test]
+    public async Task Snapshot_preserves_TTL_on_destination_tree()
+    {
+        // × snapshot: entries written with a TTL must retain their
+        // absolute expiry when snapshot-copied to a new tree. The raw-drain /
+        // raw-bulk-load path in CopyShardAsync carries LwwValue.ExpiresAtTicks
+        // verbatim — we verify this end-to-end by (a) confirming a
+        // short-TTL entry disappears from destination reads after its
+        // expiry elapses (proves ExpiresAtTicks survived the copy), and
+        // (b) confirming a long-TTL entry and a non-TTL entry both remain
+        // live (proves the copy did not drop liveness or truncate expiry).
+        // The raw LwwEntry is deliberately not inspected from the test —
+        // that DTO lives on guarded internal grain interfaces and is not
+        // reachable via the public ILattice surface.
+        var sourceTree = $"snap-ttl-{Guid.NewGuid():N}";
+        var destTree = $"snap-ttl-dest-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(sourceTree);
+
+        // Mix of TTL'd and non-TTL entries.
+        await tree.SetAsync("long-ttl", Encoding.UTF8.GetBytes("L"), TimeSpan.FromHours(1));
+        await tree.SetAsync("no-ttl", Encoding.UTF8.GetBytes("N"));
+        await tree.SetAsync("short-ttl", Encoding.UTF8.GetBytes("S"), TimeSpan.FromMilliseconds(300));
+
+        var snapshot = _cluster.GrainFactory.GetGrain<ITreeSnapshotGrain>(sourceTree);
+        await snapshot.SnapshotAsync(destTree, SnapshotMode.Offline);
+        await snapshot.RunSnapshotPassAsync();
+
+        var dest = _cluster.GrainFactory.GetGrain<ILattice>(destTree);
+
+        // Immediately after snapshot: all three keys are live on destination.
+        Assert.That(await dest.GetAsync("long-ttl"), Is.Not.Null,
+            "long-TTL entry should be live on destination immediately after snapshot");
+        Assert.That(await dest.GetAsync("no-ttl"), Is.Not.Null,
+            "non-TTL entry should be live on destination immediately after snapshot");
+        Assert.That(await dest.GetAsync("short-ttl"), Is.Not.Null,
+            "short-TTL entry should be live on destination immediately after snapshot");
+
+        // After the short TTL elapses: short-ttl must disappear from reads
+        // on the destination, proving its absolute expiry was carried over.
+        // Long-ttl and no-ttl must remain live.
+        await Task.Delay(TimeSpan.FromMilliseconds(600));
+        Assert.That(await dest.GetAsync("short-ttl"), Is.Null,
+            "short-TTL entry should have expired on destination (expiry survived snapshot)");
+        Assert.That(await dest.GetAsync("long-ttl"), Is.Not.Null,
+            "long-TTL entry should still be live on destination");
+        Assert.That(await dest.GetAsync("no-ttl"), Is.Not.Null,
+            "non-TTL entry should still be live on destination");
+    }
 }

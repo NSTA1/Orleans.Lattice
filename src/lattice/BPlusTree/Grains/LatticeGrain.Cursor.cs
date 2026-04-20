@@ -1,7 +1,7 @@
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Stateful cursor forwarding (F-033). Each <c>ILattice</c> cursor method
+/// Stateful cursor forwarding. Each <c>ILattice</c> cursor method
 /// simply routes to a per-<c>{treeId}/{cursorId}</c>
 /// <see cref="ILatticeCursorGrain"/> activation where the real work and
 /// state persistence happens.

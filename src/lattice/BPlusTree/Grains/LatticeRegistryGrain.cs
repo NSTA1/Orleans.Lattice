@@ -127,7 +127,7 @@ internal sealed class LatticeRegistryGrain(
         // can detect topology changes via a single long comparison. The
         // registry grain is non-reentrant and singleton-keyed, so the
         // get-modify-set sequence is atomic across concurrent split
-        // coordinators (F-011).
+        // coordinators.
         var previousVersion = existing.ShardMap?.Version ?? 0L;
         map.Version = previousVersion + 1;
         var updated = existing with { ShardMap = map };

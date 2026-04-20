@@ -6,7 +6,7 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// F-011 integration tests: <see cref="ILattice.CountAsync"/>,
+/// integration tests: <see cref="ILattice.CountAsync"/>,
 /// <see cref="ILattice.KeysAsync"/>, and <see cref="ILattice.EntriesAsync"/>
 /// must produce strongly-consistent results — exact key set, exact count —
 /// even when adaptive shard splits are happening concurrently.
@@ -217,7 +217,7 @@ public class StronglyConsistentScanIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(failures, Is.Empty,
-                $"Strongly-consistent scans observed {failures.Count} failures during split:\n  {string.Join("\n  ", failures.Take(20))}");
+                $"Strongly-consistent scans observed {failures.Count} failures during split:\n {string.Join("\n ", failures.Take(20))}");
             Assert.That(scansCompleted, Is.GreaterThan(0),
                 "At least one scan must have completed during the test window.");
         });
@@ -286,7 +286,7 @@ public class StronglyConsistentScanIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(failures, Is.Empty,
-                $"Strongly-consistent scans observed {failures.Count} failures during parallel splits:\n  {string.Join("\n  ", failures.Take(20))}");
+                $"Strongly-consistent scans observed {failures.Count} failures during parallel splits:\n {string.Join("\n ", failures.Take(20))}");
             Assert.That(scansCompleted, Is.GreaterThan(0));
         });
     }
@@ -332,7 +332,7 @@ public class StronglyConsistentScanIntegrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(failures, Is.Empty, $"Mid-split count failures:\n  {string.Join("\n  ", failures.Take(10))}");
+            Assert.That(failures, Is.Empty, $"Mid-split count failures:\n {string.Join("\n ", failures.Take(10))}");
             Assert.That(iterations, Is.GreaterThan(0));
         });
     }
@@ -378,7 +378,7 @@ public class StronglyConsistentScanIntegrationTests
     }
 
     // ==========================================================================
-    // F-032 — Scan ordering preservation under topology change.
+    // — Scan ordering preservation under topology change.
     // Output must be strictly sorted end-to-end even when a shard split commits
     // mid-scan. The current implementation injects reconciled keys as an
     // additional memory cursor into the same k-way merge priority queue, so
@@ -444,7 +444,7 @@ public class StronglyConsistentScanIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(failures, Is.Empty,
-                $"Ordering failures during concurrent split:\n  {string.Join("\n  ", failures.Take(20))}");
+                $"Ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
             Assert.That(completedScans, Is.GreaterThan(0));
         });
     }
@@ -502,7 +502,7 @@ public class StronglyConsistentScanIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(failures, Is.Empty,
-                $"Reverse ordering failures during concurrent split:\n  {string.Join("\n  ", failures.Take(20))}");
+                $"Reverse ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
             Assert.That(completedScans, Is.GreaterThan(0));
         });
     }
@@ -562,7 +562,7 @@ public class StronglyConsistentScanIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(failures, Is.Empty,
-                $"Entry ordering failures during concurrent split:\n  {string.Join("\n  ", failures.Take(20))}");
+                $"Entry ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
             Assert.That(completedScans, Is.GreaterThan(0));
         });
     }
@@ -620,7 +620,7 @@ public class StronglyConsistentScanIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(failures, Is.Empty,
-                $"Reverse entry ordering failures during concurrent split:\n  {string.Join("\n  ", failures.Take(20))}");
+                $"Reverse entry ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
             Assert.That(completedScans, Is.GreaterThan(0));
         });
     }

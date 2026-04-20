@@ -3,7 +3,7 @@ using System.ComponentModel;
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Coordinator grain that drives a single online adaptive split (F-011) for
+/// Coordinator grain that drives a single online adaptive split for
 /// a tree: shadow-write → drain → swap → reject → cleanup → complete.
 /// One coordinator activation per (tree, source-shard) pair, so multiple
 /// splits can run in parallel for a single tree up to

@@ -57,7 +57,7 @@ internal sealed class ShardRootState
     [Id(7)] public bool IsRegistered { get; set; }
 
     /// <summary>
-    /// Non-null when this shard is participating in an adaptive split (F-011)
+    /// Non-null when this shard is participating in an adaptive split
     /// as the source. Drives shadow-write and reject-routing behaviour on the
     /// hot path of every operation. Cleared once the split coordinator
     /// completes the post-cleanup phase.

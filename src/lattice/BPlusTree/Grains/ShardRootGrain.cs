@@ -88,6 +88,25 @@ internal sealed partial class ShardRootGrain(
         return await TraverseForReadWithVersionAsync(key);
     }
 
+    /// <inheritdoc />
+    public async Task<LwwEntry?> GetRawEntryAsync(string key)
+    {
+        await PrepareForOperationAsync();
+        ThrowIfRejectedForKey(key);
+        RecordRead();
+
+        if (state.State.RootNodeId is null) return null;
+
+        var leafId = state.State.RootIsLeaf
+            ? state.State.RootNodeId!.Value
+            : await TraverseToLeafAsync(key);
+        var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+        var raw = await leaf.GetRawEntryAsync(key);
+        if (raw is null) return null;
+        if (raw.Value.IsTombstone) return null;
+        return raw;
+    }
+
     public async Task<bool> ExistsAsync(string key)
     {
         await PrepareForOperationAsync();
@@ -122,7 +141,7 @@ internal sealed partial class ShardRootGrain(
                     splitResult = await PromoteRootAsync(splitResult);
                 }
 
-                // F-011: shadow-forward the write to the split target if applicable.
+                // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key);
                 return;
             }
@@ -131,6 +150,36 @@ internal sealed partial class ShardRootGrain(
                 // The failed grain will be deactivated by Orleans. On retry, a fresh
                 // activation loads clean state and the recovery guards resume any
                 // interrupted split.
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task SetAsync(string key, byte[] value, long expiresAtTicks)
+    {
+        await PrepareForOperationAsync();
+        ThrowIfRejectedForKey(key);
+        RecordWrite();
+
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                var splitResult = await TraverseForWriteWithExpiryAsync(key, value, expiresAtTicks);
+
+                while (splitResult is not null)
+                {
+                    splitResult = await PromoteRootAsync(splitResult);
+                }
+
+                // shadow-forward the write to the split target if applicable.
+                // The target fetches the authoritative entry via the normal merge
+                // path so expiry is preserved end-to-end.
+                await ForwardLocalWriteToShadowIfNeededAsync(key);
+                return;
+            }
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            {
             }
         }
     }
@@ -160,7 +209,7 @@ internal sealed partial class ShardRootGrain(
                     splitResult = await PromoteRootAsync(splitResult);
                 }
 
-                // F-011: shadow-forward the write to the split target if applicable.
+                // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key);
                 return null;
             }
@@ -197,7 +246,7 @@ internal sealed partial class ShardRootGrain(
                     splitResult = await PromoteRootAsync(splitResult);
                 }
 
-                // F-011: shadow-forward the write to the split target if applicable.
+                // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key);
                 return true;
             }
@@ -242,7 +291,7 @@ internal sealed partial class ShardRootGrain(
                     result = await leafGrain.DeleteAsync(key);
                 }
 
-                // F-011: tombstone forwarding is handled by the comprehensive
+                // tombstone forwarding is handled by the comprehensive
                 // cleanup phase of the split coordinator. See
                 // ForwardLocalWriteToShadowIfNeededAsync XML doc for rationale.
                 return result;
@@ -257,10 +306,9 @@ internal sealed partial class ShardRootGrain(
     public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive)
     {
         await PrepareForOperationAsync();
-        // F-011: range deletes do not currently shadow-forward tombstones — see
+        // range deletes do not currently shadow-forward tombstones — see
         // ForwardLocalWriteToShadowIfNeededAsync XML doc. The cleanup phase of
-        // the split coordinator restores convergence by re-tombstoning moved
-        // entries on T after the swap. No explicit reject check is performed
+        // the split coordinator restores convergence by re-tombstoning moved-slot entries on T after the swap. No explicit reject check is performed
         // here because the LatticeGrain has already routed the range delete
         // to the correct shard via the current ShardMap.
         RecordWrite();
@@ -313,7 +361,7 @@ internal sealed partial class ShardRootGrain(
         var leafId = await GetLeftmostLeafIdAsync();
         if (leafId is null) return 0;
 
-        // F-011: if any virtual slots have been split away, we cannot trust
+        // if any virtual slots have been split away, we cannot trust
         // the leaf-level count (it includes orphan moved-slot entries). Walk
         // the keys and filter. The fast path (no splits) is preserved when
         // MovedAwaySlots is empty.

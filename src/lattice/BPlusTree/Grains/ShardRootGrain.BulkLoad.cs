@@ -60,6 +60,82 @@ internal sealed partial class ShardRootGrain
             prevLeafId = leafId;
         }
 
+        await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
+    }
+
+    /// <inheritdoc />
+    public async Task BulkLoadRawAsync(
+        string operationId,
+        List<LwwEntry> sortedEntries)
+    {
+        ThrowIfDeleted();
+        if (state.State.LastCompletedBulkOperationId == operationId) return;
+
+        if (state.State.RootNodeId is not null)
+            throw new InvalidOperationException("BulkLoadRawAsync requires an empty shard. This shard already has data.");
+
+        if (sortedEntries.Count == 0) return;
+
+        RecordWrite();
+
+        var shardKey = context.GrainId.Key.ToString()!;
+        var options = await GetOptionsAsync();
+        var maxLeafKeys = options.MaxLeafKeys;
+        var maxChildren = options.MaxInternalChildren;
+
+        var leafIds = new List<GrainId>();
+        var separators = new List<string?>();
+        GrainId? prevLeafId = null;
+        int leafIndex = 0;
+
+        // Identical B+ tree assembly to BulkLoadAsync — the only difference is
+        // that every entry's LwwValue (HLC version AND ExpiresAtTicks /
+        // TTL) flows through verbatim instead of being re-stamped with a fresh
+        // zero-based clock. Used by snapshot / restore (TreeSnapshotGrain) so
+        // TTL metadata survives the transfer end-to-end.
+        for (int i = 0; i < sortedEntries.Count; i += maxLeafKeys)
+        {
+            int count = Math.Min(maxLeafKeys, sortedEntries.Count - i);
+            var batch = new Dictionary<string, LwwValue<byte[]>>(count);
+            for (int j = 0; j < count; j++)
+            {
+                var e = sortedEntries[i + j];
+                batch[e.Key] = e.ToLwwValue();
+            }
+
+            var deterministicId = DeterministicGuid($"{shardKey}/bulkraw/{operationId}/leaf/{leafIndex++}");
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
+            var leafId = leaf.GetGrainId();
+            await leaf.SetTreeIdAsync(TreeId);
+            await leaf.MergeEntriesAsync(batch);
+
+            if (prevLeafId is not null)
+            {
+                var prevLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(prevLeafId.Value);
+                await prevLeaf.SetNextSiblingAsync(leafId);
+                await leaf.SetPrevSiblingAsync(prevLeafId.Value);
+            }
+
+            separators.Add(leafIds.Count == 0 ? null : sortedEntries[i].Key);
+            leafIds.Add(leafId);
+            prevLeafId = leafId;
+        }
+
+        await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
+    }
+
+    /// <summary>
+    /// Shared bottom-up internal-node assembly used by both
+    /// <see cref="BulkLoadAsync"/> and <see cref="BulkLoadRawAsync"/>. Builds
+    /// internal nodes from <paramref name="leafIds"/> / <paramref name="separators"/>,
+    /// persists the root, and records <paramref name="operationId"/> as complete.
+    /// </summary>
+    private async Task FinalizeBulkLoadTreeAsync(
+        string operationId,
+        List<GrainId> leafIds,
+        List<string?> separators,
+        int maxChildren)
+    {
         if (leafIds.Count == 1)
         {
             state.State.RootNodeId = leafIds[0];
@@ -69,6 +145,7 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
+        var shardKey = context.GrainId.Key.ToString()!;
         var currentLevel = new List<(string? separator, GrainId id)>(leafIds.Count);
         for (int i = 0; i < leafIds.Count; i++)
             currentLevel.Add((separators[i], leafIds[i]));

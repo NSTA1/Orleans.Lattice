@@ -6,7 +6,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// Strongly-consistent, globally-sorted key enumeration via paginated k-way
 /// merge across shards with in-line reconciliation against concurrent
-/// adaptive splits (F-011, F-032).
+/// adaptive splits.
 /// </summary>
 internal sealed partial class LatticeGrain
 {
@@ -24,7 +24,7 @@ internal sealed partial class LatticeGrain
     /// <b>Algorithm.</b> A streaming k-way merge across the physical shards
     /// owned by the start-of-scan shard map. Each shard filters out virtual
     /// slots that have been (or are being) moved to another physical shard by
-    /// an adaptive split (F-011) and reports them via
+    /// an adaptive split and reports them via
     /// <see cref="KeysPage.MovedAwaySlots"/>. Whenever the orchestrator
     /// observes (a) new moved slots reported by any cursor, or (b) a change
     /// in <see cref="ShardMap.Version"/> since the last reconciliation
@@ -310,7 +310,7 @@ internal sealed partial class LatticeGrain
     /// the next page in the background to hide grain-call latency. Accumulates
     /// the union of <see cref="KeysPage.MovedAwaySlots"/> reported by every
     /// page consumed into <paramref name="movedSlotSink"/> for the
-    /// orchestrator's reconciliation (F-011).
+    /// orchestrator's reconciliation.
     /// </summary>
     private sealed class ShardCursor(
         IShardRootGrain shard,

@@ -4,7 +4,7 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// A page of key-value entries returned by <see cref="ILattice.NextEntriesAsync"/>
-/// from a stateful cursor (F-033).
+/// from a stateful cursor.
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeCursorEntriesPage)]

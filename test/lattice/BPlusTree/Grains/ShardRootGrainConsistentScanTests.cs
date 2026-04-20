@@ -8,7 +8,7 @@ using Orleans.Lattice.Tests.Fakes;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Unit tests for the F-011 strongly-consistent scan surface added to
+/// Unit tests for the strongly-consistent scan surface added to
 /// <see cref="ShardRootGrain"/>: <see cref="IShardRootGrain.CountWithMovedAwayAsync"/>,
 /// <see cref="IShardRootGrain.CountForSlotsAsync"/>, the slot-filtered scan
 /// methods, and the <c>MovedAwaySlots</c> reporting on the existing scan

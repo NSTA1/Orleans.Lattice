@@ -21,7 +21,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<byte[]?> GetAsync(string key)
     {
-        if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone)
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
         {
             return Task.FromResult<byte[]?>(lww.Value);
         }
@@ -31,7 +32,8 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<VersionedValue> GetWithVersionAsync(string key)
     {
-        if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone)
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
         {
             return Task.FromResult(new VersionedValue { Value = lww.Value, Version = lww.Timestamp });
         }
@@ -41,19 +43,21 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<bool> ExistsAsync(string key)
     {
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
         return Task.FromResult(
-            state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone);
+            state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks));
     }
 
     public Task<GetOrSetResult> GetOrSetAsync(string key, byte[] value)
     {
-        // Short-circuit: if the key already exists and is live, return its value without writing.
-        if (state.State.Entries.TryGetValue(key, out var existing) && !existing.IsTombstone)
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        // Short-circuit: if the key already exists and is live (and not expired), return its value without writing.
+        if (state.State.Entries.TryGetValue(key, out var existing) && !existing.IsTombstone && !existing.IsExpired(nowTicks))
         {
             return Task.FromResult(new GetOrSetResult { ExistingValue = existing.Value });
         }
 
-        // Key is absent or tombstoned — delegate to the write path and wrap the result.
+        // Key is absent, tombstoned, or expired — delegate to the write path and wrap the result.
         return GetOrSetWriteAsync(key, value);
     }
 
@@ -65,8 +69,11 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<CasResult> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
     {
-        // Check current entry version.
-        if (state.State.Entries.TryGetValue(key, out var existing) && !existing.IsTombstone)
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        // Check current entry version. Treat expired live entries as absent
+        // for CAS purposes (same as tombstones) so a fresh write with
+        // expectedVersion == Zero succeeds after expiry.
+        if (state.State.Entries.TryGetValue(key, out var existing) && !existing.IsTombstone && !existing.IsExpired(nowTicks))
         {
             if (existing.Timestamp != expectedVersion)
             {
@@ -109,10 +116,11 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var result = new Dictionary<string, byte[]>(keys.Count);
         foreach (var key in keys)
         {
-            if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone)
+            if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
             {
                 result[key] = lww.Value!;
             }
@@ -120,7 +128,21 @@ internal sealed partial class BPlusLeafGrain(
         return Task.FromResult(result);
     }
 
-    public async Task<SplitResult?> SetAsync(string key, byte[] value)
+    public Task<SplitResult?> SetAsync(string key, byte[] value) =>
+        SetCoreAsync(key, value, 0L);
+
+    /// <inheritdoc />
+    public Task<SplitResult?> SetAsync(string key, byte[] value, long expiresAtTicks) =>
+        SetCoreAsync(key, value, expiresAtTicks);
+
+    public Task<LwwEntry?> GetRawEntryAsync(string key)
+    {
+        if (state.State.Entries.TryGetValue(key, out var lww))
+            return Task.FromResult<LwwEntry?>(new LwwEntry(key, lww));
+        return Task.FromResult<LwwEntry?>(null);
+    }
+
+    private async Task<SplitResult?> SetCoreAsync(string key, byte[] value, long expiresAtTicks)
     {
         // Recovery: if a previous split was interrupted, complete it first.
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
@@ -133,14 +155,14 @@ internal sealed partial class BPlusLeafGrain(
             {
                 // The key belongs to the new sibling — forward it there.
                 var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.SplitSiblingId!.Value);
-                await sibling.SetAsync(key, value);
+                await sibling.SetAsync(key, value, expiresAtTicks);
             }
             else
             {
                 // The key belongs to this leaf — write it here.
                 state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
                 state.State.Version.Tick(ReplicaId);
-                var entry = LwwValue<byte[]>.Create(value, state.State.Clock);
+                var entry = LwwValue<byte[]>.CreateWithExpiry(value, state.State.Clock, expiresAtTicks);
                 if (state.State.Entries.TryGetValue(key, out var prev))
                     state.State.Entries[key] = LwwValue<byte[]>.Merge(prev, entry);
                 else
@@ -153,7 +175,7 @@ internal sealed partial class BPlusLeafGrain(
 
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
         state.State.Version.Tick(ReplicaId);
-        var newEntry = LwwValue<byte[]>.Create(value, state.State.Clock);
+        var newEntry = LwwValue<byte[]>.CreateWithExpiry(value, state.State.Clock, expiresAtTicks);
 
         if (state.State.Entries.TryGetValue(key, out var existing))
         {
@@ -204,8 +226,9 @@ internal sealed partial class BPlusLeafGrain(
     {
         // Collect matching keys. Entries is a SortedDictionary so we can
         // break early once we pass endExclusive — but we must still report
-        // whether we observed a key >= endExclusive (FX-011) so the shard
+        // whether we observed a key >= endExclusive so the shard
         // coordinator can terminate the chain walk deterministically.
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
         List<string>? keysToDelete = null;
         var pastRange = false;
         foreach (var (key, lww) in state.State.Entries)
@@ -216,7 +239,8 @@ internal sealed partial class BPlusLeafGrain(
                 break;
             }
 
-            if (string.Compare(key, startInclusive, StringComparison.Ordinal) >= 0 && !lww.IsTombstone)
+            if (string.Compare(key, startInclusive, StringComparison.Ordinal) >= 0
+                && !lww.IsTombstone && !lww.IsExpired(nowTicks))
                 (keysToDelete ??= []).Add(key);
         }
 
@@ -238,10 +262,11 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<int> CountAsync()
     {
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var count = 0;
         foreach (var lww in state.State.Entries.Values)
         {
-            if (!lww.IsTombstone) count++;
+            if (!lww.IsTombstone && !lww.IsExpired(nowTicks)) count++;
         }
         return Task.FromResult(count);
     }
@@ -280,23 +305,42 @@ internal sealed partial class BPlusLeafGrain(
         if (state.State.LastCompactionVersion.DominatesOrEquals(state.State.Version))
             return 0;
 
-        var cutoff = DateTimeOffset.UtcNow.Ticks - gracePeriod.Ticks;
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        var cutoff = nowTicks - gracePeriod.Ticks;
         var toRemove = new List<string>();
         var anyInGraceRemaining = false;
 
         foreach (var (key, lww) in state.State.Entries)
         {
-            if (!lww.IsTombstone) continue;
-
-            if (lww.Timestamp.WallClockTicks <= cutoff)
+            if (lww.IsTombstone)
             {
-                toRemove.Add(key);
+                if (lww.Timestamp.WallClockTicks <= cutoff)
+                {
+                    toRemove.Add(key);
+                }
+                else
+                {
+                    // Tombstone is still within the grace window — a future pass
+                    // must re-scan it once the grace has elapsed.
+                    anyInGraceRemaining = true;
+                }
+                continue;
             }
-            else
+
+            // Reap expired live entries past the same grace period.
+            // Reads already hide them; a short retention after expiry protects
+            // against a stale merge resurrecting the entry (another replica
+            // whose clock is behind could re-send the pre-expiry LwwValue).
+            if (lww.ExpiresAtTicks != 0 && lww.ExpiresAtTicks <= nowTicks)
             {
-                // Tombstone is still within the grace window — a future pass
-                // must re-scan it once the grace has elapsed.
-                anyInGraceRemaining = true;
+                if (lww.ExpiresAtTicks <= cutoff)
+                {
+                    toRemove.Add(key);
+                }
+                else
+                {
+                    anyInGraceRemaining = true;
+                }
             }
         }
 
@@ -321,6 +365,11 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion)
     {
+        // NOTE: Replication paths intentionally propagate expired entries.
+        // Readers filter them via LwwValue.IsExpired; shipping them to peers
+        // preserves CRDT convergence so LWW can resolve by timestamp on
+        // replicas whose wall clocks are drifted. CompactTombstonesAsync
+        // reaps them after the configured grace period on each replica.
         // If the caller's version dominates ours, they already have everything.
         if (sinceVersion.DominatesOrEquals(state.State.Version))
         {
@@ -389,6 +438,11 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries)
     {
+        // NOTE: Expired entries are merged as-is and not filtered here.
+        // Replication must preserve them so CRDT LWW convergence is resolved
+        // by timestamp, not by the wall clock of whichever replica happens to
+        // see a write first. Readers filter expired entries; compaction reaps
+        // them after the grace period.
         var maxIncoming = HybridLogicalClock.Zero;
         foreach (var (key, incoming) in entries)
         {
@@ -426,6 +480,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
     {
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
 
@@ -442,7 +497,7 @@ internal sealed partial class BPlusLeafGrain(
                 string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
                 break;
 
-            if (lww.IsTombstone)
+            if (lww.IsTombstone || lww.IsExpired(nowTicks))
                 continue;
 
             if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
@@ -459,6 +514,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
     {
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
 
@@ -475,7 +531,7 @@ internal sealed partial class BPlusLeafGrain(
                 string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
                 break;
 
-            if (lww.IsTombstone)
+            if (lww.IsTombstone || lww.IsExpired(nowTicks))
                 continue;
 
             if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
@@ -492,12 +548,28 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<Dictionary<string, byte[]>> GetLiveEntriesAsync()
     {
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var result = new Dictionary<string, byte[]>();
         foreach (var (key, lww) in state.State.Entries)
         {
-            if (!lww.IsTombstone)
+            if (!lww.IsTombstone && !lww.IsExpired(nowTicks))
             {
                 result[key] = lww.Value!;
+            }
+        }
+        return Task.FromResult(result);
+    }
+
+    /// <inheritdoc />
+    public Task<List<LwwEntry>> GetLiveRawEntriesAsync()
+    {
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        var result = new List<LwwEntry>(state.State.Entries.Count);
+        foreach (var (key, lww) in state.State.Entries)
+        {
+            if (!lww.IsTombstone && !lww.IsExpired(nowTicks))
+            {
+                result.Add(new LwwEntry(key, lww));
             }
         }
         return Task.FromResult(result);

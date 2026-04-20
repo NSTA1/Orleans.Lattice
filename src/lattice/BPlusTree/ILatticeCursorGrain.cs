@@ -3,7 +3,7 @@ using System.ComponentModel;
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Stateful cursor / iterator coordinator (F-033). One grain activation per
+/// Stateful cursor / iterator coordinator. One grain activation per
 /// open cursor, keyed by <c>{treeId}/{cursorId}</c>. Persists the scan spec
 /// and last-yielded key after every page so a paused cursor survives silo
 /// failovers and topology changes (shard splits). Resumption is transparent:
@@ -13,7 +13,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// Ordering across resumptions is preserved because the continuation uses the
 /// same <see cref="ILattice.KeysAsync"/> / <see cref="ILattice.EntriesAsync"/>
 /// path bounded by the persisted last-yielded key — and those paths already
-/// deliver strict global ordering under topology change (F-032).
+/// deliver strict global ordering under topology change.
 /// </para>
 /// <para>
 /// Guarded: external callers must go through <see cref="ILattice"/>

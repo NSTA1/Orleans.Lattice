@@ -70,6 +70,7 @@ without distributed locks or coordination protocols.
 | **Soft delete & recovery** | Trees can be soft-deleted with a configurable retention window. Recovery restores full access; purge permanently removes all data. |
 | **Tombstone cleanup** | Reminder-driven compaction removes expired tombstones shard-by-shard, with crash-safe progress tracking. |
 | **Tree registry** | An internal registry tree tracks all user trees, per-tree config overrides, and tree aliasing — enabling enumeration, resize, and snapshot without external metadata. |
+| **TTL on `SetAsync`** | Per-entry time-to-live via `SetAsync(key, value, TimeSpan)`. Absolute UTC expiry is resolved server-side so client clock skew does not shift individual entry lifetimes. Expired entries are hidden from every read path and reaped by tombstone compaction after a configurable grace period. TTL metadata is preserved verbatim across shard splits, snapshots, resize, merges, and saga compensation. |
 
 ## Quick Start
 
@@ -98,6 +99,7 @@ Detailed design documentation is split by concept:
 | [Tree Registry](docs/tree-registry.md) | Internal registry tree, automatic registration, config priority, tree enumeration |
 | [Tree Sizing](docs/tree-sizing.md) | Per-provider storage limits, leaf/internal node size estimation, sizing recommendations, resizing existing trees |
 | [Tree Structure](docs/tree-structure.md) | Internal/leaf node layout, two-phase leaf splits, idempotent split propagation |
+| [TTL](docs/ttl.md) | Per-entry time-to-live: `SetAsync(ttl)`, server-side absolute expiry, read-path filtering, preservation across splits / snapshots / resize / merge / saga compensation, CRDT replication invariant |
 
 ## Performance Characteristics
 

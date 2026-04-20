@@ -1,7 +1,7 @@
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Lifecycle phase of an atomic multi-key write saga (F-031).
+/// Lifecycle phase of an atomic multi-key write saga.
 /// Persisted in <see cref="State.AtomicWriteState"/> so the saga can resume
 /// after a silo crash.
 /// </summary>
