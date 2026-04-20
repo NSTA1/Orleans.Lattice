@@ -40,7 +40,16 @@ internal sealed class TreeSnapshotGrain(
     public async Task SnapshotAsync(string destinationTreeId, SnapshotMode mode,
         int? maxLeafKeys = null, int? maxInternalChildren = null)
     {
+        await SnapshotWithOperationIdAsync(destinationTreeId, mode, maxLeafKeys, maxInternalChildren,
+            Guid.NewGuid().ToString("N"));
+    }
+
+    /// <inheritdoc />
+    public async Task SnapshotWithOperationIdAsync(string destinationTreeId, SnapshotMode mode,
+        int? maxLeafKeys, int? maxInternalChildren, string operationId)
+    {
         ArgumentNullException.ThrowIfNull(destinationTreeId);
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
 
         if (maxLeafKeys is not null && maxLeafKeys <= 1)
             throw new ArgumentOutOfRangeException(nameof(maxLeafKeys), "Must be greater than 1.");
@@ -86,7 +95,7 @@ internal sealed class TreeSnapshotGrain(
                 $"Destination tree '{destinationTreeId}' already exists. Choose a new tree ID.");
 
         await InitiateSnapshotStateAsync(destinationTreeId, mode, sourceOptions.ShardCount,
-            maxLeafKeys, maxInternalChildren);
+            maxLeafKeys, maxInternalChildren, operationId);
         await StartSnapshotAsync();
     }
 
@@ -97,7 +106,8 @@ internal sealed class TreeSnapshotGrain(
     /// for unit testing.
     /// </summary>
     internal async Task InitiateSnapshotStateAsync(string destinationTreeId, SnapshotMode mode,
-        int shardCount, int? maxLeafKeys = null, int? maxInternalChildren = null)
+        int shardCount, int? maxLeafKeys = null, int? maxInternalChildren = null,
+        string? operationId = null)
     {
         // Register the destination tree in the registry before any data is written.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
@@ -122,7 +132,7 @@ internal sealed class TreeSnapshotGrain(
         state.State.ShardRetries = 0;
         state.State.DestinationTreeId = destinationTreeId;
         state.State.Mode = mode;
-        state.State.OperationId = Guid.NewGuid().ToString("N");
+        state.State.OperationId = operationId ?? Guid.NewGuid().ToString("N");
         state.State.ShardCount = shardCount;
         state.State.MaxLeafKeys = maxLeafKeys;
         state.State.MaxInternalChildren = maxInternalChildren;

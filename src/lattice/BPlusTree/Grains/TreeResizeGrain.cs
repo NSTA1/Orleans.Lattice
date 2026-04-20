@@ -7,20 +7,28 @@ using Orleans.Timers;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Manages tree resizing by taking an offline snapshot to a new physical tree,
+/// Manages tree resizing by taking an online snapshot to a new physical tree,
 /// swapping the tree alias, and soft-deleting the old physical tree.
 /// <para>
 /// The resize flow is:
 /// <list type="number">
-/// <item><description><see cref="ResizePhase.Snapshot"/> — offline snapshot of the logical
-/// tree to a new physical tree with the desired sizing.</description></item>
+/// <item><description><see cref="ResizePhase.Snapshot"/> — online snapshot of the logical
+/// tree to a new physical tree with the desired sizing. The source tree remains
+/// fully available for reads and writes; every accepted mutation is
+/// shadow-forwarded to the destination.</description></item>
 /// <item><description><see cref="ResizePhase.Swap"/> — set alias so the logical tree ID
 /// points to the new physical tree.</description></item>
+/// <item><description><see cref="ResizePhase.Reject"/> — transition every shard on the old
+/// physical tree to the Rejecting phase so any lingering client request to the old
+/// tree throws <see cref="StaleTreeRoutingException"/> and retries against the new
+/// alias target.</description></item>
 /// <item><description><see cref="ResizePhase.Cleanup"/> — soft-delete the old physical
 /// tree to reclaim storage.</description></item>
 /// </list>
 /// During the <see cref="LatticeOptions.SoftDeleteDuration"/> window, the resize
-/// can be undone with <see cref="UndoResizeAsync"/>.
+/// can be undone with <see cref="UndoResizeAsync"/>. Undo is also available
+/// before the alias swap (during the drain) — in that case the destination
+/// tree is deleted and shadow-forward cleared without touching the source.
 /// </para>
 /// Key format: <c>{treeId}</c>.
 /// </summary>
@@ -59,6 +67,15 @@ internal sealed class TreeResizeGrain(
                 $"A resize is already in progress for tree '{TreeId}' with different parameters " +
                 $"(MaxLeafKeys={state.State.NewMaxLeafKeys}, MaxInternalChildren={state.State.NewMaxInternalChildren}).");
         }
+
+        // Interlock: refuse to start a resize while a reshard is in flight.
+        // Resize crosses physical trees; a concurrent reshard mutating the
+        // source tree's ShardMap would invalidate the snapshot's per-slot
+        // routing assumptions.
+        var reshard = grainFactory.GetGrain<ITreeReshardGrain>(TreeId);
+        if (!await reshard.IsCompleteAsync())
+            throw new InvalidOperationException(
+                $"A reshard is already in progress for tree '{TreeId}'; resize refused until reshard completes.");
 
         if (state.State.Complete)
         {
@@ -101,10 +118,16 @@ internal sealed class TreeResizeGrain(
         state.State.OldRegistryEntry = oldEntry;
         await state.WriteStateAsync();
 
-        // Initiate the offline snapshot from current physical tree to new tree.
+        // Initiate the online snapshot from current physical tree to new tree.
+        // Online mode keeps the source tree available for reads and writes
+        // throughout the resize via the shadow-forwarding primitive. The
+        // resize's operationId is threaded into the snapshot so both
+        // coordinators stamp the same id onto the source shards' shadow-
+        // forward state — the resize can then later call
+        // EnterRejectingAsync / ClearShadowForwardAsync with this same id.
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(currentPhysical);
-        await snapshot.SnapshotAsync(snapshotTreeId, SnapshotMode.Offline,
-            newMaxLeafKeys, newMaxInternalChildren);
+        await snapshot.SnapshotWithOperationIdAsync(snapshotTreeId, SnapshotMode.Online,
+            newMaxLeafKeys, newMaxInternalChildren, operationId);
     }
 
     public async Task RunResizePassAsync()
@@ -119,6 +142,11 @@ internal sealed class TreeResizeGrain(
         if (state.State.Phase == ResizePhase.Swap)
         {
             await SwapAliasAsync();
+        }
+
+        if (state.State.Phase == ResizePhase.Reject)
+        {
+            await RejectOldShardsAsync();
         }
 
         if (state.State.Phase == ResizePhase.Cleanup)
@@ -147,35 +175,94 @@ internal sealed class TreeResizeGrain(
 
     public async Task UndoResizeAsync()
     {
-        if (!state.State.Complete || state.State.OldPhysicalTreeId is null || state.State.SnapshotTreeId is null)
+        // Undo is available in two windows:
+        //   1. Before swap — while the online snapshot is draining and the
+        //      alias has not yet been updated. Shadow-forwarding is active
+        //      but discardable: clearing it and deleting the draft
+        //      destination tree leaves the source fully intact.
+        //   2. After swap — during the SoftDeleteDuration window. Recover
+        //      the old physical tree, remove the alias, restore registry
+        //      entry, and delete the destination tree. Shadow-forward
+        //      state on the old-tree shards must also be cleared so the
+        //      tree becomes writable again.
+        if (!state.State.InProgress && !state.State.Complete)
             throw new InvalidOperationException(
-                $"No completed resize exists for tree '{TreeId}' that can be undone.");
+                $"No resize exists for tree '{TreeId}' that can be undone.");
+
+        if (state.State.OldPhysicalTreeId is null || state.State.SnapshotTreeId is null)
+            throw new InvalidOperationException(
+                $"Resize state for tree '{TreeId}' is incomplete; cannot undo.");
 
         var oldPhysical = state.State.OldPhysicalTreeId;
         var snapshotTreeId = state.State.SnapshotTreeId;
+        var opId = state.State.OperationId!;
+        var shardCount = state.State.ShardCount;
 
+        if (state.State.InProgress)
+        {
+            // ---- Undo during drain (before swap). ----
+            // Cancel the in-flight snapshot by clearing shadow-forward on
+            // every old-tree shard and deleting the destination tree.
+            // No alias was ever set so no recovery or alias removal needed.
+            var clearTasks = new Task[shardCount];
+            for (int i = 0; i < shardCount; i++)
+            {
+                var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{i}");
+                clearTasks[i] = shard.ClearShadowForwardAsync(opId);
+            }
+            await Task.WhenAll(clearTasks);
+
+            var destDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(snapshotTreeId);
+            await destDeletion.DeleteTreeAsync();
+
+            ResetResizeState();
+            await state.WriteStateAsync();
+
+            _resizeTimer?.Dispose();
+            _resizeTimer = null;
+            await UnregisterKeepaliveAsync();
+            this.DeactivateOnIdle();
+            return;
+        }
+
+        // ---- Undo after swap. ----
         // 1. Recover the old physical tree from soft-delete.
         var oldDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(oldPhysical);
         await oldDeletion.RecoverAsync();
 
-        // 2. Remove the alias so the logical tree maps back to the old physical tree.
+        // 2. Clear shadow-forward on every old-tree shard so the tree becomes
+        //    writable again (lifts the Rejecting phase).
+        var undoTasks = new Task[shardCount];
+        for (int i = 0; i < shardCount; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{i}");
+            undoTasks[i] = shard.ClearShadowForwardAsync(opId);
+        }
+        await Task.WhenAll(undoTasks);
+
+        // 3. Remove the alias so the logical tree maps back to the old physical tree.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.RemoveAliasAsync(TreeId);
 
-        // 3. Delete the snapshot tree.
+        // 4. Delete the snapshot tree.
         var newDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(snapshotTreeId);
         await newDeletion.DeleteTreeAsync();
 
-        // 4. Restore the original registry entry (or clear overrides if none existed).
+        // 5. Restore the original registry entry (or clear overrides if none existed).
         await registry.UpdateAsync(TreeId, state.State.OldRegistryEntry ?? new TreeRegistryEntry());
 
-        // 5. Clear resize state.
+        // 6. Clear resize state.
+        ResetResizeState();
+        await state.WriteStateAsync();
+    }
+
+    private void ResetResizeState()
+    {
         state.State.InProgress = false;
         state.State.Complete = false;
         state.State.SnapshotTreeId = null;
         state.State.OldPhysicalTreeId = null;
         state.State.OldRegistryEntry = null;
-        await state.WriteStateAsync();
     }
 
     private async Task StartResizeAsync()
@@ -223,6 +310,10 @@ internal sealed class TreeResizeGrain(
                     await SwapAliasAsync();
                     break;
 
+                case ResizePhase.Reject:
+                    await RejectOldShardsAsync();
+                    break;
+
                 case ResizePhase.Cleanup:
                     await CleanupOldTreeAsync();
                     await CompleteResizeAsync();
@@ -267,6 +358,32 @@ internal sealed class TreeResizeGrain(
 
         // Set alias to redirect to the new physical tree.
         await registry.SetAliasAsync(TreeId, state.State.SnapshotTreeId!);
+
+        state.State.Phase = ResizePhase.Reject;
+        await state.WriteStateAsync();
+    }
+
+    /// <summary>
+    /// Transitions every shard on the old physical tree to
+    /// <c>ShadowForwardPhase.Rejecting</c>. Any lingering client request
+    /// routed to the old tree after this point throws
+    /// <see cref="StaleTreeRoutingException"/>, which the stateless
+    /// <see cref="LatticeGrain"/> routing tier handles by refreshing its
+    /// alias and retrying against the new physical tree. Exposed as
+    /// <c>internal</c> for unit testing.
+    /// </summary>
+    internal async Task RejectOldShardsAsync()
+    {
+        var oldPhysical = state.State.OldPhysicalTreeId!;
+        var opId = state.State.OperationId!;
+        var shardCount = state.State.ShardCount;
+        var tasks = new Task[shardCount];
+        for (int i = 0; i < shardCount; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{i}");
+            tasks[i] = shard.EnterRejectingAsync(opId);
+        }
+        await Task.WhenAll(tasks);
 
         state.State.Phase = ResizePhase.Cleanup;
         await state.WriteStateAsync();

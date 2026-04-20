@@ -11,7 +11,7 @@ using Orleans.Timers;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
-public class TreeResizeGrainTests
+public partial class TreeResizeGrainTests
 {
     private const string TreeId = "test-tree";
     private const int ShardCount = 2;
@@ -51,6 +51,20 @@ public class TreeResizeGrainTests
         // Setup default deletion grain mock.
         var deletion = Substitute.For<ITreeDeletionGrain>();
         grainFactory.GetGrain<ITreeDeletionGrain>(Arg.Any<string>()).Returns(deletion);
+
+        // Setup default reshard grain mock — defaults to IsCompleteAsync == true
+        // so the new ResizeAsync interlock does not block.
+        var reshard = Substitute.For<ITreeReshardGrain>();
+        reshard.IsCompleteAsync().Returns(Task.FromResult(true));
+        grainFactory.GetGrain<ITreeReshardGrain>(Arg.Any<string>()).Returns(reshard);
+
+        // Setup default shard root grain mocks so RejectOldShardsAsync /
+        // UndoResizeAsync can fan out without NullReferenceException.
+        for (int i = 0; i < ShardCount; i++)
+        {
+            var shard = Substitute.For<IShardRootGrain>();
+            grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}").Returns(shard);
+        }
 
         var grain = new TreeResizeGrain(
             context, grainFactory, reminderRegistry, optionsMonitor,
@@ -126,17 +140,18 @@ public class TreeResizeGrainTests
     }
 
     [Test]
-    public async Task InitiateResize_kicks_off_offline_snapshot()
+    public async Task InitiateResize_kicks_off_online_snapshot()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
 
         await grain.InitiateResizeStateAsync(256, 64);
 
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
-        await snapshot.Received(1).SnapshotAsync(
+        await snapshot.Received(1).SnapshotWithOperationIdAsync(
             state.State.SnapshotTreeId!,
-            SnapshotMode.Offline,
-            256, 64);
+            SnapshotMode.Online,
+            256, 64,
+            state.State.OperationId!);
     }
 
     [Test]
@@ -192,7 +207,7 @@ public class TreeResizeGrainTests
         await registry.Received(1).UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e =>
             e.MaxLeafKeys == 256 && e.MaxInternalChildren == 64));
         await registry.Received(1).SetAliasAsync(TreeId, $"{TreeId}/resized/op1");
-        Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Cleanup));
+        Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Reject));
     }
 
     // --- CleanupOldTreeAsync ---
@@ -265,7 +280,11 @@ public class TreeResizeGrainTests
         await grain.ProcessNextPhaseAsync();
         Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Swap));
 
-        // Swap phase
+        // Swap phase → Reject
+        await grain.ProcessNextPhaseAsync();
+        Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Reject));
+
+        // Reject phase → Cleanup
         await grain.ProcessNextPhaseAsync();
         Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Cleanup));
 
@@ -367,7 +386,7 @@ public class TreeResizeGrainTests
 
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.Received(1).SetAliasAsync(TreeId, $"{TreeId}/resized/recovery");
-        Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Cleanup));
+        Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Reject));
     }
 
     // --- RunResizePassAsync ---

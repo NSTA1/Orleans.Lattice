@@ -377,4 +377,33 @@ public class TreeReshardGrainTests
         Assert.That(totalDispatches, Is.EqualTo(1),
             "Dispatch budget must be clamped to (target - current - inFlight).");
     }
+
+    [Test]
+    public void ReshardAsync_refused_while_resize_in_flight()
+    {
+        // Bidirectional interlock: a grow reshard must refuse to start while
+        // a resize is still migrating data across physical trees, since the
+        // ShardMap mutations a reshard performs on the source would
+        // invalidate the resize snapshot's per-slot routing.
+        var (grain, _, grainFactory, _) = CreateGrain(virtualShardCount: 16, physicalShardCount: 2);
+        var resize = Substitute.For<ITreeResizeGrain>();
+        resize.IsCompleteAsync().Returns(Task.FromResult(false));
+        grainFactory.GetGrain<ITreeResizeGrain>(TreeId).Returns(resize);
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => grain.ReshardAsync(4));
+    }
+
+    [Test]
+    public void ReshardAsync_validates_arguments_before_consulting_resize_interlock()
+    {
+        // Bad argument must throw ArgumentOutOfRangeException even when a
+        // resize is in flight — caller feedback on bad input must not be
+        // masked by the interlock check.
+        var (grain, _, grainFactory, _) = CreateGrain(virtualShardCount: 16, physicalShardCount: 2);
+        var resize = Substitute.For<ITreeResizeGrain>();
+        resize.IsCompleteAsync().Returns(Task.FromResult(false));
+        grainFactory.GetGrain<ITreeResizeGrain>(TreeId).Returns(resize);
+
+        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => grain.ReshardAsync(1));
+    }
 }

@@ -67,8 +67,11 @@ internal sealed class TreeResizeState
 internal enum ResizePhase
 {
     /// <summary>
-    /// The offline snapshot to the new physical tree is in progress.
-    /// The <see cref="Grains.TreeSnapshotGrain"/> handles the actual work.
+    /// The online snapshot to the new physical tree is in progress.
+    /// The <see cref="Grains.TreeSnapshotGrain"/> handles the actual work;
+    /// during this phase every accepted mutation on the source tree is
+    /// shadow-forwarded to the destination via the shadow-forwarding
+    /// primitive.
     /// </summary>
     Snapshot = 0,
 
@@ -82,5 +85,14 @@ internal enum ResizePhase
     /// The alias has been swapped. The old physical tree needs to be
     /// soft-deleted to reclaim storage.
     /// </summary>
-    Cleanup = 2
+    Cleanup = 2,
+
+    /// <summary>
+    /// The alias has been swapped. Every shard on the old physical tree
+    /// must transition to <c>ShadowForwardPhase.Rejecting</c> so that any
+    /// remaining client request routed to the old tree throws
+    /// <see cref="StaleTreeRoutingException"/> and retries against the new
+    /// alias target.
+    /// </summary>
+    Reject = 3,
 }

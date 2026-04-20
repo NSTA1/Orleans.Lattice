@@ -75,6 +75,16 @@ internal sealed class TreeReshardGrain(
             throw new ArgumentOutOfRangeException(nameof(newShardCount),
                 $"Target shard count ({newShardCount}) must be greater than current count ({currentCount}). Shrink is not supported.");
 
+        // Interlock: refuse to start a reshard while a resize is in flight.
+        // Resize crosses physical trees; concurrent ShardMap mutation on the
+        // source would invalidate the resize snapshot's per-slot routing
+        // assumptions. Checked after argument validation so that callers
+        // providing invalid parameters always receive an argument exception.
+        var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
+        if (!await resize.IsCompleteAsync())
+            throw new InvalidOperationException(
+                $"A resize is already in progress for tree '{TreeId}'; reshard refused until resize completes.");
+
         if (state.State.Complete) state.State.Complete = false;
 
         state.State.InProgress = true;

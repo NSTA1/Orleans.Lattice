@@ -32,6 +32,23 @@ public interface ITreeSnapshotGrain : IGrainWithStringKey
     Task SnapshotAsync(string destinationTreeId, SnapshotMode mode, int? maxLeafKeys = null, int? maxInternalChildren = null);
 
     /// <summary>
+    /// Internal overload used by coordinator grains (e.g. <c>TreeResizeGrain</c>)
+    /// that need the snapshot to share an <c>operationId</c> with a
+    /// shadow-forward they intend to manage themselves. The supplied
+    /// <paramref name="operationId"/> is stamped onto every source shard's
+    /// shadow-forward state so the caller can later invoke
+    /// <see cref="IShardRootGrain.EnterRejectingAsync"/> or
+    /// <see cref="IShardRootGrain.ClearShadowForwardAsync"/> with the same id.
+    /// </summary>
+    /// <param name="destinationTreeId">The ID for the new tree. Must not already exist.</param>
+    /// <param name="mode">Snapshot mode. Typically <see cref="SnapshotMode.Online"/> for this overload.</param>
+    /// <param name="maxLeafKeys">Optional sizing override for the destination tree.</param>
+    /// <param name="maxInternalChildren">Optional sizing override for the destination tree.</param>
+    /// <param name="operationId">Externally allocated shadow-forward operation id. Must be non-empty.</param>
+    Task SnapshotWithOperationIdAsync(string destinationTreeId, SnapshotMode mode,
+        int? maxLeafKeys, int? maxInternalChildren, string operationId);
+
+    /// <summary>
     /// Processes all remaining shards synchronously in a single call.
     /// Used for testing and manual operations.
     /// </summary>
