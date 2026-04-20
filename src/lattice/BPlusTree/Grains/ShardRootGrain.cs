@@ -133,6 +133,7 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
+                var forwardTask = ForwardShadowAsync(t => t.SetAsync(key, value));
                 var splitResult = await TraverseForWriteAsync(key, value);
 
                 // If the root node split, we need to create a new internal root.
@@ -143,6 +144,7 @@ internal sealed partial class ShardRootGrain(
 
                 // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key);
+                await forwardTask;
                 return;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
@@ -165,6 +167,7 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
+                var forwardTask = ForwardShadowAsync(t => t.SetAsync(key, value, expiresAtTicks));
                 var splitResult = await TraverseForWriteWithExpiryAsync(key, value, expiresAtTicks);
 
                 while (splitResult is not null)
@@ -176,6 +179,7 @@ internal sealed partial class ShardRootGrain(
                 // The target fetches the authoritative entry via the normal merge
                 // path so expiry is preserved end-to-end.
                 await ForwardLocalWriteToShadowIfNeededAsync(key);
+                await forwardTask;
                 return;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
@@ -194,11 +198,16 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
+                // Shadow-forward the same semantic operation so the destination tree
+                // observes GetOrSet semantics too. LWW on the destination absorbs
+                // the interleaving between drain reads and this forward.
+                var forwardTask = ForwardShadowAsync(t => t.GetOrSetAsync(key, value));
                 var result = await TraverseForGetOrSetAsync(key, value);
 
                 // If the key was already live, no write occurred — return existing value.
                 if (result.ExistingValue is not null)
                 {
+                    await forwardTask;
                     return result.ExistingValue;
                 }
 
@@ -211,6 +220,7 @@ internal sealed partial class ShardRootGrain(
 
                 // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key);
+                await forwardTask;
                 return null;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
@@ -232,6 +242,14 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
+                // Forward the unconditional Set on success. Rationale: SetIfVersion's
+                // precondition is on the source's HLC; the destination holds its own
+                // drained copy plus any preceding forwards. Issuing an unconditional
+                // Set on the destination ensures the same post-condition value
+                // lands there regardless of the destination's own version state,
+                // with LWW resolving ordering against concurrent forwards. We only
+                // forward once the local CAS has succeeded so a rejected CAS does
+                // not leak a phantom value onto the destination.
                 var result = await TraverseForSetIfVersionAsync(key, value, expectedVersion);
 
                 if (!result.Success)
@@ -248,6 +266,7 @@ internal sealed partial class ShardRootGrain(
 
                 // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key);
+                await ForwardShadowAsync(t => t.SetAsync(key, value));
                 return true;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
@@ -277,6 +296,14 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
+                // For online resize, tombstones MUST be forwarded — the destination
+                // tree becomes authoritative at swap, so a tombstone that never
+                // reached T' would leave the key alive post-swap. LWW on the
+                // destination resolves any interleaving with the drain reader.
+                // This differs from the adaptive-split path, where post-swap
+                // cleanup restores convergence within one tree.
+                var forwardTask = ForwardShadowAsync(t => t.DeleteAsync(key));
+
                 bool result;
                 if (state.State.RootIsLeaf)
                 {
@@ -291,9 +318,10 @@ internal sealed partial class ShardRootGrain(
                     result = await leafGrain.DeleteAsync(key);
                 }
 
-                // tombstone forwarding is handled by the comprehensive
-                // cleanup phase of the split coordinator. See
+                // tombstone forwarding for adaptive splits is handled by the
+                // comprehensive cleanup phase of the split coordinator. See
                 // ForwardLocalWriteToShadowIfNeededAsync XML doc for rationale.
+                await forwardTask;
                 return result;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
@@ -312,6 +340,11 @@ internal sealed partial class ShardRootGrain(
         // here because the LatticeGrain has already routed the range delete
         // to the correct shard via the current ShardMap.
         RecordWrite();
+
+        // For online resize, forward the same range delete to the destination
+        // in parallel — LWW on the destination shard absorbs any interleaving
+        // with drain and live forwards.
+        var forwardTask = ForwardShadowAsync(t => t.DeleteRangeAsync(startInclusive, endExclusive));
 
         // Find the starting leaf for the range.
         GrainId leafId;
@@ -346,6 +379,7 @@ internal sealed partial class ShardRootGrain(
             leafId = nextSibling.Value;
         }
 
+        await forwardTask;
         return totalDeleted;
     }
 
@@ -552,6 +586,7 @@ internal sealed partial class ShardRootGrain(
     private async Task PrepareForOperationAsync()
     {
         ThrowIfDeleted();
+        ThrowIfTreeRejecting();
         await EnsureRootAsync();
         await ResumePendingPromotionAsync();
         await ResumePendingBulkGraftAsync();
@@ -567,11 +602,18 @@ internal sealed partial class ShardRootGrain(
             return;
         }
 
+        // Online-resize shadow-forward: forward the full merge batch to the
+        // destination tree in parallel. LWW preserves the original HLCs end-to-end,
+        // so the destination converges whether this forward wins, loses, or races
+        // with the background drain reader.
+        var forwardTask = ForwardShadowAsync(t => t.MergeManyAsync(entries));
+
         // Root-is-leaf fast path: route the entire batch to the single leaf
         // in one grain call and one WriteStateAsync.
         if (state.State.RootIsLeaf)
         {
             await MergeGroupAsync(entries);
+            await forwardTask;
             return;
         }
 

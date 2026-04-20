@@ -86,6 +86,25 @@ internal sealed class ShardRootState
     /// otherwise the recorded slot indices would lose meaning.
     /// </summary>
     [Id(10)] public int? MovedAwayVirtualShardCount { get; set; }
+
+    /// <summary>
+    /// Non-null when this shard is participating in an online tree-level
+    /// operation (e.g. online resize) as the <em>source</em>. Drives
+    /// parallel shadow-forwarding of every accepted mutation to the
+    /// corresponding shard on
+    /// <c>ShadowForwardState.DestinationPhysicalTreeId</c>, and post-swap
+    /// rejection of new operations with <see cref="StaleTreeRoutingException"/>.
+    /// Cleared by the coordinator after the destination tree has been
+    /// promoted to the primary alias and the source is safe to tear down.
+    /// <para>
+    /// A <c>null</c> value is the steady state — no online operation is in
+    /// flight for this shard. Adding this slot is backward-compatible with
+    /// Orleans serialization: activations persisted before this field was
+    /// introduced deserialize with <c>ShadowForward = null</c>, which is
+    /// the correct "no operation in flight" state.
+    /// </para>
+    /// </summary>
+    [Id(11)] public ShadowForwardState? ShadowForward { get; set; }
 }
 
 /// <summary>
