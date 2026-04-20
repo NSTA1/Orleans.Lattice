@@ -287,6 +287,38 @@ public interface ILattice : IGrainWithStringKey
     Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Online reshard — grows the tree to <paramref name="newShardCount"/>
+    /// distinct physical shards by iteratively splitting the largest-slot-owning
+    /// existing shards. The tree continues to serve reads and writes throughout;
+    /// every underlying split drains moved virtual slots online and then
+    /// atomically swaps the <see cref="ShardMap"/>, so key routing shifts
+    /// transparently. Returns once orchestration has been accepted by the
+    /// coordinator grain; the migration then runs anchored by reminders so
+    /// it survives silo restarts. Poll completion with
+    /// <see cref="IsReshardCompleteAsync"/>.
+    /// <para>
+    /// <b>Grow-only.</b> <paramref name="newShardCount"/> must be strictly
+    /// greater than the current number of distinct physical shards, and
+    /// less than or equal to <see cref="LatticeOptions.VirtualShardCount"/>.
+    /// Throws <see cref="ArgumentOutOfRangeException"/> otherwise.
+    /// </para>
+    /// <para>
+    /// Idempotent: a call with the same <paramref name="newShardCount"/>
+    /// while a reshard is in progress is a no-op. A call with a different
+    /// target throws <see cref="InvalidOperationException"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="newShardCount">The desired number of distinct physical shards.</param>
+    /// <param name="cancellationToken">Cancels orchestration before the reshard coordinator is submitted. Once the coordinator accepts the request it runs to completion via reminders.</param>
+    Task ReshardAsync(int newShardCount, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns <c>true</c> if no reshard operation is in progress for this tree —
+    /// either the most recent reshard has completed or no reshard has ever been initiated.
+    /// </summary>
+    Task<bool> IsReshardCompleteAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the effective routing context for this tree — the resolved
     /// physical tree ID (after registry alias resolution) and the per-tree
     /// <see cref="ShardMap"/>. Used by infrastructure helpers (e.g. the
