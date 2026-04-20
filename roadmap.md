@@ -175,6 +175,18 @@ Fixed in two passes. **v1** added a shard-map version stability check after the 
 
 **Why high priority.** A user raising `MaxLeafKeys` in silo config — a plausible scaling adjustment — can silently corrupt an existing tree's size invariants and push leaf state past the provider hard limit. There is no error surface today; the corruption only manifests later as `WriteStateAsync` failures or unexpected split behaviour. The guard is the difference between a self-inflicted outage and a fast-fail at startup.
 
+### 🔲 FX-014 — Observe shadow-forward tasks in `ShardRootGrain` mutation paths *(reliability / low — follow-up from F-019 review)*
+**Problem.** Every mutation path in `ShardRootGrain` (`SetAsync`, `SetAsync(ttl)`, `GetOrSetAsync`, `SetIfVersionAsync`, `SetManyAsync`, `DeleteAsync`, `DeleteRangeAsync`, `MergeManyAsync`) dispatches a parallel `ForwardShadowAsync` task when shadow forwarding is active. Two gaps surfaced in the F-019 branch review:
+
+1. **Orphaned task on transient-error retry.** The single-key mutation methods wrap the local write in a `while` loop that retries on transient Orleans exceptions. Each iteration allocates a fresh `forwardTask`; the previous iteration's task is abandoned — neither awaited nor cancelled. LWW guarantees the destination still converges, but if an abandoned forward faults, it surfaces only via `TaskScheduler.UnobservedTaskException`, bypassing the grain's normal error-handling path.
+2. **Exception masking in `SetManyAsync`.** The `finally { await forwardTask; }` at the end of `SetManyAsync` will replace a local-loop exception with a forward-path exception if both fail in the same call. Callers lose visibility of the original (root-cause) error.
+
+**Fix.** Track every in-flight shadow-forward task in an activation-scoped list, observe all prior tasks (await-and-discard-exception or attach a faulted-task logger) before dispatching the next one, and switch the `SetManyAsync` finally block to `Task.WhenAll` with aggregated exception preservation so the local failure is the primary.
+
+**Scope.** ~80 LOC source, ~6 tests, one PR. No public API change. Tests must cover: (a) retry loop does not leak unobserved faulted forward tasks; (b) `SetManyAsync` surfaces the local exception when both paths fail; (c) happy-path forward still completes before the grain deactivates.
+
+**Why low priority.** Neither gap is observable in healthy operation — LWW absorbs the data-plane impact, and double-failure masking only fires when the cluster is already degraded. The fix is a hygiene item to keep the F-019 primitive robust under long-tail failure modes.
+
 ---
 
 ## 🔍 Gaps & Potential Additions
