@@ -247,13 +247,22 @@ await tree.ResizeAsync(newMaxLeafKeys: 256, newMaxInternalChildren: 64);
 
 ### How it works
 
-Resize uses an **offline snapshot** to create a new physical tree with the desired sizing, then swaps the tree alias so reads and writes are redirected:
+Resize runs **online**: reads and writes remain available throughout. A whole-tree shape change cannot be done in place — every leaf and every internal node has to be re-paginated at the new fan-out — so `ResizeAsync` drains the source into a freshly-provisioned destination physical tree and then atomically swaps the registry alias.
 
-1. **Snapshot** — An offline snapshot is taken of the current physical tree into a new physical tree (e.g., `my-tree/resized/{opId}`). The snapshot uses the new `MaxLeafKeys` and `MaxInternalChildren` values. During this phase, the source tree is locked (all shards marked as deleted).
-2. **Swap** — The tree alias is set so the logical tree ID (`my-tree`) points to the new physical tree. The registry entry is updated with the new sizing. After this point, new `LatticeGrain` activations will resolve the alias and route to the new tree.
-3. **Cleanup** — The old physical tree is soft-deleted. It will be purged automatically after the configured `SoftDeleteDuration` (default 72 hours).
+1. **Provision destination** — `TreeResizeGrain` creates a destination physical tree ID (e.g. `my-tree/resized/{operationId}`) registered with the new `MaxLeafKeys` / `MaxInternalChildren`. The destination inherits the source's `ShardCount` and a copy of its `ShardMap`, so slot *x* on the source routes to the same physical shard index on the destination.
+2. **Snapshot with shadow forwarding** — the source tree runs under `SnapshotMode.Online`. Before drain begins, every source `ShardRootGrain` is placed in `ShadowForwardPhase.Draining` via `BeginShadowForwardAsync`, and every mutation path (`SetAsync`, `SetManyAsync`, `SetManyAtomicAsync`, `DeleteAsync`, `DeleteManyAsync`, `DeleteRangeAsync`, `BulkLoadAsync`, and saga compensation) runs the local write and a parallel forward to the corresponding destination shard.
+3. **Drain** — `TreeSnapshotGrain` reads each source shard's current entries and merges them into the destination via `IShardRootGrain.MergeManyAsync` (bounded by `LatticeOptions.MaxConcurrentDrains`, default 4). Raw `LwwEntry` payloads flow through verbatim: HLC timestamps, tombstone flags, and TTL (`ExpiresAtTicks`) are preserved. When every shard has finished draining, its shadow state transitions to `Drained`; live forwards continue until swap.
+4. **Swap** — the registry entry is updated with the new sizing and `SetAliasAsync` atomically points the logical tree ID at the destination. Once complete, each source shard transitions to `ShadowForwardPhase.Rejecting` and subsequent writes against the old physical tree throw `StaleTreeRoutingException`. The stateless-worker `LatticeGrain` catches this exception, re-resolves via the registry, and retries transparently against the destination — callers never observe the transition.
+5. **Cleanup** — the old physical tree is soft-deleted. It will be purged automatically after the configured `SoftDeleteDuration` (default 72 hours), leaving `UndoResizeAsync` viable until then.
 
-Each phase transition is persisted. If the silo crashes mid-resize, a keepalive reminder reactivates the grain and resumes from the last completed phase.
+Each phase transition is persisted. If the silo crashes mid-resize, reminder-anchored `TreeResizeGrain` and `TreeSnapshotGrain` reactivate and resume from the last completed phase; source shards retain their `ShadowForwardState` across activations, so live forwards continue uninterrupted.
+
+### LWW convergence — why shadow forwarding is safe
+
+Every entry carries a hybrid-logical-clock timestamp and all writes flow through a last-writer-wins comparator. That makes the shadow-forward path commutative: whether a live write arrives at the destination before or after the drain reader copies the same key, the destination converges to the entry with the higher HLC. Consequently:
+
+- The parallel `local ∥ forward` write is **not** a two-phase commit. If local succeeds and forward fails, the client sees failure; the next idempotent retry lands on both trees. Writes that briefly land on the source only are captured by the drain reader and re-delivered with their original HLCs.
+- The drain uses `MergeManyAsync` (not `BulkLoadRawAsync`) because shadow-forwarded writes can populate destination shards ahead of the drain batch. LWW merge absorbs the race; a bulk-load would error on non-empty destination shards. (The offline snapshot path still uses `BulkLoadRawAsync` — source shards are locked before drain so the destination is guaranteed empty.)
 
 ### Cache invalidation
 
@@ -261,22 +270,30 @@ Different physical trees produce different leaf grain IDs, which automatically c
 
 ### Undo resize
 
-During the soft-delete window, the resize can be undone:
+During the soft-delete window the resize can be undone:
 
 ```csharp
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 await tree.UndoResizeAsync();
 ```
 
-This recovers the old physical tree, removes the alias, and deletes the new snapshot tree. After the soft-delete window expires and the old tree is purged, the resize can no longer be undone.
+`UndoResizeAsync` is phase-aware:
+
+- **Before swap** (`Phase == Snapshot`) — aborts the snapshot coordinator, clears every source shard's `ShadowForwardState`, deletes the half-built destination tree, and returns the source to a fully-writable state. No alias was ever set, so clients never observed the destination.
+- **After swap** (`Phase ∈ { Swap, Reject, Cleanup }`) — recovers the old physical tree, removes the alias, restores the original registry configuration, clears any residual `Rejecting` phase on source shards, defensively aborts any post-swap snapshot still attached, and deletes the new snapshot tree.
+
+Once the soft-delete window expires and the old tree is purged, the resize can no longer be undone.
 
 ### Important considerations
 
-- **Availability:** During the snapshot phase, the source tree is locked (offline snapshot). Once the alias is swapped, the tree is immediately available with the new sizing. Stale `LatticeGrain` activations may briefly route to the soft-deleted old tree and throw `InvalidOperationException`; client retries will hit new activations that resolve the updated alias.
-- **Storage:** Both the old and new physical trees exist simultaneously until the old tree is purged. Plan for approximately 2× the tree's storage usage during this window.
-- **Idempotency:** Calling `ResizeAsync` again with the same parameters while a resize is in progress is a no-op. Calling with different parameters throws `InvalidOperationException`.
-- **Options configuration:** The new sizing values are stored in the tree registry and take priority over `IOptionsMonitor` configuration. You do not need to update your silo configuration separately.
-- **`ShardCount` cannot be resized.** Changing shard count requires re-hashing all keys, which `ResizeAsync` does not support. Choose shard count before first use.
+- **Availability:** reads and writes continue throughout. The per-shard `Rejecting` window at swap is absorbed by `LatticeGrain`'s `StaleTreeRoutingException` retry — callers observe at most one internal retry, not an error.
+- **Storage:** both the old and new physical trees exist simultaneously until the old tree is purged. Plan for approximately 2× the tree's storage usage during this window.
+- **Hot-path cost during drain:** every write between `BeginShadowForwardAsync` and swap pays one extra grain hop for the parallel forward. For same-cluster destinations this is in the millisecond range. Prefer off-peak windows for large resizes even though they are online.
+- **Concurrency cap:** `LatticeOptions.MaxConcurrentDrains` (default 4) bounds the number of concurrent per-shard drains `TreeSnapshotGrain` dispatches. Mirrors `MaxConcurrentMigrations` for reshard.
+- **Idempotency:** calling `ResizeAsync` again with the same parameters while a resize is in progress is a no-op. Calling with different parameters throws `InvalidOperationException`.
+- **Options configuration:** the new sizing values are stored in the tree registry and take priority over `IOptionsMonitor` configuration. You do not need to update your silo configuration separately.
+- **Interlocks:** while a resize is in flight, `HotShardMonitorGrain` suppresses autonomic splits on the tree and `ReshardAsync` throws `InvalidOperationException`. Run reshard first if you need both, then resize.
+- **`ShardCount` cannot be resized.** Changing shard count requires re-hashing all keys, which `ResizeAsync` does not support. Use `ReshardAsync` for that; it runs online via its own shadow-write + swap primitive.
 
 ### Manual trigger (testing)
 
