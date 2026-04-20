@@ -182,6 +182,22 @@ public sealed class LatticeOptions
     public const int DefaultMaxConcurrentMigrations = 4;
 
     /// <summary>
+    /// Maximum number of parallel per-shard drains that an online snapshot
+    /// (<see cref="ILattice.SnapshotAsync"/> in <see cref="SnapshotMode.Online"/>)
+    /// may dispatch concurrently. Each drain reads one source shard's leaf
+    /// chain and bulk-loads it into the corresponding destination shard while
+    /// live writes continue to mirror via the shadow-forwarding primitive.
+    /// Higher values shorten total snapshot duration at the cost of
+    /// proportionally higher background drain I/O and memory on the
+    /// coordinator silo. The snapshot remains crash-safe and idempotent
+    /// under any cap — re-running converges via CRDT LWW.
+    /// </summary>
+    public int MaxConcurrentDrains { get; set; } = DefaultMaxConcurrentDrains;
+
+    /// <summary>Default value for <see cref="MaxConcurrentDrains"/> (4).</summary>
+    public const int DefaultMaxConcurrentDrains = 4;
+
+    /// <summary>
     /// Maximum number of moved-slot entries the split coordinator accumulates
     /// in a single <see cref="IShardRootGrain.MergeManyAsync"/> call to the
     /// target shard during drain. Larger values reduce per-call overhead;

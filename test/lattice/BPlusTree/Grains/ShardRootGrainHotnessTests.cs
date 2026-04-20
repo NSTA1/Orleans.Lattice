@@ -243,8 +243,8 @@ public class ShardRootGrainHotnessTests
         ]);
 
         var hotness = await grain.GetHotnessAsync();
-        // SetManyAsync delegates to SetAsync for each entry.
-        Assert.That(hotness.Writes, Is.EqualTo(3));
+        // SetManyAsync counts the whole batch as a single write (matches MergeManyAsync).
+        Assert.That(hotness.Writes, Is.EqualTo(1));
     }
 
     [Test]

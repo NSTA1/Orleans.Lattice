@@ -5,10 +5,12 @@ namespace Orleans.Lattice.BPlusTree;
 /// <summary>
 /// A grain responsible for resizing a tree by changing its <see cref="LatticeOptions.MaxLeafKeys"/>
 /// and/or <see cref="LatticeOptions.MaxInternalChildren"/>. One activation exists per tree,
-/// keyed by <c>{treeId}</c>.
+/// keyed by <c>{treeId}</c>
 /// <para>
-/// Resize uses an offline snapshot to create a new physical tree with the desired sizing,
+/// Resize uses an online snapshot to create a new physical tree with the desired sizing,
 /// then swaps the tree alias so that reads and writes are redirected to the new tree.
+/// The source tree remains fully available for reads and writes throughout; every
+/// accepted mutation is shadow-forwarded to the destination so that no data is lost.
 /// The old physical tree is soft-deleted and will be purged after the configured
 /// <see cref="LatticeOptions.SoftDeleteDuration"/>. During the soft-delete window,
 /// the resize can be undone with <see cref="UndoResizeAsync"/>.
