@@ -47,7 +47,7 @@ internal static class TypeAliases
     internal const string RoutingInfo = "ol.ri";
     internal const string ShardCountResult = "ol.scr";
 
-    // Adaptive shard splitting (F-011)
+    // Adaptive shard splitting
     internal const string TreeShardSplitState = "ol.sss";
     internal const string ShardSplitInProgress = "ol.sip";
     internal const string ShardSplitPhase = "ol.sph";
@@ -56,12 +56,15 @@ internal static class TypeAliases
     // Range delete (FX-011)
     internal const string RangeDeleteResult = "ol.rdr";
 
-    // Atomic multi-key writes (F-031)
+    // Raw-entry bulk load ( snapshot TTL preservation)
+    internal const string LwwEntry = "ol.lwe";
+
+    // Atomic multi-key writes
     internal const string AtomicWriteState = "ol.aws";
     internal const string AtomicWritePhase = "ol.awp";
     internal const string AtomicPreValue = "ol.apv";
 
-    // Stateful cursor / iterator (F-033)
+    // Stateful cursor / iterator
     internal const string LatticeCursorKind = "ol.lck";
     internal const string LatticeCursorSpec = "ol.lcu";
     internal const string LatticeCursorPhase = "ol.lcp";

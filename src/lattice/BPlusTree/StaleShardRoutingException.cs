@@ -5,7 +5,7 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Thrown by <c>ShardRootGrain</c> when an incoming operation targets a key
 /// whose virtual slot has been migrated to a different physical shard during
-/// an adaptive split (F-011) and the calling <c>LatticeGrain</c> is using a
+/// an adaptive split and the calling <c>LatticeGrain</c> is using a
 /// stale <see cref="ShardMap"/>. The <c>LatticeGrain</c> catches this
 /// exception, invalidates its cached routing snapshot, refreshes the
 /// <see cref="ShardMap"/> from the registry, and retries the operation

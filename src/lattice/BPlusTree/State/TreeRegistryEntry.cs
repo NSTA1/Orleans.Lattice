@@ -47,7 +47,7 @@ public sealed record TreeRegistryEntry
     /// adaptive splits, or <c>null</c> if no split has yet occurred.
     /// Used by <see cref="ILatticeRegistry.AllocateNextShardIndexAsync"/> to
     /// hand out unique target shard indices when multiple splits run
-    /// concurrently for the same tree (F-011 — <c>MaxConcurrentAutoSplits</c> &gt; 1).
+    /// concurrently for the same tree ( — <c>MaxConcurrentAutoSplits</c> &gt; 1).
     /// </summary>
     [Id(5)] public int? NextShardIndex { get; init; }
 }

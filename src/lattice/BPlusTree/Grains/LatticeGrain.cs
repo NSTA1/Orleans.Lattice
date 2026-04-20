@@ -182,6 +182,45 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    /// <inheritdoc />
+    public async Task SetAsync(string key, byte[] value, TimeSpan ttl, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(value);
+        if (ttl <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(ttl), "TTL must be positive.");
+        var nowUtc = DateTimeOffset.UtcNow;
+        if (ttl > DateTimeOffset.MaxValue - nowUtc)
+            throw new ArgumentOutOfRangeException(nameof(ttl),
+                "TTL is too large — absolute expiry would exceed DateTimeOffset.MaxValue.");
+        cancellationToken.ThrowIfCancellationRequested();
+        await EnsureCompactionReminderAsync();
+        await EnsureMonitorAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Resolve the absolute expiry on the silo handling this call so
+        // per-entry lifetimes are not shifted by client-clock skew.
+        var expiresAtTicks = nowUtc.Add(ttl).UtcTicks;
+
+        var shard = await GetShardGrainAsync(key);
+        try
+        {
+            await shard.SetAsync(key, value, expiresAtTicks);
+        }
+        catch (StaleShardRoutingException) when (InvalidateShardMap())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            shard = await GetShardGrainAsync(key);
+            await shard.SetAsync(key, value, expiresAtTicks);
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            shard = await GetShardGrainAsync(key);
+            await shard.SetAsync(key, value, expiresAtTicks);
+        }
+    }
+
     public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(key);
@@ -295,7 +334,7 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <summary>
-    /// Atomic multi-key write (F-031). Activates a dedicated
+    /// Atomic multi-key write. Activates a dedicated
     /// <see cref="IAtomicWriteGrain"/> keyed by <c>{treeId}/{operationId}</c>
     /// and awaits saga completion. Duplicate-key and null-value validation is
     /// done inside the saga grain; no routing is needed here because the saga
@@ -399,7 +438,7 @@ internal sealed partial class LatticeGrain(
 
     /// <summary>
     /// Strongly-consistent total live key count across all physical shards
-    /// of this tree (F-011). Tolerates concurrent adaptive shard splits by
+    /// of this tree. Tolerates concurrent adaptive shard splits by
     /// asking every physical shard to count only the virtual slots it
     /// currently owns per the authoritative <see cref="ShardMap"/>, then
     /// re-reading the map after the fan-out and retrying on any version

@@ -6,26 +6,26 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// F-011 chaos stress test: runs a dense concurrent workload of point
+/// chaos stress test: runs a dense concurrent workload of point
 /// reads, point writes, bulk reads, bulk writes, scans, and counts against
 /// a tree while manually-triggered shard splits mutate the physical
 /// topology. Verifies that Lattice's public API upholds its consistency
 /// guarantees under arbitrary interleavings:
 ///
 /// <list type="bullet">
-///   <item><description><c>CountAsync</c> returns the exact size of the
-///     pinned key universe regardless of concurrent splits and value
-///     updates.</description></item>
-///   <item><description><c>KeysAsync</c> never yields duplicates, never
-///     yields unknown keys, and yields exactly the full universe when
-///     the scan completes.</description></item>
-///   <item><description><c>EntriesAsync</c> only yields values that were
-///     actually written at some point (envelope check on the value).</description></item>
-///   <item><description><c>GetManyAsync</c> results are drawn from the
-///     known universe with well-formed values.</description></item>
-///   <item><description>No operation on the public API throws an unhandled
-///     exception. Stale routing is transparently retried by the framework;
-///     stream-cursor deactivations are transient and tolerated.</description></item>
+/// <item><description><c>CountAsync</c> returns the exact size of the
+/// pinned key universe regardless of concurrent splits and value
+/// updates.</description></item>
+/// <item><description><c>KeysAsync</c> never yields duplicates, never
+/// yields unknown keys, and yields exactly the full universe when
+/// the scan completes.</description></item>
+/// <item><description><c>EntriesAsync</c> only yields values that were
+/// actually written at some point (envelope check on the value).</description></item>
+/// <item><description><c>GetManyAsync</c> results are drawn from the
+/// known universe with well-formed values.</description></item>
+/// <item><description>No operation on the public API throws an unhandled
+/// exception. Stale routing is transparently retried by the framework;
+/// stream-cursor deactivations are transient and tolerated.</description></item>
 /// </list>
 ///
 /// The universe is fixed during the chaos window so the exact-count
@@ -103,7 +103,7 @@ public class ChaosIntegrationTests
         // pre-saga values which also satisfy the v-{idx}-* envelope).
         || (ex is InvalidOperationException
             && ex.Message.Contains("failed and was rolled back", StringComparison.Ordinal))
-        // Orleans call timeout under saturated load (F-031 sagas serialise 8+
+        // Orleans call timeout under saturated load ( sagas serialise 8+
         // round-trips per call). The saga's own reminder-driven recovery will
         // finish the write; from the chaos test's perspective this is a
         // transient saturation symptom, not an invariant violation. Tracked by
@@ -216,7 +216,7 @@ public class ChaosIntegrationTests
         }
 
         // ---- Atomic writers: SetManyAtomicAsync with batches of 2 random keys.
-        // Exercises the F-031 saga path under concurrent splits — envelope and
+        // Exercises the saga path under concurrent splits — envelope and
         // count invariants must hold whether the saga commits or rolls back.
         // Kept at a small batch and single-worker count because each saga
         // serialises ~8 round-trips (4 pre-saga reads + 4 writes).
@@ -494,8 +494,8 @@ public class ChaosIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(failures, Is.Empty,
-                $"Chaos observed {failures.Count} invariant violations (first 20):\n  " +
-                string.Join("\n  ", failures.Take(20)));
+                $"Chaos observed {failures.Count} invariant violations (first 20):\n " +
+                string.Join("\n ", failures.Take(20)));
 
             Assert.That(finalCount, Is.EqualTo(UniverseSize),
                 "Post-chaos CountAsync must match the pinned universe size.");
@@ -538,6 +538,6 @@ public class ChaosIntegrationTests
 
         TestContext.Out.WriteLine("Chaos workload stats:");
         foreach (var kv in stats.OrderBy(k => k.Key))
-            TestContext.Out.WriteLine($"  {kv.Key,-22}{kv.Value}");
+            TestContext.Out.WriteLine($" {kv.Key,-22}{kv.Value}");
     }
 }

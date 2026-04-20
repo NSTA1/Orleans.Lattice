@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 public partial class LatticeGrainTests
 {
-    // --- GetRoutingAsync tests (F-030) ---
+    // --- GetRoutingAsync tests ---
 
     [Test]
     public async Task GetRoutingAsync_returns_default_map_when_registry_returns_null()

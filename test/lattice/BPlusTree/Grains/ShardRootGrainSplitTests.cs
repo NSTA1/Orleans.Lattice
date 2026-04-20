@@ -9,7 +9,7 @@ using Orleans.Lattice.Tests.Fakes;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Unit tests for the F-011 adaptive-split surface on <see cref="ShardRootGrain"/>:
+/// Unit tests for the adaptive-split surface on <see cref="ShardRootGrain"/>:
 /// lifecycle methods, reject-phase routing, and shadow-write forwarding.
 /// </summary>
 public class ShardRootGrainSplitTests
@@ -244,7 +244,7 @@ public class ShardRootGrainSplitTests
     }
 
     // ============================================================================
-    // F-011 MovedAwaySlots — permanent rejection after Complete (stale-cache safety)
+    // MovedAwaySlots — permanent rejection after Complete (stale-cache safety)
     // ============================================================================
 
     [Test]

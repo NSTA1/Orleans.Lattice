@@ -5,7 +5,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Unit tests for the F-011 helper methods on <see cref="LatticeGrain"/>:
+/// Unit tests for the helper methods on <see cref="LatticeGrain"/>:
 /// <c>GroupSlotsByOwner</c>, <c>ToSortedArray</c>, and <c>ComputeOwnerDiff</c>.
 /// These pure functions underpin the strongly-consistent scan reconciliation.
 /// </summary>

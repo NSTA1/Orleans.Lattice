@@ -3,7 +3,7 @@ using System.ComponentModel;
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Saga coordinator for atomic multi-key writes (F-031). One grain activation
+/// Saga coordinator for atomic multi-key writes. One grain activation
 /// per in-flight batch, keyed by <c>{treeId}/{operationId}</c>. Applies each
 /// write sequentially through <see cref="ILattice"/>, persists progress after
 /// every step, and compensates already-committed keys when a step throws.

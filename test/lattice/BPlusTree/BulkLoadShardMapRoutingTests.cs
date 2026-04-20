@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
 /// Integration tests that verify the streaming <see cref="LatticeExtensions.BulkLoadAsync"/>
-/// honours a custom <see cref="ShardMap"/> persisted in the registry (F-030).
+/// honours a custom <see cref="ShardMap"/> persisted in the registry.
 /// A multi-shard fixture is required: under a single-shard layout, any map
 /// pinned to shard 0 is a no-op and the routing assertion is vacuous.
 /// </summary>
@@ -33,7 +33,7 @@ public class BulkLoadShardMapRoutingTests
     [Test]
     public async Task BulkLoadAsync_streaming_routes_via_persisted_shard_map()
     {
-        // Exercises the full F-030 path: GetRoutingAsync resolves a custom
+        // Exercises the full path: GetRoutingAsync resolves a custom
         // shard map persisted in the registry, and entries are routed accordingly.
         // IMPORTANT: must not touch the tree before writing the custom map,
         // because LatticeGrain caches _shardMap on first access. SetShardMapAsync
@@ -76,8 +76,8 @@ public class BulkLoadShardMapRoutingTests
         // hashed map, CountPerShardAsync would return length 4 with values
         // spread across all shards. Under the pinned map, GetPhysicalShardIndices
         // collapses to a single physical shard, so:
-        //   - CountPerShardAsync returns exactly one entry, and
-        //   - that entry holds every live key.
+        // - CountPerShardAsync returns exactly one entry, and
+        // - that entry holds every live key.
         var perShard = await tree.CountPerShardAsync();
         Assert.That(perShard, Has.Count.EqualTo(1),
             $"ShardMap pins every virtual slot to shard {pinnedShard}, so " +

@@ -34,6 +34,27 @@ public interface IShardRootGrain : IGrainWithStringKey
     Task SetAsync(string key, byte[] value);
 
     /// <summary>
+    /// Inserts or updates the value for <paramref name="key"/> with an absolute
+    /// expiry. The entry is treated as tombstoned on reads once the
+    /// current UTC wall clock passes <paramref name="expiresAtTicks"/>.
+    /// Pass <c>0</c> for no expiry (equivalent to <see cref="SetAsync(string, byte[])"/>).
+    /// </summary>
+    Task SetAsync(string key, byte[] value, long expiresAtTicks);
+
+    /// <summary>
+    /// Returns the raw entry for <paramref name="key"/> — wrapped in an
+    /// <see cref="LwwEntry"/> so the Orleans type-alias encoder handles a
+    /// single aliased shape rather than a nested
+    /// <c>Nullable&lt;LwwValue&lt;byte[]&gt;&gt;</c>. Preserves both the
+    /// <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/> version
+    /// and absolute <c>ExpiresAtTicks</c> ( TTL). Returns <c>null</c>
+    /// when the key is absent or tombstoned. Already-expired entries are
+    /// returned so callers can introspect expiry metadata; use
+    /// <see cref="LwwValue{T}.IsExpired(long)"/> to filter.
+    /// </summary>
+    Task<LwwEntry?> GetRawEntryAsync(string key);
+
+    /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
     /// already exist (or is tombstoned). Returns the existing value when the key is live,
     /// or <c>null</c> when the write was performed.
@@ -134,6 +155,17 @@ public interface IShardRootGrain : IGrainWithStringKey
     Task BulkLoadAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries);
 
     /// <summary>
+    /// Bulk-loads pre-stamped <see cref="LwwValue{T}"/> entries into an empty
+    /// shard, preserving the original <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/>
+    /// version and <c>ExpiresAtTicks</c> on every entry. Used by
+    /// snapshot / restore so TTL and source HLC metadata survive
+    /// the transfer end-to-end. Entries must already be sorted in ascending
+    /// key order.
+    /// </summary>
+    /// <param name="operationId">Unique ID for idempotency. Retries with the same ID are no-ops.</param>
+    Task BulkLoadRawAsync(string operationId, List<LwwEntry> sortedEntries);
+
+    /// <summary>
     /// Appends a sorted batch of key-value pairs to the right edge of this shard's
     /// B+ tree. All keys in <paramref name="sortedEntries"/> must be greater than
     /// every existing key in the shard. Creates new leaves as needed and propagates
@@ -183,7 +215,7 @@ public interface IShardRootGrain : IGrainWithStringKey
     Task<ShardHotness> GetHotnessAsync();
 
     /// <summary>
-    /// Marks this shard as the source of an in-progress adaptive split (F-011).
+    /// Marks this shard as the source of an in-progress adaptive split.
     /// While the returned task is incomplete or the split has not been completed,
     /// every write to a key whose virtual slot is in <paramref name="movedSlots"/>
     /// is mirrored to the shard at <paramref name="targetShardIndex"/> via
@@ -231,7 +263,7 @@ public interface IShardRootGrain : IGrainWithStringKey
     /// Strongly-consistent variant of <see cref="CountAsync"/> for use by
     /// <c>ILattice.CountAsync</c>. Returns the live key count plus the set of
     /// virtual slots this shard filtered out because they have been (or are
-    /// being) moved to another physical shard by an adaptive split (F-011).
+    /// being) moved to another physical shard by an adaptive split.
     /// The orchestrator uses <see cref="ShardCountResult.MovedAwaySlots"/> to
     /// query the new owners for the missing slots and produce a consistent
     /// total even mid-split.
@@ -260,7 +292,7 @@ public interface IShardRootGrain : IGrainWithStringKey
     /// <paramref name="sortedSlots"/>, in sorted order, filtered to the
     /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
     /// Used by <c>ILattice.KeysAsync</c> to fetch slot-restricted entries
-    /// from a new owner after detecting a topology change mid-scan (F-011).
+    /// from a new owner after detecting a topology change mid-scan.
     /// Pagination semantics match <see cref="GetSortedKeysBatchAsync"/>.
     /// </summary>
     /// <remarks>
@@ -283,7 +315,7 @@ public interface IShardRootGrain : IGrainWithStringKey
     /// is in <paramref name="sortedSlots"/>, in sorted key order, filtered to the
     /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
     /// Used by <c>ILattice.EntriesAsync</c> to fetch slot-restricted entries
-    /// from a new owner after detecting a topology change mid-scan (F-011).
+    /// from a new owner after detecting a topology change mid-scan.
     /// Pagination semantics match <see cref="GetSortedEntriesBatchAsync"/>.
     /// </summary>
     /// <remarks>

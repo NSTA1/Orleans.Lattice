@@ -4,7 +4,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// F-011 adaptive split surface for the shard root.
+/// adaptive split surface for the shard root.
 /// <para>
 /// During an adaptive split, the source shard <c>S</c> participates in three
 /// hot-path behaviours driven by the persisted
@@ -294,12 +294,17 @@ internal sealed partial class ShardRootGrain
         var slot = ShardMap.GetVirtualSlot(key, sip.VirtualShardCount);
         if (!sip.IsMovedSlot(slot)) return;
 
-        var versioned = await TraverseForReadWithVersionAsync(key);
-        if (versioned.Value is null) return; // deleted/missing — handled by cleanup phase.
+        // read the raw LwwValue (not the filtered VersionedValue) so the
+        // entry's ExpiresAtTicks is forwarded verbatim. Using the filtered path
+        // would drop TTL metadata, leaving the target shard with a non-expiring
+        // copy after the split commits.
+        var leafId = await TraverseToLeafAsync(key);
+        var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+        var raw = await leaf.GetRawEntryAsync(key);
+        if (raw is null || raw.Value.IsTombstone) return; // deleted/missing — handled by cleanup phase.
 
-        var lwwValue = LwwValue<byte[]>.Create(versioned.Value, versioned.Version);
         var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{sip.ShadowTargetShardIndex}");
-        await target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = lwwValue });
+        await target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = raw.Value.ToLwwValue() });
     }
 
     /// <summary>
@@ -362,7 +367,7 @@ internal sealed partial class ShardRootGrain
     /// <see cref="ShardRootState.MovedAwaySlots"/> map, returns <c>true</c>
     /// and outputs the slot index; otherwise returns <c>false</c> and
     /// <paramref name="slot"/> is <c>-1</c>. Used by strongly-consistent scan
-    /// APIs (F-011) to both filter the entry and report the affected slot to
+    /// APIs to both filter the entry and report the affected slot to
     /// the orchestrator so it can re-fetch from the new owner.
     /// </summary>
     internal bool TryGetMovedAwaySlot(string key, out int slot)

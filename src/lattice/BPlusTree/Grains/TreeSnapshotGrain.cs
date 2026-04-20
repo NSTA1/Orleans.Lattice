@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
 using Orleans.Timers;
 
@@ -293,7 +294,11 @@ internal sealed class TreeSnapshotGrain(
 
     /// <summary>
     /// Drains live entries from the source shard's leaf chain and bulk-loads
-    /// them into the destination shard.
+    /// them into the destination shard. Uses the raw-LwwValue drain and
+    /// bulk-load paths so TTL (<c>ExpiresAtTicks</c>) and source HLC
+    /// metadata are preserved on the destination tree — a snapshot of a key
+    /// with remaining TTL reappears on the destination with the same absolute
+    /// expiry, not a fresh zero-expiry entry.
     /// </summary>
     private async Task CopyShardAsync(int shardIndex)
     {
@@ -301,12 +306,12 @@ internal sealed class TreeSnapshotGrain(
         var sourceShard = grainFactory.GetGrain<IShardRootGrain>(sourceShardKey);
         var leafId = await sourceShard.GetLeftmostLeafIdAsync();
 
-        var entries = new List<KeyValuePair<string, byte[]>>();
+        var entries = new List<LwwEntry>();
         while (leafId is not null)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-            var liveEntries = await leaf.GetLiveEntriesAsync();
-            entries.AddRange(liveEntries);
+            var liveRaw = await leaf.GetLiveRawEntriesAsync();
+            entries.AddRange(liveRaw);
             leafId = await leaf.GetNextSiblingAsync();
         }
 
@@ -318,7 +323,7 @@ internal sealed class TreeSnapshotGrain(
         var destShardKey = $"{state.State.DestinationTreeId}/{shardIndex}";
         var destShard = grainFactory.GetGrain<IShardRootGrain>(destShardKey);
         var operationId = $"{state.State.OperationId}-snapshot-{shardIndex}";
-        await destShard.BulkLoadAsync(operationId, entries);
+        await destShard.BulkLoadRawAsync(operationId, entries);
     }
 
     private async Task UnmarkSourceShardAsync(int shardIndex)

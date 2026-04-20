@@ -7,7 +7,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// (<see cref="IShardRootGrain.CountWithMovedAwayAsync"/>): the live key
 /// count from the shard at scan time, plus the set of virtual slots the
 /// shard filtered out because they are being or have been moved to another
-/// physical shard by an adaptive split (F-011).
+/// physical shard by an adaptive split.
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.ShardCountResult)]

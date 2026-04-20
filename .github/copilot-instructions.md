@@ -69,6 +69,7 @@ Never rename or remove an alias — it is part of the wire format.
 - When adding a new grain, update the "Grain Key Conventions" table in `.github/instructions/grains.instructions.md` if it uses a structured key format.
 - Topic-specific documentation lives in the `docs/` folder. When adding a new document, add a corresponding row to the **Documentation** table in `README.md`, keeping entries sorted alphabetically by document name.
 - When changing behavior covered by an existing `docs/*.md` file, update that file in the same commit.
+- **Feature-tracker IDs (`F-XXX`) appear only in `roadmap.md`.** Do not reference them in other markdown docs, XML doc comments, or source/inline comments. Describe the behavior by name and effect instead (e.g. "adaptive shard splitting" or "TTL on `SetAsync`").
 
 ## Branching and Pull Requests
 

@@ -36,6 +36,27 @@ public interface ILattice : IGrainWithStringKey
     Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Inserts or updates the value for <paramref name="key"/> with a time-to-live
+    ///. The entry is treated as tombstoned on all reads
+    /// (<see cref="GetAsync"/>, <see cref="ExistsAsync"/>, <see cref="GetManyAsync"/>,
+    /// <see cref="KeysAsync"/>, <see cref="EntriesAsync"/>, <see cref="CountAsync"/>, 
+    /// etc.) once <paramref name="ttl"/> has elapsed since the server-side write.
+    /// Expired entries are reaped by background tombstone compaction after the
+    /// configured <see cref="LatticeOptions.TombstoneGracePeriod"/>.
+    /// <para>
+    /// The TTL is converted to an absolute UTC expiry at write time on the silo
+    /// handling the call, so clock skew between clients does not shift individual
+    /// entries' lifetimes. Throws <see cref="ArgumentOutOfRangeException"/> when
+    /// <paramref name="ttl"/> is negative or zero.
+    /// </para>
+    /// </summary>
+    /// <param name="key">The key to write.</param>
+    /// <param name="value">The value to store.</param>
+    /// <param name="ttl">How long the entry remains live. Must be positive.</param>
+    /// <param name="cancellationToken">Cancels the routing and shard dispatch. Once the write lands on a shard it completes normally.</param>
+    Task SetAsync(string key, byte[] value, TimeSpan ttl, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the entry's
     /// current <see cref="HybridLogicalClock"/> matches <paramref name="expectedVersion"/>.
     /// Returns <c>true</c> if the write was applied, <c>false</c> if the version did not
@@ -275,7 +296,7 @@ public interface ILattice : IGrainWithStringKey
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     Task<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default);
 
-    // ── Stateful cursors (F-033) ────────────────────────────────
+    // ── Stateful cursors ────────────────────────────────
 
     /// <summary>
     /// Opens a stateful key-enumeration cursor over the given range and

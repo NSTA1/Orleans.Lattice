@@ -8,7 +8,7 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// F-011 chaos + fault-injection theory. Runs a concurrent read/write/scan/split
+/// chaos + fault-injection theory. Runs a concurrent read/write/scan/split
 /// workload against a multi-shard tree while a fault injector arms one-shot
 /// <c>WriteStateAsync</c> faults on random shard-root and leaf grains at a
 /// configurable rate. Tolerates arbitrary exceptions during the fault window;
@@ -25,7 +25,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </para>
 ///
 /// <para>
-/// This test exercises F-011 recovery surfaces: resumable splits
+/// This test exercises recovery surfaces: resumable splits
 /// (<c>SplitInProgress</c>), two-phase root promotion (<c>PendingPromotion</c>),
 /// shadow <c>MergeManyAsync</c> atomicity, registry version stamping under
 /// retry, and idempotent <c>BulkGraft</c>.
@@ -238,7 +238,7 @@ public class ChaosWithFaultsIntegrationTests
             }, ct));
         }
 
-        // ---- Atomic writers: F-031 saga batch writes under fault injection.
+        // ---- Atomic writers: saga batch writes under fault injection.
         // Storage faults may cause saga rollback; post-quiescence healing
         // restores envelope-valid values for every universe key.
         for (int w = 0; w < AtomicWriterCount; w++)
@@ -436,8 +436,8 @@ public class ChaosWithFaultsIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(failures, Is.Empty,
-                $"Observed {failures.Count} envelope/key violations during chaos (first 10):\n  " +
-                string.Join("\n  ", failures.Take(10)));
+                $"Observed {failures.Count} envelope/key violations during chaos (first 10):\n " +
+                string.Join("\n ", failures.Take(10)));
 
             Assert.That(finalCount, Is.EqualTo(UniverseSize),
                 "Post-quiescence CountAsync must equal the pinned universe size.");
@@ -489,7 +489,7 @@ public class ChaosWithFaultsIntegrationTests
 
         TestContext.Out.WriteLine($"ChaosWithFaults stats (p={faultProbability}):");
         foreach (var kv in stats.OrderBy(k => k.Key))
-            TestContext.Out.WriteLine($"  {kv.Key,-26}{kv.Value}");
+            TestContext.Out.WriteLine($" {kv.Key,-26}{kv.Value}");
     }
 
     /// <summary>

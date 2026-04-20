@@ -3,7 +3,7 @@ using System.ComponentModel;
 namespace Orleans.Lattice;
 
 /// <summary>
-/// The immutable specification of a stateful-cursor scan (F-033): the range
+/// The immutable specification of a stateful-cursor scan: the range
 /// to scan, the direction, and the kind of work the cursor performs. Captured
 /// on <see cref="ILattice.OpenKeyCursorAsync"/> /
 /// <see cref="ILattice.OpenEntryCursorAsync"/> /

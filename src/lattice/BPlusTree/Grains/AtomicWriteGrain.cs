@@ -1,13 +1,14 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
 using Orleans.Timers;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Saga coordinator for atomic multi-key writes (F-031). One grain activation
+/// Saga coordinator for atomic multi-key writes. One grain activation
 /// per batch, keyed by <c>{treeId}/{operationId}</c>. Applies each write
 /// sequentially, persists progress after every step, and compensates
 /// previously-committed keys if a step throws. Crash recovery is driven by a
@@ -157,9 +158,20 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
-    /// Captures pre-saga values for every key via <see cref="ILattice.GetAsync"/>
-    /// and persists the full saga state so that a crash mid-Execute can still
-    /// compensate.
+    /// Captures pre-saga values for every key via
+    /// <see cref="IShardRootGrain.GetRawEntryAsync"/> so <c>ExpiresAtTicks</c>
+    /// metadata is preserved for compensation. Already-expired entries are
+    /// treated as absent (matching public read semantics) so compensation
+    /// will restore an "absent" outcome rather than resurrect a stale value.
+    /// <para>
+    /// Routing is resolved once via the public <see cref="ILattice.GetRoutingAsync"/>
+    /// hook (which returns routing metadata only, no CRDT internals) and the
+    /// saga then addresses <see cref="IShardRootGrain"/> directly. This keeps
+    /// the raw <see cref="LwwEntry"/> traffic on guarded internal grain
+    /// interfaces — it never crosses the public <see cref="ILattice"/> surface.
+    /// A <see cref="StaleShardRoutingException"/> from an adaptive shard split
+    /// triggers a one-shot routing refresh and retry for the affected key.
+    /// </para>
     /// </summary>
     private async Task PrepareAsync(string treeId, List<KeyValuePair<string, byte[]>> entries)
     {
@@ -172,19 +184,53 @@ internal sealed class AtomicWriteGrain(
         state.State.FailureMessage = null;
 
         var lattice = grainFactory.GetGrain<ILattice>(treeId);
+        var routing = await lattice.GetRoutingAsync();
+        var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
+
         foreach (var entry in entries)
         {
-            var current = await lattice.GetAsync(entry.Key);
+            LwwEntry? raw;
+            try
+            {
+                raw = await GetShardForKey(routing, entry.Key).GetRawEntryAsync(entry.Key);
+            }
+            catch (StaleShardRoutingException)
+            {
+                // Adaptive shard split has remapped virtual slots; refresh
+                // routing and retry this key once.
+                routing = await lattice.GetRoutingAsync();
+                raw = await GetShardForKey(routing, entry.Key).GetRawEntryAsync(entry.Key);
+            }
+
+            // LwwEntry fields are flat (Value/Timestamp/IsTombstone/ExpiresAtTicks).
+            // ToLwwValue() rehydrates the underlying LwwValue for IsExpired.
+            var existed = raw is not null
+                && !raw.Value.IsTombstone
+                && !raw.Value.ToLwwValue().IsExpired(nowTicks);
             state.State.PreValues.Add(new AtomicPreValue
             {
                 Key = entry.Key,
-                Value = current,
-                Existed = current is not null,
+                Value = existed ? raw!.Value.Value : null,
+                Existed = existed,
+                ExpiresAtTicks = existed ? raw!.Value.ExpiresAtTicks : 0,
             });
         }
 
         state.State.Phase = AtomicWritePhase.Execute;
         await state.WriteStateAsync();
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="IShardRootGrain"/> that owns <paramref name="key"/>
+    /// for the supplied <paramref name="routing"/> snapshot. Mirrors
+    /// <c>LatticeGrain.GetShardGrainAsync</c> but inlined because the saga
+    /// holds the <see cref="RoutingInfo"/> externally rather than caching it
+    /// on a per-activation basis.
+    /// </summary>
+    private IShardRootGrain GetShardForKey(RoutingInfo routing, string key)
+    {
+        var shardIndex = routing.Map.Resolve(key);
+        return grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}");
     }
 
     /// <summary>
@@ -272,7 +318,13 @@ internal sealed class AtomicWriteGrain(
     /// Rolls back committed entries in reverse order by rewriting pre-saga
     /// values (or tombstoning previously-absent keys). Each revert uses a
     /// fresh HLC via the normal write path; LWW merge guarantees the revert
-    /// wins over the prior commit.
+    /// wins over the prior commit. Entries captured with a non-zero
+    /// <see cref="AtomicPreValue.ExpiresAtTicks"/> are restored through the
+    /// TTL overload <see cref="ILattice.SetAsync(string, byte[], TimeSpan, CancellationToken)"/>
+    /// with the remaining time-to-live computed against the current wall clock,
+    /// so expiry is preserved across compensation. If the entry's
+    /// absolute expiry has already elapsed by the time compensation runs it
+    /// is treated as absent and tombstoned instead.
     /// </summary>
     private async Task CompensatePhaseAsync()
     {
@@ -301,9 +353,29 @@ internal sealed class AtomicWriteGrain(
             try
             {
                 if (pre.Existed && pre.Value is not null)
-                    await lattice.SetAsync(pre.Key, pre.Value);
+                {
+                    if (pre.ExpiresAtTicks > 0)
+                    {
+                        // Preserve the original absolute expiry by computing
+                        // the remaining time-to-live against the current wall
+                        // clock. If the entry's expiry has already elapsed,
+                        // treat it as absent and tombstone instead — public
+                        // reads would already hide an expired entry.
+                        var remainingTicks = pre.ExpiresAtTicks - DateTimeOffset.UtcNow.UtcTicks;
+                        if (remainingTicks <= 0)
+                            await lattice.DeleteAsync(pre.Key);
+                        else
+                            await lattice.SetAsync(pre.Key, pre.Value, TimeSpan.FromTicks(remainingTicks));
+                    }
+                    else
+                    {
+                        await lattice.SetAsync(pre.Key, pre.Value);
+                    }
+                }
                 else
+                {
                     await lattice.DeleteAsync(pre.Key);
+                }
 
                 state.State.NextIndex--;
                 state.State.RetriesOnCurrentStep = 0;

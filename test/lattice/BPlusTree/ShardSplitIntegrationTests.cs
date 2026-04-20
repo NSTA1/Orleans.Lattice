@@ -217,7 +217,7 @@ public class ShardSplitIntegrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(failures, Is.Empty, $"Concurrent reads/scans observed inconsistencies during split:\n  {string.Join("\n  ", failures.Take(20))}");
+            Assert.That(failures, Is.Empty, $"Concurrent reads/scans observed inconsistencies during split:\n {string.Join("\n ", failures.Take(20))}");
             Assert.That(readsCompleted, Is.GreaterThan(0), "At least one point read should have executed during the split window.");
             Assert.That(scansCompleted + scansAborted, Is.GreaterThan(0), "At least one scan attempt should have executed during the split window.");
         });
@@ -298,7 +298,7 @@ public class ShardSplitIntegrationTests
         cts.Cancel();
         await Task.WhenAll(writers);
 
-        Assert.That(failures, Is.Empty, $"Concurrent writes failed during split:\n  {string.Join("\n  ", failures.Take(20))}");
+        Assert.That(failures, Is.Empty, $"Concurrent writes failed during split:\n {string.Join("\n ", failures.Take(20))}");
         Assert.That(lastWritten, Is.Not.Empty, "Writers should have produced at least one successful write.");
 
         // Every recorded write must read back with the recorded value.
@@ -320,6 +320,67 @@ public class ShardSplitIntegrationTests
             Assert.That(Encoding.UTF8.GetString(actual!), Is.EqualTo($"baseline-{i}"),
                 $"Baseline key '{key}' wrong post-split.");
         }
+    }
+
+    [Test]
+    public async Task Split_shadow_forward_preserves_TTL_on_target_shard()
+    {
+        // Regression test for interaction:
+        // shadow-forward used to reconstruct LwwValue via LwwValue.Create(value, version),
+        // silently dropping ExpiresAtTicks. After split commit, the target shard held
+        // non-expiring copies of TTL'd writes. The fix routes shadow-forward through
+        // IBPlusLeafGrain.GetRawEntryAsync so the raw LwwValue (including expiry)
+        // is forwarded verbatim.
+        var treeId = $"split-ttl-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+
+        // Seed enough keys so shard 0 owns multiple virtual slots that will move.
+        for (int i = 0; i < 200; i++)
+        {
+            await tree.SetAsync($"seed-{i:D4}", Encoding.UTF8.GetBytes($"v{i}"));
+        }
+
+        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        await split.SplitAsync(sourceShardIndex: 0); // source enters BeginShadowWrite.
+
+        // Write TTL'd entries while the split is active. Any key whose virtual slot
+        // is moved will be shadow-forwarded to the target shard; once the map swaps,
+        // subsequent reads route to the target and the entry's expiry must still apply.
+        var ttl = TimeSpan.FromMilliseconds(800);
+        var ttlKeys = new List<string>();
+        for (int i = 0; i < 50; i++)
+        {
+            var k = $"ttl-{i:D3}";
+            ttlKeys.Add(k);
+            await tree.SetAsync(k, Encoding.UTF8.GetBytes($"e{i}"), ttl);
+        }
+
+        await split.RunSplitPassAsync();
+        Assert.That(await split.IsCompleteAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
+
+        // Immediately after split: every TTL'd key should still be live
+        // (TTL=800ms hasn't elapsed yet).
+        foreach (var k in ttlKeys)
+        {
+            Assert.That(await tree.GetAsync(k), Is.Not.Null,
+                $"TTL'd key '{k}' should be live immediately after split.");
+        }
+
+        // Wait past the TTL. Every TTL'd key must now read null regardless of which
+        // physical shard serves it — previously, shadow-forwarded copies on the
+        // target shard had ExpiresAtTicks=0 and would remain live indefinitely.
+        await Task.Delay(ttl + TimeSpan.FromMilliseconds(400));
+
+        var leaked = new List<string>();
+        foreach (var k in ttlKeys)
+        {
+            if (await tree.GetAsync(k) is not null)
+                leaked.Add(k);
+        }
+
+        Assert.That(leaked, Is.Empty,
+            $"TTL must survive shadow-forward: {leaked.Count} key(s) remained live past expiry " +
+            $"({string.Join(", ", leaked.Take(5))}{(leaked.Count > 5 ? "..." : "")}).");
     }
 
     private static bool IsTransientScanAbort(Exception ex)

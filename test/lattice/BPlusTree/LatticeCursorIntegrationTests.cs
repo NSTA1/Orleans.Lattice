@@ -5,7 +5,7 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// Integration tests for stateful cursors (F-033): key/entry enumeration and
+/// Integration tests for stateful cursors: key/entry enumeration and
 /// resumable range delete exposed on <see cref="ILattice"/>.
 /// </summary>
 [TestFixture]

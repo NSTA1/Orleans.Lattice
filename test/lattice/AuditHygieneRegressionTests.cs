@@ -60,7 +60,7 @@ public class AuditHygieneRegressionTests
     /// <c>orleans.lattice</c> (the Orleans meter convention). Before the
     /// fix, internal telemetry hooks mixed <c>lattice.*</c> and
     /// <c>orleans.lattice.*</c> prefixes; locking the constant here prevents
-    /// F-029 instruments from being published under the wrong namespace.
+    /// instruments from being published under the wrong namespace.
     /// </summary>
     [Test]
     public void LatticeMetrics_meter_name_is_orleans_lattice()

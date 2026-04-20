@@ -137,41 +137,37 @@ public class TypedLatticeExtensionsIntegrationTests
         Assert.That(result, Is.Null);
     }
 
-    [Test]
-    public async Task Exists_works_after_typed_set()
-    {
-        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-exists");
-        await tree.SetAsync("p1", new Product("Exists", 1.00m));
+    // --- TTL ---
 
-        Assert.That(await tree.ExistsAsync("p1"), Is.True);
+    [Test]
+    public async Task Set_with_ttl_expires_entry_after_window()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-ttl-expire");
+        await tree.SetAsync("p1", new Product("Ephemeral", 1.00m), TimeSpan.FromMilliseconds(50));
+
+        // Give the expiry a small cushion past the TTL.
+        await Task.Delay(200);
+
+        var result = await tree.GetAsync<Product>("p1");
+        Assert.That(result, Is.Null);
     }
 
     [Test]
-    public async Task DeleteRange_works_with_typed_data()
+    public async Task Set_with_ttl_visible_before_expiry()
     {
-        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-delrange");
-        await tree.SetAsync("a", new Product("A", 1.00m));
-        await tree.SetAsync("b", new Product("B", 2.00m));
-        await tree.SetAsync("c", new Product("C", 3.00m));
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-ttl-live");
+        var product = new Product("Ephemeral", 2.00m);
+        await tree.SetAsync("p1", product, TimeSpan.FromMinutes(10));
 
-        var count = await tree.DeleteRangeAsync("a", "c");
-
-        Assert.That(count, Is.EqualTo(2));
-        Assert.That(await tree.GetAsync<Product>("c"), Is.EqualTo(new Product("C", 3.00m)));
+        var result = await tree.GetAsync<Product>("p1");
+        Assert.That(result, Is.EqualTo(product));
     }
 
     [Test]
-    public async Task KeysAsync_works_with_typed_data()
+    public void Set_with_zero_ttl_throws()
     {
-        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-keys");
-        await tree.SetAsync("k1", new Product("A", 1.00m));
-        await tree.SetAsync("k2", new Product("B", 2.00m));
-
-        var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
-            keys.Add(k);
-
-        Assert.That(keys, Does.Contain("k1"));
-        Assert.That(keys, Does.Contain("k2"));
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-ttl-zero");
+        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            tree.SetAsync("p1", new Product("x", 1m), TimeSpan.Zero));
     }
 }

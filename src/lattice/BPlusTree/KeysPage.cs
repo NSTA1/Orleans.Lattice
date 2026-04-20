@@ -22,7 +22,7 @@ public sealed record KeysPage
     /// <summary>
     /// Virtual slots whose entries were filtered out of <see cref="Keys"/> by
     /// the source shard because the slot has been (or is being) moved to
-    /// another physical shard by an adaptive split (F-011). <c>null</c> or
+    /// another physical shard by an adaptive split. <c>null</c> or
     /// empty when no such filtering occurred. Strongly-consistent scans
     /// (<c>ILattice.KeysAsync</c>) use this signal to query the new owner
     /// for the missing slots before completing.

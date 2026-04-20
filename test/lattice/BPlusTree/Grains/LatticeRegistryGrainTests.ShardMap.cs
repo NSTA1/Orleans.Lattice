@@ -100,7 +100,7 @@ public partial class LatticeRegistryGrainTests
             Throws.ArgumentNullException);
     }
 
-    // --- F-011: Version stamping (strongly-consistent scan stability hint ---
+    // --- Version stamping (strongly-consistent scan stability hint ---
 
     [Test]
     public async Task SetShardMapAsync_stamps_version_one_on_first_persist()

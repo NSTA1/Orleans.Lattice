@@ -7,7 +7,7 @@ using Orleans.Timers;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Per-tree autonomic monitor for adaptive shard splitting (F-011).
+/// Per-tree autonomic monitor for adaptive shard splitting.
 /// <para>
 /// The monitor is started lazily by <c>LatticeGrain</c> on the first write
 /// to a tree and re-activates on silo restart via a keepalive reminder. On

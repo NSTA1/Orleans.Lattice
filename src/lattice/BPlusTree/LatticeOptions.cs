@@ -25,7 +25,7 @@ public sealed class LatticeOptions
     /// into one of <see cref="VirtualShardCount"/> virtual slots, and a per-tree
     /// <c>ShardMap</c> collapses those virtual slots onto the
     /// <see cref="ShardCount"/> physical shards. This indirection enables future
-    /// adaptive shard splitting (F-011) without rehashing existing keys.
+    /// adaptive shard splitting without rehashing existing keys.
     /// <para>
     /// Must be greater than or equal to <see cref="ShardCount"/>, and must be an
     /// integer multiple of <see cref="ShardCount"/> so that the default identity
@@ -109,7 +109,7 @@ public sealed class LatticeOptions
     /// <summary>
     /// When <c>true</c>, the autonomic <c>HotShardMonitorGrain</c> periodically
     /// polls each physical shard's hotness counters (<see cref="IShardRootGrain.GetHotnessAsync"/>)
-    /// and triggers an online adaptive split (F-011) when the observed
+    /// and triggers an online adaptive split when the observed
     /// operations-per-second exceeds <see cref="HotShardOpsPerSecondThreshold"/>.
     /// Splits happen fully online via shadow-writing — no shard is ever taken
     /// offline. Set to <c>false</c> to disable autonomic splitting entirely.
@@ -204,7 +204,7 @@ public sealed class LatticeOptions
     public const int DefaultMaxScanRetries = 3;
 
     /// <summary>
-    /// How long an open stateful cursor (F-033) may remain idle before it is
+    /// How long an open stateful cursor may remain idle before it is
     /// automatically cleaned up. On every <c>Open</c> / <c>Next</c> /
     /// <c>DeleteRangeStep</c> call, the cursor grain refreshes a grain
     /// reminder set to fire after this interval; if the reminder ever fires
@@ -221,7 +221,7 @@ public sealed class LatticeOptions
     public static readonly TimeSpan DefaultCursorIdleTtl = TimeSpan.FromHours(48);
 
     /// <summary>
-    /// How long a completed atomic-write saga (F-031) retains its persisted
+    /// How long a completed atomic-write saga retains its persisted
     /// state for idempotent re-invocation by the client. After the retention
     /// window elapses, a grain reminder fires, the saga's state is cleared,
     /// and the coordinator grain deactivates. A client that re-issues a

@@ -3,7 +3,7 @@ using System.ComponentModel;
 namespace Orleans.Lattice;
 
 /// <summary>
-/// Progress of a resumable range-delete cursor (F-033) after one
+/// Progress of a resumable range-delete cursor after one
 /// <see cref="ILattice.DeleteRangeStepAsync"/> call.
 /// </summary>
 [GenerateSerializer]

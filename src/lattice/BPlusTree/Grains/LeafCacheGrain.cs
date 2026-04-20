@@ -45,7 +45,9 @@ internal sealed class LeafCacheGrain(
         // delta without scanning entries.
         await RefreshAsync();
 
-        if (_cache.TryGetValue(key, out var cached) && !cached.IsTombstone)
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        if (_cache.TryGetValue(key, out var cached) && !cached.IsTombstone
+            && !cached.IsExpired(nowTicks))
         {
             return cached.Value;
         }
@@ -56,17 +58,21 @@ internal sealed class LeafCacheGrain(
     public async Task<bool> ExistsAsync(string key)
     {
         await RefreshAsync();
-        return _cache.TryGetValue(key, out var cached) && !cached.IsTombstone;
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        return _cache.TryGetValue(key, out var cached) && !cached.IsTombstone
+            && !cached.IsExpired(nowTicks);
     }
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
         await RefreshAsync();
 
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var result = new Dictionary<string, byte[]>(keys.Count);
         foreach (var key in keys)
         {
-            if (_cache.TryGetValue(key, out var cached) && !cached.IsTombstone)
+            if (_cache.TryGetValue(key, out var cached) && !cached.IsTombstone
+                && !cached.IsExpired(nowTicks))
             {
                 result[key] = cached.Value!;
             }
@@ -91,7 +97,7 @@ internal sealed class LeafCacheGrain(
         // If the primary leaf has been split, prune any cached entries that
         // now belong to the new sibling (keys >= SplitKey). This is idempotent
         // and safe to apply on every refresh — pruning a key that doesn't
-        // exist is a no-op.
+        // exist is a no-operation.
         if (delta.SplitKey is not null)
         {
             var splitKey = delta.SplitKey;

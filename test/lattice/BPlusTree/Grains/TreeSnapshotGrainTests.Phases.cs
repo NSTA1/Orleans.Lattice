@@ -117,8 +117,7 @@ public partial class TreeSnapshotGrainTests
         await grain.ProcessNextPhaseAsync();
 
         await grainFactory.GetGrain<IShardRootGrain>($"{DestTreeId}/0")
-            .Received(1).BulkLoadAsync("test-op-snapshot-0", Arg.Is<List<KeyValuePair<string, byte[]>>>(
-                e => e.Count == 2));
+            .Received(1).BulkLoadRawAsync("test-op-snapshot-0", Arg.Is<List<LwwEntry>>(e => e.Count == 2));
     }
 
     [Test]
@@ -142,7 +141,7 @@ public partial class TreeSnapshotGrainTests
         await grain.ProcessNextPhaseAsync();
 
         await grainFactory.GetGrain<IShardRootGrain>($"{DestTreeId}/0")
-            .DidNotReceive().BulkLoadAsync(Arg.Any<string>(), Arg.Any<List<KeyValuePair<string, byte[]>>>());
+            .DidNotReceive().BulkLoadRawAsync(Arg.Any<string>(), Arg.Any<List<LwwEntry>>());
     }
 
     // --- Online vs Offline phase flow ---
