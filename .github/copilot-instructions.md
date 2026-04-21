@@ -70,6 +70,7 @@ Never rename or remove an alias — it is part of the wire format.
 - Topic-specific documentation lives in the `docs/` folder. When adding a new document, add a corresponding row to the **Documentation** table in `README.md`, keeping entries sorted alphabetically by document name.
 - When changing behavior covered by an existing `docs/*.md` file, update that file in the same commit.
 - **Feature-tracker IDs (`F-XXX`) appear only in `roadmap.md`.** Do not reference them in other markdown docs, XML doc comments, or source/inline comments. Describe the behavior by name and effect instead (e.g. "adaptive shard splitting" or "TTL on `SetAsync`").
+- **All C# code snippets in `docs/*.md` MUST use the `verify` fence attribute** (i.e. ```` ```csharp verify ````, not ```` ```csharp ````). The Roslyn-backed `DocsSnippetCompilationTests` harness compiles every `csharp verify` fence against the real `Orleans.Lattice` surface, so the snippet must be self-contained and compile cleanly — declare any variables it references inline, or use the ambient identifiers the harness injects (`grainFactory`, `client`, `siloBuilder`, `tree`, `lattice`, `cancellationToken`, and the `User` / `Order` records). If a snippet is genuinely illustrative and cannot compile (e.g. pseudo-code or intentionally incomplete), convert it to plain prose or a non-`csharp` fence rather than dropping the `verify` marker.
 
 ## Branching and Pull Requests
 

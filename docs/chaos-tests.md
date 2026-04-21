@@ -137,16 +137,6 @@ aborts, stale routing, and count drift. Instead, the test asserts
 the tree must recover to the exact same pinned universe with every
 value still matching its envelope.
 
-### Parametrization
-
-```csharp
-[TestCase(0.00, TestName = "no_faults_baseline")]
-[TestCase(0.05, TestName = "5pct_fault_probability")]
-[TestCase(0.15, TestName = "15pct_fault_probability")]
-[TestCase(0.30, TestName = "30pct_fault_probability")]
-public async Task Chaos_with_storage_faults_converges_after_quiescence(double faultProbability)
-```
-
 `faultProbability` is the probability, per 20 ms tick, that the fault
 injector arms a fresh one-shot `WriteStateAsync` fault on a randomly
 chosen target grain (initial leaves + shard-root grains of every shard).
@@ -346,7 +336,7 @@ in [shard-splitting.md](shard-splitting.md),
   exercised by the happy-path, faults, and reshard tests.
 * [Online Reshard](online-reshard.md) — the reshard coordinator and
   its interaction with autonomic splits.
-* [Tree Sizing](tree-sizing.md#resizing-an-existing-tree) — the online
+* [Tree Sizing](tree-sizing.md#resizing-an_existing_tree) — the online
   resize path exercised by `ChaosResizeIntegrationTests`.
 * [Architecture](architecture.md) — grain layers, root promotion,
   bounded retry, and the invariants the chaos tests verify.

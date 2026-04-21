@@ -37,7 +37,7 @@ source at the drain's completion instant.
 
 ## Usage
 
-```csharp
+```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 
 // Offline snapshot — source tree locked during copy
@@ -98,9 +98,9 @@ ID. This grain is **guarded by `InternalGrainGuardFilter`** — external callers
 cannot invoke it directly. The `ILattice` interface delegates to it via
 `SnapshotAsync`:
 
-```csharp
+```csharp verify
 // Public API — use this
-await lattice.SnapshotAsync("my-snapshot", SnapshotMode.Full);
+await lattice.SnapshotAsync("my-snapshot", SnapshotMode.Offline);
 ```
 
 Internally, `ITreeSnapshotGrain` exposes `RunSnapshotPassAsync` which processes

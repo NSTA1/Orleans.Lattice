@@ -60,7 +60,7 @@ Given a batch `[(k₀, v₀), (k₁, v₁), …, (kₙ₋₁, vₙ₋₁)]`, a s
 
 ## Usage
 
-```csharp
+```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("orders");
 
 // Byte-array surface
@@ -73,12 +73,12 @@ var batch = new List<KeyValuePair<string, byte[]>>
 await tree.SetManyAtomicAsync(batch);
 
 // Typed extension (System.Text.Json by default)
-var typed = tree.AsTyped<Order>();
-await typed.SetManyAtomicAsync(new Dictionary<string, Order>
+var typedBatch = new List<KeyValuePair<string, Order>>
 {
-    ["order:42"] = new Order(42, "shipped", "1Z999"),
-    ["order:43"] = new Order(43, "pending", null),
-});
+    new("order:42", new Order("42", 99.95m)),
+    new("order:43", new Order("43", 12.50m)),
+};
+await tree.SetManyAtomicAsync(typedBatch);
 ```
 
 ## How It Works

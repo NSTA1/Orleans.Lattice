@@ -61,7 +61,7 @@ The reminder is registered lazily — `LatticeGrain` calls `EnsureReminderAsync`
 
 For manual or on-demand compaction (e.g. maintenance scripts, integration tests), call `RunCompactionPassAsync` on the compaction grain directly:
 
-```csharp
+```csharp verify
 var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>("my-tree");
 await compaction.RunCompactionPassAsync();
 ```
@@ -70,7 +70,7 @@ await compaction.RunCompactionPassAsync();
 
 `TombstoneGracePeriod` follows the same named-options pattern as all other `LatticeOptions` properties:
 
-```csharp
+```csharp verify
 // Global default — applies to all trees.
 siloBuilder.ConfigureLattice(o => o.TombstoneGracePeriod = TimeSpan.FromHours(12));
 

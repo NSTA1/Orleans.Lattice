@@ -194,7 +194,7 @@ share a value.
 
 **Configuration:**
 
-```csharp
+```csharp verify
 // Per-tree
 siloBuilder.ConfigureLattice("my-tree", o =>
     o.CursorIdleTtl = TimeSpan.FromHours(6));

@@ -4,7 +4,7 @@
 
 Every silo must call `AddLattice` to register the grain storage provider that Lattice grains use internally:
 
-```csharp
+```csharp verify
 siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
 ```
 
@@ -18,7 +18,7 @@ Lattice uses the standard .NET [named options](https://learn.microsoft.com/dotne
 
 Use `ConfigureLattice` without a tree name to set defaults that apply to every tree unless overridden:
 
-```csharp
+```csharp verify
 siloBuilder.ConfigureLattice(o =>
 {
     o.CacheTtl = TimeSpan.FromMilliseconds(100);
@@ -30,7 +30,7 @@ siloBuilder.ConfigureLattice(o =>
 
 Pass a tree name to override specific options for a single tree:
 
-```csharp
+```csharp verify
 siloBuilder.ConfigureLattice("high-throughput-tree", o =>
 {
     o.HotShardOpsPerSecondThreshold = 500;
@@ -98,7 +98,7 @@ How long a deleted key's tombstone is retained before it becomes eligible for pe
 
 Set to `Timeout.InfiniteTimeSpan` to disable tombstone compaction entirely. This is useful for trees where deletes are rare or where tombstone accumulation is acceptable.
 
-```csharp
+```csharp verify
 // Compact aggressively (12 hours)
 siloBuilder.ConfigureLattice(o => o.TombstoneGracePeriod = TimeSpan.FromHours(12));
 
@@ -117,7 +117,7 @@ How long a soft-deleted tree's data is retained in storage before being permanen
 
 Set to `TimeSpan.Zero` for immediate purge on the next reminder tick (clamped to a 1-minute minimum by the Orleans reminder floor).
 
-```csharp
+```csharp verify
 // Retain deleted trees for 7 days
 siloBuilder.ConfigureLattice(o => o.SoftDeleteDuration = TimeSpan.FromDays(7));
 
@@ -134,7 +134,7 @@ This option can be changed freely at any time. The new duration takes effect on 
 
 Minimum time between consecutive delta refreshes from the primary leaf in the `LeafCacheGrain`. When set to `TimeSpan.Zero` (the default), every read triggers a delta refresh — the version-vector comparison on the primary is cheap but the RPC overhead remains. Setting a non-zero value allows the cache to serve reads from its local dictionary without contacting the primary, trading freshness for lower read latency.
 
-```csharp
+```csharp verify
 // Allow up to 100 ms of staleness for lower read latency
 siloBuilder.ConfigureLattice(o => o.CacheTtl = TimeSpan.FromMilliseconds(100));
 
@@ -151,14 +151,14 @@ This option can be changed freely at any time. The new TTL takes effect on the n
 
 When enabled, `KeysAsync` pre-fetches the next page from each shard in the background while the current page is being consumed by the k-way merge. This hides per-shard grain-call latency and can significantly reduce wall-clock time for large scans across many shards.
 
-```csharp
+```csharp verify
 // Enable globally
 siloBuilder.ConfigureLattice(o => o.PrefetchKeysScan = true);
 ```
 
 Pre-fetch can also be controlled per-call via the `prefetch` parameter on `KeysAsync`, which overrides the global option:
 
-```csharp
+```csharp verify
 // Override for a single call regardless of global setting
 await foreach (var key in tree.KeysAsync(prefetch: true))
 {
@@ -252,13 +252,13 @@ This option can be changed freely at any time.
 
 Lattice grains use the storage provider named `"lattice"` (exposed as `LatticeOptions.StorageProviderName`). The `AddLattice` extension method passes this name to your storage registration delegate. In advanced scenarios where you register storage directly, use this constant to ensure the provider name matches:
 
-```csharp
+```csharp verify
 siloBuilder.AddMemoryGrainStorage(LatticeOptions.StorageProviderName);
 ```
 
 ## Full Example
 
-```csharp
+```csharp verify
 var builder = WebApplication.CreateBuilder(args);
 
 builder.UseOrleans(silo =>

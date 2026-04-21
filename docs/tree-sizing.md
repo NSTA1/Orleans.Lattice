@@ -31,7 +31,7 @@ For shard-count growth (`ILattice.ReshardAsync`), see
 If you need to change `MaxLeafKeys` or `MaxInternalChildren` on a tree
 that already contains data, use the `ResizeAsync` API:
 
-```csharp
+```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 await tree.ResizeAsync(newMaxLeafKeys: 256, newMaxInternalChildren: 64);
 ```
@@ -63,7 +63,7 @@ Different physical trees produce different leaf grain IDs, which automatically c
 
 During the soft-delete window the resize can be undone:
 
-```csharp
+```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 await tree.UndoResizeAsync();
 ```
