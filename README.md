@@ -65,6 +65,7 @@ both live consistency and eventual convergence.
 | **Crash-safe splits** | Every node split uses a two-phase pattern with persisted intent. Interrupted splits resume automatically on the next access. |
 | **Durable cursors** | `OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `OpenDeleteRangeCursorAsync` return a server-side checkpointed iterator that survives silo failovers, client restarts, and topology changes. Progress is persisted after every page; a new activation resumes from the last yielded key. Self-cleaning via sliding idle-TTL reminder. |
 | **Events** | Per-tree `LatticeTreeEvent` Orleans stream: event kinds, `OperationId` correlation for atomic writes, delivery semantics, setup |
+| **Metrics** | `System.Diagnostics.Metrics` instruments published on the `orleans.lattice` meter: shard counters, leaf latency histograms, cache hit/miss, OpenTelemetry registration |
 | **Fast reads** | A `[StatelessWorker]` cache grain per silo serves reads via delta replication from the primary leaf. Cache misses cost a single version-vector comparison. |
 | **Fault-tolerant** | Validated end-to-end by a parametrized fault-injection chaos test: random storage-write failures during concurrent reads, writes, scans, and splits converge to the correct state once faults stop. |
 | **Online Reshard** | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
@@ -98,6 +99,7 @@ Detailed design documentation is split by concept:
 | [Diagnostics](docs/diagnostics.md) | `ILattice.DiagnoseAsync` tree health snapshot: per-shard depth/live-keys/tombstones/hotness, shallow vs deep mode, caching, recent-splits ring buffer |
 | [Durable Cursors](docs/durable-cursors.md) | Stateful `ILatticeCursorGrain` design, grain lifecycle, effective-range resumption, idle-TTL self-cleanup, performance characteristics |
 | [Events](docs/events.md) | Per-tree `LatticeTreeEvent` Orleans stream: event kinds, `OperationId` correlation for atomic writes, delivery semantics, setup |
+| [Metrics](docs/metrics.md) | `System.Diagnostics.Metrics` instruments published on the `orleans.lattice` meter: shard counters, leaf latency histograms, cache hit/miss, OpenTelemetry registration |
 | [Online Reshard](docs/online-reshard.md) | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
 | [Read Caching](docs/caching.md) | Delta-based `[StatelessWorker]` cache, split-aware pruning |
 | [Shard Splitting](docs/shard-splitting.md) | Adaptive online splits, shadow-write design, autonomic monitor, suppression rules, scan semantics during splits, tunables |

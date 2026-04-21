@@ -53,6 +53,8 @@ Potential improvements and new features.
 
 - [x] **F-015 — Tree events (Orleans Streams)**: Metadata-only event publication on a per-tree Orleans stream, opt-in via `LatticeOptions.PublishEvents` (default `false`) and configurable via `LatticeOptions.EventStreamProviderName` (default `"Default"`). Stream namespace `"orleans.lattice.events"`, stream id = logical tree id, payload `LatticeTreeEvent` (`readonly record struct`, alias `ol.lte`) with `Kind`, `TreeId`, `Key`, `ShardIndex`, `OperationId`, `AtUtc`. Twelve kinds (`LatticeTreeEventKind`, alias `ol.ltk`): `Set`, `Delete`, `DeleteRange`, `AtomicWriteCompleted`, `SplitCommitted`, `CompactionCompleted`, `SnapshotCompleted`, `ResizeCompleted`, `ReshardCompleted`, `TreeDeleted`, `TreeRecovered`, `TreePurged`. Producers: `LatticeGrain` (per-key write events, with conditional emission on `SetIfVersion` / `GetOrSet`; `DeleteRange` collapsed to a single `{start}..{end}` event when anything was deleted), `AtomicWriteGrain` (stamps the saga's `operationId` into `RequestContext` on every phase so downstream per-key `Set` events carry the correlation id, plus a terminal `AtomicWriteCompleted`), and the four coordinator grains (`TreeShardSplitGrain`, `TombstoneCompactionGrain`, `TreeSnapshotGrain`, `TreeResizeGrain`, `TreeReshardGrain`) plus `TreeDeletionGrain` for the three tree-lifecycle kinds. Publication is fire-and-forget with log-and-swallow semantics: missing provider, serialization failures, and downstream queue exceptions never propagate to the write path. Subscribers consume via `LatticeExtensions.SubscribeToEventsAsync(ILattice, IClusterClient, Func<LatticeTreeEvent, Task>, string providerName = "Default", CancellationToken)` which returns a `StreamSubscriptionHandle<LatticeTreeEvent>` and throws `InvalidOperationException` with an actionable remediation message when the client-side provider is missing. Lattice does not register a stream provider on your behalf — opt in on both silo and client (e.g. `AddMemoryStreams("Default")` + `AddMemoryGrainStorage("PubSubStore")`). Regression tests: 4 unit tests on `LatticeEventPublisherTests` (gating, missing-provider no-throw, `OperationId` round-trip through `RequestContext`) and 5 integration tests on `EventStreamIntegrationTests` (per-key `Set`, `Delete`, `DeleteRange`, `SetManyAtomicAsync` with correlated `OperationId`, `SetIfVersionAsync` conditional emission). Documented in [`docs/events.md`](docs/events.md), [`docs/api.md`](docs/api.md), and [`docs/configuration.md`](docs/configuration.md).
 
+- [x] **F-029 — External metrics / telemetry export** *(required F-013 ✓)*: Orleans.Lattice publishes `System.Diagnostics.Metrics` instruments on a single static `Meter` named `orleans.lattice` (pinned by FX-008's regression test), exposed via `Orleans.Lattice.LatticeMetrics` so OpenTelemetry pipelines subscribe once with `.AddMeter("orleans.lattice")` and receive every instrument. Eighteen instruments across five tiers: **shard-level** counters (`orleans.lattice.shard.reads`, `orleans.lattice.shard.writes`, `orleans.lattice.shard.splits_committed`) emitted from `ShardRootGrain.RecordRead` / `RecordWrite` and `TreeShardSplitGrain.FinaliseAsync` respectively; **leaf-level** histograms and counters (`orleans.lattice.leaf.write.duration`, `orleans.lattice.leaf.scan.duration` tagged `operation=keys|entries`, `orleans.lattice.leaf.compaction.duration`, `orleans.lattice.leaf.tombstones.created`, `orleans.lattice.leaf.tombstones.reaped`, `orleans.lattice.leaf.tombstones.expired`, `orleans.lattice.leaf.splits`) emitted from `BPlusLeafGrain` — a new `PersistAsync()` helper (partial file `BPlusLeafGrain.Metrics.cs`) wraps every `state.WriteStateAsync()` call with `Stopwatch.GetTimestamp()` deltas so the write histogram captures storage-provider latency from the grain boundary where I/O actually occurs, scan durations are timed around the synchronous loop body in `GetKeysAsync` / `GetEntriesAsync`, and `CompactTombstonesAsync` counts explicit-delete tombstones and TTL-expired entries into separate counters so operators can distinguish delete throughput from TTL churn; **cache** counters (`orleans.lattice.cache.hits`, `orleans.lattice.cache.misses`) emitted from `LeafCacheGrain.GetAsync` / `ExistsAsync` / `GetManyAsync`; **saga / coordinator / lifecycle** counters (`orleans.lattice.atomic_write.completed` tagged `outcome=committed|compensated|failed` from `AtomicWriteGrain.CompleteSagaAsync`; `orleans.lattice.coordinator.completed` tagged `kind=snapshot|resize|reshard|merge|compaction` from the five coordinator completion paths; `orleans.lattice.tree.lifecycle` tagged `kind=deleted|recovered|purged` emitted **unconditionally** from `TreeDeletionGrain.PublishTreeLifecycleEventAsync` so lifecycle visibility does not depend on the event stream being enabled); and **events & configuration** counters (`orleans.lattice.events.published` tagged `kind`; `orleans.lattice.events.dropped` tagged `reason=missing_provider|publish_error` so operators detect a misconfigured `PublishEvents` / provider pairing before it consumes silo resources; `orleans.lattice.config.changed` tagged `config=publish_events` emitted from `ILattice.SetPublishEventsEnabledAsync` so runtime policy changes show up on the same pipeline as the traffic they affect). All instruments carry a `tree` tag; shard instruments additionally carry `shard` (physical shard index, parsed once at activation from the grain-key suffix); scan histograms carry `operation`. Leaf grain ids are deliberately not tagged — in a large tree they would produce unbounded cardinality. The meter is created at assembly load, so callers wire it up on the silo host before the cluster starts and every subsequently-activated grain publishes into the already-subscribed pipeline. Durations are reported in milliseconds as `double`. Measurement callbacks are elided when no listener is attached, so there is no runtime cost on the hot path for callers who do not opt in. Regression tests: 14 integration tests (9 in `LatticeMetricsIntegrationTests` + 5 in `LatticeMetricsCoordinatorIntegrationTests` covering atomic-write `committed`, tree-lifecycle `deleted` / `recovered`, the events-quiescence invariant, and `config.changed` on `publish_events` toggles) plus 2 unit tests in `BPlusLeafGrainTests.Compaction` pinning the explicit-vs-TTL counter split, all using a `MeterListener` filtered by `ReferenceEquals(inst.Meter, LatticeMetrics.Meter)` so the tests cannot drift with the meter name. Documented in [`docs/metrics.md`](docs/metrics.md) and [`docs/api.md`](docs/api.md).
+
 ---
 
 ## 🔲 Outstanding
@@ -61,40 +63,28 @@ Items are ordered by estimated impact. Dependencies on completed features are no
 
 Audit follow-up fixes (`FX-###`) are tracked in a [dedicated section below](#-audit-follow-up-fixes) and take operational precedence over feature work when they touch data-loss or liveness risks.
 
-### 1 · F-029 — External metrics / telemetry export *(prereq F-013 ✓ — unblocked)*
-**Observability / high impact**
-
-Publish `System.Diagnostics.Metrics` counters and histograms for OpenTelemetry-compatible dashboards. Instruments fall into two tiers:
-
-- **Shard-level** (sourced directly from F-013's existing `ShardRootGrain` counters): per-shard read ops, write ops, split count, and ops/sec derived from `countersSince`.
-- **Leaf-level** (requires new instrumentation at `BPlusLeafGrain`): read latency and write latency histograms timed around `ReadStateAsync` / `WriteStateAsync` calls, cache hit/miss ratio, tombstone count, compaction duration, and scan latency.
-
-The leaf-level instruments cannot be inferred from F-013's shard-root counters — they require timing and counting at the leaf grain boundary where storage I/O actually occurs.
-
----
-
-### 2 · F-025
+### 1 · F-025
 **Feature / high impact**
 
 Incremental, ongoing merge from one or more source trees using `VersionVector` to track a per-source high-water mark, so each cycle transfers only entries newer than the last. Requires a delta-aware leaf scan (`GetEntriesNewerThanAsync(HybridLogicalClock threshold)`) and a merge-state tracking grain to persist the vector per source tree. Should replace the current full-shard drain in `TreeMergeGrain.MergeShardAsync` with a chunked or cursor-based leaf-chain iteration.
 
 ---
 
-### 3 · F-012
+### 2 · F-012
 **Reliability / medium impact**
 
 Optionally pre-warm `LeafCacheGrain` activations for recently-accessed leaves after a silo restart to reduce cold-start read-latency spikes. No dependencies.
 
 ---
 
-### 4 · F-018
+### 3 · F-018
 **Feature / lower impact (complex)**
 
 Associate tags with keys and query by tag. Implementable as a secondary Lattice tree mapping `tag → Set<key>`, maintained transactionally alongside the primary write. High complexity; deferred until core feature set is stable.
 
 ---
 
-### 5 · Documentation & Developer Experience
+### 4 · Documentation & Developer Experience
 
 - [ ] **F-021 — Migration guide**: Document how to migrate data from external stores (Redis, SQL, Cosmos DB) into Lattice using the streaming bulk-load API, including key-design and value-serialization best practices.
 - [ ] **F-022 — Troubleshooting guide (`docs/troubleshooting.md`)** *(follows F-014 ✓)*: Cover common issues — storage provider exceptions from oversized grains, concurrent split activity, slow scans, stale cache behavior — and how to interpret the output of `DiagnoseAsync`.
@@ -195,7 +185,7 @@ Each `ShardRootGrain` is currently placed by Orleans' default random placement d
 | F-011 (Adaptive shard splitting) | F-013 (Shard hotness counters) | ✅ Both complete |
 | F-011 (Adaptive shard splitting) | F-028 (Shard map indirection) | ✅ Both complete |
 | F-011 (Adaptive shard splitting) | F-030 (Route `BulkLoadAsync` through shard map) | ✅ Both complete |
-| F-029 (External metrics / telemetry) | F-013 (Shard hotness counters) | ✅ Prereq complete — F-029 unblocked |
+| F-029 (External metrics / telemetry) | F-013 (Shard hotness counters) | ✅ Both complete |
 | F-025 (Continuous merge) | F-020 (Merge trees) | ✅ Prereq complete — F-025 unblocked |
 | F-027 (Leaf-grouped merge routing) | — | ✅ Complete (amortises batched merge at scale for F-025) |
 | F-019 (Online resize) | F-028 (Shard map indirection) | ✅ Both complete |
