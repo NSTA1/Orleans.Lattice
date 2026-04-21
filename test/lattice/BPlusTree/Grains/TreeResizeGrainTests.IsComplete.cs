@@ -23,19 +23,26 @@ public class TreeResizeGrainIsCompleteTests
         var grainFactory = Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions { ShardCount = ShardCount });
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
         var state = existingState ?? new FakePersistentState<TreeResizeState>();
 
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ResolveAsync(TreeId).Returns(Task.FromResult(TreeId));
-        registry.GetEntryAsync(TreeId).Returns(Task.FromResult<TreeRegistryEntry?>(null));
+        registry.GetEntryAsync(TreeId).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = ShardCount,
+            }));
+        var optionsResolver = TestOptionsResolver.ForFactory(grainFactory);
 
         var snapshot = Substitute.For<ITreeSnapshotGrain>();
         grainFactory.GetGrain<ITreeSnapshotGrain>(Arg.Any<string>()).Returns(snapshot);
 
         return new TreeResizeGrain(
-            context, grainFactory, reminderRegistry, optionsMonitor,
+            context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeResizeGrain>(), state);
     }
 

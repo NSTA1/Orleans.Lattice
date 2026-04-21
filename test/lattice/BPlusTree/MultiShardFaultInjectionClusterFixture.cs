@@ -2,6 +2,7 @@ using Orleans.Configuration;
 using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -13,7 +14,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </summary>
 public sealed class MultiShardFaultInjectionClusterFixture
 {
-    public const string TreeName = "i-multi-tree";
+    public const string TreeName = "i-multi-tree";
     public const int TestShardCount = 4;
     public const int SmallMaxLeafKeys = 4;
     public const int SmallMaxInternalChildren = 4;
@@ -26,6 +27,14 @@ public sealed class MultiShardFaultInjectionClusterFixture
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+
+        var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(TreeName, new TreeRegistryEntry
+        {
+            MaxLeafKeys = SmallMaxLeafKeys,
+            MaxInternalChildren = SmallMaxInternalChildren,
+            ShardCount = TestShardCount,
+        });
     }
 
     public async Task DisposeAsync()
@@ -43,12 +52,6 @@ public sealed class MultiShardFaultInjectionClusterFixture
                     name,
                     (MemoryGrainStorageOptions _) => { },
                     (FaultInjectionGrainStorageOptions _) => { }));
-            siloBuilder.ConfigureLattice(TreeName, o =>
-            {
-                o.MaxLeafKeys = SmallMaxLeafKeys;
-                o.MaxInternalChildren = SmallMaxInternalChildren;
-                o.ShardCount = TestShardCount;
-            });
             siloBuilder.UseInMemoryReminderService();
         }
     }

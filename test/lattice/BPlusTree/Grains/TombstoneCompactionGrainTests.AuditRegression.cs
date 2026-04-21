@@ -95,7 +95,6 @@ public partial class TombstoneCompactionGrainTests
         // the currently configured period.
         var options = new LatticeOptions
         {
-            ShardCount = ShardCount,
             TombstoneGracePeriod = TimeSpan.FromHours(12),
         };
         var (grain, _, reminderRegistry, grainFactory, _) = CreateGrain(options);
@@ -135,7 +134,6 @@ public partial class TombstoneCompactionGrainTests
     {
         var options = new LatticeOptions
         {
-            ShardCount = ShardCount,
             TombstoneGracePeriod = TimeSpan.FromHours(2),
         };
         var (grain, _, reminderRegistry, grainFactory, _) = CreateGrain(options);

@@ -104,7 +104,7 @@ public class ChaosReshardIntegrationTests
     public async Task Chaos_reshard_under_concurrent_load_preserves_all_data()
     {
         var treeId = $"reshard-chaos-{Guid.NewGuid():N}";
-        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        var tree = await _fixture.CreateTreeAsync(treeId);
         var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var reshard = _cluster.GrainFactory.GetGrain<ITreeReshardGrain>(treeId);
 
@@ -252,7 +252,7 @@ public class ChaosReshardIntegrationTests
                     Bump(stats, "reshard-passes");
 
                     var map = await registry.GetShardMapAsync(treeId)
-                        ?? ShardMap.CreateDefault(LatticeOptions.DefaultVirtualShardCount, FourShardClusterFixture.TestShardCount);
+                        ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, FourShardClusterFixture.TestShardCount);
                     foreach (var idx in map.GetPhysicalShardIndices())
                     {
                         if (ct.IsCancellationRequested) break;

@@ -12,8 +12,7 @@ public partial class LatticeGrainTests
     public async Task GetRoutingAsync_returns_default_map_when_registry_returns_null()
     {
         const string treeId = "routing-default";
-        var options = new LatticeOptions { ShardCount = 4, VirtualShardCount = 16 };
-        var (grain, factory, _) = CreateGrainWithRegistry(treeId, options);
+        var (grain, factory, _) = CreateGrainWithRegistry(treeId, shardCount: 4);
         SetupShardRoot(factory);
 
         var routing = await grain.GetRoutingAsync();
@@ -21,8 +20,8 @@ public partial class LatticeGrainTests
         Assert.That(routing, Is.Not.Null);
         Assert.That(routing.PhysicalTreeId, Is.EqualTo(treeId));
         Assert.That(routing.Map, Is.Not.Null);
-        Assert.That(routing.Map.Slots.Length, Is.EqualTo(16));
-        for (int i = 0; i < 16; i++)
+        Assert.That(routing.Map.Slots.Length, Is.EqualTo(LatticeConstants.DefaultVirtualShardCount));
+        for (int i = 0; i < LatticeConstants.DefaultVirtualShardCount; i++)
             Assert.That(routing.Map.Slots[i], Is.EqualTo(i % 4));
     }
 
@@ -30,8 +29,7 @@ public partial class LatticeGrainTests
     public async Task GetRoutingAsync_returns_custom_map_from_registry()
     {
         const string treeId = "routing-custom";
-        var options = new LatticeOptions { ShardCount = 4, VirtualShardCount = 8 };
-        var (grain, factory, registry) = CreateGrainWithRegistry(treeId, options);
+        var (grain, factory, registry) = CreateGrainWithRegistry(treeId, shardCount: 4, virtualShardCount: 8);
         var customMap = new ShardMap { Slots = [0, 1, 2, 3, 0, 1, 2, 3] };
         registry.GetShardMapAsync(treeId).Returns(Task.FromResult<ShardMap?>(customMap));
         SetupShardRoot(factory);

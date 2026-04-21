@@ -31,21 +31,24 @@ public partial class TreeMergeGrainTests
         var grainFactory = Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        options ??= new LatticeOptions
-        {
-            ShardCount = ShardCount,
-            MaxLeafKeys = 128,
-            MaxInternalChildren = 128,
-        };
+        options ??= new LatticeOptions();
         optionsMonitor.Get(Arg.Any<string>()).Returns(options);
         var state = existingState ?? new FakePersistentState<TreeMergeState>();
 
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ExistsAsync(SourceTreeId).Returns(true);
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = ShardCount,
+            }));
+        var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 
         var grain = new TreeMergeGrain(
-            context, grainFactory, reminderRegistry, optionsMonitor,
+            context, grainFactory, reminderRegistry, optionsResolver,
             new LoggerFactory().CreateLogger<TreeMergeGrain>(), state);
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);
     }

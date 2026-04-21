@@ -1,6 +1,7 @@
 using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -19,6 +20,15 @@ public sealed class SmallLeafClusterFixture
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+
+        var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var pin = new TreeRegistryEntry
+        {
+            MaxLeafKeys = SmallMaxLeafKeys,
+            ShardCount = 1,
+        };
+        await registry.RegisterAsync(TreeName, pin);
+        await registry.RegisterAsync(CompactionTreeName, pin);
     }
 
     public async Task DisposeAsync()
@@ -34,14 +44,7 @@ public sealed class SmallLeafClusterFixture
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.ConfigureLattice(o =>
             {
-                o.MaxLeafKeys = SmallMaxLeafKeys;
-                o.ShardCount = 1;
                 o.TombstoneGracePeriod = TimeSpan.Zero;
-            });
-            siloBuilder.ConfigureLattice(TreeName, o =>
-            {
-                o.MaxLeafKeys = SmallMaxLeafKeys;
-                o.ShardCount = 1;
             });
             siloBuilder.UseInMemoryReminderService();
         }

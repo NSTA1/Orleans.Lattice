@@ -14,7 +14,8 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed partial class LatticeGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
-    IOptionsMonitor<LatticeOptions> optionsMonitor) : ILattice
+    IOptionsMonitor<LatticeOptions> optionsMonitor,
+    LatticeOptionsResolver optionsResolver) : ILattice
 {
     private string TreeId => context.GrainId.Key.ToString()!;
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
@@ -907,18 +908,18 @@ internal sealed partial class LatticeGrain(
         var physicalTreeId = await GetPhysicalTreeIdAsync();
         if (_shardMap is not null) return new RoutingInfo(physicalTreeId, _shardMap);
 
-        var options = Options;
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
         if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
             // System trees never have a custom shard map; using the default
             // also avoids a circular registry call.
-            _shardMap = ShardMap.CreateDefault(options.VirtualShardCount, options.ShardCount);
+            _shardMap = ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         }
         else
         {
             var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
             _shardMap = await registry.GetShardMapAsync(TreeId)
-                ?? ShardMap.CreateDefault(options.VirtualShardCount, options.ShardCount);
+                ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         }
 
         return new RoutingInfo(physicalTreeId, _shardMap);

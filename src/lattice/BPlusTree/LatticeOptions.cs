@@ -4,36 +4,31 @@ namespace Orleans.Lattice;
 /// Configuration options for a Lattice tree. Register a named instance to
 /// override settings for a specific tree:
 /// <code>
-/// siloBuilder.Services.Configure&lt;LatticeOptions&gt;("my-tree", o => o.MaxLeafKeys = 256);
+/// siloBuilder.Services.Configure&lt;LatticeOptions&gt;("my-tree", o => o.CacheTtl = TimeSpan.FromMilliseconds(100));
 /// </code>
 /// The unnamed (default) instance applies to all trees that do not have a
 /// named override.
+/// <para>
+/// Structural sizing — the number of keys per leaf, the number of children
+/// per internal node, and the shard count — is <em>not</em> configured here.
+/// Those values are pinned in the internal tree registry at first-use
+/// (seeded from the canonical defaults in
+/// <see cref="Orleans.Lattice.BPlusTree.LatticeConstants"/>) and are mutable
+/// only through <see cref="ILattice.ResizeAsync"/> (leaf / internal capacity)
+/// or <see cref="ILattice.ReshardAsync"/> (shard count). This prevents
+/// accidental divergence between the layout a tree was built with and a
+/// later configuration change.
+/// </para>
+/// <para>
+/// The virtual shard space is also not configurable here. It is a compile-time
+/// constant,
+/// <see cref="Orleans.Lattice.BPlusTree.LatticeConstants.DefaultVirtualShardCount"/>
+/// (4096), because persisted shard maps reference virtual slots by integer
+/// index and changing the constant would invalidate every stored map.
+/// </para>
 /// </summary>
-public sealed class LatticeOptions
+public class LatticeOptions
 {
-    /// <summary>Maximum number of keys per leaf node before a split is triggered.</summary>
-    public int MaxLeafKeys { get; set; } = DefaultMaxLeafKeys;
-
-    /// <summary>Maximum number of children per internal node before a split is triggered.</summary>
-    public int MaxInternalChildren { get; set; } = DefaultMaxInternalChildren;
-
-    /// <summary>Number of independent shards the key space is divided into.</summary>
-    public int ShardCount { get; set; } = DefaultShardCount;
-
-    /// <summary>
-    /// Size of the virtual shard space used for key routing. Keys are hashed
-    /// into one of <see cref="VirtualShardCount"/> virtual slots, and a per-tree
-    /// <c>ShardMap</c> collapses those virtual slots onto the
-    /// <see cref="ShardCount"/> physical shards. This indirection enables future
-    /// adaptive shard splitting without rehashing existing keys.
-    /// <para>
-    /// Must be greater than or equal to <see cref="ShardCount"/>, and must be an
-    /// integer multiple of <see cref="ShardCount"/> so that the default identity
-    /// map preserves the legacy <c>hash % shardCount</c> routing.
-    /// </para>
-    /// </summary>
-    public int VirtualShardCount { get; set; } = DefaultVirtualShardCount;
-
     /// <summary>Number of keys per page returned by <see cref="IShardRootGrain.GetSortedKeysBatchAsync"/>.</summary>
     public int KeysPageSize { get; set; } = DefaultKeysPageSize;
 
@@ -73,18 +68,6 @@ public sealed class LatticeOptions
 
     /// <summary>Default value for <see cref="TombstoneGracePeriod"/> (24 hours).</summary>
     public static readonly TimeSpan DefaultTombstoneGracePeriod = TimeSpan.FromHours(24);
-
-    /// <summary>Default value for <see cref="MaxLeafKeys"/>.</summary>
-    public const int DefaultMaxLeafKeys = 128;
-
-    /// <summary>Default value for <see cref="MaxInternalChildren"/>.</summary>
-    public const int DefaultMaxInternalChildren = 128;
-
-    /// <summary>Default value for <see cref="ShardCount"/>.</summary>
-    public const int DefaultShardCount = 64;
-
-    /// <summary>Default value for <see cref="VirtualShardCount"/> (4096).</summary>
-    public const int DefaultVirtualShardCount = 4096;
 
     /// <summary>Default value for <see cref="KeysPageSize"/>.</summary>
     public const int DefaultKeysPageSize = 512;
@@ -271,7 +254,7 @@ public sealed class LatticeOptions
 
     /// <summary>
     /// Optional retention window for <see cref="Primitives.VersionVector"/>
-    /// entries (FX-003). When a merge pipeline calls
+    /// entries. When a merge pipeline calls
     /// <see cref="Primitives.VersionVector.PruneOlderThan(long)"/> with
     /// <c>UtcNow - VersionVectorRetention</c>, replica entries whose
     /// wall-clock tick falls before the cutoff are dropped to bound the

@@ -3,6 +3,8 @@ using NSubstitute;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -11,21 +13,35 @@ public partial class LatticeGrainTests
     // --- Shard map indirection tests ---
 
     private static (LatticeGrain grain, IGrainFactory factory, ILatticeRegistry registry)
-        CreateGrainWithRegistry(string treeId, LatticeOptions? options = null)
+        CreateGrainWithRegistry(
+            string treeId,
+            LatticeOptions? options = null,
+            int shardCount = 4,
+            int virtualShardCount = 16)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice", treeId));
 
         var grainFactory = Substitute.For<IGrainFactory>();
+        var baseOptions = options ?? new LatticeOptions();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions());
+        optionsMonitor.Get(Arg.Any<string>()).Returns(baseOptions);
 
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ResolveAsync(Arg.Any<string>()).Returns(c => Task.FromResult(c.Arg<string>()));
         registry.GetShardMapAsync(Arg.Any<string>()).Returns(Task.FromResult<ShardMap?>(null));
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = shardCount,
+            }));
 
-        var grain = new LatticeGrain(context, grainFactory, optionsMonitor);
+        var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, baseOptions);
+
+        var grain = new LatticeGrain(context, grainFactory, optionsMonitor, optionsResolver);
         return (grain, grainFactory, registry);
     }
 
@@ -33,8 +49,7 @@ public partial class LatticeGrainTests
     public async Task GetAsync_uses_default_shard_map_when_registry_returns_null()
     {
         const string treeId = "default-map";
-        var options = new LatticeOptions { ShardCount = 4, VirtualShardCount = 16 };
-        var (grain, factory, _) = CreateGrainWithRegistry(treeId, options);
+        var (grain, factory, _) = CreateGrainWithRegistry(treeId, shardCount: 4, virtualShardCount: 16);
         var shardRoot = SetupShardRoot(factory);
 
         await grain.GetAsync("hello");
@@ -50,8 +65,7 @@ public partial class LatticeGrainTests
     public async Task GetAsync_uses_custom_shard_map_from_registry()
     {
         const string treeId = "custom-map";
-        var options = new LatticeOptions { ShardCount = 4, VirtualShardCount = 8 };
-        var (grain, factory, registry) = CreateGrainWithRegistry(treeId, options);
+        var (grain, factory, registry) = CreateGrainWithRegistry(treeId, shardCount: 4, virtualShardCount: 8);
 
         // Retarget every virtual slot to physical shard 7 (e.g. simulating a split target).
         var customMap = new ShardMap { Slots = [7, 7, 7, 7, 7, 7, 7, 7] };
@@ -107,7 +121,11 @@ public partial class LatticeGrainTests
     [Test]
     public async Task System_tree_uses_default_shard_map_without_registry_lookup()
     {
-        var (grain, factory, registry) = CreateGrainWithRegistry(LatticeConstants.RegistryTreeId);
+        // System trees resolve to LatticeConstants.DefaultShardCount, so
+        // the base options must supply a compatible VirtualShardCount.
+        var (grain, factory, registry) = CreateGrainWithRegistry(
+            LatticeConstants.RegistryTreeId,
+            virtualShardCount: LatticeConstants.DefaultShardCount);
         SetupShardRoot(factory);
 
         await grain.GetAsync("k1");
@@ -121,8 +139,7 @@ public partial class LatticeGrainTests
     public async Task CountPerShardAsync_uses_physical_shard_indices_from_map()
     {
         const string treeId = "fan-out";
-        var options = new LatticeOptions { ShardCount = 4, VirtualShardCount = 8 };
-        var (grain, factory, registry) = CreateGrainWithRegistry(treeId, options);
+        var (grain, factory, registry) = CreateGrainWithRegistry(treeId, shardCount: 4, virtualShardCount: 8);
 
         // Custom map with only physical shards 0 and 2 referenced.
         var customMap = new ShardMap { Slots = [0, 0, 2, 2, 0, 2, 0, 2] };

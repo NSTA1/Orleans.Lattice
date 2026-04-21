@@ -29,8 +29,30 @@ internal sealed class LatticeRegistryGrain(
         if (await Registry.ExistsAsync(treeId))
             return;
 
-        var bytes = entry is not null ? SerializeEntry(entry) : EmptyEntry;
+        // Seed the structural sizing pin from LatticeConstants so every tree
+        // has an unambiguous, immutable structural identity from the moment
+        // it is first registered. After seeding, the registry is the only
+        // source of structural truth; IOptionsMonitor<LatticeOptions> no
+        // longer exposes these fields. ResizeAsync / ReshardAsync are the
+        // only legitimate mutation paths. System trees are intentionally
+        // not special-cased — they use the same defaults so their leaves,
+        // internals, and shard maps share the same invariants as user
+        // trees.
+        var seeded = SeedStructuralDefaults(entry);
+
+        var bytes = SerializeEntry(seeded);
         await Registry.SetAsync(treeId, bytes);
+    }
+
+    private static TreeRegistryEntry SeedStructuralDefaults(TreeRegistryEntry? entry)
+    {
+        entry ??= new TreeRegistryEntry();
+        return entry with
+        {
+            MaxLeafKeys = entry.MaxLeafKeys ?? LatticeConstants.DefaultMaxLeafKeys,
+            MaxInternalChildren = entry.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren,
+            ShardCount = entry.ShardCount ?? LatticeConstants.DefaultShardCount,
+        };
     }
 
     public async Task UpdateAsync(string treeId, TreeRegistryEntry entry)

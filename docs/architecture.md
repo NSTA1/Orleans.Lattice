@@ -81,7 +81,7 @@ flowchart LR
 
 The hash function (`XxHash32`) is **stable across processes** — unlike `string.GetHashCode()`, it will always route the same key to the same shard. The default shard count is 64, configurable at tree creation time.
 
-**Shard map indirection.** Routing is two-stage: keys hash into a large fixed virtual space (`VirtualShardCount`, default 4096), and a per-tree `ShardMap` collapses ranges of virtual slots onto physical shards. The default map (`slot[i] = i % shardCount`) preserves the legacy `hash % shardCount` routing bit-for-bit when `VirtualShardCount % ShardCount == 0` (enforced by the options validator). The shard map is persisted on the tree's registry entry, fetched lazily by `LatticeGrain` on first access, cached for the activation's lifetime, and invalidated alongside the physical-tree-ID cache when a shard signals a stale alias. This indirection decouples logical key routing from the physical shard count, enabling adaptive shard splitting without rehashing existing keys.
+**Shard map indirection.** Routing is two-stage: keys hash into a large fixed virtual space (`LatticeConstants.DefaultVirtualShardCount`, a compile-time constant fixed at 4096), and a per-tree `ShardMap` collapses ranges of virtual slots onto physical shards. The default map (`slot[i] = i % shardCount`) preserves the legacy `hash % shardCount` routing bit-for-bit when `VirtualShardCount % ShardCount == 0` (enforced by `ShardMap.CreateDefault` at use time). The shard map is persisted on the tree's registry entry, fetched lazily by `LatticeGrain` on first access, cached for the activation's lifetime, and invalidated alongside the physical-tree-ID cache when a shard signals a stale alias. This indirection decouples logical key routing from the physical shard count, enabling adaptive shard splitting without rehashing existing keys. The virtual shard count is not a `LatticeOptions` property because changing it would invalidate every persisted `ShardMap` (slots are referenced by integer index).
 
 **Trade-off:** Keys in different shards have no ordering relationship. A global range scan requires a scatter-gather across all shards followed by a merge.
 
@@ -120,8 +120,8 @@ These grains form the structural B+ tree and handle every read/write request:
 
 The registry holds a `TreeRegistryEntry` per user tree, containing:
 
-- **`ShardMap`** — the per-tree mapping from virtual slots to physical shard indices. `null` until the first topology change (adaptive split or explicit `SetShardMapAsync`); `LatticeGrain` falls back to `ShardMap.CreateDefault(VirtualShardCount, ShardCount)` when absent.
-- **Config overrides** — per-tree `LatticeOptions` values (e.g. `MaxLeafKeys`, `ShardCount`) that override the global defaults.
+- **`ShardMap`** — the per-tree mapping from virtual slots to physical shard indices. `null` until the first topology change (adaptive split or explicit `SetShardMapAsync`); `LatticeGrain` falls back to `ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, ShardCount)` when absent.
+- **Structural pins** — per-tree `MaxLeafKeys`, `MaxInternalChildren`, and `ShardCount` seeded on first use from `LatticeConstants` (128 / 128 / 64). These are the sole source of structural truth, read by every grain through `LatticeOptionsResolver`. Mutable only through `ResizeAsync` (leaf / internal capacity) and `ReshardAsync` (shard count).
 - **Tree alias** — an optional indirection from a logical tree name to a physical tree ID, used by `ResizeAsync` and `SnapshotAsync` to swap the backing tree atomically.
 - **Soft-delete metadata** — deletion timestamp and retention window for `DeleteTreeAsync` / `RecoverTreeAsync`.
 

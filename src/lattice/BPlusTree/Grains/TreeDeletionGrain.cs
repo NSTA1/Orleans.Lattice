@@ -19,6 +19,7 @@ internal sealed class TreeDeletionGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    LatticeOptionsResolver optionsResolver,
     ILogger<TreeDeletionGrain> logger,
     [PersistentState("tree-deletion", LatticeOptions.StorageProviderName)]
     IPersistentState<TreeDeletionState> state) : ITreeDeletionGrain, IRemindable, IGrainBase
@@ -37,10 +38,10 @@ internal sealed class TreeDeletionGrain(
     {
         if (state.State.IsDeleted) return;
 
-        var options = Options;
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
 
         // Mark all shards as deleted first.
-        var shardCount = options.ShardCount;
+        var shardCount = resolved.ShardCount;
         var tasks = new Task[shardCount];
         for (int i = 0; i < shardCount; i++)
         {
@@ -59,7 +60,7 @@ internal sealed class TreeDeletionGrain(
         await compaction.UnregisterReminderAsync();
 
         // Register the purge reminder.
-        var period = ClampPeriod(options.SoftDeleteDuration);
+        var period = ClampPeriod(Options.SoftDeleteDuration);
         await reminderRegistry.RegisterOrUpdateReminder(
             callingGrainId: context.GrainId,
             reminderName: ReminderName,
@@ -81,9 +82,9 @@ internal sealed class TreeDeletionGrain(
             throw new InvalidOperationException("Cannot recover a tree while a purge is in progress.");
 
         // Unmark all shards.
-        var options = Options;
-        var tasks = new Task[options.ShardCount];
-        for (int i = 0; i < options.ShardCount; i++)
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
+        var tasks = new Task[resolved.ShardCount];
+        for (int i = 0; i < resolved.ShardCount; i++)
         {
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
             tasks[i] = shard.UnmarkDeletedAsync();
@@ -112,8 +113,8 @@ internal sealed class TreeDeletionGrain(
             throw new InvalidOperationException("This tree has already been fully purged.");
 
         // Run purge synchronously shard-by-shard (no timer needed for manual purge).
-        var options = Options;
-        for (int i = 0; i < options.ShardCount; i++)
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
+        for (int i = 0; i < resolved.ShardCount; i++)
         {
             await PurgeShardAsync(i);
         }
@@ -195,8 +196,8 @@ internal sealed class TreeDeletionGrain(
 
     internal async Task ProcessNextShardAsync()
     {
-        var options = Options;
-        var shardCount = options.ShardCount;
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
+        var shardCount = resolved.ShardCount;
 
         if (state.State.NextShardIndex >= shardCount)
         {

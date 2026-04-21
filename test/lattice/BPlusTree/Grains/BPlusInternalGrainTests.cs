@@ -19,9 +19,8 @@ public class BPlusInternalGrainTests
         state ??= new FakePersistentState<InternalNodeState>();
         var context = Substitute.For<IGrainContext>();
         var grainFactory = Substitute.For<IGrainFactory>();
-        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
-        return new BPlusInternalGrain(context, state, grainFactory, optionsMonitor);
+        var optionsResolver = TestOptionsResolver.Create(factory: grainFactory);
+        return new BPlusInternalGrain(context, state, grainFactory, optionsResolver);
     }
 
     // --- InitializeAsync ---

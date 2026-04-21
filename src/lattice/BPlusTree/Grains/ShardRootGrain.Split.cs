@@ -298,7 +298,9 @@ internal sealed partial class ShardRootGrain
         // entry's ExpiresAtTicks is forwarded verbatim. Using the filtered path
         // would drop TTL metadata, leaving the target shard with a non-expiring
         // copy after the split commits.
-        var leafId = await TraverseToLeafAsync(key);
+        var leafId = state.State.RootIsLeaf
+            ? state.State.RootNodeId!.Value
+            : await TraverseToLeafAsync(key);
         var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
         var raw = await leaf.GetRawEntryAsync(key);
         if (raw is null || raw.Value.IsTombstone) return; // deleted/missing — handled by cleanup phase.

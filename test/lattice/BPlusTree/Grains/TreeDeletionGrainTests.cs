@@ -31,14 +31,13 @@ public class TreeDeletionGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         options ??= new LatticeOptions
         {
-            ShardCount = ShardCount,
             SoftDeleteDuration = TimeSpan.FromHours(72),
         };
         optionsMonitor.Get(Arg.Any<string>()).Returns(options);
         var state = existingState ?? new FakePersistentState<TreeDeletionState>();
 
         // Set up shard root mocks.
-        for (int i = 0; i < options.ShardCount; i++)
+        for (int i = 0; i < ShardCount; i++)
         {
             var shardRoot = Substitute.For<IShardRootGrain>();
             grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}")
@@ -55,9 +54,18 @@ public class TreeDeletionGrainTests
         // Set up registry grain mock.
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = ShardCount,
+            }));
+        var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 
         var grain = new TreeDeletionGrain(
-            context, grainFactory, reminderRegistry, optionsMonitor, new LoggerFactory().CreateLogger<TreeDeletionGrain>(), state);
+            context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
+            new LoggerFactory().CreateLogger<TreeDeletionGrain>(), state);
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);
     }
 
@@ -183,7 +191,7 @@ public class TreeDeletionGrainTests
     [Test]
     public async Task ProcessNextShard_retries_failed_shard_once_then_skips()
     {
-        var options = new LatticeOptions { ShardCount = ShardCount, SoftDeleteDuration = TimeSpan.FromHours(1) };
+        var options = new LatticeOptions { SoftDeleteDuration = TimeSpan.FromHours(1) };
         var (grain, state, _, grainFactory, _) = CreateGrain(options);
         state.State.IsDeleted = true;
         state.State.DeletedAtUtc = DateTimeOffset.UtcNow.AddHours(-100);

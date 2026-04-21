@@ -29,12 +29,7 @@ public partial class TreeResizeGrainTests
         var grainFactory = Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        options ??= new LatticeOptions
-        {
-            ShardCount = ShardCount,
-            MaxLeafKeys = 128,
-            MaxInternalChildren = 128,
-        };
+        options ??= new LatticeOptions();
         optionsMonitor.Get(Arg.Any<string>()).Returns(options);
         var state = existingState ?? new FakePersistentState<TreeResizeState>();
 
@@ -42,32 +37,18 @@ public partial class TreeResizeGrainTests
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ResolveAsync(TreeId).Returns(Task.FromResult(TreeId));
-        registry.GetEntryAsync(TreeId).Returns(Task.FromResult<TreeRegistryEntry?>(null));
-
-        // Setup default snapshot grain mock.
-        var snapshot = Substitute.For<ITreeSnapshotGrain>();
-        grainFactory.GetGrain<ITreeSnapshotGrain>(Arg.Any<string>()).Returns(snapshot);
-
-        // Setup default deletion grain mock.
-        var deletion = Substitute.For<ITreeDeletionGrain>();
-        grainFactory.GetGrain<ITreeDeletionGrain>(Arg.Any<string>()).Returns(deletion);
-
-        // Setup default reshard grain mock — defaults to IsCompleteAsync == true
-        // so the new ResizeAsync interlock does not block.
-        var reshard = Substitute.For<ITreeReshardGrain>();
-        reshard.IsCompleteAsync().Returns(Task.FromResult(true));
-        grainFactory.GetGrain<ITreeReshardGrain>(Arg.Any<string>()).Returns(reshard);
-
-        // Setup default shard root grain mocks so RejectOldShardsAsync /
-        // UndoResizeAsync can fan out without NullReferenceException.
-        for (int i = 0; i < ShardCount; i++)
-        {
-            var shard = Substitute.For<IShardRootGrain>();
-            grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}").Returns(shard);
-        }
+        // Default entry has the structural pin used by tests via resolver.
+        registry.GetEntryAsync(TreeId).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = ShardCount,
+            }));
+        var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 
         var grain = new TreeResizeGrain(
-            context, grainFactory, reminderRegistry, optionsMonitor,
+            context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeResizeGrain>(), state);
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);
     }
@@ -136,7 +117,10 @@ public partial class TreeResizeGrainTests
         Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Snapshot));
         Assert.That(state.State.SnapshotTreeId, Is.Not.Null);
         Assert.That(state.State.OldPhysicalTreeId, Is.EqualTo(TreeId));
-        Assert.That(state.State.OldRegistryEntry, Is.Null, "No prior entry — should be null");
+        // F-019c: the registry pin is now the source of structural truth,
+        // so OldRegistryEntry is the seeded pin captured for UndoResizeAsync.
+        Assert.That(state.State.OldRegistryEntry, Is.Not.Null);
+        Assert.That(state.State.OldRegistryEntry!.ShardCount, Is.EqualTo(ShardCount));
     }
 
     [Test]

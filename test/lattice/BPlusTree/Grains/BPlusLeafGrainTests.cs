@@ -15,7 +15,8 @@ public partial class BPlusLeafGrainTests
         FakePersistentState<LeafNodeState>? state = null,
         string replicaId = "test-leaf",
         LatticeOptions? options = null,
-        IBPlusLeafGrain? siblingStub = null)
+        IBPlusLeafGrain? siblingStub = null,
+        int maxLeafKeys = 128)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", replicaId));
@@ -26,9 +27,15 @@ public partial class BPlusLeafGrainTests
             grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(siblingStub);
             grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(siblingStub);
         }
-        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions());
-        return new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
+        // F-019c: structural sizing (MaxLeafKeys) now flows from the registry
+        // pin via LatticeOptionsResolver. Tests pin the desired sizing through
+        // the resolver; non-structural knobs still come from LatticeOptions.
+        var optionsResolver = TestOptionsResolver.Create(
+            baseOptions: options,
+            maxLeafKeys: maxLeafKeys,
+            shardCount: 1,
+            factory: grainFactory);
+        return new BPlusLeafGrain(context, state, grainFactory, optionsResolver);
     }
 
     // --- GetAsync ---

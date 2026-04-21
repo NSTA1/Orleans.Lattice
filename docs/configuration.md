@@ -21,8 +21,8 @@ Use `ConfigureLattice` without a tree name to set defaults that apply to every t
 ```csharp
 siloBuilder.ConfigureLattice(o =>
 {
-    o.MaxLeafKeys = 256;
-    o.ShardCount = 32;
+    o.CacheTtl = TimeSpan.FromMilliseconds(100);
+    o.TombstoneGracePeriod = TimeSpan.FromHours(6);
 });
 ```
 
@@ -33,8 +33,8 @@ Pass a tree name to override specific options for a single tree:
 ```csharp
 siloBuilder.ConfigureLattice("high-throughput-tree", o =>
 {
-    o.ShardCount = 128;
-    o.MaxLeafKeys = 64;
+    o.HotShardOpsPerSecondThreshold = 500;
+    o.PrefetchKeysScan = true;
 });
 
 siloBuilder.ConfigureLattice("archive-tree", o =>
@@ -45,14 +45,14 @@ siloBuilder.ConfigureLattice("archive-tree", o =>
 
 Per-tree overrides are layered on top of the global defaults. Only the properties you set in the override are changed; everything else inherits from the global configuration.
 
+> **Structural sizing is pinned per-tree in the registry, not in `LatticeOptions`.** `MaxLeafKeys`, `MaxInternalChildren`, and `ShardCount` are seeded into the `TreeRegistryEntry` on first tree use from canonical defaults in `LatticeConstants` (128 / 128 / 64) and are mutable only through [`ILattice.ResizeAsync`](tree-sizing.md#resizing-an_existing-tree) and `ILattice.ReshardAsync`. This prevents accidental divergence between the layout a tree was built with and a later configuration change.
+
+> **The virtual shard space is a hard-coded constant** (`LatticeConstants.DefaultVirtualShardCount = 4096`). It is not a `LatticeOptions` property because changing it would invalidate every persisted `ShardMap` (slots are referenced by integer index). The virtual space is deliberately generous; the real ceiling on useful shard counts is scan fan-out and activation cost.
+
 ## Options Reference
 
 | Option | Type | Default | Safe to change after data exists? |
 |---|---|---|---|
-| `ShardCount` | `int` | 64 | **No** |
-| `VirtualShardCount` | `int` | 4096 | **No** |
-| `MaxLeafKeys` | `int` | 128 | **No** |
-| `MaxInternalChildren` | `int` | 128 | **No** |
 | `KeysPageSize` | `int` | 512 | Yes |
 | `TombstoneGracePeriod` | `TimeSpan` | 24 hours | Yes |
 | `SoftDeleteDuration` | `TimeSpan` | 72 hours | Yes |
@@ -63,37 +63,28 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | `HotShardSampleInterval` | `TimeSpan` | 30 seconds | Yes |
 | `HotShardSplitCooldown` | `TimeSpan` | 2 minutes | Yes |
 | `MaxConcurrentAutoSplits` | `int` | 2 | Yes |
+| `MaxConcurrentMigrations` | `int` | 4 | Yes |
+| `MaxConcurrentDrains` | `int` | 4 | Yes |
 | `SplitDrainBatchSize` | `int` | 1024 | Yes |
 | `AutoSplitMinTreeAge` | `TimeSpan` | 60 seconds | Yes |
 | `MaxScanRetries` | `int` | 3 | Yes |
 | `CursorIdleTtl` | `TimeSpan` | 48 hours | Yes |
 | `AtomicWriteRetention` | `TimeSpan` | 48 hours | Yes |
+| `VersionVectorRetention` | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
 
-### `ShardCount`
+### Structural sizing (registry-pinned)
 
-The number of independent sub-trees the key space is divided into. Each key is assigned to a shard via the per-tree [`ShardMap`](tree-registry.md#shard-map) — by default `ShardMap.CreateDefault(VirtualShardCount, ShardCount)` produces an identity mapping that is bit-for-bit equivalent to legacy `XxHash32(key) % ShardCount` routing. More shards mean more write parallelism (each shard is an independent grain with its own lock-free write path) but also more grains and a wider scatter-gather for global key scans.
+`MaxLeafKeys`, `MaxInternalChildren`, and `ShardCount` used to live on `LatticeOptions` but were moved onto the per-tree `TreeRegistryEntry` under F-019c. They are seeded from `LatticeConstants` on first tree use (defaults 128 / 128 / 64) and can be changed through:
 
-> **⚠️ Do not change after data exists.** Changing `ShardCount` changes the default shard map. Keys already stored under the old shard count will no longer be routable — reads will miss, writes will create duplicates in the wrong shard, and the tree will be in an inconsistent state. Choose a shard count before first use and keep it fixed for the lifetime of the tree.
+- `ILattice.ResizeAsync(newMaxLeafKeys, newMaxInternalChildren)` — see [Tree Sizing](tree-sizing.md#resizing-an-existing-tree). Runs online; empty-tree fast-path if no data exists.
+- `ILattice.ReshardAsync(newShardCount)` — see [Online Reshard](online-reshard.md). Grow-only unless the tree is empty (fast-path).
+- Pre-registering the pin explicitly before first use via `ILatticeRegistry.RegisterAsync(treeId, new TreeRegistryEntry { MaxLeafKeys = …, MaxInternalChildren = …, ShardCount = … })`.
 
-### `VirtualShardCount`
+### Virtual shard space (constant)
 
-The size of the virtual shard space (default 4096). Keys hash into `[0, VirtualShardCount)` and the per-tree [`ShardMap`](tree-registry.md#shard-map) collapses ranges of virtual slots onto physical shards. This indirection decouples logical key routing from the physical shard count, enabling future adaptive shard splitting without rehashing existing keys.
+The virtual shard space is fixed at `LatticeConstants.DefaultVirtualShardCount = 4096` for every tree. Keys hash into `[0, 4096)` and the per-tree [`ShardMap`](tree-registry.md#shard-map) collapses ranges of virtual slots onto physical shards. This indirection decouples logical key routing from the physical shard count, enabling adaptive shard splitting without rehashing existing keys.
 
-`VirtualShardCount` must be ≥ `ShardCount` and divisible by `ShardCount` (validated at startup). The divisibility constraint guarantees that the default identity map preserves legacy `hash % ShardCount` routing exactly.
-
-> **⚠️ Do not change after data exists.** Changing `VirtualShardCount` changes the virtual-slot a key hashes to. Persisted shard maps reference virtual slots, so altering this value invalidates all existing routing. Choose a value before first use and keep it fixed.
-
-### `MaxLeafKeys`
-
-The maximum number of key-value entries a leaf node holds before it splits. Smaller values produce more frequent splits (more grains, shallower leaves) while larger values reduce grain count at the cost of larger per-grain state.
-
-> **⚠️ Do not change in configuration after data exists.** Existing leaves were split based on the original threshold. Lowering the value does not retroactively split over-full leaves, and raising it does not merge under-full ones. The result is an unbalanced tree with unpredictable split behaviour. To safely change this value on a tree with data, use [`ResizeAsync`](tree-sizing.md#resizing-an-existing-tree) which creates an offline snapshot of the tree with the new sizing and swaps the tree alias.
-
-### `MaxInternalChildren`
-
-The maximum number of child references an internal node holds before it splits. This controls the branching factor of the tree above the leaf level.
-
-> **⚠️ Do not change in configuration after data exists.** The same reasoning as `MaxLeafKeys` applies — existing internal nodes were split at the original threshold and will not be rebalanced. Use [`ResizeAsync`](tree-sizing.md#resizing-an-existing-tree) to safely change this value.
+The pinned `ShardCount` must divide 4096 evenly for the default identity map to preserve `hash % ShardCount` routing exactly; this invariant is validated at use time by `ShardMap.CreateDefault`. The value is a compile-time constant — changing it in source would invalidate every persisted `ShardMap` and is treated as a breaking wire-format change.
 
 ### `KeysPageSize`
 
@@ -209,6 +200,18 @@ Maximum number of in-flight adaptive splits per tree (default: 2). Because `HotS
 
 This option can be changed freely at any time.
 
+### `MaxConcurrentMigrations`
+
+Maximum number of concurrent active-tombstone migrations per tree (default: 4). Helps limit the burst I/O load during bulk-deletes. Each migration drains a tombstone's shadow-write in the background.
+
+This option can be changed freely at any time.
+
+### `MaxConcurrentDrains`
+
+Maximum number of concurrent shadow-write drains per tree (default: 4). Helps limit the burst I/O load during adaptive splits. Each drain transfers a split shard's data to the new location in the background.
+
+This option can be changed freely at any time.
+
 ### `SplitDrainBatchSize`
 
 Number of entries per batch during the shadow-write drain phase of an adaptive split (default: 1024). Larger batches reduce the number of drain rounds but increase per-round memory and storage I/O.
@@ -239,6 +242,12 @@ Retention window for completed `SetManyAtomicAsync` saga state (default: 48 hour
 
 This option can be changed freely at any time.
 
+### `VersionVectorRetention`
+
+How long to retain version vectors for deleted keys (default: `InfiniteTimeSpan`, disabled). When a key is deleted, its version vector is retained in the `LeafCacheGrain` for this duration to support historical scans. After the retention window, the vector is expunged from the cache.
+
+This option can be changed freely at any time.
+
 ## Storage Provider Name
 
 Lattice grains use the storage provider named `"lattice"` (exposed as `LatticeOptions.StorageProviderName`). The `AddLattice` extension method passes this name to your storage registration delegate. In advanced scenarios where you register storage directly, use this constant to ensure the provider name matches:
@@ -266,18 +275,15 @@ builder.UseOrleans(silo =>
     // Global defaults
     silo.ConfigureLattice(o =>
     {
-        o.ShardCount = 64;
-        o.MaxLeafKeys = 128;
-        o.MaxInternalChildren = 128;
         o.KeysPageSize = 1024;
         o.TombstoneGracePeriod = TimeSpan.FromHours(12);
         o.SoftDeleteDuration = TimeSpan.FromHours(72);
     });
 
-    // Per-tree: higher shard count for a high-write tree
+    // Per-tree: enable prefetch for a scan-heavy tree
     silo.ConfigureLattice("events", o =>
     {
-        o.ShardCount = 128;
+        o.PrefetchKeysScan = true;
     });
 
     // Per-tree: disable compaction for an append-only tree
