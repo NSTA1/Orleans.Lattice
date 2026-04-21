@@ -18,8 +18,10 @@ internal sealed partial class BPlusLeafGrain
         state.State.SplitSiblingId = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid()).GetGrainId();
         state.State.OldNextSibling = state.State.NextSibling;
         state.State.NextSibling = state.State.SplitSiblingId;
-        await state.WriteStateAsync();
+        await PersistAsync();
 
+        LatticeMetrics.LeafSplits.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty));
         return await CompleteSplitAsync();
     }
 

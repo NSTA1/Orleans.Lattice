@@ -49,9 +49,11 @@ internal sealed class LeafCacheGrain(
         if (_cache.TryGetValue(key, out var cached) && !cached.IsTombstone
             && !cached.IsExpired(nowTicks))
         {
+            LatticeMetrics.CacheHits.Add(1, CacheTreeTag());
             return cached.Value;
         }
 
+        LatticeMetrics.CacheMisses.Add(1, CacheTreeTag());
         return null;
     }
 
@@ -59,8 +61,10 @@ internal sealed class LeafCacheGrain(
     {
         await RefreshAsync();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
-        return _cache.TryGetValue(key, out var cached) && !cached.IsTombstone
+        var hit = _cache.TryGetValue(key, out var cached) && !cached.IsTombstone
             && !cached.IsExpired(nowTicks);
+        (hit ? LatticeMetrics.CacheHits : LatticeMetrics.CacheMisses).Add(1, CacheTreeTag());
+        return hit;
     }
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
@@ -69,16 +73,25 @@ internal sealed class LeafCacheGrain(
 
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var result = new Dictionary<string, byte[]>(keys.Count);
+        var hits = 0;
         foreach (var key in keys)
         {
             if (_cache.TryGetValue(key, out var cached) && !cached.IsTombstone
                 && !cached.IsExpired(nowTicks))
             {
                 result[key] = cached.Value!;
+                hits++;
             }
         }
+        var tag = CacheTreeTag();
+        if (hits > 0) LatticeMetrics.CacheHits.Add(hits, tag);
+        var misses = keys.Count - hits;
+        if (misses > 0) LatticeMetrics.CacheMisses.Add(misses, tag);
         return result;
     }
+
+    private KeyValuePair<string, object?> CacheTreeTag() =>
+        new(LatticeMetrics.TagTree, _treeId ?? string.Empty);
 
     private async Task RefreshAsync()
     {

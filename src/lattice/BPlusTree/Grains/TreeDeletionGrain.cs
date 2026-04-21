@@ -259,6 +259,19 @@ internal sealed class TreeDeletionGrain(
 
     private async Task PublishTreeLifecycleEventAsync(LatticeTreeEventKind kind)
     {
+        // Emit lifecycle metrics unconditionally — operators need to see tree
+        // deletions / recoveries / purges even when the event stream is disabled.
+        var kindTag = kind switch
+        {
+            LatticeTreeEventKind.TreeDeleted => "deleted",
+            LatticeTreeEventKind.TreeRecovered => "recovered",
+            LatticeTreeEventKind.TreePurged => "purged",
+            _ => kind.ToString(),
+        };
+        LatticeMetrics.TreeLifecycle.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, kindTag));
+
         var opts = Options;
         if (!await _eventsGate.IsEnabledAsync(grainFactory, TreeId, opts)) return;
         var evt = LatticeEventPublisher.CreateEvent(kind, TreeId);

@@ -365,6 +365,10 @@ await tree.SetPublishEventsEnabledAsync(null, cancellationToken);
 
 For subscribing to the published events on the cluster client, see `SubscribeToEventsAsync` under [`LatticeExtensions`](#latticeextensions).
 
+## Metrics
+
+Orleans.Lattice publishes `System.Diagnostics.Metrics` instruments on a single static meter named `orleans.lattice`, exposed via `Orleans.Lattice.LatticeMetrics`. Instruments are grouped into five tiers: shard-level ops (`shard.reads`, `shard.writes`, `shard.splits_committed`), leaf-level latencies and counters (`leaf.write.duration`, `leaf.scan.duration`, `leaf.compaction.duration`, `leaf.tombstones.created`, `leaf.tombstones.reaped`, `leaf.tombstones.expired`, `leaf.splits`), the read cache (`cache.hits`, `cache.misses`), saga / coordinator / lifecycle outcomes (`atomic_write.completed`, `coordinator.completed`, `tree.lifecycle`), and events / configuration (`events.published`, `events.dropped`, `config.changed`). Every measurement is tagged with `tree` (logical tree id); shard instruments additionally carry `shard` (physical shard index), scan histograms carry `operation` (`keys` or `entries`), saga / coordinator / lifecycle / event counters carry `outcome`, `kind`, or `reason`, and `config.changed` carries `config` (e.g. `publish_events`). Subscribe once with `.AddMeter("orleans.lattice")` on your OpenTelemetry `MeterProviderBuilder`; see [Metrics](metrics.md) for the full instrument catalog, tag conventions, and registration example.
+
 ## `SnapshotMode`
 
 Controls source-tree availability during a snapshot operation.

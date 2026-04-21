@@ -433,6 +433,10 @@ internal sealed class TreeResizeGrain(
         state.State.Complete = true;
         await state.WriteStateAsync();
 
+        LatticeMetrics.CoordinatorCompleted.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "resize"));
+
         await PublishResizeCompletedAsync();
 
         await CompleteCoordinatorAsync();

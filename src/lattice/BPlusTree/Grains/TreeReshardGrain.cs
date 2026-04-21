@@ -282,6 +282,10 @@ internal sealed class TreeReshardGrain(
         state.State.Phase = ReshardPhase.None;
         await state.WriteStateAsync();
 
+        LatticeMetrics.CoordinatorCompleted.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "reshard"));
+
         await PublishReshardCompletedAsync();
 
         await CompleteCoordinatorAsync();

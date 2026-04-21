@@ -94,23 +94,87 @@ public partial class BPlusLeafGrainTests
         Assert.That(removed2, Is.EqualTo(0));
     }
 
+    // --- TTL-expiry metric ---
+
     [Test]
-    public async Task CompactTombstones_returns_count_of_removed_entries()
+    public async Task CompactTombstones_emits_LeafTombstonesExpired_for_ttl_entries()
     {
         var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = "ttl-metric-tree";
         var grain = CreateGrain(state);
 
+        // Seed a live entry with an already-elapsed expiry in the far past.
         var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
-        state.State.Entries["a"] = LwwValue<byte[]>.Tombstone(oldClock);
-        state.State.Entries["b"] = LwwValue<byte[]>.Tombstone(oldClock);
-        state.State.Entries["c"] = LwwValue<byte[]>.Create(
-            Encoding.UTF8.GetBytes("live"), oldClock);
-        state.State.Version.Tick("test"); // ensure version advances past LastCompactionVersion
+        state.State.Entries["ttl-key"] = LwwValue<byte[]>.CreateWithExpiry(
+            Encoding.UTF8.GetBytes("v"), oldClock, expiresAtTicks: 2);
+        state.State.Version.Tick("test"); // bump version past LastCompactionVersion.
+
+        var records = new List<KeyValuePair<string, object?>[]>();
+        using var listener = new System.Diagnostics.Metrics.MeterListener
+        {
+            InstrumentPublished = (inst, l) =>
+            {
+                if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter)
+                    && inst.Name == "orleans.lattice.leaf.tombstones.expired")
+                    l.EnableMeasurementEvents(inst);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            if (value <= 0) return;
+            records.Add(tags.ToArray());
+        });
+        listener.Start();
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
-        Assert.That(removed, Is.EqualTo(2));
-        Assert.That(state.State.Entries, Has.Count.EqualTo(1));
-        Assert.That(state.State.Entries.ContainsKey("c"), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(removed, Is.EqualTo(1));
+            Assert.That(records, Has.Count.EqualTo(1));
+            Assert.That(records[0].Any(t =>
+                t.Key == LatticeMetrics.TagTree && (t.Value as string) == "ttl-metric-tree"), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task CompactTombstones_separates_explicit_tombstones_from_ttl_expiries()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = "ttl-split-tree";
+        var grain = CreateGrain(state);
+
+        var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
+        state.State.Entries["dead"] = LwwValue<byte[]>.Tombstone(oldClock);
+        state.State.Entries["expired"] = LwwValue<byte[]>.CreateWithExpiry(
+            Encoding.UTF8.GetBytes("v"), oldClock, expiresAtTicks: 2);
+        state.State.Version.Tick("test");
+
+        long reaped = 0, expired = 0;
+        using var listener = new System.Diagnostics.Metrics.MeterListener
+        {
+            InstrumentPublished = (inst, l) =>
+            {
+                if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter)
+                    && (inst.Name == "orleans.lattice.leaf.tombstones.reaped"
+                     || inst.Name == "orleans.lattice.leaf.tombstones.expired"))
+                    l.EnableMeasurementEvents(inst);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((inst, value, _, _) =>
+        {
+            if (inst.Name == "orleans.lattice.leaf.tombstones.reaped") reaped += value;
+            else if (inst.Name == "orleans.lattice.leaf.tombstones.expired") expired += value;
+        });
+        listener.Start();
+
+        var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(removed, Is.EqualTo(2));
+            Assert.That(reaped, Is.EqualTo(1), "explicit tombstone should count on reaped");
+            Assert.That(expired, Is.EqualTo(1), "TTL-expired live entry should count on expired");
+        });
     }
 }
