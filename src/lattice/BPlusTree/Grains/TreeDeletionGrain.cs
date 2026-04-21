@@ -66,6 +66,8 @@ internal sealed class TreeDeletionGrain(
             reminderName: ReminderName,
             dueTime: period,
             period: period);
+
+        await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreeDeleted);
     }
 
     public Task<bool> IsDeletedAsync() => Task.FromResult(state.State.IsDeleted);
@@ -102,6 +104,8 @@ internal sealed class TreeDeletionGrain(
         // Re-instate the tombstone compaction reminder.
         var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
         await compaction.EnsureReminderAsync();
+
+        await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreeRecovered);
     }
 
     public async Task PurgeNowAsync()
@@ -127,6 +131,7 @@ internal sealed class TreeDeletionGrain(
         await state.WriteStateAsync();
 
         await UnregisterAllRemindersAsync();
+        await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
         this.DeactivateOnIdle();
     }
 
@@ -248,8 +253,19 @@ internal sealed class TreeDeletionGrain(
         }
 
         await UnregisterAllRemindersAsync();
+        await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
         this.DeactivateOnIdle();
     }
+
+    private async Task PublishTreeLifecycleEventAsync(LatticeTreeEventKind kind)
+    {
+        var opts = Options;
+        if (!await _eventsGate.IsEnabledAsync(grainFactory, TreeId, opts)) return;
+        var evt = LatticeEventPublisher.CreateEvent(kind, TreeId);
+        await LatticeEventPublisher.PublishAsync(context.ActivationServices, opts, evt, logger);
+    }
+
+    private readonly PublishEventsGate _eventsGate = new();
 
     private async Task PurgeShardAsync(int shardIndex)
     {

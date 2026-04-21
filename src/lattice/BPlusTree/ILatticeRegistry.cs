@@ -107,4 +107,13 @@ public interface ILatticeRegistry : IGrainWithStringKey
     /// been recorded.
     /// </param>
     Task<int> AllocateNextShardIndexAsync(string treeId, int currentMaxFromMap);
+
+    /// <summary>
+    /// Sets or clears the per-tree <see cref="State.TreeRegistryEntry.PublishEvents"/>
+    /// override for <paramref name="treeId"/>. Pass <c>true</c>/<c>false</c> to
+    /// pin the setting for this tree, or <c>null</c> to remove the override and
+    /// fall back to the silo-wide <see cref="LatticeOptions.PublishEvents"/>.
+    /// Upserts the registry entry if the tree is not yet registered.
+    /// </summary>
+    Task SetPublishEventsAsync(string treeId, bool? enabled);
 }

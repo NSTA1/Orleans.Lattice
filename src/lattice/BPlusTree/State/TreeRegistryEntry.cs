@@ -51,4 +51,15 @@ public sealed record TreeRegistryEntry
     /// concurrently for the same tree ( — <c>MaxConcurrentAutoSplits</c> &gt; 1).
     /// </summary>
     [Id(5)] public int? NextShardIndex { get; init; }
+
+    /// <summary>
+    /// Per-tree override for <see cref="LatticeOptions.PublishEvents"/>.
+    /// When <c>null</c> (the default), the silo-wide option value is used.
+    /// When set to <c>true</c> or <c>false</c>, the override takes priority over
+    /// the silo option for this tree only. Mutated at runtime through
+    /// <see cref="ILattice.SetPublishEventsEnabledAsync(bool?, CancellationToken)"/>.
+    /// Propagation to other silo activations is best-effort: each activation
+    /// refreshes its cached value every few seconds.
+    /// </summary>
+    [Id(6)] public bool? PublishEvents { get; init; }
 }

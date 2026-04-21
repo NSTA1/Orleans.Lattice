@@ -38,6 +38,7 @@ internal sealed class TombstoneCompactionGrain(
     IGrainContext IGrainBase.GrainContext => context;
 
     private IGrainTimer? _compactionTimer;
+    private readonly PublishEventsGate _eventsGate = new();
 
     private bool IsCompactionDisabled => Options.TombstoneGracePeriod == Timeout.InfiniteTimeSpan;
 
@@ -219,9 +220,19 @@ internal sealed class TombstoneCompactionGrain(
 
         await UnregisterKeepaliveAsync();
 
+        await PublishCompactionCompletedAsync();
+
         // This grain does no work between passes — free the activation.
         // The next reminder tick will reactivate it.
         this.DeactivateOnIdle();
+    }
+
+    private async Task PublishCompactionCompletedAsync()
+    {
+        var opts = Options;
+        if (!await _eventsGate.IsEnabledAsync(grainFactory, TreeId, opts)) return;
+        var evt = LatticeEventPublisher.CreateEvent(LatticeTreeEventKind.CompactionCompleted, TreeId);
+        await LatticeEventPublisher.PublishAsync(context.ActivationServices, opts, evt, logger);
     }
 
     private async Task UnregisterKeepaliveAsync()

@@ -433,8 +433,20 @@ internal sealed class TreeResizeGrain(
         state.State.Complete = true;
         await state.WriteStateAsync();
 
+        await PublishResizeCompletedAsync();
+
         await CompleteCoordinatorAsync();
     }
+
+    private async Task PublishResizeCompletedAsync()
+    {
+        var opts = Options;
+        if (!await _eventsGate.IsEnabledAsync(grainFactory, TreeId, opts)) return;
+        var evt = LatticeEventPublisher.CreateEvent(LatticeTreeEventKind.ResizeCompleted, TreeId);
+        await LatticeEventPublisher.PublishAsync(Context.ActivationServices, opts, evt, Logger);
+    }
+
+    private readonly PublishEventsGate _eventsGate = new();
 
     /// <inheritdoc />
     public Task<bool> IsIdleAsync() =>
