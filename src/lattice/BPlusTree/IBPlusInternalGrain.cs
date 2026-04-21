@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -6,9 +5,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// An internal (non-leaf) node grain in the B+ tree. Stores separator keys
 /// and references to child grains (which may be internal or leaf nodes).
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.IBPlusInternalGrain)]
-public interface IBPlusInternalGrain : IGrainWithGuidKey
+internal interface IBPlusInternalGrain : IGrainWithGuidKey
 {
     /// <summary>Initialises this internal node with the result of a root split.</summary>
     Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild, bool childrenAreLeaves);

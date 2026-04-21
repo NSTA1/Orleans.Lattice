@@ -1,12 +1,10 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// Well-known constants used across Lattice internals.
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
-public static class LatticeConstants
+internal static class LatticeConstants
 {
     /// <summary>
     /// Prefix for system-internal tree IDs. Trees whose ID starts with this

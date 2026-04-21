@@ -39,12 +39,12 @@ public class StaleTreeRoutingExceptionTests
     }
 
     [Test]
-    public void Exception_is_editor_browsable_never()
+    public void Exception_is_internal()
     {
-        var attr = typeof(StaleTreeRoutingException)
-            .GetCustomAttributes(typeof(System.ComponentModel.EditorBrowsableAttribute), inherit: false)
-            .Cast<System.ComponentModel.EditorBrowsableAttribute>()
-            .Single();
-        Assert.That(attr.State, Is.EqualTo(System.ComponentModel.EditorBrowsableState.Never));
+        // After v3 visibility hardening the routing exceptions are internal-only
+        // infrastructure: they surface across grain boundaries but are not part of
+        // the supported public API surface.
+        Assert.That(typeof(StaleTreeRoutingException).IsPublic, Is.False);
+        Assert.That(typeof(StaleTreeRoutingException).IsNotPublic, Is.True);
     }
 }

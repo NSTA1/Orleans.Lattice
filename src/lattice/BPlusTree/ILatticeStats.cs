@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -8,9 +7,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// caches the result for <see cref="LatticeOptions.DiagnosticsCacheTtl"/>.
 /// Not part of the public API — callers use <see cref="ILattice.DiagnoseAsync"/>.
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.ILatticeStats)]
-public interface ILatticeStats : IGrainWithStringKey
+internal interface ILatticeStats : IGrainWithStringKey
 {
     /// <summary>
     /// Returns the current <see cref="TreeDiagnosticReport"/>. Concurrent callers

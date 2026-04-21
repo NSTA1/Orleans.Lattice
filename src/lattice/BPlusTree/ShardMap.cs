@@ -1,5 +1,4 @@
 using System.Buffers;
-using System.ComponentModel;
 using System.IO.Hashing;
 using System.Text;
 
@@ -24,7 +23,6 @@ namespace Orleans.Lattice;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.ShardMap)]
-[EditorBrowsable(EditorBrowsableState.Never)]
 public sealed class ShardMap
 {
     /// <summary>

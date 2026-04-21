@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -14,9 +13,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// </para>
 /// Key format: <c>{treeId}</c>.
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.IHotShardMonitorGrain)]
-public interface IHotShardMonitorGrain : IGrainWithStringKey
+internal interface IHotShardMonitorGrain : IGrainWithStringKey
 {
     /// <summary>
     /// Ensures the monitor is active for this tree. Idempotent — repeated

@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -21,9 +20,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// etc.), which addresses the cursor grain on their behalf.
 /// </para>
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.ILatticeCursorGrain)]
-public interface ILatticeCursorGrain : IGrainWithStringKey
+internal interface ILatticeCursorGrain : IGrainWithStringKey
 {
     /// <summary>
     /// Initializes the cursor with the given scan specification. Idempotent

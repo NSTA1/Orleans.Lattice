@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using Orleans.Lattice;
 
 namespace Orleans.Lattice.Primitives;
@@ -11,8 +10,7 @@ namespace Orleans.Lattice.Primitives;
 [GenerateSerializer]
 [Alias(TypeAliases.StateDelta)]
 [Immutable]
-[EditorBrowsable(EditorBrowsableState.Never)]
-public sealed record StateDelta
+internal sealed record StateDelta
 {
     /// <summary>The changed entries: key → LWW-wrapped value (including tombstones).</summary>
     [Id(0)] public required Dictionary<string, LwwValue<byte[]>> Entries { get; init; }

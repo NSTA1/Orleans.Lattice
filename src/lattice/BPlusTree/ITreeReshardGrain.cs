@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -14,9 +13,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// Key format: <c>{treeId}</c>.
 /// </para>
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.ITreeReshardGrain)]
-public interface ITreeReshardGrain : IGrainWithStringKey
+internal interface ITreeReshardGrain : IGrainWithStringKey
 {
     /// <summary>
     /// Initiates an online reshard that grows the tree to
