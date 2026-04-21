@@ -371,6 +371,28 @@ public interface ILattice : IGrainWithStringKey
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     Task<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default);
 
+    // ── Diagnostics ─────────────────────────────────────
+
+    /// <summary>
+    /// Returns a <see cref="TreeDiagnosticReport"/> aggregating per-shard
+    /// health — depth, live-key count, hotness, split/bulk state — plus a
+    /// bounded ring buffer of recent adaptive-split events. Repeated calls
+    /// are served from a short in-memory cache configured via
+    /// <see cref="LatticeOptions.DiagnosticsCacheTtl"/> (default 5 seconds).
+    /// <para>
+    /// When <paramref name="deep"/> is <c>true</c>, each shard walks its leaf
+    /// chain to aggregate tombstone-and-expired counts — populating
+    /// <see cref="TreeDiagnosticReport.TotalTombstones"/> and the per-shard
+    /// <see cref="ShardDiagnosticReport.Tombstones"/> /
+    /// <see cref="ShardDiagnosticReport.TombstoneRatio"/> fields. Deep mode
+    /// is cached independently of shallow mode; the trade-off is one grain
+    /// call per leaf rather than one per shard.
+    /// </para>
+    /// </summary>
+    /// <param name="deep">Whether to compute tombstone counts (walks the leaf chain per shard).</param>
+    /// <param name="cancellationToken">Cancels the diagnostics fan-out before it begins.</param>
+    Task<TreeDiagnosticReport> DiagnoseAsync(bool deep = false, CancellationToken cancellationToken = default);
+
     // ── Stateful cursors ────────────────────────────────
 
     /// <summary>

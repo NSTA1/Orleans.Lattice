@@ -298,6 +298,22 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultMinVersionVectorRetention = TimeSpan.FromHours(1);
 
     /// <summary>
+    /// How long an assembled <see cref="TreeDiagnosticReport"/> is held in-memory
+    /// by the diagnostics grain before a fresh fan-out is performed. Short
+    /// windows deliver near-live data at the cost of extra shard traffic under
+    /// dashboard polling; longer windows smooth out diagnostics load.
+    /// Shallow and deep reports are cached independently. Set to
+    /// <see cref="TimeSpan.Zero"/> to disable caching entirely (every call
+    /// fans out). The cache is automatically invalidated whenever the
+    /// diagnostics grain observes a new split event via
+    /// <c>ILatticeStats.RecordSplitAsync</c>.
+    /// </summary>
+    public TimeSpan DiagnosticsCacheTtl { get; set; } = DefaultDiagnosticsCacheTtl;
+
+    /// <summary>Default value for <see cref="DiagnosticsCacheTtl"/> (5 seconds).</summary>
+    public static readonly TimeSpan DefaultDiagnosticsCacheTtl = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.
     /// Used internally by <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
     /// and exposed for advanced scenarios where callers register storage directly.

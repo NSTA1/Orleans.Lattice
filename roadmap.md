@@ -47,6 +47,10 @@ Potential improvements and new features.
   **Explicit boundaries (by design, not gaps).** `ReshardAsync` is grow-only on non-empty trees — shrink would require live-merging shards and is out of scope. `ResizeAsync` fan-out changes are bidirectional (grow or shrink) because the snapshot + alias-swap path rebuilds the tree regardless of direction. Split concurrency is bounded per-tree via `MaxConcurrentAutoSplits` and `MaxConcurrentMigrations`; cluster-wide aggregate admission control is tracked separately as **G-010**.
 - [x] **G-011 — Caller-supplied idempotency key for `SetManyAtomicAsync`** *(pre-v3.0.0 API lock-in)*: A new `ILattice.SetManyAtomicAsync(entries, operationId)` overload (plus two matching typed overloads on `TypedLatticeExtensions`) accepts a stable caller-supplied idempotency key. The saga grain is keyed `{treeId}/{operationId}` as before, so re-submitting with the same `operationId` re-attaches to the original saga: if it has completed, the second call observes the terminal outcome (or rethrows the original compensation-surrogate `InvalidOperationException`); if it is still in flight, the call awaits the terminal state. This turns a transport-level failure (silo crash mid-call, client-side timeout) into a safe client retry. `operationId` validation rejects null / empty / whitespace and any value containing `'/'` (reserved as the grain-key separator) with `ArgumentException`. Key-set stability is enforced via a SHA-256 fingerprint over the sorted key set, persisted on first `Prepare` as `[Id(7)] AtomicWriteState.KeyFingerprint` (wire-compatible: missing field on legacy state decodes to `null` and skips the check). Re-submissions whose key set differs (added, removed, or renamed keys) throw `InvalidOperationException`; reordering keys and changing values is allowed. The default `SetManyAtomicAsync(entries)` overload is unchanged and continues to generate a fresh `Guid`. Retention semantics are unchanged: completed saga state lives for `LatticeOptions.AtomicWriteRetention` (default 48h) and is then purged, after which the same `operationId` becomes eligible for a fresh saga. Regression tests: 7 unit tests on `AtomicWriteGrain` (fingerprint stability, mismatch detection, legacy-state compatibility) and 6 integration tests on `AtomicWriteIntegrationTests` (idempotent replay, mismatched-key-set rejection, invalid-operationId rejection, typed overload). Documented in [`docs/atomic-writes.md`](docs/atomic-writes.md#caller-supplied-idempotency-keys) and [`docs/api.md`](docs/api.md).
 
+### Observability
+
+- [x] **F-014 — Per-shard health / diagnostics**: New `ILattice.DiagnoseAsync(bool deep = false, CancellationToken)` method returns a `TreeDiagnosticReport` with per-shard depth, live key count, tombstone count (deep mode only), hotness (ops/sec, reads, writes, window), split-in-progress and bulk-operation-pending flags, plus a bounded 32-entry ring buffer of recent adaptive-split events. Aggregation runs through a new internal, single-activation `ILatticeStats` grain keyed by logical tree id: `LatticeGrain.DiagnoseAsync` forwards to it, it fans out to every physical `IShardRootGrain.GetDiagnosticsAsync(deep)`, and coalesces repeat callers through a dual-mode (shallow/deep) cache bounded by `LatticeOptions.DiagnosticsCacheTtl` (default 5 s, `TimeSpan.Zero` disables). Shard-level depth is computed by walking `RootNodeId` via `IBPlusInternalGrain.GetLeftmostChildWithMetadataAsync`; deep tombstone counts walk the leaf chain via `IBPlusLeafGrain.GetStatsAsync`. `TreeShardSplitGrain.FinaliseAsync` pushes a best-effort `RecordSplitAsync(shardIndex, utcNow)` to the diagnostics grain as a fire-and-forget notification that also invalidates the cache, guaranteeing the next call after a topology change returns a fresh report. Per-shard RPC failures surface as empty shard entries rather than failing the whole report, so `DiagnoseAsync` is safe to call during an ongoing resize or reshard. Public DTOs (`TreeDiagnosticReport`, `ShardDiagnosticReport`, `RecentSplit`) are `readonly record struct`, `[GenerateSerializer][Immutable]`, and aliased in `TypeAliases`. Regression tests: 10 unit tests on `LatticeStatsGrainTests` (shallow/deep aggregation, dual-mode cache independence, ring-buffer capacity, cache invalidation on split, pre-cancelled token, shard-index stamping) and 7 integration tests on `DiagnosticsIntegrationTests` (empty tree, populated vs `CountAsync`, deep tombstones, depth growth after splits, cancellation fail-fast, hotness counters, cache-within-TTL identical `SampledAt`). Documented in [`docs/diagnostics.md`](docs/diagnostics.md) and [`docs/api.md`](docs/api.md).
+
 ---
 
 ## 🔲 Outstanding
@@ -74,39 +78,31 @@ Incremental, ongoing merge from one or more source trees using `VersionVector` t
 
 ---
 
-### 3 · F-014
-**Observability / medium impact**
-
-Return per-shard health information — depth, live key count, tombstone ratio, pending splits/promotions — via an `ILatticeAdmin` interface or a method on `ILattice`.
-
-- [ ] **F-022 — Troubleshooting guide (`docs/troubleshooting.md`)** *(follows F-014)*: Cover common issues — storage provider exceptions from oversized grains, concurrent split activity, slow scans, stale cache behavior — and how to interpret the output of `DiagnoseAsync`.
-
----
-
-### 4 · F-012
+### 3 · F-012
 **Reliability / medium impact**
 
 Optionally pre-warm `LeafCacheGrain` activations for recently-accessed leaves after a silo restart to reduce cold-start read-latency spikes. No dependencies.
 
 ---
 
-### 5 · F-015
+### 4 · F-015
 **Feature / medium impact**
 
 Publish tree events (key written, tree deleted, split occurred, compaction completed) via an `ILatticeObserver` interface or Orleans Streams integration for event-driven architectures.
 
 ---
 
-### 6 · F-018
+### 5 · F-018
 **Feature / lower impact (complex)**
 
 Associate tags with keys and query by tag. Implementable as a secondary Lattice tree mapping `tag → Set<key>`, maintained transactionally alongside the primary write. High complexity; deferred until core feature set is stable.
 
 ---
 
-### 8 · Documentation & Developer Experience
+### 6 · Documentation & Developer Experience
 
 - [ ] **F-021 — Migration guide**: Document how to migrate data from external stores (Redis, SQL, Cosmos DB) into Lattice using the streaming bulk-load API, including key-design and value-serialization best practices.
+- [ ] **F-022 — Troubleshooting guide (`docs/troubleshooting.md`)** *(follows F-014 ✓)*: Cover common issues — storage provider exceptions from oversized grains, concurrent split activity, slow scans, stale cache behavior — and how to interpret the output of `DiagnoseAsync`.
 - [ ] **F-023 — Sample applications (`samples/`)**: End-to-end examples (e.g. ASP.NET Core session store, leaderboard, distributed configuration service) showing real integration patterns beyond the Quick Start snippet.
 
 ---
@@ -208,4 +204,4 @@ Each `ShardRootGrain` is currently placed by Orleans' default random placement d
 | F-025 (Continuous merge) | F-020 (Merge trees) | ✅ Prereq complete — F-025 unblocked |
 | F-027 (Leaf-grouped merge routing) | — | ✅ Complete (amortises batched merge at scale for F-025) |
 | F-019 (Online resize) | F-028 (Shard map indirection) | ✅ Both complete |
-| F-022 (Troubleshooting guide) | F-014 (Tree diagnostics) | 🔲 Guide should follow diagnostics implementation |
+| F-022 (Troubleshooting guide) | F-014 (Tree diagnostics) | ✅ Prereq complete — F-022 unblocked |
