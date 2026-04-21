@@ -72,21 +72,25 @@ idempotent.
 
 ## Scan semantics during a split
 
+This section describes the *mechanism* by which live operations behave
+during a split. For the consistency contract each `ILattice` method
+provides — including under concurrent splits — see
+[Consistency](consistency.md).
+
 Point reads and writes (`GetAsync`, `SetAsync`, `DeleteAsync`,
-`SetIfVersionAsync`, `GetOrSetAsync`, etc.) are **fully consistent**
-throughout the split: every successful write is mirrored to the new owner
-during shadow phase and the post-swap reject phase guarantees stale
-activations transparently retry against the correct shard. The post-Complete
-permanent `MovedAwaySlots` rejection extends this guarantee for the lifetime
-of the source shard.
+`SetIfVersionAsync`, `GetOrSetAsync`, etc.) continue to serve traffic
+throughout the split: every successful write is mirrored to the new
+owner during the shadow phase and the post-swap reject phase causes
+stale activations to transparently retry against the correct shard. The
+post-Complete permanent `MovedAwaySlots` rejection extends this for the
+lifetime of the source shard.
 
-Scans (`KeysAsync`, `EntriesAsync`, `CountAsync`) are **strongly consistent**
-across topology changes — including any number of concurrent splits. They
-return the exact live key set as observed at the moment each scan starts,
-with no missing or double-counted entries even when the shard map mutates
-mid-scan.
+Scans (`KeysAsync`, `EntriesAsync`, `CountAsync`) reconcile against
+topology changes mid-scan as described below. See
+[Consistency](consistency.md) for the guarantee this reconciliation
+delivers.
 
-### How strong consistency is achieved
+### How the reconciliation works
 
 Each scan uses a reconciliation algorithm coordinated against the
 registry's monotonically-incrementing `ShardMap.Version`, but `CountAsync`
@@ -206,7 +210,7 @@ individually** when:
 | `MaxConcurrentAutoSplits` | `2` | Maximum concurrent splits per tree. Each split runs in its own per-shard coordinator activation; the cap bounds aggregate storage I/O. |
 | `SplitDrainBatchSize` | `1024` | Maximum number of moved-slot entries the drain accumulates in memory before flushing to the target shard. Caps coordinator allocation regardless of source shard size. |
 | `AutoSplitMinTreeAge` | `60 s` | Minimum tree age before autonomic splits are allowed; absorbs startup bursts. |
-| `MaxScanRetries` | `3` | Maximum bounded retries that a strongly-consistent scan (`CountAsync`, `KeysAsync`, `EntriesAsync`) performs when `ShardMap.Version` keeps moving mid-scan due to concurrent splits. Throws `InvalidOperationException` on exhaustion. Increase if scans run during very-high split churn. |
+| `MaxScanRetries` | `3` | Maximum bounded retries that a scan (`CountAsync`, `KeysAsync`, `EntriesAsync`) performs when `ShardMap.Version` keeps moving mid-scan due to concurrent splits. Throws `InvalidOperationException` on exhaustion. Increase if scans run during very-high split churn. See [Consistency](consistency.md). |
 
 ## Convergence guarantees
 

@@ -11,6 +11,11 @@ cases where partial application on failure is acceptable.
 
 ## Atomicity Guarantees
 
+This section describes the **atomicity** contract of the saga. For the
+reader-visibility and consistency model (partial-visibility window,
+interaction with concurrent point reads, etc.), see
+[Consistency](consistency.md#batch-operations).
+
 Given a batch `[(k₀, v₀), (k₁, v₁), …, (kₙ₋₁, vₙ₋₁)]`, a successful
 `SetManyAtomicAsync` call guarantees:
 
