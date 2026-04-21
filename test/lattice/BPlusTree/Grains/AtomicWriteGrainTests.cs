@@ -47,7 +47,7 @@ public class AtomicWriteGrainTests
         var opts = options ?? new LatticeOptions();
         var routing = new RoutingInfo(
             TreeId,
-            ShardMap.CreateDefault(opts.VirtualShardCount, opts.ShardCount));
+            ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, LatticeConstants.DefaultShardCount));
         lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(routing));
 

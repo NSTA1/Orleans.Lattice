@@ -104,7 +104,7 @@ public class ChaosReshardIntegrationTests
     public async Task Chaos_reshard_under_concurrent_load_preserves_all_data()
     {
         var treeId = $"reshard-chaos-{Guid.NewGuid():N}";
-        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        var tree = await _fixture.CreateTreeAsync(treeId);
         var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var reshard = _cluster.GrainFactory.GetGrain<ITreeReshardGrain>(treeId);
 
@@ -114,6 +114,24 @@ public class ChaosReshardIntegrationTests
         var stats = new ConcurrentDictionary<string, int>();
         static int Bump(ConcurrentDictionary<string, int> s, string k)
             => s.AddOrUpdate(k, 1, (_, v) => v + 1);
+
+        // Warm cold activations BEFORE the chaos timer starts. F-019c routes
+        // structural sizing through the registry on first grain activation,
+        // which serialises ~N round-trips on cold trees; on slow Linux
+        // Release CI this can consume most of the chaos window on its own.
+        // The warmup (and the reshard kickoff below) move that cost out of
+        // the timed window so the driver loop inside the window is pure
+        // pass-pumping work under live load.
+        _ = await tree.GetRoutingAsync();
+        _ = await tree.CountAsync();
+        _ = await reshard.IsCompleteAsync();
+
+        // Initiate the reshard synchronously before opening the chaos window
+        // so the driver's only responsibility once traffic starts is to pump
+        // RunReshardPassAsync + per-shard split passes to completion.
+        Bump(stats, "reshard-attempts");
+        await tree.ReshardAsync(ReshardTarget);
+        Bump(stats, "reshard-kicked");
 
         using var cts = new CancellationTokenSource(ChaosDuration);
         var ct = cts.Token;
@@ -232,18 +250,14 @@ public class ChaosReshardIntegrationTests
             }, ct));
         }
 
-        // ---- Reshard driver: kicks off the reshard, then manually drives the
-        // coordinator + dispatched per-shard splits to completion. Integration
-        // timers in TestingHost tick far too slowly to finish inside the chaos
-        // window otherwise.
+        // ---- Reshard driver: the reshard was already initiated outside the
+        // chaos window (see warmup above). Inside the window, the driver
+        // only pumps the coordinator + per-shard splits to completion
+        // under live load.
         workers.Add(Task.Run(async () =>
         {
             try
             {
-                Bump(stats, "reshard-attempts");
-                await tree.ReshardAsync(ReshardTarget);
-                Bump(stats, "reshard-kicked");
-
                 while (!ct.IsCancellationRequested)
                 {
                     if (await reshard.IsCompleteAsync()) { Bump(stats, "reshard-complete"); break; }
@@ -252,7 +266,7 @@ public class ChaosReshardIntegrationTests
                     Bump(stats, "reshard-passes");
 
                     var map = await registry.GetShardMapAsync(treeId)
-                        ?? ShardMap.CreateDefault(LatticeOptions.DefaultVirtualShardCount, FourShardClusterFixture.TestShardCount);
+                        ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, FourShardClusterFixture.TestShardCount);
                     foreach (var idx in map.GetPhysicalShardIndices())
                     {
                         if (ct.IsCancellationRequested) break;

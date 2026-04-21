@@ -108,7 +108,7 @@ public class ChaosResizeIntegrationTests
     public async Task Chaos_resize_under_concurrent_load_preserves_all_data()
     {
         var treeId = $"resize-chaos-{Guid.NewGuid():N}";
-        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        var tree = await _fixture.CreateTreeAsync(treeId);
         var resize = _cluster.GrainFactory.GetGrain<ITreeResizeGrain>(treeId);
 
         await SeedAsync(tree);

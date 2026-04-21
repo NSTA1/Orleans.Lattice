@@ -24,8 +24,7 @@ public class ShardRootGrainHotnessTests
         state.State.RootIsLeaf = true;
 
         var grainFactory = Substitute.For<IGrainFactory>();
-        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions(), factory: grainFactory);
 
         // Stub leaf grain for read/write paths.
         var leafGrain = Substitute.For<IBPlusLeafGrain>();
@@ -58,7 +57,7 @@ public class ShardRootGrainHotnessTests
         cacheGrain.GetManyAsync(Arg.Any<List<string>>()).Returns(Task.FromResult(new Dictionary<string, byte[]>()));
         grainFactory.GetGrain<ILeafCacheGrain>(Arg.Any<string>()).Returns(cacheGrain);
 
-        return new ShardRootGrain(context, state, grainFactory, optionsMonitor);
+        return new ShardRootGrain(context, state, grainFactory, optionsResolver);
     }
 
     // --- GetHotnessAsync (initial state) ---

@@ -94,7 +94,7 @@ await registry.RemoveAliasAsync("my-tree");
 
 ## Shard Map
 
-A `TreeRegistryEntry` can also carry a per-tree `ShardMap` that maps virtual shard slots to physical shard indices. The shard map decouples logical key routing from the physical shard count: keys hash into a large fixed virtual space (`VirtualShardCount`, default 4096), and the `ShardMap.Slots` array collapses ranges of virtual slots onto physical shards.
+A `TreeRegistryEntry` can also carry a per-tree `ShardMap` that maps virtual shard slots to physical shard indices. The shard map decouples logical key routing from the physical shard count: keys hash into a large fixed virtual space (`LatticeConstants.DefaultVirtualShardCount`, fixed at 4096), and the `ShardMap.Slots` array collapses ranges of virtual slots onto physical shards.
 
 When no shard map is persisted (the default state for newly created trees), `LatticeGrain` materialises an identity map (`slot[i] = i % shardCount`) which preserves the legacy `XxHash32(key) % shardCount` routing bit-for-bit. Custom shard maps are written by topology-changing operations (e.g. future adaptive shard splits) and are cached by `LatticeGrain` for the activation's lifetime — invalidated together with the physical-tree-ID cache when a shard signals a stale alias.
 

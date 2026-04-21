@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
@@ -6,15 +5,19 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Internal (non-leaf) node grain implementation. Stores separator keys and
-/// child references. Splits when the child count exceeds <see cref="LatticeOptions.MaxInternalChildren"/>.
+/// child references. Splits when the child count exceeds the internal-sizing
+/// pin in the tree registry.
 /// </summary>
 internal sealed class BPlusInternalGrain(
     IGrainContext context,
     [PersistentState("internal", LatticeOptions.StorageProviderName)] IPersistentState<InternalNodeState> state,
     IGrainFactory grainFactory,
-    IOptionsMonitor<LatticeOptions> optionsMonitor) : IBPlusInternalGrain
+    LatticeOptionsResolver optionsResolver) : IBPlusInternalGrain
 {
-    private LatticeOptions Options => optionsMonitor.Get(state.State.TreeId ?? string.Empty);
+    private ResolvedLatticeOptions? _options;
+    private async Task<ResolvedLatticeOptions> GetOptionsAsync() =>
+        _options ??= await optionsResolver.ResolveAsync(state.State.TreeId ?? string.Empty);
+
     public async Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild, bool childrenAreLeaves)
     {
         state.State.Children =
@@ -102,7 +105,7 @@ internal sealed class BPlusInternalGrain(
         state.State.Children.Insert(insertIndex, entry);
 
         SplitResult? splitResult = null;
-        if (state.State.Children.Count > Options.MaxInternalChildren)
+        if (state.State.Children.Count > (await GetOptionsAsync()).MaxInternalChildren)
         {
             splitResult = await SplitAsync();
         }

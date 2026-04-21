@@ -28,10 +28,12 @@ Per-tree options can be configured with the `ConfigureLattice` extension method 
 ```csharp
 siloBuilder.ConfigureLattice("my-tree", o =>
 {
-    o.MaxLeafKeys = 256;
-    o.ShardCount = 32;
+    o.CacheTtl = TimeSpan.FromMilliseconds(100);
+    o.HotShardOpsPerSecondThreshold = 500;
 });
 ```
+
+> Structural sizing (`MaxLeafKeys`, `MaxInternalChildren`, `ShardCount`) is **not** configured here — those values are pinned per-tree in the registry. See [Tree Sizing](tree-sizing.md) for how to set them on a new or existing tree.
 
 ## `ILattice`
 
@@ -267,7 +269,7 @@ These methods manage tree structure and lifecycle. Several of them **take the tr
 |--------|-----------|-------------|
 | `ResizeAsync` | `Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)` | **Online** — resizes the tree's node fan-out by draining every live entry into a newly-provisioned destination physical tree while mirroring live writes end-to-end via the shadow-forward primitive, then atomically swapping the registry alias. Reads and writes remain available throughout; the per-shard `Rejecting` phase at swap is absorbed transparently by the stateless-worker `LatticeGrain` via `StaleTreeRoutingException` retry. Zero data loss under concurrent load (LWW commutativity). Undoable within the `SoftDeleteDuration` retention window. Crash-safe via reminder-anchored `TreeResizeGrain`. See [Tree Sizing](tree-sizing.md#resizing-an-existing-tree). |
 | `UndoResizeAsync` | `Task UndoResizeAsync()` | Undoes the most recent resize. Behaviour depends on when undo is invoked: **before swap** — aborts the snapshot coordinator, clears every source shard's `ShadowForwardState`, and returns the source tree to a fully-writable state; **after swap** — recovers the old physical tree, removes the alias, restores the original registry configuration, clears any residual `Rejecting` phase on source shards, defensively aborts any post-swap snapshot still attached, and deletes the new snapshot tree. Only available while the old tree is still within its `SoftDeleteDuration` window (before purge completes). |
-| `ReshardAsync` | `Task ReshardAsync(int newShardCount, CancellationToken cancellationToken = default)` | **Online** — grows the tree's physical shard count to at least `newShardCount` while the tree continues to serve reads and writes. Internally dispatches up to `LatticeOptions.MaxConcurrentMigrations` (default 4) concurrent per-shard splits, each of which atomically grows the `ShardMap` via its own shadow-write + swap phases. Grow-only: `newShardCount` must be strictly greater than the current distinct-shard count and ≤ `LatticeOptions.VirtualShardCount` (`ArgumentOutOfRangeException` otherwise). Idempotent for the same target while in progress; `InvalidOperationException` when a different target is already running. Returns once the intent is persisted — use `IsReshardCompleteAsync` to poll for completion. Crash-safe via reminder-anchored coordinator. See [Online Reshard](online-reshard.md). |
+| `ReshardAsync` | `Task ReshardAsync(int newShardCount, CancellationToken cancellationToken = default)` | **Online** — grows the tree's physical shard count to at least `newShardCount` while the tree continues to serve reads and writes. Internally dispatches up to `LatticeOptions.MaxConcurrentMigrations` (default 4) concurrent per-shard splits, each of which atomically grows the `ShardMap` via its own shadow-write + swap phases. Grow-only: `newShardCount` must be strictly greater than the current distinct-shard count and ≤ `LatticeConstants.DefaultVirtualShardCount` (4096, compile-time constant) (`ArgumentOutOfRangeException` otherwise). Idempotent for the same target while in progress; `InvalidOperationException` when a different target is already running. Returns once the intent is persisted — use `IsReshardCompleteAsync` to poll for completion. Crash-safe via reminder-anchored coordinator. See [Online Reshard](online-reshard.md). |
 
 #### Merge
 
@@ -354,12 +356,12 @@ Implement this interface to provide a custom serialization strategy. The library
 
 See [Configuration](configuration.md) for detailed guidance on each option, immutability constraints, and per-tree overrides via the [tree registry](tree-registry.md).
 
+> **Structural sizing is pinned per-tree in the registry, not in `LatticeOptions`.** `MaxLeafKeys`, `MaxInternalChildren`, and `ShardCount` are seeded into the `TreeRegistryEntry` on first tree use from the canonical defaults in `LatticeConstants` (128 / 128 / 64). After seeding, they are mutable only through `ILattice.ResizeAsync` (leaf / internal capacity) and `ILattice.ReshardAsync` (shard count), both of which run online and update the pin atomically. Callers who want non-default sizing should either (a) call `ResizeAsync` / `ReshardAsync` on a freshly-created tree (empty-tree fast-path — no coordinator machinery) or (b) pre-register the pin via `ILatticeRegistry.RegisterAsync` before first use.
+
+> **The virtual shard space is also not a runtime option.** It is a compile-time constant, `LatticeConstants.DefaultVirtualShardCount = 4096`. Persisted `ShardMap` instances index into this space by integer slot, so changing it would invalidate every stored map. The pinned `ShardCount` must divide this constant evenly (enforced by `ShardMap.CreateDefault`).
+
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `MaxLeafKeys` | `int` | 128 | Max keys per leaf before splitting. |
-| `MaxInternalChildren` | `int` | 128 | Max children per internal node before splitting. |
-| `ShardCount` | `int` | 64 | Number of independent shards. |
-| `VirtualShardCount` | `int` | 4096 | Size of the virtual shard space. Keys hash into `[0, VirtualShardCount)` and a per-tree `ShardMap` collapses virtual slots onto physical shards. Must be ≥ `ShardCount` and divisible by `ShardCount`. |
 | `KeysPageSize` | `int` | 512 | Keys per page in `KeysAsync` pagination. |
 | `TombstoneGracePeriod` | `TimeSpan` | 24 h | Minimum age before a tombstone is eligible for compaction. `InfiniteTimeSpan` disables compaction. |
 | `SoftDeleteDuration` | `TimeSpan` | 72 h | Retention window after soft-delete before purge fires. |

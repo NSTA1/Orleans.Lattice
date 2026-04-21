@@ -24,6 +24,7 @@ internal sealed class TreeSnapshotGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    LatticeOptionsResolver optionsResolver,
     ILogger<TreeSnapshotGrain> logger,
     [PersistentState("tree-snapshot", LatticeOptions.StorageProviderName)]
     IPersistentState<TreeSnapshotState> state) : ITreeSnapshotGrain, IRemindable, IGrainBase
@@ -81,13 +82,12 @@ internal sealed class TreeSnapshotGrain(
             state.State.Complete = false;
         }
 
-        // Validate shard counts match.
-        var sourceOptions = Options;
-        var destOptions = optionsMonitor.Get(destinationTreeId);
-        if (sourceOptions.ShardCount != destOptions.ShardCount)
-            throw new InvalidOperationException(
-                $"Source tree '{SourceTreeId}' has {sourceOptions.ShardCount} shards but destination " +
-                $"'{destinationTreeId}' is configured with {destOptions.ShardCount} shards. Shard counts must match.");
+        // Resolve the source tree's pinned structural sizing from the registry.
+        // The destination tree is created by this grain (see InitiateSnapshotStateAsync)
+        // and inherits the source's ShardCount — there is no pre-existing
+        // destination to compare against, so the former "shard counts must match"
+        // check against destOptions.ShardCount is gone post-F-019c.
+        var sourceResolved = await optionsResolver.ResolveAsync(SourceTreeId);
 
         // Validate destination tree doesn't already exist.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
@@ -95,7 +95,7 @@ internal sealed class TreeSnapshotGrain(
             throw new InvalidOperationException(
                 $"Destination tree '{destinationTreeId}' already exists. Choose a new tree ID.");
 
-        await InitiateSnapshotStateAsync(destinationTreeId, mode, sourceOptions.ShardCount,
+        await InitiateSnapshotStateAsync(destinationTreeId, mode, sourceResolved.ShardCount,
             maxLeafKeys, maxInternalChildren, operationId, logicalTreeId);
         await StartSnapshotAsync();
     }
@@ -111,14 +111,17 @@ internal sealed class TreeSnapshotGrain(
         string? operationId = null, string? logicalTreeId = null)
     {
         // Register the destination tree in the registry before any data is written.
+        // Always seed the ShardCount pin from the source so F-019c's resolver
+        // has a complete structural pin for the destination tree. MaxLeafKeys /
+        // MaxInternalChildren are propagated only when the caller overrode them
+        // (resize case); otherwise the registry-grain's seeding fills defaults.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var entry = (maxLeafKeys is not null || maxInternalChildren is not null)
-            ? new TreeRegistryEntry
-            {
-                MaxLeafKeys = maxLeafKeys,
-                MaxInternalChildren = maxInternalChildren,
-            }
-            : null;
+        var entry = new TreeRegistryEntry
+        {
+            MaxLeafKeys = maxLeafKeys,
+            MaxInternalChildren = maxInternalChildren,
+            ShardCount = shardCount,
+        };
         await registry.RegisterAsync(destinationTreeId, entry);
 
         // Persist intent BEFORE any shard-marking side effects.

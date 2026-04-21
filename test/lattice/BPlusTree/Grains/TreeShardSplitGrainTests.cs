@@ -37,8 +37,6 @@ public class TreeShardSplitGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions
         {
-            ShardCount = physicalShardCount,
-            VirtualShardCount = virtualShardCount,
         });
 
         var registry = Substitute.For<ILatticeRegistry>();
@@ -46,6 +44,14 @@ public class TreeShardSplitGrainTests
         registry.ResolveAsync(TreeId).Returns(TreeId);
         registry.GetShardMapAsync(TreeId).Returns(existingMap
             ?? ShardMap.CreateDefault(virtualShardCount, physicalShardCount));
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = physicalShardCount,
+            }));
+        var optionsResolver = TestOptionsResolver.ForFactory(grainFactory);
         // Default allocation hands back currentMaxFromMap + 1 — matches the
         // previous max-existing+1 behavior for unit-test expectations.
         registry.AllocateNextShardIndexAsync(TreeId, Arg.Any<int>())
@@ -64,7 +70,7 @@ public class TreeShardSplitGrainTests
 
         var state = existingState ?? new FakePersistentState<TreeShardSplitState>();
         var grain = new TreeShardSplitGrain(
-            context, grainFactory, reminderRegistry, optionsMonitor,
+            context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeShardSplitGrain>(), state);
         return (grain, state, grainFactory, registry, sourceShard, targetShard);
     }

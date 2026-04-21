@@ -126,7 +126,7 @@ public partial class LatticeGrainTests
     [Test]
     public async Task DeleteRangeAsync_retries_on_stale_alias()
     {
-        var (grain, factory) = CreateGrain(options: new LatticeOptions { ShardCount = 1 });
+        var (grain, factory) = CreateGrain(shardCount: 1);
         SetupCompactionGrain(factory, "my-tree");
 
         var shard = Substitute.For<IShardRootGrain>();

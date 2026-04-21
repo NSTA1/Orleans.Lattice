@@ -35,8 +35,9 @@ public sealed record TreeRegistryEntry
 
     /// <summary>
     /// Persistent shard map for this tree, or <c>null</c> if the tree uses
-    /// the default identity map derived from <see cref="LatticeOptions.VirtualShardCount"/>
-    /// and <see cref="LatticeOptions.ShardCount"/>. The map records which
+    /// the default identity map derived from
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeConstants.DefaultVirtualShardCount"/>
+    /// and the pinned <see cref="ShardCount"/>. The map records which
     /// physical shard owns each virtual slot and is rewritten when adaptive
     /// shard splits change the topology.
     /// </summary>

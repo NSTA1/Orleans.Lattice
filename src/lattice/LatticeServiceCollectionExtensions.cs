@@ -25,6 +25,7 @@ public static class LatticeServiceCollectionExtensions
     {
         configureStorage(builder, LatticeOptions.StorageProviderName);
         builder.Services.AddSingleton<IValidateOptions<LatticeOptions>, LatticeOptionsValidator>();
+        builder.Services.AddSingleton<LatticeOptionsResolver>();
         builder.AddOutgoingGrainCallFilter<LatticeCallContextFilter>();
         builder.AddIncomingGrainCallFilter<InternalGrainGuardFilter>();
         return builder;

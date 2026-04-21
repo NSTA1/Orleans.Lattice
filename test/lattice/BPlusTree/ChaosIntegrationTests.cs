@@ -149,6 +149,22 @@ public class ChaosIntegrationTests
         static int Bump(ConcurrentDictionary<string, int> s, string k)
             => s.AddOrUpdate(k, 1, (_, v) => v + 1);
 
+        // Warm cold-activation paths that are not covered by SeedAsync (which
+        // only exercises the ILattice.SetAsync fan-out). F-019c routes
+        // structural sizing through the registry on first grain activation,
+        // so the first SetManyAtomicAsync (saga coordinator) and first
+        // CountPerShardAsync (split selector) each pay a serialised chain
+        // of registry round-trips. On slow Linux Release CI this can eat
+        // the entire chaos window, leaving atomic-write-attempts == 0 and
+        // split-attempts == 0. The warmup calls are envelope-valid and
+        // idempotent, so post-chaos invariants are unaffected.
+        await tree.SetManyAtomicAsync(new List<KeyValuePair<string, byte[]>>
+        {
+            new(KeyOf(0), Encoding.UTF8.GetBytes("v-0-warmup-0")),
+            new(KeyOf(1), Encoding.UTF8.GetBytes("v-1-warmup-0")),
+        });
+        _ = await tree.CountPerShardAsync();
+
         using var cts = new CancellationTokenSource(ChaosDuration);
         var ct = cts.Token;
 

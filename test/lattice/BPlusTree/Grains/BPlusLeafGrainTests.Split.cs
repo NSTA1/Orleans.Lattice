@@ -12,6 +12,25 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 public partial class BPlusLeafGrainTests
 {
+    /// <summary>
+    /// F-019c: tests in this partial historically constructed BPlusLeafGrain
+    /// directly with IOptionsMonitor. With structural sizing now pinned in
+    /// the registry, the grain takes a LatticeOptionsResolver instead.
+    /// This helper keeps the pre-existing call-sites concise.
+    /// </summary>
+    private static BPlusLeafGrain BuildGrain(
+        IGrainContext context,
+        FakePersistentState<LeafNodeState> state,
+        IGrainFactory grainFactory,
+        int maxLeafKeys = 128)
+    {
+        var resolver = TestOptionsResolver.Create(
+            maxLeafKeys: maxLeafKeys,
+            shardCount: 1,
+            factory: grainFactory);
+        return new BPlusLeafGrain(context, state, grainFactory, resolver);
+    }
+
     // --- Split recovery ---
 
     [Test]
@@ -173,7 +192,7 @@ public partial class BPlusLeafGrainTests
         var siblingId = GrainId.Create("leaf", Guid.NewGuid().ToString());
         grainFactory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);
 
-        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
+        var grain = BuildGrain(context, state, grainFactory);
 
         await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
         await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
@@ -213,7 +232,7 @@ public partial class BPlusLeafGrainTests
 
         var siblingId = GrainId.Create("leaf", Guid.NewGuid().ToString());
         grainFactory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);
-        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
+        var grain = BuildGrain(context, state, grainFactory);
 
         await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
         await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
@@ -248,7 +267,7 @@ public partial class BPlusLeafGrainTests
 
         grainFactory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);
         grainFactory.GetGrain<IBPlusLeafGrain>(oldNextId).Returns(oldNextMock);
-        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
+        var grain = BuildGrain(context, state, grainFactory);
 
         await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
         await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
@@ -283,7 +302,7 @@ public partial class BPlusLeafGrainTests
 
         grainFactory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);
         grainFactory.GetGrain<IBPlusLeafGrain>(oldNextId).Returns(oldNextMock);
-        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
+        var grain = BuildGrain(context, state, grainFactory);
 
         await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
         await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
@@ -318,7 +337,7 @@ public partial class BPlusLeafGrainTests
 
         grainFactory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);
         grainFactory.GetGrain<IBPlusLeafGrain>(oldNextId).Returns(oldNextMock);
-        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
+        var grain = BuildGrain(context, state, grainFactory);
 
         await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
         await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
@@ -349,7 +368,7 @@ public partial class BPlusLeafGrainTests
 
         var siblingId = GrainId.Create("leaf", Guid.NewGuid().ToString());
         grainFactory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);
-        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsMonitor);
+        var grain = BuildGrain(context, state, grainFactory);
 
         await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
         await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
@@ -378,7 +397,6 @@ public partial class BPlusLeafGrainTests
         // (now-moved) keys — producing a visible "duplicated keys"
         // state in the tree.
         var state = new FakePersistentState<LeafNodeState>();
-        var opts = new LatticeOptions { MaxLeafKeys = 3 };
         var siblingContext = Substitute.For<IGrainContext>();
         siblingContext.GrainId.Returns(GrainId.Create("leaf", Guid.NewGuid().ToString()));
         var sibling = Substitute.For<IBPlusLeafGrain, IGrainBase>();
@@ -389,7 +407,7 @@ public partial class BPlusLeafGrainTests
         sibling.SetNextSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
         sibling.SetPrevSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
 
-        var grain = CreateGrain(state, options: opts, siblingStub: sibling);
+        var grain = CreateGrain(state, siblingStub: sibling, maxLeafKeys: 3);
 
         await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));

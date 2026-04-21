@@ -39,6 +39,7 @@ internal sealed class TreeShardSplitGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    LatticeOptionsResolver optionsResolver,
     ILogger<TreeShardSplitGrain> logger,
     [PersistentState("tree-shard-split", LatticeOptions.StorageProviderName)]
     IPersistentState<TreeShardSplitState> state) : ITreeShardSplitGrain, IRemindable, IGrainBase
@@ -126,10 +127,10 @@ internal sealed class TreeShardSplitGrain(
     internal async Task InitiateSplitStateAsync(int sourceShardIndex)
     {
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var options = Options;
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
 
         var currentMap = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.CreateDefault(options.VirtualShardCount, options.ShardCount);
+            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
 
         // Find virtual slots currently owned by the source shard.
         var ownedSlots = new List<int>();

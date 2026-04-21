@@ -24,6 +24,7 @@ internal sealed class TombstoneCompactionGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    LatticeOptionsResolver optionsResolver,
     ILogger<TombstoneCompactionGrain> logger,
     [PersistentState("tombstone-compaction", LatticeOptions.StorageProviderName)]
     IPersistentState<TombstoneCompactionState> state) : ITombstoneCompactionGrain, IRemindable, IGrainBase
@@ -286,9 +287,9 @@ internal sealed class TombstoneCompactionGrain(
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var resolved = await registry.ResolveAsync(TreeId);
         var physicalTreeId = string.IsNullOrEmpty(resolved) ? TreeId : resolved;
-        var options = Options;
+        var resolvedOpts = await optionsResolver.ResolveAsync(TreeId);
         var map = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.CreateDefault(options.VirtualShardCount, options.ShardCount);
+            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolvedOpts.ShardCount);
         return (physicalTreeId, map.GetPhysicalShardIndices());
     }
 

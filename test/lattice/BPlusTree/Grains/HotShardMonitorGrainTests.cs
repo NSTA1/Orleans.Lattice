@@ -33,8 +33,6 @@ public partial class HotShardMonitorGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         options ??= new LatticeOptions
         {
-            ShardCount = physicalShardCount,
-            VirtualShardCount = virtualShardCount,
             AutoSplitMinTreeAge = TimeSpan.Zero,
             HotShardOpsPerSecondThreshold = 100,
             MaxConcurrentAutoSplits = 1,
@@ -55,7 +53,15 @@ public partial class HotShardMonitorGrainTests
         var registry = Substitute.For<ILatticeRegistry>();
         registry.ResolveAsync(TreeId).Returns(TreeId);
         registry.GetShardMapAsync(TreeId).Returns(ShardMap.CreateDefault(virtualShardCount, physicalShardCount));
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = physicalShardCount,
+            }));
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 
         // One shard substitute per physical shard index. Defaults to cold.
         var shardSubs = new Dictionary<int, IShardRootGrain>();
@@ -77,7 +83,7 @@ public partial class HotShardMonitorGrainTests
         });
 
         var grain = new HotShardMonitorGrain(
-            context, grainFactory, reminderRegistry, optionsMonitor,
+            context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<HotShardMonitorGrain>(),
             new FakePersistentState<HotShardMonitorState>());
         return (grain, grainFactory, lattice, splitGrain, registry, Shard, options);
@@ -87,10 +93,7 @@ public partial class HotShardMonitorGrainTests
     public async Task RunSamplingPass_does_nothing_when_AutoSplit_disabled()
     {
         var opts = new LatticeOptions
-        {
-            ShardCount = 2,
-            VirtualShardCount = 16,
-            AutoSplitEnabled = false,
+        {            AutoSplitEnabled = false,
         };
         var (grain, _, _, splitGrain, _, _, _) = CreateGrain(options: opts);
         await grain.RunSamplingPassAsync();
@@ -164,6 +167,8 @@ public partial class HotShardMonitorGrainTests
         var registry = Substitute.For<ILatticeRegistry>();
         registry.ResolveAsync(TreeId).Returns(TreeId);
         registry.GetShardMapAsync(TreeId).Returns(new ShardMap { Slots = slots });
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 2 }));
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("monitor", TreeId));
@@ -192,14 +197,14 @@ public partial class HotShardMonitorGrainTests
 
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions
-        {
-            ShardCount = 2, VirtualShardCount = 4,
-            AutoSplitMinTreeAge = TimeSpan.Zero,
+        {            AutoSplitMinTreeAge = TimeSpan.Zero,
             HotShardOpsPerSecondThreshold = 100,
         });
 
+        var optionsResolver2 = TestOptionsResolver.ForFactory(grainFactory);
+
         var grain = new HotShardMonitorGrain(
-            context, grainFactory, Substitute.For<IReminderRegistry>(), optionsMonitor,
+            context, grainFactory, Substitute.For<IReminderRegistry>(), optionsMonitor, optionsResolver2,
             new LoggerFactory().CreateLogger<HotShardMonitorGrain>(),
             new FakePersistentState<HotShardMonitorState>());
 
@@ -212,9 +217,7 @@ public partial class HotShardMonitorGrainTests
     public async Task RunSamplingPass_suppressed_when_max_concurrent_in_flight_already_reached()
     {
         var opts = new LatticeOptions
-        {
-            ShardCount = 2, VirtualShardCount = 16,
-            AutoSplitMinTreeAge = TimeSpan.Zero,
+        {            AutoSplitMinTreeAge = TimeSpan.Zero,
             HotShardOpsPerSecondThreshold = 100,
             MaxConcurrentAutoSplits = 1,
         };
@@ -233,9 +236,7 @@ public partial class HotShardMonitorGrainTests
     public async Task RunSamplingPass_triggers_two_splits_when_two_shards_hot_and_MaxConcurrent_is_2()
     {
         var opts = new LatticeOptions
-        {
-            ShardCount = 4, VirtualShardCount = 16,
-            AutoSplitMinTreeAge = TimeSpan.Zero,
+        {            AutoSplitMinTreeAge = TimeSpan.Zero,
             HotShardOpsPerSecondThreshold = 100,
             MaxConcurrentAutoSplits = 2,
         };
@@ -256,9 +257,7 @@ public partial class HotShardMonitorGrainTests
     public async Task RunSamplingPass_caps_concurrent_splits_at_MaxConcurrentAutoSplits()
     {
         var opts = new LatticeOptions
-        {
-            ShardCount = 4, VirtualShardCount = 16,
-            AutoSplitMinTreeAge = TimeSpan.Zero,
+        {            AutoSplitMinTreeAge = TimeSpan.Zero,
             HotShardOpsPerSecondThreshold = 100,
             MaxConcurrentAutoSplits = 2,
         };
@@ -287,9 +286,7 @@ public partial class HotShardMonitorGrainTests
         // split.
         var sharedState = new FakePersistentState<HotShardMonitorState>();
         LatticeOptions opts = new()
-        {
-            ShardCount = 2, VirtualShardCount = 16,
-            AutoSplitMinTreeAge = TimeSpan.FromMinutes(5),
+        {            AutoSplitMinTreeAge = TimeSpan.FromMinutes(5),
             HotShardOpsPerSecondThreshold = 100,
             MaxConcurrentAutoSplits = 1,
         };
@@ -313,18 +310,13 @@ public partial class HotShardMonitorGrainTests
         var reg = Substitute.For<ILatticeRegistry>();
         reg.ResolveAsync(TreeId).Returns(TreeId);
         reg.GetShardMapAsync(TreeId).Returns(ShardMap.CreateDefault(16, 2));
+        reg.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 2 }));
         gf.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(reg);
-        var split = Substitute.For<ITreeShardSplitGrain>();
-        split.IsCompleteAsync().Returns(true);
-        gf.GetGrain<ITreeShardSplitGrain>(Arg.Any<string>()).Returns(split);
-        var hotShard = Substitute.For<IShardRootGrain>();
-        hotShard.GetHotnessAsync().Returns(new ShardHotness { Reads = 50_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        hotShard.HasPendingBulkOperationAsync().Returns(false);
-        hotShard.IsSplittingAsync().Returns(false);
-        gf.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(hotShard);
+        var sharedResolver = TestOptionsResolver.ForFactory(gf, opts);
 
         var first = new HotShardMonitorGrain(
-            ctx, gf, Substitute.For<IReminderRegistry>(), om,
+            ctx, gf, Substitute.For<IReminderRegistry>(), om, sharedResolver,
             new LoggerFactory().CreateLogger<HotShardMonitorGrain>(), sharedState);
         await first.RunSamplingPassAsync();
 
@@ -332,11 +324,11 @@ public partial class HotShardMonitorGrainTests
         var persistedTime = sharedState.State.ActivationUtc!.Value;
 
         // Grace window is 5min and ActivationUtc was just written → no split.
-        await split.DidNotReceive().SplitAsync(Arg.Any<int>());
+        await splitGrain1.DidNotReceive().SplitAsync(Arg.Any<int>());
 
         // --- Second activation (simulated restart): reuses persisted time.
         var second = new HotShardMonitorGrain(
-            ctx, gf, Substitute.For<IReminderRegistry>(), om,
+            ctx, gf, Substitute.For<IReminderRegistry>(), om, sharedResolver,
             new LoggerFactory().CreateLogger<HotShardMonitorGrain>(), sharedState);
         await second.RunSamplingPassAsync();
 

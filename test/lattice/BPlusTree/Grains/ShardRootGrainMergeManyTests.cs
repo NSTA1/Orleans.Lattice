@@ -68,12 +68,11 @@ public class ShardRootGrainMergeManyTests
         factory.GetGrain<IBPlusLeafGrain>(leftId).Returns(leftLeaf);
         factory.GetGrain<IBPlusLeafGrain>(rightId).Returns(rightLeaf);
 
-        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions(), factory: factory);
 
         return new Harness
         {
-            Grain = new ShardRootGrain(context, state, factory, optionsMonitor),
+            Grain = new ShardRootGrain(context, state, factory, optionsResolver),
             Leaves = new Dictionary<GrainId, IBPlusLeafGrain>
             {
                 [leftId] = leftLeaf,
@@ -104,12 +103,11 @@ public class ShardRootGrainMergeManyTests
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leaf);
 
-        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions(), factory: factory);
 
         return new Harness
         {
-            Grain = new ShardRootGrain(context, state, factory, optionsMonitor),
+            Grain = new ShardRootGrain(context, state, factory, optionsResolver),
             Leaves = new Dictionary<GrainId, IBPlusLeafGrain> { [leafId] = leaf },
             State = state,
         };
@@ -158,12 +156,11 @@ public class ShardRootGrainMergeManyTests
         factory.GetGrain<IBPlusLeafGrain>(midId).Returns(midLeaf);
         factory.GetGrain<IBPlusLeafGrain>(rightId).Returns(rightLeaf);
 
-        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions(), factory: factory);
 
         var h = new Harness
         {
-            Grain = new ShardRootGrain(context, state, factory, optionsMonitor),
+            Grain = new ShardRootGrain(context, state, factory, optionsResolver),
             Leaves = new Dictionary<GrainId, IBPlusLeafGrain>
             {
                 [leftId] = leftLeaf,
@@ -360,10 +357,9 @@ public class ShardRootGrainMergeManyTests
         factory.GetGrain<IBPlusLeafGrain>(leftId).Returns(leftLeaf);
         factory.GetGrain<IBPlusLeafGrain>(rightId).Returns(rightLeaf);
 
-        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions(), factory: factory);
 
-        var grain = new ShardRootGrain(context, state, factory, optionsMonitor);
+        var grain = new ShardRootGrain(context, state, factory, optionsResolver);
         var entries = BuildEntries("a", "b");
 
         await grain.MergeManyAsync(entries);

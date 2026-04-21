@@ -22,34 +22,6 @@ public class LatticeOptionsValidatorTests
 
     [TestCase(0)]
     [TestCase(-1)]
-    public void ShardCount_must_be_positive(int value)
-    {
-        var result = Validate(o => o.ShardCount = value);
-        Assert.That(result.Failed, Is.True);
-        Assert.That(result.FailureMessage, Does.Contain("ShardCount"));
-    }
-
-    [TestCase(0)]
-    [TestCase(1)]
-    public void MaxLeafKeys_must_be_greater_than_one(int value)
-    {
-        var result = Validate(o => o.MaxLeafKeys = value);
-        Assert.That(result.Failed, Is.True);
-        Assert.That(result.FailureMessage, Does.Contain("MaxLeafKeys"));
-    }
-
-    [TestCase(0)]
-    [TestCase(1)]
-    [TestCase(2)]
-    public void MaxInternalChildren_must_be_greater_than_two(int value)
-    {
-        var result = Validate(o => o.MaxInternalChildren = value);
-        Assert.That(result.Failed, Is.True);
-        Assert.That(result.FailureMessage, Does.Contain("MaxInternalChildren"));
-    }
-
-    [TestCase(0)]
-    [TestCase(-1)]
     public void KeysPageSize_must_be_positive(int value)
     {
         var result = Validate(o => o.KeysPageSize = value);
@@ -62,9 +34,6 @@ public class LatticeOptionsValidatorTests
     {
         var result = Validate(o =>
         {
-            o.ShardCount = 1;
-            o.MaxLeafKeys = 2;
-            o.MaxInternalChildren = 3;
             o.KeysPageSize = 1;
         });
         Assert.That(result.Succeeded, Is.True);

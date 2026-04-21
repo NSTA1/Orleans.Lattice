@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
@@ -6,18 +5,21 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Leaf node grain implementation. Stores key → <see cref="LwwValue{T}"/> entries
-/// in a sorted dictionary. Splits when the entry count exceeds <see cref="LatticeOptions.MaxLeafKeys"/>.
+/// in a sorted dictionary. Splits when the entry count exceeds the leaf-sizing
+/// pin in the tree registry.
 /// </summary>
 internal sealed partial class BPlusLeafGrain(
     IGrainContext context,
     [PersistentState("leaf", LatticeOptions.StorageProviderName)] IPersistentState<LeafNodeState> state,
     IGrainFactory grainFactory,
-    IOptionsMonitor<LatticeOptions> optionsMonitor) : IBPlusLeafGrain
+    LatticeOptionsResolver optionsResolver) : IBPlusLeafGrain
 {
     private static readonly Dictionary<string, LwwValue<byte[]>> EmptyEntries = new();
 
     private string ReplicaId => context.GrainId.ToString();
-    private LatticeOptions Options => optionsMonitor.Get(state.State.TreeId ?? string.Empty);
+    private ResolvedLatticeOptions? _options;
+    private async Task<ResolvedLatticeOptions> GetOptionsAsync() =>
+        _options ??= await optionsResolver.ResolveAsync(state.State.TreeId ?? string.Empty);
 
     public Task<byte[]?> GetAsync(string key)
     {
@@ -187,7 +189,7 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         SplitResult? splitResult = null;
-        if (state.State.Entries.Count > Options.MaxLeafKeys)
+        if (state.State.Entries.Count > (await GetOptionsAsync()).MaxLeafKeys)
         {
             splitResult = await SplitAsync();
         }
@@ -630,7 +632,7 @@ internal sealed partial class BPlusLeafGrain(
         MergeIntoState(entries);
 
         SplitResult? splitResult = null;
-        if (state.State.Entries.Count > Options.MaxLeafKeys)
+        if (state.State.Entries.Count > (await GetOptionsAsync()).MaxLeafKeys)
         {
             splitResult = await SplitAsync();
         }
