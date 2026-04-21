@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -12,8 +11,7 @@ namespace Orleans.Lattice.BPlusTree;
 [GenerateSerializer]
 [Alias(TypeAliases.ShardCountResult)]
 [Immutable]
-[EditorBrowsable(EditorBrowsableState.Never)]
-public readonly record struct ShardCountResult
+internal readonly record struct ShardCountResult
 {
     /// <summary>
     /// The number of live, non-tombstoned keys this shard authoritatively

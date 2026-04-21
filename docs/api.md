@@ -383,7 +383,6 @@ Controls source-tree availability during a snapshot operation.
 | Method | Description |
 |--------|-------------|
 | `BulkLoadAsync(IAsyncEnumerable<...>, IGrainFactory, int chunkSize)` | Streaming bulk load for large datasets. Input **must** be pre-sorted in ascending key order. Routing is resolved via `ILattice.GetRoutingAsync()` so the per-tree `ShardMap` is honoured. See [Bulk Loading](bulk-loading.md). |
-| `BulkLoadAsync(..., int shardCount, int chunkSize)` *(obsolete)* | Legacy streaming overload that takes an explicit `shardCount`. Bypasses the persisted `ShardMap` and will mis-route entries on trees with non-default maps. Use the overload above. |
 | `SubscribeToEventsAsync(this ILattice, IClusterClient, Func<LatticeTreeEvent, Task>, string providerName = "Default", CancellationToken)` | Subscribes to the per-tree `LatticeTreeEvent` stream on the cluster client. Returns a `StreamSubscriptionHandle<LatticeTreeEvent>`; call `UnsubscribeAsync()` on it to stop receiving events. Throws `InvalidOperationException` when `providerName` is not registered on the client. See [Events](events.md). |
 
 ## `TypedLatticeExtensions`
@@ -491,16 +490,6 @@ Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Nev
 
 ## Internal Grain Access Control
 
-Lattice exposes a single public entry-point — `ILattice`. All other grain interfaces (`IShardRootGrain`, `IBPlusLeafGrain`, `IBPlusInternalGrain`, `ILeafCacheGrain`, `ILatticeRegistry`, `ITombstoneCompactionGrain`, `ITreeDeletionGrain`, `ITreeResizeGrain`, `ITreeSnapshotGrain`) are internal implementation details.
+Lattice exposes a single public entry-point — `ILattice`. All other grain interfaces (`IShardRootGrain`, `IBPlusLeafGrain`, `IBPlusInternalGrain`, `ILeafCacheGrain`, `ILatticeRegistry`, `ITombstoneCompactionGrain`, `ITreeDeletionGrain`, `ITreeResizeGrain`, `ITreeSnapshotGrain`, `ITreeMergeGrain`, `ITreeShardSplitGrain`, `IHotShardMonitorGrain`, `IAtomicWriteGrain`, `ILatticeCursorGrain`, `ITreeReshardGrain`, `ILatticeStats`) are declared `internal` and are not visible to consumer assemblies. The C# type system enforces the boundary at compile time — external code cannot name, reference, or invoke these interfaces. Internal DTOs associated with these interfaces (e.g. `SplitResult`, `KeysPage`, `EntriesPage`, `LatticeConstants`) are also `internal`.
 
-Two mechanisms prevent accidental direct use of internal grains:
-
-1. **IntelliSense exclusion** — All internal grain interfaces and public serializable model types (e.g. `HybridLogicalClock`, `SplitResult`, `KeysPage`, `LatticeConstants`) are annotated with `[EditorBrowsable(EditorBrowsableState.Never)]`, hiding them from auto-complete in IDEs. They remain `public` for Orleans code generation but are invisible during normal development.
-
-2. **Grain call filters** — `AddLattice` registers a pair of grain call filters:
-   - An **outgoing filter** (`LatticeCallContextFilter`) resolves the current grain context at call time via `IGrainContextAccessor` and checks whether the calling grain implements a Lattice interface (via direct `Type.IsAssignableFrom`). If so, it stamps the outgoing call with a `RequestContext` token. If the caller is **not** a Lattice grain, the filter **clears** the token to prevent it from leaking through a non-Lattice intermediary.
-   - An **incoming filter** (`InternalGrainGuardFilter`) rejects calls to internal Lattice grains that do not carry the token, throwing `InvalidOperationException`.
-
-   External client calls never carry the token and are blocked. Calls from non-Lattice grains co-hosted in the same silo are also blocked because the outgoing filter only stamps calls originating from Lattice grains. Both filters cache `Type.IsAssignableFrom` results in a `ConcurrentDictionary<Type, bool>`, so repeated calls from the same grain type cost a single dictionary lookup (~20 ns) rather than a linear scan. All type checks use direct .NET type comparison — there is no dependency on Orleans grain-type name conventions.
-
-> **Note:** The token is not a security credential — it prevents accidental misuse, not malicious access. A determined caller within the silo process could set the `RequestContext` value manually.
+A small number of types remain `public` because they appear directly on the `ILattice` surface or its typed extensions: `HybridLogicalClock`, `VersionedValue`, `Versioned<T>`, `RoutingInfo`, and `ShardMap` (transitively via `RoutingInfo`).

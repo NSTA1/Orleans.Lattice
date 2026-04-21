@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 
@@ -12,8 +11,7 @@ namespace Orleans.Lattice.BPlusTree;
 [GenerateSerializer]
 [Alias(TypeAliases.CasResult)]
 [Immutable]
-[EditorBrowsable(EditorBrowsableState.Never)]
-public sealed record CasResult
+internal sealed record CasResult
 {
     /// <summary>
     /// <c>true</c> if the write was applied because the expected version matched;

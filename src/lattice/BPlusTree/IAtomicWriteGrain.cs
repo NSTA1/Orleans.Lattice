@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -21,9 +20,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// <see cref="ILattice.SetIfVersionAsync"/>) on top.
 /// </para>
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.IAtomicWriteGrain)]
-public interface IAtomicWriteGrain : IGrainWithStringKey
+internal interface IAtomicWriteGrain : IGrainWithStringKey
 {
     /// <summary>
     /// Starts (or resumes) the atomic write saga for <paramref name="entries"/>

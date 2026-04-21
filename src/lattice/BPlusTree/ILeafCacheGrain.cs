@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree;
@@ -8,9 +7,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// of the backing <see cref="IBPlusLeafGrain"/>.
 /// Multiple activations may exist across silos (stateless worker).
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.ILeafCacheGrain)]
-public interface ILeafCacheGrain : IGrainWithStringKey
+internal interface ILeafCacheGrain : IGrainWithStringKey
 {
     /// <summary>
     /// Returns the value for <paramref name="key"/> from the local cache,

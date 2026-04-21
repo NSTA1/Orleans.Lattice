@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice;
 
@@ -19,8 +18,7 @@ namespace Orleans.Lattice;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.StaleShardRouting)]
-[EditorBrowsable(EditorBrowsableState.Never)]
-public sealed class StaleShardRoutingException : Exception
+internal sealed class StaleShardRoutingException : Exception
 {
     /// <summary>
     /// The physical shard index that the request was routed to, which is no

@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -14,9 +13,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// Key format: <c>{treeId}/{sourceShardIndex}</c>.
 /// </para>
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.ITreeShardSplitGrain)]
-public interface ITreeShardSplitGrain : IGrainWithStringKey
+internal interface ITreeShardSplitGrain : IGrainWithStringKey
 {
     /// <summary>
     /// Initiates an online adaptive split that migrates the upper half of

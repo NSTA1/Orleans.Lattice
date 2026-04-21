@@ -1,15 +1,13 @@
 namespace Orleans.Lattice.BPlusTree;
 
-using System.ComponentModel;
 using Orleans.Lattice.Primitives;
 
 /// <summary>
 /// A leaf node grain in the B+ tree. Stores key-value pairs as
 /// <see cref="Primitives.LwwValue{T}"/> entries for monotonic conflict resolution.
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.IBPlusLeafGrain)]
-public interface IBPlusLeafGrain : IGrainWithGuidKey
+internal interface IBPlusLeafGrain : IGrainWithGuidKey
 {
     /// <summary>Gets the value for <paramref name="key"/>, or <c>null</c> if absent/tombstoned.</summary>
     Task<byte[]?> GetAsync(string key);

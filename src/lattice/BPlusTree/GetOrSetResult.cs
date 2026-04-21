@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using Orleans.Lattice;
 
 namespace Orleans.Lattice.BPlusTree;
@@ -11,8 +10,7 @@ namespace Orleans.Lattice.BPlusTree;
 [GenerateSerializer]
 [Alias(TypeAliases.GetOrSetResult)]
 [Immutable]
-[EditorBrowsable(EditorBrowsableState.Never)]
-public sealed record GetOrSetResult
+internal sealed record GetOrSetResult
 {
     /// <summary>
     /// The existing value if the key was already live, or <c>null</c> if the

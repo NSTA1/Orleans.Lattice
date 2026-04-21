@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
@@ -13,7 +12,6 @@ namespace Orleans.Lattice;
 [GenerateSerializer]
 [Alias(TypeAliases.Versioned)]
 [Immutable]
-[EditorBrowsable(EditorBrowsableState.Never)]
 public readonly record struct Versioned<T>
 {
     /// <summary>The stored value, or <c>default</c> if the key is absent or tombstoned.</summary>

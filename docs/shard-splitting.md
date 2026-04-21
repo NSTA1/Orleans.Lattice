@@ -3,8 +3,8 @@
 Adaptive shard splitting allows a hot physical shard to split into two **at
 runtime, fully online** — no shard is ever taken offline. Splits happen
 automatically when an autonomic monitor detects a hot shard. Shard
-splitting is internal-only: `ITreeShardSplitGrain` is guarded by
-`InternalGrainGuardFilter` and is not exposed on the public API.
+splitting is internal-only: `ITreeShardSplitGrain` is declared `internal`
+and is not reachable from consumer assemblies.
 
 ## Why
 

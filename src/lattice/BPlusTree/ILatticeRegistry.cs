@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -14,9 +13,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// </para>
 /// Key format: singleton — use <see cref="LatticeConstants.RegistryTreeId"/> as the grain key.
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.ILatticeRegistry)]
-public interface ILatticeRegistry : IGrainWithStringKey
+internal interface ILatticeRegistry : IGrainWithStringKey
 {
     /// <summary>
     /// Registers a tree in the registry. If the tree already exists, this is a no-op
