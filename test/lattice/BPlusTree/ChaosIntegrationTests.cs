@@ -107,7 +107,7 @@ public class ChaosIntegrationTests
         // round-trips per call). The saga's own reminder-driven recovery will
         // finish the write; from the chaos test's perspective this is a
         // transient saturation symptom, not an invariant violation. Tracked by
-        // FX-006 (CancellationToken support on ILattice).
+        // CancellationToken support on ILattice.
         || ex is TimeoutException;
 
     /// <summary>
@@ -150,7 +150,7 @@ public class ChaosIntegrationTests
             => s.AddOrUpdate(k, 1, (_, v) => v + 1);
 
         // Warm cold-activation paths that are not covered by SeedAsync (which
-        // only exercises the ILattice.SetAsync fan-out). F-019c routes
+        // only exercises the ILattice.SetAsync fan-out). Registry-authoritative sizing routes
         // structural sizing through the registry on first grain activation,
         // so the first SetManyAtomicAsync (saga coordinator) and first
         // CountPerShardAsync (split selector) each pay a serialised chain

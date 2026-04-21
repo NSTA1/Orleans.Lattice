@@ -270,13 +270,13 @@ internal sealed partial class ShardRootGrain(
         // interleaving with the drain reader.
         var forwardTask = TrackShadowForward(t => t.SetManyAsync(entries));
 
-        // FX-013: preserve the local exception as the primary diagnostic. The
-        // old shape (try { local } finally { await forwardTask; }) replaces a
-        // local failure with a forward-path failure if both happen to fail on
-        // the same call. The tracker's fault-logger continuation already
-        // observes any forward fault asynchronously, so when the local loop
-        // throws we rethrow its exception and let the continuation log the
-        // forward side separately.
+        // Preserve the local exception as the primary diagnostic. The
+        // older shape (try { local } finally { await forwardTask; }) would
+        // replace a local failure with a forward-path failure if both
+        // happened to fail on the same call. The tracker's fault-logger
+        // continuation already observes any forward fault asynchronously,
+        // so when the local loop throws we rethrow its exception and let
+        // the continuation log the forward side separately.
         System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
         try
         {
@@ -400,7 +400,7 @@ internal sealed partial class ShardRootGrain(
         }
 
         // Walk the leaf chain, tombstoning matching entries in each leaf.
-        // Terminate on the first leaf that reports PastRange=true (FX-011):
+        // Terminate on the first leaf that reports PastRange=true:
         // deleting zero is NOT a valid termination signal on multi-shard trees,
         // where early leaves can be sparse yet later leaves contain range-matching
         // entries.
@@ -694,11 +694,10 @@ internal sealed partial class ShardRootGrain(
             await MergeGroupAsync(group);
         }
 
-        // FX-013: the grouped path previously fell off the end without awaiting
-        // forwardTask, leaving a successful local merge's forward failures
-        // unobserved by the caller (though the tracker continuation still logs
-        // them). Awaiting here matches the root-is-leaf fast path and surfaces
-        // any forward failure to the caller.
+        // Await forwardTask at the end of the grouped path - matches the
+        // root-is-leaf fast path and surfaces any forward failure to the
+        // caller. Without this await, the forward would only be observed
+        // asynchronously by the tracker continuation.
         await forwardTask;
     }
 

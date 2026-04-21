@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Tests;
 public class AuditHygieneRegressionTests
 {
     /// <summary>
-    /// FX-007 regression: every grain implementation must use
+    /// Regression: every grain implementation must use
     /// <c>ILogger&lt;TSelf&gt;</c> (not plain <c>ILogger</c>) so that per-category
     /// filter configuration works uniformly across the assembly. Fails if
     /// any grain-class constructor declares a non-generic <c>ILogger</c>
@@ -56,7 +56,7 @@ public class AuditHygieneRegressionTests
     }
 
     /// <summary>
-    /// FX-008 regression: the public telemetry meter name must remain
+    /// Regression: the public telemetry meter name must remain
     /// <c>orleans.lattice</c> (the Orleans meter convention). Before the
     /// fix, internal telemetry hooks mixed <c>lattice.*</c> and
     /// <c>orleans.lattice.*</c> prefixes; locking the constant here prevents

@@ -85,7 +85,7 @@ internal sealed class TreeResizeGrain(
             state.State.Complete = false;
         }
 
-        // F-019c empty-tree fast-path: if the tree has no live entries, repin
+        // Empty-tree fast-path: if the tree has no live entries, repin
         // the structural leaf/internal sizes atomically on the registry and
         // short-circuit the coordinator machinery. No snapshot, no shadow-
         // forward, no alias swap.
@@ -102,7 +102,7 @@ internal sealed class TreeResizeGrain(
     }
 
     /// <summary>
-    /// F-019c empty-tree fast-path: repins <c>MaxLeafKeys</c> /
+    /// Empty-tree fast-path: repins <c>MaxLeafKeys</c> /
     /// <c>MaxInternalChildren</c> in the registry without running the online
     /// resize pipeline.
     /// </summary>
@@ -368,8 +368,8 @@ internal sealed class TreeResizeGrain(
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 
         // Update registry entry with new structural sizing. Preserve the
-        // previously-pinned ShardCount so F-019c's resolver does not see a
-        // null pin on the logical tree after the swap.
+        // previously-pinned ShardCount so the registry resolver does not
+        // see a null pin on the logical tree after the swap.
         var oldEntry = state.State.OldRegistryEntry;
         var entry = new TreeRegistryEntry
         {

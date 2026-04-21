@@ -8,15 +8,15 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// calling mutation (happy path) or asynchronously by a fault-logging
 /// continuation (retry-loop abandonment).
 /// <para>
-/// Closes the hygiene gap identified by the F-019 review: each retry
-/// iteration of the single-key mutation paths (<c>SetAsync</c>,
-/// <c>SetAsync(ttl)</c>, <c>GetOrSetAsync</c>, <c>DeleteAsync</c>) dispatches
-/// a fresh forward task; if the local write fails transiently before the
-/// caller awaits <c>forwardTask</c>, the prior iteration''s forward is
-/// abandoned. Without observation, a fault in that abandoned task would
-/// surface only via <see cref="TaskScheduler.UnobservedTaskException"/>,
-/// bypassing the grain''s normal error-handling path. LWW guarantees the
-/// destination still converges; this type exists so faults are never silent.
+/// Closes a hygiene gap in the single-key mutation paths (<c>SetAsync</c>,
+/// <c>SetAsync(ttl)</c>, <c>GetOrSetAsync</c>, <c>DeleteAsync</c>): each
+/// retry iteration dispatches a fresh forward task, and if the local write
+/// fails transiently before the caller awaits <c>forwardTask</c>, the prior
+/// iteration's forward is abandoned. Without observation, a fault in that
+/// abandoned task would surface only via
+/// <see cref="TaskScheduler.UnobservedTaskException"/>, bypassing the
+/// grain's normal error-handling path. LWW guarantees the destination
+/// still converges; this type exists so faults are never silent.
 /// </para>
 /// </summary>
 internal sealed partial class ShardRootGrain
@@ -58,3 +58,4 @@ internal sealed partial class ShardRootGrain
         return task;
     }
 }
+

@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <para>
 /// A resumable-delete-across-split test is tracked separately: test coverage
 /// authoring surfaced a pre-existing bug in
-/// <c>ShardRootGrain.DeleteRangeAsync</c> (audit <c>FX-011</c>) that causes
+/// <c>ShardRootGrain.DeleteRangeAsync</c> that causes
 /// under-deletion when a shard's start-leaf has no range-matching keys but
 /// later leaves do. That bug is unrelated to cursors and is not exercised
 /// here.

@@ -278,7 +278,7 @@ public partial class HotShardMonitorGrainTests
     [Test]
     public async Task ActivationUtc_persists_and_survives_reactivation()
     {
-        // FX-004 regression: the monitor's first-ever activation time must
+        // Regression: the monitor's first-ever activation time must
         // be persisted so the AutoSplitMinTreeAge grace period is
         // anchored to the tree's first activation, not the current silo
         // restart. Without this, a cluster that restarts silos more

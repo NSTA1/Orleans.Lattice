@@ -11,13 +11,13 @@ using Orleans.Lattice.Tests.Fakes;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Regression tests for FX-013 - shadow-forward task observation.
+/// Regression tests for shadow-forward task observation.
 /// Validates that every dispatched shadow-forward is observed exactly once
 /// (by the caller''s await, by the fault-logger continuation, or both) and
 /// that <see cref="ShardRootGrain.SetManyAsync"/> preserves the local
 /// exception as the primary when both local and forward fail.
 /// </summary>
-public class ShardRootGrainFx013Tests
+public class ShardRootGrainShadowForwardTrackingTests
 {
     private const string TreeId = "src-tree";
     private const string DestTreeId = "src-tree/resized/op-1";
@@ -102,7 +102,7 @@ public class ShardRootGrainFx013Tests
         var caught = Assert.ThrowsAsync<InvalidOperationException>(
             async () => await h.Grain.SetManyAsync(entries));
 
-        // FX-013: the local (primary) exception is preserved, not the forward one.
+        // The local (primary) exception is preserved, not the forward one.
         Assert.That(caught!.Message, Is.EqualTo("local-blew-up"));
     }
 

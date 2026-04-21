@@ -5,7 +5,7 @@ using Orleans.TestingHost;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// Regression tests for FX-006 — <see cref="CancellationToken"/> support on the
+/// Regression tests for <see cref="CancellationToken"/> support on the
 /// public <see cref="ILattice"/> surface. Verifies that a pre-cancelled token
 /// causes every public method to throw <see cref="OperationCanceledException"/>
 /// before the orchestrator performs any work.

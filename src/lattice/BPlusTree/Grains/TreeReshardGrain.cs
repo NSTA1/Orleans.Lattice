@@ -78,7 +78,7 @@ internal sealed class TreeReshardGrain(
             ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var currentCount = currentMap.GetPhysicalShardIndices().Count;
 
-        // F-019c empty-tree fast-path: if the tree has no live entries yet,
+        // Empty-tree fast-path: if the tree has no live entries yet,
         // repin ShardCount atomically and rebuild the default identity map
         // without activating the coordinator machinery. This also relaxes
         // the grow-only restriction so callers (including test fixtures)
@@ -271,7 +271,7 @@ internal sealed class TreeReshardGrain(
     /// </summary>
     internal async Task FinaliseAsync()
     {
-        // F-019c: repin the structural ShardCount on the registry so future
+        // Repin the structural ShardCount on the registry so future
         // resolver calls see the new physical shard count. The shard map
         // itself was updated incrementally by each per-shard split; this
         // reconciles the scalar pin with the map's physical shard count.
@@ -298,7 +298,7 @@ internal sealed class TreeReshardGrain(
     }
 
     /// <summary>
-    /// F-019c empty-tree fast-path for <see cref="ReshardAsync"/>: with no
+    /// Empty-tree fast-path for <see cref="ReshardAsync"/>: with no
     /// live entries the reshard reduces to a single registry write that
     /// updates the <see cref="State.TreeRegistryEntry.ShardCount"/> pin and
     /// rebuilds the default identity <see cref="ShardMap"/> for the new

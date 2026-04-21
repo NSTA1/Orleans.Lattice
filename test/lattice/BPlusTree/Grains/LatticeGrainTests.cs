@@ -30,7 +30,7 @@ public partial class LatticeGrainTests
         registry.ResolveAsync(Arg.Any<string>()).Returns(callInfo => Task.FromResult(callInfo.Arg<string>()));
         registry.GetShardMapAsync(Arg.Any<string>()).Returns(Task.FromResult<ShardMap?>(null));
 
-        // F-019c: seed the registry pin so the resolver returns the desired
+        // Seed the registry pin so the resolver returns the desired
         // structural sizing for every tree id queried.
         registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
             new TreeRegistryEntry

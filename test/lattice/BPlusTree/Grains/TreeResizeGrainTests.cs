@@ -117,7 +117,7 @@ public partial class TreeResizeGrainTests
         Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Snapshot));
         Assert.That(state.State.SnapshotTreeId, Is.Not.Null);
         Assert.That(state.State.OldPhysicalTreeId, Is.EqualTo(TreeId));
-        // F-019c: the registry pin is now the source of structural truth,
+        // The registry pin is now the source of structural truth,
         // so OldRegistryEntry is the seeded pin captured for UndoResizeAsync.
         Assert.That(state.State.OldRegistryEntry, Is.Not.Null);
         Assert.That(state.State.OldRegistryEntry!.ShardCount, Is.EqualTo(ShardCount));

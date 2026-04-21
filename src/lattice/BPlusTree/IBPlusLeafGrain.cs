@@ -102,7 +102,7 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <c>&gt;= endExclusive</c>. The shard-root coordinator uses <c>PastRange</c> to
     /// stop walking the leaf chain deterministically on sparse multi-shard trees, where
     /// a leaf may legitimately delete zero keys even when later leaves contain
-    /// range-matching entries (FX-011).
+    /// range-matching entries.
     /// </summary>
     Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive);
 

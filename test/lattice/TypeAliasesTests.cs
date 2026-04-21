@@ -56,7 +56,7 @@ public class TypeAliasesTests
     }
 
     /// <summary>
-    /// FX-009: every <c>TypeAliases</c> constant must be referenced by at
+    /// Regression: every <c>TypeAliases</c> constant must be referenced by at
     /// least one <c>[Alias(...)]</c> attribute somewhere in the assembly,
     /// and every <c>[Alias(...)]</c> attribute value must be equal to one
     /// of the constants. Fails on dead entries (removed type, stale alias)

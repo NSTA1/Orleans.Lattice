@@ -90,7 +90,7 @@ public partial class TombstoneCompactionGrainTests
     [Test]
     public async Task ReceiveReminder_reregisters_when_period_drifts_from_options()
     {
-        // FX-002: when a stale reminder period survives an options change
+        // Regression: when a stale reminder period survives an options change
         // (or an Orleans upgrade), the next tick must re-register with
         // the currently configured period.
         var options = new LatticeOptions

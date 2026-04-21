@@ -108,7 +108,7 @@ public sealed class VersionVector
 
     /// <summary>
     /// Removes entries whose <see cref="HybridLogicalClock.WallTimeTicks"/>
-    /// is older than <paramref name="minRetainedUtcTicks"/> (FX-003).
+    /// is older than <paramref name="minRetainedUtcTicks"/>.
     /// <para>
     /// Pruning prevents unbounded growth of this vector when replicas
     /// enter and leave the cluster over long time horizons. Because a

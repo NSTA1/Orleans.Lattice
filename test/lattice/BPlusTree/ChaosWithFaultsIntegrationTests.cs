@@ -136,7 +136,7 @@ public class ChaosWithFaultsIntegrationTests
         }
 
         // Warm AtomicWriteGrain (saga coordinator) BEFORE the 8s chaos timer
-        // starts. F-019c routes structural sizing through the registry on
+        // starts. Registry-authoritative sizing flows through the registry on
         // cold activation, and the saga itself has reminder + persistence
         // bootstrapping; on slow Linux Release CI a single cold
         // SetManyAtomicAsync can easily exceed the chaos window, leaving

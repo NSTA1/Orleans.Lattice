@@ -115,7 +115,7 @@ public class ChaosReshardIntegrationTests
         static int Bump(ConcurrentDictionary<string, int> s, string k)
             => s.AddOrUpdate(k, 1, (_, v) => v + 1);
 
-        // Warm cold activations BEFORE the chaos timer starts. F-019c routes
+        // Warm cold activations BEFORE the chaos timer starts. Registry-authoritative sizing routes
         // structural sizing through the registry on first grain activation,
         // which serialises ~N round-trips on cold trees; on slow Linux
         // Release CI this can consume most of the chaos window on its own.

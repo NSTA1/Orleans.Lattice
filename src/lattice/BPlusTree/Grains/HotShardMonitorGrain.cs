@@ -54,7 +54,7 @@ internal sealed class HotShardMonitorGrain(
     /// <summary>
     /// Returns the monitor's first-ever activation time for this tree,
     /// loading and persisting the value on first use so it survives silo
-    /// restarts (FX-004). Without persistence, the
+    /// restarts. Without persistence, the
     /// <see cref="LatticeOptions.AutoSplitMinTreeAge"/> grace period would
     /// restart on every activation and a cluster with frequent restarts
     /// would never trigger autonomic splits.
@@ -87,7 +87,7 @@ internal sealed class HotShardMonitorGrain(
             dueTime: TimeSpan.FromMinutes(1),
             period: TimeSpan.FromMinutes(1));
 
-        // Initialize the persisted activation time (FX-004) on first use.
+        // Initialize the persisted activation time on first use.
         await GetOrSetActivationUtcAsync(DateTime.UtcNow);
         StartTimer();
     }
@@ -119,10 +119,9 @@ internal sealed class HotShardMonitorGrain(
         if (reminderName != KeepaliveReminderName) return;
         if (!Options.AutoSplitEnabled) return;
 
-        // FX-002: defensively re-register the keepalive if the current
-        // period drifts from the configured value. Protects against
-        // stale-period reminders that survived option changes or Orleans
-        // upgrades.
+        // Defensively re-register the keepalive if the current period drifts
+        // from the configured value. Protects against stale-period reminders
+        // that survived option changes or Orleans upgrades.
         var desired = TimeSpan.FromMinutes(1);
         if (status.Period != desired)
         {
