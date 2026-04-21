@@ -247,7 +247,10 @@ public static class TypedLatticeExtensions
 
     /// <summary>
     /// Streams live key-value entries in sorted key order, deserializing values via
-    /// the provided <paramref name="serializer"/>.
+    /// the provided <paramref name="serializer"/>. When <paramref name="prefetch"/>
+    /// is <c>true</c> (or <c>null</c> and <see cref="LatticeOptions.PrefetchEntriesScan"/>
+    /// is enabled), the next page from each shard is fetched in parallel while the
+    /// current page is being consumed.
     /// </summary>
     public static async IAsyncEnumerable<KeyValuePair<string, T>> EntriesAsync<T>(
         this ILattice lattice,
@@ -255,21 +258,23 @@ public static class TypedLatticeExtensions
         string? startInclusive = null,
         string? endExclusive = null,
         bool reverse = false,
+        bool? prefetch = null,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(serializer);
-        await foreach (var entry in lattice.EntriesAsync(startInclusive, endExclusive, reverse, cancellationToken))
+        await foreach (var entry in lattice.EntriesAsync(startInclusive, endExclusive, reverse, prefetch, cancellationToken))
         {
             yield return new KeyValuePair<string, T>(entry.Key, serializer.Deserialize(entry.Value));
         }
     }
 
-    /// <inheritdoc cref="EntriesAsync{T}(ILattice, ILatticeSerializer{T}, string?, string?, bool, CancellationToken)"/>
+    /// <inheritdoc cref="EntriesAsync{T}(ILattice, ILatticeSerializer{T}, string?, string?, bool, bool?, CancellationToken)"/>
     public static IAsyncEnumerable<KeyValuePair<string, T>> EntriesAsync<T>(
         this ILattice lattice,
         string? startInclusive = null,
         string? endExclusive = null,
         bool reverse = false,
+        bool? prefetch = null,
         CancellationToken cancellationToken = default) =>
-        lattice.EntriesAsync(JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, cancellationToken);
+        lattice.EntriesAsync(JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, prefetch, cancellationToken);
 }

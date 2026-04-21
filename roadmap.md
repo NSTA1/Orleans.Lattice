@@ -23,6 +23,7 @@ Potential improvements and new features.
 - [x] **F-007 — Leaf-side continuation filtering for `KeysAsync`**: Apply the same `afterExclusive` leaf-side filtering to `GetSortedKeysBatchAsync`, eliminating shard-level skip loops for key-only scans.
 - [x] **F-008 — Reverse-scan leaf-side filtering**: Add a `beforeExclusive` parameter to leaf `GetKeysAsync` / `GetEntriesAsync` so reverse pagination also filters at the leaf, avoiding unnecessary serialization in `GetSortedKeysBatchReverseAsync` / `GetSortedEntriesBatchReverseAsync`.
 - [x] **F-009 — Parallel shard pre-fetch for `KeysAsync`**: Double-buffer the k-way merge by pre-fetching the next page from each shard in parallel, hiding per-shard latency during ordered key scans. Controlled via `LatticeOptions.PrefetchKeysScan` or the per-call `prefetch` parameter.
+- [x] **F-024 — Parallel shard pre-fetch for `EntriesAsync`** *(required F-009 ✓)*: Extends the F-009 double-buffering strategy to `EntriesAsync`, hiding per-shard grain-call latency during ordered entry scans. Controlled via `LatticeOptions.PrefetchEntriesScan` (new, default `false`) or an optional `prefetch` parameter on `ILattice.EntriesAsync` (and the typed `EntriesAsync<T>` extensions). Gated separately from `PrefetchKeysScan` because entry pages carry `byte[]` values and increase in-flight memory by `shardCount × KeysPageSize × avgValueSize` — callers opt in only when the memory trade-off is acceptable. Ordering, completeness, and scan-reconciliation semantics are unchanged; the prefetch kick-off mirrors `ShardCursor.MoveNextAsync` so `MovedAwaySlots` observed on a pre-fetched page are still consumed on the next loop iteration before any further dequeue. Regression tests: 8 `EntriesPrefetchTests` integration cases (sorted, reverse, range, reverse range, forced pagination, `prefetch: false` override, empty tree, prefetch-vs-non-prefetch parity) and one typed-extension forwarding test.
 - [x] **F-013 — Internal shard hotness counters**: Volatile in-memory counters (`reads`, `writes`, `countersSince`) on `ShardRootGrain`, incremented at zero persistence cost. Exposed via `GetHotnessAsync()` returning a `ShardHotness` struct so coordinators can poll all shards in parallel. Counters reset on grain deactivation.
 - [x] **F-028 — Shard map indirection**: Replaced fixed `XxHash32 % shardCount` routing with a persistent `ShardMap` mapping virtual shard indices to physical `ShardRootGrain` identities over a large fixed virtual slot space (4 096 slots). `LatticeGrain` caches the map in memory and invalidates on topology changes.
 - [x] **F-030 — Route `BulkLoadAsync` through the shard map**: The streaming `BulkLoadAsync` overload resolves the per-tree `ShardMap` up-front via `ILattice.GetRoutingAsync()` and routes each entry through `ShardMap.Resolve`. The legacy `int shardCount` overload is preserved but marked `[Obsolete]`.
@@ -73,14 +74,7 @@ Incremental, ongoing merge from one or more source trees using `VersionVector` t
 
 ---
 
-### 3 · F-024
-**Performance / medium-high impact**
-
-Extend the F-009 double-buffering strategy to `EntriesAsync`. Because entries carry `byte[]` values, pre-fetched pages increase in-flight memory proportionally to `shardCount × pageSize × avgValueSize`. Gate behind a dedicated `PrefetchEntriesScan` option or an optional `prefetch` parameter so callers opt in only when the memory trade-off is acceptable.
-
----
-
-### 4 · F-014
+### 3 · F-014
 **Observability / medium impact**
 
 Return per-shard health information — depth, live key count, tombstone ratio, pending splits/promotions — via an `ILatticeAdmin` interface or a method on `ILattice`.
@@ -89,21 +83,21 @@ Return per-shard health information — depth, live key count, tombstone ratio, 
 
 ---
 
-### 5 · F-012
+### 4 · F-012
 **Reliability / medium impact**
 
 Optionally pre-warm `LeafCacheGrain` activations for recently-accessed leaves after a silo restart to reduce cold-start read-latency spikes. No dependencies.
 
 ---
 
-### 6 · F-015
+### 5 · F-015
 **Feature / medium impact**
 
 Publish tree events (key written, tree deleted, split occurred, compaction completed) via an `ILatticeObserver` interface or Orleans Streams integration for event-driven architectures.
 
 ---
 
-### 7 · F-018
+### 6 · F-018
 **Feature / lower impact (complex)**
 
 Associate tags with keys and query by tag. Implementable as a secondary Lattice tree mapping `tag → Set<key>`, maintained transactionally alongside the primary write. High complexity; deferred until core feature set is stable.
@@ -214,8 +208,4 @@ Each `ShardRootGrain` is currently placed by Orleans' default random placement d
 | F-025 (Continuous merge) | F-020 (Merge trees) | ✅ Prereq complete — F-025 unblocked |
 | F-027 (Leaf-grouped merge routing) | — | ✅ Complete (amortises batched merge at scale for F-025) |
 | F-019 (Online resize) | F-028 (Shard map indirection) | ✅ Both complete |
-| F-024 (Entry pre-fetch) | F-009 (Key pre-fetch) | ✅ Prereq complete — F-024 unblocked |
 | F-022 (Troubleshooting guide) | F-014 (Tree diagnostics) | 🔲 Guide should follow diagnostics implementation |
-| F-031 (Atomic multi-key writes) | F-017 (CAS) | ✅ Both complete |
-| F-032 (Scan ordering under topology change) | F-011 (Adaptive shard splitting) | ✅ Both complete |
-| F-033 (Stateful cursor grain) | F-032 (Scan ordering under topology change) | ✅ Both complete |
