@@ -383,7 +383,6 @@ Controls source-tree availability during a snapshot operation.
 | Method | Description |
 |--------|-------------|
 | `BulkLoadAsync(IAsyncEnumerable<...>, IGrainFactory, int chunkSize)` | Streaming bulk load for large datasets. Input **must** be pre-sorted in ascending key order. Routing is resolved via `ILattice.GetRoutingAsync()` so the per-tree `ShardMap` is honoured. See [Bulk Loading](bulk-loading.md). |
-| `BulkLoadAsync(..., int shardCount, int chunkSize)` *(obsolete)* | Legacy streaming overload that takes an explicit `shardCount`. Bypasses the persisted `ShardMap` and will mis-route entries on trees with non-default maps. Use the overload above. |
 | `SubscribeToEventsAsync(this ILattice, IClusterClient, Func<LatticeTreeEvent, Task>, string providerName = "Default", CancellationToken)` | Subscribes to the per-tree `LatticeTreeEvent` stream on the cluster client. Returns a `StreamSubscriptionHandle<LatticeTreeEvent>`; call `UnsubscribeAsync()` on it to stop receiving events. Throws `InvalidOperationException` when `providerName` is not registered on the client. See [Events](events.md). |
 
 ## `TypedLatticeExtensions`
