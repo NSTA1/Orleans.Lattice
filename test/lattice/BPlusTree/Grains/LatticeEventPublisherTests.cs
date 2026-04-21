@@ -21,13 +21,16 @@ public class LatticeEventPublisherTests
     };
 
     [Test]
-    public async Task PublishAsync_noops_when_publishing_disabled()
+    public void PublishAsync_noops_when_publishing_disabled()
     {
+        // A service provider with no stream provider registered would throw if
+        // PublishAsync reached the lookup, so DoesNotThrow proves the early-exit
+        // branch taken when PublishEvents is false.
         var services = new ServiceCollection().BuildServiceProvider();
         var options = new LatticeOptions { PublishEvents = false };
 
-        await LatticeEventPublisher.PublishAsync(services, options, MakeEvent(), NullLogger.Instance);
-        Assert.Pass();
+        Assert.DoesNotThrowAsync(async () =>
+            await LatticeEventPublisher.PublishAsync(services, options, MakeEvent(), NullLogger.Instance));
     }
 
     [Test]

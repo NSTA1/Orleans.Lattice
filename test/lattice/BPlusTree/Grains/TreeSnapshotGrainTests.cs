@@ -175,6 +175,11 @@ public partial class TreeSnapshotGrainTests
         state.State.Mode = SnapshotMode.Offline;
 
         await grain.SnapshotAsync(DestTreeId, SnapshotMode.Offline);
+
+        // Idempotent call must leave the in-progress marker unchanged.
+        Assert.That(state.State.InProgress, Is.True);
+        Assert.That(state.State.DestinationTreeId, Is.EqualTo(DestTreeId));
+        Assert.That(state.State.Mode, Is.EqualTo(SnapshotMode.Offline));
     }
 
     [Test]

@@ -178,6 +178,10 @@ public partial class TreeMergeGrainTests
 
         // Should not throw — same source.
         await grain.MergeAsync(SourceTreeId);
+
+        // Idempotent call must leave the in-progress marker unchanged.
+        Assert.That(state.State.InProgress, Is.True);
+        Assert.That(state.State.SourceTreeId, Is.EqualTo(SourceTreeId));
     }
 
     [Test]

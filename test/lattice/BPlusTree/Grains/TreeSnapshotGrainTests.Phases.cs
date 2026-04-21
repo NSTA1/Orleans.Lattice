@@ -87,6 +87,11 @@ public partial class TreeSnapshotGrainTests
 
         // Same params including sizing — should not throw.
         await grain.SnapshotAsync(DestTreeId, SnapshotMode.Offline, maxLeafKeys: 256, maxInternalChildren: 64);
+
+        // Idempotent call must leave the in-progress marker and sizing unchanged.
+        Assert.That(state.State.InProgress, Is.True);
+        Assert.That(state.State.MaxLeafKeys, Is.EqualTo(256));
+        Assert.That(state.State.MaxInternalChildren, Is.EqualTo(64));
     }
 
     // --- Copy phase ---
