@@ -41,12 +41,14 @@ internal sealed partial class LatticeGrain
         string? startInclusive = null,
         string? endExclusive = null,
         bool reverse = false,
+        bool? prefetch = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var (physicalTreeId, shardMap0) = await GetRoutingAsync();
         var physicalShards = shardMap0.GetPhysicalShardIndices();
         var pageSize = Options.KeysPageSize;
+        var usePrefetch = prefetch ?? Options.PrefetchEntriesScan;
         var isSystemTree = TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal);
 
         IComparer<string> comparer = reverse ? ReverseOrdinal : StringComparer.Ordinal;
@@ -60,7 +62,7 @@ internal sealed partial class LatticeGrain
             var shardKey = $"{physicalTreeId}/{physicalShards[i]}";
             var sc = new EntriesCursor(
                 grainFactory.GetGrain<IShardRootGrain>(shardKey),
-                startInclusive, endExclusive, pageSize, reverse, movedReported);
+                startInclusive, endExclusive, pageSize, reverse, usePrefetch, movedReported);
             cursors.Add(sc);
             initTasks[i] = sc.MoveNextAsync();
         }
@@ -272,10 +274,10 @@ internal sealed partial class LatticeGrain
     }
 
     /// <summary>
-    /// Lazily paginates through a single shard's entries, accumulating
+    /// Lazily paginates through a single shard's entries, optionally pre-fetching
+    /// the next page in the background to hide grain-call latency. Accumulates
     /// reported <see cref="EntriesPage.MovedAwaySlots"/> into
-    /// <paramref name="movedSlotSink"/> for the orchestrator's reconciliation
-    ///.
+    /// <paramref name="movedSlotSink"/> for the orchestrator's reconciliation.
     /// </summary>
     private sealed class EntriesCursor(
         IShardRootGrain shard,
@@ -283,12 +285,14 @@ internal sealed partial class LatticeGrain
         string? endExclusive,
         int pageSize,
         bool reverse,
+        bool prefetch,
         HashSet<int>? movedSlotSink) : IEntriesCursor
     {
         private List<KeyValuePair<string, byte[]>>? _page;
         private int _index;
         private bool _hasMore = true;
         private string? _continuation;
+        private Task<EntriesPage>? _prefetchTask;
 
         public bool HasCurrent => _page is not null && _index < _page.Count;
         public KeyValuePair<string, byte[]> Current => _page![_index];
@@ -302,11 +306,17 @@ internal sealed partial class LatticeGrain
 
             if (_page is null || (_index >= _page.Count && _hasMore))
             {
-                var result = reverse
-                    ? await shard.GetSortedEntriesBatchReverseAsync(
-                        startInclusive, endExclusive, pageSize, _continuation)
-                    : await shard.GetSortedEntriesBatchAsync(
-                        startInclusive, endExclusive, pageSize, _continuation);
+                EntriesPage result;
+                if (_prefetchTask is not null)
+                {
+                    result = await _prefetchTask;
+                    _prefetchTask = null;
+                }
+                else
+                {
+                    result = await FetchPageAsync(_continuation);
+                }
+
                 _page = result.Entries;
                 _index = 0;
                 _hasMore = result.HasMore;
@@ -317,7 +327,20 @@ internal sealed partial class LatticeGrain
                 {
                     foreach (var s in moved) movedSlotSink.Add(s);
                 }
+
+                // Kick off background fetch for the next page.
+                if (prefetch && _hasMore)
+                    _prefetchTask = FetchPageAsync(_continuation);
             }
+        }
+
+        private Task<EntriesPage> FetchPageAsync(string? continuation)
+        {
+            return reverse
+                ? shard.GetSortedEntriesBatchReverseAsync(
+                    startInclusive, endExclusive, pageSize, continuation)
+                : shard.GetSortedEntriesBatchAsync(
+                    startInclusive, endExclusive, pageSize, continuation);
         }
     }
 }
