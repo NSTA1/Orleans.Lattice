@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Concurrency;
 using Orleans.Lattice.Primitives;
@@ -15,7 +16,9 @@ internal sealed partial class LatticeGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
-    LatticeOptionsResolver optionsResolver) : ILattice
+    LatticeOptionsResolver optionsResolver,
+    IServiceProvider services,
+    ILogger<LatticeGrain> logger) : ILattice
 {
     private string TreeId => context.GrainId.Key.ToString()!;
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
@@ -23,6 +26,15 @@ internal sealed partial class LatticeGrain(
     private bool _monitorEnsured;
     private string? _physicalTreeId;
     private ShardMap? _shardMap;
+    private readonly PublishEventsGate _eventsGate = new();
+
+    private async Task PublishEventAsync(LatticeTreeEventKind kind, string? key = null, int? shardIndex = null)
+    {
+        var opts = Options;
+        if (!await _eventsGate.IsEnabledAsync(grainFactory, TreeId, opts)) return;
+        var evt = LatticeEventPublisher.CreateEvent(kind, TreeId, key, shardIndex);
+        await LatticeEventPublisher.PublishAsync(services, opts, evt, logger);
+    }
 
     public async Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
     {
@@ -210,6 +222,7 @@ internal sealed partial class LatticeGrain(
             shard = await GetShardGrainAsync(key);
             await shard.SetAsync(key, value);
         }
+        await PublishEventAsync(LatticeTreeEventKind.Set, key);
     }
 
     /// <inheritdoc />
@@ -255,6 +268,7 @@ internal sealed partial class LatticeGrain(
             shard = await GetShardGrainAsync(key);
             await shard.SetAsync(key, value, expiresAtTicks);
         }
+        await PublishEventAsync(LatticeTreeEventKind.Set, key);
     }
 
     public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default)
@@ -266,28 +280,31 @@ internal sealed partial class LatticeGrain(
         await EnsureMonitorAsync();
         cancellationToken.ThrowIfCancellationRequested();
         var shard = await GetShardGrainAsync(key);
+        bool applied;
         try
         {
-            return await shard.SetIfVersionAsync(key, value, expectedVersion);
+            applied = await shard.SetIfVersionAsync(key, value, expectedVersion);
         }
         catch (StaleShardRoutingException) when (InvalidateShardMap())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            return await shard.SetIfVersionAsync(key, value, expectedVersion);
+            applied = await shard.SetIfVersionAsync(key, value, expectedVersion);
         }
         catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            return await shard.SetIfVersionAsync(key, value, expectedVersion);
+            applied = await shard.SetIfVersionAsync(key, value, expectedVersion);
         }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            return await shard.SetIfVersionAsync(key, value, expectedVersion);
+            applied = await shard.SetIfVersionAsync(key, value, expectedVersion);
         }
+        if (applied) await PublishEventAsync(LatticeTreeEventKind.Set, key);
+        return applied;
     }
 
     public async Task<byte[]?> GetOrSetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
@@ -299,28 +316,32 @@ internal sealed partial class LatticeGrain(
         await EnsureMonitorAsync();
         cancellationToken.ThrowIfCancellationRequested();
         var shard = await GetShardGrainAsync(key);
+        byte[]? existing;
         try
         {
-            return await shard.GetOrSetAsync(key, value);
+            existing = await shard.GetOrSetAsync(key, value);
         }
         catch (StaleShardRoutingException) when (InvalidateShardMap())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            return await shard.GetOrSetAsync(key, value);
+            existing = await shard.GetOrSetAsync(key, value);
         }
         catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            return await shard.GetOrSetAsync(key, value);
+            existing = await shard.GetOrSetAsync(key, value);
         }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            return await shard.GetOrSetAsync(key, value);
+            existing = await shard.GetOrSetAsync(key, value);
         }
+        // Publish only when a new value was actually written (existing was null).
+        if (existing is null) await PublishEventAsync(LatticeTreeEventKind.Set, key);
+        return existing;
     }
 
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
@@ -349,6 +370,18 @@ internal sealed partial class LatticeGrain(
             cancellationToken.ThrowIfCancellationRequested();
             await SetManyAsyncCore(entries);
         }
+
+        // Publish one Set event per entry. Emitted only after all shard writes
+        // have committed so subscribers never observe a Set for a key that
+        // failed to persist (we'd have thrown above). Skipped entirely when
+        // publishing is disabled to avoid walking the entry list.
+        if (entries.Count > 0 && await _eventsGate.IsEnabledAsync(grainFactory, TreeId, Options))
+        {
+            foreach (var entry in entries)
+            {
+                await PublishEventAsync(LatticeTreeEventKind.Set, entry.Key);
+            }
+        }
     }
 
     private async Task SetManyAsyncCore(List<KeyValuePair<string, byte[]>> entries)
@@ -356,7 +389,7 @@ internal sealed partial class LatticeGrain(
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
 
         // Group entries by shard.
-        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>();
+        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>> ();
         foreach (var entry in entries)
         {
             var idx = shardMap.Resolve(entry.Key);
@@ -441,28 +474,31 @@ internal sealed partial class LatticeGrain(
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();
         var shard = await GetShardGrainAsync(key);
+        bool existed;
         try
         {
-            return await shard.DeleteAsync(key);
+            existed = await shard.DeleteAsync(key);
         }
         catch (StaleShardRoutingException) when (InvalidateShardMap())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            return await shard.DeleteAsync(key);
+            existed = await shard.DeleteAsync(key);
         }
         catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            return await shard.DeleteAsync(key);
+            existed = await shard.DeleteAsync(key);
         }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            return await shard.DeleteAsync(key);
+            existed = await shard.DeleteAsync(key);
         }
+        if (existed) await PublishEventAsync(LatticeTreeEventKind.Delete, key);
+        return existed;
     }
 
     public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
@@ -472,25 +508,29 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();
+        int deleted;
         try
         {
-            return await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
+            deleted = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
         }
         catch (StaleShardRoutingException) when (InvalidateShardMap())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
+            deleted = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
         }
         catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
+            deleted = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
         }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
+            deleted = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
         }
+        if (deleted > 0)
+            await PublishEventAsync(LatticeTreeEventKind.DeleteRange, $"{startInclusive}..{endExclusive}");
+        return deleted;
     }
 
     private async Task<int> DeleteRangeAsyncCore(string startInclusive, string endExclusive, CancellationToken cancellationToken)

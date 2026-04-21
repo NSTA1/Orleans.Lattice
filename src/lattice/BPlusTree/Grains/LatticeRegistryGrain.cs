@@ -172,6 +172,15 @@ internal sealed class LatticeRegistryGrain(
         return allocated;
     }
 
+    public async Task SetPublishEventsAsync(string treeId, bool? enabled)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var updated = existing with { PublishEvents = enabled };
+        await UpdateAsync(treeId, updated);
+    }
+
     private static byte[] SerializeEntry(TreeRegistryEntry entry) =>
         JsonSerializer.SerializeToUtf8Bytes(entry, RegistryEntryContext.Default.TreeRegistryEntry);
 

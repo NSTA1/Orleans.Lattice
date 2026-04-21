@@ -314,6 +314,35 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultDiagnosticsCacheTtl = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// When <c>true</c>, Lattice publishes <see cref="LatticeTreeEvent"/> notifications
+    /// on an Orleans stream (namespace <see cref="LatticeEventConstants.StreamNamespace"/>,
+    /// stream id = tree id) for writes, deletes, compaction passes, splits,
+    /// snapshots, resizes, reshards, and tree-lifecycle transitions. Consumers
+    /// subscribe via <see cref="LatticeExtensions.SubscribeToEventsAsync"/>.
+    /// cost on the write path. Enabling publication requires that an Orleans
+    /// stream provider named <see cref="EventStreamProviderName"/> is
+    /// registered on every silo that hosts Lattice grains — otherwise
+    /// publishes are logged-and-swallowed and subscribers never receive
+    /// events.
+    /// </summary>
+    public bool PublishEvents { get; set; } = DefaultPublishEvents;
+
+    /// <summary>Default value for <see cref="PublishEvents"/> (<c>false</c>).</summary>
+    public const bool DefaultPublishEvents = false;
+
+    /// <summary>
+    /// Name of the Orleans stream provider used to publish and subscribe to
+    /// <see cref="LatticeTreeEvent"/>. Defaults to <c>"Default"</c>, matching
+    /// the conventional name used by <c>siloBuilder.AddMemoryStreams("Default")</c>.
+    /// The same name must be used on the client (subscribers) and on every
+    /// silo (publishers).
+    /// </summary>
+    public string EventStreamProviderName { get; set; } = DefaultEventStreamProviderName;
+
+    /// <summary>Default value for <see cref="EventStreamProviderName"/> (<c>"Default"</c>).</summary>
+    public const string DefaultEventStreamProviderName = "Default";
+
+    /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.
     /// Used internally by <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
     /// and exposed for advanced scenarios where callers register storage directly.

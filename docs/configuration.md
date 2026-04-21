@@ -288,6 +288,23 @@ siloBuilder.ConfigureLattice("debug-tree", o => o.DiagnosticsCacheTtl = TimeSpan
 
 This option can be changed freely at any time. The new TTL takes effect on the next `DiagnoseAsync` call.
 
+### `PublishEvents`
+
+Silo-wide default for tree-event publication (default: `false`). When the effective setting resolves to `true`, the silo fires metadata-only `LatticeTreeEvent` notifications on a per-tree Orleans stream as writes, splits, compactions, snapshots, resizes, reshards, and tree-lifecycle transitions occur. Subscribers consume the stream via `LatticeExtensions.SubscribeToEventsAsync` on the cluster client. See [Events](events.md) for the event contract, delivery semantics, and provider requirements.
+
+The effective setting is resolved per tree as follows:
+
+1. If the tree's registry entry has a per-tree override (set via `ILattice.SetPublishEventsEnabledAsync(bool?)`), that value wins.
+2. Otherwise the silo-wide `LatticeOptions.PublishEvents` is used.
+
+This means `PublishEvents` acts as the **global default**: it applies to every tree — user trees *and* system-internal trees (those prefixed with `_lattice_`, e.g. the registry tree itself) — that has not set an override. System trees never consult the registry for their own override (that would deadlock the registry activation), so for them the silo option is always authoritative. In practice system trees produce very low event volume and are rarely of interest to subscribers; leave this at `false` unless you specifically want to observe them.
+
+Propagation of a per-tree override is best-effort across silos: the activation that handled `SetPublishEventsEnabledAsync` observes the change immediately, while other activations refresh their cached value within a few seconds. Writes in flight at the moment of the change may emit events under the previous setting.
+
+Publication itself is fire-and-forget: a missing stream provider, a serialization failure, or a downstream queue error is logged at `Warning` and swallowed — write-path latency and availability are unaffected by subscriber health.
+
+This option can be changed freely at any time.
+
 ## Storage Provider Name
 
 Lattice grains use the storage provider named `"lattice"` (exposed as `LatticeOptions.StorageProviderName`). The `AddLattice` extension method passes this name to your storage registration delegate. In advanced scenarios where you register storage directly, use this constant to ensure the provider name matches:

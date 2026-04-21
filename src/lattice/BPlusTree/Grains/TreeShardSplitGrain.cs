@@ -327,8 +327,20 @@ internal sealed class TreeShardSplitGrain(
         // are swallowed so the commit path never waits on diagnostics plumbing.
         NotifyDiagnosticsOfSplit(state.State.SourceShardIndex);
 
+        await PublishSplitCommittedAsync(state.State.SourceShardIndex);
+
         await CompleteCoordinatorAsync();
     }
+
+    private async Task PublishSplitCommittedAsync(int shardIndex)
+    {
+        var opts = optionsMonitor.Get(TreeId);
+        if (!await _eventsGate.IsEnabledAsync(grainFactory, TreeId, opts)) return;
+        var evt = LatticeEventPublisher.CreateEvent(LatticeTreeEventKind.SplitCommitted, TreeId, key: null, shardIndex: shardIndex);
+        await LatticeEventPublisher.PublishAsync(Context.ActivationServices, opts, evt, Logger);
+    }
+
+    private readonly PublishEventsGate _eventsGate = new();
 
     private void NotifyDiagnosticsOfSplit(int shardIndex)
     {

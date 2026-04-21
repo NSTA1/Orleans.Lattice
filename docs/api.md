@@ -349,6 +349,22 @@ foreach (var shard in report.Shards)
 }
 ```
 
+#### Events
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `SetPublishEventsEnabledAsync` | `Task SetPublishEventsEnabledAsync(bool? enabled, CancellationToken cancellationToken = default)` | Sets or clears the per-tree override for event publication. `true` forces publication on, `false` forces it off, `null` removes the override so the tree inherits the silo-wide `LatticeOptions.PublishEvents` default. The override is persisted on the tree's registry entry and survives silo restarts. Propagation is best-effort: the handling activation observes the change immediately; other activations refresh within a few seconds. See [Events — Per-tree override](events.md#per-tree-override) and [Configuration → `PublishEvents`](configuration.md#publishevents). |
+
+```csharp verify
+// Force events on for this tree regardless of the silo default:
+await tree.SetPublishEventsEnabledAsync(true, cancellationToken);
+
+// Clear the override and inherit whatever the silo is configured for:
+await tree.SetPublishEventsEnabledAsync(null, cancellationToken);
+```
+
+For subscribing to the published events on the cluster client, see `SubscribeToEventsAsync` under [`LatticeExtensions`](#latticeextensions).
+
 ## `SnapshotMode`
 
 Controls source-tree availability during a snapshot operation.
@@ -364,6 +380,7 @@ Controls source-tree availability during a snapshot operation.
 |--------|-------------|
 | `BulkLoadAsync(IAsyncEnumerable<...>, IGrainFactory, int chunkSize)` | Streaming bulk load for large datasets. Input **must** be pre-sorted in ascending key order. Routing is resolved via `ILattice.GetRoutingAsync()` so the per-tree `ShardMap` is honoured. See [Bulk Loading](bulk-loading.md). |
 | `BulkLoadAsync(..., int shardCount, int chunkSize)` *(obsolete)* | Legacy streaming overload that takes an explicit `shardCount`. Bypasses the persisted `ShardMap` and will mis-route entries on trees with non-default maps. Use the overload above. |
+| `SubscribeToEventsAsync(this ILattice, IClusterClient, Func<LatticeTreeEvent, Task>, string providerName = "Default", CancellationToken)` | Subscribes to the per-tree `LatticeTreeEvent` stream on the cluster client. Returns a `StreamSubscriptionHandle<LatticeTreeEvent>`; call `UnsubscribeAsync()` on it to stop receiving events. Throws `InvalidOperationException` when `providerName` is not registered on the client. See [Events](events.md). |
 
 ## `TypedLatticeExtensions`
 

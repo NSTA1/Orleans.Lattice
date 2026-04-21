@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
@@ -41,7 +43,9 @@ public partial class LatticeGrainTests
             }));
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 
-        var grain = new LatticeGrain(context, grainFactory, optionsMonitor, optionsResolver);
+        var services = Substitute.For<IServiceProvider>();
+        var logger = NullLogger<LatticeGrain>.Instance;
+        var grain = new LatticeGrain(context, grainFactory, optionsMonitor, optionsResolver, services, logger);
         return (grain, grainFactory);
     }
 
