@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
@@ -150,7 +151,7 @@ internal sealed partial class BPlusLeafGrain(
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
         {
             var recovered = await CompleteSplitAsync();
-            await state.WriteStateAsync();
+            await PersistAsync();
 
             // Apply the caller's write to the correct leaf so it isn't silently dropped.
             if (string.Compare(key, state.State.SplitKey!, StringComparison.Ordinal) >= 0)
@@ -169,7 +170,7 @@ internal sealed partial class BPlusLeafGrain(
                     state.State.Entries[key] = LwwValue<byte[]>.Merge(prev, entry);
                 else
                     state.State.Entries[key] = entry;
-                await state.WriteStateAsync();
+                await PersistAsync();
             }
 
             return recovered;
@@ -194,7 +195,7 @@ internal sealed partial class BPlusLeafGrain(
             splitResult = await SplitAsync();
         }
 
-        await state.WriteStateAsync();
+        await PersistAsync();
         return splitResult;
     }
 
@@ -220,7 +221,8 @@ internal sealed partial class BPlusLeafGrain(
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
         state.State.Version.Tick(ReplicaId);
         state.State.Entries[key] = LwwValue<byte[]>.Tombstone(state.State.Clock);
-        await state.WriteStateAsync();
+        await PersistAsync();
+        LatticeMetrics.LeafTombstonesCreated.Add(1, LeafTreeTag());
         return true;
     }
 
@@ -258,7 +260,8 @@ internal sealed partial class BPlusLeafGrain(
             state.State.Entries[key] = tombstone;
         }
 
-        await state.WriteStateAsync();
+        await PersistAsync();
+        LatticeMetrics.LeafTombstonesCreated.Add(keysToDelete.Count, LeafTreeTag());
         return new RangeDeleteResult { Deleted = keysToDelete.Count, PastRange = pastRange };
     }
 
@@ -292,7 +295,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task SetNextSiblingAsync(GrainId? siblingId)
     {
         state.State.NextSibling = siblingId;
-        await state.WriteStateAsync();
+        await PersistAsync();
     }
 
     public Task<GrainId?> GetPrevSiblingAsync() =>
@@ -301,14 +304,14 @@ internal sealed partial class BPlusLeafGrain(
     public async Task SetPrevSiblingAsync(GrainId? siblingId)
     {
         state.State.PrevSibling = siblingId;
-        await state.WriteStateAsync();
+        await PersistAsync();
     }
 
     public async Task SetTreeIdAsync(string treeId)
     {
         if (state.State.TreeId is not null) return;
         state.State.TreeId = treeId;
-        await state.WriteStateAsync();
+        await PersistAsync();
     }
 
     public Task<string?> GetTreeIdAsync() =>
@@ -320,10 +323,13 @@ internal sealed partial class BPlusLeafGrain(
         if (state.State.LastCompactionVersion.DominatesOrEquals(state.State.Version))
             return 0;
 
+        var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var cutoff = nowTicks - gracePeriod.Ticks;
         var toRemove = new List<string>();
         var anyInGraceRemaining = false;
+        var tombstonesRemoved = 0;
+        var expiredRemoved = 0;
 
         foreach (var (key, lww) in state.State.Entries)
         {
@@ -332,6 +338,7 @@ internal sealed partial class BPlusLeafGrain(
                 if (lww.Timestamp.WallClockTicks <= cutoff)
                 {
                     toRemove.Add(key);
+                    tombstonesRemoved++;
                 }
                 else
                 {
@@ -351,6 +358,7 @@ internal sealed partial class BPlusLeafGrain(
                 if (lww.ExpiresAtTicks <= cutoff)
                 {
                     toRemove.Add(key);
+                    expiredRemoved++;
                 }
                 else
                 {
@@ -374,7 +382,14 @@ internal sealed partial class BPlusLeafGrain(
         if (!anyInGraceRemaining)
             state.State.LastCompactionVersion = state.State.Version.Clone();
 
-        await state.WriteStateAsync();
+        await PersistAsync();
+        var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
+        var treeTag = LeafTreeTag();
+        LatticeMetrics.LeafCompactionDuration.Record(elapsedMs, treeTag);
+        if (tombstonesRemoved > 0)
+            LatticeMetrics.LeafTombstonesReaped.Add(tombstonesRemoved, treeTag);
+        if (expiredRemoved > 0)
+            LatticeMetrics.LeafTombstonesExpired.Add(expiredRemoved, treeTag);
         return toRemove.Count;
     }
 
@@ -490,11 +505,12 @@ internal sealed partial class BPlusLeafGrain(
             state.State.Version.Tick(ReplicaId);
         }
 
-        await state.WriteStateAsync();
+        await PersistAsync();
     }
 
     public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
     {
+        var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
@@ -524,11 +540,16 @@ internal sealed partial class BPlusLeafGrain(
             keys.Add(key);
         }
 
+        var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
+        LatticeMetrics.LeafScanDuration.Record(elapsedMs,
+            LeafTreeTag(),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, "keys"));
         return Task.FromResult(keys);
     }
 
     public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
     {
+        var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
@@ -558,6 +579,10 @@ internal sealed partial class BPlusLeafGrain(
             entries.Add(new KeyValuePair<string, byte[]>(key, lww.Value!));
         }
 
+        var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
+        LatticeMetrics.LeafScanDuration.Record(elapsedMs,
+            LeafTreeTag(),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, "entries"));
         return Task.FromResult(entries);
     }
 
@@ -608,7 +633,7 @@ internal sealed partial class BPlusLeafGrain(
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
         {
             var recovered = await CompleteSplitAsync();
-            await state.WriteStateAsync();
+            await PersistAsync();
 
             // Re-merge entries that belong to the new sibling.
             var siblingEntries = new Dictionary<string, LwwValue<byte[]>>();
@@ -631,7 +656,7 @@ internal sealed partial class BPlusLeafGrain(
             if (localEntries.Count > 0)
             {
                 MergeIntoState(localEntries);
-                await state.WriteStateAsync();
+                await PersistAsync();
             }
 
             return recovered;
@@ -650,7 +675,7 @@ internal sealed partial class BPlusLeafGrain(
             splitResult = await SplitAsync();
         }
 
-        await state.WriteStateAsync();
+        await PersistAsync();
         return splitResult;
     }
 

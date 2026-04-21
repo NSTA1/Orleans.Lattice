@@ -327,6 +327,10 @@ internal sealed class TreeShardSplitGrain(
         // are swallowed so the commit path never waits on diagnostics plumbing.
         NotifyDiagnosticsOfSplit(state.State.SourceShardIndex);
 
+        LatticeMetrics.ShardSplitsCommitted.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, state.State.SourceShardIndex));
+
         await PublishSplitCommittedAsync(state.State.SourceShardIndex);
 
         await CompleteCoordinatorAsync();

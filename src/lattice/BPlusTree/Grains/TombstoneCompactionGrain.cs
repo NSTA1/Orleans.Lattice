@@ -220,6 +220,10 @@ internal sealed class TombstoneCompactionGrain(
 
         await UnregisterKeepaliveAsync();
 
+        LatticeMetrics.CoordinatorCompleted.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "compaction"));
+
         await PublishCompactionCompletedAsync();
 
         // This grain does no work between passes — free the activation.

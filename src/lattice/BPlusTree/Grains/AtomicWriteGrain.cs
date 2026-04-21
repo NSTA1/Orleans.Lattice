@@ -471,6 +471,18 @@ internal sealed class AtomicWriteGrain(
         await UnregisterKeepaliveAsync();
         await SlideTtlAsync();
 
+        // Emit a terminal outcome counter for operators. "committed" = all
+        // writes applied; "failed" = compensation ran after a Prepare/Execute
+        // failure surrogate was recorded; "compensated" = rolled back for a
+        // reason that was not captured as a surrogate failure (e.g. explicit
+        // caller cancellation path).
+        var outcome = success
+            ? "committed"
+            : (state.State.FailureMessage is not null ? "failed" : "compensated");
+        LatticeMetrics.AtomicWriteCompleted.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
+
         // Publish AtomicWriteCompleted only when the saga committed all writes.
         // Rolled-back sagas emitted per-key Set events during ExecutePhase but
         // compensated them back via LWW tombstones/restores; there is no net

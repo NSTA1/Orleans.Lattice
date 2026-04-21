@@ -477,6 +477,10 @@ internal sealed class TreeSnapshotGrain(
         var destCompaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(state.State.DestinationTreeId!);
         await destCompaction.EnsureReminderAsync();
 
+        LatticeMetrics.CoordinatorCompleted.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, SourceTreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "snapshot"));
+
         await PublishSnapshotCompletedAsync();
 
         await CompleteCoordinatorAsync();

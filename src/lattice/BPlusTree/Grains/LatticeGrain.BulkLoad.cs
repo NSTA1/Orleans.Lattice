@@ -103,6 +103,9 @@ internal sealed partial class LatticeGrain
         // Make sure this activation re-reads the registry next time it publishes
         // so the override takes effect immediately locally.
         _eventsGate.Invalidate();
+        LatticeMetrics.ConfigChanged.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "publish_events"));
     }
 
     public async Task MergeAsync(string sourceTreeId, CancellationToken cancellationToken = default)

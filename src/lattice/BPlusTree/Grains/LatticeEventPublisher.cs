@@ -16,7 +16,6 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="LatticeOptions.EventStreamProviderName"/> is resolved via
 /// keyed-service DI and a metadata-only event is pushed on the per-tree
 /// stream (namespace <see cref="LatticeEventConstants.StreamNamespace"/>,
-/// stream id = tree id).
 /// </para>
 /// <para>
 /// <b>Failures are never propagated to the caller.</b> Missing-provider,
@@ -47,6 +46,9 @@ internal static class LatticeEventPublisher
                 logger?.LogWarning(
                     "Lattice event publication skipped: no Orleans stream provider named '{ProviderName}' is registered on this silo. Register one via siloBuilder.AddMemoryStreams / AddEventHubStreams / etc., or disable LatticeOptions.PublishEvents.",
                     options.EventStreamProviderName);
+                LatticeMetrics.EventsDropped.Add(1,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, evt.TreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagReason, "missing_provider"));
                 return Task.CompletedTask;
             }
 
@@ -58,6 +60,9 @@ internal static class LatticeEventPublisher
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "Lattice event publication threw synchronously for tree {TreeId} kind {Kind}.", evt.TreeId, evt.Kind);
+            LatticeMetrics.EventsDropped.Add(1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, evt.TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagReason, "publish_error"));
             return Task.CompletedTask;
         }
     }
@@ -67,10 +72,16 @@ internal static class LatticeEventPublisher
         try
         {
             await stream.OnNextAsync(evt);
+            LatticeMetrics.EventsPublished.Add(1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, evt.TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagKind, evt.Kind.ToString()));
         }
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "Lattice event publication failed for tree {TreeId} kind {Kind}.", evt.TreeId, evt.Kind);
+            LatticeMetrics.EventsDropped.Add(1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, evt.TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagReason, "publish_error"));
         }
     }
 

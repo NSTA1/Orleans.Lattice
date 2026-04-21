@@ -378,6 +378,10 @@ internal sealed class TreeMergeGrain(
         state.State.ShardRetries = 0;
         await state.WriteStateAsync();
 
+        LatticeMetrics.CoordinatorCompleted.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TargetTreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"));
+
         await UnregisterKeepaliveAsync();
         this.DeactivateOnIdle();
     }
