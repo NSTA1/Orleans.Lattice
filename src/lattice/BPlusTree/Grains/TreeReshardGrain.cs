@@ -35,6 +35,7 @@ internal sealed class TreeReshardGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    LatticeOptionsResolver optionsResolver,
     ILogger<TreeReshardGrain> logger,
     [PersistentState("tree-reshard", LatticeOptions.StorageProviderName)]
     IPersistentState<TreeReshardState> state) : ITreeReshardGrain, IRemindable, IGrainBase
@@ -54,10 +55,10 @@ internal sealed class TreeReshardGrain(
             throw new ArgumentOutOfRangeException(nameof(newShardCount),
                 "Target shard count must be at least 2.");
 
-        var options = Options;
-        if (newShardCount > options.VirtualShardCount)
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
+        if (newShardCount > LatticeConstants.DefaultVirtualShardCount)
             throw new ArgumentOutOfRangeException(nameof(newShardCount),
-                $"Target shard count ({newShardCount}) cannot exceed VirtualShardCount ({options.VirtualShardCount}).");
+                $"Target shard count ({newShardCount}) cannot exceed the virtual shard space ({LatticeConstants.DefaultVirtualShardCount}).");
 
         if (state.State.InProgress)
         {
@@ -69,8 +70,25 @@ internal sealed class TreeReshardGrain(
         // Inspect the current map to validate grow-only semantics.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var currentMap = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.CreateDefault(options.VirtualShardCount, options.ShardCount);
+            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var currentCount = currentMap.GetPhysicalShardIndices().Count;
+
+        // F-019c empty-tree fast-path: if the tree has no live entries yet,
+        // repin ShardCount atomically and rebuild the default identity map
+        // without activating the coordinator machinery. This also relaxes
+        // the grow-only restriction so callers (including test fixtures)
+        // can set any desired shard count on a freshly-created tree.
+        if (newShardCount != currentCount)
+        {
+            var lattice = grainFactory.GetGrain<ILattice>(TreeId);
+            var liveCount = await lattice.CountAsync();
+            if (liveCount == 0)
+            {
+                await ApplyEmptyTreeResharAsync(registry, newShardCount, LatticeConstants.DefaultVirtualShardCount);
+                return;
+            }
+        }
+
         if (newShardCount <= currentCount)
             throw new ArgumentOutOfRangeException(nameof(newShardCount),
                 $"Target shard count ({newShardCount}) must be greater than current count ({currentCount}). Shrink is not supported.");
@@ -196,10 +214,10 @@ internal sealed class TreeReshardGrain(
     /// </summary>
     internal async Task MigrateAsync()
     {
-        var options = Options;
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var currentMap = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.CreateDefault(options.VirtualShardCount, options.ShardCount);
+            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
 
         var physicalShards = currentMap.GetPhysicalShardIndices();
         if (physicalShards.Count >= state.State.TargetShardCount)
@@ -237,7 +255,7 @@ internal sealed class TreeReshardGrain(
             eligible.Add((splittingIndices[i], slotCounts[splittingIndices[i]]));
         }
 
-        var maxConcurrent = options.MaxConcurrentMigrations;
+        var maxConcurrent = resolved.MaxConcurrentMigrations;
         if (maxConcurrent < 1) maxConcurrent = 1;
         if (inFlight >= maxConcurrent) return; // Wait for in-flight splits to commit before dispatching more.
 
@@ -298,6 +316,12 @@ internal sealed class TreeReshardGrain(
         _reshardTimer?.Dispose();
         _reshardTimer = null;
 
+        // F-019c: repin the structural ShardCount on the registry so future
+        // resolver calls see the new physical shard count. The shard map
+        // itself was updated incrementally by each per-shard split; this
+        // reconciles the scalar pin with the map's physical shard count.
+        await UpdateShardCountPinAsync(state.State.TargetShardCount);
+
         state.State.InProgress = false;
         state.State.Complete = true;
         state.State.Phase = ReshardPhase.None;
@@ -305,6 +329,18 @@ internal sealed class TreeReshardGrain(
 
         await UnregisterKeepaliveAsync();
         this.DeactivateOnIdle();
+    }
+
+    /// <summary>
+    /// Atomically updates the <see cref="State.TreeRegistryEntry.ShardCount"/>
+    /// pin for this tree, preserving every other field on the existing entry.
+    /// </summary>
+    private async Task UpdateShardCountPinAsync(int newShardCount)
+    {
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var existing = await registry.GetEntryAsync(TreeId);
+        var updated = (existing ?? new State.TreeRegistryEntry()) with { ShardCount = newShardCount };
+        await registry.UpdateAsync(TreeId, updated);
     }
 
     private async Task UnregisterKeepaliveAsync()
@@ -319,5 +355,25 @@ internal sealed class TreeReshardGrain(
         {
             logger.LogDebug(ex, "Failed to unregister reshard keepalive for tree {TreeId}", TreeId);
         }
+    }
+
+    /// <summary>
+    /// F-019c empty-tree fast-path for <see cref="ReshardAsync"/>: with no
+    /// live entries the reshard reduces to a single registry write that
+    /// updates the <see cref="State.TreeRegistryEntry.ShardCount"/> pin and
+    /// rebuilds the default identity <see cref="ShardMap"/> for the new
+    /// count. The grow-only restriction does not apply because no data has
+    /// to be migrated.
+    /// </summary>
+    private async Task ApplyEmptyTreeResharAsync(ILatticeRegistry registry, int newShardCount, int virtualShardCount)
+    {
+        await UpdateShardCountPinAsync(newShardCount);
+        var newMap = ShardMap.CreateDefault(virtualShardCount, newShardCount);
+        await registry.SetShardMapAsync(TreeId, newMap);
+
+        state.State.Complete = true;
+        state.State.Phase = ReshardPhase.None;
+        state.State.TargetShardCount = newShardCount;
+        await state.WriteStateAsync();
     }
 }

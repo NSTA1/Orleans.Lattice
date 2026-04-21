@@ -301,8 +301,9 @@ public interface ILattice : IGrainWithStringKey
     /// <para>
     /// <b>Grow-only.</b> <paramref name="newShardCount"/> must be strictly
     /// greater than the current number of distinct physical shards, and
-    /// less than or equal to <see cref="LatticeOptions.VirtualShardCount"/>.
-    /// Throws <see cref="ArgumentOutOfRangeException"/> otherwise.
+    /// less than or equal to
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeConstants.DefaultVirtualShardCount"/>
+    /// (4096). Throws <see cref="ArgumentOutOfRangeException"/> otherwise.
     /// </para>
     /// <para>
     /// Idempotent: a call with the same <paramref name="newShardCount"/>

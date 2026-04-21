@@ -1,6 +1,5 @@
 using System.IO;
 using Microsoft.Extensions.ObjectPool;
-using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
@@ -15,7 +14,7 @@ internal sealed partial class ShardRootGrain(
     IGrainContext context,
     [PersistentState("shardroot", LatticeOptions.StorageProviderName)] IPersistentState<ShardRootState> state,
     IGrainFactory grainFactory,
-    IOptionsMonitor<LatticeOptions> optionsMonitor) : IShardRootGrain
+    LatticeOptionsResolver optionsResolver) : IShardRootGrain
 {
     private string? _treeId;
     private string TreeId => _treeId ??= ComputeTreeId();
@@ -25,39 +24,17 @@ internal sealed partial class ShardRootGrain(
         return key[..key.LastIndexOf('/')];
     }
 
-    private LatticeOptions? _cachedOptions;
+    private ResolvedLatticeOptions? _cachedOptions;
 
     /// <summary>
-    /// Returns the effective options for this tree. On first access, checks the
-    /// registry for per-tree overrides; falls back to <see cref="IOptionsMonitor{LatticeOptions}"/>.
-    /// Cached for the grain's lifetime.
+    /// Returns the effective options for this tree. Cached for the grain's
+    /// lifetime. Structural sizing is sourced from the tree registry pin;
+    /// non-structural fields flow through from <see cref="LatticeOptions"/>.
     /// </summary>
-    private async Task<LatticeOptions> GetOptionsAsync()
+    private async Task<ResolvedLatticeOptions> GetOptionsAsync()
     {
         if (_cachedOptions is not null) return _cachedOptions;
-
-        if (!TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
-        {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-            var entry = await registry.GetEntryAsync(TreeId);
-            if (entry is not null)
-            {
-                var baseOptions = optionsMonitor.Get(TreeId);
-                _cachedOptions = new LatticeOptions
-                {
-                    MaxLeafKeys = entry.MaxLeafKeys ?? baseOptions.MaxLeafKeys,
-                    MaxInternalChildren = entry.MaxInternalChildren ?? baseOptions.MaxInternalChildren,
-                    ShardCount = entry.ShardCount ?? baseOptions.ShardCount,
-                    KeysPageSize = baseOptions.KeysPageSize,
-                    TombstoneGracePeriod = baseOptions.TombstoneGracePeriod,
-                    SoftDeleteDuration = baseOptions.SoftDeleteDuration,
-                    CacheTtl = baseOptions.CacheTtl,
-                };
-                return _cachedOptions;
-            }
-        }
-
-        _cachedOptions = optionsMonitor.Get(TreeId);
+        _cachedOptions = await optionsResolver.ResolveAsync(TreeId);
         return _cachedOptions;
     }
 

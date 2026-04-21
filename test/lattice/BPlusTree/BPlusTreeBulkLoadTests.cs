@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.TestingHost;
 using System.Text;
 
@@ -27,6 +28,22 @@ public class BPlusTreeBulkLoadTests
     public async Task OneTimeTearDown()
     {
         await _fixture.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Registers a single-shard pin for <paramref name="treeId"/> so tests that
+    /// write directly to shard <c>/0</c> and read back through <c>ILattice</c>
+    /// are not broken by the global default <c>ShardCount=64</c> that F-019c
+    /// applies via lazy-seed.
+    /// </summary>
+    private async Task RegisterSingleShardAsync(string treeId)
+    {
+        var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = SmallLeafClusterFixture.SmallMaxLeafKeys,
+            ShardCount = 1,
+        });
     }
 
     [Test]
@@ -210,6 +227,7 @@ public class BPlusTreeBulkLoadTests
     public async Task BulkAppend_direct_shard_call_stores_entries()
     {
         // Call BulkAppendAsync directly on the shard to isolate from extension method.
+        await RegisterSingleShardAsync("bulk-direct");
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-direct");
         var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("bulk-direct/0");
         var entries = Enumerable.Range(0, 10)
@@ -234,6 +252,7 @@ public class BPlusTreeBulkLoadTests
     {
         // BulkLoadAsync on the same tree twice should succeed — the second
         // call hits the idempotency guard (LastCompletedBulkOperationId).
+        await RegisterSingleShardAsync("bulk-idempotent");
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-idempotent");
         var entries = Enumerable.Range(0, 20)
             .Select(i => KeyValuePair.Create($"k{i:D4}", Encoding.UTF8.GetBytes($"v{i}")))
@@ -404,6 +423,7 @@ public class BPlusTreeBulkLoadTests
     {
         // After bulk append, Set/Get/Delete should work normally
         // (verifies ResumePendingBulkGraftAsync doesn't interfere).
+        await RegisterSingleShardAsync("bulk-then-normal");
         var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("bulk-then-normal/0");
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-then-normal");
 

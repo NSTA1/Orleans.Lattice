@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.TestingHost;
 using System.Text;
 
@@ -22,6 +23,24 @@ public class ReshardIntegrationTests
     public async Task OneTimeTearDown()
     {
         await _fixture.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Registers <paramref name="treeId"/> in the lattice registry with the
+    /// cluster's <see cref="FourShardClusterFixture.TestShardCount"/> pin so
+    /// the tree starts at 4 physical shards (matching the fixture's legacy
+    /// semantics) rather than the global <c>LatticeConstants.DefaultShardCount</c>.
+    /// Must be called before any operation that would otherwise trigger the
+    /// resolver's lazy-seed fallback.
+    /// </summary>
+    private async Task RegisterTreeAsync(string treeId)
+    {
+        var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = FourShardClusterFixture.SmallMaxLeafKeys,
+            ShardCount = FourShardClusterFixture.TestShardCount,
+        });
     }
 
     private async Task WaitForReshardAsync(ILattice tree, TimeSpan? timeout = null)
@@ -59,7 +78,7 @@ public class ReshardIntegrationTests
             // fall back to the default layout so we still reach the shard
             // coordinators that were just dispatched.
             var map = await registry.GetShardMapAsync(treeId)
-                ?? ShardMap.CreateDefault(LatticeOptions.DefaultVirtualShardCount, FourShardClusterFixture.TestShardCount);
+                ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, FourShardClusterFixture.TestShardCount);
             foreach (var idx in map.GetPhysicalShardIndices())
             {
                 var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/{idx}");
@@ -81,6 +100,7 @@ public class ReshardIntegrationTests
     public async Task ReshardAsync_grows_shard_count_and_preserves_all_data()
     {
         var treeId = $"reshard-grow-{Guid.NewGuid():N}";
+        await RegisterTreeAsync(treeId);
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         // Pre-populate.
@@ -118,7 +138,12 @@ public class ReshardIntegrationTests
     public void ReshardAsync_throws_when_target_not_greater_than_current()
     {
         var treeId = $"reshard-invalid-{Guid.NewGuid():N}";
+        RegisterTreeAsync(treeId).GetAwaiter().GetResult();
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+
+        // Seed a key so the empty-tree fast-path (which allows any target) is
+        // bypassed and the grow-only validation below is actually exercised.
+        tree.SetAsync("seed", [1]).GetAwaiter().GetResult();
 
         // Cluster is configured with 4 shards; any request for ≤4 must throw.
         Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => tree.ReshardAsync(4));
@@ -146,6 +171,7 @@ public class ReshardIntegrationTests
     public async Task ReshardAsync_is_idempotent_for_same_target()
     {
         var treeId = $"reshard-idem-{Guid.NewGuid():N}";
+        await RegisterTreeAsync(treeId);
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
         await tree.SetAsync("k", [1]);
 
@@ -161,6 +187,7 @@ public class ReshardIntegrationTests
     public async Task ReshardAsync_concurrent_writes_during_reshard_are_preserved()
     {
         var treeId = $"reshard-concurrent-{Guid.NewGuid():N}";
+        await RegisterTreeAsync(treeId);
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         // Seed with a handful of keys.

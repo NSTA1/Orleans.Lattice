@@ -28,7 +28,7 @@ You reshard when a shard's **write path** is saturated — single root grain bot
 |---|---|
 | Availability | Reads and writes served throughout. No global lock. |
 | Direction | **Grow-only.** Shrink is not supported. |
-| Target range | `2 ≤ newShardCount ≤ LatticeOptions.VirtualShardCount` (default 4096). Must be strictly greater than the current distinct-shard count. |
+| Target range | `2 ≤ newShardCount ≤ LatticeConstants.DefaultVirtualShardCount` (fixed at 4096). Must be strictly greater than the current distinct-shard count. |
 | Idempotence | Repeated calls with the same target while in progress are no-ops. |
 | Concurrent target change | `InvalidOperationException` if a reshard with a different target is already in progress. |
 | Crash-safety | Reminder-anchored coordinator (`reshard-keepalive`, 1 min keepalive). Resumes automatically on silo restart. |
@@ -66,15 +66,15 @@ Because each underlying split is itself an independent online operation, the tre
 | Option | Default | Effect |
 |---|---|---|
 | `LatticeOptions.MaxConcurrentMigrations` | 4 | Upper bound on the number of in-flight splits the reshard coordinator will dispatch per tick. Higher values migrate faster but increase drain I/O load. |
-| `LatticeOptions.VirtualShardCount` | 4096 | Absolute ceiling on `newShardCount`. The reshard can never produce more distinct physical shards than there are virtual slots. |
+| `LatticeConstants.DefaultVirtualShardCount` | 4096 | Compile-time ceiling on `newShardCount`. The reshard can never produce more distinct physical shards than there are virtual slots. Not a runtime option — the virtual space is fixed because persisted shard maps index into it. |
 
 ### Practical size limits
 
-The `VirtualShardCount = 4096` default is generous. The real ceiling on useful shard counts comes from scan fan-out and activation cost, not the map itself:
+The 4096 virtual shard count is generous. The real ceiling on useful shard counts comes from scan fan-out and activation cost, not the map itself:
 
 - **Scan fan-out is linear in distinct physical shards.** Every strongly-consistent scan issues one parallel grain call per shard. A 4096-shard tree issues 4096 concurrent calls per `KeysAsync` / `EntriesAsync` / `CountAsync`.
 - **Activation cost scales with shards × trees × silos.** Each physical shard has one `ShardRootGrain` activation per active tree.
-- **`ShardMap` storage is trivial** (`4 × VirtualShardCount` bytes — 16 KB at default) and never the limit.
+- **`ShardMap` storage is trivial** (`4 × 4096 = 16 KB`) and never the limit.
 
 Recommended ranges for steady-state operation:
 
@@ -83,7 +83,7 @@ Recommended ranges for steady-state operation:
 | 1 – 64 | Low-to-moderate write throughput. The out-of-box default. |
 | 128 – 1024 | Sweet spot for large, write-heavy trees. Scans remain tractable. |
 | 1024 – 4096 | Only when write throughput genuinely demands it. Prefer indexes over full-tree enumeration. |
-| > 4096 | Raise `VirtualShardCount` first — but if you need this, you probably want multiple trees rather than one massive one. |
+| > 4096 | Not supported in a single tree — use multiple trees instead. |
 
 Splits halve the source shard's virtual-slot ownership. Starting from `ShardCount = 64` on the default map, each shard owns `4096 / 64 = 64` virtual slots and can be split 6 times (64 → 32 → 16 → 8 → 4 → 2 → 1) before hitting the `≥ 2 slots` eligibility floor, so the full 4096 ceiling is reachable by the reshard path.
 

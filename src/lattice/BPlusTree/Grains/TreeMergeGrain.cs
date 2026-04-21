@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
@@ -24,7 +23,7 @@ internal sealed class TreeMergeGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
-    IOptionsMonitor<LatticeOptions> optionsMonitor,
+    LatticeOptionsResolver optionsResolver,
     ILogger<TreeMergeGrain> logger,
     [PersistentState("tree-merge", LatticeOptions.StorageProviderName)]
     IPersistentState<TreeMergeState> state) : ITreeMergeGrain, IRemindable, IGrainBase
@@ -43,7 +42,6 @@ internal sealed class TreeMergeGrain(
     private const int MaxRetriesPerShard = 2;
 
     private string TargetTreeId => context.GrainId.Key.ToString()!;
-    private LatticeOptions TargetOptions => optionsMonitor.Get(TargetTreeId);
     IGrainContext IGrainBase.GrainContext => context;
 
     private IGrainTimer? _mergeTimer;
@@ -74,9 +72,9 @@ internal sealed class TreeMergeGrain(
             throw new InvalidOperationException(
                 $"Source tree '{sourceTreeId}' does not exist.");
 
-        var sourceOptions = optionsMonitor.Get(sourceTreeId);
+        var sourceResolvedOpts = await optionsResolver.ResolveAsync(sourceTreeId);
 
-        await InitiateMergeStateAsync(sourceTreeId, sourceOptions.ShardCount);
+        await InitiateMergeStateAsync(sourceTreeId, sourceResolvedOpts.ShardCount);
         await StartMergeAsync();
     }
 
@@ -94,9 +92,9 @@ internal sealed class TreeMergeGrain(
         var sourcePhysicalTreeId = string.IsNullOrEmpty(sourceResolved) ? sourceTreeId : sourceResolved;
         var targetPhysicalTreeId = string.IsNullOrEmpty(targetResolved) ? TargetTreeId : targetResolved;
 
-        var sourceOptions = optionsMonitor.Get(sourceTreeId);
+        var sourceResolvedOpts = await optionsResolver.ResolveAsync(sourceTreeId);
         var sourceMap = await registry.GetShardMapAsync(sourceTreeId)
-            ?? ShardMap.CreateDefault(sourceOptions.VirtualShardCount, sourceOptions.ShardCount);
+            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, sourceResolvedOpts.ShardCount);
         var sourcePhysicalShards = sourceMap.GetPhysicalShardIndices();
 
         state.State.InProgress = true;
@@ -303,9 +301,9 @@ internal sealed class TreeMergeGrain(
             state.State.TargetPhysicalTreeId = string.IsNullOrEmpty(resolved) ? TargetTreeId : resolved;
         }
 
-        var sourceOptions = optionsMonitor.Get(sourceTreeId);
+        var sourceResolvedOpts2 = await optionsResolver.ResolveAsync(sourceTreeId);
         var sourceMap = await registry.GetShardMapAsync(sourceTreeId)
-            ?? ShardMap.CreateDefault(sourceOptions.VirtualShardCount, sourceOptions.ShardCount);
+            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, sourceResolvedOpts2.ShardCount);
         state.State.SourcePhysicalShards = [.. sourceMap.GetPhysicalShardIndices()];
     }
 
@@ -327,9 +325,9 @@ internal sealed class TreeMergeGrain(
         // Resolve the target tree's shard map (falling back to the default
         // identity map when the tree has no custom map persisted).
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var targetOptions = TargetOptions;
+        var targetResolvedOpts = await optionsResolver.ResolveAsync(TargetTreeId);
         var targetShardMap = await registry.GetShardMapAsync(TargetTreeId)
-            ?? ShardMap.CreateDefault(targetOptions.VirtualShardCount, targetOptions.ShardCount);
+            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, targetResolvedOpts.ShardCount);
 
         // Walk the source leaf chain, flushing each leaf's delta through the
         // target shard map before loading the next leaf.

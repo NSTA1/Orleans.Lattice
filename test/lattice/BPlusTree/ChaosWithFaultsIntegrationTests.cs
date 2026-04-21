@@ -135,6 +135,20 @@ public class ChaosWithFaultsIntegrationTests
             targets.Add(shardRoot.GetGrainId());
         }
 
+        // Warm AtomicWriteGrain (saga coordinator) BEFORE the 8s chaos timer
+        // starts. F-019c routes structural sizing through the registry on
+        // cold activation, and the saga itself has reminder + persistence
+        // bootstrapping; on slow Linux Release CI a single cold
+        // SetManyAtomicAsync can easily exceed the chaos window, leaving
+        // atomicTotal == 1 and the success-rate assertion ill-defined. The
+        // warmup call is envelope-valid so the post-quiescence invariant
+        // check is unaffected.
+        await tree.SetManyAtomicAsync(new List<KeyValuePair<string, byte[]>>
+        {
+            new(KeyOf(0), Encoding.UTF8.GetBytes("v-0-warmup-0")),
+            new(KeyOf(1), Encoding.UTF8.GetBytes("v-1-warmup-0")),
+        });
+
         var failures = new ConcurrentBag<string>();
         var stats = new ConcurrentDictionary<string, int>();
         static int Bump(ConcurrentDictionary<string, int> s, string k)

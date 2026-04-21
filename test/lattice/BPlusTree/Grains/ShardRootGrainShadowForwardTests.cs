@@ -43,8 +43,7 @@ public class ShardRootGrainShadowForwardTests
         state.State.RootIsLeaf = true;
 
         var factory = Substitute.For<IGrainFactory>();
-        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions(), factory: factory);
 
         var leaf = Substitute.For<IBPlusLeafGrain>();
         leaf.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<byte[]?>(null));
@@ -82,7 +81,7 @@ public class ShardRootGrainShadowForwardTests
             .Returns(Task.CompletedTask);
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shadowTarget);
 
-        var grain = new ShardRootGrain(context, state, factory, optionsMonitor);
+        var grain = new ShardRootGrain(context, state, factory, optionsResolver);
         return new GrainHarness
         {
             Grain = grain,

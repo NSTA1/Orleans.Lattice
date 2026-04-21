@@ -31,22 +31,40 @@ public class TreeReshardGrainTests
         var grainFactory = Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions
+        var opts = new LatticeOptions
         {
-            ShardCount = physicalShardCount,
-            VirtualShardCount = virtualShardCount,
             MaxConcurrentMigrations = maxConcurrentMigrations,
-        });
+        };
+        optionsMonitor.Get(Arg.Any<string>()).Returns(opts);
 
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ResolveAsync(TreeId).Returns(TreeId);
         registry.GetShardMapAsync(TreeId).Returns(existingMap
             ?? ShardMap.CreateDefault(virtualShardCount, physicalShardCount));
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = physicalShardCount,
+            }));
+        var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, opts);
+
+        // Default: simulate a non-empty tree so validation paths run.
+        // Empty-tree fast-path tests override CountAsync explicitly.
+        var defaultLattice = Substitute.For<ILattice>();
+        defaultLattice.CountAsync().Returns(Task.FromResult(1));
+        defaultLattice.IsResizeCompleteAsync().Returns(true);
+        grainFactory.GetGrain<ILattice>(TreeId).Returns(defaultLattice);
+
+        var defaultResize = Substitute.For<ITreeResizeGrain>();
+        defaultResize.IsCompleteAsync().Returns(Task.FromResult(true));
+        grainFactory.GetGrain<ITreeResizeGrain>(TreeId).Returns(defaultResize);
 
         var state = existingState ?? new FakePersistentState<TreeReshardState>();
         var grain = new TreeReshardGrain(
-            context, grainFactory, reminderRegistry, optionsMonitor,
+            context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeReshardGrain>(), state);
         return (grain, state, grainFactory, registry);
     }
@@ -63,8 +81,9 @@ public class TreeReshardGrainTests
     [Test]
     public void ReshardAsync_throws_when_target_exceeds_virtual_shard_count()
     {
-        var (grain, _, _, _) = CreateGrain(virtualShardCount: 16);
-        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => grain.ReshardAsync(17));
+        var (grain, _, _, _) = CreateGrain();
+        Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => grain.ReshardAsync(LatticeConstants.DefaultVirtualShardCount + 1));
     }
 
     [Test]

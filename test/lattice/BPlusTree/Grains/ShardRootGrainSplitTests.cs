@@ -57,8 +57,7 @@ public class ShardRootGrainSplitTests
         state.State.RootIsLeaf = true;
 
         var factory = Substitute.For<IGrainFactory>();
-        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions(), factory: factory);
 
         var leaf = Substitute.For<IBPlusLeafGrain>();
         var versionedReadback = readbackValue is null
@@ -89,7 +88,7 @@ public class ShardRootGrainSplitTests
         shadowTarget.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>()).Returns(Task.CompletedTask);
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shadowTarget);
 
-        var grain = new ShardRootGrain(context, state, factory, optionsMonitor);
+        var grain = new ShardRootGrain(context, state, factory, optionsResolver);
         return new GrainHarness { Grain = grain, Leaf = leaf, ShadowTarget = shadowTarget, State = state, Factory = factory };
     }
 

@@ -47,7 +47,7 @@ public class BulkLoadShardMapRoutingTests
         const int pinnedShard = 3;
 
         var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var pinnedSlots = new int[LatticeOptions.DefaultVirtualShardCount];
+        var pinnedSlots = new int[LatticeConstants.DefaultVirtualShardCount];
         Array.Fill(pinnedSlots, pinnedShard);
         await registry.SetShardMapAsync(treeId, new ShardMap { Slots = pinnedSlots });
 

@@ -65,12 +65,14 @@ public class ShardRootGrainConsistentScanTests
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
 
-        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions { VirtualShardCount = VirtualShardCount });
+        var optionsResolver = TestOptionsResolver.Create(
+            baseOptions: new LatticeOptions(),
+            shardCount: 1,
+            factory: factory);
 
         return new Harness
         {
-            Grain = new ShardRootGrain(context, state, factory, optionsMonitor),
+            Grain = new ShardRootGrain(context, state, factory, optionsResolver),
             Leaf = leaf,
             State = state,
         };

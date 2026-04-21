@@ -36,6 +36,7 @@ internal sealed class HotShardMonitorGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    LatticeOptionsResolver optionsResolver,
     ILogger<HotShardMonitorGrain> logger,
     [PersistentState("hot-shard-monitor", LatticeOptions.StorageProviderName)]
     IPersistentState<HotShardMonitorState> state) : IHotShardMonitorGrain, IRemindable, IGrainBase
@@ -181,8 +182,9 @@ internal sealed class HotShardMonitorGrain(
         // Resolve the current shard map and list of physical shards.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var physicalTreeId = await registry.ResolveAsync(TreeId);
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
         var map = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.CreateDefault(options.VirtualShardCount, options.ShardCount);
+            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var physicalShards = map.GetPhysicalShardIndices();
 
         // Prune cooldown entries for shards no longer present in the current

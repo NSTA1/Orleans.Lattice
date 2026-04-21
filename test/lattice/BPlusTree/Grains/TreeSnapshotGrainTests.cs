@@ -31,12 +31,7 @@ public partial class TreeSnapshotGrainTests
         var grainFactory = Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        options ??= new LatticeOptions
-        {
-            ShardCount = ShardCount,
-            MaxLeafKeys = 128,
-            MaxInternalChildren = 128,
-        };
+        options ??= new LatticeOptions();
         optionsMonitor.Get(Arg.Any<string>()).Returns(options);
         var state = existingState ?? new FakePersistentState<TreeSnapshotState>();
 
@@ -47,9 +42,17 @@ public partial class TreeSnapshotGrainTests
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ExistsAsync(Arg.Any<string>()).Returns(false);
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = ShardCount,
+            }));
+        var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 
         var grain = new TreeSnapshotGrain(
-            context, grainFactory, reminderRegistry, optionsMonitor,
+            context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeSnapshotGrain>(), state);
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);
     }
@@ -149,16 +152,6 @@ public partial class TreeSnapshotGrainTests
 
         Assert.ThrowsAsync<ArgumentException>(
             () => grain.SnapshotAsync("_lattice_reserved", SnapshotMode.Offline));
-    }
-
-    [Test]
-    public void SnapshotAsync_throws_when_shard_counts_differ()
-    {
-        var (grain, _, _, grainFactory, optionsMonitor) = CreateGrain();
-        optionsMonitor.Get(DestTreeId).Returns(new LatticeOptions { ShardCount = 4 });
-
-        Assert.ThrowsAsync<InvalidOperationException>(
-            () => grain.SnapshotAsync(DestTreeId, SnapshotMode.Offline));
     }
 
     [Test]

@@ -2,6 +2,8 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Tests.Fakes;
 using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -10,7 +12,10 @@ public partial class LatticeGrainTests
 {
     private static (LatticeGrain grain, IGrainFactory factory) CreateGrain(
         string treeId = "my-tree",
-        LatticeOptions? options = null)
+        LatticeOptions? options = null,
+        int shardCount = 4,
+        int maxLeafKeys = 128,
+        int maxInternalChildren = 128)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice", treeId));
@@ -25,7 +30,18 @@ public partial class LatticeGrainTests
         registry.ResolveAsync(Arg.Any<string>()).Returns(callInfo => Task.FromResult(callInfo.Arg<string>()));
         registry.GetShardMapAsync(Arg.Any<string>()).Returns(Task.FromResult<ShardMap?>(null));
 
-        var grain = new LatticeGrain(context, grainFactory, optionsMonitor);
+        // F-019c: seed the registry pin so the resolver returns the desired
+        // structural sizing for every tree id queried.
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = maxLeafKeys,
+                MaxInternalChildren = maxInternalChildren,
+                ShardCount = shardCount,
+            }));
+        var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
+
+        var grain = new LatticeGrain(context, grainFactory, optionsMonitor, optionsResolver);
         return (grain, grainFactory);
     }
 
@@ -121,7 +137,7 @@ public partial class LatticeGrainTests
         await grain2.GetAsync("stable-key");
 
         // Both grains should have resolved the same shard key.
-        var expectedShardIndex = LatticeGrain.GetShardIndex("stable-key", LatticeOptions.DefaultShardCount);
+        var expectedShardIndex = LatticeGrain.GetShardIndex("stable-key", 4);
         var expectedKey = $"tree-a/{expectedShardIndex}";
         factory1.Received(1).GetGrain<IShardRootGrain>(
             Arg.Is<string>(s => s == expectedKey), Arg.Any<string>());

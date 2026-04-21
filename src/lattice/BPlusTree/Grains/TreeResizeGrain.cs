@@ -37,6 +37,7 @@ internal sealed class TreeResizeGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    LatticeOptionsResolver optionsResolver,
     ILogger<TreeResizeGrain> logger,
     [PersistentState("tree-resize", LatticeOptions.StorageProviderName)]
     IPersistentState<TreeResizeState> state) : ITreeResizeGrain, IRemindable, IGrainBase
@@ -69,9 +70,6 @@ internal sealed class TreeResizeGrain(
         }
 
         // Interlock: refuse to start a resize while a reshard is in flight.
-        // Resize crosses physical trees; a concurrent reshard mutating the
-        // source tree's ShardMap would invalidate the snapshot's per-slot
-        // routing assumptions.
         var reshard = grainFactory.GetGrain<ITreeReshardGrain>(TreeId);
         if (!await reshard.IsCompleteAsync())
             throw new InvalidOperationException(
@@ -79,12 +77,45 @@ internal sealed class TreeResizeGrain(
 
         if (state.State.Complete)
         {
-            // Reset completion flag for a new resize.
             state.State.Complete = false;
+        }
+
+        // F-019c empty-tree fast-path: if the tree has no live entries, repin
+        // the structural leaf/internal sizes atomically on the registry and
+        // short-circuit the coordinator machinery. No snapshot, no shadow-
+        // forward, no alias swap.
+        var lattice = grainFactory.GetGrain<ILattice>(TreeId);
+        var liveCount = await lattice.CountAsync();
+        if (liveCount == 0)
+        {
+            await ApplyEmptyTreeResizeAsync(newMaxLeafKeys, newMaxInternalChildren);
+            return;
         }
 
         await InitiateResizeStateAsync(newMaxLeafKeys, newMaxInternalChildren);
         await StartResizeAsync();
+    }
+
+    /// <summary>
+    /// F-019c empty-tree fast-path: repins <c>MaxLeafKeys</c> /
+    /// <c>MaxInternalChildren</c> in the registry without running the online
+    /// resize pipeline.
+    /// </summary>
+    private async Task ApplyEmptyTreeResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)
+    {
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var existing = await registry.GetEntryAsync(TreeId);
+        var updated = (existing ?? new State.TreeRegistryEntry()) with
+        {
+            MaxLeafKeys = newMaxLeafKeys,
+            MaxInternalChildren = newMaxInternalChildren,
+        };
+        await registry.UpdateAsync(TreeId, updated);
+
+        state.State.Complete = true;
+        state.State.NewMaxLeafKeys = newMaxLeafKeys;
+        state.State.NewMaxInternalChildren = newMaxInternalChildren;
+        await state.WriteStateAsync();
     }
 
     /// <summary>
@@ -94,7 +125,7 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     internal async Task InitiateResizeStateAsync(int newMaxLeafKeys, int newMaxInternalChildren)
     {
-        var options = Options;
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
         var operationId = Guid.NewGuid().ToString("N");
 
         // Resolve the current physical tree ID (may already be aliased from a prior resize).
@@ -111,7 +142,7 @@ internal sealed class TreeResizeGrain(
         state.State.NewMaxLeafKeys = newMaxLeafKeys;
         state.State.NewMaxInternalChildren = newMaxInternalChildren;
         state.State.OperationId = operationId;
-        state.State.ShardCount = options.ShardCount;
+        state.State.ShardCount = resolved.ShardCount;
         state.State.Complete = false;
         state.State.SnapshotTreeId = snapshotTreeId;
         state.State.OldPhysicalTreeId = currentPhysical;
@@ -375,11 +406,15 @@ internal sealed class TreeResizeGrain(
     {
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 
-        // Update registry entry with new sizing.
+        // Update registry entry with new structural sizing. Preserve the
+        // previously-pinned ShardCount so F-019c's resolver does not see a
+        // null pin on the logical tree after the swap.
+        var oldEntry = state.State.OldRegistryEntry;
         var entry = new TreeRegistryEntry
         {
             MaxLeafKeys = state.State.NewMaxLeafKeys,
             MaxInternalChildren = state.State.NewMaxInternalChildren,
+            ShardCount = oldEntry?.ShardCount ?? state.State.ShardCount,
         };
         await registry.UpdateAsync(TreeId, entry);
 

@@ -212,7 +212,6 @@ public partial class TreeSnapshotGrainTests
         const int shardCount = 8;
         var options = new LatticeOptions
         {
-            ShardCount = shardCount,
             MaxConcurrentDrains = 2,
         };
         var (grain, state, reminderRegistry, grainFactory, _) = CreateGrain(options);

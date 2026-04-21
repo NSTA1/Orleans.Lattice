@@ -258,7 +258,7 @@ public partial class LatticeGrainTests
     [Test]
     public async Task DeleteRangeAsync_delegates_to_all_shards()
     {
-        var (grain, factory) = CreateGrain(options: new LatticeOptions { ShardCount = 2 });
+        var (grain, factory) = CreateGrain(shardCount: 2);
 
         var shard0 = Substitute.For<IShardRootGrain>();
         var shard1 = Substitute.For<IShardRootGrain>();

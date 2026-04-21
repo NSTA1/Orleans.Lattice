@@ -31,14 +31,25 @@ public partial class TombstoneCompactionGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         options ??= new LatticeOptions
         {
-            ShardCount = ShardCount,
             TombstoneGracePeriod = TimeSpan.FromHours(24)
         };
         optionsMonitor.Get(Arg.Any<string>()).Returns(options);
         var state = existingState ?? new FakePersistentState<TombstoneCompactionState>();
 
+        var registry = Substitute.For<ILatticeRegistry>();
+        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = ShardCount,
+            }));
+        var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
+
         var grain = new TombstoneCompactionGrain(
-            context, grainFactory, reminderRegistry, optionsMonitor, new LoggerFactory().CreateLogger<TombstoneCompactionGrain>(), state);
+            context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
+            new LoggerFactory().CreateLogger<TombstoneCompactionGrain>(), state);
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);
     }
 
@@ -92,7 +103,6 @@ public partial class TombstoneCompactionGrainTests
     {
         var options = new LatticeOptions
         {
-            ShardCount = ShardCount,
             TombstoneGracePeriod = TimeSpan.FromSeconds(10)
         };
         var (grain, _, reminderRegistry, _, _) = CreateGrain(options);
@@ -111,7 +121,6 @@ public partial class TombstoneCompactionGrainTests
     {
         var options = new LatticeOptions
         {
-            ShardCount = ShardCount,
             TombstoneGracePeriod = Timeout.InfiniteTimeSpan
         };
         var (grain, _, reminderRegistry, _, _) = CreateGrain(options);
@@ -378,7 +387,6 @@ public partial class TombstoneCompactionGrainTests
         var gracePeriod = TimeSpan.FromHours(12);
         var options = new LatticeOptions
         {
-            ShardCount = ShardCount,
             TombstoneGracePeriod = gracePeriod
         };
         var (grain, _, _, grainFactory, _) = CreateGrain(options);
