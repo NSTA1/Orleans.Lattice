@@ -57,8 +57,9 @@ public interface ITreeResizeGrain : IGrainWithStringKey
     Task UndoResizeAsync();
 
     /// <summary>
-    /// Returns <c>true</c> if no resize is in progress — either the most recent
-    /// resize has completed or no resize has ever been initiated (vacuously complete).
+    /// Returns <c>true</c> when the coordinator is idle — either no resize
+    /// has ever been initiated, or the last one has run to completion.
+    /// Returns <c>false</c> while a resize is in flight.
     /// </summary>
-    Task<bool> IsCompleteAsync();
+    Task<bool> IsIdleAsync();
 }

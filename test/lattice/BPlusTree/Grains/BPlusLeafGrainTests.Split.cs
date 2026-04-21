@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public partial class BPlusLeafGrainTests
 {
     /// <summary>
-    /// F-019c: tests in this partial historically constructed BPlusLeafGrain
+    /// Tests in this partial historically constructed BPlusLeafGrain
     /// directly with IOptionsMonitor. With structural sizing now pinned in
     /// the registry, the grain takes a LatticeOptionsResolver instead.
     /// This helper keeps the pre-existing call-sites concise.
@@ -388,7 +388,7 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task Split_flushes_source_state_before_returning_SplitResult()
     {
-        // FX-001 regression: the source leaf's trimmed state must be persisted
+        // Regression: the source leaf's trimmed state must be persisted
         // before the SplitResult is returned to the caller (which in turn
         // publishes the new sibling to the parent node). If the caller
         // crashes after receiving SplitResult but before the source's

@@ -222,7 +222,7 @@ public partial class TreeMergeGrainTests
     [Test]
     public async Task ProcessNextShardAsync_poisons_shard_after_retry_budget_exhausted()
     {
-        // FX-005 regression: when a source shard's merge has failed and
+        // Regression: when a source shard's merge has failed and
         // <see cref="TreeMergeState.ShardRetries"/> has reached the poison
         // cap (MaxRetriesPerShard = 2), the next tick must SKIP the shard,
         // advance the cursor, and reset the retry counter — without
@@ -270,7 +270,7 @@ public partial class TreeMergeGrainTests
     [Test]
     public async Task ProcessNextShardAsync_preincrements_retry_counter_before_attempt()
     {
-        // FX-005 regression: the retry counter must be incremented BEFORE
+        // Regression: the retry counter must be incremented BEFORE
         // the merge attempt and persisted, so that a non-throwing crash
         // (silo restart, host kill mid-merge) still burns budget on
         // reactivation. Without pre-increment, a deterministic-crash

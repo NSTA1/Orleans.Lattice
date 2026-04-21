@@ -12,11 +12,11 @@ namespace Orleans.Lattice;
 /// to be walked.
 /// </para>
 /// <para>
-/// The shard-root coordinator (FX-011) uses <see cref="PastRange"/> to
+/// The shard-root coordinator uses <see cref="PastRange"/> to
 /// terminate the leaf-chain walk deterministically. Relying solely on
 /// <see cref="Deleted"/> = 0 is unsafe on sparse multi-shard trees where
 /// an early leaf legitimately has no range-matching keys but later
-/// leaves do — the coordinator must keep walking until a leaf reports
+/// leaves do - the coordinator must keep walking until a leaf reports
 /// <see cref="PastRange"/> = <c>true</c>, at which point it can stop.
 /// </para>
 /// </summary>

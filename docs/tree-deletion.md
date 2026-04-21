@@ -4,7 +4,7 @@
 
 Trees can be deleted via `ILattice.DeleteTreeAsync()`. Deletion is a **soft delete** — the tree is immediately marked as inaccessible, but its data is retained in storage for a configurable grace period before being permanently purged.
 
-```csharp
+```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 await tree.DeleteTreeAsync();
 ```
@@ -110,7 +110,7 @@ After deletion, existing cache activations may still hold stale data in memory, 
 
 The soft-delete window is controlled by `SoftDeleteDuration` in `LatticeOptions`. See [Configuration](configuration.md) for details.
 
-```csharp
+```csharp verify
 // Global default — 72 hours
 siloBuilder.ConfigureLattice(o => o.SoftDeleteDuration = TimeSpan.FromHours(72));
 
@@ -122,7 +122,7 @@ siloBuilder.ConfigureLattice("ephemeral-tree", o => o.SoftDeleteDuration = TimeS
 
 During the soft-delete window (before purge begins), a deleted tree can be recovered:
 
-```csharp
+```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 await tree.RecoverTreeAsync();
 
@@ -145,7 +145,7 @@ byte[]? value = await tree.GetAsync("customer-123");
 
 To bypass the soft-delete waiting window and permanently destroy a tree's data immediately:
 
-```csharp
+```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 await tree.DeleteTreeAsync();
 await tree.PurgeTreeAsync();

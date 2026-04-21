@@ -50,7 +50,7 @@ public class TreeResizeGrainIsCompleteTests
     public async Task IsCompleteAsync_returns_true_when_no_resize_initiated()
     {
         var grain = CreateGrainForIsComplete();
-        var result = await grain.IsCompleteAsync();
+        var result = await grain.IsIdleAsync();
         Assert.That(result, Is.True);
     }
 
@@ -61,7 +61,7 @@ public class TreeResizeGrainIsCompleteTests
         existingState.State.InProgress = true;
         existingState.State.Phase = ResizePhase.Snapshot;
         var grain = CreateGrainForIsComplete(existingState);
-        var result = await grain.IsCompleteAsync();
+        var result = await grain.IsIdleAsync();
         Assert.That(result, Is.False);
     }
 
@@ -72,7 +72,7 @@ public class TreeResizeGrainIsCompleteTests
         existingState.State.InProgress = false;
         existingState.State.Complete = true;
         var grain = CreateGrainForIsComplete(existingState);
-        var result = await grain.IsCompleteAsync();
+        var result = await grain.IsIdleAsync();
         Assert.That(result, Is.True);
     }
 }

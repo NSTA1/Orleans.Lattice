@@ -81,7 +81,7 @@ public class ShardRootGrainShadowForwardTests
             .Returns(Task.CompletedTask);
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shadowTarget);
 
-        var grain = new ShardRootGrain(context, state, factory, optionsResolver);
+        var grain = new ShardRootGrain(context, state, factory, optionsResolver, Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance);
         return new GrainHarness
         {
             Grain = grain,

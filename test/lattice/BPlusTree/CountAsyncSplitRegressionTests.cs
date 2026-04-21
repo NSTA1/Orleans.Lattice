@@ -6,7 +6,7 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// FX-012 regression: <c>CountAsync</c> and <c>CountPerShardAsync</c> must
+/// Regression: <c>CountAsync</c> and <c>CountPerShardAsync</c> must
 /// return the exact live key count even when a shard split commits
 /// concurrently. The v1 fix (shard-map version stability check on top of
 /// <c>CountWithMovedAwayAsync</c>) was insufficient because the split
@@ -47,7 +47,7 @@ public class CountAsyncSplitRegressionTests
     [Test]
     public async Task CountAsync_matches_true_live_count_after_split()
     {
-        var treeId = $"fx012-count-{Guid.NewGuid():N}";
+        var treeId = $"count-split-{Guid.NewGuid():N}";
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         const int keyCount = 400;
@@ -66,7 +66,7 @@ public class CountAsyncSplitRegressionTests
     [Test]
     public async Task CountPerShardAsync_matches_true_live_count_after_split()
     {
-        var treeId = $"fx012-pershard-{Guid.NewGuid():N}";
+        var treeId = $"pershard-split-{Guid.NewGuid():N}";
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         const int keyCount = 400;
@@ -83,7 +83,7 @@ public class CountAsyncSplitRegressionTests
     }
 
     /// <summary>
-    /// Deterministic reproducer for the FX-012 v1 race: counter spins
+    /// Deterministic reproducer for the mid-split counter race: counter spins
     /// while the split coordinator runs its full phase machine. The
     /// pre-v2 implementation over-counted inside the window between
     /// <c>SwapAsync</c> publishing the new map and <c>EnterRejectAsync</c>
@@ -94,7 +94,7 @@ public class CountAsyncSplitRegressionTests
     [Test]
     public async Task CountAsync_never_overcounts_during_concurrent_split()
     {
-        var treeId = $"fx012-count-mid-{Guid.NewGuid():N}";
+        var treeId = $"count-mid-split-{Guid.NewGuid():N}";
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         const int keyCount = 300;
@@ -150,7 +150,7 @@ public class CountAsyncSplitRegressionTests
     [Test]
     public async Task CountPerShardAsync_never_overcounts_during_concurrent_split()
     {
-        var treeId = $"fx012-pershard-mid-{Guid.NewGuid():N}";
+        var treeId = $"pershard-mid-split-{Guid.NewGuid():N}";
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         const int keyCount = 300;

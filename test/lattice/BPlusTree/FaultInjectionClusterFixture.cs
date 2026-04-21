@@ -27,7 +27,7 @@ public sealed class FaultInjectionClusterFixture
         Cluster = builder.Build();
         await Cluster.DeployAsync();
 
-        // F-019c: structural sizing is pinned in the registry. Pre-register
+        // Structural sizing is pinned in the registry. Pre-register
         // the tree with the desired structural pin before any writes so the
         // resolver-backed grains see our custom sizing instead of the
         // LatticeConstants defaults.

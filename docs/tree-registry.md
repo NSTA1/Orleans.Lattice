@@ -34,7 +34,7 @@ Registry overrides only apply to the properties that are set (non-null). All oth
 
 Use `GetAllTreeIdsAsync` to list all registered trees:
 
-```csharp
+```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("any-tree-id");
 var allIds = await tree.GetAllTreeIdsAsync();
 ```
@@ -43,7 +43,7 @@ var allIds = await tree.GetAllTreeIdsAsync();
 
 Use `TreeExistsAsync` to check whether a specific tree is registered:
 
-```csharp
+```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 bool exists = await tree.TreeExistsAsync();
 ```
@@ -79,7 +79,7 @@ Different physical trees produce different leaf grain IDs, which automatically c
 
 ### API
 
-```csharp
+```csharp verify
 var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 
 // Set alias: logical "my-tree" → physical "my-tree/resized/abc123"
@@ -100,7 +100,7 @@ When no shard map is persisted (the default state for newly created trees), `Lat
 
 ### API
 
-```csharp
+```csharp verify
 var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 
 // Read the persisted shard map for a tree (null if none).
@@ -122,7 +122,7 @@ Every `SetShardMapAsync` call increments `ShardMap.Version` by one, starting fro
 
 For advanced scenarios, the `ILatticeRegistry` grain can be accessed directly:
 
-```csharp
+```csharp verify
 var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 bool exists = await registry.ExistsAsync("my-tree");
 var entry = await registry.GetEntryAsync("my-tree");

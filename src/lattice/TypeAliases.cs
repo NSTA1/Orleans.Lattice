@@ -62,7 +62,7 @@ internal static class TypeAliases
     internal const string ShadowForwardPhase = "ol.sfp";
     internal const string StaleTreeRouting = "ol.str";
 
-    // Range delete (FX-011)
+    // Range delete
     internal const string RangeDeleteResult = "ol.rdr";
 
     // Raw-entry bulk load ( snapshot TTL preservation)

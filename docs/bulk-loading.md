@@ -6,8 +6,13 @@ Orleans.Lattice supports two bulk-loading modes for efficiently populating a tre
 
 Builds the tree bottom-up from a pre-sorted list of key-value pairs. Designed for initial population of an empty tree:
 
-```csharp
+```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
+var data = new []
+{
+    new { Key = "user:1", Value = "Alice" },
+    new { Key = "user:2", Value = "Bob" },
+};
 var entries = data
     .Select(d => KeyValuePair.Create(d.Key, Encoding.UTF8.GetBytes(d.Value)))
     .ToList();
@@ -30,12 +35,13 @@ Internally, `LatticeGrain` partitions entries by shard, sorts each partition, an
 
 For datasets too large to materialise in memory, a streaming overload accepts an `IAsyncEnumerable`:
 
-```csharp
+```csharp verify
 async IAsyncEnumerable<KeyValuePair<string, byte[]>> ReadFromSource()
 {
-    // Yield entries in ascending key order.
-    await foreach (var record in database.StreamAllAsync())
-        yield return KeyValuePair.Create(record.Key, record.ValueBytes);
+    // Yield entries in ascending key order (from your data source).
+    for (int i = 0; i < 1_000_000; i++)
+        yield return KeyValuePair.Create($"k:{i:D8}", Encoding.UTF8.GetBytes($"v{i}"));
+    await Task.CompletedTask;
 }
 
 await tree.BulkLoadAsync(

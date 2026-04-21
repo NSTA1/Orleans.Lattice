@@ -55,7 +55,7 @@ public class StronglyConsistentScanIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True);
+        Assert.That(await split.IsIdleAsync(), Is.True);
 
         var count = await tree.CountAsync();
         Assert.That(count, Is.EqualTo(expected.Count),
@@ -206,7 +206,7 @@ public class StronglyConsistentScanIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True);
+        Assert.That(await split.IsIdleAsync(), Is.True);
 
         // Allow scanners to also exercise the post-swap path.
         await Task.Delay(300);
@@ -275,8 +275,8 @@ public class StronglyConsistentScanIntegrationTests
         var split1 = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/1");
         await Task.WhenAll(split0.SplitAsync(0), split1.SplitAsync(1));
         await Task.WhenAll(split0.RunSplitPassAsync(), split1.RunSplitPassAsync());
-        Assert.That(await split0.IsCompleteAsync(), Is.True);
-        Assert.That(await split1.IsCompleteAsync(), Is.True);
+        Assert.That(await split0.IsIdleAsync(), Is.True);
+        Assert.That(await split1.IsIdleAsync(), Is.True);
 
         await Task.Delay(300);
 
@@ -435,7 +435,7 @@ public class StronglyConsistentScanIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True);
+        Assert.That(await split.IsIdleAsync(), Is.True);
         await Task.Delay(300);
 
         cts.Cancel();
@@ -493,7 +493,7 @@ public class StronglyConsistentScanIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True);
+        Assert.That(await split.IsIdleAsync(), Is.True);
         await Task.Delay(300);
 
         cts.Cancel();
@@ -553,7 +553,7 @@ public class StronglyConsistentScanIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True);
+        Assert.That(await split.IsIdleAsync(), Is.True);
         await Task.Delay(300);
 
         cts.Cancel();
@@ -611,7 +611,7 @@ public class StronglyConsistentScanIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True);
+        Assert.That(await split.IsIdleAsync(), Is.True);
         await Task.Delay(300);
 
         cts.Cancel();
@@ -639,7 +639,7 @@ public class StronglyConsistentScanIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True);
+        Assert.That(await split.IsIdleAsync(), Is.True);
 
         var observed = new List<string>();
         await foreach (var k in tree.KeysAsync()) observed.Add(k);

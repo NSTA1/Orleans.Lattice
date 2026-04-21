@@ -43,8 +43,9 @@ public interface ITreeReshardGrain : IGrainWithStringKey
     Task RunReshardPassAsync();
 
     /// <summary>
-    /// Returns <c>true</c> when no reshard is in progress (vacuously true
-    /// when no reshard has ever been initiated).
+    /// Returns <c>true</c> when the coordinator is idle — either no reshard
+    /// has ever been initiated, or the last one has run to completion.
+    /// Returns <c>false</c> while a reshard is in flight.
     /// </summary>
-    Task<bool> IsCompleteAsync();
+    Task<bool> IsIdleAsync();
 }

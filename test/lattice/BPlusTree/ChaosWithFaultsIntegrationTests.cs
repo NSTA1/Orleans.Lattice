@@ -136,7 +136,7 @@ public class ChaosWithFaultsIntegrationTests
         }
 
         // Warm AtomicWriteGrain (saga coordinator) BEFORE the 8s chaos timer
-        // starts. F-019c routes structural sizing through the registry on
+        // starts. Registry-authoritative sizing flows through the registry on
         // cold activation, and the saga itself has reminder + persistence
         // bootstrapping; on slow Linux Release CI a single cold
         // SetManyAtomicAsync can easily exceed the chaos window, leaving
@@ -495,9 +495,31 @@ public class ChaosWithFaultsIntegrationTests
                 "Expected at least one atomic-write attempt during the chaos window.");
             if (faultProbability == 0)
             {
-                Assert.That((double)atomicOk / atomicTotal, Is.GreaterThanOrEqualTo(0.70),
-                    $"Atomic-write success rate was {atomicOk}/{atomicTotal} = " +
-                    $"{(double)atomicOk / atomicTotal:P1}; expected ≥ 70% in the no-faults baseline.");
+                // The 70% ratio is only meaningful with a reasonable sample.
+                // In the no-faults baseline, a "tolerated" atomic-write error
+                // comes from a concurrent shard split rolling back the saga
+                // (an expected compensation path, not a regression). A single
+                // such rollback on a tiny sample drops the rate below 70%
+                // purely by arithmetic. Apply the ratio floor only when we
+                // have enough attempts for it to be statistically meaningful;
+                // for small samples, require forward progress plus at most
+                // one tolerated error.
+                const int MinSampleForRatio = 10;
+                if (atomicTotal >= MinSampleForRatio)
+                {
+                    Assert.That((double)atomicOk / atomicTotal, Is.GreaterThanOrEqualTo(0.70),
+                        $"Atomic-write success rate was {atomicOk}/{atomicTotal} = " +
+                        $"{(double)atomicOk / atomicTotal:P1}; expected ≥ 70% in the no-faults baseline.");
+                }
+                else
+                {
+                    Assert.That(atomicOk, Is.GreaterThanOrEqualTo(1),
+                        $"No-faults baseline: expected at least one successful atomic write " +
+                        $"(got {atomicOk}/{atomicTotal}).");
+                    Assert.That(atomicTolerated, Is.LessThanOrEqualTo(1),
+                        $"No-faults baseline with small sample (n={atomicTotal}): expected at most " +
+                        $"one tolerated atomic-write error (got {atomicTolerated}).");
+                }
             }
         });
 

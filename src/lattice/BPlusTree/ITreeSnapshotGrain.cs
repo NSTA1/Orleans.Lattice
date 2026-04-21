@@ -74,8 +74,9 @@ public interface ITreeSnapshotGrain : IGrainWithStringKey
     Task RunSnapshotPassAsync();
 
     /// <summary>
-    /// Returns <c>true</c> if no snapshot is in progress — either the most recent
-    /// snapshot has completed or no snapshot has ever been initiated (vacuously complete).
+    /// Returns <c>true</c> when the coordinator is idle — either no snapshot
+    /// has ever been initiated, or the last one has run to completion.
+    /// Returns <c>false</c> while a snapshot is in flight.
     /// </summary>
-    Task<bool> IsCompleteAsync();
+    Task<bool> IsIdleAsync();
 }
