@@ -47,7 +47,7 @@ internal sealed partial class ShardRootGrain
                 var logger = (ILogger)state!;
                 var ex = t.Exception?.GetBaseException();
                 logger.LogWarning(ex,
-                    "Shadow-forward task faulted outside of its caller''s await path; " +
+                    "Shadow-forward task faulted outside of its caller's await path; " +
                     "LWW on the destination will still converge, but the fault is reported here for diagnostics.");
             },
             state: logger,
