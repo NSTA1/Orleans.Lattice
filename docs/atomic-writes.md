@@ -158,6 +158,75 @@ re-invokes the same grain key receives the original failure via
 - Readers observing a saga in flight pay no additional cost; the
   coordinator does not block, lock, or serialise reads.
 
+## Caller-supplied idempotency keys
+
+The default `SetManyAtomicAsync(entries)` overload generates a fresh
+`Guid` per call as the saga's `operationId`. On a transport-level failure
+(silo restart mid-call, client-side timeout, transient network error) the
+client has no way to re-attach to the in-flight saga and must treat the
+call as failed — the original saga may still commit server-side.
+
+The `SetManyAtomicAsync(entries, operationId)` overload takes a stable
+caller-supplied idempotency key, which maps directly to the saga grain
+identity (`{treeId}/{operationId}`). Re-submitting the same
+`operationId` re-attaches to the original saga:
+
+- If it has already reached a terminal state, the second call returns
+  immediately (or rethrows the original terminal failure) — the client
+  observes the original outcome.
+- If it is still in flight, the second call awaits the saga's terminal
+  state.
+
+This turns a transport-level failure into a recoverable client-side retry
+— the caller simply calls again with the same `operationId`.
+
+```csharp verify
+string orderId = "42";
+string customerId = "7";
+
+// Stable per-business-operation idempotency key.
+var operationId = $"order-{orderId}";
+var entries = new List<KeyValuePair<string, byte[]>>
+{
+    new($"order:{orderId}:state",    Encoding.UTF8.GetBytes("paid")),
+    new($"customer:{customerId}:last-order", Encoding.UTF8.GetBytes(orderId)),
+};
+
+// Safe to retry on timeout: the saga is bound to operationId, not to
+// this RPC attempt.
+await tree.SetManyAtomicAsync(entries, operationId, cancellationToken);
+```
+
+### Key-set stability
+
+An `operationId` is bound to the exact **set of keys** submitted on its
+first call. The saga persists a SHA-256 fingerprint of the sorted key
+set during `Prepare`; a subsequent call reusing the same `operationId`
+with a different key set (added, removed, or renamed keys) throws
+`InvalidOperationException`. Reordering keys or changing their values
+is allowed — the fingerprint hashes the sorted key list only, so the
+same logical retry with a slightly-different serialized payload is
+accepted as idempotent.
+
+### Validation
+
+- `operationId` must be non-null, non-empty, and non-whitespace.
+- `operationId` must not contain `'/'` — reserved as the grain-key
+  separator between tree ID and operation ID.
+
+Both constraints throw `ArgumentException` at submission time.
+
+### Retention window
+
+Completed saga state is retained for
+`LatticeOptions.AtomicWriteRetention` (default 48 hours) so delayed
+retries within the window still observe the original outcome. After
+the window, the saga grain's state is cleared and its activation
+deactivates — the same `operationId` then becomes eligible for a fresh
+saga. Set the option to `Timeout.InfiniteTimeSpan` to disable
+retention cleanup (completed saga state then lives forever, at the
+cost of unbounded storage growth).
+
 ## Related
 
 - [API Reference](api.md) — full `SetManyAtomicAsync` signature and typed
