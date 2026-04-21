@@ -273,6 +273,19 @@ internal sealed partial class BPlusLeafGrain(
         return Task.FromResult(count);
     }
 
+    public Task<LeafStats> GetStatsAsync()
+    {
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        var live = 0;
+        var tombstones = 0;
+        foreach (var lww in state.State.Entries.Values)
+        {
+            if (lww.IsTombstone || lww.IsExpired(nowTicks)) tombstones++;
+            else live++;
+        }
+        return Task.FromResult(new LeafStats { LiveKeys = live, Tombstones = tombstones });
+    }
+
     public Task<GrainId?> GetNextSiblingAsync() =>
         Task.FromResult(state.State.NextSibling);
 

@@ -94,6 +94,7 @@ Detailed design documentation is split by concept:
 | [Chaos Tests](docs/chaos-tests.md) | Happy-path, fault-injection, online-resize, and online-reshard chaos integration tests; invariants proven; recovery surfaces exercised |
 | [Configuration](docs/configuration.md) | Options reference, per-tree overrides, immutability constraints, storage provider |
 | [Consistency](docs/consistency.md) | Per-operation consistency guarantees for every `ILattice` method: linearizable, strongly consistent, snapshot, and eventually consistent classifications |
+| [Diagnostics](docs/diagnostics.md) | `ILattice.DiagnoseAsync` tree health snapshot: per-shard depth/live-keys/tombstones/hotness, shallow vs deep mode, caching, recent-splits ring buffer |
 | [Durable Cursors](docs/durable-cursors.md) | Stateful `ILatticeCursorGrain` design, grain lifecycle, effective-range resumption, idle-TTL self-cleanup, performance characteristics |
 | [Online Reshard](docs/online-reshard.md) | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
 | [Read Caching](docs/caching.md) | Delta-based `[StatelessWorker]` cache, split-aware pruning |

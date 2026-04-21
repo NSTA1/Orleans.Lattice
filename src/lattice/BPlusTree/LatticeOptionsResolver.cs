@@ -78,6 +78,7 @@ internal sealed class LatticeOptionsResolver(
             CursorIdleTtl = baseOptions.CursorIdleTtl,
             AtomicWriteRetention = baseOptions.AtomicWriteRetention,
             VersionVectorRetention = baseOptions.VersionVectorRetention,
+            DiagnosticsCacheTtl = baseOptions.DiagnosticsCacheTtl,
         };
     }
 }

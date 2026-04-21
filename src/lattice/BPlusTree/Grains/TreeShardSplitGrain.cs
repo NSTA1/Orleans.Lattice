@@ -323,7 +323,28 @@ internal sealed class TreeShardSplitGrain(
         state.State.Phase = ShardSplitPhase.None;
         await state.WriteStateAsync();
 
+        // Fire-and-forget notification to the diagnostics ring buffer; failures
+        // are swallowed so the commit path never waits on diagnostics plumbing.
+        NotifyDiagnosticsOfSplit(state.State.SourceShardIndex);
+
         await CompleteCoordinatorAsync();
+    }
+
+    private void NotifyDiagnosticsOfSplit(int shardIndex)
+    {
+        try
+        {
+            var stats = grainFactory.GetGrain<ILatticeStats>(TreeId);
+            var log = Logger;
+            _ = stats.RecordSplitAsync(shardIndex, DateTime.UtcNow)
+                .ContinueWith(
+                    t => log.LogDebug(t.Exception, "Diagnostics split notification faulted; ignoring."),
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+        }
+        catch
+        {
+            // Never let diagnostics plumbing affect split completion.
+        }
     }
 
     /// <summary>

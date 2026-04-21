@@ -109,6 +109,16 @@ public interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <summary>Returns the number of live (non-tombstoned) keys in this leaf.</summary>
     Task<int> CountAsync();
 
+    /// <summary>
+    /// Returns a point-in-time count of live and tombstoned-or-expired entries
+    /// in this leaf in a single call. Used by the diagnostics aggregation path
+    /// (<see cref="ILattice.DiagnoseAsync"/>) to compute tombstone ratios without
+    /// a second grain round-trip. Expired entries count toward
+    /// <see cref="LeafStats.Tombstones"/> because they are reaped by the same
+    /// compaction pass.
+    /// </summary>
+    Task<LeafStats> GetStatsAsync();
+
     /// <summary>Returns the grain identity of the right sibling leaf, or <c>null</c>.</summary>
     Task<GrainId?> GetNextSiblingAsync();
 
