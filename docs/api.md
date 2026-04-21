@@ -35,6 +35,8 @@ siloBuilder.ConfigureLattice("my-tree", o =>
 
 > Structural sizing (`MaxLeafKeys`, `MaxInternalChildren`, `ShardCount`) is **not** configured here — those values are pinned per-tree in the registry. See [Tree Sizing](tree-sizing.md) for how to set them on a new or existing tree.
 
+> Prefer a runnable end-to-end example? See [Samples](samples.md) for in-process console apps that stand up a silo and exercise the tree.
+
 ### Basic usage
 
 Once Lattice is registered on the silo, resolve an `ILattice` grain from the client's (or a grain's) `IGrainFactory` using the tree's logical name as the string key, then call its methods directly:

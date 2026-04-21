@@ -82,6 +82,8 @@ both live consistency and eventual convergence.
 
 See the [API Reference](docs/api.md) for setup instructions, silo configuration, and full usage examples.
 
+For sample projects which exercise `ILattice`, see [Samples](docs/samples.md).
+
 ## Documentation
 
 Detailed design documentation is split by concept:
