@@ -110,6 +110,41 @@ public interface ILattice : IGrainWithStringKey
     /// <param name="cancellationToken">Cancels orchestration before the saga is submitted. Once the saga has accepted the batch it drives itself to a terminal state via reminders and is not cooperatively cancelled.</param>
     Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Caller-supplied idempotency-key overload of
+    /// <see cref="SetManyAtomicAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>.
+    /// The saga is keyed by <c>{treeId}/{operationId}</c>, so re-submitting
+    /// with the same <paramref name="operationId"/> re-attaches to the
+    /// original saga: if it has already completed the call returns
+    /// immediately; if it is still in flight the call awaits its terminal
+    /// state. This turns a transport-level timeout or silo crash mid-call
+    /// into a recoverable retry — the client simply calls again with the
+    /// same <paramref name="operationId"/>.
+    /// <para>
+    /// <b>Key-set stability.</b> An <paramref name="operationId"/> is bound
+    /// to the exact set of keys submitted on the first call. Re-submitting
+    /// the same <paramref name="operationId"/> with a different set of keys
+    /// (added, removed, or renamed) throws
+    /// <see cref="InvalidOperationException"/>. Reordering the keys or
+    /// changing their values is allowed — the fingerprint hashes the
+    /// sorted key set only.
+    /// </para>
+    /// <para>
+    /// <b>Retention.</b> Completed saga state is retained for
+    /// <see cref="LatticeOptions.AtomicWriteRetention"/> (default 48h) so
+    /// delayed retries within the window still observe the original
+    /// outcome. After the retention window the saga is purged and the
+    /// same <paramref name="operationId"/> becomes eligible for a fresh
+    /// saga.
+    /// </para>
+    /// </summary>
+    /// <param name="entries">The key-value pairs to write atomically.</param>
+    /// <param name="operationId">Stable caller-supplied idempotency key. Must be non-empty and must not contain <c>'/'</c> (reserved as the grain-key separator).</param>
+    /// <param name="cancellationToken">Cancels orchestration before the saga is submitted. Once the saga has accepted the batch it drives itself to a terminal state via reminders and is not cooperatively cancelled.</param>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="operationId"/> is null, empty, whitespace, or contains <c>'/'</c>; or when <paramref name="entries"/> contains duplicate keys or null values.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when <paramref name="operationId"/> was previously submitted with a different key set, or when a write fails and compensation completes.</exception>
+    Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, string operationId, CancellationToken cancellationToken = default);
+
     /// <summary>Deletes the value for <paramref name="key"/>. Returns <c>true</c> if it existed.</summary>
     Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default);
 

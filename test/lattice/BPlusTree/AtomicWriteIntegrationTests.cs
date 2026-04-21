@@ -112,4 +112,137 @@ public class AtomicWriteIntegrationTests
         Assert.That(await tree.GetAsync<int>("x"), Is.EqualTo(42));
         Assert.That(await tree.GetAsync<int>("y"), Is.EqualTo(7));
     }
+
+    // --- Caller-supplied idempotency key (G-011) ---
+
+    [Test]
+    public async Task SetManyAtomicAsync_with_operationId_is_idempotent()
+    {
+        var treeId = $"idem-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("a", Encoding.UTF8.GetBytes("v1")),
+            new("b", Encoding.UTF8.GetBytes("v2")),
+        };
+        var operationId = $"op-{Guid.NewGuid():N}";
+
+        // First call commits.
+        await tree.SetManyAtomicAsync(entries, operationId);
+
+        // Second call with same operationId and same key set must be a no-op
+        // (observing the completed saga's outcome) and must not throw.
+        await tree.SetManyAtomicAsync(entries, operationId);
+
+        Assert.That(await tree.GetAsync("a"), Is.EqualTo(Encoding.UTF8.GetBytes("v1")));
+        Assert.That(await tree.GetAsync("b"), Is.EqualTo(Encoding.UTF8.GetBytes("v2")));
+    }
+
+    [Test]
+    public async Task SetManyAtomicAsync_with_operationId_rejects_mismatched_key_set()
+    {
+        var treeId = $"mismatch-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        var firstBatch = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k1", Encoding.UTF8.GetBytes("v1")),
+            new("k2", Encoding.UTF8.GetBytes("v2")),
+        };
+        var operationId = $"op-{Guid.NewGuid():N}";
+        await tree.SetManyAtomicAsync(firstBatch, operationId);
+
+        var wrongBatch = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k1", Encoding.UTF8.GetBytes("v1")),
+            new("k3", Encoding.UTF8.GetBytes("v3")),
+        };
+
+        Assert.That(
+            async () => await tree.SetManyAtomicAsync(wrongBatch, operationId),
+            Throws.InvalidOperationException.With.Message.Contains("different key set"));
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("   ")]
+    public void SetManyAtomicAsync_rejects_null_empty_or_whitespace_operationId(string? operationId)
+    {
+        var treeId = $"invalid-opid-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k", Encoding.UTF8.GetBytes("v")),
+        };
+
+        Assert.That(
+            async () => await tree.SetManyAtomicAsync(entries, operationId!),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void SetManyAtomicAsync_rejects_operationId_containing_slash()
+    {
+        var treeId = $"slash-opid-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k", Encoding.UTF8.GetBytes("v")),
+        };
+
+        Assert.That(
+            async () => await tree.SetManyAtomicAsync(entries, "op/with/slash"),
+            Throws.ArgumentException.With.Message.Contains("'/'"));
+    }
+
+    [Test]
+    public async Task SetManyAtomicAsync_with_operationId_allows_reordered_keys_and_different_values()
+    {
+        var treeId = $"reorder-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        var operationId = $"op-{Guid.NewGuid():N}";
+
+        var first = new List<KeyValuePair<string, byte[]>>
+        {
+            new("a", Encoding.UTF8.GetBytes("1")),
+            new("b", Encoding.UTF8.GetBytes("2")),
+            new("c", Encoding.UTF8.GetBytes("3")),
+        };
+        await tree.SetManyAtomicAsync(first, operationId);
+
+        // Retry with the same keys (reordered) and different values. The
+        // fingerprint hashes the sorted key set only, so this is an
+        // idempotent retry that resolves to the already-completed saga.
+        var retry = new List<KeyValuePair<string, byte[]>>
+        {
+            new("c", Encoding.UTF8.GetBytes("DIFFERENT")),
+            new("a", Encoding.UTF8.GetBytes("DIFFERENT")),
+            new("b", Encoding.UTF8.GetBytes("DIFFERENT")),
+        };
+        await tree.SetManyAtomicAsync(retry, operationId);
+
+        // Original values still hold because the second call re-attached to
+        // the completed saga rather than applying the retry's payload.
+        Assert.That(await tree.GetAsync("a"), Is.EqualTo(Encoding.UTF8.GetBytes("1")));
+        Assert.That(await tree.GetAsync("b"), Is.EqualTo(Encoding.UTF8.GetBytes("2")));
+        Assert.That(await tree.GetAsync("c"), Is.EqualTo(Encoding.UTF8.GetBytes("3")));
+    }
+
+    [Test]
+    public async Task SetManyAtomicAsync_T_with_operationId_is_idempotent()
+    {
+        var treeId = $"typed-idem-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        var entries = new List<KeyValuePair<string, int>>
+        {
+            new("x", 42),
+            new("y", 7),
+        };
+        var operationId = $"op-{Guid.NewGuid():N}";
+
+        await tree.SetManyAtomicAsync(entries, operationId);
+        await tree.SetManyAtomicAsync(entries, operationId);
+
+        Assert.That(await tree.GetAsync<int>("x"), Is.EqualTo(42));
+        Assert.That(await tree.GetAsync<int>("y"), Is.EqualTo(7));
+    }
 }

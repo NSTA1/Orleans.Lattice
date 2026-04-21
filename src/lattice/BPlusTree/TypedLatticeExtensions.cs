@@ -180,6 +180,36 @@ public static class TypedLatticeExtensions
         CancellationToken cancellationToken = default) =>
         lattice.SetManyAtomicAsync(entries, JsonLatticeSerializer<T>.Default, cancellationToken);
 
+    /// <summary>
+    /// Caller-supplied idempotency-key overload: serializes and atomically
+    /// writes multiple key-value pairs via the saga, keyed by
+    /// <paramref name="operationId"/>. See
+    /// <see cref="ILattice.SetManyAtomicAsync(List{KeyValuePair{string, byte[]}}, string, CancellationToken)"/>
+    /// for the idempotency contract (key-set fingerprint, retention window,
+    /// re-attach semantics on retry).
+    /// </summary>
+    public static Task SetManyAtomicAsync<T>(
+        this ILattice lattice,
+        List<KeyValuePair<string, T>> entries,
+        string operationId,
+        ILatticeSerializer<T> serializer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+        var raw = new List<KeyValuePair<string, byte[]>>(entries.Count);
+        foreach (var (k, v) in entries)
+            raw.Add(new KeyValuePair<string, byte[]>(k, serializer.Serialize(v)));
+        return lattice.SetManyAtomicAsync(raw, operationId, cancellationToken);
+    }
+
+    /// <inheritdoc cref="SetManyAtomicAsync{T}(ILattice, List{KeyValuePair{string, T}}, string, ILatticeSerializer{T}, CancellationToken)"/>
+    public static Task SetManyAtomicAsync<T>(
+        this ILattice lattice,
+        List<KeyValuePair<string, T>> entries,
+        string operationId,
+        CancellationToken cancellationToken = default) =>
+        lattice.SetManyAtomicAsync(entries, operationId, JsonLatticeSerializer<T>.Default, cancellationToken);
+
     // ── Bulk Loading ────────────────────────────────────────────
 
     /// <summary>
