@@ -88,6 +88,10 @@ internal static class TypeAliases
     internal const string RecentSplit = "ol.rsp";
     internal const string LeafStats = "ol.lst";
 
+    // Event stream
+    internal const string LatticeTreeEvent = "ol.lte";
+    internal const string LatticeTreeEventKind = "ol.ltk";
+
     // Grain interfaces — each must be applied via [Alias(...)] on the
     // interface declaration so the Orleans manifest carries a stable,
     // short wire-format identity independent of CLR type names.

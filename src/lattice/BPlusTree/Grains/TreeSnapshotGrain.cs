@@ -477,8 +477,20 @@ internal sealed class TreeSnapshotGrain(
         var destCompaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(state.State.DestinationTreeId!);
         await destCompaction.EnsureReminderAsync();
 
+        await PublishSnapshotCompletedAsync();
+
         await CompleteCoordinatorAsync();
     }
+
+    private async Task PublishSnapshotCompletedAsync()
+    {
+        var opts = Options;
+        if (!await _eventsGate.IsEnabledAsync(grainFactory, SourceTreeId, opts)) return;
+        var evt = LatticeEventPublisher.CreateEvent(LatticeTreeEventKind.SnapshotCompleted, SourceTreeId);
+        await LatticeEventPublisher.PublishAsync(Context.ActivationServices, opts, evt, Logger);
+    }
+
+    private readonly PublishEventsGate _eventsGate = new();
 
     /// <inheritdoc />
     public async Task AbortAsync(string operationId)

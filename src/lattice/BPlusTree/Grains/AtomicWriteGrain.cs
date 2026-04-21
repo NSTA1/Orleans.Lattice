@@ -290,6 +290,8 @@ internal sealed class AtomicWriteGrain(
     /// </summary>
     private async Task RunSagaAsync()
     {
+        StampOperationIdContext();
+
         if (state.State.Phase == AtomicWritePhase.Prepare)
         {
             // Crash before execute was persisted — replay Prepare.
@@ -305,7 +307,7 @@ internal sealed class AtomicWriteGrain(
         if (state.State.Phase == AtomicWritePhase.Compensate)
         {
             await CompensatePhaseAsync();
-            await CompleteSagaAsync();
+            await CompleteSagaAsync(success: false);
             throw new InvalidOperationException(
                 $"Atomic write saga for tree '{state.State.TreeId}' failed and was rolled back: " +
                 (state.State.FailureMessage ?? "unknown failure"));
@@ -313,7 +315,7 @@ internal sealed class AtomicWriteGrain(
 
         if (state.State.Phase == AtomicWritePhase.Execute && state.State.NextIndex >= state.State.Entries.Count)
         {
-            await CompleteSagaAsync();
+            await CompleteSagaAsync(success: true);
         }
     }
 
@@ -456,17 +458,67 @@ internal sealed class AtomicWriteGrain(
     /// Marks the saga Completed, unregisters the keepalive reminder, arms the
     /// retention reminder (via the shared TtlGrain base) for delayed state
     /// cleanup, and requests deactivation. Safe to call in both success and
-    /// post-compensation paths.
+    /// post-compensation paths. <paramref name="success"/> gates emission of
+    /// the terminal <see cref="LatticeTreeEventKind.AtomicWriteCompleted"/>
+    /// event — rolled-back sagas do not publish a completion event because
+    /// no write actually committed.
     /// </summary>
-    private async Task CompleteSagaAsync()
+    private async Task CompleteSagaAsync(bool success)
     {
         state.State.Phase = AtomicWritePhase.Completed;
         state.State.RetriesOnCurrentStep = 0;
         await state.WriteStateAsync();
         await UnregisterKeepaliveAsync();
         await SlideTtlAsync();
+
+        // Publish AtomicWriteCompleted only when the saga committed all writes.
+        // Rolled-back sagas emitted per-key Set events during ExecutePhase but
+        // compensated them back via LWW tombstones/restores; there is no net
+        // write to notify subscribers about.
+        if (success)
+        {
+            await PublishCompletedEventAsync();
+        }
+
         this.DeactivateOnIdle();
     }
+
+    /// <summary>
+    /// Extracts <c>operationId</c> from the composite grain key
+    /// (<c>{treeId}/{operationId}</c>) and stamps it into Orleans
+    /// <see cref="RequestContext"/> so downstream <c>SetAsync</c> /
+    /// <c>DeleteAsync</c> calls made by this saga carry the correlation id
+    /// onto their emitted <see cref="LatticeTreeEvent"/>s.
+    /// </summary>
+    private void StampOperationIdContext()
+    {
+        var idx = OperationKey.IndexOf('/');
+        if (idx < 0 || idx == OperationKey.Length - 1) return;
+        var opId = OperationKey[(idx + 1)..];
+        RequestContext.Set(LatticeEventConstants.OperationIdRequestContextKey, opId);
+    }
+
+    private async Task PublishCompletedEventAsync()
+    {
+        var treeId = state.State.TreeId;
+        if (string.IsNullOrEmpty(treeId)) return;
+        var options = optionsMonitor.Get(treeId);
+        if (!await _eventsGate.IsEnabledAsync(grainFactory, treeId, options)) return;
+        var idx = OperationKey.IndexOf('/');
+        var opId = idx < 0 || idx == OperationKey.Length - 1 ? null : OperationKey[(idx + 1)..];
+        var evt = new LatticeTreeEvent
+        {
+            Kind = LatticeTreeEventKind.AtomicWriteCompleted,
+            TreeId = treeId,
+            Key = null,
+            ShardIndex = null,
+            OperationId = opId,
+            AtUtc = DateTimeOffset.UtcNow,
+        };
+        await LatticeEventPublisher.PublishAsync(GrainContext.ActivationServices, options, evt, Logger);
+    }
+
+    private readonly PublishEventsGate _eventsGate = new();
 
     /// <summary>
     /// Re-throws a remembered failure when the caller re-invokes a terminal

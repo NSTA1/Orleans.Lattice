@@ -1,4 +1,6 @@
 using Orleans.Lattice.BPlusTree;
+using Orleans.Runtime;
+using Orleans.Streams;
 
 namespace Orleans.Lattice;
 
@@ -184,5 +186,74 @@ public static class LatticeExtensions
         }
 
         await Task.WhenAll(finalTasks);
+    }
+
+    /// <summary>
+    /// Subscribes to <see cref="LatticeTreeEvent"/> notifications for
+    /// <paramref name="tree"/>. Each event (writes, deletes, splits,
+    /// compactions, tree-lifecycle transitions, etc.) is delivered via the
+    /// Orleans stream provider named <paramref name="providerName"/> (default
+    /// <c>"Default"</c>) on the namespace
+    /// <see cref="LatticeEventConstants.StreamNamespace"/> with stream id
+    /// equal to the tree's logical id.
+    /// <para>
+    /// The silo must have <see cref="LatticeOptions.PublishEvents"/> enabled
+    /// and the client must be connected to a cluster that has the same
+    /// stream provider registered. Events are metadata-only — they carry
+    /// <see cref="LatticeTreeEvent.Kind"/>, <see cref="LatticeTreeEvent.TreeId"/>,
+
+    /// <see cref="LatticeTreeEvent.Key"/>, <see cref="LatticeTreeEvent.ShardIndex"/>,
+
+    /// <see cref="LatticeTreeEvent.OperationId"/>, and
+    /// <see cref="LatticeTreeEvent.AtUtc"/>. Use
+    /// <see cref="ILattice.GetAsync(string, CancellationToken)"/> or
+    /// <see cref="ILattice.GetWithVersionAsync(string, CancellationToken)"/>
+    /// to read the current value for a key referenced by an event.
+    /// </para>
+    /// </summary>
+    /// <param name="tree">The tree to subscribe to.</param>
+    /// <param name="client">The Orleans cluster client that hosts the stream provider.</param>
+    /// <param name="onEvent">Callback invoked for every received event. Exceptions
+    /// propagate back into the Orleans stream pipeline — wrap in a try/catch if
+    /// your consumer should be tolerant of its own faults.</param>
+    /// <param name="providerName">Orleans stream provider name. Must match
+    /// <see cref="LatticeOptions.EventStreamProviderName"/>. Defaults to
+    /// <see cref="LatticeOptions.DefaultEventStreamProviderName"/>.</param>
+    /// <param name="cancellationToken">Cancels the subscription handshake.</param>
+    /// <returns>An Orleans stream subscription handle. Call
+    /// <c>UnsubscribeAsync()</c> on it to stop receiving events.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when
+    /// <paramref name="providerName"/> is not registered on the cluster client.</exception>
+    public static Task<StreamSubscriptionHandle<LatticeTreeEvent>> SubscribeToEventsAsync(
+        this ILattice tree,
+        IClusterClient client,
+        Func<LatticeTreeEvent, Task> onEvent,
+        string providerName = LatticeOptions.DefaultEventStreamProviderName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(onEvent);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        IStreamProvider provider;
+        try
+        {
+            provider = client.GetStreamProvider(providerName);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"No Orleans stream provider named '{providerName}' is registered on the cluster client. " +
+                $"Register one via clientBuilder.AddMemoryStreams(\"{providerName}\") (or the Event Hub / Azure Queue equivalent) " +
+                $"and ensure every silo hosting Lattice grains has the same provider registered.",
+                ex);
+        }
+
+        var treeId = tree.GetPrimaryKeyString();
+        var stream = provider.GetStream<LatticeTreeEvent>(
+            StreamId.Create(LatticeEventConstants.StreamNamespace, treeId));
+        return stream.SubscribeAsync((evt, _) => onEvent(evt));
     }
 }

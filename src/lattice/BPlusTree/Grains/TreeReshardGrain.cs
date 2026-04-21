@@ -282,8 +282,20 @@ internal sealed class TreeReshardGrain(
         state.State.Phase = ReshardPhase.None;
         await state.WriteStateAsync();
 
+        await PublishReshardCompletedAsync();
+
         await CompleteCoordinatorAsync();
     }
+
+    private async Task PublishReshardCompletedAsync()
+    {
+        var opts = Options;
+        if (!await _eventsGate.IsEnabledAsync(grainFactory, TreeId, opts)) return;
+        var evt = LatticeEventPublisher.CreateEvent(LatticeTreeEventKind.ReshardCompleted, TreeId);
+        await LatticeEventPublisher.PublishAsync(Context.ActivationServices, opts, evt, Logger);
+    }
+
+    private readonly PublishEventsGate _eventsGate = new();
 
     /// <summary>
     /// Atomically updates the <see cref="State.TreeRegistryEntry.ShardCount"/>

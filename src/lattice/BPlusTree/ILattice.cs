@@ -4,7 +4,7 @@ using Orleans.Lattice.Primitives;
 
 /// <summary>
 /// Public entry point for a distributed B+ tree.
-/// A stateless-worker grain that routes requests to the correct shard root
+/// A stateless-worker grain that routes requests to the correct shard
 /// based on a stable hash of the key.
 /// Key format: <c>{treeId}</c> — the tree this grain manages.
 /// </summary>
@@ -295,6 +295,26 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="SnapshotAsync"/> are included.
     /// </summary>
     Task<IReadOnlyList<string>> GetAllTreeIdsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sets or clears the per-tree override for event publication. When an
+    /// override is set it takes priority over the silo-wide
+    /// <see cref="LatticeOptions.PublishEvents"/>; when cleared (<paramref name="enabled"/>
+    /// is <c>null</c>) the tree falls back to the silo option. The override
+    /// is persisted on the tree's registry entry and survives silo restarts.
+    /// <para>
+    /// Propagation is best-effort: the silo activation that handled this call
+    /// observes the change immediately; other activations refresh their cached
+    /// value within a few seconds. Writes in flight at the moment of the change
+    /// may emit events under the previous setting.
+    /// </para>
+    /// </summary>
+    /// <param name="enabled">
+    /// <c>true</c> to force publication on for this tree, <c>false</c> to force
+    /// it off, or <c>null</c> to remove the override and inherit the silo default.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the registry write.</param>
+    Task SetPublishEventsEnabledAsync(bool? enabled, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Merges all entries from <paramref name="sourceTreeId"/> into this tree

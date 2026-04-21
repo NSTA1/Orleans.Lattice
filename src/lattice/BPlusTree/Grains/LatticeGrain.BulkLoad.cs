@@ -95,6 +95,16 @@ internal sealed partial class LatticeGrain
         return await registry.GetAllTreeIdsAsync();
     }
 
+    public async Task SetPublishEventsEnabledAsync(bool? enabled, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.SetPublishEventsAsync(TreeId, enabled);
+        // Make sure this activation re-reads the registry next time it publishes
+        // so the override takes effect immediately locally.
+        _eventsGate.Invalidate();
+    }
+
     public async Task MergeAsync(string sourceTreeId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
