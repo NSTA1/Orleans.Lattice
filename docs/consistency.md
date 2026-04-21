@@ -107,6 +107,7 @@ mitigation options.
 | `PurgeTreeAsync` | **Linearizable, destructive** | Permanently removes all data. |
 | `TreeExistsAsync`, `GetAllTreeIdsAsync` | **Eventually consistent (registry read)** | Registry reads reflect the latest persisted state but may briefly lag a concurrent registration/deletion observed by a different client. |
 | `IsMergeCompleteAsync`, `IsSnapshotCompleteAsync`, `IsResizeCompleteAsync`, `IsReshardCompleteAsync` | **Monotonic** | Once `true` for a given operation, a subsequent query for the same operation will never return `false`. Vacuously `true` when no operation of that kind has ever been initiated. |
+| `DiagnoseAsync` | **Point-in-time snapshot (non-linearizable)** | Aggregates a per-shard health sample across all physical shards; the fan-out is not atomic, so a concurrent split commit can race individual shard reports. Repeat calls within `LatticeOptions.DiagnosticsCacheTtl` return the same cached snapshot (identical `SampledAt`); the cache is invalidated on split commit so the next call after a topology change is guaranteed fresh. Per-shard RPC failures surface as empty shard entries rather than failing the whole report, so the method is safe to call during ongoing resize/reshard. **Not for hot-path or correctness-critical decisions** — use the operation-specific APIs (`GetRoutingAsync`, `CountAsync`) instead. See [Diagnostics](diagnostics.md). |
 
 ---
 

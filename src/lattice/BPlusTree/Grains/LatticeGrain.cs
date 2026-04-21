@@ -955,6 +955,14 @@ internal sealed partial class LatticeGrain(
         return new RoutingInfo(physicalTreeId, _shardMap);
     }
 
+    /// <inheritdoc />
+    public Task<TreeDiagnosticReport> DiagnoseAsync(bool deep = false, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var stats = grainFactory.GetGrain<ILatticeStats>(TreeId);
+        return stats.GetReportAsync(deep, cancellationToken);
+    }
+
     /// <summary>
     /// Returns <c>true</c> if the cached alias was stale and has been invalidated,
     /// allowing a retry with a fresh resolution. Returns <c>false</c> if no alias

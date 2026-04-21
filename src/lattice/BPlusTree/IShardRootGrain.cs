@@ -215,6 +215,15 @@ public interface IShardRootGrain : IGrainWithStringKey
     Task<ShardHotness> GetHotnessAsync();
 
     /// <summary>
+    /// Returns a complete <see cref="ShardDiagnosticReport"/> for this shard.
+    /// Bundles depth, root-is-leaf, split/bulk state, live-key count, and
+    /// hotness into a single RPC. When <paramref name="deep"/> is <c>true</c>,
+    /// walks the shard's leaf chain to aggregate tombstone-and-expired counts.
+    /// Only the shard index is left unset — the caller stamps it from the key.
+    /// </summary>
+    Task<ShardDiagnosticReport> GetDiagnosticsAsync(bool deep);
+
+    /// <summary>
     /// Marks this shard as the source of an in-progress adaptive split.
     /// While the returned task is incomplete or the split has not been completed,
     /// every write to a key whose virtual slot is in <paramref name="movedSlots"/>
@@ -246,10 +255,7 @@ public interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     Task CompleteSplitAsync();
 
-    /// <summary>
-    /// Returns <c>true</c> if this shard has a non-null
-    /// <see cref="ShardSplitInProgress"/> in its persistent state.
-    /// </summary>
+    /// <summary>Returns <c>true</c> if this shard is currently participating in an adaptive split as source.</summary>
     Task<bool> IsSplittingAsync();
 
     /// <summary>

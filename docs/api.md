@@ -334,6 +334,21 @@ These methods manage tree structure and lifecycle. Several of them **take the tr
 | `IsResizeCompleteAsync` | `Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default)` | Returns `true` if no resize operation is in progress — either the most recent resize has completed or no resize has ever been initiated (vacuously complete). |
 | `IsReshardCompleteAsync` | `Task<bool> IsReshardCompleteAsync(CancellationToken cancellationToken = default)` | Returns `true` if no online reshard operation is in progress — either the most recent reshard has completed or no reshard has ever been initiated (vacuously complete). |
 
+#### Diagnostics
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `DiagnoseAsync` | `Task<TreeDiagnosticReport> DiagnoseAsync(bool deep = false, CancellationToken cancellationToken = default)` | Returns a per-shard health snapshot — depth, root-is-leaf, live-key count, tombstone count (deep only), hotness counters, ops/sec, and split/bulk state — plus a bounded ring buffer of recent adaptive-split events. Repeated calls within `LatticeOptions.DiagnosticsCacheTtl` (default 5 s) are served from an in-memory cache; shallow and deep reports are cached independently. When `deep: true`, each shard walks its leaf chain to aggregate tombstone counts (one RPC per leaf). See [Diagnostics](diagnostics.md) for the full DTO reference and [Consistency](consistency.md#maintenance-operations) for the consistency classification. |
+
+```csharp verify
+var report = await tree.DiagnoseAsync(deep: true, cancellationToken);
+Console.WriteLine($"Tree {report.TreeId}: {report.TotalLiveKeys} live, {report.TotalTombstones} tombstones across {report.ShardCount} shards.");
+foreach (var shard in report.Shards)
+{
+    Console.WriteLine($"  shard {shard.ShardIndex}: depth={shard.Depth}, live={shard.LiveKeys}, ops/s={shard.OpsPerSecond:F1}");
+}
+```
+
 ## `SnapshotMode`
 
 Controls source-tree availability during a snapshot operation.

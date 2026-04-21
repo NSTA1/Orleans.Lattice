@@ -72,6 +72,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | `CursorIdleTtl` | `TimeSpan` | 48 hours | Yes |
 | `AtomicWriteRetention` | `TimeSpan` | 48 hours | Yes |
 | `VersionVectorRetention` | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
+| `DiagnosticsCacheTtl` | `TimeSpan` | 5 seconds | Yes |
 
 ### Structural sizing (registry-pinned)
 
@@ -271,6 +272,21 @@ This option can be changed freely at any time.
 How long to retain version vectors for deleted keys (default: `InfiniteTimeSpan`, disabled). When a key is deleted, its version vector is retained in the `LeafCacheGrain` for this duration to support historical scans. After the retention window, the vector is expunged from the cache.
 
 This option can be changed freely at any time.
+
+### `DiagnosticsCacheTtl`
+
+How long the internal diagnostics grain caches a `TreeDiagnosticReport` before assembling a fresh sample (default: 5 seconds). `ILattice.DiagnoseAsync` is an admin-rate API; caching coalesces repeat callers (e.g. dashboards polling every few seconds) so that a single fan-out walks every shard rather than one per call.
+
+Shallow (`deep: false`) and deep (`deep: true`) reports are cached independently. The cache is invalidated immediately when an adaptive split commits, so the next call after a topology change always returns a fresh report.
+
+Set to `TimeSpan.Zero` to disable caching entirely — every call assembles a new report. This is useful in tests or for tight polling scenarios where staleness is unacceptable.
+
+```csharp verify
+// Disable caching for a debug tree
+siloBuilder.ConfigureLattice("debug-tree", o => o.DiagnosticsCacheTtl = TimeSpan.Zero);
+```
+
+This option can be changed freely at any time. The new TTL takes effect on the next `DiagnoseAsync` call.
 
 ## Storage Provider Name
 

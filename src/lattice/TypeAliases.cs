@@ -82,6 +82,12 @@ internal static class TypeAliases
     internal const string LatticeCursorEntriesPage = "ol.lep";
     internal const string LatticeCursorDeleteProgress = "ol.ldp";
 
+    // Diagnostics
+    internal const string TreeDiagnosticReport = "ol.tdr";
+    internal const string ShardDiagnosticReport = "ol.sdr";
+    internal const string RecentSplit = "ol.rsp";
+    internal const string LeafStats = "ol.lst";
+
     // Grain interfaces — each must be applied via [Alias(...)] on the
     // interface declaration so the Orleans manifest carries a stable,
     // short wire-format identity independent of CLR type names.
@@ -101,4 +107,5 @@ internal static class TypeAliases
     internal const string ITreeShardSplitGrain = "ol.gss";
     internal const string ITreeSnapshotGrain = "ol.gsn";
     internal const string ITreeReshardGrain = "ol.gtx";
+    internal const string ILatticeStats = "ol.gls";
 }
