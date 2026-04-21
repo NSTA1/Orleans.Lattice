@@ -58,6 +58,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | `SoftDeleteDuration` | `TimeSpan` | 72 hours | Yes |
 | `CacheTtl` | `TimeSpan` | `TimeSpan.Zero` (refresh on every read) | Yes |
 | `PrefetchKeysScan` | `bool` | `false` | Yes |
+| `PrefetchEntriesScan` | `bool` | `false` | Yes |
 | `AutoSplitEnabled` | `bool` | `true` | Yes |
 | `HotShardOpsPerSecondThreshold` | `int` | 200 | Yes |
 | `HotShardSampleInterval` | `TimeSpan` | 30 seconds | Yes |
@@ -161,6 +162,29 @@ Pre-fetch can also be controlled per-call via the `prefetch` parameter on `KeysA
 ```csharp verify
 // Override for a single call regardless of global setting
 await foreach (var key in tree.KeysAsync(prefetch: true))
+{
+    // ...
+}
+```
+
+Because each pre-fetched page is held in memory until consumed, callers that abort iteration early (e.g. `Take(n)`) pay for pages they never read. For bounded scans, leave this disabled or pass `prefetch: false` explicitly.
+
+This option can be changed freely at any time.
+
+### `PrefetchEntriesScan`
+
+When enabled, `EntriesAsync` pre-fetches the next page from each shard in the background while the current page is being consumed by the k-way merge. This hides per-shard grain-call latency and can significantly reduce wall-clock time for large scans across many shards.
+
+```csharp verify
+// Enable globally
+siloBuilder.ConfigureLattice(o => o.PrefetchEntriesScan = true);
+```
+
+Pre-fetch can also be controlled per-call via the `prefetch` parameter on `EntriesAsync`, which overrides the global option:
+
+```csharp verify
+// Override for a single call regardless of global setting
+await foreach (var entry in tree.EntriesAsync(prefetch: true))
 {
     // ...
 }

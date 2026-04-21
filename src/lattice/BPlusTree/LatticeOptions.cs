@@ -90,6 +90,22 @@ public class LatticeOptions
     public const bool DefaultPrefetchKeysScan = false;
 
     /// <summary>
+    /// When <c>true</c>, <see cref="ILattice.EntriesAsync"/> pre-fetches the next page
+    /// from each shard in parallel while the current page is being consumed,
+    /// hiding per-shard grain-call latency during ordered entry scans. Because
+    /// entries carry <c>byte[]</c> values, pre-fetched pages increase in-flight memory
+    /// proportionally to <c>shardCount × KeysPageSize × avgValueSize</c>, so this is
+    /// gated separately from <see cref="PrefetchKeysScan"/>. Callers that abort
+    /// iteration early (e.g. <c>Take(n)</c>) pay for pages they never read.
+    /// Disabled by default. This option can also be overridden per-call via the
+    /// <c>prefetch</c> parameter on <see cref="ILattice.EntriesAsync"/>.
+    /// </summary>
+    public bool PrefetchEntriesScan { get; set; } = DefaultPrefetchEntriesScan;
+
+    /// <summary>Default value for <see cref="PrefetchEntriesScan"/> (<c>false</c>).</summary>
+    public const bool DefaultPrefetchEntriesScan = false;
+
+    /// <summary>
     /// When <c>true</c>, the autonomic <c>HotShardMonitorGrain</c> periodically
     /// polls each physical shard's hotness counters (<see cref="IShardRootGrain.GetHotnessAsync"/>)
     /// and triggers an online adaptive split when the observed

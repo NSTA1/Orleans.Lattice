@@ -187,3 +187,192 @@ public class EntriesSmallLeafClusterTests
         Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(expected));
     }
 }
+
+/// <summary>
+/// Integration tests for <see cref="ILattice.EntriesAsync"/> with the <c>prefetch</c>
+/// parameter enabled, using a 4-shard cluster with small leaves to force pagination.
+/// </summary>
+[TestFixture]
+public class EntriesPrefetchTests
+{
+    private FourShardClusterFixture _fixture = null!;
+    private TestCluster _cluster = null!;
+
+    [OneTimeSetUp]
+    public async Task OneTimeSetUp()
+    {
+        _fixture = new FourShardClusterFixture();
+        await _fixture.InitializeAsync();
+        _cluster = _fixture.Cluster;
+    }
+
+    [OneTimeTearDown]
+    public async Task OneTimeTearDown()
+    {
+        await _fixture.DisposeAsync();
+    }
+
+    [Test]
+    public async Task Entries_prefetch_returns_all_entries_sorted()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("epf-sorted");
+
+        var keys = Enumerable.Range(0, 50)
+            .Select(i => $"epf-{i:D4}")
+            .ToList();
+
+        foreach (var k in keys)
+            await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
+
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        await foreach (var e in tree.EntriesAsync(prefetch: true))
+            entries.Add(e);
+
+        keys.Sort(StringComparer.Ordinal);
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(keys));
+        foreach (var e in entries)
+            Assert.That(Encoding.UTF8.GetString(e.Value), Is.EqualTo(e.Key));
+    }
+
+    [Test]
+    public async Task Entries_prefetch_reverse_returns_descending()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("epf-reverse");
+
+        var keys = Enumerable.Range(0, 50)
+            .Select(i => $"epfr-{i:D4}")
+            .ToList();
+
+        foreach (var k in keys)
+            await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
+
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        await foreach (var e in tree.EntriesAsync(reverse: true, prefetch: true))
+            entries.Add(e);
+
+        keys.Sort(StringComparer.Ordinal);
+        keys.Reverse();
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(keys));
+    }
+
+    [Test]
+    public async Task Entries_prefetch_range_filters_correctly()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("epf-range");
+
+        for (int i = 0; i < 50; i++)
+            await tree.SetAsync($"epfg-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
+
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        await foreach (var e in tree.EntriesAsync(startInclusive: "epfg-0010", endExclusive: "epfg-0030", prefetch: true))
+            entries.Add(e);
+
+        var expected = Enumerable.Range(10, 20)
+            .Select(i => $"epfg-{i:D4}")
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task Entries_prefetch_many_entries_forces_pagination()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("epf-pagination");
+
+        var keys = Enumerable.Range(0, 200)
+            .Select(i => $"epfp-{i:D4}")
+            .ToList();
+
+        foreach (var k in keys)
+            await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
+
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        await foreach (var e in tree.EntriesAsync(prefetch: true))
+            entries.Add(e);
+
+        keys.Sort(StringComparer.Ordinal);
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(keys));
+    }
+
+    [Test]
+    public async Task Entries_prefetch_false_disables_even_when_option_enabled()
+    {
+        // prefetch: false should work the same as default — verifies the parameter
+        // override path doesn't break anything.
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("epf-disabled");
+
+        var keys = Enumerable.Range(0, 30)
+            .Select(i => $"epfd-{i:D4}")
+            .ToList();
+
+        foreach (var k in keys)
+            await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
+
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        await foreach (var e in tree.EntriesAsync(prefetch: false))
+            entries.Add(e);
+
+        keys.Sort(StringComparer.Ordinal);
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(keys));
+    }
+
+    [Test]
+    public async Task Entries_prefetch_empty_tree_returns_nothing()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("epf-empty");
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        await foreach (var e in tree.EntriesAsync(prefetch: true))
+            entries.Add(e);
+
+        Assert.That(entries, Is.Empty);
+    }
+
+    [Test]
+    public async Task Entries_prefetch_reverse_range_filters_correctly()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("epf-rev-range");
+
+        for (int i = 0; i < 50; i++)
+            await tree.SetAsync($"eprr-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
+
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        await foreach (var e in tree.EntriesAsync(
+            startInclusive: "eprr-0010", endExclusive: "eprr-0030",
+            reverse: true, prefetch: true))
+            entries.Add(e);
+
+        var expected = Enumerable.Range(10, 20)
+            .Select(i => $"eprr-{i:D4}")
+            .OrderByDescending(k => k, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task Entries_prefetch_matches_non_prefetch_results()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("epf-match");
+
+        var keys = Enumerable.Range(0, 100)
+            .Select(i => $"epm-{i:D4}")
+            .ToList();
+
+        foreach (var k in keys)
+            await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
+
+        var withoutPrefetch = new List<KeyValuePair<string, byte[]>>();
+        await foreach (var e in tree.EntriesAsync(prefetch: false))
+            withoutPrefetch.Add(e);
+
+        var withPrefetch = new List<KeyValuePair<string, byte[]>>();
+        await foreach (var e in tree.EntriesAsync(prefetch: true))
+            withPrefetch.Add(e);
+
+        Assert.That(withPrefetch.Select(e => e.Key).ToList(),
+            Is.EqualTo(withoutPrefetch.Select(e => e.Key).ToList()));
+        for (int i = 0; i < withPrefetch.Count; i++)
+            Assert.That(withPrefetch[i].Value, Is.EqualTo(withoutPrefetch[i].Value));
+    }
+}

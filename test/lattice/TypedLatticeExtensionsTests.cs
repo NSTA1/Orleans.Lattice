@@ -375,6 +375,26 @@ public class TypedLatticeExtensionsTests
         lattice.Received(1).EntriesAsync("k1", "k3", true);
     }
 
+    [Test]
+    public async Task EntriesAsync_forwards_prefetch_parameter()
+    {
+        var lattice = CreateMock();
+        var item = new TestItem("alice", 10);
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k1", JsonSerializer.SerializeToUtf8Bytes(item)),
+        };
+        lattice.EntriesAsync(null, null, false, true)
+            .Returns(entries.ToAsyncEnumerable());
+
+        var result = new List<KeyValuePair<string, TestItem>>();
+        await foreach (var e in lattice.EntriesAsync(Serializer, prefetch: true))
+            result.Add(e);
+
+        Assert.That(result, Has.Count.EqualTo(1));
+        lattice.Received(1).EntriesAsync(null, null, false, true);
+    }
+
     // ── GetWithVersionAsync ─────────────────────────────────────
 
     [Test]
