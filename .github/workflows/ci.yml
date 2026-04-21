@@ -20,7 +20,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Skip build & test when only markdown / docs files changed.
+      # Classify what changed so we can skip expensive steps when the PR only
+      # touches docs, or run a lightweight samples-only build when nothing
+      # outside samples/ (plus docs) changed.
+      #
+      # Outputs:
+      #   code       — at least one non-doc file changed (any *.md / docs/** only => false).
+      #   nonSample  — at least one non-doc, non-sample file changed.
+      #
+      # Derived: samples-only == (code == 'true' && nonSample == 'false').
       - name: Check for non-markdown changes
         id: filter
         uses: dorny/paths-filter@v3
@@ -30,6 +38,10 @@ jobs:
             code:
               - '!**.md'
               - '!docs/**'
+            nonSample:
+              - '!**.md'
+              - '!docs/**'
+              - '!samples/**'
 
       - name: Setup .NET
         if: steps.filter.outputs.code == 'true'
@@ -46,25 +58,44 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
           restore-keys: nuget-${{ runner.os }}-
 
+      # Samples-only fast path: build every project under samples/ and stop.
+      # The samples reference the library as a ProjectReference, so this
+      # transitively compiles Orleans.Lattice too — enough to catch breaks
+      # introduced by sample-side edits without paying for the full test suite.
+      - name: Build samples (samples-only change)
+        if: steps.filter.outputs.code == 'true' && steps.filter.outputs.nonSample != 'true'
+        run: |
+          shopt -s nullglob
+          projects=(samples/**/*.csproj)
+          if [ ${#projects[@]} -eq 0 ]; then
+            echo "No sample projects found under samples/."
+            exit 1
+          fi
+          for proj in "${projects[@]}"; do
+            echo "::group::Build $proj"
+            dotnet build "$proj" --configuration Release
+            echo "::endgroup::"
+          done
+
       - name: Restore
-        if: steps.filter.outputs.code == 'true'
+        if: steps.filter.outputs.nonSample == 'true'
         run: dotnet restore
 
       - name: Build
-        if: steps.filter.outputs.code == 'true'
+        if: steps.filter.outputs.nonSample == 'true'
         run: dotnet build --no-restore --configuration Release
 
       - name: Test (chaos first — isolate flaky-prone surface)
-        if: steps.filter.outputs.code == 'true'
+        if: steps.filter.outputs.nonSample == 'true'
         run: dotnet test --no-build --configuration Release --filter "TestCategory=Chaos" --logger "trx;LogFileName=chaos.trx"
 
       - name: Test (deterministic)
-        if: steps.filter.outputs.code == 'true'
+        if: steps.filter.outputs.nonSample == 'true'
         run: dotnet test --no-build --configuration Release --filter "TestCategory!=Chaos" --logger "trx;LogFileName=results.trx"
 
       # Upload test results even if the Test step fails.
       - name: Upload test results
-        if: always() && steps.filter.outputs.code == 'true'
+        if: always() && steps.filter.outputs.nonSample == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: test-results
