@@ -93,7 +93,7 @@ See [Shard Splitting](shard-splitting.md) for the full split lifecycle.
 
 ## Resize
 
-`ResizeAsync` is implemented on top of the snapshot pipeline (copy to a new physical tree, then swap the alias). TTLs are preserved verbatim for the same reason snapshots preserve them. See [Tree Sizing](tree-sizing.md).
+`ResizeAsync` is implemented on top of the snapshot pipeline (copy to a new physical tree, then swap the alias). TTLs are preserved verbatim for the same reason snapshots preserve them. See [Tree Sizing](tree-sizing.md) for the resize phase machine and [Tree Storage](tree-storage.md) for sizing guidance.
 
 ## Merge (`MergeAsync`)
 
