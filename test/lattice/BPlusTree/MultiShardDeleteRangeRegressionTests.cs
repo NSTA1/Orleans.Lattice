@@ -5,7 +5,7 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// FX-011 regression: <c>DeleteRangeAsync</c> on a sparse multi-shard tree
+/// Regression: <c>DeleteRangeAsync</c> on a sparse multi-shard tree
 /// must walk past empty leaves whose live keys are all less than
 /// <c>startInclusive</c> rather than short-circuiting on the first
 /// zero-delete leaf.
@@ -30,7 +30,7 @@ public class MultiShardDeleteRangeRegressionTests
     [Test]
     public async Task DeleteRange_walks_past_empty_leaves_on_multi_shard_tree()
     {
-        var treeId = $"fx011-{Guid.NewGuid():N}";
+        var treeId = $"range-delete-sparse-{Guid.NewGuid():N}";
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         for (int i = 0; i < 200; i++)

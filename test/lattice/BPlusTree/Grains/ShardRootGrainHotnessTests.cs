@@ -57,7 +57,7 @@ public class ShardRootGrainHotnessTests
         cacheGrain.GetManyAsync(Arg.Any<List<string>>()).Returns(Task.FromResult(new Dictionary<string, byte[]>()));
         grainFactory.GetGrain<ILeafCacheGrain>(Arg.Any<string>()).Returns(cacheGrain);
 
-        return new ShardRootGrain(context, state, grainFactory, optionsResolver);
+        return new ShardRootGrain(context, state, grainFactory, optionsResolver, Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance);
     }
 
     // --- GetHotnessAsync (initial state) ---

@@ -101,7 +101,7 @@ public class MultiPageScanOrderingIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True);
+        Assert.That(await split.IsIdleAsync(), Is.True);
         await Task.Delay(300);
 
         cts.Cancel();
@@ -287,7 +287,7 @@ public class MultiPageScanOrderingIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True);
+        Assert.That(await split.IsIdleAsync(), Is.True);
 
         var observed = new List<string>();
         await foreach (var k in tree.KeysAsync()) observed.Add(k);

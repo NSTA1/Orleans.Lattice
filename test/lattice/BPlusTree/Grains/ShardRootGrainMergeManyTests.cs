@@ -72,7 +72,7 @@ public class ShardRootGrainMergeManyTests
 
         return new Harness
         {
-            Grain = new ShardRootGrain(context, state, factory, optionsResolver),
+            Grain = new ShardRootGrain(context, state, factory, optionsResolver, Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance),
             Leaves = new Dictionary<GrainId, IBPlusLeafGrain>
             {
                 [leftId] = leftLeaf,
@@ -107,7 +107,7 @@ public class ShardRootGrainMergeManyTests
 
         return new Harness
         {
-            Grain = new ShardRootGrain(context, state, factory, optionsResolver),
+            Grain = new ShardRootGrain(context, state, factory, optionsResolver, Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance),
             Leaves = new Dictionary<GrainId, IBPlusLeafGrain> { [leafId] = leaf },
             State = state,
         };
@@ -160,7 +160,7 @@ public class ShardRootGrainMergeManyTests
 
         var h = new Harness
         {
-            Grain = new ShardRootGrain(context, state, factory, optionsResolver),
+            Grain = new ShardRootGrain(context, state, factory, optionsResolver, Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance),
             Leaves = new Dictionary<GrainId, IBPlusLeafGrain>
             {
                 [leftId] = leftLeaf,
@@ -359,7 +359,7 @@ public class ShardRootGrainMergeManyTests
 
         var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions(), factory: factory);
 
-        var grain = new ShardRootGrain(context, state, factory, optionsResolver);
+        var grain = new ShardRootGrain(context, state, factory, optionsResolver, Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance);
         var entries = BuildEntries("a", "b");
 
         await grain.MergeManyAsync(entries);

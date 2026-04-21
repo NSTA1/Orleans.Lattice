@@ -12,20 +12,20 @@ dotnet add package Orleans.Lattice
 
 Add the namespace import:
 
-```csharp
+```csharp verify
 using Orleans.Lattice;
 ```
 
 Register Lattice on the silo, providing a storage provider:
 
-```csharp
+```csharp verify
 siloBuilder.AddLattice((silo, storageName) =>
     silo.AddMemoryGrainStorage(storageName));
 ```
 
 Per-tree options can be configured with the `ConfigureLattice` extension method (see [Configuration](configuration.md) for the full options reference and per-tree override semantics):
 
-```csharp
+```csharp verify
 siloBuilder.ConfigureLattice("my-tree", o =>
 {
     o.CacheTtl = TimeSpan.FromMilliseconds(100);
@@ -39,7 +39,7 @@ siloBuilder.ConfigureLattice("my-tree", o =>
 
 Once Lattice is registered on the silo, resolve an `ILattice` grain from the client's (or a grain's) `IGrainFactory` using the tree's logical name as the string key, then call its methods directly:
 
-```csharp
+```csharp verify
 // Resolve the tree (idempotent — the same logical name always routes to the same tree).
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 
@@ -64,18 +64,17 @@ await foreach (var key in tree.KeysAsync(startInclusive: "user:", endExclusive: 
 
 Keys are `string`; values are `byte[]`. For typed payloads (POCOs, records, DTOs) use the serializer-aware overloads in [`TypedLatticeExtensions`](#typedlatticeextensions) — they accept any `T` and default to `JsonLatticeSerializer<T>`:
 
-```csharp
+```csharp verify
 await tree.SetAsync("user:1", new User("Alice", 30));
 var user = await tree.GetAsync<User>("user:1");
 ```
-
 For the full set of runtime and maintenance operations, see [`ILattice`](#ilattice) below.
 
 ## `ILattice`
 
 Obtain an `ILattice` grain from the grain factory using the tree's logical name as the string key:
 
-```csharp
+```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 ```
 
@@ -232,7 +231,7 @@ intervening activity, the grain clears its persisted state, unregisters
 the reminder, and deactivates. The default window is **48 hours** and
 is configurable:
 
-```csharp
+```csharp verify
 siloBuilder.ConfigureLattice(o => o.CursorIdleTtl = TimeSpan.FromHours(6));
 ```
 
@@ -243,13 +242,13 @@ cleanup (cursors then live until `CloseCursorAsync` is called).
 
 #### Example — resumable export across a silo failover
 
-```csharp
+```csharp verify
 var cursorId = await tree.OpenEntryCursorAsync();
 while (true)
 {
     var page = await tree.NextEntriesAsync(cursorId, pageSize: 500);
     foreach (var (k, v) in page.Entries)
-        await sink.WriteAsync(k, v);
+        Console.WriteLine($"{k}={v.Length} bytes");
     if (!page.HasMore) break;
 }
 await tree.CloseCursorAsync(cursorId);
@@ -261,7 +260,7 @@ continues from its persisted last-yielded key.
 
 #### Example — bounded, resumable range delete
 
-```csharp
+```csharp verify
 var cursorId = await tree.OpenDeleteRangeCursorAsync("2024/", "2025/");
 int total = 0;
 while (true)
@@ -271,7 +270,7 @@ while (true)
     if (progress.IsComplete) break;
 }
 await tree.CloseCursorAsync(cursorId);
-logger.LogInformation("Deleted {Count} keys.", total);
+Console.WriteLine($"Deleted {total} keys.");
 ```
 
 #### Error surface
@@ -354,13 +353,13 @@ Controls source-tree availability during a snapshot operation.
 
 Extension methods that serialize/deserialize values via an `ILatticeSerializer<T>`, eliminating per-caller `byte[]` boilerplate. Each method has two overloads: one accepting an explicit serializer and one that defaults to `JsonLatticeSerializer<T>` (System.Text.Json with UTF-8 encoding).
 
-```csharp
+```csharp verify
 // Default (System.Text.Json):
 await tree.SetAsync("user:1", new User("Alice", 30));
 var user = await tree.GetAsync<User>("user:1");
 
 // Custom serializer:
-var serializer = new JsonLatticeSerializer<User>(new JsonSerializerOptions { ... });
+var serializer = new JsonLatticeSerializer<User>(new JsonSerializerOptions { WriteIndented = false });
 await tree.SetAsync("user:1", new User("Alice", 30), serializer);
 
 // Compare-and-swap (CAS):

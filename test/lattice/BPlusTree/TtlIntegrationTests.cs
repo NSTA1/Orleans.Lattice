@@ -253,7 +253,7 @@ public class TtlMultiShardIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True);
+        Assert.That(await split.IsIdleAsync(), Is.True);
 
         // Immediately after split: every TTL'd key is still live.
         foreach (var k in ttlKeys)

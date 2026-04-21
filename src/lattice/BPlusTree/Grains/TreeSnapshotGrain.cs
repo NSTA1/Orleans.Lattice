@@ -27,16 +27,22 @@ internal sealed class TreeSnapshotGrain(
     LatticeOptionsResolver optionsResolver,
     ILogger<TreeSnapshotGrain> logger,
     [PersistentState("tree-snapshot", LatticeOptions.StorageProviderName)]
-    IPersistentState<TreeSnapshotState> state) : ITreeSnapshotGrain, IRemindable, IGrainBase
+    IPersistentState<TreeSnapshotState> state)
+    : CoordinatorGrain<TreeSnapshotGrain>(context, reminderRegistry, logger), ITreeSnapshotGrain
 {
-    private const string KeepaliveReminderName = "snapshot-keepalive";
     private const int MaxRetriesPerPhase = 1;
 
-    private string SourceTreeId => context.GrainId.Key.ToString()!;
+    private string SourceTreeId => Context.GrainId.Key.ToString()!;
     private LatticeOptions Options => optionsMonitor.Get(SourceTreeId);
-    IGrainContext IGrainBase.GrainContext => context;
 
-    private IGrainTimer? _snapshotTimer;
+    /// <inheritdoc />
+    protected override string KeepaliveReminderName => "snapshot-keepalive";
+
+    /// <inheritdoc />
+    protected override bool InProgress => state.State.InProgress;
+
+    /// <inheritdoc />
+    protected override string LogContext => $"tree {SourceTreeId}";
 
     public async Task SnapshotAsync(string destinationTreeId, SnapshotMode mode,
         int? maxLeafKeys = null, int? maxInternalChildren = null)
@@ -84,9 +90,9 @@ internal sealed class TreeSnapshotGrain(
 
         // Resolve the source tree's pinned structural sizing from the registry.
         // The destination tree is created by this grain (see InitiateSnapshotStateAsync)
-        // and inherits the source's ShardCount — there is no pre-existing
-        // destination to compare against, so the former "shard counts must match"
-        // check against destOptions.ShardCount is gone post-F-019c.
+        // and inherits the source's ShardCount - there is no pre-existing
+        // destination to compare against, so no "shard counts must match"
+        // check against destOptions.ShardCount is required.
         var sourceResolved = await optionsResolver.ResolveAsync(SourceTreeId);
 
         // Validate destination tree doesn't already exist.
@@ -97,7 +103,7 @@ internal sealed class TreeSnapshotGrain(
 
         await InitiateSnapshotStateAsync(destinationTreeId, mode, sourceResolved.ShardCount,
             maxLeafKeys, maxInternalChildren, operationId, logicalTreeId);
-        await StartSnapshotAsync();
+        await StartCoordinatorAsync();
     }
 
     /// <summary>
@@ -111,10 +117,11 @@ internal sealed class TreeSnapshotGrain(
         string? operationId = null, string? logicalTreeId = null)
     {
         // Register the destination tree in the registry before any data is written.
-        // Always seed the ShardCount pin from the source so F-019c's resolver
-        // has a complete structural pin for the destination tree. MaxLeafKeys /
-        // MaxInternalChildren are propagated only when the caller overrode them
-        // (resize case); otherwise the registry-grain's seeding fills defaults.
+        // Always seed the ShardCount pin from the source so the registry
+        // resolver has a complete structural pin for the destination tree.
+        // MaxLeafKeys / MaxInternalChildren are propagated only when the
+        // caller overrode them (resize case); otherwise the registry-grain's
+        // seeding fills defaults.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var entry = new TreeRegistryEntry
         {
@@ -197,41 +204,6 @@ internal sealed class TreeSnapshotGrain(
         await CompleteSnapshotAsync();
     }
 
-    public async Task ReceiveReminder(string reminderName, TickStatus status)
-    {
-        if (reminderName == KeepaliveReminderName)
-        {
-            if (state.State.InProgress && _snapshotTimer is null)
-            {
-                await StartSnapshotTimerAsync();
-            }
-            else if (!state.State.InProgress)
-            {
-                await UnregisterKeepaliveAsync();
-                this.DeactivateOnIdle();
-            }
-        }
-    }
-
-    private async Task StartSnapshotAsync()
-    {
-        await reminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: context.GrainId,
-            reminderName: KeepaliveReminderName,
-            dueTime: TimeSpan.FromMinutes(1),
-            period: TimeSpan.FromMinutes(1));
-
-        await StartSnapshotTimerAsync();
-    }
-
-    private Task StartSnapshotTimerAsync()
-    {
-        _snapshotTimer = this.RegisterGrainTimer(
-            OnSnapshotTimerTick,
-            new GrainTimerCreationOptions(dueTime: TimeSpan.Zero, period: TimeSpan.FromSeconds(2)));
-        return Task.CompletedTask;
-    }
-
     /// <summary>
     /// Persists the in-progress marker and registers the keepalive reminder
     /// without starting the grain timer. Used by unit tests.
@@ -242,23 +214,19 @@ internal sealed class TreeSnapshotGrain(
         state.State.ShardRetries = 0;
         await state.WriteStateAsync();
 
-        await reminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: context.GrainId,
+        await ReminderRegistry.RegisterOrUpdateReminder(
+            callingGrainId: Context.GrainId,
             reminderName: KeepaliveReminderName,
             dueTime: TimeSpan.FromMinutes(1),
             period: TimeSpan.FromMinutes(1));
     }
 
-    private async Task OnSnapshotTimerTick(CancellationToken ct)
-    {
-        await ProcessNextPhaseAsync();
-    }
-
     /// <summary>
     /// Processes the next phase of the current shard. If all shards are done,
-    /// completes the snapshot. Exposed as <c>internal</c> for unit testing.
+    /// completes the snapshot. Exposed as <c>internal</c> via <c>protected</c>
+    /// override for unit testing.
     /// </summary>
-    internal async Task ProcessNextPhaseAsync()
+    protected internal override async Task ProcessNextPhaseAsync()
     {
         if (state.State.Phase == SnapshotPhase.Lock)
         {
@@ -320,7 +288,7 @@ internal sealed class TreeSnapshotGrain(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Snapshot phase {Phase} failed for shard {ShardIndex} of tree {TreeId}",
+            Logger.LogWarning(ex, "Snapshot phase {Phase} failed for shard {ShardIndex} of tree {TreeId}",
                 state.State.Phase, shardIndex, SourceTreeId);
 
             if (state.State.ShardRetries < MaxRetriesPerPhase)
@@ -498,9 +466,6 @@ internal sealed class TreeSnapshotGrain(
 
     internal async Task CompleteSnapshotAsync()
     {
-        _snapshotTimer?.Dispose();
-        _snapshotTimer = null;
-
         state.State.InProgress = false;
         state.State.Complete = true;
         state.State.NextShardIndex = 0;
@@ -508,29 +473,11 @@ internal sealed class TreeSnapshotGrain(
         state.State.Phase = SnapshotPhase.Lock;
         await state.WriteStateAsync();
 
-        await UnregisterKeepaliveAsync();
-
         // Ensure tombstone compaction is active on the destination tree.
         var destCompaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(state.State.DestinationTreeId!);
         await destCompaction.EnsureReminderAsync();
 
-        this.DeactivateOnIdle();
-    }
-
-    private async Task UnregisterKeepaliveAsync()
-    {
-        try
-        {
-            var reminder = await reminderRegistry.GetReminder(context.GrainId, KeepaliveReminderName);
-            if (reminder is not null)
-            {
-                await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to unregister snapshot keepalive reminder for tree {TreeId}", SourceTreeId);
-        }
+        await CompleteCoordinatorAsync();
     }
 
     /// <inheritdoc />
@@ -545,9 +492,6 @@ internal sealed class TreeSnapshotGrain(
         // This prevents a stale coordinator from tearing down a newer operation.
         if (!string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal))
             return;
-
-        _snapshotTimer?.Dispose();
-        _snapshotTimer = null;
 
         // Clear all in-flight state so the grain deactivates cleanly. Shadow-
         // forward state on the source shards is the coordinator's responsibility
@@ -566,11 +510,10 @@ internal sealed class TreeSnapshotGrain(
         state.State.LogicalTreeId = "";
         await state.WriteStateAsync();
 
-        await UnregisterKeepaliveAsync();
-        this.DeactivateOnIdle();
+        await CompleteCoordinatorAsync();
     }
 
     /// <inheritdoc />
-    public Task<bool> IsCompleteAsync() =>
+    public Task<bool> IsIdleAsync() =>
         Task.FromResult(!state.State.InProgress);
 }

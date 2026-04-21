@@ -223,7 +223,7 @@ public class TreeShardSplitGrainTests
     public async Task IsCompleteAsync_returns_true_when_no_split_in_progress()
     {
         var (grain, _, _, _, _, _) = CreateGrain();
-        Assert.That(await grain.IsCompleteAsync(), Is.True);
+        Assert.That(await grain.IsIdleAsync(), Is.True);
     }
 
     [Test]
@@ -231,7 +231,7 @@ public class TreeShardSplitGrainTests
     {
         var (grain, state, _, _, _, _) = CreateGrain();
         state.State.InProgress = true;
-        Assert.That(await grain.IsCompleteAsync(), Is.False);
+        Assert.That(await grain.IsIdleAsync(), Is.False);
     }
 
     // --- RunSplitPassAsync ---

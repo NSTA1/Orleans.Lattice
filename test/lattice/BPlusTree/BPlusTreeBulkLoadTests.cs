@@ -33,7 +33,7 @@ public class BPlusTreeBulkLoadTests
     /// <summary>
     /// Registers a single-shard pin for <paramref name="treeId"/> so tests that
     /// write directly to shard <c>/0</c> and read back through <c>ILattice</c>
-    /// are not broken by the global default <c>ShardCount=64</c> that F-019c
+    /// are not broken by the global default <c>ShardCount=64</c> that registry-authoritative sizing
     /// applies via lazy-seed.
     /// </summary>
     private async Task RegisterSingleShardAsync(string treeId)

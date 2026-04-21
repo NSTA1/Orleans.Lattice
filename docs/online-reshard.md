@@ -36,7 +36,7 @@ You reshard when a shard's **write path** is saturated — single root grain bot
 
 ## Usage
 
-```csharp
+```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("catalogue");
 
 // Start the reshard — returns once the intent is persisted.

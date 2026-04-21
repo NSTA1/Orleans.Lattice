@@ -27,7 +27,7 @@ public partial class BPlusLeafGrainTests
             grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(siblingStub);
             grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(siblingStub);
         }
-        // F-019c: structural sizing (MaxLeafKeys) now flows from the registry
+        // Structural sizing (MaxLeafKeys) now flows from the registry
         // pin via LatticeOptionsResolver. Tests pin the desired sizing through
         // the resolver; non-structural knobs still come from LatticeOptions.
         var optionsResolver = TestOptionsResolver.Create(

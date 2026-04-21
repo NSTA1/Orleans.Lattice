@@ -7,7 +7,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// <para>
 /// Tracks the first time this monitor activated for a tree so the
 /// <see cref="LatticeOptions.AutoSplitMinTreeAge"/> grace period survives
-/// silo restarts (FX-004). Without persistence, the grace clock restarts
+/// silo restarts. Without persistence, the grace clock restarts
 /// on every activation and in a cluster with frequent restarts the monitor
 /// never accumulates enough uptime to trigger an autonomic split.
 /// </para>

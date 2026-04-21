@@ -33,7 +33,7 @@ internal sealed class TreeMergeGrain(
     /// Maximum number of attempts (first try + retries combined) before a
     /// source shard is poisoned and the merge advances to the next shard.
     /// <para>
-    /// The retry counter is incremented BEFORE each attempt (FX-005) so that
+    /// The retry counter is incremented BEFORE each attempt so that
     /// a non-throwing crash mid-merge still counts against the budget. With
     /// <c>MaxAttemptsPerShard = 2</c>, a shard gets its first try plus one
     /// retry on reactivation after a silo crash.
@@ -127,8 +127,8 @@ internal sealed class TreeMergeGrain(
     {
         if (reminderName == KeepaliveReminderName)
         {
-            // FX-002: defensively re-register the keepalive if the current
-            // period drifts from the configured value. The keepalive period
+            // Defensively re-register the keepalive if the current period drifts
+            // from the configured value. The keepalive period
             // is a fixed 1-minute constant today, so this check is primarily
             // a safety net for future constant bumps and for reminders that
             // survive an Orleans upgrade.
@@ -213,7 +213,7 @@ internal sealed class TreeMergeGrain(
     }
 
     /// <summary>
-    /// Processes the current source shard, with crash-resume retry semantics (FX-005):
+    /// Processes the current source shard, with crash-resume retry semantics:
     /// <list type="number">
     ///   <item>Check the poison cap. If <see cref="TreeMergeState.ShardRetries"/>
     ///   has reached <see cref="MaxRetriesPerShard"/>, skip the shard, reset the

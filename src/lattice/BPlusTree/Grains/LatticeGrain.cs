@@ -511,9 +511,9 @@ internal sealed partial class LatticeGrain(
     /// asking every physical shard to count only the virtual slots it
     /// currently owns per the authoritative <see cref="ShardMap"/>, then
     /// re-reading the map after the fan-out and retrying on any version
-    /// change (FX-012 v2).
+    /// change.
     /// <para>
-    /// This supersedes the earlier (FX-012 v1) design that fanned out via
+    /// This supersedes an earlier design that fanned out via
     /// <see cref="IShardRootGrain.CountWithMovedAwayAsync"/> and relied on
     /// each source shard filtering its moved-slot keys via
     /// <c>SplitInProgress.Phase</c>. That protocol had a gap: the split
@@ -579,7 +579,7 @@ internal sealed partial class LatticeGrain(
                 continue;
             }
 
-            // FX-012 v2: partition virtual slots by current owner per the
+            // Partition virtual slots by current owner per the
             // authoritative map and ask each physical shard to count only
             // its owned slots. This makes the result topology-consistent
             // with the observed map snapshot regardless of where each
@@ -761,7 +761,7 @@ internal sealed partial class LatticeGrain(
             return simple;
         }
 
-        // FX-012 v2: mirror CountAsyncCore's per-slot routing so per-shard
+        // Mirror CountAsyncCore's per-slot routing so per-shard
         // counts are also topology-consistent with the observed map. Without
         // this, a split mid-call would surface as a target-shard count
         // inflated by double-counted migrating slots.

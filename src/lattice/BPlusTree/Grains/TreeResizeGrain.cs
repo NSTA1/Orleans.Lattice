@@ -40,15 +40,20 @@ internal sealed class TreeResizeGrain(
     LatticeOptionsResolver optionsResolver,
     ILogger<TreeResizeGrain> logger,
     [PersistentState("tree-resize", LatticeOptions.StorageProviderName)]
-    IPersistentState<TreeResizeState> state) : ITreeResizeGrain, IRemindable, IGrainBase
+    IPersistentState<TreeResizeState> state)
+    : CoordinatorGrain<TreeResizeGrain>(context, reminderRegistry, logger), ITreeResizeGrain
 {
-    private const string KeepaliveReminderName = "resize-keepalive";
-
-    private string TreeId => context.GrainId.Key.ToString()!;
+    private string TreeId => Context.GrainId.Key.ToString()!;
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
-    IGrainContext IGrainBase.GrainContext => context;
 
-    private IGrainTimer? _resizeTimer;
+    /// <inheritdoc />
+    protected override string KeepaliveReminderName => "resize-keepalive";
+
+    /// <inheritdoc />
+    protected override bool InProgress => state.State.InProgress;
+
+    /// <inheritdoc />
+    protected override string LogContext => $"tree {TreeId}";
 
     public async Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)
     {
@@ -71,7 +76,7 @@ internal sealed class TreeResizeGrain(
 
         // Interlock: refuse to start a resize while a reshard is in flight.
         var reshard = grainFactory.GetGrain<ITreeReshardGrain>(TreeId);
-        if (!await reshard.IsCompleteAsync())
+        if (!await reshard.IsIdleAsync())
             throw new InvalidOperationException(
                 $"A reshard is already in progress for tree '{TreeId}'; resize refused until reshard completes.");
 
@@ -80,7 +85,7 @@ internal sealed class TreeResizeGrain(
             state.State.Complete = false;
         }
 
-        // F-019c empty-tree fast-path: if the tree has no live entries, repin
+        // Empty-tree fast-path: if the tree has no live entries, repin
         // the structural leaf/internal sizes atomically on the registry and
         // short-circuit the coordinator machinery. No snapshot, no shadow-
         // forward, no alias swap.
@@ -93,11 +98,11 @@ internal sealed class TreeResizeGrain(
         }
 
         await InitiateResizeStateAsync(newMaxLeafKeys, newMaxInternalChildren);
-        await StartResizeAsync();
+        await StartCoordinatorAsync();
     }
 
     /// <summary>
-    /// F-019c empty-tree fast-path: repins <c>MaxLeafKeys</c> /
+    /// Empty-tree fast-path: repins <c>MaxLeafKeys</c> /
     /// <c>MaxInternalChildren</c> in the registry without running the online
     /// resize pipeline.
     /// </summary>
@@ -188,22 +193,6 @@ internal sealed class TreeResizeGrain(
         await CompleteResizeAsync();
     }
 
-    public async Task ReceiveReminder(string reminderName, TickStatus status)
-    {
-        if (reminderName == KeepaliveReminderName)
-        {
-            if (state.State.InProgress && _resizeTimer is null)
-            {
-                await StartResizeTimerAsync();
-            }
-            else if (!state.State.InProgress)
-            {
-                await UnregisterKeepaliveAsync();
-                this.DeactivateOnIdle();
-            }
-        }
-    }
-
     public async Task UndoResizeAsync()
     {
         // Undo is available in two windows:
@@ -270,10 +259,7 @@ internal sealed class TreeResizeGrain(
             ResetResizeState();
             await state.WriteStateAsync();
 
-            _resizeTimer?.Dispose();
-            _resizeTimer = null;
-            await UnregisterKeepaliveAsync();
-            this.DeactivateOnIdle();
+            await CompleteCoordinatorAsync();
             return;
         }
 
@@ -323,36 +309,11 @@ internal sealed class TreeResizeGrain(
         state.State.OldRegistryEntry = null;
     }
 
-    private async Task StartResizeAsync()
-    {
-        // Register keepalive for crash recovery.
-        await reminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: context.GrainId,
-            reminderName: KeepaliveReminderName,
-            dueTime: TimeSpan.FromMinutes(1),
-            period: TimeSpan.FromMinutes(1));
-
-        await StartResizeTimerAsync();
-    }
-
-    private Task StartResizeTimerAsync()
-    {
-        _resizeTimer = this.RegisterGrainTimer(
-            OnResizeTimerTick,
-            new GrainTimerCreationOptions(dueTime: TimeSpan.Zero, period: TimeSpan.FromSeconds(2)));
-        return Task.CompletedTask;
-    }
-
-    private async Task OnResizeTimerTick(CancellationToken ct)
-    {
-        await ProcessNextPhaseAsync();
-    }
-
     /// <summary>
-    /// Processes the next phase of the resize. Exposed as <c>internal</c> for
-    /// unit testing.
+    /// Processes the next phase of the resize. Exposed as <c>internal</c> via
+    /// <c>protected</c> override for unit testing.
     /// </summary>
-    internal async Task ProcessNextPhaseAsync()
+    protected internal override async Task ProcessNextPhaseAsync()
     {
         if (!state.State.InProgress) return;
 
@@ -380,7 +341,7 @@ internal sealed class TreeResizeGrain(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Resize phase {Phase} failed for tree {TreeId}",
+            Logger.LogWarning(ex, "Resize phase {Phase} failed for tree {TreeId}",
                 state.State.Phase, TreeId);
         }
     }
@@ -407,8 +368,8 @@ internal sealed class TreeResizeGrain(
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 
         // Update registry entry with new structural sizing. Preserve the
-        // previously-pinned ShardCount so F-019c's resolver does not see a
-        // null pin on the logical tree after the swap.
+        // previously-pinned ShardCount so the registry resolver does not
+        // see a null pin on the logical tree after the swap.
         var oldEntry = state.State.OldRegistryEntry;
         var entry = new TreeRegistryEntry
         {
@@ -468,35 +429,14 @@ internal sealed class TreeResizeGrain(
 
     internal async Task CompleteResizeAsync()
     {
-        _resizeTimer?.Dispose();
-        _resizeTimer = null;
-
         state.State.InProgress = false;
         state.State.Complete = true;
         await state.WriteStateAsync();
 
-        await UnregisterKeepaliveAsync();
-
-        this.DeactivateOnIdle();
-    }
-
-    private async Task UnregisterKeepaliveAsync()
-    {
-        try
-        {
-            var reminder = await reminderRegistry.GetReminder(context.GrainId, KeepaliveReminderName);
-            if (reminder is not null)
-            {
-                await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to unregister resize keepalive reminder for tree {TreeId}", TreeId);
-        }
+        await CompleteCoordinatorAsync();
     }
 
     /// <inheritdoc />
-    public Task<bool> IsCompleteAsync() =>
+    public Task<bool> IsIdleAsync() =>
         Task.FromResult(!state.State.InProgress);
 }

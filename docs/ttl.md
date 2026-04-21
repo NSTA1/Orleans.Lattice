@@ -6,13 +6,16 @@ Orleans.Lattice supports **per-entry time-to-live (TTL)** on writes. An entry wr
 
 The public API is an overload on `ILattice`:
 
-```csharp
+```csharp verify
 Task SetAsync(string key, byte[] value, TimeSpan ttl, CancellationToken ct = default);
 ```
 
 Typed convenience overloads are provided on `TypedLatticeExtensions`:
 
-```csharp
+```csharp verify
+var session = new User("alice", 1);
+var serializer = new JsonLatticeSerializer<User>();
+
 await lattice.SetAsync("session:42", session, TimeSpan.FromMinutes(30));
 await lattice.SetAsync("session:42", session, TimeSpan.FromMinutes(30), serializer);
 ```
