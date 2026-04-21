@@ -166,6 +166,7 @@ public static class TypedLatticeExtensions
         ILatticeSerializer<T> serializer,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(serializer);
         var raw = new List<KeyValuePair<string, byte[]>>(entries.Count);
         foreach (var (k, v) in entries)
@@ -177,8 +178,11 @@ public static class TypedLatticeExtensions
     public static Task SetManyAtomicAsync<T>(
         this ILattice lattice,
         List<KeyValuePair<string, T>> entries,
-        CancellationToken cancellationToken = default) =>
-        lattice.SetManyAtomicAsync(entries, JsonLatticeSerializer<T>.Default, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        return lattice.SetManyAtomicAsync(entries, JsonLatticeSerializer<T>.Default, cancellationToken);
+    }
 
     /// <summary>
     /// Caller-supplied idempotency-key overload: serializes and atomically
@@ -195,6 +199,7 @@ public static class TypedLatticeExtensions
         ILatticeSerializer<T> serializer,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(serializer);
         var raw = new List<KeyValuePair<string, byte[]>>(entries.Count);
         foreach (var (k, v) in entries)
@@ -207,8 +212,11 @@ public static class TypedLatticeExtensions
         this ILattice lattice,
         List<KeyValuePair<string, T>> entries,
         string operationId,
-        CancellationToken cancellationToken = default) =>
-        lattice.SetManyAtomicAsync(entries, operationId, JsonLatticeSerializer<T>.Default, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        return lattice.SetManyAtomicAsync(entries, operationId, JsonLatticeSerializer<T>.Default, cancellationToken);
+    }
 
     // ── Bulk Loading ────────────────────────────────────────────
 

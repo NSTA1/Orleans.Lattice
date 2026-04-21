@@ -190,6 +190,56 @@ public class TypedLatticeExtensionsTests
             Arg.Is<List<KeyValuePair<string, byte[]>>>(l => l.Count == 0));
     }
 
+    // ── SetManyAtomicAsync ──────────────────────────────────────
+
+    [Test]
+    public void SetManyAtomicAsync_throws_for_null_entries_with_serializer()
+    {
+        var lattice = CreateMock();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAtomicAsync<TestItem>(null!, Serializer));
+    }
+
+    [Test]
+    public void SetManyAtomicAsync_throws_for_null_entries_default_serializer()
+    {
+        var lattice = CreateMock();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAtomicAsync<TestItem>((List<KeyValuePair<string, TestItem>>)null!));
+    }
+
+    [Test]
+    public void SetManyAtomicAsync_throws_for_null_entries_with_operationId_and_serializer()
+    {
+        var lattice = CreateMock();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAtomicAsync<TestItem>(null!, "op-1", Serializer));
+    }
+
+    [Test]
+    public void SetManyAtomicAsync_throws_for_null_entries_with_operationId_default_serializer()
+    {
+        var lattice = CreateMock();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAtomicAsync<TestItem>(null!, "op-1"));
+    }
+
+    [Test]
+    public void SetManyAtomicAsync_throws_for_null_serializer()
+    {
+        var lattice = CreateMock();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAtomicAsync(new List<KeyValuePair<string, TestItem>>(), (ILatticeSerializer<TestItem>)null!));
+    }
+
+    [Test]
+    public void SetManyAtomicAsync_with_operationId_throws_for_null_serializer()
+    {
+        var lattice = CreateMock();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAtomicAsync(new List<KeyValuePair<string, TestItem>>(), "op-1", (ILatticeSerializer<TestItem>)null!));
+    }
+
     // ── BulkLoadAsync ───────────────────────────────────────────
 
     [Test]
