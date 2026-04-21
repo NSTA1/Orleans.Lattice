@@ -173,23 +173,6 @@ internal sealed class TreeMergeGrain(
         return Task.CompletedTask;
     }
 
-    /// <summary>
-    /// Persists the in-progress marker and registers the keepalive reminder
-    /// without starting the grain timer. Used by unit tests.
-    /// </summary>
-    internal async Task BeginMergeStateAsync(int startFromShard)
-    {
-        state.State.NextShardIndex = startFromShard;
-        state.State.ShardRetries = 0;
-        await state.WriteStateAsync();
-
-        await reminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: context.GrainId,
-            reminderName: KeepaliveReminderName,
-            dueTime: TimeSpan.FromMinutes(1),
-            period: TimeSpan.FromMinutes(1));
-    }
-
     private async Task OnMergeTimerTick(CancellationToken ct)
     {
         await ProcessNextShardAsync();

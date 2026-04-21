@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using Orleans.Lattice;
 
 namespace Orleans.Lattice.BPlusTree.State;
@@ -12,8 +11,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 [GenerateSerializer]
 [Alias(TypeAliases.TreeRegistryEntry)]
 [Immutable]
-[EditorBrowsable(EditorBrowsableState.Never)]
-public sealed record TreeRegistryEntry
+internal sealed record TreeRegistryEntry
 {
     /// <summary>Maximum number of keys per leaf node, or <c>null</c> to use configured defaults.</summary>
     [Id(0)] public int? MaxLeafKeys { get; init; }

@@ -79,18 +79,11 @@ Different physical trees produce different leaf grain IDs, which automatically c
 
 ### API
 
-```csharp verify
-var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+Tree aliasing is managed internally by `LatticeGrain` and the registry grain during `ResizeAsync`, `SnapshotAsync`, and `UndoResizeAsync`. The registry grain itself is internal infrastructure; aliasing is not a public API and there is no external surface for setting, resolving, or removing aliases directly. Conceptually the registry exposes three operations that these coordinators invoke:
 
-// Set alias: logical "my-tree" → physical "my-tree/resized/abc123"
-await registry.SetAliasAsync("my-tree", "my-tree/resized/abc123");
-
-// Resolve: returns "my-tree/resized/abc123" (or "my-tree" if no alias)
-string physicalId = await registry.ResolveAsync("my-tree");
-
-// Remove alias: reverts to using "my-tree" as the physical ID
-await registry.RemoveAliasAsync("my-tree");
-```
+- `SetAliasAsync(logicalId, physicalId)` — points a logical tree id at a physical tree id, after verifying the target is not itself aliased.
+- `ResolveAsync(logicalId)` — returns the physical id, or the logical id unchanged when no alias is registered.
+- `RemoveAliasAsync(logicalId)` — clears the alias, reverting to the logical id.
 
 ## Shard Map
 
@@ -100,30 +93,13 @@ When no shard map is persisted (the default state for newly created trees), `Lat
 
 ### API
 
-```csharp verify
-var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+The registry grain (`ILatticeRegistry`) and the registry tree id (`LatticeConstants.RegistryTreeId`) are internal infrastructure; they are not part of the public Orleans.Lattice API. `LatticeGrain` reads and writes the shard map through these internal surfaces. Conceptually:
 
-// Read the persisted shard map for a tree (null if none).
-ShardMap? map = await registry.GetShardMapAsync("my-tree");
-
-// Persist a new shard map for a tree. The registry atomically stamps a
-// fresh monotonic Version on every persist (the caller-supplied Version
-// is ignored).
-await registry.SetShardMapAsync("my-tree", new ShardMap { Slots = [0, 0, 1, 1] });
-```
+- `GetShardMapAsync(treeId)` returns the persisted `ShardMap` for a tree, or `null` if none has been written. A never-persisted tree behaves as an identity map with `Version = 0`.
+- `SetShardMapAsync(treeId, shardMap)` persists a new shard map and atomically stamps a fresh monotonic `Version` on it (the caller-supplied `Version` is ignored).
 
 ### Monotonic `ShardMap.Version`
 
 Every `SetShardMapAsync` call increments `ShardMap.Version` by one, starting from 1 on the first persist. The default identity map materialised in memory for never-persisted trees has `Version = 0`.
 
 `LatticeGrain` uses this version as a stability hint for scans (`CountAsync`, `KeysAsync`, `EntriesAsync`): a scan records the version when it starts and re-reads it before returning. If the version moved, the scan retries up to `LatticeOptions.MaxScanRetries` times. Because the registry grain is non-reentrant, the version increment is atomic with the shard-map write, so concurrent splits cannot produce torn maps or out-of-order version stamps. See [Shard Splitting](shard-splitting.md#scan-semantics-during-a-split) for the algorithm and [Consistency](consistency.md) for the resulting per-operation guarantees.
-
-## Accessing the Registry Grain Directly
-
-For advanced scenarios, the `ILatticeRegistry` grain can be accessed directly:
-
-```csharp verify
-var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-bool exists = await registry.ExistsAsync("my-tree");
-var entry = await registry.GetEntryAsync("my-tree");
-var allIds = await registry.GetAllTreeIdsAsync();

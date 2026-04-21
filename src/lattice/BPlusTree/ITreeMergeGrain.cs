@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -14,9 +13,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// trees may have different shard counts.
 /// </para>
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.ITreeMergeGrain)]
-public interface ITreeMergeGrain : IGrainWithStringKey
+internal interface ITreeMergeGrain : IGrainWithStringKey
 {
     /// <summary>
     /// Initiates a merge of all entries from <paramref name="sourceTreeId"/>

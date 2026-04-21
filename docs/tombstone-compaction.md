@@ -59,12 +59,7 @@ sequenceDiagram
 
 The reminder is registered lazily — `LatticeGrain` calls `EnsureReminderAsync` on the first `SetAsync` or `DeleteAsync` for a given tree. A per-activation `bool` field ensures this cross-grain call happens at most once per `LatticeGrain` activation.
 
-For manual or on-demand compaction (e.g. maintenance scripts, integration tests), call `RunCompactionPassAsync` on the compaction grain directly:
-
-```csharp verify
-var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>("my-tree");
-await compaction.RunCompactionPassAsync();
-```
+For manual or on-demand compaction (e.g. maintenance scripts, integration tests), `LatticeGrain` invokes `ITombstoneCompactionGrain.RunCompactionPassAsync` internally on each reminder tick. The compaction grain is not part of the public API.
 
 ## Configuration
 

@@ -85,6 +85,11 @@ public partial class TreeResizeGrainTests
 
         // Same params — should not throw.
         await grain.ResizeAsync(256, 64);
+
+        // Idempotent call must leave the in-progress marker unchanged.
+        Assert.That(state.State.InProgress, Is.True);
+        Assert.That(state.State.NewMaxLeafKeys, Is.EqualTo(256));
+        Assert.That(state.State.NewMaxInternalChildren, Is.EqualTo(64));
     }
 
     [Test]

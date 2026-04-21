@@ -89,7 +89,7 @@ Once the soft-delete window expires and the old tree is purged, the resize can n
 
 ### Manual trigger (testing)
 
-In integration tests, the existing test harnesses call `ITreeResizeGrain` directly to drive resize passes synchronously. This grain is **guarded by `InternalGrainGuardFilter`** — external callers (including application code and `dotnet tool` wrappers) cannot invoke it. Use `ILattice.ResizeAsync` for all non-test scenarios; it delegates to `ITreeResizeGrain` internally and exposes `ILattice.IsResizeCompleteAsync()` for progress polling.
+In integration tests, the existing test harnesses call `ITreeResizeGrain` directly to drive resize passes synchronously. This grain interface is **declared `internal`** — consumer assemblies cannot reference or invoke it. Use `ILattice.ResizeAsync` for all non-test scenarios; it delegates to `ITreeResizeGrain` internally and exposes `ILattice.IsResizeCompleteAsync()` for progress polling.
 
 ## See also
 

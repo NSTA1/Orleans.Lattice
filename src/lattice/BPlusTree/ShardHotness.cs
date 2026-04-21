@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -11,8 +10,7 @@ namespace Orleans.Lattice.BPlusTree;
 [GenerateSerializer]
 [Alias(TypeAliases.ShardHotness)]
 [Immutable]
-[EditorBrowsable(EditorBrowsableState.Never)]
-public readonly record struct ShardHotness
+internal readonly record struct ShardHotness
 {
     /// <summary>Number of read operations (Get, Exists, GetMany, key/entry scans) since activation.</summary>
     [Id(0)] public long Reads { get; init; }

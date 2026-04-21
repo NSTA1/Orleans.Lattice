@@ -1,12 +1,9 @@
-using System.ComponentModel;
-
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// Well-known constants used across Lattice internals.
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
-public static class LatticeConstants
+internal static class LatticeConstants
 {
     /// <summary>
     /// Prefix for system-internal tree IDs. Trees whose ID starts with this
@@ -63,15 +60,4 @@ public static class LatticeConstants
     /// </para>
     /// </summary>
     public const int DefaultVirtualShardCount = 4096;
-
-    /// <summary>
-    /// <see cref="RequestContext"/> key used by <see cref="LatticeCallContextFilter"/>
-    /// to stamp grain-to-grain calls as internal.
-    /// </summary>
-    internal const string InternalCallTokenKey = "ol.internal";
-
-    /// <summary>
-    /// Expected value for <see cref="InternalCallTokenKey"/>.
-    /// </summary>
-    internal const string InternalCallTokenValue = "1";
 }

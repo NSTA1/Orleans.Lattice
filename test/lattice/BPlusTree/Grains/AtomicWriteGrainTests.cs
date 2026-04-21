@@ -643,6 +643,11 @@ public class AtomicWriteGrainTests
 
         // Must not throw; the completed saga is observed as idempotent success.
         await grain.ExecuteAsync(TreeId, retry);
+
+        // Completed saga state must remain Completed with the original entries —
+        // a reentry on a finished saga is a pure no-op.
+        Assert.That(seeded.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
+        Assert.That(seeded.State.Entries, Is.EqualTo(original));
     }
 
     [Test]

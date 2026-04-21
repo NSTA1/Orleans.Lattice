@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree;
@@ -22,8 +21,7 @@ namespace Orleans.Lattice.BPlusTree;
 [GenerateSerializer]
 [Alias(TypeAliases.LwwEntry)]
 [Immutable]
-[EditorBrowsable(EditorBrowsableState.Never)]
-public readonly record struct LwwEntry
+internal readonly record struct LwwEntry
 {
     /// <summary>The key this entry belongs to.</summary>
     [Id(0)] public string Key { get; init; }

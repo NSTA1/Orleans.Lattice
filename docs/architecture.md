@@ -179,7 +179,7 @@ flowchart TD
     Delete --> Registry
 ```
 
-All coordination grains are guarded by `InternalGrainGuardFilter` — external callers interact only through methods on `ILattice`.
+All coordination grain interfaces are declared `internal` — external callers interact only through methods on `ILattice`.
 
 ## Capacity and Depth
 

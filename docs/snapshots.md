@@ -94,8 +94,8 @@ its own tombstone compaction reminder registered upon snapshot completion.
 ## Grain Interface
 
 The snapshot is orchestrated by `ITreeSnapshotGrain`, keyed by the source tree
-ID. This grain is **guarded by `InternalGrainGuardFilter`** — external callers
-cannot invoke it directly. The `ILattice` interface delegates to it via
+ID. This grain interface is **declared `internal`** — external callers
+cannot reference or invoke it. The `ILattice` interface delegates to it via
 `SnapshotAsync`:
 
 ```csharp verify

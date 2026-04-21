@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.BPlusTree;
@@ -13,9 +12,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// In online mode, the source tree remains available throughout.
 /// </para>
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.ITreeSnapshotGrain)]
-public interface ITreeSnapshotGrain : IGrainWithStringKey
+internal interface ITreeSnapshotGrain : IGrainWithStringKey
 {
     /// <summary>
     /// Initiates a snapshot of this tree into <paramref name="destinationTreeId"/>.

@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -11,9 +10,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// pattern as <see cref="ITombstoneCompactionGrain"/>) and permanently purges
 /// all leaf and internal node state.
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.ITreeDeletionGrain)]
-public interface ITreeDeletionGrain : IGrainWithStringKey
+internal interface ITreeDeletionGrain : IGrainWithStringKey
 {
     /// <summary>
     /// Initiates a soft delete of the tree. Marks all shards as deleted so that

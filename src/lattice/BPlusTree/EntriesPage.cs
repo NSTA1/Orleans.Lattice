@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using Orleans.Lattice;
 
 namespace Orleans.Lattice.BPlusTree;
@@ -10,8 +9,7 @@ namespace Orleans.Lattice.BPlusTree;
 [GenerateSerializer]
 [Alias(TypeAliases.EntriesPage)]
 [Immutable]
-[EditorBrowsable(EditorBrowsableState.Never)]
-public sealed record EntriesPage
+internal sealed record EntriesPage
 {
     /// <summary>The key-value entries in this page, in sorted key order.</summary>
     [Id(0)] public required List<KeyValuePair<string, byte[]>> Entries { get; init; }

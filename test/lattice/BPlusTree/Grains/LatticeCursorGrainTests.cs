@@ -416,10 +416,14 @@ public class LatticeCursorGrainTests
     [Test]
     public async Task CloseAsync_is_idempotent_on_never_opened_cursor()
     {
-        var (grain, _, _) = CreateGrain();
+        var (grain, state, _) = CreateGrain();
+
         await grain.CloseAsync();
         await grain.CloseAsync();
-        // no exception
+
+        // State remains untouched on a never-opened cursor.
+        Assert.That(state.State.Phase, Is.EqualTo(LatticeCursorPhase.NotStarted));
+        Assert.That(state.State.TreeId, Is.Empty);
     }
 
     // --- Idle-TTL reminder self-cleanup ---

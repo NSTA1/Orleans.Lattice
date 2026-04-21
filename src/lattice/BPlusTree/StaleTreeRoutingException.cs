@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice;
 
@@ -22,8 +21,7 @@ namespace Orleans.Lattice;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.StaleTreeRouting)]
-[EditorBrowsable(EditorBrowsableState.Never)]
-public sealed class StaleTreeRoutingException : Exception
+internal sealed class StaleTreeRoutingException : Exception
 {
     /// <summary>
     /// Logical tree ID (the user-visible name, e.g. <c>"my-tree"</c>) whose

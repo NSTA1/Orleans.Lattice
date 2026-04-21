@@ -235,34 +235,6 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Batched variant of <see cref="TryForwardShadowWriteAsync(string, LwwValue{byte[]})"/>:
-    /// groups all moved-slot entries from <paramref name="entries"/> into a single
-    /// <see cref="IShardRootGrain.MergeManyAsync"/> call to amortise the cross-grain hop.
-    /// </summary>
-    private async Task TryForwardShadowWritesAsync(IEnumerable<KeyValuePair<string, LwwValue<byte[]>>> entries)
-    {
-        var sip = state.State.SplitInProgress;
-        if (sip is null) return;
-        if (sip.Phase != ShardSplitPhase.BeginShadowWrite
-            && sip.Phase != ShardSplitPhase.Drain
-            && sip.Phase != ShardSplitPhase.Swap) return;
-        if (sip.ShadowTargetShardIndex == MyShardIndex) return;
-
-        Dictionary<string, LwwValue<byte[]>>? batch = null;
-        foreach (var kvp in entries)
-        {
-            var slot = ShardMap.GetVirtualSlot(kvp.Key, sip.VirtualShardCount);
-            if (!sip.IsMovedSlot(slot)) continue;
-            (batch ??= new Dictionary<string, LwwValue<byte[]>>())[kvp.Key] = kvp.Value;
-        }
-
-        if (batch is null || batch.Count == 0) return;
-
-        var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{sip.ShadowTargetShardIndex}");
-        await target.MergeManyAsync(batch);
-    }
-
-    /// <summary>
     /// After a successful local write, forward the post-write LWW value to the
     /// shadow target if a split is active and the key falls in a moved virtual
     /// slot. The post-write value is captured by reading back the leaf's
@@ -307,19 +279,6 @@ internal sealed partial class ShardRootGrain
 
         var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{sip.ShadowTargetShardIndex}");
         await target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = raw.Value.ToLwwValue() });
-    }
-
-    /// <summary>
-    /// Returns <c>true</c> when <paramref name="key"/> hashes to a moved virtual
-    /// slot under the active split. Used by tests and internal callers that
-    /// need to know whether a key is subject to shadow-write or reject behaviour.
-    /// </summary>
-    internal bool IsKeyInMovedSlot(string key)
-    {
-        var sip = state.State.SplitInProgress;
-        if (sip is null) return false;
-        var slot = ShardMap.GetVirtualSlot(key, sip.VirtualShardCount);
-        return sip.IsMovedSlot(slot);
     }
 
     private static bool SlotsEqual(int[] sortedExisting, int[] candidate)

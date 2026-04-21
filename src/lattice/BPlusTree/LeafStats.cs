@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -12,8 +11,7 @@ namespace Orleans.Lattice.BPlusTree;
 [GenerateSerializer]
 [Alias(TypeAliases.LeafStats)]
 [Immutable]
-[EditorBrowsable(EditorBrowsableState.Never)]
-public readonly record struct LeafStats
+internal readonly record struct LeafStats
 {
     /// <summary>Number of live (non-tombstoned, non-expired) entries.</summary>
     [Id(0)] public int LiveKeys { get; init; }

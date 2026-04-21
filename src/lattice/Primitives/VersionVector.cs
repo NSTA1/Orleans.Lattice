@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using Orleans.Lattice;
 
 namespace Orleans.Lattice.Primitives;
@@ -13,8 +12,7 @@ namespace Orleans.Lattice.Primitives;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.VersionVector)]
-[EditorBrowsable(EditorBrowsableState.Never)]
-public sealed class VersionVector
+internal sealed class VersionVector
 {
     [Id(0)]
     public Dictionary<string, HybridLogicalClock> Entries { get; set; } = [];

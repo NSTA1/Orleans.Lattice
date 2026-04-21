@@ -1,4 +1,3 @@
-using System.ComponentModel;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -16,9 +15,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// the resize can be undone with <see cref="UndoResizeAsync"/>.
 /// </para>
 /// </summary>
-[EditorBrowsable(EditorBrowsableState.Never)]
 [Alias(TypeAliases.ITreeResizeGrain)]
-public interface ITreeResizeGrain : IGrainWithStringKey
+internal interface ITreeResizeGrain : IGrainWithStringKey
 {
     /// <summary>
     /// Initiates a resize of the tree. An offline snapshot is taken to a new
