@@ -6,12 +6,15 @@ analytics, or forking a dataset for experimentation.
 
 ## Snapshot Modes
 
+For the consistency contract of each mode, see
+[Consistency](consistency.md#maintenance-operations).
+
 ### Offline (`SnapshotMode.Offline`)
 
 The source tree is **locked** (all shards marked as deleted) at the start of the
 snapshot. Each shard is unlocked individually after its entries have been copied,
 so earlier shards become readable again while later shards are still being
-processed. This guarantees a fully consistent point-in-time snapshot.
+processed.
 
 Each shard follows a three-phase pattern:
 
@@ -27,11 +30,10 @@ later shards are copied.
 ### Online (`SnapshotMode.Online`)
 
 The source tree **remains available** for reads and writes during the snapshot.
-Each shard's live entries are drained independently without locking. The result
-is a best-effort point-in-time copy: concurrent mutations between processing
-shard 0 and shard 1 may cause minor inconsistencies (a key written after shard 0
-was drained but before shard 1 is drained may appear in one but not the other).
-The consistency model is similar to a non-repeatable-read isolation level.
+Each shard's live entries are drained under the shadow-forward primitive while
+live mutations are mirrored to the destination with their original HLCs; LWW
+commutativity guarantees the destination converges to a consistent view of the
+source at the drain's completion instant.
 
 ## Usage
 

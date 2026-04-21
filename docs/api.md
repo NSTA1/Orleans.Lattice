@@ -1,6 +1,6 @@
 # Lattice Public API Reference
 
-Lattice is a distributed, CRDI-bsaed B+ tree built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/). It exposes a single entry-point grain interface, `ILattice`, that routes operations to sharded internal storage. See [Architecture](architecture.md) for the full grain layer design.
+Lattice is a distributed, CRDI-based B+ tree built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/). It exposes a single entry-point grain interface, `ILattice`, that routes operations to sharded internal storage. See [Architecture](architecture.md) for the full grain layer design.
 
 ## Setup
 
@@ -35,6 +35,42 @@ siloBuilder.ConfigureLattice("my-tree", o =>
 
 > Structural sizing (`MaxLeafKeys`, `MaxInternalChildren`, `ShardCount`) is **not** configured here — those values are pinned per-tree in the registry. See [Tree Sizing](tree-sizing.md) for how to set them on a new or existing tree.
 
+### Basic usage
+
+Once Lattice is registered on the silo, resolve an `ILattice` grain from the client's (or a grain's) `IGrainFactory` using the tree's logical name as the string key, then call its methods directly:
+
+```csharp
+// Resolve the tree (idempotent — the same logical name always routes to the same tree).
+var tree = grainFactory.GetGrain<ILattice>("my-tree");
+
+// Write a value.
+await tree.SetAsync("user:1", "Alice"u8.ToArray());
+
+// Read it back (returns null if the key is absent or tombstoned).
+byte[]? value = await tree.GetAsync("user:1");
+
+// Conditional write — only insert if the key is not already present.
+byte[]? existing = await tree.GetOrSetAsync("user:1", "Bob"u8.ToArray());
+
+// Delete (tombstones the key; returns true if it was live).
+bool deleted = await tree.DeleteAsync("user:1");
+
+// Stream a key range in strict lexicographic order.
+await foreach (var key in tree.KeysAsync(startInclusive: "user:", endExclusive: "user;"))
+{
+    Console.WriteLine(key);
+}
+```
+
+Keys are `string`; values are `byte[]`. For typed payloads (POCOs, records, DTOs) use the serializer-aware overloads in [`TypedLatticeExtensions`](#typedlatticeextensions) — they accept any `T` and default to `JsonLatticeSerializer<T>`:
+
+```csharp
+await tree.SetAsync("user:1", new User("Alice", 30));
+var user = await tree.GetAsync<User>("user:1");
+```
+
+For the full set of runtime and maintenance operations, see [`ILattice`](#ilattice) below.
+
 ## `ILattice`
 
 Obtain an `ILattice` grain from the grain factory using the tree's logical name as the string key:
@@ -42,6 +78,12 @@ Obtain an `ILattice` grain from the grain factory using the tree's logical name 
 ```csharp
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 ```
+
+> For the consistency contract of each method below — linearizable,
+> strongly consistent, snapshot, or eventually consistent — see the
+> per-operation matrix in [Consistency](consistency.md). Per-row notes
+> here describe behaviour under specific conditions (e.g. concurrent
+> shard splits); they do not replace the classification in that doc.
 
 ### Cancellation
 

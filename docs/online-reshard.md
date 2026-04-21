@@ -72,7 +72,7 @@ Because each underlying split is itself an independent online operation, the tre
 
 The 4096 virtual shard count is generous. The real ceiling on useful shard counts comes from scan fan-out and activation cost, not the map itself:
 
-- **Scan fan-out is linear in distinct physical shards.** Every strongly-consistent scan issues one parallel grain call per shard. A 4096-shard tree issues 4096 concurrent calls per `KeysAsync` / `EntriesAsync` / `CountAsync`.
+- **Scan fan-out is linear in distinct physical shards.** Every scan issues one parallel grain call per shard. A 4096-shard tree issues 4096 concurrent calls per `KeysAsync` / `EntriesAsync` / `CountAsync`. See [Consistency](consistency.md) for the guarantee these scans deliver.
 - **Activation cost scales with shards × trees × silos.** Each physical shard has one `ShardRootGrain` activation per active tree.
 - **`ShardMap` storage is trivial** (`4 × 4096 = 16 KB`) and never the limit.
 
@@ -90,5 +90,5 @@ Splits halve the source shard's virtual-slot ownership. Starting from `ShardCoun
 ## Limitations and future work
 
 - **Grow-only.** Shrinking a tree (merging shards) is not supported. The underlying `ShardMap` primitive can represent any slot-to-shard mapping, but no coordinator currently implements the merge-and-drop flow.
-- **Shard-count only.** The existing `ILattice.ResizeAsync(newMaxLeafKeys, newMaxInternalChildren)` tree-sizing path remains offline (snapshot + swap). An online version is planned as a follow-up.
+- **Shard-count only.** Changing the B+ fan-out (`MaxLeafKeys` / `MaxInternalChildren`) uses a different path — see [Tree Sizing](tree-sizing.md#resizing-an-existing-tree).
 - **Node-count policy is heuristic.** The coordinator picks the largest-slot owners as split sources; it does not currently read hotness counters. Hot-shard-aware source selection would fit neatly into the same loop.
