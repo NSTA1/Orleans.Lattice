@@ -404,6 +404,36 @@ internal sealed partial class LatticeGrain(
         return saga.ExecuteAsync(TreeId, entries);
     }
 
+    /// <summary>
+    /// Caller-supplied idempotency-key overload. Validates the
+    /// <paramref name="operationId"/> shape, then dispatches to the saga
+    /// grain keyed by <c>{TreeId}/{operationId}</c>. Resubmissions with
+    /// the same id re-attach to the original saga and inherit its
+    /// completion outcome.
+    /// </summary>
+    public Task SetManyAtomicAsync(
+        List<KeyValuePair<string, byte[]>> entries,
+        string operationId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ValidateOperationId(operationId);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (entries.Count == 0) return Task.CompletedTask;
+
+        var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
+        return saga.ExecuteAsync(TreeId, entries);
+    }
+
+    private static void ValidateOperationId(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
+        if (operationId.Contains('/'))
+            throw new ArgumentException(
+                "operationId must not contain '/' (reserved as the grain-key separator).",
+                nameof(operationId));
+    }
+
     public async Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(key);

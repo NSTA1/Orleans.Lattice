@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
@@ -111,6 +114,24 @@ internal sealed class AtomicWriteGrain(
         // Empty batch: fast success, no saga work, no reminder needed.
         if (entries.Count == 0) return;
 
+        // Caller-supplied idempotency keys: if the same operationId is
+        // re-submitted with a different key set, reject it rather than
+        // silently replaying the original persisted entries. Only
+        // meaningful when a prior call has already seeded the fingerprint;
+        // null fingerprint (legacy state or fresh saga) skips the check
+        // and proceeds through the normal path below.
+        if (state.State.Phase != AtomicWritePhase.NotStarted
+            && state.State.KeyFingerprint is { } persistedFingerprint)
+        {
+            var incomingFingerprint = ComputeKeyFingerprint(entries);
+            if (!CryptographicOperations.FixedTimeEquals(persistedFingerprint, incomingFingerprint))
+            {
+                throw new InvalidOperationException(
+                    $"Atomic-write operation '{OperationKey}' was previously submitted with a different key set; " +
+                    "reuse of a caller-supplied operationId requires the exact same set of keys.");
+            }
+        }
+
         // Idempotent re-entry: if a prior call has already completed this saga,
         // the client simply sees success again.
         if (state.State.Phase == AtomicWritePhase.Completed)
@@ -158,6 +179,34 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
+    /// Computes a SHA-256 fingerprint over the batch's sorted key set plus
+    /// its entry count. Reordering the same keys produces the same
+    /// fingerprint; changing any key (or the count) changes it. Values
+    /// are not hashed — a caller retrying the same logical operation with
+    /// slightly-different serialized payloads for the same keys is treated
+    /// as an idempotent retry, not a mismatch.
+    /// </summary>
+    internal static byte[] ComputeKeyFingerprint(List<KeyValuePair<string, byte[]>> entries)
+    {
+        var sortedKeys = new string[entries.Count];
+        for (int i = 0; i < entries.Count; i++) sortedKeys[i] = entries[i].Key;
+        Array.Sort(sortedKeys, StringComparer.Ordinal);
+
+        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> lenBuf = stackalloc byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(lenBuf, entries.Count);
+        sha.AppendData(lenBuf);
+        foreach (var key in sortedKeys)
+        {
+            var bytes = Encoding.UTF8.GetBytes(key);
+            BinaryPrimitives.WriteInt32LittleEndian(lenBuf, bytes.Length);
+            sha.AppendData(lenBuf);
+            sha.AppendData(bytes);
+        }
+        return sha.GetHashAndReset();
+    }
+
+    /// <summary>
     /// Captures pre-saga values for every key via
     /// <see cref="IShardRootGrain.GetRawEntryAsync"/> so <c>ExpiresAtTicks</c>
     /// metadata is preserved for compensation. Already-expired entries are
@@ -182,6 +231,7 @@ internal sealed class AtomicWriteGrain(
         state.State.NextIndex = 0;
         state.State.RetriesOnCurrentStep = 0;
         state.State.FailureMessage = null;
+        state.State.KeyFingerprint ??= ComputeKeyFingerprint(entries);
 
         var lattice = grainFactory.GetGrain<ILattice>(treeId);
         var routing = await lattice.GetRoutingAsync();

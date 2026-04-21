@@ -83,4 +83,15 @@ internal sealed class AtomicWriteState
     /// for the synchronous client path to re-throw a meaningful error.
     /// </summary>
     [Id(6)] public string? FailureMessage { get; set; }
+
+    /// <summary>
+    /// SHA-256 fingerprint of the sorted key set submitted when the saga
+    /// was first started (caller-supplied idempotency key scenarios). When
+    /// non-null, a re-entry to <see cref="Grains.AtomicWriteGrain.ExecuteAsync"/>
+    /// whose entries produce a different fingerprint is rejected with
+    /// <see cref="InvalidOperationException"/>. Null for legacy persisted
+    /// state written before this field existed; absent fingerprint skips
+    /// the check (matches prior behaviour).
+    /// </summary>
+    [Id(7)] public byte[]? KeyFingerprint { get; set; }
 }

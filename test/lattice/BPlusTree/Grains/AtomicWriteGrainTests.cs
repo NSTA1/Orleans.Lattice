@@ -541,4 +541,128 @@ public class AtomicWriteGrainTests
             "ClearStateAsync resets state to its default (NotStarted).");
         await registry.Received().UnregisterReminder(Arg.Any<GrainId>(), reminder);
     }
+
+    // --- Caller-supplied idempotency key (G-011) ---
+
+    [Test]
+    public void ComputeKeyFingerprint_returns_same_digest_for_reordered_keys()
+    {
+        var a = MakeEntries(("k1", [1]), ("k2", [2]), ("k3", [3]));
+        var b = MakeEntries(("k3", [30]), ("k1", [10]), ("k2", [20]));
+
+        var fa = AtomicWriteGrain.ComputeKeyFingerprint(a);
+        var fb = AtomicWriteGrain.ComputeKeyFingerprint(b);
+
+        Assert.That(fa, Is.EqualTo(fb),
+            "Reordering entries or changing values must not change the fingerprint.");
+    }
+
+    [Test]
+    public void ComputeKeyFingerprint_differs_when_key_set_differs()
+    {
+        var a = MakeEntries(("k1", [1]), ("k2", [2]));
+        var b = MakeEntries(("k1", [1]), ("k3", [3]));
+
+        Assert.That(
+            AtomicWriteGrain.ComputeKeyFingerprint(a),
+            Is.Not.EqualTo(AtomicWriteGrain.ComputeKeyFingerprint(b)),
+            "Different key sets must produce different fingerprints.");
+    }
+
+    [Test]
+    public void ComputeKeyFingerprint_differs_when_count_differs()
+    {
+        var a = MakeEntries(("k1", [1]));
+        var b = MakeEntries(("k1", [1]), ("k2", [2]));
+
+        Assert.That(
+            AtomicWriteGrain.ComputeKeyFingerprint(a),
+            Is.Not.EqualTo(AtomicWriteGrain.ComputeKeyFingerprint(b)));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_seeds_KeyFingerprint_on_first_Prepare()
+    {
+        var (grain, state, _, _, _) = CreateGrain();
+        var entries = MakeEntries(("a", [1]), ("b", [2]));
+
+        await grain.ExecuteAsync(TreeId, entries);
+
+        Assert.That(state.State.KeyFingerprint, Is.Not.Null,
+            "Fresh saga must persist the fingerprint of its key set.");
+        Assert.That(
+            state.State.KeyFingerprint,
+            Is.EqualTo(AtomicWriteGrain.ComputeKeyFingerprint(entries)),
+            "Persisted fingerprint must match the caller's key set.");
+    }
+
+    [Test]
+    public void ExecuteAsync_throws_InvalidOperationException_when_reentered_with_different_key_set()
+    {
+        // Seed persisted state as if a prior saga is mid-flight with keys k1,k2.
+        var original = MakeEntries(("k1", [1]), ("k2", [2]));
+        var seeded = new FakePersistentState<AtomicWriteState>
+        {
+            State =
+            {
+                Phase = AtomicWritePhase.Execute,
+                TreeId = TreeId,
+                Entries = original,
+                KeyFingerprint = AtomicWriteGrain.ComputeKeyFingerprint(original),
+            },
+        };
+
+        var (grain, _, _, _, _) = CreateGrain(existingState: seeded);
+        var mismatched = MakeEntries(("k1", [1]), ("DIFFERENT", [9]));
+
+        Assert.That(
+            async () => await grain.ExecuteAsync(TreeId, mismatched),
+            Throws.InvalidOperationException.With.Message.Contains("different key set"));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_accepts_reentry_with_same_key_set_and_different_values()
+    {
+        // Seed persisted state as if a prior saga completed keys k1,k2.
+        var original = MakeEntries(("k1", [1]), ("k2", [2]));
+        var seeded = new FakePersistentState<AtomicWriteState>
+        {
+            State =
+            {
+                Phase = AtomicWritePhase.Completed,
+                TreeId = TreeId,
+                Entries = original,
+                KeyFingerprint = AtomicWriteGrain.ComputeKeyFingerprint(original),
+            },
+        };
+
+        var (grain, _, _, _, _) = CreateGrain(existingState: seeded);
+        // Same keys, different values (typical retry scenario where the
+        // serialized payload may differ slightly).
+        var retry = MakeEntries(("k2", [99]), ("k1", [88]));
+
+        // Must not throw; the completed saga is observed as idempotent success.
+        await grain.ExecuteAsync(TreeId, retry);
+    }
+
+    [Test]
+    public void ExecuteAsync_accepts_reentry_when_legacy_state_has_no_fingerprint()
+    {
+        // Pre-G-011 persisted state has KeyFingerprint == null. The fingerprint
+        // check must be skipped in that case so the grain remains wire-compatible.
+        var original = MakeEntries(("k1", [1]));
+        var seeded = new FakePersistentState<AtomicWriteState>
+        {
+            State =
+            {
+                Phase = AtomicWritePhase.Completed,
+                TreeId = TreeId,
+                Entries = original,
+                KeyFingerprint = null,
+            },
+        };
+
+        var (grain, _, _, _, _) = CreateGrain(existingState: seeded);
+        Assert.That(async () => await grain.ExecuteAsync(TreeId, original), Throws.Nothing);
+    }
 }
