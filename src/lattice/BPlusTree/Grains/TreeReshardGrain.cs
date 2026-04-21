@@ -38,15 +38,20 @@ internal sealed class TreeReshardGrain(
     LatticeOptionsResolver optionsResolver,
     ILogger<TreeReshardGrain> logger,
     [PersistentState("tree-reshard", LatticeOptions.StorageProviderName)]
-    IPersistentState<TreeReshardState> state) : ITreeReshardGrain, IRemindable, IGrainBase
+    IPersistentState<TreeReshardState> state)
+    : CoordinatorGrain<TreeReshardGrain>(context, reminderRegistry, logger), ITreeReshardGrain
 {
-    private const string KeepaliveReminderName = "reshard-keepalive";
-
-    private string TreeId => context.GrainId.Key.ToString()!;
+    private string TreeId => Context.GrainId.Key.ToString()!;
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
-    IGrainContext IGrainBase.GrainContext => context;
 
-    private IGrainTimer? _reshardTimer;
+    /// <inheritdoc />
+    protected override string KeepaliveReminderName => "reshard-keepalive";
+
+    /// <inheritdoc />
+    protected override bool InProgress => state.State.InProgress;
+
+    /// <inheritdoc />
+    protected override string LogContext => $"tree {TreeId}";
 
     /// <inheritdoc />
     public async Task ReshardAsync(int newShardCount)
@@ -99,7 +104,7 @@ internal sealed class TreeReshardGrain(
         // assumptions. Checked after argument validation so that callers
         // providing invalid parameters always receive an argument exception.
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
-        if (!await resize.IsCompleteAsync())
+        if (!await resize.IsIdleAsync())
             throw new InvalidOperationException(
                 $"A resize is already in progress for tree '{TreeId}'; reshard refused until resize completes.");
 
@@ -111,7 +116,7 @@ internal sealed class TreeReshardGrain(
         state.State.TargetShardCount = newShardCount;
         await state.WriteStateAsync();
 
-        await StartReshardAsync();
+        await StartCoordinatorAsync();
     }
 
     /// <inheritdoc />
@@ -133,60 +138,13 @@ internal sealed class TreeReshardGrain(
     }
 
     /// <inheritdoc />
-    public Task<bool> IsCompleteAsync() => Task.FromResult(!state.State.InProgress);
-
-    /// <inheritdoc />
-    public async Task ReceiveReminder(string reminderName, TickStatus status)
-    {
-        if (reminderName != KeepaliveReminderName) return;
-
-        if (state.State.InProgress && _reshardTimer is null)
-        {
-            StartReshardTimer();
-        }
-        else if (!state.State.InProgress)
-        {
-            await UnregisterKeepaliveAsync();
-            this.DeactivateOnIdle();
-        }
-    }
-
-    private async Task StartReshardAsync()
-    {
-        await reminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: context.GrainId,
-            reminderName: KeepaliveReminderName,
-            dueTime: TimeSpan.FromMinutes(1),
-            period: TimeSpan.FromMinutes(1));
-
-        StartReshardTimer();
-    }
-
-    private void StartReshardTimer()
-    {
-        _reshardTimer = this.RegisterGrainTimer(
-            OnReshardTimerTickAsync,
-            new GrainTimerCreationOptions(dueTime: TimeSpan.Zero, period: TimeSpan.FromSeconds(2)));
-    }
-
-    private async Task OnReshardTimerTickAsync(CancellationToken ct)
-    {
-        try
-        {
-            await ProcessNextPhaseAsync();
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Reshard phase {Phase} failed for tree {TreeId}",
-                state.State.Phase, TreeId);
-        }
-    }
+    public Task<bool> IsIdleAsync() => Task.FromResult(!state.State.InProgress);
 
     /// <summary>
     /// Processes a single phase of the reshard. Exposed as <c>internal</c> for
     /// unit testing.
     /// </summary>
-    internal async Task ProcessNextPhaseAsync()
+    protected internal override async Task ProcessNextPhaseAsync()
     {
         if (!state.State.InProgress) return;
 
@@ -286,7 +244,7 @@ internal sealed class TreeReshardGrain(
         try
         {
             await split.SplitAsync(sourceShardIndex);
-            logger.LogInformation(
+            Logger.LogInformation(
                 "Reshard dispatched split of shard {ShardIndex} for tree {TreeId}",
                 sourceShardIndex, TreeId);
         }
@@ -295,7 +253,7 @@ internal sealed class TreeReshardGrain(
             // Split already in progress for a different parameter set, or
             // source owns fewer than two slots — skip this shard and let the
             // next tick try another candidate.
-            logger.LogDebug(ex,
+            Logger.LogDebug(ex,
                 "Could not dispatch split for shard {ShardIndex} during reshard of tree {TreeId}",
                 sourceShardIndex, TreeId);
         }
@@ -313,9 +271,6 @@ internal sealed class TreeReshardGrain(
     /// </summary>
     internal async Task FinaliseAsync()
     {
-        _reshardTimer?.Dispose();
-        _reshardTimer = null;
-
         // F-019c: repin the structural ShardCount on the registry so future
         // resolver calls see the new physical shard count. The shard map
         // itself was updated incrementally by each per-shard split; this
@@ -327,8 +282,7 @@ internal sealed class TreeReshardGrain(
         state.State.Phase = ReshardPhase.None;
         await state.WriteStateAsync();
 
-        await UnregisterKeepaliveAsync();
-        this.DeactivateOnIdle();
+        await CompleteCoordinatorAsync();
     }
 
     /// <summary>
@@ -341,20 +295,6 @@ internal sealed class TreeReshardGrain(
         var existing = await registry.GetEntryAsync(TreeId);
         var updated = (existing ?? new State.TreeRegistryEntry()) with { ShardCount = newShardCount };
         await registry.UpdateAsync(TreeId, updated);
-    }
-
-    private async Task UnregisterKeepaliveAsync()
-    {
-        try
-        {
-            var reminder = await reminderRegistry.GetReminder(context.GrainId, KeepaliveReminderName);
-            if (reminder is not null)
-                await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "Failed to unregister reshard keepalive for tree {TreeId}", TreeId);
-        }
     }
 
     /// <summary>

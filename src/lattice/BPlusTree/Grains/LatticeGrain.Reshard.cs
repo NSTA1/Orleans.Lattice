@@ -21,6 +21,6 @@ internal sealed partial class LatticeGrain
     {
         cancellationToken.ThrowIfCancellationRequested();
         var reshard = grainFactory.GetGrain<ITreeReshardGrain>(TreeId);
-        return await reshard.IsCompleteAsync();
+        return await reshard.IsIdleAsync();
     }
 }

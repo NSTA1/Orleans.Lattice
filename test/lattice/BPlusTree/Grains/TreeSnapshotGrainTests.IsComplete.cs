@@ -19,7 +19,7 @@ public partial class TreeSnapshotGrainTests
         public async Task IsCompleteAsync_returns_true_when_no_snapshot_initiated()
         {
             var (grain, _, _, _, _) = CreateGrain();
-            var result = await grain.IsCompleteAsync();
+            var result = await grain.IsIdleAsync();
             Assert.That(result, Is.True);
         }
 
@@ -31,7 +31,7 @@ public partial class TreeSnapshotGrainTests
             existingState.State.DestinationTreeId = DestTreeId;
             existingState.State.ShardCount = ShardCount;
             var (grain, _, _, _, _) = CreateGrain(existingState: existingState);
-            var result = await grain.IsCompleteAsync();
+            var result = await grain.IsIdleAsync();
             Assert.That(result, Is.False);
         }
 
@@ -42,7 +42,7 @@ public partial class TreeSnapshotGrainTests
             existingState.State.InProgress = false;
             existingState.State.Complete = true;
             var (grain, _, _, _, _) = CreateGrain(existingState: existingState);
-            var result = await grain.IsCompleteAsync();
+            var result = await grain.IsIdleAsync();
             Assert.That(result, Is.True);
         }
     }

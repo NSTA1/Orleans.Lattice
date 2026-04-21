@@ -42,9 +42,17 @@ internal sealed class TreeShardSplitGrain(
     LatticeOptionsResolver optionsResolver,
     ILogger<TreeShardSplitGrain> logger,
     [PersistentState("tree-shard-split", LatticeOptions.StorageProviderName)]
-    IPersistentState<TreeShardSplitState> state) : ITreeShardSplitGrain, IRemindable, IGrainBase
+    IPersistentState<TreeShardSplitState> state)
+    : CoordinatorGrain<TreeShardSplitGrain>(context, reminderRegistry, logger), ITreeShardSplitGrain
 {
-    private const string KeepaliveReminderName = "shard-split-keepalive";
+    /// <inheritdoc />
+    protected override string KeepaliveReminderName => "shard-split-keepalive";
+
+    /// <inheritdoc />
+    protected override bool InProgress => state.State.InProgress;
+
+    /// <inheritdoc />
+    protected override string LogContext => $"tree {TreeId}";
 
     /// <summary>
     /// Parses the grain key as <c>{treeId}/{sourceShardIndex}</c>. The trailing
@@ -57,7 +65,7 @@ internal sealed class TreeShardSplitGrain(
     {
         get
         {
-            var key = context.GrainId.Key.ToString()!;
+            var key = Context.GrainId.Key.ToString()!;
             var slash = key.LastIndexOf('/');
             return slash < 0 ? key : key[..slash];
         }
@@ -73,7 +81,7 @@ internal sealed class TreeShardSplitGrain(
     {
         get
         {
-            var key = context.GrainId.Key.ToString()!;
+            var key = Context.GrainId.Key.ToString()!;
             var slash = key.LastIndexOf('/');
             if (slash < 0 || slash == key.Length - 1) return -1;
             return int.TryParse(key.AsSpan(slash + 1), out var idx) ? idx : -1;
@@ -81,9 +89,7 @@ internal sealed class TreeShardSplitGrain(
     }
 
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
-    IGrainContext IGrainBase.GrainContext => context;
 
-    private IGrainTimer? _splitTimer;
     private string? _physicalTreeId;
 
     private async Task<string> GetPhysicalTreeIdAsync()
@@ -103,7 +109,7 @@ internal sealed class TreeShardSplitGrain(
         var keyShard = SourceShardIndexFromKey;
         if (keyShard >= 0 && keyShard != sourceShardIndex)
             throw new ArgumentException(
-                $"Source shard {sourceShardIndex} does not match coordinator key shard {keyShard} (key='{context.GrainId.Key}').",
+                $"Source shard {sourceShardIndex} does not match coordinator key shard {keyShard} (key='{Context.GrainId.Key}').",
                 nameof(sourceShardIndex));
 
         if (state.State.InProgress)
@@ -116,7 +122,7 @@ internal sealed class TreeShardSplitGrain(
         if (state.State.Complete) state.State.Complete = false;
 
         await InitiateSplitStateAsync(sourceShardIndex);
-        await StartSplitAsync();
+        await StartCoordinatorAsync();
     }
 
     /// <summary>
@@ -209,53 +215,13 @@ internal sealed class TreeShardSplitGrain(
     }
 
     /// <inheritdoc />
-    public Task<bool> IsCompleteAsync() => Task.FromResult(!state.State.InProgress);
-
-    /// <inheritdoc />
-    public async Task ReceiveReminder(string reminderName, TickStatus status)
-    {
-        if (reminderName != KeepaliveReminderName) return;
-
-        if (state.State.InProgress && _splitTimer is null)
-        {
-            await StartSplitTimerAsync();
-        }
-        else if (!state.State.InProgress)
-        {
-            await UnregisterKeepaliveAsync();
-            this.DeactivateOnIdle();
-        }
-    }
-
-    private async Task StartSplitAsync()
-    {
-        await reminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: context.GrainId,
-            reminderName: KeepaliveReminderName,
-            dueTime: TimeSpan.FromMinutes(1),
-            period: TimeSpan.FromMinutes(1));
-
-        await StartSplitTimerAsync();
-    }
-
-    private Task StartSplitTimerAsync()
-    {
-        _splitTimer = this.RegisterGrainTimer(
-            OnSplitTimerTick,
-            new GrainTimerCreationOptions(dueTime: TimeSpan.Zero, period: TimeSpan.FromSeconds(2)));
-        return Task.CompletedTask;
-    }
-
-    private async Task OnSplitTimerTick(CancellationToken ct)
-    {
-        await ProcessNextPhaseAsync();
-    }
+    public Task<bool> IsIdleAsync() => Task.FromResult(!state.State.InProgress);
 
     /// <summary>
-    /// Processes a single phase of the split. Exposed as <c>internal</c> for
-    /// unit testing.
+    /// Processes a single phase of the split. Exposed as <c>internal</c> via
+    /// <c>protected</c> override for unit testing.
     /// </summary>
-    internal async Task ProcessNextPhaseAsync()
+    protected internal override async Task ProcessNextPhaseAsync()
     {
         if (!state.State.InProgress) return;
 
@@ -282,7 +248,7 @@ internal sealed class TreeShardSplitGrain(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Shard-split phase {Phase} failed for tree {TreeId}",
+            Logger.LogWarning(ex, "Shard-split phase {Phase} failed for tree {TreeId}",
                 state.State.Phase, TreeId);
         }
     }
@@ -352,21 +318,12 @@ internal sealed class TreeShardSplitGrain(
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
         await source.CompleteSplitAsync();
 
-        await CompleteSplitInternalAsync();
-    }
-
-    private async Task CompleteSplitInternalAsync()
-    {
-        _splitTimer?.Dispose();
-        _splitTimer = null;
-
         state.State.InProgress = false;
         state.State.Complete = true;
         state.State.Phase = ShardSplitPhase.None;
         await state.WriteStateAsync();
 
-        await UnregisterKeepaliveAsync();
-        this.DeactivateOnIdle();
+        await CompleteCoordinatorAsync();
     }
 
     /// <summary>
@@ -424,19 +381,5 @@ internal sealed class TreeShardSplitGrain(
 
         if (batch.Count > 0)
             await target.MergeManyAsync(batch);
-    }
-
-    private async Task UnregisterKeepaliveAsync()
-    {
-        try
-        {
-            var reminder = await reminderRegistry.GetReminder(context.GrainId, KeepaliveReminderName);
-            if (reminder is not null)
-                await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to unregister shard-split keepalive reminder for tree {TreeId}", TreeId);
-        }
     }
 }

@@ -68,7 +68,7 @@ public class ReshardIntegrationTests
 
         for (int i = 0; i < 50; i++)
         {
-            if (await reshard.IsCompleteAsync()) return;
+            if (await reshard.IsIdleAsync()) return;
 
             // Kick the coordinator to dispatch any new splits it wants to run.
             await reshard.RunReshardPassAsync();
@@ -82,7 +82,7 @@ public class ReshardIntegrationTests
             foreach (var idx in map.GetPhysicalShardIndices())
             {
                 var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/{idx}");
-                if (!await split.IsCompleteAsync())
+                if (!await split.IsIdleAsync())
                     await split.RunSplitPassAsync();
             }
 
@@ -92,7 +92,7 @@ public class ReshardIntegrationTests
         // Diagnostic: on failure, surface map + phase.
         var finalMap = await registry.GetShardMapAsync(treeId);
         var distinct = finalMap?.GetPhysicalShardIndices().Count ?? -1;
-        var isDone = await reshard.IsCompleteAsync();
+        var isDone = await reshard.IsIdleAsync();
         Assert.Fail($"Reshard did not converge. reshard.IsComplete={isDone}, map.distinct={distinct}");
     }
 

@@ -21,7 +21,7 @@ public partial class TreeResizeGrainTests
     {
         var (grain, _, _, grainFactory, _) = CreateGrain();
         var reshard = grainFactory.GetGrain<ITreeReshardGrain>(TreeId);
-        reshard.IsCompleteAsync().Returns(Task.FromResult(false));
+        reshard.IsIdleAsync().Returns(Task.FromResult(false));
 
         Assert.ThrowsAsync<InvalidOperationException>(
             () => grain.ResizeAsync(256, 64));
@@ -35,7 +35,7 @@ public partial class TreeResizeGrainTests
         // masked by an interlock check.
         var (grain, _, _, grainFactory, _) = CreateGrain();
         var reshard = grainFactory.GetGrain<ITreeReshardGrain>(TreeId);
-        reshard.IsCompleteAsync().Returns(Task.FromResult(false));
+        reshard.IsIdleAsync().Returns(Task.FromResult(false));
 
         Assert.ThrowsAsync<ArgumentOutOfRangeException>(
             () => grain.ResizeAsync(1, 64));

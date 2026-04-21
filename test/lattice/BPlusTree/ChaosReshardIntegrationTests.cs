@@ -124,7 +124,7 @@ public class ChaosReshardIntegrationTests
         // pass-pumping work under live load.
         _ = await tree.GetRoutingAsync();
         _ = await tree.CountAsync();
-        _ = await reshard.IsCompleteAsync();
+        _ = await reshard.IsIdleAsync();
 
         // Initiate the reshard synchronously before opening the chaos window
         // so the driver's only responsibility once traffic starts is to pump
@@ -260,7 +260,7 @@ public class ChaosReshardIntegrationTests
             {
                 while (!ct.IsCancellationRequested)
                 {
-                    if (await reshard.IsCompleteAsync()) { Bump(stats, "reshard-complete"); break; }
+                    if (await reshard.IsIdleAsync()) { Bump(stats, "reshard-complete"); break; }
 
                     await reshard.RunReshardPassAsync();
                     Bump(stats, "reshard-passes");
@@ -271,7 +271,7 @@ public class ChaosReshardIntegrationTests
                     {
                         if (ct.IsCancellationRequested) break;
                         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/{idx}");
-                        if (!await split.IsCompleteAsync())
+                        if (!await split.IsIdleAsync())
                         {
                             await split.RunSplitPassAsync();
                             Bump(stats, "split-passes");
@@ -293,7 +293,7 @@ public class ChaosReshardIntegrationTests
         // Post-chaos drain: finish any residual reshard work against a
         // quiescent system so the final invariants are evaluated cleanly.
         using var drainCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        while (!drainCts.IsCancellationRequested && !await reshard.IsCompleteAsync())
+        while (!drainCts.IsCancellationRequested && !await reshard.IsIdleAsync())
         {
             await reshard.RunReshardPassAsync();
             var map = await registry.GetShardMapAsync(treeId);
@@ -302,7 +302,7 @@ public class ChaosReshardIntegrationTests
                 foreach (var idx in map.GetPhysicalShardIndices())
                 {
                     var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/{idx}");
-                    if (!await split.IsCompleteAsync())
+                    if (!await split.IsIdleAsync())
                         await split.RunSplitPassAsync();
                 }
             }
@@ -313,7 +313,7 @@ public class ChaosReshardIntegrationTests
         var finalKeys = await DrainKeysWithRetryAsync(tree, maxAttempts: 5);
         var finalMap = await registry.GetShardMapAsync(treeId);
         var finalDistinct = finalMap?.GetPhysicalShardIndices().Count ?? 0;
-        var reshardDone = await reshard.IsCompleteAsync();
+        var reshardDone = await reshard.IsIdleAsync();
 
         Assert.Multiple(() =>
         {

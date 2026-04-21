@@ -113,13 +113,13 @@ internal sealed partial class LatticeGrain
     {
         cancellationToken.ThrowIfCancellationRequested();
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
-        return await snapshot.IsCompleteAsync();
+        return await snapshot.IsIdleAsync();
     }
 
     public async Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
-        return await resize.IsCompleteAsync();
+        return await resize.IsIdleAsync();
     }
 }

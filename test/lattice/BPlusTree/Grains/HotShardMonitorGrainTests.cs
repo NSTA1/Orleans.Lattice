@@ -47,7 +47,7 @@ public partial class HotShardMonitorGrainTests
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
 
         var splitGrain = Substitute.For<ITreeShardSplitGrain>();
-        splitGrain.IsCompleteAsync().Returns(true);
+        splitGrain.IsIdleAsync().Returns(true);
         grainFactory.GetGrain<ITreeShardSplitGrain>(Arg.Any<string>()).Returns(splitGrain);
 
         var registry = Substitute.For<ILatticeRegistry>();
@@ -181,7 +181,7 @@ public partial class HotShardMonitorGrainTests
         lattice.IsSnapshotCompleteAsync().Returns(true);
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
         var splitGrain = Substitute.For<ITreeShardSplitGrain>();
-        splitGrain.IsCompleteAsync().Returns(true);
+        splitGrain.IsIdleAsync().Returns(true);
         grainFactory.GetGrain<ITreeShardSplitGrain>(Arg.Any<string>()).Returns(splitGrain);
 
         var hotShard1 = Substitute.For<IShardRootGrain>();

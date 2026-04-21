@@ -59,7 +59,7 @@ public class TreeReshardGrainTests
         grainFactory.GetGrain<ILattice>(TreeId).Returns(defaultLattice);
 
         var defaultResize = Substitute.For<ITreeResizeGrain>();
-        defaultResize.IsCompleteAsync().Returns(Task.FromResult(true));
+        defaultResize.IsIdleAsync().Returns(Task.FromResult(true));
         grainFactory.GetGrain<ITreeResizeGrain>(TreeId).Returns(defaultResize);
 
         var state = existingState ?? new FakePersistentState<TreeReshardState>();
@@ -323,7 +323,7 @@ public class TreeReshardGrainTests
     public async Task IsCompleteAsync_returns_true_when_no_reshard_in_progress()
     {
         var (grain, _, _, _) = CreateGrain();
-        Assert.That(await grain.IsCompleteAsync(), Is.True);
+        Assert.That(await grain.IsIdleAsync(), Is.True);
     }
 
     [Test]
@@ -332,7 +332,7 @@ public class TreeReshardGrainTests
         var (grain, state, _, _) = CreateGrain();
         state.State.InProgress = true;
 
-        Assert.That(await grain.IsCompleteAsync(), Is.False);
+        Assert.That(await grain.IsIdleAsync(), Is.False);
     }
 
     // --- ProcessNextPhaseAsync ---
@@ -406,7 +406,7 @@ public class TreeReshardGrainTests
         // invalidate the resize snapshot's per-slot routing.
         var (grain, _, grainFactory, _) = CreateGrain(virtualShardCount: 16, physicalShardCount: 2);
         var resize = Substitute.For<ITreeResizeGrain>();
-        resize.IsCompleteAsync().Returns(Task.FromResult(false));
+        resize.IsIdleAsync().Returns(Task.FromResult(false));
         grainFactory.GetGrain<ITreeResizeGrain>(TreeId).Returns(resize);
 
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.ReshardAsync(4));
@@ -420,7 +420,7 @@ public class TreeReshardGrainTests
         // masked by the interlock check.
         var (grain, _, grainFactory, _) = CreateGrain(virtualShardCount: 16, physicalShardCount: 2);
         var resize = Substitute.For<ITreeResizeGrain>();
-        resize.IsCompleteAsync().Returns(Task.FromResult(false));
+        resize.IsIdleAsync().Returns(Task.FromResult(false));
         grainFactory.GetGrain<ITreeResizeGrain>(TreeId).Returns(resize);
 
         Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => grain.ReshardAsync(1));

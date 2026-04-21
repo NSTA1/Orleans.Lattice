@@ -59,7 +59,7 @@ public class LatticeCursorSplitTests
             $"{treeId}/{sourceShardIndex}");
         await split.SplitAsync(sourceShardIndex);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True,
+        Assert.That(await split.IsIdleAsync(), Is.True,
             $"Manual split of shard {sourceShardIndex} must complete.");
     }
 

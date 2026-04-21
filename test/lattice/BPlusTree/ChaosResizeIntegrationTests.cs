@@ -250,7 +250,7 @@ public class ChaosResizeIntegrationTests
 
                 while (!ct.IsCancellationRequested)
                 {
-                    if (await resize.IsCompleteAsync()) { Bump(stats, "resize-complete"); break; }
+                    if (await resize.IsIdleAsync()) { Bump(stats, "resize-complete"); break; }
 
                     await resize.RunResizePassAsync();
                     Bump(stats, "resize-passes");
@@ -271,7 +271,7 @@ public class ChaosResizeIntegrationTests
         // Post-chaos drain: finish any residual resize work against a
         // quiescent system so the final invariants are evaluated cleanly.
         using var drainCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        while (!drainCts.IsCancellationRequested && !await resize.IsCompleteAsync())
+        while (!drainCts.IsCancellationRequested && !await resize.IsIdleAsync())
         {
             await resize.RunResizePassAsync();
             await Task.Delay(100);
@@ -279,7 +279,7 @@ public class ChaosResizeIntegrationTests
 
         var finalCount = await tree.CountAsync();
         var finalKeys = await DrainKeysWithRetryAsync(tree, maxAttempts: 5);
-        var resizeDone = await resize.IsCompleteAsync();
+        var resizeDone = await resize.IsIdleAsync();
 
         Assert.Multiple(() =>
         {

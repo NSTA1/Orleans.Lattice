@@ -41,8 +41,9 @@ public interface ITreeShardSplitGrain : IGrainWithStringKey
     Task RunSplitPassAsync();
 
     /// <summary>
-    /// Returns <c>true</c> when no split is in progress (vacuously true when
-    /// no split has ever been initiated).
+    /// Returns <c>true</c> when the coordinator is idle — either no split
+    /// has ever been initiated, or the last one has run to completion.
+    /// Returns <c>false</c> while a split is in flight.
     /// </summary>
-    Task<bool> IsCompleteAsync();
+    Task<bool> IsIdleAsync();
 }

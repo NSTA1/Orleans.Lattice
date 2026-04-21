@@ -45,7 +45,7 @@ public class ShardSplitIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
+        Assert.That(await split.IsIdleAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
 
         // Read all keys back via the public API — LatticeGrain should refresh
         // its cached ShardMap on StaleShardRoutingException and route to the
@@ -78,7 +78,7 @@ public class ShardSplitIntegrationTests
         // Same source — must not throw.
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True);
+        Assert.That(await split.IsIdleAsync(), Is.True);
     }
 
     [Test]
@@ -207,7 +207,7 @@ public class ShardSplitIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
+        Assert.That(await split.IsIdleAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
 
         // Allow readers to also exercise the post-swap path (refreshed shard map).
         await Task.Delay(250);
@@ -290,7 +290,7 @@ public class ShardSplitIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
+        Assert.That(await split.IsIdleAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
 
         // Drive more writes after the swap so we cover the post-reject refresh path too.
         await Task.Delay(250);
@@ -356,7 +356,7 @@ public class ShardSplitIntegrationTests
         }
 
         await split.RunSplitPassAsync();
-        Assert.That(await split.IsCompleteAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
+        Assert.That(await split.IsIdleAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
 
         // Immediately after split: every TTL'd key should still be live
         // (TTL=800ms hasn't elapsed yet).
