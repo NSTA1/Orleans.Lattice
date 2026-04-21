@@ -205,23 +205,6 @@ internal sealed class TreeSnapshotGrain(
     }
 
     /// <summary>
-    /// Persists the in-progress marker and registers the keepalive reminder
-    /// without starting the grain timer. Used by unit tests.
-    /// </summary>
-    internal async Task BeginSnapshotStateAsync(int startFromShard)
-    {
-        state.State.NextShardIndex = startFromShard;
-        state.State.ShardRetries = 0;
-        await state.WriteStateAsync();
-
-        await ReminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: Context.GrainId,
-            reminderName: KeepaliveReminderName,
-            dueTime: TimeSpan.FromMinutes(1),
-            period: TimeSpan.FromMinutes(1));
-    }
-
-    /// <summary>
     /// Processes the next phase of the current shard. If all shards are done,
     /// completes the snapshot. Exposed as <c>internal</c> via <c>protected</c>
     /// override for unit testing.
