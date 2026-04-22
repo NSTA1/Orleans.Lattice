@@ -70,21 +70,30 @@ Incremental, ongoing merge from one or more source trees using `VersionVector` t
 
 ---
 
-### 2 · F-012
+### 2 · F-034
+**Reliability / high impact**
+
+Resilient client-side iterators for `ILattice.KeysAsync` and `EntriesAsync` (plus their typed extension overloads) that transparently recover from `Orleans.Runtime.EnumerationAbortedException`. The remote enumerator lives on the `LatticeGrain` orchestrator and can be reclaimed mid-scan when the grain deactivates (idle expiry, cold start, silo failover, scale-down) — today every consumer has to re-implement a retry loop that restarts the *whole* scan, which is O(n²) on large trees, races with concurrent writes, and is easy to get wrong (e.g. duplicate emission, lost cancellation propagation).
+
+Because the tree is strongly consistent and key-ordered, a range scan `[start, endExclusive]` that has yielded up through `lastKey` can be **deterministically resumed** by reopening with `(lastKey, endExclusive)` as the new exclusive lower bound. The wrapper tracks `lastYieldedKey` internally, catches `EnumerationAbortedException`, reopens the underlying grain-side enumerator, and continues — callers see a single uninterrupted `IAsyncEnumerable<T>` with no duplicates, no gaps, and original `CancellationToken` semantics preserved. F-033's stateful `ILatticeCursorGrain` remains the right choice for multi-minute exports that must survive *client* restart; F-034 covers the far more common case of a single in-process scan that outlives one grain activation. Retry budget configurable via `LatticeOptions.ScanReconnectAttempts` (default ~8) with bounded linear / exponential backoff; exhaustion rethrows the last `EnumerationAbortedException` verbatim. Reverse scans resume with `endExclusive = lastYieldedKey` on the reverse path. Applies equally to the typed `EntriesAsync<T>` / `KeysAsync` extension overloads. Interacts cleanly with F-032's in-flight reconciliation cursors: the reopened enumerator inherits the current `ShardMap`, so a mid-scan shard split that commits during a reconnect is picked up on the new attempt without special casing.
+
+---
+
+### 3 · F-012
 **Reliability / medium impact**
 
 Optionally pre-warm `LeafCacheGrain` activations for recently-accessed leaves after a silo restart to reduce cold-start read-latency spikes. No dependencies.
 
 ---
 
-### 3 · F-018
+### 4 · F-018
 **Feature / lower impact (complex)**
 
 Associate tags with keys and query by tag. Implementable as a secondary Lattice tree mapping `tag → Set<key>`, maintained transactionally alongside the primary write. High complexity; deferred until core feature set is stable.
 
 ---
 
-### 4 · Documentation & Developer Experience
+### 5 · Documentation & Developer Experience
 
 - [ ] **F-021 — Migration guide**: Document how to migrate data from external stores (Redis, SQL, Cosmos DB) into Lattice using the streaming bulk-load API, including key-design and value-serialization best practices.
 - [ ] **F-022 — Troubleshooting guide (`docs/troubleshooting.md`)** *(follows F-014 ✓)*: Cover common issues — storage provider exceptions from oversized grains, concurrent split activity, slow scans, stale cache behavior — and how to interpret the output of `DiagnoseAsync`.
