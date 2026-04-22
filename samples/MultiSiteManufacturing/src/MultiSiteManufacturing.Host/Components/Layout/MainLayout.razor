@@ -1,0 +1,63 @@
+@inherits LayoutComponentBase
+
+<header class="container">
+    <nav>
+        <ul>
+            <li><strong>Multi-Site Manufacturing</strong></li>
+            <li><small>Digital Thread Demo</small></li>
+        </ul>
+        <ul>
+            <li><small>operator: <kbd>demo</kbd></small></li>
+            <li>
+                <button class="secondary" disabled title="Chaos fly-out lands in M10">
+                    ☰ Chaos
+                </button>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+<main class="container">
+    @Body
+</main>
+
+<footer class="container">
+    <small>
+        Orleans.Lattice sample · baseline vs lattice federation ·
+        Pico.css (CDN) · Blazor Server
+    </small>
+</footer>
+
+<style>
+    /* State badges — intentionally tiny; a full design pass comes in M12. */
+    .state-badge {
+        display: inline-block;
+        padding: 0.15rem 0.5rem;
+        border-radius: 0.25rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #fff;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .state-nominal          { background: #2d8a3e; }
+    .state-underinspection  { background: #3b7ab8; }
+    .state-flaggedforreview { background: #d18f2a; }
+    .state-rework           { background: #d46b2a; }
+    .state-scrap            { background: #b83a3a; }
+
+    .chaos-banner {
+        margin-bottom: 1rem;
+    }
+    .divergent-row td {
+        background-color: rgba(184, 58, 58, 0.08);
+    }
+    .dashboard-grid {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 1.5rem;
+    }
+    @@media (max-width: 960px) {
+        .dashboard-grid { grid-template-columns: 1fr; }
+    }
+</style>

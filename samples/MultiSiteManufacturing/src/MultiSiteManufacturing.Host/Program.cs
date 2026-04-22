@@ -3,6 +3,7 @@ using Orleans.Hosting;
 using Orleans.Lattice;
 using MultiSiteManufacturing.Host.Baseline;
 using MultiSiteManufacturing.Host.Components;
+using MultiSiteManufacturing.Host.Dashboard;
 using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Grpc;
 using MultiSiteManufacturing.Host.Inventory;
@@ -70,6 +71,19 @@ builder.Services.AddSingleton<IFactBackend>(sp => new ChaosFactBackend(
     sp.GetRequiredService<LatticeFactBackend>(),
     sp.GetRequiredService<IGrainFactory>()));
 builder.Services.AddSingleton<FederationRouter>();
+
+// Dashboard broadcaster: subscribes to FederationRouter events and
+// fans out PartSummaryUpdate / ChaosOverview messages to Blazor
+// components via per-subscriber Channel<T>. Registered as a singleton
+// so DI consumers (Razor components) and the hosted-service lifecycle
+// (Start/Stop subscription hooks) share the same instance. Suppressed
+// in the Testing environment so its background fan-out reads don't
+// race with gRPC contract tests tearing the host down.
+builder.Services.AddSingleton<DashboardBroadcaster>();
+if (!builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<DashboardBroadcaster>());
+}
 
 // Bulk-load seeder: populates ~50 parts against an empty storage account,
 // no-ops on subsequent starts via IInventorySeedStateGrain. Suppressed in

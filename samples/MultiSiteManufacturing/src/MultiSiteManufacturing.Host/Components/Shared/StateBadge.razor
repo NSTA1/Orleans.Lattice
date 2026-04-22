@@ -1,0 +1,10 @@
+@* Tiny helper that renders a <see cref="ComplianceState"/> as a coloured chip. *@
+
+<span class="state-badge @CssClass">@State</span>
+
+@code {
+    /// <summary>Compliance state to display.</summary>
+    [Parameter, EditorRequired] public ComplianceState State { get; set; }
+
+    private string CssClass => $"state-{State.ToString().ToLowerInvariant()}";
+}

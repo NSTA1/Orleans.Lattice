@@ -1,0 +1,49 @@
+@* Read-only inventory table. Parent owns the live subscription; this
+   component just renders whatever <see cref="Parts"/> is handed to it. *@
+
+<article>
+    <header>
+        <strong>Inventory</strong>
+        <small> · @Parts.Count() part@(Parts.Count() == 1 ? "" : "s")</small>
+    </header>
+
+    @if (!Parts.Any())
+    {
+        <p><em>No parts yet. The seeder populates ~50 on first non-test run.</em></p>
+    }
+    else
+    {
+        <figure>
+            <table role="grid">
+                <thead>
+                    <tr>
+                        <th scope="col">Serial</th>
+                        <th scope="col">Family</th>
+                        <th scope="col">Latest stage</th>
+                        <th scope="col">Baseline</th>
+                        <th scope="col">Lattice</th>
+                        <th scope="col">Facts</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var part in Parts.OrderBy(p => p.Serial.Value))
+                    {
+                        <tr class="@(part.Diverges ? "divergent-row" : null)">
+                            <td><code>@part.Serial.Value</code></td>
+                            <td>@part.Family</td>
+                            <td>@(part.LatestStage?.ToString() ?? "—")</td>
+                            <td><StateBadge State="@part.BaselineState" /></td>
+                            <td><StateBadge State="@part.LatticeState" /></td>
+                            <td>@part.FactCount</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </figure>
+    }
+</article>
+
+@code {
+    /// <summary>Parts to display; caller provides a fresh enumerable on every render.</summary>
+    [Parameter, EditorRequired] public IEnumerable<PartSummaryUpdate> Parts { get; set; } = [];
+}

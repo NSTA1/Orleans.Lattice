@@ -1,0 +1,62 @@
+@* Prominent banner that surfaces any active chaos so the operator
+   cannot forget that the fly-out is engaged (plan §7.2). Renders
+   nothing when all knobs are nominal. *@
+
+@implements IDisposable
+@inject DashboardBroadcaster Broadcaster
+
+@if (_overview is { Any: true } overview)
+{
+    <article class="chaos-banner" aria-label="Active chaos summary">
+        <header><strong>⚠ Chaos active</strong></header>
+        <ul>
+            @if (overview.PausedSites > 0)
+            {
+                <li>@overview.PausedSites site@(overview.PausedSites == 1 ? "" : "s") paused</li>
+            }
+            @if (overview.DelayedSites > 0)
+            {
+                <li>@overview.DelayedSites site@(overview.DelayedSites == 1 ? "" : "s") delayed</li>
+            }
+            @if (overview.ReorderingSites > 0)
+            {
+                <li>@overview.ReorderingSites site@(overview.ReorderingSites == 1 ? "" : "s") reordering</li>
+            }
+            @foreach (var backend in overview.FlakyBackends)
+            {
+                <li><code>@backend</code> backend flaky (jitter / faults / amplification)</li>
+            }
+        </ul>
+    </article>
+}
+
+@code {
+    private ChaosOverview? _overview;
+    private CancellationTokenSource? _cts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _overview = await Broadcaster.GetChaosOverviewAsync();
+        _cts = new CancellationTokenSource();
+        _ = ConsumeAsync(_cts.Token);
+    }
+
+    private async Task ConsumeAsync(CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var update in Broadcaster.SubscribeChaosChanges(ct))
+            {
+                _overview = update;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { /* expected on dispose */ }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

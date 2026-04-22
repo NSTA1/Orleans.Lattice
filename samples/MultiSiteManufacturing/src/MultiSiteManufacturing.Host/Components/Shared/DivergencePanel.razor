@@ -1,0 +1,48 @@
+@* Filters <see cref="Parts"/> down to rows where baseline ≠ lattice and
+   shows the current disagreement. Feed is organic: divergence shows up
+   whenever chaos (site reorder or backend fault injection) causes the
+   two backends to see facts in different orders. *@
+
+<article>
+    <header>
+        <strong>Divergence feed</strong>
+        <small> · @Divergent.Count row@(Divergent.Count == 1 ? "" : "s")</small>
+    </header>
+
+    @if (Divergent.Count == 0)
+    {
+        <p><em>Baseline and lattice agree on every part.</em></p>
+    }
+    else
+    {
+        <figure>
+            <table role="grid">
+                <thead>
+                    <tr>
+                        <th scope="col">Serial</th>
+                        <th scope="col">Baseline</th>
+                        <th scope="col">Lattice</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var part in Divergent)
+                    {
+                        <tr class="divergent-row">
+                            <td><code>@part.Serial.Value</code></td>
+                            <td><StateBadge State="@part.BaselineState" /></td>
+                            <td><StateBadge State="@part.LatticeState" /></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </figure>
+    }
+</article>
+
+@code {
+    /// <summary>All parts currently known to the dashboard.</summary>
+    [Parameter, EditorRequired] public IEnumerable<PartSummaryUpdate> Parts { get; set; } = [];
+
+    private IReadOnlyList<PartSummaryUpdate> Divergent =>
+        Parts.Where(p => p.Diverges).OrderBy(p => p.Serial.Value).ToList();
+}

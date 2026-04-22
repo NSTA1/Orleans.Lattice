@@ -1,0 +1,56 @@
+@page "/"
+@implements IDisposable
+@inject DashboardBroadcaster Broadcaster
+
+<PageTitle>Inventory · Multi-Site Manufacturing</PageTitle>
+
+<h1>Inventory dashboard</h1>
+<p>
+    Live view over both federation backends. Every operator action
+    — new part, inspection, NCR, MRB, rework, FAI — fans out through
+    <code>FederationRouter</code> and pushes an update here without
+    polling.
+</p>
+
+<ChaosBanner />
+
+<div class="dashboard-grid">
+    <InventoryGrid Parts="@_parts.Values" />
+    <DivergencePanel Parts="@_parts.Values" />
+</div>
+
+@code {
+    private readonly Dictionary<PartSerialNumber, PartSummaryUpdate> _parts = new();
+    private CancellationTokenSource? _cts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var initial = await Broadcaster.GetInitialPartsAsync();
+        foreach (var part in initial)
+        {
+            _parts[part.Serial] = part;
+        }
+
+        _cts = new CancellationTokenSource();
+        _ = ConsumeAsync(_cts.Token);
+    }
+
+    private async Task ConsumeAsync(CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var update in Broadcaster.SubscribePartUpdates(ct))
+            {
+                _parts[update.Serial] = update;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { /* expected on dispose */ }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

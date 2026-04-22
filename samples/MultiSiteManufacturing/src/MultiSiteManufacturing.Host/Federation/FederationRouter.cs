@@ -25,6 +25,22 @@ public sealed class FederationRouter(
     /// <summary>Backends that receive every emitted fact, indexed by <see cref="IFactBackend.Name"/>.</summary>
     public IReadOnlyList<IFactBackend> Backends => _backends;
 
+    /// <summary>
+    /// Raised after a fact has been fanned out to every backend. Used
+    /// by the in-process dashboard broadcaster (<c>DashboardBroadcaster</c>)
+    /// to push live part-summary updates to the Blazor UI without
+    /// polling. Handlers must be non-blocking; exceptions are swallowed
+    /// and logged.
+    /// </summary>
+    public event EventHandler<Fact>? FactRouted;
+
+    /// <summary>
+    /// Raised after any change to site or backend chaos configuration
+    /// (direct configure, preset, backend config). Subscribers that
+    /// render "active chaos" UI refresh their snapshots on this signal.
+    /// </summary>
+    public event EventHandler? ChaosConfigChanged;
+
     /// <summary>Returns the backend with the given name, or throws if no such backend is registered.</summary>
     public IFactBackend GetBackend(string name)
     {
@@ -84,7 +100,9 @@ public sealed class FederationRouter(
     {
         var result = await Registry.ConfigureSiteAsync(site, config);
         await ReleaseAsync(result.Drained, cancellationToken);
-        return await SiteGrain(site).GetStateAsync();
+        var snapshot = await SiteGrain(site).GetStateAsync();
+        RaiseChaosConfigChanged();
+        return snapshot;
     }
 
     /// <summary>
@@ -97,7 +115,9 @@ public sealed class FederationRouter(
     {
         var drained = await Registry.ApplyPresetAsync(preset);
         await ReleaseAsync(drained, cancellationToken);
-        return await Registry.ListSitesAsync();
+        var snapshot = await Registry.ListSitesAsync();
+        RaiseChaosConfigChanged();
+        return snapshot;
     }
 
     /// <summary>Returns a snapshot of every site's configuration + counters.</summary>
@@ -137,7 +157,9 @@ public sealed class FederationRouter(
         // Validates the backend exists (throws otherwise).
         _ = GetBackend(backendName);
         var stored = await grains.GetGrain<IBackendChaosGrain>(backendName).ConfigureAsync(config);
-        return new BackendChaosState { Name = backendName, Config = stored };
+        var snapshot = new BackendChaosState { Name = backendName, Config = stored };
+        RaiseChaosConfigChanged();
+        return snapshot;
     }
 
     private ISiteRegistryGrain Registry =>
@@ -157,7 +179,53 @@ public sealed class FederationRouter(
         {
             tasks[i] = _backends[i].EmitAsync(fact, cancellationToken);
         }
-        await Task.WhenAll(tasks);
+
+        // Await WhenAll but don't let a single backend failure suppress
+        // the FactRouted signal for the others. Exceptions still bubble
+        // (the ChaosFactBackend deliberately throws for fault injection),
+        // but the event fires for partial success.
+        try
+        {
+            await Task.WhenAll(tasks);
+        }
+        finally
+        {
+            RaiseFactRouted(fact);
+        }
+    }
+
+    private void RaiseFactRouted(Fact fact)
+    {
+        var handler = FactRouted;
+        if (handler is null)
+        {
+            return;
+        }
+        try
+        {
+            handler(this, fact);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "FactRouted subscriber threw for fact {FactId}", fact.FactId);
+        }
+    }
+
+    private void RaiseChaosConfigChanged()
+    {
+        var handler = ChaosConfigChanged;
+        if (handler is null)
+        {
+            return;
+        }
+        try
+        {
+            handler(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "ChaosConfigChanged subscriber threw");
+        }
     }
 
     private async Task ReleaseAsync(IReadOnlyList<Fact> facts, CancellationToken cancellationToken)
