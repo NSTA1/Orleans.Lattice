@@ -5,6 +5,7 @@ using MultiSiteManufacturing.Host.Baseline;
 using MultiSiteManufacturing.Host.Components;
 using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Grpc;
+using MultiSiteManufacturing.Host.Inventory;
 using MultiSiteManufacturing.Host.Lattice;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -61,6 +62,14 @@ builder.Services.AddSingleton<LatticeFactBackend>();
 builder.Services.AddSingleton<IFactBackend>(sp => sp.GetRequiredService<BaselineFactBackend>());
 builder.Services.AddSingleton<IFactBackend>(sp => sp.GetRequiredService<LatticeFactBackend>());
 builder.Services.AddSingleton<FederationRouter>();
+
+// Bulk-load seeder: populates ~50 parts against an empty storage account,
+// no-ops on subsequent starts via IInventorySeedStateGrain. Suppressed in
+// the Testing environment so contract tests start against empty state.
+if (!builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Services.AddHostedService<InventorySeeder>();
+}
 
 var app = builder.Build();
 
