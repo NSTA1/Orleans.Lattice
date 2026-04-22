@@ -543,6 +543,16 @@ All §12 open questions are resolved. Answers recorded here verbatim:
 
 **Total estimate: ~7.5 developer-days** of focused work.
 
+### 13.1 Follow-ups (to resolve once upstream features land)
+
+- **F-034 (resilient scan iterators):** when Lattice ships transparent
+  `EnumerationAbortedException` recovery for `ILattice.KeysAsync` /
+  `EntriesAsync`, delete the `BuildSummaryWithRetryAsync` and
+  `ListPartsWithRetryAsync` wrappers in `DashboardBroadcaster` — they
+  exist solely to paper over cold-start / fan-out enumerator aborts and
+  become dead code once the library handles it. See the `TODO(F-034)`
+  markers on both methods.
+
 **Checkpoint cadence**: pause for reviewer confirmation between each
 milestone boundary (at minimum between M1 → M2, M6 → M7, and M7 → M8).
 

@@ -61,13 +61,39 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
     public async Task<IReadOnlyList<PartSummaryUpdate>> GetInitialPartsAsync(CancellationToken cancellationToken = default)
     {
         var lattice = _router.GetBackend("lattice");
-        var serials = await lattice.ListPartsAsync(cancellationToken);
+        var serials = await ListPartsWithRetryAsync(lattice, cancellationToken);
         var results = new List<PartSummaryUpdate>(serials.Count);
         foreach (var serial in serials)
         {
             results.Add(await BuildSummaryWithRetryAsync(serial, cancellationToken));
         }
         return results;
+    }
+
+    private static async Task<IReadOnlyList<PartSerialNumber>> ListPartsWithRetryAsync(
+        IFactBackend lattice,
+        CancellationToken cancellationToken)
+    {
+        // TODO(F-034): delete this wrapper once ILattice ships resilient
+        // scan iterators that transparently recover from
+        // EnumerationAbortedException (tracked in roadmap.md). Today the
+        // lattice backend streams via Tree.KeysAsync; the remote
+        // enumerator can be reclaimed mid-scan on cold-start or
+        // fan-out, and every consumer has to re-implement this retry.
+        const int maxAttempts = 8;
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            try
+            {
+                return await lattice.ListPartsAsync(cancellationToken);
+            }
+            catch (Orleans.Runtime.EnumerationAbortedException) when (attempt < maxAttempts - 1)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(100 * (attempt + 1)), cancellationToken);
+            }
+        }
+
+        throw new InvalidOperationException("ListPartsWithRetryAsync exhausted retries without returning.");
     }
 
     /// <summary>Reads the current chaos overview (used by the banner on initial render).</summary>
@@ -176,11 +202,18 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
     /// idle-expiry) the iterator aborts. Re-opening the enumerator
     /// recovers deterministically.
     /// </summary>
+    /// <remarks>
+    /// TODO(F-034): delete this wrapper once <c>ILattice</c> ships
+    /// resilient scan iterators that transparently recover from
+    /// <see cref="Orleans.Runtime.EnumerationAbortedException"/>
+    /// (tracked in <c>roadmap.md</c>). This is generic plumbing every
+    /// Lattice consumer would otherwise have to reinvent.
+    /// </remarks>
     private async Task<PartSummaryUpdate> BuildSummaryWithRetryAsync(
         PartSerialNumber serial,
         CancellationToken cancellationToken)
     {
-        const int maxAttempts = 5;
+        const int maxAttempts = 8;
         for (var attempt = 0; attempt < maxAttempts; attempt++)
         {
             try
@@ -189,7 +222,7 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
             }
             catch (Orleans.Runtime.EnumerationAbortedException) when (attempt < maxAttempts - 1)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(50 * (attempt + 1)), cancellationToken);
+                await Task.Delay(TimeSpan.FromMilliseconds(100 * (attempt + 1)), cancellationToken);
             }
         }
 
@@ -220,12 +253,18 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
         var baseline = _router.GetBackend("baseline");
         var lattice = _router.GetBackend("lattice");
 
+        // One lattice-tree enumeration per summary: fetch facts once and
+        // fold them locally for the lattice state. Opening a second
+        // concurrent enumerator (via lattice.GetStateAsync, which itself
+        // calls GetFactsAsync) multiplies the pressure on the tree grain
+        // and triggers EnumerationAbortedException under cold-start or
+        // high fan-out.
         var baselineStateTask = baseline.GetStateAsync(serial, cancellationToken);
-        var latticeStateTask = lattice.GetStateAsync(serial, cancellationToken);
         var factsTask = lattice.GetFactsAsync(serial, cancellationToken);
-        await Task.WhenAll(baselineStateTask, latticeStateTask, factsTask);
+        await Task.WhenAll(baselineStateTask, factsTask);
 
         var facts = factsTask.Result;
+        var latticeState = ComplianceFold.Fold(facts);
         ProcessStage? latestStage = null;
         for (var i = facts.Count - 1; i >= 0; i--)
         {
@@ -242,7 +281,7 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
             Family = InferFamily(serial),
             LatestStage = latestStage,
             BaselineState = baselineStateTask.Result,
-            LatticeState = latticeStateTask.Result,
+            LatticeState = latticeState,
             FactCount = facts.Count,
         };
     }

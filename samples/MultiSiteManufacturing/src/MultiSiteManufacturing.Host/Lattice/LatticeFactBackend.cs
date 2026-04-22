@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Globalization;
 using Microsoft.Extensions.Logging;
 using MultiSiteManufacturing.Host.Domain;
@@ -27,17 +26,16 @@ namespace MultiSiteManufacturing.Host.Lattice;
 /// </remarks>
 public sealed class LatticeFactBackend(
     IGrainFactory grainFactory,
-    ILogger<LatticeFactBackend> logger) : IFactBackend
+    ILogger<LatticeFactBackend> logger,
+    string treeId = LatticeFactBackend.FactTreeId) : IFactBackend
 {
-    /// <summary>Lattice tree id that holds every fact across every part.</summary>
+    /// <summary>Default Lattice tree id that holds every fact across every part.</summary>
     public const string FactTreeId = "mfg-facts";
-
-    private readonly ConcurrentDictionary<PartSerialNumber, byte> _knownParts = new();
 
     /// <inheritdoc />
     public string Name => "lattice";
 
-    private ILattice Tree => grainFactory.GetGrain<ILattice>(FactTreeId);
+    private ILattice Tree => grainFactory.GetGrain<ILattice>(treeId);
 
     /// <inheritdoc />
     public async Task EmitAsync(Fact fact, CancellationToken cancellationToken = default)
@@ -48,7 +46,6 @@ public sealed class LatticeFactBackend(
         var payload = FactJsonCodec.Encode(fact);
 
         await Tree.SetAsync(key, payload, cancellationToken);
-        _knownParts.TryAdd(fact.Serial, 0);
 
         logger.LogDebug("Lattice backend wrote {Key} ({Bytes} bytes)", key, payload.Length);
     }
@@ -75,8 +72,23 @@ public sealed class LatticeFactBackend(
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<PartSerialNumber>> ListPartsAsync(CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<PartSerialNumber>>([.. _knownParts.Keys]);
+    public async Task<IReadOnlyList<PartSerialNumber>> ListPartsAsync(CancellationToken cancellationToken = default)
+    {
+        // The tree is the source of truth (strongly consistent), and keys
+        // are of the form "{serial}/...", so the distinct set of serials
+        // is exactly the distinct prefix-before-'/' of every tree key.
+        // Walk once, dedupe with a HashSet.
+        var serials = new HashSet<PartSerialNumber>();
+        await foreach (var key in Tree.KeysAsync(cancellationToken: cancellationToken))
+        {
+            var slash = key.IndexOf('/');
+            if (slash > 0)
+            {
+                serials.Add(new PartSerialNumber(key[..slash]));
+            }
+        }
+        return [.. serials];
+    }
 
     private static string KeyFor(Fact fact) =>
         string.Create(CultureInfo.InvariantCulture,

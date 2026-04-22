@@ -49,8 +49,13 @@ public sealed class FederationTestClusterFixture
     public BaselineFactBackend NewBaselineBackend() => new(GrainFactory);
 
     /// <summary>Convenience: new lattice backend over the cluster's grain factory.</summary>
+    /// <remarks>
+    /// Each call uses a unique tree id so tests in the same fixture don't
+    /// observe each other's writes (the test cluster — and therefore the
+    /// in-memory Lattice state — is shared across all tests).
+    /// </remarks>
     public LatticeFactBackend NewLatticeBackend() =>
-        new(GrainFactory, NullLogger<LatticeFactBackend>.Instance);
+        new(GrainFactory, NullLogger<LatticeFactBackend>.Instance, $"mfg-facts-{Guid.NewGuid():N}");
 
     /// <summary>Convenience: a router wired to fresh baseline + lattice backends.</summary>
     public (FederationRouter Router, BaselineFactBackend Baseline, LatticeFactBackend Lattice) NewRouter()
