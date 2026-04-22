@@ -90,9 +90,9 @@ The pinned `ShardCount` must divide 4096 evenly for the default identity map to 
 
 ### `KeysPageSize`
 
-The number of keys returned per page during ordered key scans (`KeysAsync`). Larger pages reduce the number of grain calls at the cost of larger messages. This is a performance tuning knob and does not affect tree structure.
+The number of keys returned per page during ordered key scans (`ScanKeysAsync`). Larger pages reduce the number of grain calls at the cost of larger messages. This is a performance tuning knob and does not affect tree structure.
 
-This option can be changed freely at any time. It takes effect on the next `KeysAsync` call.
+This option can be changed freely at any time. It takes effect on the next `ScanKeysAsync` call.
 
 ### `TombstoneGracePeriod`
 
@@ -151,18 +151,18 @@ This option can be changed freely at any time. The new TTL takes effect on the n
 
 ### `PrefetchKeysScan`
 
-When enabled, `KeysAsync` pre-fetches the next page from each shard in the background while the current page is being consumed by the k-way merge. This hides per-shard grain-call latency and can significantly reduce wall-clock time for large scans across many shards.
+When enabled, `ScanKeysAsync` pre-fetches the next page from each shard in the background while the current page is being consumed by the k-way merge. This hides per-shard grain-call latency and can significantly reduce wall-clock time for large scans across many shards.
 
 ```csharp verify
 // Enable globally
 siloBuilder.ConfigureLattice(o => o.PrefetchKeysScan = true);
 ```
 
-Pre-fetch can also be controlled per-call via the `prefetch` parameter on `KeysAsync`, which overrides the global option:
+Pre-fetch can also be controlled per-call via the `prefetch` parameter on `ScanKeysAsync`, which overrides the global option:
 
 ```csharp verify
 // Override for a single call regardless of global setting
-await foreach (var key in tree.KeysAsync(prefetch: true))
+await foreach (var key in tree.ScanKeysAsync(prefetch: true))
 {
     // ...
 }
@@ -174,18 +174,18 @@ This option can be changed freely at any time.
 
 ### `PrefetchEntriesScan`
 
-When enabled, `EntriesAsync` pre-fetches the next page from each shard in the background while the current page is being consumed by the k-way merge. This hides per-shard grain-call latency and can significantly reduce wall-clock time for large scans across many shards.
+When enabled, `ScanEntriesAsync` pre-fetches the next page from each shard in the background while the current page is being consumed by the k-way merge. This hides per-shard grain-call latency and can significantly reduce wall-clock time for large scans across many shards.
 
 ```csharp verify
 // Enable globally
 siloBuilder.ConfigureLattice(o => o.PrefetchEntriesScan = true);
 ```
 
-Pre-fetch can also be controlled per-call via the `prefetch` parameter on `EntriesAsync`, which overrides the global option:
+Pre-fetch can also be controlled per-call via the `prefetch` parameter on `ScanEntriesAsync`, which overrides the global option:
 
 ```csharp verify
 // Override for a single call regardless of global setting
-await foreach (var entry in tree.EntriesAsync(prefetch: true))
+await foreach (var entry in tree.ScanEntriesAsync(prefetch: true))
 {
     // ...
 }
@@ -251,7 +251,7 @@ This option can be changed freely at any time.
 
 ### `MaxScanRetries`
 
-Maximum bounded-retry passes for `CountAsync`, `KeysAsync`, and `EntriesAsync` when the shard topology changes mid-scan (default: 3). If the topology keeps mutating after every reconciliation step, the scan throws `InvalidOperationException` rather than returning a silently incomplete result. Under the default split rate-limits (`MaxConcurrentAutoSplits = 2`, `HotShardSplitCooldown = 2 minutes`), exhausting 3 retries is not a realistic operational concern. See [Scan reliability](api.md#scan-reliability).
+Maximum bounded-retry passes for `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` when the shard topology changes mid-scan (default: 3). If the topology keeps mutating after every reconciliation step, the scan throws `InvalidOperationException` rather than returning a silently incomplete result. Under the default split rate-limits (`MaxConcurrentAutoSplits = 2`, `HotShardSplitCooldown = 2 minutes`), exhausting 3 retries is not a realistic operational concern. See [Scan reliability](api.md#scan-reliability).
 
 This option can be changed freely at any time.
 

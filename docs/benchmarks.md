@@ -71,7 +71,7 @@ request hits a different key.
 | GET         | `/lattice/{treeId}/keys/{key}`  | `GetAsync`         |
 | PUT         | `/lattice/{treeId}/keys/{key}`  | `SetAsync`         |
 | DELETE      | `/lattice/{treeId}/keys/{key}`  | `DeleteAsync`      |
-| GET         | `/lattice/{treeId}/keys`        | `KeysAsync`        |
+| GET         | `/lattice/{treeId}/keys`        | `ScanKeysAsync`        |
 
 ### Key-ordering approaches
 
