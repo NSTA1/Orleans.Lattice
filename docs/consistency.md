@@ -73,13 +73,13 @@ and snapshot drain rejects. Callers never see these exceptions.
 
 | Operation | Guarantee | Notes |
 |-----------|-----------|-------|
-| `KeysAsync` | **Strongly consistent, strictly ordered** | Paginated k-way merge across shards. When a shard reports moved-away slots or the `ShardMap` version advances mid-scan, the orchestrator drains the affected slots from their current owners into a sorted in-memory cursor and injects it into the same priority queue, so output remains globally sorted end-to-end. A per-call `HashSet<string>` suppresses duplicates across pre- and post-swap views. Bounded by `LatticeOptions.MaxScanRetries`; throws `InvalidOperationException` on exhaustion. |
-| `EntriesAsync` | **Strongly consistent, strictly ordered** | Same reconciliation-cursor injection algorithm as `KeysAsync`. Values read alongside keys reflect the authoritative leaf state at the moment the key was dequeued from the priority queue. |
-| Durable cursor steps (`NextKeysAsync`, `NextEntriesAsync`, `DeleteRangeStepAsync`) | **Per-step strongly consistent, cross-step snapshot** | Each step is routed through the stateless `KeysAsync` / `EntriesAsync` / `DeleteRangeAsync` path, inheriting its guarantee. Global ordering is preserved across steps by strictly excluding every previously-yielded key from the next step's range. **Values are snapshot-as-read per step, not per cursor** — a key updated between two steps is observed at its newest value when it is next visited, but once yielded by a cursor it is never re-yielded by the same cursor. See [Durable Cursors](durable-cursors.md). |
+| `ScanKeysAsync` | **Strongly consistent, strictly ordered** | Paginated k-way merge across shards. When a shard reports moved-away slots or the `ShardMap` version advances mid-scan, the orchestrator drains the affected slots from their current owners into a sorted in-memory cursor and injects it into the same priority queue, so output remains globally sorted end-to-end. A per-call `HashSet<string>` suppresses duplicates across pre- and post-swap views. Bounded by `LatticeOptions.MaxScanRetries`; throws `InvalidOperationException` on exhaustion. Transparently recovers from `Orleans.Runtime.EnumerationAbortedException` up to the `maxAttempts` parameter (default 8; see `LatticeExtensions.DefaultScanReconnectAttempts`). |
+| `ScanEntriesAsync` | **Strongly consistent, strictly ordered** | Same reconciliation-cursor injection algorithm as `ScanKeysAsync`. Values read alongside keys reflect the authoritative leaf state at the moment the key was dequeued from the priority queue. Same enumeration-abort recovery as `ScanKeysAsync`. |
+| Durable cursor steps (`NextKeysAsync`, `NextEntriesAsync`, `DeleteRangeStepAsync`) | **Per-step strongly consistent, cross-step snapshot** | Each step is routed through the stateless `ScanKeysAsync` / `ScanEntriesAsync` / `DeleteRangeAsync` path, inheriting its guarantee. Global ordering is preserved across steps by strictly excluding every previously-yielded key from the next step's range. **Values are snapshot-as-read per step, not per cursor** — a key updated between two steps is observed at its newest value when it is next visited, but once yielded by a cursor it is never re-yielded by the same cursor. See [Durable Cursors](durable-cursors.md). |
 
 ### Retry exhaustion
 
-`CountAsync`, `KeysAsync`, and `EntriesAsync` use a bounded retry budget
+`CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` use a bounded retry budget
 (`LatticeOptions.MaxScanRetries`, default 3) to reconcile against
 concurrent shard splits. If the topology keeps mutating beyond the
 budget, the scan throws `InvalidOperationException` rather than returning
@@ -88,6 +88,16 @@ default settings (`MaxConcurrentAutoSplits = 2`,
 `HotShardSplitCooldown = 2 min`); see
 [API Reference — Scan reliability](api.md#scan-reliability) for
 mitigation options.
+
+`ScanKeysAsync` / `ScanEntriesAsync` additionally recover from
+`Orleans.Runtime.EnumerationAbortedException` — raised when the
+orchestrator enumerator is reclaimed mid-scan (silo failover, idle
+expiry, cold start). This is bounded separately by the `maxAttempts`
+parameter on the wrapper (default 8; see
+`LatticeExtensions.DefaultScanReconnectAttempts`); the wrapper
+reopens the scan with a tightened bound based on the last yielded
+key so the stream is deterministic — no duplicates, no gaps,
+original ordering preserved.
 
 ---
 

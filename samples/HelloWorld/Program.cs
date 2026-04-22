@@ -91,7 +91,7 @@ while (true)
             {
                 sw.Restart();
                 var count = 0;
-                await foreach (var entry in tree.EntriesAsync())
+                await foreach (var entry in tree.ScanEntriesAsync())
                 {
                     Console.WriteLine($"  {entry.Key} = {Encoding.UTF8.GetString(entry.Value)}");
                     count++;

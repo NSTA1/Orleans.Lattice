@@ -11,7 +11,7 @@ Resharding is **key-space partitioning**, not capacity management. Each physical
 | Total keys / bytes stored | | ✅ (per-shard tree grows indefinitely) |
 | Write throughput | ✅ (one root grain + storage partition per shard) | |
 | Point-read throughput | ✅ (hash-routes to one shard) | |
-| Scan cost (`KeysAsync`, `EntriesAsync`, `CountAsync`, bulk-load) | ✅ (linear fan-out) | |
+| Scan cost (`ScanKeysAsync`, `ScanEntriesAsync`, `CountAsync`, bulk-load) | ✅ (linear fan-out) | |
 | Hot-key / hot-slot contention | ✅ (splits redistribute virtual slots) | |
 
 You reshard when a shard's **write path** is saturated — single root grain bottleneck, single storage partition bottleneck, or a hot virtual slot concentrating traffic — not when a shard is "full". It can't be full.
@@ -72,7 +72,7 @@ Because each underlying split is itself an independent online operation, the tre
 
 The 4096 virtual shard count is generous. The real ceiling on useful shard counts comes from scan fan-out and activation cost, not the map itself:
 
-- **Scan fan-out is linear in distinct physical shards.** Every scan issues one parallel grain call per shard. A 4096-shard tree issues 4096 concurrent calls per `KeysAsync` / `EntriesAsync` / `CountAsync`. See [Consistency](consistency.md) for the guarantee these scans deliver.
+- **Scan fan-out is linear in distinct physical shards.** Every scan issues one parallel grain call per shard. A 4096-shard tree issues 4096 concurrent calls per `ScanKeysAsync` / `ScanEntriesAsync` / `CountAsync`. See [Consistency](consistency.md) for the guarantee these scans deliver.
 - **Activation cost scales with shards × trees × silos.** Each physical shard has one `ShardRootGrain` activation per active tree.
 - **`ShardMap` storage is trivial** (`4 × 4096 = 16 KB`) and never the limit.
 

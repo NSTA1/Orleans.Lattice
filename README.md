@@ -71,7 +71,7 @@ both live consistency and eventual convergence.
 | **Online Reshard** | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on an existing tree. Takes an offline snapshot to a new physical tree, swaps the alias, and soft-deletes the old data. The tree is unavailable during the snapshot phase but immediately accessible after the swap. Undoable within the retention window. |
 | **Scalable writes** | Keys are hash-sharded across a configurable number of independent sub-trees (default 64). No single-root bottleneck. Shards split further at runtime as load grows. |
-| **Strongly-consistent scans** | `CountAsync`, `KeysAsync`, and `EntriesAsync` return the exact live key set even during concurrent adaptive shard splits, via per-slot reconciliation against a monotonic `ShardMap.Version` and bounded optimistic retry. See [Consistency](docs/consistency.md). |
+| **Strongly-consistent scans** | `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` return the exact live key set even during concurrent adaptive shard splits, via per-slot reconciliation against a monotonic `ShardMap.Version` and bounded optimistic retry. See [Consistency](docs/consistency.md). |
 | **Snapshots** | Create a point-in-time copy of a tree: offline (source locked — tree unavailable during copy) or online (source available, strictly consistent via shadow-forward + LWW drain), with optional sizing overrides for the destination. |
 | **Soft delete & recovery** | Trees can be soft-deleted with a configurable retention window. Recovery restores full access; purge permanently removes all data. |
 | **Tombstone cleanup** | Reminder-driven compaction removes expired tombstones shard-by-shard, with crash-safe progress tracking. |
@@ -124,13 +124,13 @@ Orleans.Lattice inherits the asymptotic properties of a [B+ tree](https://en.wik
 | Point read (`GetAsync`) | O(log<sub>b</sub> n) | Finding a key requires visiting one grain per tree level — typically 1–3 hops for millions of keys. |
 | Insert / update (`SetAsync`) | O(log<sub>b</sub> n) | Same traversal as a read, plus an occasional split that propagates upward (amortised O(1) extra work). |
 | Delete (`DeleteAsync`) | O(log<sub>b</sub> n) | Writes a tombstone at the leaf; no rebalancing. Tombstones are compacted in the background. |
-| Ordered scan (`KeysAsync`) | O(n) | Leaves are linked — once the first leaf is found, iteration walks sibling pointers without revisiting internal nodes. |
+| Ordered scan (`ScanKeysAsync`) | O(n) | Leaves are linked — once the first leaf is found, iteration walks sibling pointers without revisiting internal nodes. |
 | Count (`CountAsync`) | O(n / b) | Visits every leaf across all shards but skips internal nodes. |
 | Space | O(n) | Each key-value pair is stored exactly once in a leaf node. Internal nodes hold only separator keys. |
 
 **In plain terms:** because each node can hold ~128 children (the default branching factor), the tree is extremely shallow. A shard with two million keys is only three levels deep, so a single-key lookup crosses just three grains. Adding more data makes the tree wider, not deeper — doubling the key count adds at most one extra level. Scans are efficient because all values live in the leaves, which are chained together, so iterating a range never backtracks.
 
-With sharding, the *n* in each shard is reduced by a factor of `ShardCount` (default 64), making per-shard trees even shallower. The trade-off is that cross-shard operations (`CountAsync`, `KeysAsync`, `EntriesAsync`) scatter-gather across all shards and merge the results.
+With sharding, the *n* in each shard is reduced by a factor of `ShardCount` (default 64), making per-shard trees even shallower. The trade-off is that cross-shard operations (`CountAsync`, `ScanKeysAsync`, `ScanEntriesAsync`) scatter-gather across all shards and merge the results.
 
 ## Contributing
 

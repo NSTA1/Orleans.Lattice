@@ -59,7 +59,7 @@ The effective "now" is captured once per grain call so all keys in a single `Get
 
 | Operation | Behaviour |
 |---|---|
-| `KeysAsync` / `EntriesAsync` | Expired entries are omitted. |
+| `ScanKeysAsync` / `ScanEntriesAsync` | Expired entries are omitted. |
 | `CountAsync` / `CountPerShardAsync` | Expired entries are excluded from the count. |
 | `DeleteRangeAsync` | Expired entries are skipped (no tombstone is written for them — compaction will reap them). |
 

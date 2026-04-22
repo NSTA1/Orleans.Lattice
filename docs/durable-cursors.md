@@ -2,7 +2,7 @@
 
 Durable cursors are server-side, checkpointed iterators for long-running key
 scans and resumable range deletes. Unlike the stateless
-[`KeysAsync` / `EntriesAsync` / `DeleteRangeAsync`](api.md#enumeration)
+[`ScanKeysAsync` / `ScanEntriesAsync` / `DeleteRangeAsync`](api.md#enumeration)
 methods — which are bounded by `LatticeOptions.MaxScanRetries` and die with
 the client process — a cursor grain persists its position to Orleans storage
 after every page. A new activation reads that checkpoint and continues exactly
@@ -19,7 +19,7 @@ characteristics.
 
 | Scenario | Recommendation |
 |----------|----------------|
-| Short-lived scan, client stays up, few thousand keys | Stateless `KeysAsync` / `EntriesAsync` — lower overhead, no grain state |
+| Short-lived scan, client stays up, few thousand keys | Stateless `ScanKeysAsync` / `ScanEntriesAsync` — lower overhead, no grain state |
 | Export or migration that may span minutes | Durable cursor — survives failover, no client retry code needed |
 | Range delete that must survive interruption | `OpenDeleteRangeCursorAsync` — tracks tombstoning progress across steps |
 | Topology under aggressive splitting, `MaxScanRetries` exhaustion | Durable cursor — each step has its own retry budget; topology churn only affects one step at a time |
@@ -55,7 +55,7 @@ sequenceDiagram
         Note over C,S: Next (repeated per page)
         C->>L: Next*Async(cursorId, pageSize)
         L->>G: Next*Async(pageSize)
-        G->>S: ILattice.KeysAsync(effStart, effEnd)
+        G->>S: ScanKeysAsync(effStart, effEnd)
         S-->>G: keys (split-ordering preserved)
         G->>P: WriteStateAsync() — advance LastYieldedKey
         G->>G: SlideTtlAsync() — refresh idle-TTL reminder
@@ -128,7 +128,7 @@ sequenceDiagram
     L->>G: NextKeysAsync(pageSize)
     G->>G: EnsureOpenFor(Keys)
     G->>G: ComputeEffectiveRange() — advance bounds past LastYieldedKey
-    G->>S: ILattice.KeysAsync(effStart, effEnd, reverse)
+    G->>S: ScanKeysAsync(effStart, effEnd, reverse)
     S-->>G: streamed keys (up to pageSize, split-ordering preserved)
     G->>G: WriteStateAsync() — checkpoint LastYieldedKey
     G->>G: SlideTtlAsync() — refresh idle-TTL reminder
@@ -140,7 +140,7 @@ sequenceDiagram
 
 Resumption after a silo failover requires no replay of prior pages — the grain
 recomputes `effStart` / `effEnd` from the persisted `LastYieldedKey` and
-issues the next bounded `KeysAsync` / `EntriesAsync` call:
+issues the next bounded `ScanKeysAsync` / `ScanEntriesAsync` call:
 
 - **Forward scan:** `effStart = LastYieldedKey + "\0"` — the lexicographically
   first key strictly after the last yielded one. `effEnd` is unchanged.
@@ -152,8 +152,8 @@ later, regardless of any shard splits that occur between steps.
 
 ### Ordering under concurrent shard splits
 
-Because each step delegates to the normal `ILattice.KeysAsync` /
-`EntriesAsync` / `DeleteRangeAsync` path, **ordering preservation under
+Because each step delegates to the normal `ScanKeysAsync` /
+`ScanEntriesAsync` / `DeleteRangeAsync` path, **ordering preservation under
 concurrent shard splits applies within each step**: concurrent shard splits are reconciled via
 in-line cursor injection into the k-way merge priority queue, bounded by
 `LatticeOptions.MaxScanRetries`. See [Shard Splitting](shard-splitting.md)
@@ -220,7 +220,7 @@ round-trips above a direct stateless scan call:
 | `WriteStateAsync` — checkpoint | 1 × storage write per step | Serialises `LatticeCursorState` (< 10 KB). On memory provider: negligible. On Azure Table / SQL: ~1–5 ms. |
 | `RegisterOrUpdateReminder` — TTL slide | 1 × reminder-table write per step | ~1–5 ms round-trip. See [debounce](#reducing-reminder-write-frequency) below. |
 | Extra grain round-trip | +1 Orleans call per step | `ILatticeCursorGrain` sits between `ILattice` and the shard fan-out. Typically < 1 ms on a local cluster. |
-| Shard fan-out | Same as `KeysAsync` / `EntriesAsync` | Each step is a normal sharded scan — no additional shard calls. |
+| Shard fan-out | Same as `ScanKeysAsync` / `ScanEntriesAsync` | Each step is a normal sharded scan — no additional shard calls. |
 
 **Total per-step overhead: ~2–10 ms**, dominated by the storage provider
 round-trip.
@@ -268,7 +268,7 @@ stateless scans, plus the per-step overhead per cursor.
 
 ## Stateless vs. durable — decision guide
 
-| Dimension | Stateless (`KeysAsync` / `EntriesAsync`) | Durable cursor |
+| Dimension | Stateless (`ScanKeysAsync` / `ScanEntriesAsync`) | Durable cursor |
 |-----------|------------------------------------------|----------------|
 | Survives silo failover | ✗ — stream terminates | ✓ — resumes from checkpoint |
 | Survives client restart | ✗ | ✓ — cursor ID is the resume token |

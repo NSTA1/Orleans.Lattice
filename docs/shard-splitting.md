@@ -85,7 +85,7 @@ stale activations to transparently retry against the correct shard. The
 post-Complete permanent `MovedAwaySlots` rejection extends this for the
 lifetime of the source shard.
 
-Scans (`KeysAsync`, `EntriesAsync`, `CountAsync`) reconcile against
+Scans (`ScanKeysAsync`, `ScanEntriesAsync`, `CountAsync`) reconcile against
 topology changes mid-scan as described below. See
 [Consistency](consistency.md) for the guarantee this reconciliation
 delivers.
@@ -94,7 +94,7 @@ delivers.
 
 Each scan uses a reconciliation algorithm coordinated against the
 registry's monotonically-incrementing `ShardMap.Version`, but `CountAsync`
-and the `KeysAsync` / `EntriesAsync` streams follow two different paths.
+and the `ScanKeysAsync` / `ScanEntriesAsync` streams follow two different paths.
 
 #### `CountAsync` / `CountPerShardAsync` — per-slot routing
 
@@ -110,7 +110,7 @@ moved, the count is discarded and retried on the fresh map, bounded by
 `LatticeOptions.MaxScanRetries` (default 3). Throws
 `InvalidOperationException` on retry exhaustion.
 
-#### `KeysAsync` / `EntriesAsync` — in-line reconciliation
+#### `ScanKeysAsync` / `ScanEntriesAsync` — in-line reconciliation
 
 Reconciliation is driven inside the main k-way merge loop rather than
 as a separate pass. Each shard root reports back:
@@ -145,8 +145,8 @@ cursor, not appended. Bounded by `LatticeOptions.MaxScanRetries`.
   with the number of distinct keys observed during the scan, plus a
   per-reconciliation buffer proportional to the number of keys in
   slots that actually moved during the scan (typically small). For
-  very large trees, prefer the range-bounded overload of `KeysAsync` /
-  `EntriesAsync` to bound memory.
+  very large trees, prefer the range-bounded overload of `ScanKeysAsync` /
+  `ScanEntriesAsync` to bound memory.
 * **Latency**: when no split has ever occurred, scans take the same
   fast path as before (one round-trip per shard). The reconciliation
   passes only run when a shard actually reports moved slots.
@@ -210,7 +210,7 @@ individually** when:
 | `MaxConcurrentAutoSplits` | `2` | Maximum concurrent splits per tree. Each split runs in its own per-shard coordinator activation; the cap bounds aggregate storage I/O. |
 | `SplitDrainBatchSize` | `1024` | Maximum number of moved-slot entries the drain accumulates in memory before flushing to the target shard. Caps coordinator allocation regardless of source shard size. |
 | `AutoSplitMinTreeAge` | `60 s` | Minimum tree age before autonomic splits are allowed; absorbs startup bursts. |
-| `MaxScanRetries` | `3` | Maximum bounded retries that a scan (`CountAsync`, `KeysAsync`, `EntriesAsync`) performs when `ShardMap.Version` keeps moving mid-scan due to concurrent splits. Throws `InvalidOperationException` on exhaustion. Increase if scans run during very-high split churn. See [Consistency](consistency.md). |
+| `MaxScanRetries` | `3` | Maximum bounded retries that a scan (`CountAsync`, `ScanKeysAsync`, `ScanEntriesAsync`) performs when `ShardMap.Version` keeps moving mid-scan due to concurrent splits. Throws `InvalidOperationException` on exhaustion. Increase if scans run during very-high split churn. See [Consistency](consistency.md). |
 
 ## Convergence guarantees
 
