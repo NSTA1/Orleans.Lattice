@@ -243,15 +243,15 @@ public static class TypedLatticeExtensions
         CancellationToken cancellationToken = default) =>
         lattice.BulkLoadAsync(entries, JsonLatticeSerializer<T>.Default, cancellationToken);
 
-    // ── Enumeration ─────────────────────────────────────────────
-
     /// <summary>
-    /// Streams live key-value entries in sorted key order, deserializing values via
-    /// the provided <paramref name="serializer"/>. When <paramref name="prefetch"/>
-    /// is <c>true</c> (or <c>null</c> and <see cref="LatticeOptions.PrefetchEntriesScan"/>
-    /// is enabled), the next page from each shard is fetched in parallel while the
-    /// current page is being consumed.
+    /// Low-level typed streaming primitive. Streams deserialized entries
+    /// in lexicographic key order. Prefer
+    /// <see cref="ScanEntriesAsync{T}(ILattice, ILatticeSerializer{T}, string?, string?, bool, bool?, int?, CancellationToken)"/>, 
+    /// which adds transparent reconnect on
+    /// <c>Orleans.Runtime.EnumerationAbortedException</c>. Hidden from
+    /// IntelliSense to steer callers toward the resilient wrapper.
     /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     public static async IAsyncEnumerable<KeyValuePair<string, T>> EntriesAsync<T>(
         this ILattice lattice,
         ILatticeSerializer<T> serializer,
@@ -269,6 +269,7 @@ public static class TypedLatticeExtensions
     }
 
     /// <inheritdoc cref="EntriesAsync{T}(ILattice, ILatticeSerializer{T}, string?, string?, bool, bool?, CancellationToken)"/>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     public static IAsyncEnumerable<KeyValuePair<string, T>> EntriesAsync<T>(
         this ILattice lattice,
         string? startInclusive = null,
@@ -277,4 +278,46 @@ public static class TypedLatticeExtensions
         bool? prefetch = null,
         CancellationToken cancellationToken = default) =>
         lattice.EntriesAsync(JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, prefetch, cancellationToken);
+
+    /// <summary>
+    /// Resilient typed entry scan. Composes <see cref="LatticeExtensions.ScanEntriesAsync(ILattice, string?, string?, bool, bool?, int?, CancellationToken)"/>
+    /// with <paramref name="serializer"/>, so typed exports automatically recover
+    /// from <c>Orleans.Runtime.EnumerationAbortedException</c> without duplicates
+    /// or gaps. This is the recommended client API for long-running typed scans.
+    /// </summary>
+    /// <param name="lattice">The tree to scan.</param>
+    /// <param name="serializer">Value deserializer.</param>
+    /// <param name="startInclusive">Inclusive lower bound, or <c>null</c>.</param>
+    /// <param name="endExclusive">Exclusive upper bound, or <c>null</c>.</param>
+    /// <param name="reverse">If <c>true</c>, yields entries in descending key order.</param>
+    /// <param name="prefetch">Optional per-call override for shard prefetch.</param>
+    /// <param name="maxAttempts">Optional per-call override for the reconnect budget.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public static async IAsyncEnumerable<KeyValuePair<string, T>> ScanEntriesAsync<T>(
+        this ILattice lattice,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        int? maxAttempts = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+        await foreach (var entry in lattice.ScanEntriesAsync(startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken).ConfigureAwait(false))
+        {
+            yield return new KeyValuePair<string, T>(entry.Key, serializer.Deserialize(entry.Value));
+        }
+    }
+
+    /// <inheritdoc cref="ScanEntriesAsync{T}(ILattice, ILatticeSerializer{T}, string?, string?, bool, bool?, int?, CancellationToken)"/>
+    public static IAsyncEnumerable<KeyValuePair<string, T>> ScanEntriesAsync<T>(
+        this ILattice lattice,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        int? maxAttempts = null,
+        CancellationToken cancellationToken = default) =>
+        lattice.ScanEntriesAsync(JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken);
 }

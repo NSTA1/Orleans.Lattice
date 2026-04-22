@@ -111,30 +111,22 @@ public class ChaosIntegrationTests
         || ex is TimeoutException;
 
     /// <summary>
-    /// Drains every live key in <paramref name="tree"/> via
-    /// <see cref="ILattice.KeysAsync"/>, retrying on
-    /// <c>EnumerationAbortedException</c>. The post-chaos invariant scan
-    /// is long enough that the stateless-worker <c>LatticeGrain</c>
-    /// activation hosting the async enumerator may be collected by
-    /// Orleans' idle-activation GC between <c>MoveNextAsync</c> calls on
-    /// CI runners under memory pressure — even though the tree itself is
-    /// quiescent by this point. A fresh enumeration converges immediately.
+    /// Drains every live key in <paramref name="tree"/> via the resilient
+    /// <see cref="LatticeExtensions.ScanKeysAsync"/> wrapper. The post-chaos
+    /// invariant scan is long enough that the stateless-worker
+    /// <c>LatticeGrain</c> activation hosting the async enumerator may be
+    /// collected by Orleans' idle-activation GC between <c>MoveNextAsync</c>
+    /// calls on CI runners under memory pressure — even though the tree
+    /// itself is quiescent by this point. The wrapper tracks the last
+    /// yielded key and transparently reopens the enumerator, so a fresh
+    /// enumeration converges without any caller-side retry loop.
     /// </summary>
     private static async Task<HashSet<string>> DrainKeysWithRetryAsync(ILattice tree, int maxAttempts)
     {
-        for (int attempt = 1; ; attempt++)
-        {
-            var keys = new HashSet<string>();
-            try
-            {
-                await foreach (var k in tree.KeysAsync()) keys.Add(k);
-                return keys;
-            }
-            catch (Exception ex) when (ex.GetType().Name == "EnumerationAbortedException" && attempt < maxAttempts)
-            {
-                // Retry with a fresh enumeration.
-            }
-        }
+        var keys = new HashSet<string>();
+        await foreach (var k in tree.ScanKeysAsync(maxAttempts: maxAttempts))
+            keys.Add(k);
+        return keys;
     }
 
     [Test]
@@ -352,7 +344,7 @@ public class ChaosIntegrationTests
                         {
                             var seen = new HashSet<string>();
                             string? prev = null;
-                            await foreach (var k in tree.KeysAsync())
+                            await foreach (var k in tree.ScanKeysAsync())
                             {
                                 if (ct.IsCancellationRequested) break;
                                 if (!seen.Add(k))
@@ -371,7 +363,7 @@ public class ChaosIntegrationTests
                         {
                             var seen = new HashSet<string>();
                             string? prev = null;
-                            await foreach (var kv in tree.EntriesAsync())
+                            await foreach (var kv in tree.ScanEntriesAsync())
                             {
                                 if (ct.IsCancellationRequested) break;
                                 if (!seen.Add(kv.Key))
@@ -393,7 +385,7 @@ public class ChaosIntegrationTests
                         {
                             var seen = new HashSet<string>();
                             string? prev = null;
-                            await foreach (var k in tree.KeysAsync(null, null, reverse: true))
+                            await foreach (var k in tree.ScanKeysAsync(null, null, reverse: true))
                             {
                                 if (ct.IsCancellationRequested) break;
                                 if (!seen.Add(k))
@@ -413,7 +405,7 @@ public class ChaosIntegrationTests
                             const int expectedInRange = 300;
                             var seen = new HashSet<string>();
                             string? prev = null;
-                            await foreach (var k in tree.KeysAsync(start, end))
+                            await foreach (var k in tree.ScanKeysAsync(start, end))
                             {
                                 if (ct.IsCancellationRequested) break;
                                 if (!seen.Add(k))

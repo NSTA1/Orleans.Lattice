@@ -363,7 +363,7 @@ public class ChaosWithFaultsIntegrationTests
                     try
                     {
                         string? prev = null;
-                        await foreach (var kv in tree.EntriesAsync().WithCancellation(ct))
+                        await foreach (var kv in tree.ScanEntriesAsync(cancellationToken: ct))
                         {
                             var idx = IndexOfKey(kv.Key);
                             if (idx < 0)
@@ -443,9 +443,9 @@ public class ChaosWithFaultsIntegrationTests
         // ---- Strong post-quiescence invariants.
         var finalCount = await tree.CountAsync();
         var finalKeys = new HashSet<string>();
-        await foreach (var k in tree.KeysAsync()) finalKeys.Add(k);
+        await foreach (var k in tree.ScanKeysAsync()) finalKeys.Add(k);
         var finalEntries = new Dictionary<string, byte[]>();
-        await foreach (var kv in tree.EntriesAsync()) finalEntries[kv.Key] = kv.Value;
+        await foreach (var kv in tree.ScanEntriesAsync()) finalEntries[kv.Key] = kv.Value;
 
         Assert.Multiple(() =>
         {

@@ -89,19 +89,10 @@ public class ChaosResizeIntegrationTests
 
     private static async Task<HashSet<string>> DrainKeysWithRetryAsync(ILattice tree, int maxAttempts)
     {
-        for (int attempt = 1; ; attempt++)
-        {
-            var keys = new HashSet<string>();
-            try
-            {
-                await foreach (var k in tree.KeysAsync()) keys.Add(k);
-                return keys;
-            }
-            catch (Exception ex) when (ex.GetType().Name == "EnumerationAbortedException" && attempt < maxAttempts)
-            {
-                // Retry with a fresh enumeration.
-            }
-        }
+        var keys = new HashSet<string>();
+        await foreach (var k in tree.ScanKeysAsync(maxAttempts: maxAttempts))
+            keys.Add(k);
+        return keys;
     }
 
     [Test]
@@ -190,7 +181,7 @@ public class ChaosResizeIntegrationTests
                     try
                     {
                         var seen = new HashSet<string>();
-                        await foreach (var k in tree.KeysAsync())
+                        await foreach (var k in tree.ScanKeysAsync())
                         {
                             if (ct.IsCancellationRequested) break;
                             if (!seen.Add(k))

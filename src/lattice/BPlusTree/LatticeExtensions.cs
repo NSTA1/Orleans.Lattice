@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Runtime;
 using Orleans.Streams;
@@ -9,6 +10,14 @@ namespace Orleans.Lattice;
 /// </summary>
 public static class LatticeExtensions
 {
+    /// <summary>
+    /// Default reconnect budget for <see cref="ScanKeysAsync"/> and
+    /// <see cref="ScanEntriesAsync"/> when the remote enumerator is reclaimed
+    /// mid-scan (silo failover, cold start, idle expiry, scale-down).
+    /// Overridable per call via the <c>maxAttempts</c> parameter.
+    /// </summary>
+    public const int DefaultScanReconnectAttempts = 8;
+
     /// <summary>
     /// Streams sorted key-value pairs into the tree, partitioning by physical
     /// shard and flushing chunks in parallel across shards. Each shard receives
@@ -174,5 +183,215 @@ public static class LatticeExtensions
         var stream = provider.GetStream<LatticeTreeEvent>(
             StreamId.Create(LatticeEventConstants.StreamNamespace, treeId));
         return stream.SubscribeAsync((evt, _) => onEvent(evt));
+    }
+
+    /// <summary>
+    /// Resilient forward/reverse key scan. Wraps <see cref="ILattice.KeysAsync"/>
+    /// and transparently recovers from <c>Orleans.Runtime.EnumerationAbortedException</c>
+    /// (raised when the remote enumerator on the orchestrator grain is reclaimed
+    /// mid-scan due to silo failover, cold start, idle expiry, or scale-down).
+    /// The wrapper tracks the last yielded key and — on abort — reopens the
+    /// underlying scan with a tightened bound so the result stream is
+    /// deterministic: no duplicates, no gaps, original ordering preserved.
+    /// For forward scans the resume lower bound is the successor of the last
+    /// yielded key (<c>lastKey + "\u0000"</c>); for reverse scans the resume
+    /// upper bound becomes the last yielded key (exclusive).
+    /// <para>
+    /// The first reconnect is immediate; subsequent attempts apply a small
+    /// linear backoff (10&#160;ms × attempt, capped at 100&#160;ms) to avoid
+    /// a tight loop against a persistently-faulting orchestrator. If the
+    /// retry budget is exhausted the last <c>EnumerationAbortedException</c>
+    /// is rethrown verbatim. This is the recommended client API for long-running
+    /// scans — <see cref="ILattice.KeysAsync"/> is retained for short,
+    /// single-page reads and for internal orchestration.
+    /// </para>
+    /// </summary>
+    /// <param name="lattice">The tree to scan.</param>
+    /// <param name="startInclusive">Inclusive lower bound, or <c>null</c> for the tree's lowest key.</param>
+    /// <param name="endExclusive">Exclusive upper bound, or <c>null</c> for the tree's end.</param>
+    /// <param name="reverse">If <c>true</c>, yields keys in descending order.</param>
+    /// <param name="prefetch">Optional per-call override for shard prefetch; see <see cref="LatticeOptions.PrefetchKeysScan"/>.</param>
+    /// <param name="maxAttempts">Optional per-call override for the reconnect budget; defaults to <see cref="DefaultScanReconnectAttempts"/>.</param>
+    /// <param name="cancellationToken">Cancellation token; honoured between reconnects and during backoff.</param>
+    public static async IAsyncEnumerable<string> ScanKeysAsync(
+        this ILattice lattice,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        int? maxAttempts = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        var budget = maxAttempts ?? DefaultScanReconnectAttempts;
+        if (budget < 0) budget = 0;
+
+        string? lastKey = null;
+        var attempt = 0;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (s, e) = ComputeScanBounds(startInclusive, endExclusive, lastKey, reverse);
+            var enumerator = lattice.KeysAsync(s, e, reverse, prefetch, cancellationToken).GetAsyncEnumerator();
+            var completedNormally = false;
+            var shouldReopen = false;
+            try
+            {
+                while (true)
+                {
+                    bool hasNext;
+                    try
+                    {
+                        hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                    }
+                    catch (EnumerationAbortedException) when (attempt < budget)
+                    {
+                        attempt++;
+                        shouldReopen = true;
+                        break;
+                    }
+
+                    if (!hasNext)
+                    {
+                        completedNormally = true;
+                        break;
+                    }
+
+                    lastKey = enumerator.Current;
+                    yield return enumerator.Current;
+                }
+            }
+            finally
+            {
+                await enumerator.DisposeAsync().ConfigureAwait(false);
+            }
+
+            if (completedNormally)
+            {
+                yield break;
+            }
+
+            if (shouldReopen)
+            {
+                var delayMs = ComputeReconnectDelayMs(attempt);
+                if (delayMs > 0)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resilient forward/reverse entry scan. Wraps <see cref="ILattice.EntriesAsync"/>
+    /// with the same <c>EnumerationAbortedException</c> recovery and deterministic
+    /// resume semantics as <see cref="ScanKeysAsync"/>. This is the recommended
+    /// client API for long-running entry exports.
+    /// </summary>
+    /// <param name="lattice">The tree to scan.</param>
+    /// <param name="startInclusive">Inclusive lower bound, or <c>null</c> for the tree's lowest key.</param>
+    /// <param name="endExclusive">Exclusive upper bound, or <c>null</c> for the tree's end.</param>
+    /// <param name="reverse">If <c>true</c>, yields entries in descending key order.</param>
+    /// <param name="prefetch">Optional per-call override for shard prefetch; see <see cref="LatticeOptions.PrefetchEntriesScan"/>.</param>
+    /// <param name="maxAttempts">Optional per-call override for the reconnect budget; defaults to <see cref="DefaultScanReconnectAttempts"/>.</param>
+    /// <param name="cancellationToken">Cancellation token; honoured between reconnects and during backoff.</param>
+    public static async IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(
+        this ILattice lattice,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        int? maxAttempts = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        var budget = maxAttempts ?? DefaultScanReconnectAttempts;
+        if (budget < 0) budget = 0;
+
+        string? lastKey = null;
+        var attempt = 0;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (s, e) = ComputeScanBounds(startInclusive, endExclusive, lastKey, reverse);
+            var enumerator = lattice.EntriesAsync(s, e, reverse, prefetch, cancellationToken).GetAsyncEnumerator();
+            var completedNormally = false;
+            var shouldReopen = false;
+            try
+            {
+                while (true)
+                {
+                    bool hasNext;
+                    try
+                    {
+                        hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                    }
+                    catch (EnumerationAbortedException) when (attempt < budget)
+                    {
+                        attempt++;
+                        shouldReopen = true;
+                        break;
+                    }
+
+                    if (!hasNext)
+                    {
+                        completedNormally = true;
+                        break;
+                    }
+
+                    lastKey = enumerator.Current.Key;
+                    yield return enumerator.Current;
+                }
+            }
+            finally
+            {
+                await enumerator.DisposeAsync().ConfigureAwait(false);
+            }
+
+            if (completedNormally)
+            {
+                yield break;
+            }
+
+            if (shouldReopen)
+            {
+                var delayMs = ComputeReconnectDelayMs(attempt);
+                if (delayMs > 0)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Computes the inter-reconnect backoff for a resilient scan. The first
+    /// reconnect is immediate (the grain-reactivation cost already dominates
+    /// and there is nothing to back off from); subsequent attempts apply a
+    /// small linear ramp capped at 100&#160;ms to avoid a tight loop against
+    /// a persistently-faulting orchestrator.
+    /// </summary>
+    private static int ComputeReconnectDelayMs(int attempt) =>
+        attempt <= 1 ? 0 : Math.Min(100, 10 * attempt);
+
+    /// <summary>
+    /// Computes the resume bounds for a resilient scan given the last successfully
+    /// yielded key. Forward scans tighten the lower bound to the successor of
+    /// <paramref name="lastKey"/>; reverse scans tighten the upper bound to
+    /// <paramref name="lastKey"/> (exclusive).
+    /// </summary>
+    private static (string? Start, string? End) ComputeScanBounds(
+        string? originalStart, string? originalEnd, string? lastKey, bool reverse)
+    {
+        if (lastKey is null)
+        {
+            return (originalStart, originalEnd);
+        }
+
+        return reverse
+            ? (originalStart, lastKey)
+            : (lastKey + "\u0000", originalEnd);
     }
 }

@@ -58,7 +58,7 @@ byte[]? existing = await tree.GetOrSetAsync("user:1", "Bob"u8.ToArray());
 bool deleted = await tree.DeleteAsync("user:1");
 
 // Stream a key range in strict lexicographic order.
-await foreach (var key in tree.KeysAsync(startInclusive: "user:", endExclusive: "user;"))
+await foreach (var key in tree.ScanKeysAsync(startInclusive: "user:", endExclusive: "user;"))
 {
     Console.WriteLine(key);
 }
@@ -88,7 +88,8 @@ var tree = grainFactory.GetGrain<ILattice>("my-tree");
 
 ### Cancellation
 
-Every method on `ILattice` — including scans (`KeysAsync`, `EntriesAsync`),
+Every method on `ILattice` — including scans (via the
+`ScanKeysAsync` / `ScanEntriesAsync` extension wrappers),
 range deletes, counts, fan-out batch operations, bulk load, stateful
 cursors, and all tree-lifecycle orchestrators — accepts an optional
 trailing `CancellationToken cancellationToken = default` parameter. The
@@ -118,7 +119,7 @@ These methods are used during normal application flow to read, write, and enumer
 | `GetWithVersionAsync` | `Task<VersionedValue> GetWithVersionAsync(string key)` | Returns the value and its `HybridLogicalClock` version for `key`, or a default `VersionedValue` with `null` value and zero version when absent/tombstoned. Use the returned version with `SetIfVersionAsync` for optimistic concurrency (CAS). Reads directly from the primary leaf (not cached) to ensure version freshness. |
 | `ExistsAsync` | `Task<bool> ExistsAsync(string key)` | Returns `true` if `key` exists and is not tombstoned. |
 | `SetAsync` | `Task SetAsync(string key, byte[] value)` | Inserts or updates the value for `key`. |
-| `SetAsync` (TTL) | `Task SetAsync(string key, byte[] value, TimeSpan ttl)` | Inserts or updates the value for `key` with a time-to-live. The entry is treated as tombstoned on all reads (`GetAsync`, `ExistsAsync`, `GetManyAsync`, `KeysAsync`, `EntriesAsync`, `CountAsync`, etc.) once `ttl` has elapsed since the server-side write, and is reaped by background tombstone compaction after the configured `LatticeOptions.TombstoneGracePeriod`. The TTL is converted to an absolute UTC expiry on the silo handling the call, so clock skew between clients does not shift individual entries' lifetimes. Throws `ArgumentOutOfRangeException` when `ttl` is zero or negative. Typed overload: `SetAsync<T>(this ILattice, string, T, TimeSpan, ILatticeSerializer<T>)`. |
+| `SetAsync` (TTL) | `Task SetAsync(string key, byte[] value, TimeSpan ttl)` | Inserts or updates the value for `key` with a time-to-live. The entry is treated as tombstoned on all reads (`GetAsync`, `ExistsAsync`, `GetManyAsync`, `ScanKeysAsync`, `ScanEntriesAsync`, `CountAsync`, etc.) once `ttl` has elapsed since the server-side write, and is reaped by background tombstone compaction after the configured `LatticeOptions.TombstoneGracePeriod`. The TTL is converted to an absolute UTC expiry on the silo handling the call, so clock skew between clients does not shift individual entries' lifetimes. Throws `ArgumentOutOfRangeException` when `ttl` is zero or negative. Typed overload: `SetAsync<T>(this ILattice, string, T, TimeSpan, ILatticeSerializer<T>)`. |
 | `SetIfVersionAsync` | `Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)` | Sets `key` to `value` only if the entry's current `HybridLogicalClock` matches `expectedVersion`. Returns `true` if the write was applied, `false` if the version did not match (another writer updated the key). For a new key, pass `HybridLogicalClock.Zero` as the expected version. Enables safe read-modify-write patterns without distributed locks. |
 | `GetOrSetAsync` | `Task<byte[]?> GetOrSetAsync(string key, byte[] value)` | Sets `key` to `value` only if the key does not already exist (or is tombstoned). Returns the existing value when the key is live, or `null` when the value was newly written. Avoids a read-then-write roundtrip by short-circuiting at the leaf grain. |
 | `DeleteAsync` | `Task<bool> DeleteAsync(string key)` | Tombstones `key`. Returns `true` if it was live. Tombstones are removed by [background compaction](tombstone-compaction.md). |
@@ -137,17 +138,30 @@ These methods are used during normal application flow to read, write, and enumer
 
 #### Enumeration
 
+Long-running scans use the resilient extension wrappers
+`ScanKeysAsync` / `ScanEntriesAsync` on `ILattice`. The wrapper tracks
+the last yielded key and — if the remote enumerator on the
+orchestrator grain is reclaimed mid-scan (silo failover, cold start,
+idle expiry, scale-down) — transparently reopens with a tightened
+bound and resumes. Because the tree is strongly consistent and
+key-ordered, the result stream is deterministic: no duplicates, no
+gaps, original order preserved. The retry budget defaults to
+`LatticeExtensions.DefaultScanReconnectAttempts` (8) and can be
+overridden per call via `maxAttempts`; the first reconnect is
+immediate, subsequent reconnects apply a short linear backoff
+(10 ms × attempt, capped at 100 ms).
+
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `KeysAsync` | `IAsyncEnumerable<string> KeysAsync(string? startInclusive, string? endExclusive, bool reverse, bool? prefetch)` | Streams live keys in strict lexicographic order via paginated k-way merge across shards. When `prefetch` is `true` (or `null` with `PrefetchKeysScan` enabled), the next page from each shard is fetched in parallel while the current page is consumed, hiding grain-call latency during large scans. **Strongly consistent and strictly ordered during shard splits**: when a shard reports moved-away slots or the `ShardMap` version advances mid-scan, the orchestrator drains the affected slots from their current owners into a sorted in-memory cursor and injects it into the same k-way merge priority queue, so output remains globally sorted end-to-end. A per-call `HashSet<string>` suppresses duplicates across pre- and post-swap views. Reconciliation is bounded by `LatticeOptions.MaxScanRetries`; throws `InvalidOperationException` if the topology keeps mutating beyond that budget (see [`docs/shard-splitting.md`](shard-splitting.md)). |
-| `EntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive, string? endExclusive, bool reverse, bool? prefetch)` | Streams live key-value entries in strict lexicographic key order via paginated k-way merge across shards. When `prefetch` is `true` (or `null` with `PrefetchEntriesScan` enabled), the next page from each shard is fetched in parallel while the current page is consumed. Because entries carry `byte[]` values, pre-fetched pages hold extra in-flight memory proportional to `shardCount × KeysPageSize × avgValueSize`, so this flag is gated separately from `PrefetchKeysScan`. Useful for exports, migrations, and analytics without a separate `GetAsync` per key. **Strongly consistent and strictly ordered during shard splits** with the same reconciliation-cursor injection algorithm as `KeysAsync`. Subject to the same `InvalidOperationException` contract on retry exhaustion — see [Scan reliability](#scan-reliability). |
+| `ScanKeysAsync` | `IAsyncEnumerable<string> ScanKeysAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live keys in strict lexicographic order via paginated k-way merge across shards. When `prefetch` is `true` (or `null` with `PrefetchKeysScan` enabled), the next page from each shard is fetched in parallel while the current page is consumed. **Strongly consistent and strictly ordered during shard splits**: when a shard reports moved-away slots or the `ShardMap` version advances mid-scan, the orchestrator drains the affected slots from their current owners into a sorted in-memory cursor and injects it into the same k-way merge priority queue, so output remains globally sorted end-to-end. A per-call `HashSet<string>` suppresses duplicates across pre- and post-swap views. Reconciliation is bounded by `LatticeOptions.MaxScanRetries`; throws `InvalidOperationException` if the topology keeps mutating beyond that budget (see [`docs/shard-splitting.md`](shard-splitting.md)). |
+| `ScanEntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live key-value entries in strict lexicographic key order. When `prefetch` is `true` (or `null` with `PrefetchEntriesScan` enabled), the next page from each shard is fetched in parallel while the current page is consumed. Because entries carry `byte[]` values, pre-fetched pages hold extra in-flight memory proportional to `shardCount × KeysPageSize × avgValueSize`, so this flag is gated separately from `PrefetchKeysScan`. Useful for exports, migrations, and analytics without a separate `GetAsync` per key. **Strongly consistent and strictly ordered during shard splits** with the same reconciliation-cursor injection algorithm as `ScanKeysAsync`. Subject to the same `InvalidOperationException` contract on retry exhaustion — see [Scan reliability](#scan-reliability). |
 
 ### Scan reliability
 
-`CountAsync`, `KeysAsync`, and `EntriesAsync` use bounded optimistic
-retry (`LatticeOptions.MaxScanRetries`, default 3) to reconcile against
-concurrent shard splits. If the shard topology keeps mutating after
-every reconciliation step, the scan throws
+`CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` use bounded
+optimistic retry (`LatticeOptions.MaxScanRetries`, default 3) to
+reconcile against concurrent shard splits. If the shard topology keeps
+mutating after every reconciliation step, the scan throws
 `InvalidOperationException` rather than returning a silently
 incomplete result.
 
@@ -158,6 +172,14 @@ budget. Point operations (`GetAsync` / `SetAsync` / `DeleteAsync` /
 `SetIfVersionAsync`) transparently retry on `StaleShardRoutingException`
 during shard-map swaps and never surface this exception to callers.
 
+The resilient scan wrappers additionally recover from
+`Orleans.Runtime.EnumerationAbortedException` — raised when the
+remote enumerator on the orchestrator grain is reclaimed mid-scan
+(silo failover, idle expiry). This is distinct from topology churn
+and is bounded separately by the `maxAttempts` parameter on
+`ScanKeysAsync` / `ScanEntriesAsync` (default 8; see
+`LatticeExtensions.DefaultScanReconnectAttempts`)
+
 Callers running multi-minute export scans in aggressively split-prone
 workloads have three options:
 
@@ -166,8 +188,7 @@ workloads have three options:
 2. Wrap the scan in an application-level retry with exponential backoff
    and resume from the last successfully yielded key (using
    `startInclusive`).
-3. Use **stateful cursors** — `OpenKeyCursorAsync` /
-   `OpenEntryCursorAsync` return a server-side checkpointed iterator
+3. Use **stateful cursors** — `OpenKeyCursorAsync` / `OpenEntryCursorAsync` return a server-side checkpointed iterator
    that survives topology changes, silo failover, and client restarts
    without caller retry code. See
    [Stateful cursors](#stateful-cursors) below.
@@ -176,11 +197,11 @@ workloads have three options:
 
 `ILattice` exposes a stateful cursor API for long-running scans and
 resumable range deletes that survive silo failovers, client restarts,
-and topology changes (shard splits). Unlike the stateless `KeysAsync`
-/ `EntriesAsync` / `DeleteRangeAsync` methods — bounded by
-`LatticeOptions.MaxScanRetries` — a cursor checkpoints its progress
-server-side after every page: a new grain activation reads its
-persisted state and resumes from the last yielded key.
+and topology changes (shard splits). Unlike the stateless
+`ScanKeysAsync` / `ScanEntriesAsync` / `DeleteRangeAsync` methods — 
+bounded by `LatticeOptions.MaxScanRetries` — a cursor checkpoints its
+progress server-side after every page: a new grain activation reads
+its persisted state and resumes from the last yielded key.
 
 Each cursor is backed by a single per-tree grain activation keyed
 `{treeId}/{cursorId}`. The grain persists the scan spec, current
@@ -212,8 +233,8 @@ next-step range from that checkpoint and continues.
 
 #### Ordering and consistency
 
-- Each step goes through the normal `ILattice.KeysAsync` /
-  `EntriesAsync` / `DeleteRangeAsync` path, so strict lexicographic
+- Each step goes through the normal `ScanKeysAsync` / 
+  `ScanEntriesAsync` / `DeleteRangeAsync` path, so strict lexicographic
   ordering under concurrent shard splits applies within each page.
 - Across steps, global ordering is preserved because the step's
   effective range strictly excludes every previously-yielded key
@@ -419,7 +440,7 @@ bool success = await tree.SetIfVersionAsync("user:1", updated, versioned.Version
 | `SetManyAtomicAsync<T>` | `Task SetManyAtomicAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and atomically writes multiple entries via the saga coordinator. See `ILattice.SetManyAtomicAsync` for full semantics. |
 | `SetManyAtomicAsync<T>` (idempotency key) | `Task SetManyAtomicAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, string operationId, ILatticeSerializer<T>)` | Caller-supplied idempotency-key overload of the typed variant; delegates to `ILattice.SetManyAtomicAsync(entries, operationId)` after serializing each value. |
 | `BulkLoadAsync<T>` | `Task BulkLoadAsync<T>(this ILattice, IReadOnlyList<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and bulk-loads entries into an empty tree. |
-| `EntriesAsync<T>` | `IAsyncEnumerable<KeyValuePair<string, T>> EntriesAsync<T>(this ILattice, ILatticeSerializer<T>, string?, string?, bool)` | Streams live entries, deserializing values via the provided serializer. |
+| `ScanEntriesAsync<T>` | `IAsyncEnumerable<KeyValuePair<string, T>> ScanEntriesAsync<T>(this ILattice, ILatticeSerializer<T>, string?, string?, bool, bool?, int?)` | Streams live entries, deserializing values via the provided serializer. Transparently recovers from `Orleans.Runtime.EnumerationAbortedException` — see [Scan reliability](#scan-reliability). |
 
 Each method also has a parameterless overload that defaults to `JsonLatticeSerializer<T>.Default`.
 
@@ -442,12 +463,12 @@ See [Configuration](configuration.md) for detailed guidance on each option, immu
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `KeysPageSize` | `int` | 512 | Keys per page in `KeysAsync` pagination. |
+| `KeysPageSize` | `int` | 512 | Keys per page in enumeration pagination. |
 | `TombstoneGracePeriod` | `TimeSpan` | 24 h | Minimum age before a tombstone is eligible for compaction. `InfiniteTimeSpan` disables compaction. |
 | `SoftDeleteDuration` | `TimeSpan` | 72 h | Retention window after soft-delete before purge fires. |
 | `CacheTtl` | `TimeSpan` | `TimeSpan.Zero` | Minimum time between delta refreshes in `LeafCacheGrain`. Zero means refresh on every read. |
-| `PrefetchKeysScan` | `bool` | `false` | When `true`, `KeysAsync` pre-fetches the next page from each shard in the background. Overridable per-call via the `prefetch` parameter. |
-| `PrefetchEntriesScan` | `bool` | `false` | When `true`, `EntriesAsync` pre-fetches the next page from each shard in the background. Gated separately from `PrefetchKeysScan` because entry pages carry `byte[]` values and increase in-flight memory by `shardCount × KeysPageSize × avgValueSize`. Overridable per-call via the `prefetch` parameter. |
+| `PrefetchKeysScan` | `bool` | `false` | When `true`, `ScanKeysAsync` pre-fetches the next page from each shard in the background. Overridable per-call via the `prefetch` parameter. |
+| `PrefetchEntriesScan` | `bool` | `false` | When `true`, `ScanEntriesAsync` pre-fetches the next page from each shard in the background. Gated separately from `PrefetchKeysScan` because entry pages carry `byte[]` values and increase in-flight memory by `shardCount × KeysPageSize × avgValueSize`. Overridable per-call via the `prefetch` parameter. |
 | `AutoSplitEnabled` | `bool` | `true` | Master switch for autonomic shard splitting. When `false`, `HotShardMonitorGrain` will not trigger any splits. |
 | `HotShardOpsPerSecondThreshold` | `int` | 200 | Ops/sec on a single shard that triggers an adaptive split. |
 | `HotShardSampleInterval` | `TimeSpan` | 30 s | How often `HotShardMonitorGrain` polls shard hotness counters. |
@@ -455,7 +476,7 @@ See [Configuration](configuration.md) for detailed guidance on each option, immu
 | `MaxConcurrentAutoSplits` | `int` | 2 | Maximum in-flight adaptive splits per tree. |
 | `SplitDrainBatchSize` | `int` | 1024 | Entries per batch during the shadow-write drain phase of a split. |
 | `AutoSplitMinTreeAge` | `TimeSpan` | 60 s | Minimum tree age before the hot-shard monitor begins sampling. Prevents splits during initial bulk-load bursts. |
-| `MaxScanRetries` | `int` | 3 | Maximum bounded-retry passes for `CountAsync` / `KeysAsync` / `EntriesAsync` when the shard topology changes mid-scan. |
+| `MaxScanRetries` | `int` | 3 | Maximum bounded-retry passes for `CountAsync` / `ScanKeysAsync` / `ScanEntriesAsync` when the shard topology changes mid-scan. |
 | `CursorIdleTtl` | `TimeSpan` | 48 h | Sliding idle timeout for stateful cursors. `InfiniteTimeSpan` disables auto-cleanup. |
 | `AtomicWriteRetention` | `TimeSpan` | 48 h | Retention window for completed `SetManyAtomicAsync` saga state (idempotency window). `InfiniteTimeSpan` disables auto-cleanup. |
 

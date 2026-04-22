@@ -176,6 +176,7 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="LatticeOptions.PrefetchKeysScan"/> is enabled), the next page from
     /// each shard is fetched in parallel while the current page is being consumed.
     /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -188,6 +189,7 @@ public interface ILattice : IGrainWithStringKey
     /// Because entries carry <c>byte[]</c> values, pre-fetched pages hold extra
     /// memory proportional to <c>shardCount × KeysPageSize × avgValueSize</c>.
     /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 
     /// <summary>

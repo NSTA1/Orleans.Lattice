@@ -68,7 +68,7 @@ Worker categories (exact mix varies per test — see the runtime table):
 * **Point readers** — `GetAsync`; validates envelope if a value is returned.
 * **Bulk readers** — `GetManyAsync` for 16 random keys (happy-path /
   faults only).
-* **Scanners** — rotating `KeysAsync`, `EntriesAsync`, reverse scan,
+* **Scanners** — rotating `ScanKeysAsync`, `ScanEntriesAsync`, reverse scan,
   range scan. Each full-tree scan must yield exactly the universe with
   no duplicates and no unknown keys.
 * **Counters** — `CountAsync` must always equal the pinned universe size.
@@ -94,9 +94,9 @@ observes a fully consistent view of the tree.
 | Invariant | Mechanism under test |
 |---|---|
 | `CountAsync` returns the exact universe size, always | Per-slot routing via `CountForSlotsAsync` against the authoritative `ShardMap` plus version stability check |
-| `KeysAsync` / `EntriesAsync` yield exactly the universe, no duplicates, no unknowns, in strict sorted order | In-line reconciliation-cursor injection into the k-way merge + `HashSet` dedup |
-| `KeysAsync(null, null, reverse: true)` yields the full universe in reverse | Reverse-scan path also reconciles |
-| `KeysAsync(start, end)` yields exactly the in-range slice | Range pruning is slot-aware |
+| `ScanKeysAsync` / `ScanEntriesAsync` yield exactly the universe, no duplicates, no unknowns, in strict sorted order | In-line reconciliation-cursor injection into the k-way merge + `HashSet` dedup |
+| `ScanKeysAsync(null, null, reverse: true)` yields the full universe in reverse | Reverse-scan path also reconciles |
+| `ScanKeysAsync(start, end)` yields exactly the in-range slice | Range pruning is slot-aware |
 | `GetAsync` / `GetManyAsync` never return a corrupt value | Writes are atomic per-shard; CRDT LWW resolves concurrent rewrites |
 | No public-API call throws an unhandled exception | Stale routing retries and enumeration aborts are transparent |
 | Splits during a scan never cause data loss, duplication, or out-of-order output | `MovedAwaySlots` + version stamping + in-line reconciliation |
@@ -120,7 +120,7 @@ violation, fails the test.
 After the chaos window closes:
 
 * `CountAsync` matches the pinned universe size exactly.
-* `KeysAsync` yields exactly the pinned universe (no gaps, no extras).
+* `ScanKeysAsync` yields exactly the pinned universe (no gaps, no extras).
 * Every worker category performed at least one operation (proves the
   workload ran under real concurrency, not a degenerate single-thread
   schedule).
@@ -210,8 +210,8 @@ passes complete exception-free**, bounded by a 15 s timeout. This loop:
 After healing:
 
 * `CountAsync == UniverseSize` exactly.
-* `KeysAsync` yields exactly the pinned universe.
-* `EntriesAsync` yields exactly the pinned universe with every value
+* `ScanKeysAsync` yields exactly the pinned universe.
+* `ScanEntriesAsync` yields exactly the pinned universe with every value
   matching its envelope.
 * Every universe key is recoverable via `GetAsync`.
 * Zero envelope violations were observed during the whole run.
@@ -235,7 +235,7 @@ per-shard reject phase, cleanup — happens inside the chaos window.
 * Alias swap — mid-flight `GetAsync` / `SetAsync` on a stateless-worker
   `LatticeGrain` activation holding a stale alias must transparently
   re-resolve and retry.
-* Strongly-consistent `CountAsync` / `KeysAsync` during the online
+* Strongly-consistent `CountAsync` / `ScanKeysAsync` during the online
   snapshot drain and Rejecting phase.
 
 ### Tolerated transients
@@ -248,7 +248,7 @@ raised during the alias swap window.
 After the chaos window closes:
 
 * `CountAsync` matches the pinned universe size exactly.
-* `KeysAsync` yields exactly the pinned universe.
+* `ScanKeysAsync` yields exactly the pinned universe.
 * `IsResizeCompleteAsync` is `true`.
 * Every worker category performed at least one operation; the resize
   was driven to completion.
@@ -285,7 +285,7 @@ completion.
 After the chaos window closes:
 
 * `CountAsync` matches the pinned universe size exactly.
-* `KeysAsync` yields exactly the pinned universe.
+* `ScanKeysAsync` yields exactly the pinned universe.
 * `IsReshardCompleteAsync` is `true`.
 * The post-reshard `ShardMap` has at least `ReshardTarget` distinct
   physical shards.
@@ -302,7 +302,7 @@ in [shard-splitting.md](shard-splitting.md),
 | Surface | Happy path | Faults | Resize | Reshard |
 |---|:---:|:---:|:---:|:---:|
 | Concurrent reads/writes during split shadow phase | ✅ | ✅ | — | ✅ |
-| `KeysAsync` / `EntriesAsync` in-line reconciliation | ✅ | ✅ | ✅ | ✅ |
+| `ScanKeysAsync` / `ScanEntriesAsync` in-line reconciliation | ✅ | ✅ | ✅ | ✅ |
 | `CountAsync` per-slot routing + version stability + bounded retry | ✅ | ✅ | ✅ | ✅ |
 | `StaleShardRoutingException` transparent retry | ✅ | ✅ | — | ✅ |
 | `StaleTreeRoutingException` transparent retry across alias swap | — | — | ✅ | — |
