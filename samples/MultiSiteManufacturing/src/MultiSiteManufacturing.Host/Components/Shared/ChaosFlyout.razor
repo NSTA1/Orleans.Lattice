@@ -1,9 +1,9 @@
-@* Chaos fly-out side panel (plan §7.2). Slides in from the right when
-   the operator clicks the "☰ Chaos" button in the layout header. Three
-   sections: per-site controls, backend storage chaos, canned presets.
-   All state lives in Orleans grains (IProcessSiteGrain / IBackendChaosGrain);
-   the fly-out reads through FederationRouter and subscribes to
-   ChaosConfigChanged so it rerenders whenever anything changes anywhere. *@
+@* Chaos fly-out side panel. Slides in from the right when the operator
+   clicks the "☰ Chaos" button in the layout header. Three sections:
+   per-site controls, backend storage chaos, canned presets. All state
+   is persisted durably and survives a process restart; the fly-out
+   subscribes to chaos-config-change notifications so it re-renders
+   whenever anything changes anywhere. *@
 
 @implements IAsyncDisposable
 @inject FederationRouter Router
@@ -22,14 +22,13 @@
             </ul>
         </nav>
         <small>
-            All chaos state is persisted in Orleans grains (plan §4.2) and
-            survives a process restart.
+            All chaos state is persisted and survives a process restart.
         </small>
     </header>
 
     <section aria-labelledby="chaos-sites-heading">
         <h3 id="chaos-sites-heading">Per-site controls</h3>
-        <p><small>Tier 1 + Tier 3 from plan §4.3. Changes apply immediately.</small></p>
+        <p><small>Pause a site, add WAN-style delay, or enable a reorder buffer. Changes apply immediately.</small></p>
         @if (_sites.Count == 0)
         {
             <p aria-busy="true">Loading sites…</p>
@@ -96,8 +95,9 @@
         <h3 id="chaos-backends-heading">Backend storage chaos</h3>
         <p>
             <small>
-                Tier 2 from plan §4.3. Apply faults to one backend only to
-                surface baseline-vs-lattice divergence organically.
+                Inject jitter, transient failures, or write amplification at the
+                storage layer. Apply faults to one backend only to surface
+                baseline-vs-lattice divergence organically.
             </small>
         </p>
         @if (_backends.Count == 0)

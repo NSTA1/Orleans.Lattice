@@ -41,6 +41,16 @@
 }
 
 <style>
+    /* Widen the default Pico container — at standard widths Pico caps at
+       ~1130px which wraps the Serial / Family columns hard on a 1080p
+       display. Give the dashboard real estate up to 1800px while keeping
+       a small gutter on ultra-wide monitors. */
+    body > header.container,
+    body > main.container,
+    body > footer.container {
+        max-width: min(1800px, calc(100vw - 2rem));
+    }
+
     /* State badges — intentionally tiny; a full design pass comes in M12. */
     .state-badge {
         display: inline-block;
@@ -63,6 +73,11 @@
     }
     .divergent-row td {
         background-color: rgba(184, 58, 58, 0.08);
+    }
+    /* Serial numbers (`HPT-BLD-S1-2028-00001`) and family codes are
+       identifiers — never wrap them mid-token. */
+    .inventory-nowrap {
+        white-space: nowrap;
     }
     .dashboard-grid {
         display: grid;

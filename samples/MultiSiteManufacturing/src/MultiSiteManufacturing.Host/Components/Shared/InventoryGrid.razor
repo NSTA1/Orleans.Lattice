@@ -9,7 +9,7 @@
 
     @if (!Parts.Any())
     {
-        <p><em>No parts yet. The seeder populates ~50 on first non-test run.</em></p>
+        <p><em>No parts yet. The seeder populates a small set on first non-test run.</em></p>
     }
     else
     {
@@ -29,8 +29,8 @@
                     @foreach (var part in Parts.OrderBy(p => p.Serial.Value))
                     {
                         <tr class="@(part.Diverges ? "divergent-row" : null)">
-                            <td><code><a href="/parts/@part.Serial.Value">@part.Serial.Value</a></code></td>
-                            <td>@part.Family</td>
+                            <td class="inventory-nowrap"><code><a href="/parts/@part.Serial.Value">@part.Serial.Value</a></code></td>
+                            <td class="inventory-nowrap">@part.Family</td>
                             <td>@(part.LatestStage?.ToString() ?? "—")</td>
                             <td><StateBadge State="@part.BaselineState" /></td>
                             <td><StateBadge State="@part.LatticeState" /></td>
