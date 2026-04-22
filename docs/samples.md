@@ -13,3 +13,9 @@ Run it with:
 ```shell
 dotnet run --project samples/HelloWorld
 ```
+
+## MultiSiteManufacturing
+
+[`samples/MultiSiteManufacturing`](../samples/MultiSiteManufacturing)
+
+Regulated process-engineering traceability demo built on Blazor Server + gRPC + Orleans + Orleans.Lattice, backed by Azure Table Storage (Azurite for local development). Models a turbine-blade lifecycle (forge → heat-treat → machining → NDT → MRB → FAI) across seven process sites, with a bulk-loaded inventory, operator-driven fact emission, a chaos fly-out for injecting site-level pause/delay/reorder, and a live divergence feed comparing a baseline LWW backend against the Orleans.Lattice fact store. See [`samples/MultiSiteManufacturing/plan.md`](../samples/MultiSiteManufacturing/plan.md) for the design document.

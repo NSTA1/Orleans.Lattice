@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package multisitemfg.v1;
+
+option csharp_namespace = "MultiSiteManufacturing.Contracts.V1";
+
+// Placeholder shared message. Replaced in M5 with the full contract set
+// (inventory.proto, facts.proto, sites.proto, compliance.proto).
+message HealthCheck {
+  string status = 1;
+}
