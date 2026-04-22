@@ -1,7 +1,10 @@
 using Azure.Data.Tables;
 using Orleans.Hosting;
 using Orleans.Lattice;
+using MultiSiteManufacturing.Host.Baseline;
 using MultiSiteManufacturing.Host.Components;
+using MultiSiteManufacturing.Host.Federation;
+using MultiSiteManufacturing.Host.Lattice;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -38,6 +41,14 @@ builder.Services.AddGrpc();
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
+
+// Federation: one concrete backend per name, both exposed as IFactBackend
+// so FederationRouter receives them via the IEnumerable<IFactBackend> ctor.
+builder.Services.AddSingleton<BaselineFactBackend>();
+builder.Services.AddSingleton<LatticeFactBackend>();
+builder.Services.AddSingleton<IFactBackend>(sp => sp.GetRequiredService<BaselineFactBackend>());
+builder.Services.AddSingleton<IFactBackend>(sp => sp.GetRequiredService<LatticeFactBackend>());
+builder.Services.AddSingleton<FederationRouter>();
 
 var app = builder.Build();
 

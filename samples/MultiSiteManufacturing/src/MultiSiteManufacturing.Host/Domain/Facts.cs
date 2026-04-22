@@ -1,4 +1,5 @@
 using Orleans.Lattice.Primitives;
+using System.Text.Json.Serialization;
 
 namespace MultiSiteManufacturing.Host.Domain;
 
@@ -7,6 +8,13 @@ namespace MultiSiteManufacturing.Host.Domain;
 /// router. Concrete fact payloads inherit from this record.
 /// </summary>
 [GenerateSerializer]
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+[JsonDerivedType(typeof(ProcessStepCompleted), nameof(ProcessStepCompleted))]
+[JsonDerivedType(typeof(InspectionRecorded), nameof(InspectionRecorded))]
+[JsonDerivedType(typeof(NonConformanceRaised), nameof(NonConformanceRaised))]
+[JsonDerivedType(typeof(MrbDisposition), nameof(MrbDisposition))]
+[JsonDerivedType(typeof(ReworkCompleted), nameof(ReworkCompleted))]
+[JsonDerivedType(typeof(FinalAcceptance), nameof(FinalAcceptance))]
 public abstract record Fact
 {
     /// <summary>Part the fact applies to.</summary>

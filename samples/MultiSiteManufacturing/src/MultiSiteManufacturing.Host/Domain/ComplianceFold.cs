@@ -44,96 +44,9 @@ public static class ComplianceFold
 
         foreach (var fact in ordered)
         {
-            if (state == ComplianceState.Scrap)
-            {
-                // Terminal; later facts cannot revive a scrapped part.
-                continue;
-            }
-
-            switch (fact)
-            {
-                case ProcessStepCompleted:
-                    break;
-
-                case InspectionRecorded { Outcome: InspectionOutcome.Pass }:
-                    if (state == ComplianceState.Rework)
-                    {
-                        retestArmed = true;
-                    }
-                    break;
-
-                case InspectionRecorded { Outcome: InspectionOutcome.Fail }:
-                    state = Max(state, ComplianceState.FlaggedForReview);
-                    retestArmed = false;
-                    break;
-
-                case NonConformanceRaised nc:
-                    state = Max(state, nc.Severity switch
-                    {
-                        NcSeverity.Minor => ComplianceState.FlaggedForReview,
-                        NcSeverity.Major => ComplianceState.Rework,
-                        NcSeverity.Critical => ComplianceState.Scrap,
-                        _ => state,
-                    });
-                    retestArmed = false;
-                    break;
-
-                case MrbDisposition md:
-                    state = ApplyDisposition(state, md.Disposition, ref retestArmed);
-                    break;
-
-                case ReworkCompleted { RetestPassed: true }:
-                    if (state == ComplianceState.Rework)
-                    {
-                        retestArmed = true;
-                    }
-                    break;
-
-                case ReworkCompleted { RetestPassed: false }:
-                    // Retest failed — stays in Rework, flag stays disarmed.
-                    retestArmed = false;
-                    break;
-
-                case FinalAcceptance:
-                    break;
-            }
+            (state, retestArmed) = StateTransitions.Apply(state, retestArmed, fact);
         }
 
         return state;
     }
-
-    private static ComplianceState ApplyDisposition(
-        ComplianceState current,
-        MrbDispositionKind disposition,
-        ref bool retestArmed)
-    {
-        switch (disposition)
-        {
-            case MrbDispositionKind.UseAsIs:
-                if (current == ComplianceState.FlaggedForReview)
-                {
-                    return ComplianceState.Nominal;
-                }
-                if (current == ComplianceState.Rework && retestArmed)
-                {
-                    retestArmed = false;
-                    return ComplianceState.Nominal;
-                }
-                return current;
-
-            case MrbDispositionKind.Rework:
-                retestArmed = false;
-                return Max(current, ComplianceState.Rework);
-
-            case MrbDispositionKind.Scrap:
-            case MrbDispositionKind.ReturnToVendor:
-                return ComplianceState.Scrap;
-
-            default:
-                return current;
-        }
-    }
-
-    private static ComplianceState Max(ComplianceState a, ComplianceState b) =>
-        (ComplianceState)Math.Max((int)a, (int)b);
 }
