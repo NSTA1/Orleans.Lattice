@@ -61,39 +61,13 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
     public async Task<IReadOnlyList<PartSummaryUpdate>> GetInitialPartsAsync(CancellationToken cancellationToken = default)
     {
         var lattice = _router.GetBackend("lattice");
-        var serials = await ListPartsWithRetryAsync(lattice, cancellationToken);
+        var serials = await lattice.ListPartsAsync(cancellationToken);
         var results = new List<PartSummaryUpdate>(serials.Count);
         foreach (var serial in serials)
         {
-            results.Add(await BuildSummaryWithRetryAsync(serial, cancellationToken));
+            results.Add(await BuildSummaryAsync(serial, cancellationToken));
         }
         return results;
-    }
-
-    private static async Task<IReadOnlyList<PartSerialNumber>> ListPartsWithRetryAsync(
-        IFactBackend lattice,
-        CancellationToken cancellationToken)
-    {
-        // TODO(F-034): delete this wrapper once ILattice ships resilient
-        // scan iterators that transparently recover from
-        // EnumerationAbortedException (tracked in roadmap.md). Today the
-        // lattice backend streams via Tree.KeysAsync; the remote
-        // enumerator can be reclaimed mid-scan on cold-start or
-        // fan-out, and every consumer has to re-implement this retry.
-        const int maxAttempts = 8;
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            try
-            {
-                return await lattice.ListPartsAsync(cancellationToken);
-            }
-            catch (Orleans.Runtime.EnumerationAbortedException) when (attempt < maxAttempts - 1)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(100 * (attempt + 1)), cancellationToken);
-            }
-        }
-
-        throw new InvalidOperationException("ListPartsWithRetryAsync exhausted retries without returning.");
     }
 
     /// <summary>Reads the current chaos overview (used by the banner on initial render).</summary>
@@ -182,7 +156,7 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
     {
         try
         {
-            var update = await BuildSummaryWithRetryAsync(fact.Serial, CancellationToken.None);
+            var update = await BuildSummaryAsync(fact.Serial, CancellationToken.None);
             foreach (var sub in _partSubs.Values)
             {
                 sub.Writer.TryWrite(update);
@@ -192,42 +166,6 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
         {
             _logger.LogWarning(ex, "Failed to build dashboard update for fact {FactId}", fact.FactId);
         }
-    }
-
-    /// <summary>
-    /// Wraps <see cref="BuildSummaryAsync"/> with a short retry loop for
-    /// <see cref="Orleans.Runtime.EnumerationAbortedException"/>. The
-    /// lattice backend streams entries from a B+ tree grain; if that
-    /// grain deactivates mid-enumeration (cold-start, scale-down,
-    /// idle-expiry) the iterator aborts. Re-opening the enumerator
-    /// recovers deterministically.
-    /// </summary>
-    /// <remarks>
-    /// TODO(F-034): delete this wrapper once <c>ILattice</c> ships
-    /// resilient scan iterators that transparently recover from
-    /// <see cref="Orleans.Runtime.EnumerationAbortedException"/>
-    /// (tracked in <c>roadmap.md</c>). This is generic plumbing every
-    /// Lattice consumer would otherwise have to reinvent.
-    /// </remarks>
-    private async Task<PartSummaryUpdate> BuildSummaryWithRetryAsync(
-        PartSerialNumber serial,
-        CancellationToken cancellationToken)
-    {
-        const int maxAttempts = 8;
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            try
-            {
-                return await BuildSummaryAsync(serial, cancellationToken);
-            }
-            catch (Orleans.Runtime.EnumerationAbortedException) when (attempt < maxAttempts - 1)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(100 * (attempt + 1)), cancellationToken);
-            }
-        }
-
-        // Unreachable — last attempt either returns or throws.
-        throw new InvalidOperationException("BuildSummaryWithRetryAsync exhausted retries without returning.");
     }
 
     private async Task PublishChaosAsync()
@@ -256,9 +194,10 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
         // One lattice-tree enumeration per summary: fetch facts once and
         // fold them locally for the lattice state. Opening a second
         // concurrent enumerator (via lattice.GetStateAsync, which itself
-        // calls GetFactsAsync) multiplies the pressure on the tree grain
-        // and triggers EnumerationAbortedException under cold-start or
-        // high fan-out.
+        // calls GetFactsAsync) multiplies the pressure on the tree grain.
+        // Enumerator aborts (cold-start, scale-down, idle-expiry) are
+        // recovered transparently inside LatticeFactBackend via the
+        // resilient ScanEntriesAsync wrapper.
         var baselineStateTask = baseline.GetStateAsync(serial, cancellationToken);
         var factsTask = lattice.GetFactsAsync(serial, cancellationToken);
         await Task.WhenAll(baselineStateTask, factsTask);

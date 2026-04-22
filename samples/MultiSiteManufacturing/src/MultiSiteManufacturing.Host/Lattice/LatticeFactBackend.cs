@@ -63,7 +63,7 @@ public sealed class LatticeFactBackend(
         var (start, endExclusive) = PrefixRange(serial);
         var facts = new List<Fact>();
 
-        await foreach (var kvp in Tree.EntriesAsync(start, endExclusive, cancellationToken: cancellationToken))
+        await foreach (var kvp in Tree.ScanEntriesAsync(start, endExclusive, cancellationToken: cancellationToken))
         {
             facts.Add(FactJsonCodec.Decode(kvp.Value));
         }
@@ -79,7 +79,7 @@ public sealed class LatticeFactBackend(
         // is exactly the distinct prefix-before-'/' of every tree key.
         // Walk once, dedupe with a HashSet.
         var serials = new HashSet<PartSerialNumber>();
-        await foreach (var key in Tree.KeysAsync(cancellationToken: cancellationToken))
+        await foreach (var key in Tree.ScanKeysAsync(cancellationToken: cancellationToken))
         {
             var slash = key.IndexOf('/');
             if (slash > 0)
