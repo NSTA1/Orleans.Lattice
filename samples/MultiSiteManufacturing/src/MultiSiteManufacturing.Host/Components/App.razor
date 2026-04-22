@@ -8,10 +8,10 @@
     <!-- Pico.css v2 (classless CSS framework) served from jsDelivr CDN;
          intentionally not added to the project per sample constraint. -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@@picocss/pico@@2/css/pico.min.css" />
-    <HeadOutlet />
+    <HeadOutlet @rendermode="RenderMode.InteractiveServer" />
 </head>
 <body>
-    <Routes />
+    <Routes @rendermode="RenderMode.InteractiveServer" />
     <script src="_framework/blazor.web.js"></script>
 </body>
 </html>

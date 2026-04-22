@@ -1,7 +1,7 @@
 # MultiSiteManufacturing Sample — Plan
 
-> Status: **M1–M8 complete** (committed on `feature/sample-manufacturing`,
-> 78/78 tests green). **Executing M9 — operator action forms.**
+> Status: **M1–M9 complete** (committed on `feature/sample-manufacturing`,
+> 87/87 tests green). **Executing M10 — chaos fly-out.**
 > All §12 review items resolved below.
 
 
@@ -535,7 +535,7 @@ All §12 open questions are resolved. Answers recorded here verbatim:
 | M6 | Bulk-load seeder + `IInventorySeedStateGrain` + idempotency test + deterministic seed | ✅ done |
 | **M7** | **Fault-injection infrastructure (§4.3):** `ChaosFactBackend : IFactBackend` decorator + `IBackendChaosGrain` (jitter, transient fault rate, write amplification) + wire reorder buffer in `ProcessSiteGrain` (Tier 3) + `ListBackends` / `ConfigureBackend` RPCs on `SiteControlService` + "Lattice storage flakes" preset + domain tests for all three tiers | ✅ done |
 | **M8** | **Blazor Server shell + main dashboard (read-only) wired to real-time channels:** `FederationRouter.FactRouted` / `ChaosConfigChanged` events + `DashboardBroadcaster` (`IHostedService` + per-subscriber `Channel<T>`) + Pico.css v2 via jsDelivr CDN (no project files) + `MainLayout` / `Dashboard` page / `InventoryGrid` / `DivergencePanel` / `ChaosBanner` + 5 broadcaster tests | ✅ done |
-| M9 | Operator action forms (new part, record inspection, raise NCR, MRB disposition, rework complete, FAI sign-off) | 1 day |
+| M9 | **Operator action forms:** `OperatorClock` (monotonic HLC singleton) + `OperatorActions` facade (6 fact-kind methods) + `NewPartDialog` + "+ New part" button on Dashboard + clickable serials in `InventoryGrid` + `/parts/{serial}` detail page with fact trail & 5 action forms (process step, inspection, NCR, MRB, rework, FAI) + 9 `OperatorActionsTests` | ✅ done |
 | M10 | Chaos fly-out (two-section: site controls + backend storage chaos) with canned presets + active-chaos banner | 0.5 day |
 | M11 | Divergence feed (organic, from chaos-induced reorder + backend fault rate) wired into dashboard + `WatchDivergence` gRPC stream | 0.5 day |
 | M12 | README, glossary, architecture doc, Azurite setup instructions, screenshots | 0.5 day |
@@ -548,8 +548,8 @@ milestone boundary (at minimum between M1 → M2, M6 → M7, and M7 → M8).
 
 ## 14. Sign-off
 
-All review items resolved — see §12. **M1–M8 executed and committed on
-`feature/sample-manufacturing` (78/78 tests green).** Execution of
-**M9 (operator action forms)** is next; the dashboard shell now pushes
-live updates from both backends and surfaces any active chaos so M9
-operator mutations will be instantly visible.
+All review items resolved — see §12. **M1–M9 executed and committed on
+`feature/sample-manufacturing` (87/87 tests green).** Execution of
+**M10 (chaos fly-out)** is next; operator forms now emit all six fact
+kinds through a monotonic `OperatorClock`, and live dashboard updates
+mean every action is immediately reflected in baseline vs. lattice state.

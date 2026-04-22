@@ -8,6 +8,7 @@ using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Grpc;
 using MultiSiteManufacturing.Host.Inventory;
 using MultiSiteManufacturing.Host.Lattice;
+using MultiSiteManufacturing.Host.Operator;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -71,6 +72,12 @@ builder.Services.AddSingleton<IFactBackend>(sp => new ChaosFactBackend(
     sp.GetRequiredService<LatticeFactBackend>(),
     sp.GetRequiredService<IGrainFactory>()));
 builder.Services.AddSingleton<FederationRouter>();
+
+// Operator action surface: OperatorClock is a singleton (monotonic HLC
+// shared across all circuits & gRPC handlers); OperatorActions is scoped
+// so each Blazor circuit gets a fresh instance but uses the shared clock.
+builder.Services.AddSingleton<OperatorClock>();
+builder.Services.AddScoped<OperatorActions>();
 
 // Dashboard broadcaster: subscribes to FederationRouter events and
 // fans out PartSummaryUpdate / ChaosOverview messages to Blazor

@@ -1,16 +1,27 @@
 @page "/"
 @implements IDisposable
 @inject DashboardBroadcaster Broadcaster
+@inject NavigationManager Nav
 
 <PageTitle>Inventory · Multi-Site Manufacturing</PageTitle>
 
-<h1>Inventory dashboard</h1>
+<hgroup>
+    <h1>Inventory dashboard</h1>
+    <p>
+        Live view over both federation backends. Every operator action
+        — new part, inspection, NCR, MRB, rework, FAI — fans out through
+        <code>FederationRouter</code> and pushes an update here without
+        polling.
+    </p>
+</hgroup>
+
 <p>
-    Live view over both federation backends. Every operator action
-    — new part, inspection, NCR, MRB, rework, FAI — fans out through
-    <code>FederationRouter</code> and pushes an update here without
-    polling.
+    <button @onclick="() => _showNewPart = true">+ New part</button>
 </p>
+
+<NewPartDialog IsOpen="_showNewPart"
+               OnClose="() => _showNewPart = false"
+               OnCreated="OnPartCreated" />
 
 <ChaosBanner />
 
@@ -22,6 +33,13 @@
 @code {
     private readonly Dictionary<PartSerialNumber, PartSummaryUpdate> _parts = new();
     private CancellationTokenSource? _cts;
+    private bool _showNewPart;
+
+    private void OnPartCreated(PartSerialNumber serial)
+    {
+        _showNewPart = false;
+        Nav.NavigateTo($"/parts/{serial.Value}");
+    }
 
     protected override async Task OnInitializedAsync()
     {

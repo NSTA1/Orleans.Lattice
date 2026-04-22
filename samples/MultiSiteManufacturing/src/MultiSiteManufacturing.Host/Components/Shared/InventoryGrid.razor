@@ -29,7 +29,7 @@
                     @foreach (var part in Parts.OrderBy(p => p.Serial.Value))
                     {
                         <tr class="@(part.Diverges ? "divergent-row" : null)">
-                            <td><code>@part.Serial.Value</code></td>
+                            <td><code><a href="/parts/@part.Serial.Value">@part.Serial.Value</a></code></td>
                             <td>@part.Family</td>
                             <td>@(part.LatestStage?.ToString() ?? "—")</td>
                             <td><StateBadge State="@part.BaselineState" /></td>
