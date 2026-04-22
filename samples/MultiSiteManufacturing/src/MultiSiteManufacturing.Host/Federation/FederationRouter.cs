@@ -48,10 +48,18 @@ public sealed class FederationRouter(
         ArgumentNullException.ThrowIfNull(fact);
 
         var admission = await SiteGrain(fact.Site).AdmitAsync(fact);
+
+        // Tier 3 (plan §4.3): a reorder flush returns a shuffled batch of
+        // previously-buffered facts for the router to release.
+        if (admission.ShuffledDrain is { Count: > 0 } drained)
+        {
+            await ReleaseAsync(drained, cancellationToken);
+        }
+
         if (!admission.Forward)
         {
             logger.LogDebug(
-                "Fact {FactId} held at {Site} (paused)",
+                "Fact {FactId} held at {Site} (paused or buffered)",
                 fact.FactId, fact.Site);
             return;
         }
@@ -94,6 +102,43 @@ public sealed class FederationRouter(
 
     /// <summary>Returns a snapshot of every site's configuration + counters.</summary>
     public Task<IReadOnlyList<SiteState>> ListSitesAsync() => Registry.ListSitesAsync();
+
+    /// <summary>
+    /// Returns a snapshot of every registered backend's chaos
+    /// configuration (plan §4.3 Tier 2). One entry per
+    /// <see cref="IFactBackend.Name"/>, in registration order.
+    /// </summary>
+    public async Task<IReadOnlyList<BackendChaosState>> ListBackendChaosAsync()
+    {
+        var tasks = new Task<BackendChaosConfig>[_backends.Count];
+        for (var i = 0; i < _backends.Count; i++)
+        {
+            tasks[i] = grains.GetGrain<IBackendChaosGrain>(_backends[i].Name).GetConfigAsync();
+        }
+        var configs = await Task.WhenAll(tasks);
+
+        var states = new BackendChaosState[_backends.Count];
+        for (var i = 0; i < _backends.Count; i++)
+        {
+            states[i] = new BackendChaosState { Name = _backends[i].Name, Config = configs[i] };
+        }
+        return states;
+    }
+
+    /// <summary>
+    /// Updates the chaos configuration for the backend with the given
+    /// name and returns its fresh snapshot. Throws if
+    /// <paramref name="backendName"/> is not registered.
+    /// </summary>
+    public async Task<BackendChaosState> ConfigureBackendChaosAsync(
+        string backendName,
+        BackendChaosConfig config)
+    {
+        // Validates the backend exists (throws otherwise).
+        _ = GetBackend(backendName);
+        var stored = await grains.GetGrain<IBackendChaosGrain>(backendName).ConfigureAsync(config);
+        return new BackendChaosState { Name = backendName, Config = stored };
+    }
 
     private ISiteRegistryGrain Registry =>
         grains.GetGrain<ISiteRegistryGrain>(ISiteRegistryGrain.SingletonKey);

@@ -19,8 +19,16 @@ public readonly record struct SiteConfig
     /// <summary>Artificial latency added before a fact is forwarded to the backends.</summary>
     [Id(1)] public int DelayMs { get; init; }
 
-    /// <summary>Enables the grain to buffer and shuffle pending facts (wired in a later milestone).</summary>
+    /// <summary>
+    /// When true, the grain accumulates admitted facts in a small
+    /// reorder buffer and flushes them in shuffled order once the
+    /// buffer fills (window size <see cref="ReorderWindowSize"/>).
+    /// Models cross-site out-of-order arrival (plan §4.3 Tier 3).
+    /// </summary>
     [Id(2)] public bool ReorderEnabled { get; init; }
+
+    /// <summary>Number of facts buffered before a reorder flush fires.</summary>
+    public const int ReorderWindowSize = 4;
 }
 
 /// <summary>
@@ -60,11 +68,27 @@ public readonly record struct SiteAdmission
     /// <summary>Delayed pass-through: forward after waiting <see cref="DelayMs"/>.</summary>
     public static SiteAdmission Delayed(int delayMs) => new() { Forward = true, DelayMs = delayMs };
 
+    /// <summary>
+    /// Hold admission that also returns a shuffled batch of previously
+    /// buffered facts for the router to release. Produced when a reorder
+    /// window fills (plan §4.3 Tier 3).
+    /// </summary>
+    public static SiteAdmission ReorderFlush(IReadOnlyList<Fact> drained) =>
+        new() { Forward = false, DelayMs = 0, ShuffledDrain = drained };
+
     /// <summary>True if the router should forward the fact to the backends.</summary>
     [Id(0)] public bool Forward { get; init; }
 
     /// <summary>Artificial latency to apply before forwarding (ignored when <see cref="Forward"/> is false).</summary>
     [Id(1)] public int DelayMs { get; init; }
+
+    /// <summary>
+    /// When non-null, the router must release these facts to every
+    /// backend in the order given. Only populated on a reorder flush;
+    /// <see cref="Pass"/> / <see cref="Hold"/> / <see cref="Delayed"/>
+    /// all leave this null.
+    /// </summary>
+    [Id(2)] public IReadOnlyList<Fact>? ShuffledDrain { get; init; }
 }
 
 /// <summary>
@@ -96,4 +120,11 @@ public enum ChaosPreset
 
     /// <summary>Pauses Cincinnati MRB entirely.</summary>
     MrbWeekend,
+
+    /// <summary>
+    /// Applies a 10% transient-failure rate and 50–250 ms jitter to the
+    /// <c>lattice</c> backend only. Drives baseline-vs-lattice divergence
+    /// without touching site chaos (plan §7.2).
+    /// </summary>
+    LatticeStorageFlakes,
 }

@@ -120,6 +120,7 @@ internal static class ProtoMappings
         V1.ChaosPreset.TransoceanicBackhaulOutage => ChaosPreset.TransoceanicBackhaulOutage,
         V1.ChaosPreset.CustomsHold => ChaosPreset.CustomsHold,
         V1.ChaosPreset.MrbWeekend => ChaosPreset.MrbWeekend,
+        V1.ChaosPreset.LatticeStorageFlakes => ChaosPreset.LatticeStorageFlakes,
         _ => throw new ArgumentOutOfRangeException(nameof(preset), preset, "Unspecified preset"),
     };
 
@@ -169,6 +170,35 @@ internal static class ProtoMappings
         Config = ToProto(state.Config),
         PendingCount = state.PendingCount,
         AdmittedCount = state.AdmittedCount,
+    };
+
+    public static V1.BackendChaosConfig ToProto(BackendChaosConfig config) => new()
+    {
+        JitterMsMin = config.JitterMsMin,
+        JitterMsMax = config.JitterMsMax,
+        TransientFailureRate = config.TransientFailureRate,
+        WriteAmplificationRate = config.WriteAmplificationRate,
+    };
+
+    public static BackendChaosConfig FromProto(V1.BackendChaosConfig? config)
+    {
+        if (config is null)
+        {
+            return BackendChaosConfig.Nominal;
+        }
+        return new BackendChaosConfig
+        {
+            JitterMsMin = config.JitterMsMin,
+            JitterMsMax = config.JitterMsMax,
+            TransientFailureRate = config.TransientFailureRate,
+            WriteAmplificationRate = config.WriteAmplificationRate,
+        };
+    }
+
+    public static V1.BackendChaosState ToProto(BackendChaosState state) => new()
+    {
+        Name = state.Name,
+        Config = ToProto(state.Config),
     };
 
     /// <summary>

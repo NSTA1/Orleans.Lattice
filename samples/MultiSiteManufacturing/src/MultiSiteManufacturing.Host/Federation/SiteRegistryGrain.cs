@@ -26,35 +26,75 @@ internal sealed class SiteRegistryGrain(IGrainFactory grains) : Grain, ISiteRegi
 
     public async Task<IReadOnlyList<Fact>> ApplyPresetAsync(ChaosPreset preset)
     {
-        var target = preset switch
-        {
-            ChaosPreset.ClearAll => AllSites.Select(s => (s, SiteConfig.Nominal)).ToArray(),
-            ChaosPreset.TransoceanicBackhaulOutage =>
-            [
-                (ProcessSite.StuttgartCmmLab, new SiteConfig { IsPaused = true, DelayMs = 4_000 }),
-                (ProcessSite.ToulouseNdtLab, new SiteConfig { IsPaused = true, DelayMs = 4_000 }),
-            ],
-            ChaosPreset.CustomsHold =>
-            [
-                (ProcessSite.NagoyaHeatTreat, new SiteConfig { DelayMs = 8_000 }),
-            ],
-            ChaosPreset.MrbWeekend =>
-            [
-                (ProcessSite.CincinnatiMrb, new SiteConfig { IsPaused = true }),
-            ],
-            _ => throw new ArgumentOutOfRangeException(nameof(preset), preset, "Unknown chaos preset."),
-        };
+        (ProcessSite Site, SiteConfig Config)[] siteTargets;
+        IReadOnlyDictionary<string, BackendChaosConfig> backendTargets;
 
-        var tasks = target.Select(t => SiteGrain(t.Item1).ConfigureAsync(t.Item2)).ToArray();
-        var results = await Task.WhenAll(tasks);
+        switch (preset)
+        {
+            case ChaosPreset.ClearAll:
+                siteTargets = AllSites.Select(s => (s, SiteConfig.Nominal)).ToArray();
+                backendTargets = new Dictionary<string, BackendChaosConfig>
+                {
+                    ["baseline"] = BackendChaosConfig.Nominal,
+                    ["lattice"] = BackendChaosConfig.Nominal,
+                };
+                break;
+            case ChaosPreset.TransoceanicBackhaulOutage:
+                siteTargets =
+                [
+                    (ProcessSite.StuttgartCmmLab, new SiteConfig { IsPaused = true, DelayMs = 4_000 }),
+                    (ProcessSite.ToulouseNdtLab, new SiteConfig { IsPaused = true, DelayMs = 4_000 }),
+                ];
+                backendTargets = EmptyBackendTargets;
+                break;
+            case ChaosPreset.CustomsHold:
+                siteTargets =
+                [
+                    (ProcessSite.NagoyaHeatTreat, new SiteConfig { DelayMs = 8_000 }),
+                ];
+                backendTargets = EmptyBackendTargets;
+                break;
+            case ChaosPreset.MrbWeekend:
+                siteTargets =
+                [
+                    (ProcessSite.CincinnatiMrb, new SiteConfig { IsPaused = true }),
+                ];
+                backendTargets = EmptyBackendTargets;
+                break;
+            case ChaosPreset.LatticeStorageFlakes:
+                siteTargets = [];
+                backendTargets = new Dictionary<string, BackendChaosConfig>
+                {
+                    ["lattice"] = new BackendChaosConfig
+                    {
+                        JitterMsMin = 50,
+                        JitterMsMax = 250,
+                        TransientFailureRate = 0.10,
+                    },
+                };
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(preset), preset, "Unknown chaos preset.");
+        }
+
+        var siteTasks = siteTargets.Select(t => SiteGrain(t.Site).ConfigureAsync(t.Config)).ToArray();
+        var backendTasks = backendTargets
+            .Select(kv => grains.GetGrain<IBackendChaosGrain>(kv.Key).ConfigureAsync(kv.Value))
+            .ToArray();
+
+        var siteResults = await Task.WhenAll(siteTasks);
+        await Task.WhenAll(backendTasks);
 
         var drained = new List<Fact>();
-        foreach (var result in results)
+        foreach (var result in siteResults)
         {
             drained.AddRange(result.Drained);
         }
         return drained;
     }
+
+    private static readonly IReadOnlyDictionary<string, BackendChaosConfig> EmptyBackendTargets
+        = new Dictionary<string, BackendChaosConfig>();
 
     private IProcessSiteGrain SiteGrain(ProcessSite site) =>
         grains.GetGrain<IProcessSiteGrain>(site.ToString());

@@ -52,11 +52,42 @@ internal sealed class ProcessSiteGrain(
             return SiteAdmission.Hold;
         }
 
+        if (state.State.Config.ReorderEnabled)
+        {
+            state.State.Pending.Add(fact);
+            if (state.State.Pending.Count >= SiteConfig.ReorderWindowSize)
+            {
+                var shuffled = Shuffle(state.State.Pending);
+                state.State.Pending.Clear();
+                await state.WriteStateAsync();
+                logger.LogDebug(
+                    "Site {Site} reorder window full; flushing {Count} facts in shuffled order",
+                    this.GetPrimaryKeyString(), shuffled.Count);
+                return SiteAdmission.ReorderFlush(shuffled);
+            }
+            await state.WriteStateAsync();
+            return SiteAdmission.Hold;
+        }
+
         // Only the counter changed; still persist so restart surfaces it.
         await state.WriteStateAsync();
 
         var delay = state.State.Config.DelayMs;
         return delay > 0 ? SiteAdmission.Delayed(delay) : SiteAdmission.Pass;
+    }
+
+    private static IReadOnlyList<Fact> Shuffle(IReadOnlyList<Fact> source)
+    {
+        var buffer = source.ToArray();
+        // Fisher–Yates with Random.Shared; deterministic order is not required —
+        // the sample only needs the arrival order to differ from the emission order
+        // so the baseline backend can demonstrably diverge from the HLC-ordered lattice.
+        for (var i = buffer.Length - 1; i > 0; i--)
+        {
+            var j = Random.Shared.Next(i + 1);
+            (buffer[i], buffer[j]) = (buffer[j], buffer[i]);
+        }
+        return buffer;
     }
 
     private SiteState Snapshot()

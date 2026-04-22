@@ -1,8 +1,8 @@
 # MultiSiteManufacturing Sample — Plan
 
-> Status: **M1–M6 complete** (committed on `feature/sample-manufacturing`,
-> 54/54 tests green). **Executing new M7 — backend chaos shim + reorder
-> buffer.** All §12 review items resolved below.
+> Status: **M1–M7 complete** (committed on `feature/sample-manufacturing`,
+> 73/73 tests green). **Executing M8 — Blazor Server shell + read-only
+> dashboard.** All §12 review items resolved below.
 
 
 ## 1. Goals
@@ -533,7 +533,7 @@ All §12 open questions are resolved. Answers recorded here verbatim:
 | M4 | `IProcessSiteGrain` + `ISiteRegistryGrain` + router integration + grain tests | ✅ done |
 | M5 | gRPC contracts (proto) + service implementations + contract tests via in-proc channel | ✅ done |
 | M6 | Bulk-load seeder + `IInventorySeedStateGrain` + idempotency test + deterministic seed | ✅ done |
-| **M7** | **Fault-injection infrastructure (§4.3):** `ChaosFactBackend : IFactBackend` decorator + `IBackendChaosGrain` (jitter, transient fault rate, write amplification) + wire reorder buffer in `ProcessSiteGrain` (Tier 3) + `ListBackends` / `ConfigureBackend` RPCs on `SiteControlService` + "Lattice storage flakes" preset + domain tests for all three tiers | 0.5 day |
+| **M7** | **Fault-injection infrastructure (§4.3):** `ChaosFactBackend : IFactBackend` decorator + `IBackendChaosGrain` (jitter, transient fault rate, write amplification) + wire reorder buffer in `ProcessSiteGrain` (Tier 3) + `ListBackends` / `ConfigureBackend` RPCs on `SiteControlService` + "Lattice storage flakes" preset + domain tests for all three tiers | ✅ done |
 | M8 | Blazor Server shell + main dashboard (read-only) wired to real-time channels | 1 day |
 | M9 | Operator action forms (new part, record inspection, raise NCR, MRB disposition, rework complete, FAI sign-off) | 1 day |
 | M10 | Chaos fly-out (two-section: site controls + backend storage chaos) with canned presets + active-chaos banner | 0.5 day |
@@ -548,8 +548,7 @@ milestone boundary (at minimum between M1 → M2, M6 → M7, and M7 → M8).
 
 ## 14. Sign-off
 
-All review items resolved — see §12. **M1–M6 executed and committed on
-`feature/sample-manufacturing` (54/54 tests green).** Execution of the
-new **M7 (backend chaos shim + reorder buffer)** is underway; Blazor
-work (formerly M7) is re-sequenced to M8 so the chaos fly-out lands on
-top of a complete fault-injection surface.
+All review items resolved — see §12. **M1–M7 executed and committed on
+`feature/sample-manufacturing` (73/73 tests green).** Execution of
+**M8 (Blazor Server shell + read-only dashboard)** is underway; the
+chaos fly-out now lands on a complete fault-injection surface.

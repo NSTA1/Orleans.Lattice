@@ -74,4 +74,43 @@ public sealed class SiteControlServiceImpl(FederationRouter router)
         }
         return result;
     }
+
+    /// <inheritdoc />
+    public override async Task<V1.ListBackendsResponse> ListBackends(Empty request, ServerCallContext context)
+    {
+        var backends = await router.ListBackendChaosAsync();
+        var response = new V1.ListBackendsResponse();
+        foreach (var state in backends)
+        {
+            response.Backends.Add(ProtoMappings.ToProto(state));
+        }
+        return response;
+    }
+
+    /// <inheritdoc />
+    public override async Task<V1.BackendChaosState> ConfigureBackend(
+        V1.ConfigureBackendRequest request,
+        ServerCallContext context)
+    {
+        if (string.IsNullOrWhiteSpace(request.Name))
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Backend name is required."));
+        }
+
+        try
+        {
+            var state = await router.ConfigureBackendChaosAsync(
+                request.Name,
+                ProtoMappings.FromProto(request.Config));
+            return ProtoMappings.ToProto(state);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new RpcException(new Status(StatusCode.NotFound, ex.Message));
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+    }
 }

@@ -55,12 +55,20 @@ builder.Services.AddGrpc();
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
-// Federation: one concrete backend per name, both exposed as IFactBackend
-// so FederationRouter receives them via the IEnumerable<IFactBackend> ctor.
+// Federation: one concrete backend per name, each wrapped in a
+// ChaosFactBackend decorator so IBackendChaosGrain (plan §4.3 Tier 2)
+// can inject jitter, transient failures, and write amplification. The
+// router consumes IEnumerable<IFactBackend> and sees only the decorated
+// instances; the undecorated singletons remain available for code that
+// needs a direct reference (e.g. future diagnostic endpoints).
 builder.Services.AddSingleton<BaselineFactBackend>();
 builder.Services.AddSingleton<LatticeFactBackend>();
-builder.Services.AddSingleton<IFactBackend>(sp => sp.GetRequiredService<BaselineFactBackend>());
-builder.Services.AddSingleton<IFactBackend>(sp => sp.GetRequiredService<LatticeFactBackend>());
+builder.Services.AddSingleton<IFactBackend>(sp => new ChaosFactBackend(
+    sp.GetRequiredService<BaselineFactBackend>(),
+    sp.GetRequiredService<IGrainFactory>()));
+builder.Services.AddSingleton<IFactBackend>(sp => new ChaosFactBackend(
+    sp.GetRequiredService<LatticeFactBackend>(),
+    sp.GetRequiredService<IGrainFactory>()));
 builder.Services.AddSingleton<FederationRouter>();
 
 // Bulk-load seeder: populates ~50 parts against an empty storage account,
