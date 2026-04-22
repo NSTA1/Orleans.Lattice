@@ -1,7 +1,8 @@
 # MultiSiteManufacturing Sample — Plan
 
-> Status: **M1–M10 complete** (committed on `feature/sample-manufacturing`,
-> 92/92 tests green). **Executing M11 — divergence feed.**
+> Status: **M1–M11 complete** (committed on `feature/sample-manufacturing`,
+> 97/97 tests green). **Next: M12 — docs (README, glossary, architecture,
+> Azurite setup, screenshots).**
 > All §12 review items resolved below.
 
 ## 1. Goals
@@ -60,8 +61,7 @@ Nominal  <  UnderInspection  <  FlaggedForReview  <  Rework  <  Scrap
 
 Totally ordered for the fold. `Scrap` is terminal (no further dispositions
 accepted). `UseAsIs` is modelled as an explicit `MRBDisposition` fact that
-demotes `FlaggedForReview` back to `Nominal` — mirroring the Olympics
-sample's "appeal overturned" mechanic.
+demotes `FlaggedForReview` back to `Nominal`
 
 ### 3.2 Identifiers
 
@@ -114,8 +114,6 @@ Max of:
 - `ReworkCompleted(retestPassed=true)` → stays `Rework` until explicit re-NDT `Pass` + fresh MRB `UseAsIs`
 - `FinalAcceptance` → `Nominal` only if no outstanding `FlaggedForReview`/`Rework`/`Scrap`
 
-Same shape as `FactFolding.cs` in the Olympics sample — deterministic
-across delivery orders.
 
 ## 4. Architecture
 
@@ -182,8 +180,7 @@ Tables used:
 
 ### 4.2 Chaos state as Orleans grains (decision 10)
 
-Site chaos configuration is **not** held in `FederationRouter` memory
-(as it was in the Olympics sample). Instead:
+
 
 - `IProcessSiteGrain` — one grain per `ProcessSite` enum value, keyed by
   the site name. Persists `IsPaused`, `DelayMs`, `ReorderEnabled`,
@@ -450,7 +447,7 @@ asked for.
 | Layer | Framework | What's covered |
 |---|---|---|
 | Domain fold | NUnit | Every fact kind, every severity transition, `MRBDisposition(UseAsIs)` demotion, idempotency under duplicate facts |
-| Backends | NUnit + TestCluster | Baseline LWW vs. Lattice divergence under reorder (reuse of Olympics test strategy) |
+| Backends | NUnit + TestCluster | Baseline LWW vs. Lattice divergence under reorder |
 | Site grain | NUnit + TestCluster | `IProcessSiteGrain` persistence, pause/resume semantics, preset fan-out |
 | Seeder | NUnit | Idempotency (runs twice → same counts), spread correctness (every state bucket populated) |
 | gRPC contracts | NUnit + `Grpc.Net.Client` in-proc channel | Request/response shape, error codes, stream completion on cancel |
@@ -462,73 +459,17 @@ from the iterative dev filter.
 Test cluster uses Orleans in-memory storage (no Azurite dependency in
 the test suite — keeps CI fast and hermetic).
 
-## 10. Migration from Olympics
 
-**Hard replacement** (decision confirmed):
-- Delete `samples/OlympicsFederation/` entirely (M1 step 2).
-- Update root `README.md` samples table to list
-  `samples/MultiSiteManufacturing` (M1 step 3).
-- `.github/copilot-instructions.md` and related docs are domain-agnostic;
-  verify no stale references after the delete.
 
-What survives the move (copy-forward with renames / minor tidying):
-- `FederationRouter` (rename `SourceCluster` → `ProcessSite`, extract
-  chaos state into `IProcessSiteGrain`).
-- `HybridLogicalClock` usage, retry-on-`EnumerationAbortedException`
-  pattern in the fact store.
-- Fan-out `IFactBackend` contract.
-- Baseline-vs-lattice divergence detection (becomes the divergence feed).
 
-What gets discarded:
-- The scripted-scenario loop (`ScenarioLoop`, `ScriptedScenario`) —
-  replaced by bulk-load + operator actions. No scripted divergence saga
-  in v1 (decision 7).
-- The plain HTML/JS dashboard — replaced wholesale by Blazor Server.
-- The live-config endpoint — no longer needed.
-
-## 11. (reserved — was "Migration")
-
-Numbering preserved for cross-reference stability; migration content
-merged into §10.
-
-## 12. Decisions from review
-
-All §12 open questions are resolved. Answers recorded here verbatim:
-
-1. **Single host vs. split silo/web processes?** → **Single host.**
-   One ASP.NET Core process hosts silo + Blazor + gRPC.
-2. **gRPC reflection / gRPC-UI?** → **Overkill — don't add.**
-3. **Authentication / operator identity?** → **No authentication.**
-   Dashboard shows a static "operator: demo" label.
-4. **Persistence?** → **Azure Table Storage** (Azurite for dev),
-   inspected via **Azure Storage Explorer**. Both Orleans grain state
-   and Orleans.Lattice fact store back onto Table Storage.
-5. **CLI tool?** → **No CLI.**
-6. **Per-part grain vs. per-site grain?** → **Per-part grain**
-   (`IPartGrain`) for operator-facing state. Per-site state lives in
-   `IProcessSiteGrain` (see decision 10).
-7. **Scripted divergence scenario?** → **No divergence scenario for
-   now.** Divergence emerges organically from chaos-induced reorder;
-   there is no "trigger divergence" button in v1.
-8. **Blazor WebAssembly vs. Server?** → **Blazor Server.**
-9. **Use `Grpc.AspNetCore.Web`?** → **Skip.**
-10. **Chaos fly-out persistence?** → **Maintain with dedicated grain(s)** —
-    `IProcessSiteGrain` per site plus an `ISiteRegistryGrain` singleton,
-    both persisted to Azure Table Storage. Chaos state survives process
-    restart.
-11. **How many process sites to model?** → **Seven**, with readable
-    display names (see §3.2 table). The reviewer flagged that opaque
-    codes like `CMM-DE` are unhelpful; every UI surface uses the full
-    display name (e.g. "Stuttgart CMM Lab").
-
-## 13. Milestones
+## 10. Milestones
 
 | # | Deliverable | Rough effort |
 |---:|---|---|
 | M0 | Plan reviewed + accepted | ✅ done |
-| M1 | Repo restructure: delete Olympics, scaffold new dir tree, solution/csproj setup, Azurite+Table Storage wired in `Program.cs`, build green on empty projects | ✅ done |
-| M2 | Domain + fold + NUnit fold tests (port from Olympics) | ✅ done |
-| M3 | Baseline + Lattice backends + `IFactBackend` + fan-out router, reusing Olympics plumbing with renames | ✅ done |
+| M1 | Repo restructure: scaffold new dir tree, solution/csproj setup, Azurite+Table Storage wired in `Program.cs`, build green on empty projects | ✅ done |
+| M2 | Domain + fold + NUnit fold tests | ✅ done |
+| M3 | Baseline + Lattice backends + `IFactBackend` + fan-out router | ✅ done |
 | M4 | `IProcessSiteGrain` + `ISiteRegistryGrain` + router integration + grain tests | ✅ done |
 | M5 | gRPC contracts (proto) + service implementations + contract tests via in-proc channel | ✅ done |
 | M6 | Bulk-load seeder + `IInventorySeedStateGrain` + idempotency test + deterministic seed | ✅ done |
@@ -536,7 +477,7 @@ All §12 open questions are resolved. Answers recorded here verbatim:
 | **M8** | **Blazor Server shell + main dashboard (read-only) wired to real-time channels:** `FederationRouter.FactRouted` / `ChaosConfigChanged` events + `DashboardBroadcaster` (`IHostedService` + per-subscriber `Channel<T>`) + Pico.css v2 via jsDelivr CDN (no project files) + `MainLayout` / `Dashboard` page / `InventoryGrid` / `DivergencePanel` / `ChaosBanner` + 5 broadcaster tests | ✅ done |
 | M9 | **Operator action forms:** `OperatorClock` (monotonic HLC singleton) + `OperatorActions` facade (6 fact-kind methods) + `NewPartDialog` + "+ New part" button on Dashboard + clickable serials in `InventoryGrid` + `/parts/{serial}` detail page with fact trail & 5 action forms (process step, inspection, NCR, MRB, rework, FAI) + 9 `OperatorActionsTests` | ✅ done |
 | **M10** | **Chaos fly-out** (two-section: site controls + backend storage chaos) with canned presets + active-chaos banner — `ChaosFlyout.razor` (slide-in side panel wired to `FederationRouter` + `DashboardBroadcaster`), `ChaosPresetInfo` (display name + description metadata), `MainLayout.razor` toggle + slide-in CSS, 5 `ChaosPresetInfoTests` | ✅ done |
-| M11 | Divergence feed (organic, from chaos-induced reorder + backend fault rate) wired into dashboard + `WatchDivergence` gRPC stream | 0.5 day |
+| M11 | Divergence feed (organic, from chaos-induced reorder + backend fault rate) wired into dashboard + `WatchDivergence` gRPC stream | ✅ done |
 | M12 | README, glossary, architecture doc, Azurite setup instructions, screenshots | 0.5 day |
 | M13 | Test pass, polish, Chaos-category stress test | 0.5 day |
 
@@ -549,8 +490,10 @@ milestone boundary (at minimum between M1 → M2, M6 → M7, and M7 → M8).
 
 ## 14. Sign-off
 
-All review items resolved — see §12. **M1–M10 executed and committed on
-`feature/sample-manufacturing` (92/92 tests green).** Execution of
-**M11 (divergence feed)** is next; the chaos fly-out now lets operators
-drive every Tier-1 / Tier-2 / Tier-3 knob live, and the banner surfaces
-active chaos on the dashboard so no engaged knob goes unnoticed.
+All review items resolved — see §12. **M1–M11 executed and committed on
+`feature/sample-manufacturing` (97/97 tests green).** Execution of
+**M12 (docs & screenshots)** is next; the divergence feed is now
+push-based — `ComplianceService.WatchDivergence` forwards a live
+`DivergenceEvent` stream backed by `DashboardBroadcaster`, with
+`Resolved` transitions emitted when backends reconverge so subscribers
+can drop stale rows.

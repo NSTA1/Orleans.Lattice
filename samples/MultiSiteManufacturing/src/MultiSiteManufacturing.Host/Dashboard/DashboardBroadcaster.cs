@@ -29,6 +29,13 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
     private readonly ILogger<DashboardBroadcaster> _logger;
     private readonly ConcurrentDictionary<Guid, Channel<PartSummaryUpdate>> _partSubs = new();
     private readonly ConcurrentDictionary<Guid, Channel<ChaosOverview>> _chaosSubs = new();
+    private readonly ConcurrentDictionary<Guid, Channel<DivergenceEvent>> _divSubs = new();
+
+    // Remembers the last-published (baseline, lattice) state per part so
+    // PublishPartAsync can decide whether a fresh summary should also
+    // raise a DivergenceEvent. Concurrent access is fine — the fan-out
+    // is serialised per fact inside PublishPartAsync.
+    private readonly ConcurrentDictionary<PartSerialNumber, (ComplianceState Baseline, ComplianceState Lattice)> _lastStates = new();
 
     /// <summary>Creates the broadcaster (DI ctor).</summary>
     public DashboardBroadcaster(FederationRouter router, ILogger<DashboardBroadcaster> logger)
@@ -76,6 +83,32 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
         var sites = await _router.ListSitesAsync();
         var backends = await _router.ListBackendChaosAsync();
         return BuildOverview(sites, backends);
+    }
+
+    /// <summary>
+    /// Returns every part currently in a divergent state — baseline
+    /// disagrees with lattice. Used by the <c>WatchDivergence</c> gRPC
+    /// stream to seed its initial snapshot before switching to the live
+    /// subscription.
+    /// </summary>
+    public async Task<IReadOnlyList<DivergenceEvent>> GetInitialDivergenceAsync(CancellationToken cancellationToken = default)
+    {
+        var initial = await GetInitialPartsAsync(cancellationToken);
+        var results = new List<DivergenceEvent>();
+        foreach (var part in initial)
+        {
+            if (part.Diverges)
+            {
+                results.Add(new DivergenceEvent
+                {
+                    Serial = part.Serial,
+                    BaselineState = part.BaselineState,
+                    LatticeState = part.LatticeState,
+                    Resolved = false,
+                });
+            }
+        }
+        return results;
     }
 
     /// <summary>
@@ -132,6 +165,36 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Live feed of divergence events. Yields a new <see cref="DivergenceEvent"/>
+    /// whenever a part's baseline/lattice agreement changes — enters
+    /// divergence, stays divergent with a new state pair, or resolves
+    /// (<see cref="DivergenceEvent.Resolved"/> is <c>true</c>).
+    /// </summary>
+    public async IAsyncEnumerable<DivergenceEvent> SubscribeDivergence(
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var id = Guid.NewGuid();
+        var channel = Channel.CreateUnbounded<DivergenceEvent>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false,
+        });
+        _divSubs[id] = channel;
+        try
+        {
+            await foreach (var update in channel.Reader.ReadAllAsync(cancellationToken))
+            {
+                yield return update;
+            }
+        }
+        finally
+        {
+            _divSubs.TryRemove(id, out _);
+            channel.Writer.TryComplete();
+        }
+    }
+
     /// <inheritdoc />
     public ValueTask DisposeAsync()
     {
@@ -143,8 +206,14 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
         {
             sub.Writer.TryComplete();
         }
+        foreach (var sub in _divSubs.Values)
+        {
+            sub.Writer.TryComplete();
+        }
         _partSubs.Clear();
         _chaosSubs.Clear();
+        _divSubs.Clear();
+        _lastStates.Clear();
         return ValueTask.CompletedTask;
     }
 
@@ -160,6 +229,54 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
             foreach (var sub in _partSubs.Values)
             {
                 sub.Writer.TryWrite(update);
+            }
+
+            // Derive a divergence transition, if any, and fan that out on
+            // the divergence channel. We publish on:
+            //   - entry into divergence (previous absent or agreed; now disagrees)
+            //   - state change while still divergent (both backends' states
+            //     have shifted but they still disagree)
+            //   - resolution (previously disagreed; now agrees)
+            var newStates = (update.BaselineState, update.LatticeState);
+            _lastStates.TryGetValue(update.Serial, out var oldStates);
+            _lastStates[update.Serial] = newStates;
+
+            var nowDiverges = update.Diverges;
+            var wasDiverging = oldStates != default && oldStates.Baseline != oldStates.Lattice;
+
+            if (!nowDiverges && !wasDiverging)
+            {
+                return;
+            }
+
+            DivergenceEvent? evt = null;
+            if (nowDiverges && (!wasDiverging || oldStates != newStates))
+            {
+                evt = new DivergenceEvent
+                {
+                    Serial = update.Serial,
+                    BaselineState = update.BaselineState,
+                    LatticeState = update.LatticeState,
+                    Resolved = false,
+                };
+            }
+            else if (!nowDiverges && wasDiverging)
+            {
+                evt = new DivergenceEvent
+                {
+                    Serial = update.Serial,
+                    BaselineState = update.BaselineState,
+                    LatticeState = update.LatticeState,
+                    Resolved = true,
+                };
+            }
+
+            if (evt is not null)
+            {
+                foreach (var sub in _divSubs.Values)
+                {
+                    sub.Writer.TryWrite(evt);
+                }
             }
         }
         catch (Exception ex)

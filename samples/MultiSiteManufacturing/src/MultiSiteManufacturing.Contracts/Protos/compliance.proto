@@ -27,4 +27,8 @@ message DivergenceReport {
   string serial = 1;
   ComplianceState baseline_state = 2;
   ComplianceState lattice_state = 3;
+  // True when the two backends previously disagreed but have now
+  // converged — lets subscribers drop a row from their divergence
+  // feed instead of re-rendering a "resolved" state.
+  bool resolved = 4;
 }

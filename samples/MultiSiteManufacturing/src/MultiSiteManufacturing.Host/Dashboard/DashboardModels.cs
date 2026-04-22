@@ -56,3 +56,28 @@ public sealed record ChaosOverview
         || ReorderingSites > 0
         || FlakyBackends.Count > 0;
 }
+
+/// <summary>
+/// One row of the divergence feed — pushed whenever a part's
+/// baseline-vs-lattice agreement status flips (enters divergence, stays
+/// divergent with new states, or resolves).
+/// </summary>
+public sealed record DivergenceEvent
+{
+    /// <summary>Part the event is reporting on.</summary>
+    public required PartSerialNumber Serial { get; init; }
+
+    /// <summary>Compliance state as computed by the baseline backend.</summary>
+    public required ComplianceState BaselineState { get; init; }
+
+    /// <summary>Compliance state as computed by the lattice backend.</summary>
+    public required ComplianceState LatticeState { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when the two backends used to disagree on this part
+    /// but have now converged (<see cref="BaselineState"/> equals
+    /// <see cref="LatticeState"/>). Subscribers can drop the row instead
+    /// of re-rendering it.
+    /// </summary>
+    public required bool Resolved { get; init; }
+}

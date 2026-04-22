@@ -1,5 +1,6 @@
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
+using MultiSiteManufacturing.Host.Dashboard;
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
 using V1 = MultiSiteManufacturing.Contracts.V1;
@@ -12,11 +13,11 @@ namespace MultiSiteManufacturing.Host.Grpc;
 /// surfaces per-part divergence.
 /// </summary>
 /// <remarks>
-/// <c>WatchDivergence</c> currently emits the current divergence set once
-/// then awaits cancellation. Live push lands in M10 alongside the
-/// divergence feed component.
+/// <c>WatchDivergence</c> emits an initial snapshot of every currently
+/// divergent part, then forwards <see cref="DivergenceEvent"/>s pushed by
+/// <see cref="DashboardBroadcaster"/> until the caller cancels.
 /// </remarks>
-public sealed class ComplianceServiceImpl(FederationRouter router)
+public sealed class ComplianceServiceImpl(FederationRouter router, DashboardBroadcaster broadcaster)
     : V1.ComplianceService.ComplianceServiceBase
 {
     private const string BaselineBackendName = "baseline";
@@ -49,32 +50,29 @@ public sealed class ComplianceServiceImpl(FederationRouter router)
         IServerStreamWriter<V1.DivergenceReport> responseStream,
         ServerCallContext context)
     {
-        var baseline = router.GetBackend(BaselineBackendName);
-        var lattice = router.GetBackend(LatticeBackendName);
-
-        var parts = await lattice.ListPartsAsync(context.CancellationToken);
-        foreach (var serial in parts)
+        var initial = await broadcaster.GetInitialDivergenceAsync(context.CancellationToken);
+        foreach (var evt in initial)
         {
-            var baselineState = await baseline.GetStateAsync(serial, context.CancellationToken);
-            var latticeState = await lattice.GetStateAsync(serial, context.CancellationToken);
-            if (baselineState == latticeState)
-            {
-                continue;
-            }
-            await responseStream.WriteAsync(new V1.DivergenceReport
-            {
-                Serial = serial.Value,
-                BaselineState = ProtoMappings.ToProto(baselineState),
-                LatticeState = ProtoMappings.ToProto(latticeState),
-            }, context.CancellationToken);
+            await responseStream.WriteAsync(ToProto(evt), context.CancellationToken);
         }
 
         try
         {
-            await Task.Delay(Timeout.Infinite, context.CancellationToken);
+            await foreach (var evt in broadcaster.SubscribeDivergence(context.CancellationToken))
+            {
+                await responseStream.WriteAsync(ToProto(evt), context.CancellationToken);
+            }
         }
         catch (OperationCanceledException)
         {
         }
     }
+
+    private static V1.DivergenceReport ToProto(DivergenceEvent evt) => new()
+    {
+        Serial = evt.Serial.Value,
+        BaselineState = ProtoMappings.ToProto(evt.BaselineState),
+        LatticeState = ProtoMappings.ToProto(evt.LatticeState),
+        Resolved = evt.Resolved,
+    };
 }
