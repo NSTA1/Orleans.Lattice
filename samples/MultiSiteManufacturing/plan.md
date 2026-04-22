@@ -1,8 +1,9 @@
 # MultiSiteManufacturing Sample — Plan
 
-> Status: **APPROVED — executing M1**. All §12 review items resolved below.
-> This document supersedes the Olympics Federation sample, which is being
-> deleted as part of M1 (hard replacement).
+> Status: **M1–M6 complete** (committed on `feature/sample-manufacturing`,
+> 54/54 tests green). **Executing new M7 — backend chaos shim + reorder
+> buffer.** All §12 review items resolved below.
+
 
 ## 1. Goals
 
@@ -197,6 +198,27 @@ fact. This moves chaos state from "ephemeral process memory" to
 "durable, inspectable, survives restart" — which matches how a real MES
 would persist site availability flags.
 
+### 4.3 Fault-injection tiers
+
+Fault injection is layered deliberately so that each tier models a
+distinct class of real-world failure and can be exercised independently
+from the UI and from tests.
+
+| Tier | Where | Models | Controls | Status |
+|---:|---|---|---|---|
+| 1 | `IProcessSiteGrain.AdmitAsync` (origin site) | Site unavailable, WAN latency, out-of-order delivery from a region | `IsPaused`, `DelayMs`, `ReorderEnabled` | Pause + delay built in M4; **reorder buffer lands in M7** |
+| 2 | `ChaosFactBackend : IFactBackend` decorator (per backend) | Transient storage failure, per-call jitter, duplicate writes; applied to one backend only to create baseline-vs-lattice divergence | `JitterMsMin`, `JitterMsMax`, `TransientFailureRate`, `WriteAmplificationRate` on `IBackendChaosGrain` keyed by backend name (`"baseline"`, `"lattice"`) | **New in M7** |
+| 3 | Reorder buffer inside `ProcessSiteGrain` | Cross-site out-of-order arrival after a regional pause lifts | `ReorderEnabled` flag (already on `SiteConfig`, currently unwired) | **Wired in M7** |
+
+Storage-provider-level chaos (wrapping the `TableServiceClient` itself)
+is explicitly **out of scope** — Tier 2 exercises the same failure modes
+at a cleaner seam without coupling tests to the Azure SDK.
+
+The decorator composes around the inner backend inside the
+`FederationRouter` fan-out so the router remains oblivious; Tier 2 is
+opt-in and suppressed under the `Testing` environment (same pattern as
+the seeder) so contract tests remain deterministic.
+
 ## 5. Project layout
 
 ```
@@ -269,15 +291,20 @@ rpc EmitFactStream (stream FactEnvelope)  returns (EmitSummary);          // bul
 ### 6.3 `SiteControlService`
 
 ```proto
-rpc ListSites      (google.protobuf.Empty)   returns (ListSitesResponse);
-rpc ConfigureSite  (ConfigureSiteRequest)    returns (SiteState);         // pause / delay / reorder
-rpc WatchSites     (google.protobuf.Empty)   returns (stream SiteState);  // pending counts etc.
-rpc TriggerPreset  (TriggerPresetRequest)    returns (PresetResult);      // canned chaos presets
+rpc ListSites       (google.protobuf.Empty)   returns (ListSitesResponse);
+rpc ConfigureSite   (ConfigureSiteRequest)    returns (SiteState);           // pause / delay / reorder
+rpc WatchSites      (google.protobuf.Empty)   returns (stream SiteState);    // pending counts etc.
+rpc TriggerPreset   (TriggerPresetRequest)    returns (PresetResult);        // canned chaos presets
+rpc ListBackends    (google.protobuf.Empty)   returns (ListBackendsResponse);
+rpc ConfigureBackend(ConfigureBackendRequest) returns (BackendChaosState);   // jitter / fault rate / write-amp
 ```
 
-`ConfigureSite` is a full-state PUT (supply any subset of fields;
-omitted fields are left unchanged). Preset application fans out to the
-`IProcessSiteGrain`s via `ISiteRegistryGrain`.
+`ConfigureSite` and `ConfigureBackend` are full-state PUTs (supply any
+subset of fields; omitted fields are left unchanged). `ListBackends`
+returns the current `BackendChaosState` for each registered backend
+(`"baseline"` and `"lattice"`). Preset application fans out to the
+`IProcessSiteGrain`s via `ISiteRegistryGrain` and (for backend-targeted
+presets) to the per-backend `IBackendChaosGrain` instances.
 
 ### 6.4 `ComplianceService`
 
@@ -319,20 +346,28 @@ browser re-renders the current state from grain storage. The fly-out
 open/closed bit is UI-local.
 
 Sections inside the fly-out:
-1. **Per-site controls** — table of the seven sites (by display name)
-   with Paused / Delay / Reorder / Pending / Forwarded, each row
-   editable live with explicit labels.
-2. **Canned presets** — single-click buttons that configure multiple
-   sites at once:
+1. **Per-site controls** (Tier 1 + 3) — table of the seven sites (by
+   display name) with Paused / Delay / Reorder / Pending / Forwarded,
+   each row editable live with explicit labels.
+2. **Backend storage chaos** (Tier 2) — one row per backend (`baseline`,
+   `lattice`) with sliders for Jitter min/max, Transient fault rate,
+   and Write amplification rate. Applying fault rate to only one
+   backend is the canonical way to surface baseline-vs-lattice
+   divergence without a scripted saga.
+3. **Canned presets** — single-click buttons that configure multiple
+   knobs at once:
    - *Transoceanic backhaul outage*: pauses Stuttgart CMM Lab +
      Toulouse NDT Lab, delay 4 s.
    - *Customs hold*: delays Nagoya Heat Treatment by 8 s.
    - *MRB weekend*: pauses Cincinnati MRB entirely.
-   - *Clear all*: resets every site to nominal (0 delay, unpaused).
-3. **Active chaos summary** — a prominent banner at the top of the
-   dashboard (outside the fly-out) showing "⚠ 2 sites paused, 1 delayed"
-   so the operator can never leave the fly-out open, forget about it, and
-   be confused by downstream effects.
+   - *Lattice storage flakes*: applies a 10 % transient fault rate and
+     50–250 ms jitter to the **lattice** backend only — drives the
+     divergence feed organically.
+   - *Clear all*: resets every site and every backend to nominal.
+4. **Active chaos summary** — a prominent banner at the top of the
+   dashboard (outside the fly-out) showing "⚠ 2 sites paused, 1 delayed,
+   lattice backend flaky" so the operator can never leave the fly-out
+   open, forget about it, and be confused by downstream effects.
 
 Clear labelling rule: every chaos control has an explicit plain-English
 description ("Simulate 4-second latency at Toulouse NDT Lab" — not
@@ -366,12 +401,18 @@ across a spread of lifecycle states:
 |---:|---|---|
 | 10 | `Nominal` | Forge only |
 | 8  | `Nominal` | HeatTreat complete |
-| 8  | `Nominal` | Machining complete, CMM pass |
-| 6  | `UnderInspection` | NDT in progress |
+| 14 | `Nominal` | Machining complete, CMM pass *(absorbs the original `UnderInspection` bucket — see note)* |
 | 6  | `FlaggedForReview` | NDT raised minor NC |
 | 5  | `Rework` | MRB dispositioned rework |
 | 4  | `Nominal` | FAI signed off (fully complete) |
 | 3  | `Scrap` | Critical NC |
+
+> **Seed-shape deviation (M6):** the original plan reserved 6 parts for
+> `UnderInspection`, but the fact grammar has no `InspectionStarted`
+> transition — `UnderInspection` is not reachable by folding any fact
+> sequence in v1. Those 6 parts were folded into the Machining+CMM pass
+> bucket so the total remains 50. The deviation is also documented in
+> `InventorySeeder` XML comments.
 
 Serial numbers are deterministic (`HPT-BLD-S1-2028-00001` … `-00050`) so
 running the sample always produces the same seeded inventory for demos.
@@ -486,24 +527,29 @@ All §12 open questions are resolved. Answers recorded here verbatim:
 | # | Deliverable | Rough effort |
 |---:|---|---|
 | M0 | Plan reviewed + accepted | ✅ done |
-| M1 | Repo restructure: delete Olympics, scaffold new dir tree, solution/csproj setup, Azurite+Table Storage wired in `Program.cs`, build green on empty projects | 0.5 day |
-| M2 | Domain + fold + NUnit fold tests (port from Olympics) | 0.5 day |
-| M3 | Baseline + Lattice backends + `IFactBackend` + fan-out router, reusing Olympics plumbing with renames | 0.5 day |
-| M4 | `IProcessSiteGrain` + `ISiteRegistryGrain` + router integration + grain tests | 0.5 day |
-| M5 | gRPC contracts (proto) + service implementations + contract tests via in-proc channel | 1 day |
-| M6 | Bulk-load seeder + `IInventorySeedStateGrain` + idempotency test + deterministic seed | 0.5 day |
-| M7 | Blazor Server shell + main dashboard (read-only) wired to real-time channels | 1 day |
-| M8 | Operator action forms (new part, record inspection, raise NCR, MRB disposition, rework complete, FAI sign-off) | 1 day |
-| M9 | Chaos fly-out with live site controls + canned presets + active-chaos banner | 0.5 day |
-| M10 | Divergence feed (organic, from chaos-induced reorder) wired into dashboard + `WatchDivergence` gRPC stream | 0.5 day |
-| M11 | README, glossary, architecture doc, Azurite setup instructions, screenshots | 0.5 day |
-| M12 | Test pass, polish, Chaos-category stress test | 0.5 day |
+| M1 | Repo restructure: delete Olympics, scaffold new dir tree, solution/csproj setup, Azurite+Table Storage wired in `Program.cs`, build green on empty projects | ✅ done |
+| M2 | Domain + fold + NUnit fold tests (port from Olympics) | ✅ done |
+| M3 | Baseline + Lattice backends + `IFactBackend` + fan-out router, reusing Olympics plumbing with renames | ✅ done |
+| M4 | `IProcessSiteGrain` + `ISiteRegistryGrain` + router integration + grain tests | ✅ done |
+| M5 | gRPC contracts (proto) + service implementations + contract tests via in-proc channel | ✅ done |
+| M6 | Bulk-load seeder + `IInventorySeedStateGrain` + idempotency test + deterministic seed | ✅ done |
+| **M7** | **Fault-injection infrastructure (§4.3):** `ChaosFactBackend : IFactBackend` decorator + `IBackendChaosGrain` (jitter, transient fault rate, write amplification) + wire reorder buffer in `ProcessSiteGrain` (Tier 3) + `ListBackends` / `ConfigureBackend` RPCs on `SiteControlService` + "Lattice storage flakes" preset + domain tests for all three tiers | 0.5 day |
+| M8 | Blazor Server shell + main dashboard (read-only) wired to real-time channels | 1 day |
+| M9 | Operator action forms (new part, record inspection, raise NCR, MRB disposition, rework complete, FAI sign-off) | 1 day |
+| M10 | Chaos fly-out (two-section: site controls + backend storage chaos) with canned presets + active-chaos banner | 0.5 day |
+| M11 | Divergence feed (organic, from chaos-induced reorder + backend fault rate) wired into dashboard + `WatchDivergence` gRPC stream | 0.5 day |
+| M12 | README, glossary, architecture doc, Azurite setup instructions, screenshots | 0.5 day |
+| M13 | Test pass, polish, Chaos-category stress test | 0.5 day |
 
-**Total estimate: ~7 developer-days** of focused work.
+**Total estimate: ~7.5 developer-days** of focused work.
 
 **Checkpoint cadence**: pause for reviewer confirmation between each
-milestone boundary (at minimum between M1 → M2 and M6 → M7).
+milestone boundary (at minimum between M1 → M2, M6 → M7, and M7 → M8).
 
 ## 14. Sign-off
 
-All review items resolved — see §12. Execution of **M1 is underway**.
+All review items resolved — see §12. **M1–M6 executed and committed on
+`feature/sample-manufacturing` (54/54 tests green).** Execution of the
+new **M7 (backend chaos shim + reorder buffer)** is underway; Blazor
+work (formerly M7) is re-sequenced to M8 so the chaos fly-out lands on
+top of a complete fault-injection surface.
