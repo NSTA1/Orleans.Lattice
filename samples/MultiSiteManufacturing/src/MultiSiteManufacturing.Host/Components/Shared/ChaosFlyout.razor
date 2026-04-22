@@ -1,0 +1,370 @@
+@* Chaos fly-out side panel (plan §7.2). Slides in from the right when
+   the operator clicks the "☰ Chaos" button in the layout header. Three
+   sections: per-site controls, backend storage chaos, canned presets.
+   All state lives in Orleans grains (IProcessSiteGrain / IBackendChaosGrain);
+   the fly-out reads through FederationRouter and subscribes to
+   ChaosConfigChanged so it rerenders whenever anything changes anywhere. *@
+
+@implements IAsyncDisposable
+@inject FederationRouter Router
+@inject DashboardBroadcaster Broadcaster
+
+<aside class="chaos-flyout @(IsOpen ? "open" : null)" aria-hidden="@(IsOpen ? "false" : "true")">
+    <header>
+        <nav>
+            <ul>
+                <li><strong>☰ Chaos controls</strong></li>
+            </ul>
+            <ul>
+                <li>
+                    <button class="secondary" @onclick="OnClose" aria-label="Close chaos fly-out">✕</button>
+                </li>
+            </ul>
+        </nav>
+        <small>
+            All chaos state is persisted in Orleans grains (plan §4.2) and
+            survives a process restart.
+        </small>
+    </header>
+
+    <section aria-labelledby="chaos-sites-heading">
+        <h3 id="chaos-sites-heading">Per-site controls</h3>
+        <p><small>Tier 1 + Tier 3 from plan §4.3. Changes apply immediately.</small></p>
+        @if (_sites.Count == 0)
+        {
+            <p aria-busy="true">Loading sites…</p>
+        }
+        else
+        {
+            <figure>
+                <table role="grid">
+                    <thead>
+                        <tr>
+                            <th scope="col">Site</th>
+                            <th scope="col">Paused</th>
+                            <th scope="col">Delay (ms)</th>
+                            <th scope="col">Reorder</th>
+                            <th scope="col">Pending</th>
+                            <th scope="col">Forwarded</th>
+                            <th scope="col"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var state in _sites)
+                        {
+                            var edit = _siteEdits[state.Site];
+                            <tr>
+                                <th scope="row" title="@state.Site">
+                                    @ProcessSiteInfo.GetDisplayName(state.Site)
+                                </th>
+                                <td>
+                                    <input type="checkbox" @bind="edit.IsPaused"
+                                           aria-label="Pause @ProcessSiteInfo.GetDisplayName(state.Site)" />
+                                </td>
+                                <td>
+                                    <input type="number" min="0" step="500" @bind="edit.DelayMs"
+                                           aria-label="Delay for @ProcessSiteInfo.GetDisplayName(state.Site)" />
+                                </td>
+                                <td>
+                                    <input type="checkbox" @bind="edit.ReorderEnabled"
+                                           aria-label="Enable reorder buffer at @ProcessSiteInfo.GetDisplayName(state.Site)" />
+                                </td>
+                                <td>@state.PendingCount</td>
+                                <td>@state.AdmittedCount</td>
+                                <td>
+                                    <button class="outline"
+                                            disabled="@(_busy || !edit.IsDirty(state.Config))"
+                                            @onclick="() => ApplySiteAsync(state.Site)">
+                                        Apply
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </figure>
+        }
+    </section>
+
+    <section aria-labelledby="chaos-backends-heading">
+        <h3 id="chaos-backends-heading">Backend storage chaos</h3>
+        <p>
+            <small>
+                Tier 2 from plan §4.3. Apply faults to one backend only to
+                surface baseline-vs-lattice divergence organically.
+            </small>
+        </p>
+        @if (_backends.Count == 0)
+        {
+            <p aria-busy="true">Loading backends…</p>
+        }
+        else
+        {
+            foreach (var backend in _backends)
+            {
+                var edit = _backendEdits[backend.Name];
+                <article class="backend-row">
+                    <header>
+                        <strong><code>@backend.Name</code></strong>
+                        <small> backend</small>
+                    </header>
+                    <div class="grid">
+                        <label>
+                            Jitter min (ms)
+                            <input type="number" min="0" step="10" @bind="edit.JitterMsMin"
+                                   aria-label="@backend.Name jitter minimum" />
+                        </label>
+                        <label>
+                            Jitter max (ms)
+                            <input type="number" min="0" step="10" @bind="edit.JitterMsMax"
+                                   aria-label="@backend.Name jitter maximum" />
+                        </label>
+                    </div>
+                    <div class="grid">
+                        <label>
+                            Transient failure rate
+                            <input type="number" min="0" max="1" step="0.05" @bind="edit.TransientFailureRate"
+                                   aria-label="@backend.Name transient failure rate" />
+                        </label>
+                        <label>
+                            Write amplification rate
+                            <input type="number" min="0" max="1" step="0.05" @bind="edit.WriteAmplificationRate"
+                                   aria-label="@backend.Name write amplification rate" />
+                        </label>
+                    </div>
+                    <footer>
+                        <button class="outline"
+                                disabled="@(_busy || !edit.IsDirty(backend.Config))"
+                                @onclick="() => ApplyBackendAsync(backend.Name)">
+                            Apply
+                        </button>
+                    </footer>
+                </article>
+            }
+        }
+    </section>
+
+    <section aria-labelledby="chaos-presets-heading">
+        <h3 id="chaos-presets-heading">Canned presets</h3>
+        <p><small>Single-click scenarios that configure multiple knobs at once.</small></p>
+        <div class="preset-buttons">
+            @foreach (var preset in ChaosPresetInfo.All)
+            {
+                <button class="outline"
+                        disabled="@_busy"
+                        title="@ChaosPresetInfo.GetDescription(preset)"
+                        @onclick="() => TriggerPresetAsync(preset)">
+                    @ChaosPresetInfo.GetDisplayName(preset)
+                </button>
+            }
+        </div>
+        @if (_lastPresetDescription is not null)
+        {
+            <p><small><em>@_lastPresetDescription</em></small></p>
+        }
+    </section>
+
+    @if (_error is not null)
+    {
+        <p role="alert"><small style="color:var(--pico-color-red-500)">@_error</small></p>
+    }
+</aside>
+
+@if (IsOpen)
+{
+    <div class="chaos-flyout-scrim" role="presentation" @onclick="OnClose"></div>
+}
+
+@code {
+    private readonly List<SiteState> _sites = new();
+    private readonly List<BackendChaosState> _backends = new();
+    private readonly Dictionary<ProcessSite, SiteConfigEdit> _siteEdits = new();
+    private readonly Dictionary<string, BackendConfigEdit> _backendEdits = new();
+    private CancellationTokenSource? _cts;
+    private bool _busy;
+    private string? _error;
+    private string? _lastPresetDescription;
+
+    /// <summary>Whether the fly-out is visible. Owned by the parent layout.</summary>
+    [Parameter] public bool IsOpen { get; set; }
+
+    /// <summary>Fired when the user clicks the close button or scrim.</summary>
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+        _cts = new CancellationTokenSource();
+        _ = ConsumeChangesAsync(_cts.Token);
+    }
+
+    private async Task ConsumeChangesAsync(CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var _ in Broadcaster.SubscribeChaosChanges(ct))
+            {
+                await RefreshAsync();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { /* expected on dispose */ }
+    }
+
+    private async Task RefreshAsync()
+    {
+        var sites = await Router.ListSitesAsync();
+        var backends = await Router.ListBackendChaosAsync();
+
+        _sites.Clear();
+        _sites.AddRange(sites.OrderBy(s => ProcessSiteInfo.InLifecycleOrder.ToList().IndexOf(s.Site)));
+        foreach (var state in _sites)
+        {
+            // Only reset the edit buffer if the operator has not diverged
+            // from persisted state (i.e. nothing "dirty"). Otherwise the
+            // live refresh would stomp in-flight typing.
+            if (!_siteEdits.TryGetValue(state.Site, out var edit) || !edit.IsDirty(state.Config))
+            {
+                _siteEdits[state.Site] = SiteConfigEdit.From(state.Config);
+            }
+        }
+
+        _backends.Clear();
+        _backends.AddRange(backends);
+        foreach (var backend in _backends)
+        {
+            if (!_backendEdits.TryGetValue(backend.Name, out var edit) || !edit.IsDirty(backend.Config))
+            {
+                _backendEdits[backend.Name] = BackendConfigEdit.From(backend.Config);
+            }
+        }
+    }
+
+    private async Task ApplySiteAsync(ProcessSite site)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var edit = _siteEdits[site];
+            await Router.ConfigureSiteAsync(site, edit.ToConfig());
+            // Live subscription will refresh; also refresh synchronously
+            // so the Apply button disables immediately.
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ApplyBackendAsync(string name)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var edit = _backendEdits[name];
+            await Router.ConfigureBackendChaosAsync(name, edit.ToConfig());
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task TriggerPresetAsync(ChaosPreset preset)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            await Router.ApplyPresetAsync(preset);
+            _lastPresetDescription = $"Applied: {ChaosPresetInfo.GetDisplayName(preset)} — {ChaosPresetInfo.GetDescription(preset)}";
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <inheritdoc />
+    public ValueTask DisposeAsync()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    /// <summary>Edit buffer mirroring <see cref="SiteConfig"/>.</summary>
+    private sealed class SiteConfigEdit
+    {
+        public bool IsPaused { get; set; }
+        public int DelayMs { get; set; }
+        public bool ReorderEnabled { get; set; }
+
+        public static SiteConfigEdit From(SiteConfig c) => new()
+        {
+            IsPaused = c.IsPaused,
+            DelayMs = c.DelayMs,
+            ReorderEnabled = c.ReorderEnabled,
+        };
+
+        public SiteConfig ToConfig() => new()
+        {
+            IsPaused = IsPaused,
+            DelayMs = DelayMs,
+            ReorderEnabled = ReorderEnabled,
+        };
+
+        public bool IsDirty(SiteConfig current) =>
+            IsPaused != current.IsPaused
+            || DelayMs != current.DelayMs
+            || ReorderEnabled != current.ReorderEnabled;
+    }
+
+    /// <summary>Edit buffer mirroring <see cref="BackendChaosConfig"/>.</summary>
+    private sealed class BackendConfigEdit
+    {
+        public int JitterMsMin { get; set; }
+        public int JitterMsMax { get; set; }
+        public double TransientFailureRate { get; set; }
+        public double WriteAmplificationRate { get; set; }
+
+        public static BackendConfigEdit From(BackendChaosConfig c) => new()
+        {
+            JitterMsMin = c.JitterMsMin,
+            JitterMsMax = c.JitterMsMax,
+            TransientFailureRate = c.TransientFailureRate,
+            WriteAmplificationRate = c.WriteAmplificationRate,
+        };
+
+        public BackendChaosConfig ToConfig() => new()
+        {
+            JitterMsMin = JitterMsMin,
+            JitterMsMax = JitterMsMax,
+            TransientFailureRate = TransientFailureRate,
+            WriteAmplificationRate = WriteAmplificationRate,
+        };
+
+        public bool IsDirty(BackendChaosConfig current) =>
+            JitterMsMin != current.JitterMsMin
+            || JitterMsMax != current.JitterMsMax
+            || Math.Abs(TransientFailureRate - current.TransientFailureRate) > 1e-9
+            || Math.Abs(WriteAmplificationRate - current.WriteAmplificationRate) > 1e-9;
+    }
+}

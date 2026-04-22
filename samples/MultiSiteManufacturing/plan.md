@@ -1,9 +1,8 @@
 # MultiSiteManufacturing Sample — Plan
 
-> Status: **M1–M9 complete** (committed on `feature/sample-manufacturing`,
-> 87/87 tests green). **Executing M10 — chaos fly-out.**
+> Status: **M1–M10 complete** (committed on `feature/sample-manufacturing`,
+> 92/92 tests green). **Executing M11 — divergence feed.**
 > All §12 review items resolved below.
-
 
 ## 1. Goals
 
@@ -536,7 +535,7 @@ All §12 open questions are resolved. Answers recorded here verbatim:
 | **M7** | **Fault-injection infrastructure (§4.3):** `ChaosFactBackend : IFactBackend` decorator + `IBackendChaosGrain` (jitter, transient fault rate, write amplification) + wire reorder buffer in `ProcessSiteGrain` (Tier 3) + `ListBackends` / `ConfigureBackend` RPCs on `SiteControlService` + "Lattice storage flakes" preset + domain tests for all three tiers | ✅ done |
 | **M8** | **Blazor Server shell + main dashboard (read-only) wired to real-time channels:** `FederationRouter.FactRouted` / `ChaosConfigChanged` events + `DashboardBroadcaster` (`IHostedService` + per-subscriber `Channel<T>`) + Pico.css v2 via jsDelivr CDN (no project files) + `MainLayout` / `Dashboard` page / `InventoryGrid` / `DivergencePanel` / `ChaosBanner` + 5 broadcaster tests | ✅ done |
 | M9 | **Operator action forms:** `OperatorClock` (monotonic HLC singleton) + `OperatorActions` facade (6 fact-kind methods) + `NewPartDialog` + "+ New part" button on Dashboard + clickable serials in `InventoryGrid` + `/parts/{serial}` detail page with fact trail & 5 action forms (process step, inspection, NCR, MRB, rework, FAI) + 9 `OperatorActionsTests` | ✅ done |
-| M10 | Chaos fly-out (two-section: site controls + backend storage chaos) with canned presets + active-chaos banner | 0.5 day |
+| **M10** | **Chaos fly-out** (two-section: site controls + backend storage chaos) with canned presets + active-chaos banner — `ChaosFlyout.razor` (slide-in side panel wired to `FederationRouter` + `DashboardBroadcaster`), `ChaosPresetInfo` (display name + description metadata), `MainLayout.razor` toggle + slide-in CSS, 5 `ChaosPresetInfoTests` | ✅ done |
 | M11 | Divergence feed (organic, from chaos-induced reorder + backend fault rate) wired into dashboard + `WatchDivergence` gRPC stream | 0.5 day |
 | M12 | README, glossary, architecture doc, Azurite setup instructions, screenshots | 0.5 day |
 | M13 | Test pass, polish, Chaos-category stress test | 0.5 day |
@@ -550,8 +549,8 @@ milestone boundary (at minimum between M1 → M2, M6 → M7, and M7 → M8).
 
 ## 14. Sign-off
 
-All review items resolved — see §12. **M1–M9 executed and committed on
-`feature/sample-manufacturing` (87/87 tests green).** Execution of
-**M10 (chaos fly-out)** is next; operator forms now emit all six fact
-kinds through a monotonic `OperatorClock`, and live dashboard updates
-mean every action is immediately reflected in baseline vs. lattice state.
+All review items resolved — see §12. **M1–M10 executed and committed on
+`feature/sample-manufacturing` (92/92 tests green).** Execution of
+**M11 (divergence feed)** is next; the chaos fly-out now lets operators
+drive every Tier-1 / Tier-2 / Tier-3 knob live, and the banner surfaces
+active chaos on the dashboard so no engaged knob goes unnoticed.

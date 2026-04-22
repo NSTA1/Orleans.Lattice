@@ -9,7 +9,10 @@
         <ul>
             <li><small>operator: <kbd>demo</kbd></small></li>
             <li>
-                <button class="secondary" disabled title="Chaos fly-out lands in M10">
+                <button class="secondary"
+                        aria-expanded="@_chaosOpen.ToString().ToLowerInvariant()"
+                        aria-controls="chaos-flyout"
+                        @onclick="ToggleChaos">
                     ☰ Chaos
                 </button>
             </li>
@@ -21,12 +24,21 @@
     @Body
 </main>
 
+<ChaosFlyout IsOpen="_chaosOpen" OnClose="CloseChaos" />
+
 <footer class="container">
     <small>
         Orleans.Lattice sample · baseline vs lattice federation ·
         Pico.css (CDN) · Blazor Server
     </small>
 </footer>
+
+@code {
+    private bool _chaosOpen;
+
+    private void ToggleChaos() => _chaosOpen = !_chaosOpen;
+    private void CloseChaos() => _chaosOpen = false;
+}
 
 <style>
     /* State badges — intentionally tiny; a full design pass comes in M12. */
@@ -59,5 +71,46 @@
     }
     @@media (max-width: 960px) {
         .dashboard-grid { grid-template-columns: 1fr; }
+    }
+
+    /* Chaos fly-out (M10). Slides in from the right; the scrim sits
+       underneath to dim the dashboard and close on outside-click. */
+    .chaos-flyout {
+        position: fixed;
+        top: 0;
+        right: 0;
+        height: 100vh;
+        width: min(560px, 100vw);
+        background: var(--pico-background-color);
+        border-left: 1px solid var(--pico-muted-border-color);
+        box-shadow: -4px 0 16px rgba(0, 0, 0, 0.15);
+        transform: translateX(100%);
+        transition: transform 0.25s ease-in-out;
+        overflow-y: auto;
+        padding: 1rem 1.5rem;
+        z-index: 1000;
+    }
+    .chaos-flyout.open {
+        transform: translateX(0);
+    }
+    .chaos-flyout-scrim {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.35);
+        z-index: 999;
+    }
+    .chaos-flyout section {
+        margin-top: 1.5rem;
+    }
+    .chaos-flyout .backend-row {
+        padding: 0.75rem 1rem;
+    }
+    .preset-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+    .preset-buttons button {
+        flex: 1 1 auto;
     }
 </style>
