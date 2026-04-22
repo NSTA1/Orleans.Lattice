@@ -26,7 +26,7 @@ public sealed class InventorySeederTests
     public Task TearDown() => _fixture.DisposeAsync();
 
     [Test]
-    public async Task Seed_populates_exactly_fifty_parts()
+    public async Task Seed_populates_exactly_five_parts()
     {
         var (router, _, lattice) = _fixture.NewRouter();
         var seeder = new InventorySeeder(router, _fixture.GrainFactory, NullLogger<InventorySeeder>.Instance);
@@ -52,11 +52,11 @@ public sealed class InventorySeederTests
             counts[state] = counts.GetValueOrDefault(state) + 1;
         }
 
-        // 10 + 8 + 14 + 4 = 36 Nominal (forge-only, heat-treat, machining+CMM, FAI signed).
-        Assert.That(counts.GetValueOrDefault(ComplianceState.Nominal), Is.EqualTo(36));
-        Assert.That(counts.GetValueOrDefault(ComplianceState.FlaggedForReview), Is.EqualTo(6));
-        Assert.That(counts.GetValueOrDefault(ComplianceState.Rework), Is.EqualTo(5));
-        Assert.That(counts.GetValueOrDefault(ComplianceState.Scrap), Is.EqualTo(3));
+        // 2 Nominal (forge-only + FAI signed), 1 FlaggedForReview, 1 Rework, 1 Scrap.
+        Assert.That(counts.GetValueOrDefault(ComplianceState.Nominal), Is.EqualTo(2));
+        Assert.That(counts.GetValueOrDefault(ComplianceState.FlaggedForReview), Is.EqualTo(1));
+        Assert.That(counts.GetValueOrDefault(ComplianceState.Rework), Is.EqualTo(1));
+        Assert.That(counts.GetValueOrDefault(ComplianceState.Scrap), Is.EqualTo(1));
     }
 
     [Test]

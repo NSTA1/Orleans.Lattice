@@ -7,16 +7,18 @@ using Orleans.Lattice.Primitives;
 namespace MultiSiteManufacturing.Host.Inventory;
 
 /// <summary>
-/// Bulk-loads a realistic spread of parts into the federation on silo
-/// startup (plan §8). The seed is deterministic — same serial numbers,
-/// same facts, same HLCs across runs — so demos look identical every time
-/// the host starts against a fresh storage account.
+/// Bulk-loads a small, diverse spread of parts into the federation on
+/// silo startup (plan §8). The seed is deterministic — same serial
+/// numbers, same facts, same HLCs across runs — so demos look identical
+/// every time the host starts against a fresh storage account.
 /// </summary>
 /// <remarks>
 /// <para>
 /// The seeder gates on <see cref="IInventorySeedStateGrain"/>: once the
 /// flag is set against a given Azure Table Storage account, subsequent
-/// host starts no-op and preserve any operator mutations.
+/// host starts no-op and preserve any operator mutations. To force a
+/// re-seed, delete the <c>msmfgGrainState</c> and <c>msmfgLatticeFacts*</c>
+/// tables from Azurite (or the target storage account).
 /// </para>
 /// <para>
 /// Before emitting, the seeder snapshots every site's chaos configuration
@@ -25,12 +27,11 @@ namespace MultiSiteManufacturing.Host.Inventory;
 /// interfere with seed determinism.
 /// </para>
 /// <para>
-/// The plan §8.1 shape calls for 6 parts in <c>UnderInspection</c>, but
-/// the current fact grammar has no transition to that state (there is no
-/// <c>InspectionStarted</c> fact). Those 6 slots are currently folded
-/// into the <c>Machining complete, CMM pass</c> bucket so the seed still
-/// produces 50 parts and exercises every reachable state. If/when an
-/// inspection-in-progress fact is added, this balance can shift back.
+/// The seed produces 5 parts — one per reachable <see cref="ComplianceState"/>
+/// terminal / representative state — chosen to keep the demo inventory
+/// small and readable while still exercising every fold transition the UI
+/// needs to render (Nominal early, Nominal complete, FlaggedForReview,
+/// Rework, Scrap).
 /// </para>
 /// </remarks>
 public sealed class InventorySeeder(
@@ -42,7 +43,7 @@ public sealed class InventorySeeder(
     private const int SeedYear = 2028;
 
     /// <summary>Total number of parts the seeder produces against an empty store.</summary>
-    public const int TotalParts = 50;
+    public const int TotalParts = 5;
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken) => SeedAsync(cancellationToken);
@@ -97,42 +98,17 @@ public sealed class InventorySeeder(
 
     private async Task EmitAllAsync(CancellationToken cancellationToken)
     {
-        var sequence = 1;
-        // 10: Forge complete only.
-        for (var i = 0; i < 10; i++, sequence++)
-        {
-            await EmitForgeOnlyAsync(sequence, cancellationToken);
-        }
-        // 8: HeatTreat complete.
-        for (var i = 0; i < 8; i++, sequence++)
-        {
-            await EmitThroughHeatTreatAsync(sequence, cancellationToken);
-        }
-        // 14 (8 base + 6 folded from UnderInspection bucket): Machining + CMM pass.
-        for (var i = 0; i < 14; i++, sequence++)
-        {
-            await EmitThroughMachiningAsync(sequence, cancellationToken);
-        }
-        // 6: FlaggedForReview (NDT raised a minor NC).
-        for (var i = 0; i < 6; i++, sequence++)
-        {
-            await EmitFlaggedForReviewAsync(sequence, cancellationToken);
-        }
-        // 5: Rework (MRB disposition).
-        for (var i = 0; i < 5; i++, sequence++)
-        {
-            await EmitReworkAsync(sequence, cancellationToken);
-        }
-        // 4: FAI signed off, nominal.
-        for (var i = 0; i < 4; i++, sequence++)
-        {
-            await EmitFullLifecycleAsync(sequence, cancellationToken);
-        }
-        // 3: Scrap (critical NC).
-        for (var i = 0; i < 3; i++, sequence++)
-        {
-            await EmitScrapAsync(sequence, cancellationToken);
-        }
+        // 5 parts total, one representative per reachable fold outcome:
+        //   seq 1 — Forge only                         → Nominal
+        //   seq 2 — Full lifecycle incl. FAI           → Nominal
+        //   seq 3 — NDT raised minor NC                → FlaggedForReview
+        //   seq 4 — NDT major NC + MRB Rework          → Rework
+        //   seq 5 — NDT critical NC                    → Scrap
+        await EmitForgeOnlyAsync(1, cancellationToken);
+        await EmitFullLifecycleAsync(2, cancellationToken);
+        await EmitFlaggedForReviewAsync(3, cancellationToken);
+        await EmitReworkAsync(4, cancellationToken);
+        await EmitScrapAsync(5, cancellationToken);
     }
 
     private async Task EmitForgeOnlyAsync(int seq, CancellationToken ct)
