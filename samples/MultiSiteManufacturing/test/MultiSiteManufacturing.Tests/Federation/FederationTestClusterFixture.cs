@@ -57,7 +57,10 @@ public sealed class FederationTestClusterFixture
     {
         var baseline = NewBaselineBackend();
         var lattice = NewLatticeBackend();
-        var router = new FederationRouter([baseline, lattice], NullLogger<FederationRouter>.Instance);
+        var router = new FederationRouter(
+            [baseline, lattice],
+            GrainFactory,
+            NullLogger<FederationRouter>.Instance);
         return (router, baseline, lattice);
     }
 
