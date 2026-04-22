@@ -53,12 +53,15 @@
                         @foreach (var state in _sites)
                         {
                             var edit = _siteEdits[state.Site];
+                            var dirty = edit.IsDirty(state.Config);
                             <tr>
                                 <th scope="row" title="@state.Site">
                                     @ProcessSiteInfo.GetDisplayName(state.Site)
                                 </th>
                                 <td>
                                     <input type="checkbox" @bind="edit.IsPaused"
+                                           @bind:after="() => AutoApplySiteAsync(state.Site)"
+                                           disabled="@_busy"
                                            aria-label="Pause @ProcessSiteInfo.GetDisplayName(state.Site)" />
                                 </td>
                                 <td>
@@ -67,15 +70,18 @@
                                 </td>
                                 <td>
                                     <input type="checkbox" @bind="edit.ReorderEnabled"
+                                           @bind:after="() => AutoApplySiteAsync(state.Site)"
+                                           disabled="@_busy"
                                            aria-label="Enable reorder buffer at @ProcessSiteInfo.GetDisplayName(state.Site)" />
                                 </td>
                                 <td>@state.PendingCount</td>
                                 <td>@state.AdmittedCount</td>
                                 <td>
                                     <button class="outline"
-                                            disabled="@(_busy || !edit.IsDirty(state.Config))"
-                                            @onclick="() => ApplySiteAsync(state.Site)">
-                                        Apply
+                                            disabled="@(_busy || !dirty)"
+                                            @onclick="() => ApplySiteAsync(state.Site)"
+                                            title="@(dirty ? "Unsaved edits — click to apply." : "No pending edits.")">
+                                        @(dirty ? "Apply *" : "Apply")
                                     </button>
                                 </td>
                             </tr>
@@ -204,14 +210,18 @@
         {
             await foreach (var _ in Broadcaster.SubscribeChaosChanges(ct))
             {
-                await RefreshAsync();
+                // An out-of-band change (preset apply, another browser tab,
+                // grain lifecycle) means the authoritative state is the
+                // grain's — clobber any stale local edits so the UI reflects
+                // reality.
+                await RefreshAsync(forceReset: true);
                 await InvokeAsync(StateHasChanged);
             }
         }
         catch (OperationCanceledException) { /* expected on dispose */ }
     }
 
-    private async Task RefreshAsync()
+    private async Task RefreshAsync(bool forceReset = false)
     {
         var sites = await Router.ListSitesAsync();
         var backends = await Router.ListBackendChaosAsync();
@@ -220,10 +230,12 @@
         _sites.AddRange(sites.OrderBy(s => ProcessSiteInfo.InLifecycleOrder.ToList().IndexOf(s.Site)));
         foreach (var state in _sites)
         {
-            // Only reset the edit buffer if the operator has not diverged
-            // from persisted state (i.e. nothing "dirty"). Otherwise the
-            // live refresh would stomp in-flight typing.
-            if (!_siteEdits.TryGetValue(state.Site, out var edit) || !edit.IsDirty(state.Config))
+            // Reset when forced (out-of-band change wins) or when the
+            // operator has not diverged from persisted state. Otherwise
+            // preserve in-flight numeric typing.
+            if (forceReset
+                || !_siteEdits.TryGetValue(state.Site, out var edit)
+                || !edit.IsDirty(state.Config))
             {
                 _siteEdits[state.Site] = SiteConfigEdit.From(state.Config);
             }
@@ -233,7 +245,9 @@
         _backends.AddRange(backends);
         foreach (var backend in _backends)
         {
-            if (!_backendEdits.TryGetValue(backend.Name, out var edit) || !edit.IsDirty(backend.Config))
+            if (forceReset
+                || !_backendEdits.TryGetValue(backend.Name, out var edit)
+                || !edit.IsDirty(backend.Config))
             {
                 _backendEdits[backend.Name] = BackendConfigEdit.From(backend.Config);
             }
@@ -250,7 +264,7 @@
             await Router.ConfigureSiteAsync(site, edit.ToConfig());
             // Live subscription will refresh; also refresh synchronously
             // so the Apply button disables immediately.
-            await RefreshAsync();
+            await RefreshAsync(forceReset: true);
         }
         catch (Exception ex)
         {
@@ -262,6 +276,15 @@
         }
     }
 
+    /// <summary>
+    /// Fires from <c>@bind:after</c> on the boolean toggles (pause,
+    /// reorder). A checkbox is a binary decision — the operator should
+    /// not also have to remember to click "Apply" for the change to reach
+    /// the <c>IProcessSiteGrain</c>. Numeric fields (delay) keep the
+    /// explicit Apply semantics so mid-typing values don't round-trip.
+    /// </summary>
+    private Task AutoApplySiteAsync(ProcessSite site) => ApplySiteAsync(site);
+
     private async Task ApplyBackendAsync(string name)
     {
         _busy = true;
@@ -270,7 +293,7 @@
         {
             var edit = _backendEdits[name];
             await Router.ConfigureBackendChaosAsync(name, edit.ToConfig());
-            await RefreshAsync();
+            await RefreshAsync(forceReset: true);
         }
         catch (Exception ex)
         {
@@ -290,7 +313,9 @@
         {
             await Router.ApplyPresetAsync(preset);
             _lastPresetDescription = $"Applied: {ChaosPresetInfo.GetDisplayName(preset)} — {ChaosPresetInfo.GetDescription(preset)}";
-            await RefreshAsync();
+            // A preset is an out-of-band, multi-site overwrite — stomp any
+            // stale local edits so the new config is visible immediately.
+            await RefreshAsync(forceReset: true);
         }
         catch (Exception ex)
         {

@@ -481,19 +481,3 @@ the test suite — keeps CI fast and hermetic).
 | M12 | README, glossary, architecture doc, Azurite setup instructions, screenshots | 0.5 day |
 | M13 | Test pass, polish, Chaos-category stress test | 0.5 day |
 
-**Total estimate: ~7.5 developer-days** of focused work.
-
-
-
-**Checkpoint cadence**: pause for reviewer confirmation between each
-milestone boundary (at minimum between M1 → M2, M6 → M7, and M7 → M8).
-
-## 14. Sign-off
-
-All review items resolved — see §12. **M1–M11 executed and committed on
-`feature/sample-manufacturing` (97/97 tests green).** Execution of
-**M12 (docs & screenshots)** is next; the divergence feed is now
-push-based — `ComplianceService.WatchDivergence` forwards a live
-`DivergenceEvent` stream backed by `DashboardBroadcaster`, with
-`Resolved` transitions emitted when backends reconverge so subscribers
-can drop stale rows.

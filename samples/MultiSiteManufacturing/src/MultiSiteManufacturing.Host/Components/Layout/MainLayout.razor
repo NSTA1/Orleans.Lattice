@@ -80,7 +80,7 @@
         top: 0;
         right: 0;
         height: 100vh;
-        width: min(560px, 100vw);
+        width: min(1100px, 100vw);
         background: var(--pico-background-color);
         border-left: 1px solid var(--pico-muted-border-color);
         box-shadow: -4px 0 16px rgba(0, 0, 0, 0.15);
@@ -104,6 +104,17 @@
     }
     .chaos-flyout .backend-row {
         padding: 0.75rem 1rem;
+    }
+    /* Per-site table: give numeric inputs enough room for 4-5 digit
+       values (e.g. "8000" ms) without clipping. Pico's default narrow
+       table input style was crushing them. */
+    .chaos-flyout table input[type="number"] {
+        min-width: 6rem;
+        width: 100%;
+    }
+    .chaos-flyout table td,
+    .chaos-flyout table th {
+        white-space: nowrap;
     }
     .preset-buttons {
         display: flex;
