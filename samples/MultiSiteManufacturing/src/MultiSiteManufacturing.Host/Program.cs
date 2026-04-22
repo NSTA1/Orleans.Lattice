@@ -4,9 +4,13 @@ using Orleans.Lattice;
 using MultiSiteManufacturing.Host.Baseline;
 using MultiSiteManufacturing.Host.Components;
 using MultiSiteManufacturing.Host.Federation;
+using MultiSiteManufacturing.Host.Grpc;
 using MultiSiteManufacturing.Host.Lattice;
 
 var builder = WebApplication.CreateBuilder(args);
+
+var useInMemoryStorage = builder.Environment.IsEnvironment("Testing")
+    || builder.Configuration.GetValue<bool>("Orleans:UseInMemoryStorage");
 
 var tableStorageConnectionString =
     builder.Configuration.GetConnectionString("AzureTableStorage")
@@ -15,26 +19,34 @@ var tableStorageConnectionString =
 builder.Host.UseOrleans(silo =>
 {
     silo.UseLocalhostClustering();
-
-    silo.AddAzureTableGrainStorageAsDefault(options =>
-    {
-        options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
-    });
-
-    silo.AddAzureTableGrainStorage("msmfgGrainState", options =>
-    {
-        options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
-    });
-
     silo.UseInMemoryReminderService();
 
-    silo.AddLattice((services, name) =>
+    if (useInMemoryStorage)
     {
-        services.AddAzureTableGrainStorage(name, options =>
+        silo.AddMemoryGrainStorageAsDefault();
+        silo.AddMemoryGrainStorage("msmfgGrainState");
+        silo.AddLattice((services, name) => services.AddMemoryGrainStorage(name));
+    }
+    else
+    {
+        silo.AddAzureTableGrainStorageAsDefault(options =>
         {
             options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
         });
-    });
+
+        silo.AddAzureTableGrainStorage("msmfgGrainState", options =>
+        {
+            options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
+        });
+
+        silo.AddLattice((services, name) =>
+        {
+            services.AddAzureTableGrainStorage(name, options =>
+            {
+                options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
+            });
+        });
+    }
 });
 
 builder.Services.AddGrpc();
@@ -58,7 +70,10 @@ app.UseAntiforgery();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
-// gRPC service endpoints are registered in M5. Scaffold only today.
+app.MapGrpcService<FactIngressServiceImpl>();
+app.MapGrpcService<SiteControlServiceImpl>();
+app.MapGrpcService<ComplianceServiceImpl>();
+app.MapGrpcService<InventoryServiceImpl>();
 
 await app.RunAsync();
 

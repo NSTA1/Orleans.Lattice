@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package multisitemfg.v1;
+
+option csharp_namespace = "MultiSiteManufacturing.Contracts.V1";
+
+import "common.proto";
+import "google/protobuf/empty.proto";
+
+service SiteControlService {
+  rpc ListSites     (google.protobuf.Empty) returns (ListSitesResponse);
+  rpc ConfigureSite (ConfigureSiteRequest)  returns (SiteState);
+  rpc WatchSites    (google.protobuf.Empty) returns (stream SiteState);
+  rpc TriggerPreset (TriggerPresetRequest)  returns (PresetResult);
+}
+
+enum ChaosPreset {
+  CHAOS_PRESET_UNSPECIFIED = 0;
+  CHAOS_PRESET_CLEAR_ALL = 1;
+  CHAOS_PRESET_TRANSOCEANIC_BACKHAUL_OUTAGE = 2;
+  CHAOS_PRESET_CUSTOMS_HOLD = 3;
+  CHAOS_PRESET_MRB_WEEKEND = 4;
+}
+
+message SiteConfig {
+  bool is_paused = 1;
+  int32 delay_ms = 2;
+  bool reorder_enabled = 3;
+}
+
+message SiteState {
+  ProcessSite site = 1;
+  SiteConfig config = 2;
+  int32 pending_count = 3;
+  int64 admitted_count = 4;
+}
+
+message ListSitesResponse {
+  repeated SiteState sites = 1;
+}
+
+message ConfigureSiteRequest {
+  ProcessSite site = 1;
+  SiteConfig config = 2;
+}
+
+message TriggerPresetRequest {
+  ChaosPreset preset = 1;
+}
+
+message PresetResult {
+  repeated SiteState sites = 1;
+}

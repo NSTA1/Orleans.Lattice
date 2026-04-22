@@ -6,7 +6,7 @@ public class ScaffoldTests
     [Test]
     public void Contracts_assembly_loads()
     {
-        var assembly = typeof(MultiSiteManufacturing.Contracts.V1.HealthCheck).Assembly;
+        var assembly = typeof(MultiSiteManufacturing.Contracts.V1.FactEnvelope).Assembly;
         Assert.That(assembly, Is.Not.Null);
     }
 

@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package multisitemfg.v1;
+
+option csharp_namespace = "MultiSiteManufacturing.Contracts.V1";
+
+import "common.proto";
+
+service FactIngressService {
+  rpc EmitFact       (FactEnvelope)        returns (EmitResult);
+  rpc EmitFactStream (stream FactEnvelope) returns (EmitSummary);
+}
+
+message FactEnvelope {
+  string fact_id = 1;
+  string serial = 2;
+  Hlc hlc = 3;
+  ProcessSite site = 4;
+  string operator_id = 5;
+  string description = 6;
+
+  oneof payload {
+    ProcessStepCompleted process_step_completed = 10;
+    InspectionRecorded   inspection_recorded    = 11;
+    NonConformanceRaised non_conformance_raised = 12;
+    MrbDispositionEvent  mrb_disposition        = 13;
+    ReworkCompleted      rework_completed       = 14;
+    FinalAcceptance      final_acceptance       = 15;
+  }
+}
+
+message ProcessStepCompleted {
+  ProcessStage stage = 1;
+  string heat_lot = 2;
+  map<string, string> process_parameters = 3;
+}
+
+message InspectionRecorded {
+  Inspection inspection = 1;
+  InspectionOutcome outcome = 2;
+  map<string, string> measurements = 3;
+  // Unix seconds; 0 when not set.
+  int64 instrument_calibration_unix_seconds = 4;
+}
+
+message NonConformanceRaised {
+  string nc_number = 1;
+  string defect_code = 2;
+  NcSeverity severity = 3;
+}
+
+message MrbDispositionEvent {
+  string nc_number = 1;
+  MrbDispositionKind disposition = 2;
+}
+
+message ReworkCompleted {
+  string rework_operation = 1;
+  bool retest_passed = 2;
+}
+
+message FinalAcceptance {
+  string fai_report_id = 1;
+  string inspector_id = 2;
+  bool certificate_issued = 3;
+}
+
+message EmitResult {
+  string fact_id = 1;
+  bool accepted = 2;
+}
+
+message EmitSummary {
+  int32 accepted_count = 1;
+}

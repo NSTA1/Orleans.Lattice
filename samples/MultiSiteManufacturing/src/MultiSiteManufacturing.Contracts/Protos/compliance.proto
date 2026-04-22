@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package multisitemfg.v1;
+
+option csharp_namespace = "MultiSiteManufacturing.Contracts.V1";
+
+import "common.proto";
+import "google/protobuf/empty.proto";
+
+service ComplianceService {
+  rpc GetPartCompliance (GetPartComplianceRequest) returns (PartComplianceView);
+  rpc WatchDivergence   (google.protobuf.Empty)    returns (stream DivergenceReport);
+}
+
+message GetPartComplianceRequest {
+  string serial = 1;
+}
+
+message PartComplianceView {
+  string serial = 1;
+  ComplianceState baseline_state = 2;
+  ComplianceState lattice_state = 3;
+  bool diverges = 4;
+}
+
+message DivergenceReport {
+  string serial = 1;
+  ComplianceState baseline_state = 2;
+  ComplianceState lattice_state = 3;
+}
