@@ -1,0 +1,19 @@
+# Exclude everything by default, then whitelist what the Dockerfile
+# actually needs. This keeps the build context small and avoids
+# uploading bin/ / obj/ from developer machines.
+**
+
+# Project sources referenced by the Host csproj.
+!src/lattice/**
+!samples/MultiSiteManufacturing/src/**
+
+# Never ship build outputs, IDE state, test results, or node_modules.
+**/bin
+**/obj
+**/.vs
+**/TestResults
+**/node_modules
+
+# Never ship secrets / local overrides.
+**/appsettings.Development.json
+**/*.user

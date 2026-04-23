@@ -34,7 +34,7 @@ public class PartitionChaosTests
             [baseline, lattice],
             _fixture.GrainFactory,
             NullLogger<FederationRouter>.Instance,
-            new SiloIdentity(isPrimary ? "a" : "b", isPrimary));
+            new SiloIdentity(isPrimary ? "a" : "b", isPrimary, ClusterName: "forge"));
     }
 
     [Test]
@@ -115,3 +115,4 @@ public class PartitionChaosTests
         await router.ConfigurePartitionAsync(false);
     }
 }
+

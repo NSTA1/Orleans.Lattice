@@ -1,12 +1,38 @@
 @inherits LayoutComponentBase
+@implements IDisposable
+@inject MultiSiteManufacturing.Host.SiloIdentity Silo
+@inject MultiSiteManufacturing.Host.Replication.ReplicationActivityTracker Replication
 
 <header class="container">
     <nav>
         <ul>
             <li><strong>Multi-Site Manufacturing</strong></li>
         </ul>
-        <ul>
+        <ul class="topbar-status">
             <li><small>operator: <kbd>demo</kbd></small></li>
+            <li>
+                <small>silo: <kbd>@($"{Silo.ClusterName}/{Silo.Id.ToUpperInvariant()}")</kbd></small>
+            </li>
+            <li>
+                <small title="@SentTooltip">
+                    sent:
+                    <kbd class="@SentClass">@SentLabel</kbd>
+                </small>
+            </li>
+            <li>
+                <small title="@ReceivedTooltip">
+                    recv:
+                    <kbd class="@ReceivedClass">@ReceivedLabel</kbd>
+                </small>
+            </li>
+            @if (_snapshot.SendErrors > 0)
+            {
+                <li>
+                    <small title="@($"{_snapshot.SendErrors} outbound error(s); last at {_snapshot.LastSendErrorUtc:HH:mm:ss}Z")">
+                        <kbd class="repl-bad">err @_snapshot.SendErrors</kbd>
+                    </small>
+                </li>
+            }
             <li>
                 <button class="secondary"
                         aria-expanded="@_chaosOpen.ToString().ToLowerInvariant()"
@@ -28,12 +54,99 @@
 
 @code {
     private bool _chaosOpen;
+    private System.Threading.Timer? _refresh;
+    private MultiSiteManufacturing.Host.Replication.ReplicationActivitySnapshot _snapshot =
+        new(null, null, 0, 0, 0, 0, 0, null, null, null);
+
+    protected override void OnInitialized()
+    {
+        // Kick an immediate refresh so the bar renders with real values
+        // (when non-zero) rather than the all-zero default snapshot.
+        _ = RefreshAsync();
+
+        // 1 s tick — drives the "Ns ago" relative timestamps and picks
+        // up new sends/receives from the cluster-wide stats grain.
+        _refresh = new System.Threading.Timer(_ => InvokeAsync(RefreshAsync),
+            null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    private async Task RefreshAsync()
+    {
+        try
+        {
+            _snapshot = await Replication.SnapshotAsync();
+            StateHasChanged();
+        }
+        catch
+        {
+            // Snapshot is best-effort; swallow and try again on the next tick.
+        }
+    }
+
+    public void Dispose() => _refresh?.Dispose();
 
     private void ToggleChaos() => _chaosOpen = !_chaosOpen;
     private void CloseChaos() => _chaosOpen = false;
+
+    private string SentLabel => FormatActivity(_snapshot.LastSentUtc, _snapshot.BatchesSent, _snapshot.RowsSent);
+    private string ReceivedLabel => FormatActivity(_snapshot.LastReceivedUtc, _snapshot.BatchesReceived, _snapshot.RowsReceived);
+
+    private string SentClass => FreshnessClass(_snapshot.LastSentUtc);
+    private string ReceivedClass => FreshnessClass(_snapshot.LastReceivedUtc);
+
+    private string SentTooltip => _snapshot.LastSentPeer is null
+        ? "No outbound batches yet."
+        : $"Last peer: {_snapshot.LastSentPeer} · {_snapshot.BatchesSent} batches · {_snapshot.RowsSent} rows · last at {_snapshot.LastSentUtc:HH:mm:ss}Z";
+
+    private string ReceivedTooltip => _snapshot.LastReceivedPeer is null
+        ? "No inbound batches yet."
+        : $"Last peer: {_snapshot.LastReceivedPeer} · {_snapshot.BatchesReceived} batches · {_snapshot.RowsReceived} rows · last at {_snapshot.LastReceivedUtc:HH:mm:ss}Z";
+
+    private static string FormatActivity(DateTime? lastUtc, long batches, long rows)
+    {
+        if (lastUtc is null)
+        {
+            return "—";
+        }
+        var age = DateTime.UtcNow - lastUtc.Value;
+        return $"{FormatAge(age)} · {batches}b/{rows}r";
+    }
+
+    private static string FormatAge(TimeSpan age)
+    {
+        if (age.TotalSeconds < 1)   return "now";
+        if (age.TotalSeconds < 60)  return $"{(int)age.TotalSeconds}s ago";
+        if (age.TotalMinutes < 60)  return $"{(int)age.TotalMinutes}m ago";
+        if (age.TotalHours   < 24)  return $"{(int)age.TotalHours}h ago";
+        return $"{(int)age.TotalDays}d ago";
+    }
+
+    private static string FreshnessClass(DateTime? lastUtc)
+    {
+        if (lastUtc is null) return "repl-idle";
+        var age = DateTime.UtcNow - lastUtc.Value;
+        if (age.TotalSeconds < 10) return "repl-fresh";
+        if (age.TotalSeconds < 60) return "repl-warn";
+        return "repl-stale";
+    }
 }
 
 <style>
+    /* Top-bar replication strip. Each kbd colour-codes freshness so a
+       glance tells you whether the cluster is actively replicating. */
+    .topbar-status {
+        gap: 0.75rem;
+    }
+    .topbar-status li {
+        display: inline-flex;
+        align-items: center;
+    }
+    .topbar-status kbd.repl-fresh { background: #2d8a3e; color: #fff; }
+    .topbar-status kbd.repl-warn  { background: #d18f2a; color: #fff; }
+    .topbar-status kbd.repl-stale { background: #b83a3a; color: #fff; }
+    .topbar-status kbd.repl-idle  { background: var(--pico-muted-color); color: #fff; }
+    .topbar-status kbd.repl-bad   { background: #b83a3a; color: #fff; }
+
     /* Widen the default Pico container — at standard widths Pico caps at
        ~1130px which wraps the Serial / Family columns hard on a 1080p
        display. Give the dashboard real estate up to 1800px while keeping
@@ -174,10 +287,10 @@
 
     /* Tab bar for switching between top-level dashboard views
        (Inventory vs. Inventory By Activity). Styled to sit flush
-       above the tab panels with a single bottom border; the active
-       tab lifts that border into the primary accent colour. The
-       same class is reused inside the activity panel for its
-       per-site filter strip. */
+       above the tab panels with a single bottom border; the
+       active tab lifts that border into the primary accent
+       colour. The same class is reused inside the activity
+       panel for its per-site filter strip. */
     .tabs {
         display: flex;
         flex-wrap: wrap;

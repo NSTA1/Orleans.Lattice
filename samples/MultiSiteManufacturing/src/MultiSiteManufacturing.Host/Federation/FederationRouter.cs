@@ -31,7 +31,7 @@ public sealed class FederationRouter(
     SiloIdentity? siloIdentity = null)
 {
     private readonly IReadOnlyList<IFactBackend> _backends = [.. backends];
-    private readonly SiloIdentity _silo = siloIdentity ?? new SiloIdentity("a", IsPrimary: true);
+    private readonly SiloIdentity _silo = siloIdentity ?? new SiloIdentity("a", IsPrimary: true, ClusterName: "forge");
 
     /// <summary>Backends that receive every emitted fact, indexed by <see cref="IFactBackend.Name"/>.</summary>
     public IReadOnlyList<IFactBackend> Backends => _backends;

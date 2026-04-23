@@ -46,14 +46,18 @@ concrete vertical. The sample must:
   there is no scripted saga or "trigger divergence" button in v1.
 - Full MES/QMS parity. We ship a single product family (HPT blade) with
   a simplified severity lattice.
-- Container orchestration / k8s. `dotnet run` on a developer workstation,
-  with Azurite running locally. (M12 lifts the single-silo restriction:
-  `run.ps1` launches two localhost silos that cluster via shared
-  Azurite — still no containers.)
-- True Orleans transport-level partition. M12c simulates an inter-silo
-  partition via a router-level hash filter; it does not actually drop
-  packets between silos. This is clearly documented in
-  `FederationRouter.IsDroppedByPartitionAsync`.
+- Kubernetes / production orchestration. M14 adds Docker Compose as the
+  supported local topology (two clusters × two silos × per-cluster
+  Azurite, only HTTP ports 5001–5004 exposed to the host), but there is
+  no Helm chart, no k8s manifest, and no TLS/auth hardening. The legacy
+  host-process launcher (`run-legacy.ps1`) remains available for the
+  "no Docker" quick-start.
+- True Orleans transport-level partition at the router layer. M12c
+  simulates an inter-silo partition via a router-level hash filter; it
+  does not drop packets between silos. (M14 adds a genuine Tier-5
+  transport-level partition option via `docker network disconnect` —
+  see §4.3 — but the Tier-4 hash-filter sim still exists as the fast
+  path that requires no Docker interaction.)
 
 ## 3. Domain model
 
@@ -241,6 +245,7 @@ from the UI and from tests.
 | 2 | `ChaosFactBackend : IFactBackend` decorator (per backend) | Transient storage failure, per-call jitter, duplicate writes; applied to one backend only to create baseline-vs-lattice divergence | `JitterMsMin`, `JitterMsMax`, `TransientFailureRate`, `WriteAmplificationRate` on `IBackendChaosGrain` keyed by backend name | M7 |
 | 3 | Reorder buffer inside `ProcessSiteGrain` | Cross-site out-of-order arrival after a regional pause lifts | `ReorderEnabled` flag on `SiteConfig` | M7 |
 | 4 | `FederationRouter.IsDroppedByPartitionAsync` + `PartCrdtStore` shadow prefix | Simulated inter-silo partition (not true transport drop) | `IPartitionChaosGrain.IsPartitioned`, toggled by `ChaosPreset.SiloPartition` | M12 |
+| 5 | `docker network disconnect msmfg_wan <silo>` | **Genuine** cross-cluster transport partition — silos on the disconnected container can't reach the peer cluster's `/replicate/{tree}` endpoint; replog grows locally, replicator backs off, replay resumes after `docker network connect`. | Manual `docker network` commands (Compose-only) | M14 |
 
 Storage-provider-level chaos (wrapping the `TableServiceClient` itself)
 is explicitly **out of scope** — Tier 2 exercises the same failure modes
@@ -536,88 +541,309 @@ the test suite — keeps CI fast and hermetic).
 | M5 | gRPC contracts (proto) + service implementations + contract tests via in-proc channel | ✅ done |
 | M6 | Bulk-load seeder + `IInventorySeedStateGrain` + idempotency test + deterministic seed | ✅ done |
 | M7 | **Fault-injection infrastructure (§4.3):** `ChaosFactBackend : IFactBackend` decorator + `IBackendChaosGrain` (jitter, transient fault rate, write amplification) + wire reorder buffer in `ProcessSiteGrain` (Tier 3) + `ListBackends` / `ConfigureBackend` RPCs on `SiteControlService` + "Lattice storage flakes" preset + domain tests for all three tiers | ✅ done |
-| M8 | **Blazor Server shell + main dashboard (read-only) wired to real-time channels:** `FederationRouter.FactRouted` / `ChaosConfigChanged` events + `DashboardBroadcaster` (`IHostedService` + per-subscriber `Channel<T>`) + Pico.css v2 via jsDelivr CDN + `MainLayout` / `Dashboard` page / `InventoryGrid` / `DivergencePanel` / `ChaosBanner` + 5 broadcaster tests | ✅ done |
-| M9 | **Operator action forms:** `OperatorClock` (monotonic HLC singleton) + `OperatorActions` facade (6 fact-kind methods) + `NewPartDialog` + "+ New part" button on Dashboard + clickable serials in `InventoryGrid` + `/parts/{serial}` detail page with fact trail & 5 action forms + 9 `OperatorActionsTests` | ✅ done |
-| M10 | **Chaos fly-out** (two-section: site controls + backend storage chaos) with canned presets + active-chaos banner — `ChaosFlyout.razor` (slide-in side panel wired to `FederationRouter` + `DashboardBroadcaster`), `ChaosPresetInfo`, `MainLayout.razor` toggle + slide-in CSS, 5 `ChaosPresetInfoTests` | ✅ done |
-| M11 | Divergence feed (organic, from chaos-induced reorder + backend fault rate) wired into dashboard + `WatchDivergence` gRPC stream | ✅ done |
-| M11a | Per-row **⚠ Race** button on `InventoryGrid` — emits a concurrent NCR(Minor) → Inspection(Pass) → MRB(UseAsIs) trio via `OperatorActions.RaceAsync`. Lattice always folds by HLC to Nominal; combined with the *Baseline reorder storm* preset or a multi-second site delay, baseline folds the shuffled arrival order to Flagged — the canonical UI-driven way to force a row in the Divergence feed. Paired with a per-row **✓ Fix** button that replaces Race on diverged rows and emits a single `MrbDisposition(UseAsIs)` via `OperatorActions.FixAsync` to restore baseline ↔ lattice agreement. | ✅ done |
-| M12 | **Make it actually a Lattice demo.** Today the sample exercises `HybridLogicalClock` + an HLC-sorted event replay, which any event-sourced Orleans codebase could reproduce. M12 adds the features that are *uniquely* `Orleans.Lattice`: <br/>**(a) Second silo on localhost** — update `Program.cs` to support `--silo-id` and an override port, document `dotnet run -- --silo-id a` / `--silo-id b` in the README. Lifts the "Single host" non-goal in §2; both silos join the same Orleans cluster and share Azure Table Storage. <br/>**(b) CRDT-typed grain state on `IPartGrain`** — at least one property that merges without sorting events: `CurrentOperator : LWW<OperatorId>` and `ProcessLabels : GSet<string>`. Surfaced on the part-detail page. Writes from either silo converge on read, demonstrating the CRDT merge story naked Orleans grains can't tell. <br/>**(c) Partition-and-heal preset** — new `ChaosPreset.SiloPartition` that drops inter-silo traffic for N seconds via a transport filter, then heals. Operators on silo A write to one set of parts, operators on silo B to another overlapping set; on heal, `LWW`/`GSet` merge is observably correct. <br/>**(d) B+ tree range query** — new `/inventory/by-site/{site}` view uses `ILattice` range scan over a `{site}/{stage}/{serial}` composite key to list parts by site, exercising the sharded tree directly (not the per-key grain). Add a "Parts currently at $site" panel to the dashboard. <br/>**(e) Tests** — partition-heal integration test (writes on both silos during partition → merged state after heal), range-scan contract test, `LWW`/`GSet` convergence property tests. <br/>Keeps the existing baseline-vs-lattice story intact; M12 is additive. | ✅ done |
-| M13 | README, glossary, architecture doc, Azurite setup instructions, screenshots, `run.ps1` walk-through | 0.5 day |
-| M14 | Test pass, polish, Chaos-category stress test | 0.5 day |
+| M13 | **Cross-cluster replication (§13):** two independent Orleans clusters (`forge`, `heattreat`) each with two silos and its own Azurite, linked by per-tree HTTP replication over an HLC-ordered replog. Opt-in per tree, loop-broken via `RequestContext`, compacted by a janitor grain, with FUTURE seams for the library-native change-feed + continuous-merge capability. | ✅ done |
+| M14 | **Docker Compose topology (§14):** replace the localhost multi-process launcher with a Compose file that runs two Azurite containers and four silos across three networks (`forge-net`, `heattreat-net`, `wan`), publishing only HTTP ports 5001–5004 to the host. `Program.cs` honours `ASPNETCORE_URLS` and binds Orleans endpoints on `0.0.0.0`. `run.ps1` becomes a `docker compose` wrapper; the legacy host-process launcher survives as `run-legacy.ps1`. Enables Tier-5 genuine transport-level partition via `docker network disconnect`. | ✅ done |
 
-> **M12 implementation notes (actual vs. plan):**
->
-> - **(a)** Delivered via `--silo-id a|b` in `Program.cs`, `SiloIdentity`
->   DI record, and a top-level `run.ps1`. Silo A owns HTTP 5001 + Orleans
->   ports 11111/30000; silo B owns HTTP 5002 + 11112/30001. Only silo A
->   runs the `InventorySeeder`.
-> - **(b)** `PartCrdtStore` (not `IPartGrain`) owns the CRDT state, keyed
->   directly into an `ILattice` tree. `Orleans.Lattice.Primitives.LwwValue<T>`
->   is `internal` in the library, so the LWW register is modelled as a
->   single-key write (last HLC wins inside the tree) and the G-Set is
->   modelled as one key per label read back via `ScanKeysAsync` — both
->   visible on `/parts/{serial}`.
-> - **(c)** `ChaosPreset.SiloPartition` flips a flag on
->   `IPartitionChaosGrain`; each silo's `FederationRouter` drops facts
->   whose serial hashes to the other silo's bucket. This is *simulation,
->   not a true transport partition* (see the §2 non-goal) and is
->   documented in `FederationRouter.IsDroppedByPartitionAsync`.
->   **CRDT writes are also gated by the same flag:** during partition
->   `PartCrdtStore` writes to a silo-local shadow prefix
->   (`shadow/{siloId}/…`) inside the shared Lattice tree, and reads
->   merge `(shared ∪ own-shadow)` — so silo A and silo B observably
->   diverge while the flag is true. `PartitionHealHostedService` on each
->   silo polls the grain every 2s and, on the `true→false` transition,
->   invokes `PartCrdtStore.HealLocalShadowAsync()` which promotes every
->   shadow entry into the shared prefix (LWW register + G-Set union)
->   and deletes the shadow keys. The chaos banner gains a "inter-silo
->   partition active" entry via a new `ChaosOverview.PartitionActive`
->   field so operators can see partition state at a glance.
-> - **(d)** `SiteActivityIndex` (hosted service, formerly
->   `SiteStageIndex`) writes a secondary index into a dedicated
->   lattice tree on **every** routed `Fact` — not just
->   `ProcessStepCompleted`. Keys are
->   `{site}/{wallTicks:D20}/{counter:D10}/{serial}`; the value holds
->   a short activity label (`"Step: Machining"`,
->   `"Inspection: CMM Pass"`, `"MRB: UseAsIs"`, …). The dashboard's
->   "Parts by site" panel renders the result of
->   `ILattice.ScanEntriesAsync(reverse: true)` inline when the operator
->   clicks a site link — no separate page — exercising a direct B+
->   tree range query under the `{site}/` prefix. Results are deduped
->   by serial so each part appears once with its most recent activity
->   at that site. Generalizing beyond `ProcessStepCompleted` means
->   inspection-only sites like `StuttgartCmmLab` now surface their CMM
->   inspection history instead of appearing permanently empty.
-> - **(e)** 16 new tests: 10 × `PartCrdtStoreTests`, 4 × `SiteStageIndexTests`,
->   3 × `PartitionChaosTests`. Two-silo `TestCluster` integration is
->   deferred to M13/M14 because `Orleans.TestingHost`'s localhost
->   clustering hand-off is brittle under Azurite. Partition semantics
->   are exercised by constructing two `FederationRouter` instances with
->   distinct `SiloIdentity` against a single test cluster, which covers
->   the same logic.
->
-> **Post-M12 UX polish:** the part-detail "Record action" block no
-> longer renders six `<details>` forms with free-form dropdowns.
-> `NextActionResolver.Resolve(facts)` inspects the HLC-sorted fact log
-> and returns a single suggested next step (`CompleteHeatTreat`,
-> `CompleteMachining`, `RecordCmmInspection`, `RecordNdtInspection`,
-> `SignOffFai`, `CompleteRework`, `IssueMrb`, or `Terminal`). The page
-> renders **one** primary button for deterministic states, and shows
-> branch buttons inline only when the state genuinely requires operator
-> choice: 4 MRB buttons for an open NCR, Pass/Fail buttons for a pending
-> NDT inspection, and retest-passed/failed buttons for ordered rework.
-> A compact "Raise non-conformance" form remains always available (a
-> defect can be discovered at any lifecycle stage). 17 new tests in
-> `NextActionResolverTests` cover every state transition including null
-> guards and unordered-fact HLC sorting.
->
-> **Fold semantic fix (post-M12):** `ReworkCompleted(RetestPassed=false)`
-> was originally a no-op for state (only cleared the retest-armed flag).
-> That made operator clicks on "Rework complete (retest failed)" visibly
-> do nothing — especially noticeable after the ⚠ Race button demoted a
-> part to `Nominal` on the lattice side. The fold now escalates a failed
-> retest to `Max(current, FlaggedForReview)`, consistent with "a failed
-> retest is defect evidence". Covered by 3 new tests in
-> `ComplianceFoldTests` (Nominal→Flagged, Rework preserved, Scrap
-> terminal).
+## 13. Cross-cluster replication (M13)
 
+### 13.1 Motivation
+
+Up through M12 the sample ran as a single Orleans cluster with two
+silos — a reasonable HA topology, but not what "multi-site" actually
+implies at the infrastructure level. Real factory floors run their own
+cluster per site, own storage per site, and converge state across the
+WAN. M13 makes the sample model that: two independent Orleans clusters
+(`forge`, `heattreat`), two independent Azurite instances, four silos
+total — linked only by an explicit application-level replication hop
+running on top of the existing lattice.
+
+The cross-cluster path is deliberately **outside** `Orleans.Lattice`:
+zero library changes, zero `LatticeOptions` edits. This both respects
+the current library surface and leaves clean FUTURE seams for when the
+library gains its planned change-feed / cross-tree continuous-merge
+capability — at which point the M13 replicator collapses into a thin
+adapter over the library primitive.
+
+### 13.2 Topology
+
+Each cluster is a full Orleans deployment:
+
+| Cluster | `ClusterId` | Silos | HTTP ports | Silo ports | Gateway ports | Azurite (blob/queue/table) |
+|---|---|---|---|---|---|---|
+| `forge` | `msmfg-forge` | A, B | 5001 / 5002 | 11111 / 11112 | 30000 / 30001 | 10000 / 10001 / 10002 |
+| `heattreat` | `msmfg-heattreat` | A, B | 5003 / 5004 | 11121 / 11122 | 30010 / 30011 | 20000 / 20001 / 20002 |
+
+Silo process args: `--cluster <name> --silo-id <a|b>`.
+`appsettings.cluster.<name>.json` supplies the per-cluster connection
+string, ports, and the peer list.
+
+`run.ps1` launches two Azurite processes (distinct port sets, distinct
+workspace dirs) and four silos, and the two clusters reach each other
+over plain HTTP to localhost peer ports — the replication loop is
+transport-agnostic at the protocol boundary but trivially observable on
+the dev box.
+
+### 13.3 What requires replication (the discovery problem)
+
+The replicator's core question is "what has changed locally since I
+last synced with peer X?". M13 answers it with an **HLC-ordered
+replication log** (the "replog") maintained per replicated tree.
+
+- A lightweight `IOutgoingGrainCallFilter`
+  (`LatticeReplicationFilter`) sits on the outgoing call path and
+  fires after every `ILattice.SetAsync` / `DeleteAsync` on a tree
+  listed in `ReplicationTopology.ReplicatedTrees`. It appends one
+  envelope to a sibling lattice tree `_replog__{tree}` keyed
+  `{wallTicks:D20}{counter:D10}|{clusterId}|{op}|{key}` — zero-padded
+  HLC first so a forward lex scan is HLC-ascending, cluster id as
+  tiebreaker for cross-cluster ordering, original key last for
+  uniqueness.
+- **Implementation gotcha.** The filter must read the call arguments
+  (`context.Request.GetArgument(0)` for the user key) **before**
+  awaiting `context.Invoke()`. Orleans codegen releases reference-type
+  slots on the invokable as soon as the wire message is dispatched, so
+  any reference-type arg read back after the await is `null`. Struct
+  args such as `CancellationToken` survive the release but are not
+  useful here. The filter stashes `methodName`, `treeName`, and the
+  original key into local variables before the await, then acts on
+  them after the call completes.
+- The replog **envelope value** does not carry the user bytes. The
+  replicator looks up the primary tree's current `(value, hlc)` at
+  ship time, so a key that's been overwritten since the log entry
+  landed still ships its latest value — which is correct under
+  last-writer-wins semantics.
+- A `RequestContext` flag (`lattice.replay = sourceCluster`) is set on
+  inbound replay so the filter skips appending to the replog when the
+  write is itself a replicated apply. This breaks the A → B → A
+  cycle at the application layer without any library support.
+
+> **Future seam.** When `Orleans.Lattice` ships native change-feed
+> events, `LatticeReplicationFilter` and the `_replog__{tree}` tree
+> are replaced by a direct subscription. The rest of the pipeline
+> (`ReplicatorGrain`, `ReplogJanitorGrain`, inbound endpoint) stays as
+> it is — the replog is purely the discovery mechanism. Each file
+> carries a `FUTURE:` comment marking the replacement seam.
+
+### 13.4 Replicator grain
+
+One `IReplicatorGrain` per `(tree, peer-cluster)` pair, grain key
+`"{tree}|{peer}"`. Backed by Orleans grain storage on the
+`msmfgGrainState` table — **not** by the lattice — because the
+replicator's cursor is operational state, not domain state, and has a
+different lifecycle.
+
+Persistent state:
+
+```csharp
+internal sealed record ReplicatorState
+{
+    public HybridLogicalClock Cursor            { get; init; }
+    public DateTimeOffset     LastContactUtc    { get; init; }
+    public long               TotalRowsShipped  { get; init; }
+    public int                ConsecutiveErrors { get; init; }
+}
+```
+
+The grain doesn't track per-key state — the replog is the truth.
+
+**Tick cadence.** Orleans reminders have a **1-minute minimum period**,
+so the grain uses a split schedule:
+
+- A **1-minute reminder** (`keepalive`) acts purely as a durable
+  re-activation trigger — it ensures the grain reanimates after silo
+  restart or idle deactivation and re-registers its timer.
+- A **3-second grain timer** (`this.RegisterGrainTimer(TickAsync, 1s, 3s)'])
+  drives the actual shipping loop. Grain timers have no minimum period
+  and are auto-disposed on deactivation, so this is the idiomatic
+  sub-minute-cadence pattern under Orleans 10.
+
+Tick loop:
+1. Scan `_replog__{tree}` with a half-open range from `Cursor+` to
+   the replog's end, bounded by a batch size.
+2. In-memory dedupe: keep only the highest HLC per key in the batch.
+3. For each surviving entry call `GetAsync(tree, key)` on the primary
+   tree and ship `(key, value?, hlc, op)` — `op = Delete` when the
+   log envelope is a tombstone and the primary read returns `null`.
+4. POST to the peer via `ReplicationHttpClient.SendAsync`, which
+   iterates `peer.BaseUrls` in order and returns on the first 2xx;
+   only throws (and bumps the error counter) when every URL has
+   failed. A single peer-silo restart therefore never stalls shipping.
+5. On ack, advance `Cursor` to the highest HLC in the batch, persist
+   state, reschedule immediately if more is pending; on failure,
+   exponential backoff.
+
+### 13.5 Inbound endpoint
+
+A minimal API endpoint on each silo: `POST /replicate/{tree}`. The
+handler validates the shared-secret header, then for each entry:
+
+```csharp
+RequestContext.Set("lattice.replay", batch.SourceCluster);
+if (entry.Op == ReplicationOp.Delete)
+    await tree.DeleteAsync(entry.Key);
+else
+    await tree.SetAsync(entry.Key, entry.Value);
+```
+
+Idempotency is a consequence of the sample's key disciplines — see
+§13.7. No HLC is threaded through on apply; the receiver's lattice
+assigns its own HLC, which is fine for immutable-keyed trees and a
+**known limitation** for the LWW-register half of `mfg-part-crdt` (see
+§13.7). The FUTURE seam for library-native merge is exactly the place
+where that limitation goes away.
+
+### 13.6 Compaction
+
+`IReplogJanitorGrain` per tree (reminder every 10 min): reads every
+peer replicator's `Cursor`, takes the **min**, and deletes replog
+entries with `hlc <= min - retention` (retention = 24 h). Never prunes
+ahead of the slowest peer.
+
+### 13.7 Which trees opt in, and why
+
+`ReplicationTopology.ReplicatedTrees` is explicit configuration. The
+shipped defaults:
+
+| Tree | Key shape | Replication correctness |
+|---|---|---|
+| `mfg-facts` | `{serial}/{wallTicks:D20}/{counter:D10}/{factId}` | **Safe.** Every fact is a new immutable key; double-apply is an idempotent `SetAsync` on an existing key with an identical value. |
+| `mfg-site-activity-index` | `{site}/{wallTicks:D20}/{counter:D10}/{serial}` | **Safe.** Same reasoning — one entry per fact, never overwritten. |
+| `mfg-part-crdt` (labels only) | `{serial}/labels/{label}` | **Safe.** G-Set semantics — union is commutative/associative/idempotent. |
+| `mfg-part-crdt` (operator register) | `{serial}/operator` | **Best-effort.** LWW by the receiver's local HLC, not the source HLC. Concurrent cross-cluster writes may diverge. Opt in only with the caveat acknowledged. |
+
+The default opt-in list ships the first three. `mfg-part-crdt` is
+opt-in; the config comment points at the future library primitive
+that will fix the register case.
+
+### 13.8 Failure modes and anti-entropy
+
+- **Peer unreachable** — reminder retries with backoff.
+- **Filter fails after a primary write succeeds** — narrow race. A
+  second reminder on each replicator runs a periodic full-tree sweep
+  (`AntiEntropyCursor`) that re-ships any primary entry whose HLC is
+  newer than the cursor. O(N) but bounded; acceptable as a backstop.
+- **Duplicate delivery** — idempotent under the key disciplines above.
+- **A → B → A replay cycle** — broken by the `lattice.replay`
+  `RequestContext` flag.
+
+### 13.9 Test surface
+
+Integration-style end-to-end tests (two full Orleans clusters) are out
+of scope for the Orleans `TestingHost` fixture used by the rest of the
+sample (it materialises a single cluster). M13 ships unit tests for
+the deterministic pieces:
+
+| Area | Framework | What's covered |
+|---|---|---|
+| Replog key encoding | NUnit | Zero-padding, lex-sort matches HLC order with cluster-id tiebreaker |
+| `ReplicationTopology` parsing | NUnit | Config binding, default-opt-in tree list, peer URL validation |
+| Wire types | NUnit | JSON round-trip for `ReplicationBatch` / `ReplicationEntry` / `ReplicationAck` |
+
+All tests live in `test/MultiSiteManufacturing.Tests/Replication/` and
+run with the rest of the suite (`dotnet test --filter "TestCategory!=Chaos"`).
+Two-cluster end-to-end is exercised manually via `run.ps1` (launches
+two Azurites + four silos on the per-cluster ports documented in §13.2).
+
+
+## 14. Docker Compose topology (M14)
+
+### 14.1 Motivation
+
+Through M13 the sample ran via `run.ps1` spawning two Azurite processes
+and four silo processes on the developer machine, clustering over
+loopback. That worked but was fragile: PowerShell automatic-variable
+shadowing (`$args`, `$Host`) hid Azurite startup failures; the seeder
+and the replication bootstrap raced silo membership; "multi-site" was
+still a single flat loopback address space. M14 replaces the process
+launcher with Docker Compose so the topology is structural, not
+accidental.
+
+### 14.2 Topology
+
+Three networks, scoped so that cluster-internal traffic (Orleans silo
+membership, gateway, grain calls, Azurite table/blob/queue) cannot
+leave its cluster:
+
+| Network | Purpose | Services |
+|---|---|---|
+| `forge-net` | Forge cluster membership + Azurite access | `azurite-forge`, `silo-forge-a`, `silo-forge-b` |
+| `heattreat-net` | Heattreat cluster membership + Azurite access | `azurite-heattreat`, `silo-heattreat-a`, `silo-heattreat-b` |
+| `wan` | Cross-cluster HTTP replication only | all four silos (not the Azurites) |
+
+Azurite is deliberately **not** on the `wan` network — each cluster's
+storage is only reachable from its own silos, mirroring the real
+per-site storage isolation M13 models.
+
+Only four host ports are published:
+
+| Host port | Container | Role |
+|---|---|---|
+| 5001 | `silo-forge-a:8080` | Forge UI + gRPC + replication inbound |
+| 5002 | `silo-forge-b:8080` | Forge UI + gRPC |
+| 5003 | `silo-heattreat-a:8080` | Heattreat UI + gRPC + replication inbound |
+| 5004 | `silo-heattreat-b:8080` | Heattreat UI + gRPC |
+
+Orleans silo and gateway ports (11111 / 30000) are `EXPOSE`-d only
+inside each cluster network; no host publish.
+
+### 14.3 Config override via env vars
+
+`appsettings.cluster.{name}.json` still ships the same localhost
+defaults used by `run-legacy.ps1`. In Docker, compose overrides just
+the fields that differ:
+
+- `ConnectionStrings__AzureTableStorage` → `http://azurite-{cluster}:10002/...`
+- `Replication__Peers__0__Name` → peer cluster short name.
+- `Replication__Peers__0__BaseUrls__0` + `Replication__Peers__0__BaseUrls__1`
+  → the peer cluster's silo-A and silo-B HTTP endpoints. The list is
+  tried in order by `ReplicationHttpClient.SendAsync`, giving
+  cross-cluster failover when one peer silo is restarting or
+  disconnected from `wan`. A legacy single `Replication__Peers__0__BaseUrl`
+  scalar is still honoured for the `run-legacy.ps1` path.
+- `Cluster__SiloPortA=11111 Cluster__SiloPortB=11111` — both silos can
+  use the same Orleans port since each container has its own IP.
+- `ASPNETCORE_URLS=http://+:8080` — `Program.cs` skips its own
+  `UseUrls` call when this env var is set.
+- `Seeder__Enabled` — explicit boolean override for the inventory
+  seeder. When present, takes precedence over the legacy
+  cluster-and-silo heuristic. Compose sets `Seeder__Enabled=true` on
+  `silo-forge-a` and `Seeder__Enabled=false` on the other three silos
+  so the seed decision lives declaratively in the topology file.
+
+### 14.4 Genuine partition (Tier 5)
+
+```
+docker network disconnect msmfg_wan msmfg-silo-forge-a
+docker network disconnect msmfg_wan msmfg-silo-forge-b
+# ... demonstrate divergence ...
+docker network connect    msmfg_wan msmfg-silo-forge-a
+docker network connect    msmfg_wan msmfg-silo-forge-b
+```
+
+While disconnected, the replog continues to grow on the forge side,
+the replicator's backoff timer fires on every tick, and heattreat sees
+nothing. On reconnect the replicator ships the accumulated batch in
+HLC order and heattreat converges. This is a genuine transport drop,
+complementing (not replacing) the Tier-4 hash-filter sim which remains
+useful in tests where Docker is not available.
+
+### 14.5 Test surface
+
+The Docker topology is a developer-experience upgrade; no new
+automated tests. The existing unit-test suite
+(`test/MultiSiteManufacturing.Tests/`) runs against the in-memory
+silo fixture and is unaffected by the Compose work.
+
+### 14.6 Replication observability in the top bar
+
+The dashboard top bar renders a live replication strip next to the
+operator identity: cluster + silo id (`forge/A`), seconds since last
+ship, seconds since last inbound apply, per-side row counts, the last
+peer name, and a send-error badge when the most recent attempt failed.
+Counters are **cluster-wide** and **persistent** — they live in a
+`ClusterReplicationStatsGrain` (`IGrainWithStringKey`, keyed by the
+cluster's short name) backed by `msmfgGrainState`, so both silos of a
+cluster report the same numbers and the view survives a silo restart.
+`ReplicationActivityTracker` is a thin fire-and-forget façade over
+that grain — hot-path writes never back-pressure on storage latency.
+The strip refreshes once per second via a Blazor Server `Timer`.

@@ -1,0 +1,240 @@
+# MultiSiteManufacturing - Docker Compose topology (M14).
+#
+# Two Orleans clusters, each with its own Azurite and its own internal
+# cluster network. A shared "wan" network carries only the cross-cluster
+# HTTP replication traffic. Host ports 5001..5004 are the only surfaces
+# exposed to the developer machine - everything else (Orleans silo +
+# gateway ports, Azurite endpoints) is reachable only by container DNS
+# on the internal networks.
+#
+#   forge-net:      azurite-forge, silo-forge-a, silo-forge-b
+#   heattreat-net:  azurite-heattreat, silo-heattreat-a, silo-heattreat-b
+#   wan:            all four silos (replication only; Azurite NOT on wan)
+#
+# Simulate a cross-cluster partition:
+#   docker network disconnect msmfg_wan silo-forge-a
+#   docker network disconnect msmfg_wan silo-forge-b
+#   docker network connect    msmfg_wan silo-forge-a
+#   docker network connect    msmfg_wan silo-forge-b
+#
+# That is a genuine transport-level partition, not the hash-filter sim
+# in FederationRouter.IsDroppedByPartitionAsync (Tier 4) - the two Tier
+# types coexist; Tier 5 is network-level, Tier 4 stays as a fast-path
+# simulation that requires no docker interaction.
+
+name: msmfg
+
+networks:
+  forge-net:
+    driver: bridge
+  heattreat-net:
+    driver: bridge
+  wan:
+    driver: bridge
+
+volumes:
+  azurite-forge-data:
+  azurite-heattreat-data:
+
+x-silo-common: &silo-common
+  build:
+    context: ../../
+    dockerfile: samples/MultiSiteManufacturing/Dockerfile
+  image: msmfg-host:dev
+  restart: unless-stopped
+  environment:
+    # Orleans + ASP.NET Core bind configuration. ASPNETCORE_URLS must
+    # bind 0.0.0.0 (via "+") so host port publishing reaches the app;
+    # localhost inside a container only binds the loopback interface.
+    ASPNETCORE_URLS: "http://+:8080"
+    ASPNETCORE_ENVIRONMENT: "Production"
+    # Each container has its own IP, so all silos can share fixed
+    # Orleans ports - no A/B split needed inside the container. The
+    # appsettings overlay still provides per-A/B ports for the legacy
+    # localhost run.ps1 path; we override them here.
+    Cluster__SiloPortA: "11111"
+    Cluster__SiloPortB: "11111"
+    Cluster__GatewayPortA: "30000"
+    Cluster__GatewayPortB: "30000"
+  expose:
+    - "8080"
+    - "11111"
+    - "30000"
+
+services:
+  # ----- Forge cluster --------------------------------------------------
+  azurite-forge:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    container_name: msmfg-azurite-forge
+    restart: unless-stopped
+    command:
+      - "azurite"
+      - "--blobHost"
+      - "0.0.0.0"
+      - "--queueHost"
+      - "0.0.0.0"
+      - "--tableHost"
+      - "0.0.0.0"
+      - "--location"
+      - "/data"
+      - "--skipApiVersionCheck"
+    volumes:
+      - azurite-forge-data:/data
+    networks:
+      - forge-net
+    healthcheck:
+      # Azurite ships on a Node base image so the healthcheck uses node
+      # to probe the Table port - no curl/nc available in the image.
+      test: ["CMD-SHELL", "node -e \"require('net').createConnection(10002,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  silo-forge-a:
+    <<: *silo-common
+    container_name: msmfg-silo-forge-a
+    depends_on:
+      azurite-forge:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      ASPNETCORE_ENVIRONMENT: "Production"
+      Cluster__SiloPortA: "11111"
+      Cluster__SiloPortB: "11111"
+      Cluster__GatewayPortA: "30000"
+      Cluster__GatewayPortB: "30000"
+      CLUSTER_NAME: "forge"
+      SILO_ID: "a"
+      # Seeder: forge-a is the only silo that bulk-loads inventory on
+      # boot. All other silos (forge-b and both heattreat silos) must
+      # leave this false so the seed is produced exactly once and the
+      # heattreat cluster receives its data via replication.
+      Seeder__Enabled: "true"
+      ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-forge:10000/devstoreaccount1;QueueEndpoint=http://azurite-forge:10001/devstoreaccount1;TableEndpoint=http://azurite-forge:10002/devstoreaccount1;"
+      # Replication peers: reach EITHER heattreat silo over the wan network.
+      # The ReplicationHttpClient tries BaseUrls[0] first and falls back to
+      # BaseUrls[1] on transport failure / non-2xx, so one peer-silo down
+      # doesn't stall shipping.
+      Replication__Peers__0__Name: "heattreat"
+      Replication__Peers__0__BaseUrls__0: "http://silo-heattreat-a:8080"
+      Replication__Peers__0__BaseUrls__1: "http://silo-heattreat-b:8080"
+    command: ["--cluster", "forge", "--silo-id", "a"]
+    ports:
+      - "5001:8080"
+    networks:
+      - forge-net
+      - wan
+
+  silo-forge-b:
+    <<: *silo-common
+    container_name: msmfg-silo-forge-b
+    depends_on:
+      azurite-forge:
+        condition: service_healthy
+      silo-forge-a:
+        condition: service_started
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      ASPNETCORE_ENVIRONMENT: "Production"
+      Cluster__SiloPortA: "11111"
+      Cluster__SiloPortB: "11111"
+      Cluster__GatewayPortA: "30000"
+      Cluster__GatewayPortB: "30000"
+      CLUSTER_NAME: "forge"
+      SILO_ID: "b"
+      Seeder__Enabled: "false"
+      ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-forge:10000/devstoreaccount1;QueueEndpoint=http://azurite-forge:10001/devstoreaccount1;TableEndpoint=http://azurite-forge:10002/devstoreaccount1;"
+      Replication__Peers__0__Name: "heattreat"
+      Replication__Peers__0__BaseUrls__0: "http://silo-heattreat-a:8080"
+      Replication__Peers__0__BaseUrls__1: "http://silo-heattreat-b:8080"
+    command: ["--cluster", "forge", "--silo-id", "b"]
+    ports:
+      - "5002:8080"
+    networks:
+      - forge-net
+      - wan
+
+  # ----- Heattreat cluster ---------------------------------------------
+  azurite-heattreat:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    container_name: msmfg-azurite-heattreat
+    restart: unless-stopped
+    command:
+      - "azurite"
+      - "--blobHost"
+      - "0.0.0.0"
+      - "--queueHost"
+      - "0.0.0.0"
+      - "--tableHost"
+      - "0.0.0.0"
+      - "--location"
+      - "/data"
+      - "--skipApiVersionCheck"
+    volumes:
+      - azurite-heattreat-data:/data
+    networks:
+      - heattreat-net
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('net').createConnection(10002,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  silo-heattreat-a:
+    <<: *silo-common
+    container_name: msmfg-silo-heattreat-a
+    depends_on:
+      azurite-heattreat:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      ASPNETCORE_ENVIRONMENT: "Production"
+      Cluster__SiloPortA: "11111"
+      Cluster__SiloPortB: "11111"
+      Cluster__GatewayPortA: "30000"
+      Cluster__GatewayPortB: "30000"
+      CLUSTER_NAME: "heattreat"
+      SILO_ID: "a"
+      Seeder__Enabled: "false"
+      ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-heattreat:10000/devstoreaccount1;QueueEndpoint=http://azurite-heattreat:10001/devstoreaccount1;TableEndpoint=http://azurite-heattreat:10002/devstoreaccount1;"
+      Replication__Peers__0__Name: "forge"
+      Replication__Peers__0__BaseUrls__0: "http://silo-forge-a:8080"
+      Replication__Peers__0__BaseUrls__1: "http://silo-forge-b:8080"
+    command: ["--cluster", "heattreat", "--silo-id", "a"]
+    ports:
+      - "5003:8080"
+    networks:
+      - heattreat-net
+      - wan
+
+  silo-heattreat-b:
+    <<: *silo-common
+    container_name: msmfg-silo-heattreat-b
+    depends_on:
+      azurite-heattreat:
+        condition: service_healthy
+      silo-heattreat-a:
+        condition: service_started
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      ASPNETCORE_ENVIRONMENT: "Production"
+      Cluster__SiloPortA: "11111"
+      Cluster__SiloPortB: "11111"
+      Cluster__GatewayPortA: "30000"
+      Cluster__GatewayPortB: "30000"
+      CLUSTER_NAME: "heattreat"
+      SILO_ID: "b"
+      Seeder__Enabled: "false"
+      ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-heattreat:10000/devstoreaccount1;QueueEndpoint=http://azurite-heattreat:10001/devstoreaccount1;TableEndpoint=http://azurite-heattreat:10002/devstoreaccount1;"
+      Replication__Peers__0__Name: "forge"
+      Replication__Peers__0__BaseUrls__0: "http://silo-forge-a:8080"
+      Replication__Peers__0__BaseUrls__1: "http://silo-forge-b:8080"
+    command: ["--cluster", "heattreat", "--silo-id", "b"]
+    ports:
+      - "5004:8080"
+    networks:
+      - heattreat-net
+      - wan
+

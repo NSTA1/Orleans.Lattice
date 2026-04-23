@@ -11,8 +11,28 @@ using MultiSiteManufacturing.Host.Grpc;
 using MultiSiteManufacturing.Host.Inventory;
 using MultiSiteManufacturing.Host.Lattice;
 using MultiSiteManufacturing.Host.Operator;
+using MultiSiteManufacturing.Host.Replication;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// M13: cluster-aware bootstrap. The sample now launches as one of two
+// independent Orleans clusters — "forge" and "heattreat" — selected via
+// the --cluster command-line argument. Each cluster has its own ClusterId,
+// its own Azurite instance, and its own HTTP port range. A per-cluster
+// overlay file (appsettings.cluster.{name}.json) supplies connection
+// strings, ports, and the replication topology; it's merged on top of
+// appsettings.json so shared defaults still apply.
+var clusterName = ResolveArg(args, "--cluster", builder.Configuration["CLUSTER_NAME"]) ?? "forge";
+builder.Configuration.AddJsonFile($"appsettings.cluster.{clusterName}.json", optional: false, reloadOnChange: false);
+
+// The default WebApplicationBuilder config chain is:
+//   appsettings.json -> appsettings.{Env}.json -> env vars -> cmd line
+// Later sources win. By appending the cluster overlay above we put JSON
+// *after* env vars, which silently invalidates Docker Compose overrides
+// like ConnectionStrings__AzureTableStorage. Re-adding env vars + args
+// here restores the documented precedence (env/args beat the overlay).
+builder.Configuration.AddEnvironmentVariables();
+builder.Configuration.AddCommandLine(args);
 
 var useInMemoryStorage = builder.Environment.IsEnvironment("Testing")
     || builder.Configuration.GetValue<bool>("Orleans:UseInMemoryStorage");
@@ -21,21 +41,34 @@ var tableStorageConnectionString =
     builder.Configuration.GetConnectionString("AzureTableStorage")
     ?? "UseDevelopmentStorage=true";
 
-// Multi-silo localhost cluster (plan §M12a). The sample ships with two
-// silo identities, "a" and "b", which bind distinct Orleans silo/gateway
-// ports and distinct HTTP ports. When not using in-memory storage, both
-// silos cluster via shared Azure Table Storage (Azurite by default) and
-// share all grain state + the Lattice fact store — so writes on silo A
-// are observable from silo B's Blazor UI. In-memory mode forces
-// single-silo (UseLocalhostClustering with no peer) because in-memory
-// clustering doesn't span processes.
-var siloId = ResolveSiloId(args, builder.Configuration);
-var isPrimarySilo = string.Equals(siloId, "a", StringComparison.OrdinalIgnoreCase);
-var siloPort = isPrimarySilo ? 11111 : 11112;
-var gatewayPort = isPrimarySilo ? 30000 : 30001;
-var httpPort = isPrimarySilo ? 5001 : 5002;
+// Cluster section — per-cluster ports, cluster id, etc.
+var clusterSection = builder.Configuration.GetSection("Cluster");
+var orleansClusterId = clusterSection["OrleansClusterId"] ?? $"msmfg-{clusterName}";
 
-builder.WebHost.UseUrls($"http://localhost:{httpPort}");
+var siloId = ResolveArg(args, "--silo-id", builder.Configuration["SILO_ID"]) ?? "a";
+var isPrimarySilo = string.Equals(siloId, "a", StringComparison.OrdinalIgnoreCase);
+
+var siloPort = isPrimarySilo
+    ? clusterSection.GetValue("SiloPortA", 11111)
+    : clusterSection.GetValue("SiloPortB", 11112);
+var gatewayPort = isPrimarySilo
+    ? clusterSection.GetValue("GatewayPortA", 30000)
+    : clusterSection.GetValue("GatewayPortB", 30001);
+var httpPort = isPrimarySilo
+    ? clusterSection.GetValue("HttpPortA", 5001)
+    : clusterSection.GetValue("HttpPortB", 5002);
+
+// M14: when running under Docker Compose, ASPNETCORE_URLS is set by the
+// container env (typically "http://+:8080") and must be honoured as-is —
+// binding to "localhost" inside a container only binds the loopback
+// interface and the host-side port publish (5001..5004) never reaches
+// the app. For the legacy host-process path (run.ps1 in -Legacy mode,
+// or plain `dotnet run`), ASPNETCORE_URLS is unset and we fall back to
+// the per-A/B httpPort from the cluster overlay.
+if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ASPNETCORE_URLS")))
+{
+    builder.WebHost.UseUrls($"http://localhost:{httpPort}");
+}
 
 // When the host is launched via `dotnet <dll>` (as run.ps1 does, to avoid
 // the shared-bin/obj race of two concurrent `dotnet run` invocations), the
@@ -46,10 +79,34 @@ builder.WebHost.UseUrls($"http://localhost:{httpPort}");
 // forms and all @onclick handlers (Chaos flyout, Race, Fix) are dead.
 builder.WebHost.UseStaticWebAssets();
 
-builder.Services.AddSingleton(new SiloIdentity(siloId, isPrimarySilo));
+builder.Services.AddSingleton(new SiloIdentity(siloId, isPrimarySilo, clusterName));
+
+// M13: load the replication topology once and publish as a singleton
+// so the outgoing filter, the log writer, the inbound endpoint, and
+// the replicator grain all share one immutable view.
+var replicationTopology = ReplicationTopology.Load(builder.Configuration);
+builder.Services.AddSingleton(replicationTopology);
+builder.Services.AddSingleton<ReplicationLogWriter>();
+builder.Services.AddSingleton<LatticeReplicationFilter>();
+builder.Services.AddSingleton<ReplicationActivityTracker>();
+builder.Services.AddHttpClient<ReplicationHttpClient>();
+
+if (!useInMemoryStorage && replicationTopology.IsEnabled)
+{
+    // Only run the bootstrap service when replication is enabled and
+    // persistent storage is available — in-memory test silos don't
+    // have Azure Table reminders, and the janitor + replicator rely
+    // on IRemindable.
+    builder.Services.AddHostedService<ReplicationBootstrapHostedService>();
+}
 
 builder.Host.UseOrleans(silo =>
 {
+    // M13: register the outgoing grain-call filter so every ILattice
+    // SetAsync/DeleteAsync invocation flows through the filter and is
+    // appended to the replog for opted-in trees.
+    silo.AddOutgoingGrainCallFilter<LatticeReplicationFilter>();
+
     if (useInMemoryStorage)
     {
         // Single-silo in-memory mode (tests + quick-start without Azurite).
@@ -63,11 +120,11 @@ builder.Host.UseOrleans(silo =>
     {
         silo.Configure<ClusterOptions>(o =>
         {
-            o.ClusterId = "msmfg-cluster";
+            o.ClusterId = orleansClusterId;
             o.ServiceId = "msmfg-service";
         });
 
-        silo.ConfigureEndpoints(siloPort, gatewayPort);
+        silo.ConfigureEndpoints(siloPort, gatewayPort, listenOnAnyHostAddress: true);
 
         silo.UseAzureStorageClustering(o =>
         {
@@ -142,11 +199,33 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SiteActivityIndex>
 builder.Services.AddSingleton<DashboardBroadcaster>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DashboardBroadcaster>());
 
-// Seeder runs only on the primary silo (A) so a secondary-silo restart
-// doesn't try to re-seed over the shared Azure Table Storage account.
-// Also suppressed in the Testing environment so contract tests start
-// against empty state.
-if (!builder.Environment.IsEnvironment("Testing") && isPrimarySilo)
+// M13: seeder runs on exactly one silo of exactly one cluster so the
+// two clusters don't race and produce duplicate keys. Suppressed in
+// the Testing environment so contract tests start against empty state.
+//
+// Gating precedence:
+//   1. Configuration key "Seeder:Enabled" (env var `Seeder__Enabled`)
+//      wins outright when present — `true` forces seeding on this
+//      silo, `false` forces it off. Useful in docker-compose / CI
+//      where the topology is declarative.
+//   2. Otherwise, the default heuristic runs the seeder only on the
+//      primary silo of the "forge" cluster — the convention the
+//      sample's docker-compose and run.ps1 topologies rely on.
+var isSeeder = false;
+if (!builder.Environment.IsEnvironment("Testing"))
+{
+    var seederOverride = builder.Configuration["Seeder:Enabled"];
+    if (bool.TryParse(seederOverride, out var explicitFlag))
+    {
+        isSeeder = explicitFlag;
+    }
+    else
+    {
+        isSeeder = isPrimarySilo
+            && string.Equals(clusterName, "forge", StringComparison.OrdinalIgnoreCase);
+    }
+}
+if (isSeeder)
 {
     builder.Services.AddHostedService<InventorySeeder>();
 }
@@ -164,20 +243,22 @@ app.MapGrpcService<SiteControlServiceImpl>();
 app.MapGrpcService<ComplianceServiceImpl>();
 app.MapGrpcService<InventoryServiceImpl>();
 
+// M13: inbound replication endpoint. Authenticated via
+// X-Replication-Token shared secret (see ReplicationTopology.SharedSecret).
+app.MapReplicationEndpoint();
+
 await app.RunAsync();
 
-static string ResolveSiloId(string[] args, IConfiguration config)
+static string? ResolveArg(string[] args, string name, string? fallback)
 {
     for (var i = 0; i < args.Length - 1; i++)
     {
-        if (string.Equals(args[i], "--silo-id", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
         {
             return args[i + 1];
         }
     }
-    return config["SILO_ID"]
-        ?? Environment.GetEnvironmentVariable("MSMFG_SILO_ID")
-        ?? "a";
+    return fallback;
 }
 
 /// <summary>
