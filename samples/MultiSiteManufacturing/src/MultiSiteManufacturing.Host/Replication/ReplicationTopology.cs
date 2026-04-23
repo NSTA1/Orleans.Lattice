@@ -82,6 +82,62 @@ public sealed class ReplicationTopology
     }
 
     /// <summary>
+    /// Gate on <b>both</b> the tree and the individual key. Returns
+    /// <c>true</c> only when <paramref name="tree"/> is opted in
+    /// (<see cref="IsReplicated(string)"/>) <i>and</i> the key passes
+    /// any tree-specific per-key filter.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The only tree with a per-key filter is <c>mfg-part-crdt</c>:
+    /// the G-Set "labels" sub-tree (<c>{serial}/labels/{label}</c>) is
+    /// safe to replicate unconditionally because union is commutative,
+    /// associative, and idempotent — two clusters that both add the
+    /// same label converge trivially. The LWW-register sub-tree
+    /// (<c>{serial}/operator</c>) is <i>not</i> replicated: on inbound
+    /// replay the receiver's lattice stamps its own HLC, which loses
+    /// the source HLC ordering and can make the two clusters resolve
+    /// the register to different winners under concurrent writes. The
+    /// filter keeps the register strictly cluster-local until the
+    /// library ships native source-HLC-preserving apply (see plan
+    /// §13.7 + the FUTURE seam in <see cref="LatticeReplicationFilter"/>).
+    /// </para>
+    /// <para>
+    /// Every other replicated tree (<c>mfg-facts</c>,
+    /// <c>mfg-site-activity-index</c>) uses write-once immutable keys,
+    /// so the per-key predicate is the identity function for them.
+    /// </para>
+    /// </remarks>
+    public bool IsKeyReplicated(string tree, string key)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(key);
+
+        if (!IsReplicated(tree))
+        {
+            return false;
+        }
+
+        // mfg-part-crdt: only the G-Set labels half replicates. The
+        // operator LWW register is filtered at origin. The constants
+        // are duplicated rather than imported to avoid a dependency
+        // from the Replication layer on the Lattice layer — this
+        // layer is already the cross-cutting seam, and the cost of a
+        // second copy of the string "/labels/" is negligible.
+        if (string.Equals(tree, PartCrdtTreeId, StringComparison.Ordinal))
+        {
+            return key.Contains(PartCrdtLabelsInfix, StringComparison.Ordinal);
+        }
+
+        return true;
+    }
+
+    // Duplicated from Lattice/PartCrdtStore.cs on purpose (see
+    // IsKeyReplicated remarks). Keep these two in sync.
+    private const string PartCrdtTreeId = "mfg-part-crdt";
+    private const string PartCrdtLabelsInfix = "/labels/";
+
+    /// <summary>
     /// Binds a <see cref="ReplicationTopology"/> from the supplied
     /// config root. Expected JSON shape under <c>"Replication"</c>:
     /// <code>

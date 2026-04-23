@@ -687,10 +687,14 @@ else
 
 Idempotency is a consequence of the sample's key disciplines — see
 §13.7. No HLC is threaded through on apply; the receiver's lattice
-assigns its own HLC, which is fine for immutable-keyed trees and a
-**known limitation** for the LWW-register half of `mfg-part-crdt` (see
-§13.7). The FUTURE seam for library-native merge is exactly the place
-where that limitation goes away.
+assigns its own HLC, which is fine for immutable-keyed trees. The
+LWW-register half of `mfg-part-crdt` (the `/operator` key) would be
+a divergence risk under the same apply path, so the outgoing
+`LatticeReplicationFilter` drops those keys at origin via
+`ReplicationTopology.IsKeyReplicated` — they never enter the replog
+and the inbound endpoint never sees them. The FUTURE seam for
+library-native source-HLC-preserving apply is exactly the place
+where that filter goes away and the register can replicate too.
 
 ### 13.6 Compaction
 
@@ -701,19 +705,29 @@ ahead of the slowest peer.
 
 ### 13.7 Which trees opt in, and why
 
-`ReplicationTopology.ReplicatedTrees` is explicit configuration. The
-shipped defaults:
+`ReplicationTopology.ReplicatedTrees` is explicit **tree-level**
+opt-in; `ReplicationTopology.IsKeyReplicated(tree, key)` layers an
+additional **per-key** filter on top so a single tree can mix
+replicated and cluster-local sub-keys. The shipped defaults:
 
-| Tree | Key shape | Replication correctness |
-|---|---|---|
-| `mfg-facts` | `{serial}/{wallTicks:D20}/{counter:D10}/{factId}` | **Safe.** Every fact is a new immutable key; double-apply is an idempotent `SetAsync` on an existing key with an identical value. |
-| `mfg-site-activity-index` | `{site}/{wallTicks:D20}/{counter:D10}/{serial}` | **Safe.** Same reasoning — one entry per fact, never overwritten. |
-| `mfg-part-crdt` (labels only) | `{serial}/labels/{label}` | **Safe.** G-Set semantics — union is commutative/associative/idempotent. |
-| `mfg-part-crdt` (operator register) | `{serial}/operator` | **Best-effort.** LWW by the receiver's local HLC, not the source HLC. Concurrent cross-cluster writes may diverge. Opt in only with the caveat acknowledged. |
+| Tree | Key shape | Replicated? | Why |
+|---|---|---|---|
+| `mfg-facts` | `{serial}/{wallTicks:D20}/{counter:D10}/{factId}` | **Yes (default)** | Every fact is a new immutable key; double-apply is an idempotent `SetAsync` on an existing key with an identical value. |
+| `mfg-site-activity-index` | `{site}/{wallTicks:D20}/{counter:D10}/{serial}` | **Yes (default)** | Same reasoning — one entry per fact, never overwritten. |
+| `mfg-part-crdt` (labels) | `{serial}/labels/{label}` | **Yes** when the tree is opted in | G-Set semantics — union is commutative, associative, idempotent. Two clusters that both add the same label converge trivially. |
+| `mfg-part-crdt` (operator register) | `{serial}/operator` | **Never** — filtered at origin by `IsKeyReplicated` | LWW by the receiver's local HLC, not the source HLC. Concurrent cross-cluster writes would diverge. The outgoing filter drops these keys before they hit the replog; the inbound endpoint never sees them. |
 
-The default opt-in list ships the first three. `mfg-part-crdt` is
-opt-in; the config comment points at the future library primitive
-that will fix the register case.
+The shipped cluster config (`appsettings.cluster.*.json`) opts all
+three trees in. The per-key filter keeps the operator register
+cluster-local even when `mfg-part-crdt` is in `ReplicatedTrees`, so
+the G-Set half ships correctly while the LWW half stays safe.
+
+The `mfg-part-crdt` per-key filter is the **only** tree-specific
+filter today. All other replicated trees use write-once immutable
+keys and `IsKeyReplicated` is the identity for them. When
+`Orleans.Lattice` ships native source-HLC-preserving apply, the
+operator-register filter collapses and the whole tree can replicate
+unconditionally — that is the future seam referenced in §13.3.
 
 ### 13.8 Failure modes and anti-entropy
 

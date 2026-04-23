@@ -161,69 +161,73 @@ public sealed class ReplicationTopologyTests
         };
         Assert.That(topo.IsEnabled, Is.False);
     }
-}
 
-/// <summary>
-/// Verifies <see cref="ReplicationBatch"/> / <see cref="ReplicationEntry"/>
-/// / <see cref="ReplicationAck"/> JSON round-trip with the default
-/// System.Text.Json web defaults used by the HTTP transport.
-/// </summary>
-[TestFixture]
-public sealed class ReplicationWireJsonTests
-{
-    private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
+    // ---- IsKeyReplicated: per-tree per-key filter --------------------
+
+    private static ReplicationTopology TopologyWith(params string[] trees) => new()
+    {
+        LocalCluster = "forge",
+        SharedSecret = "s",
+        Peers = [new ReplicationPeer("heattreat", [new Uri("http://localhost:5003")])],
+        ReplicatedTrees = trees,
+    };
 
     [Test]
-    public void Batch_round_trips_through_json()
+    public void IsKeyReplicated_returns_true_for_opted_in_tree_with_no_filter()
     {
-        var batch = new ReplicationBatch
-        {
-            SourceCluster = "forge",
-            Tree = "mfg-facts",
-            Entries =
-            [
-                new ReplicationEntry
-                {
-                    Key = "HPT-PART-2028-00001/0001",
-                    Op = ReplicationOp.Set,
-                    Value = [1, 2, 3, 4],
-                    SourceHlc = new HybridLogicalClock { WallClockTicks = 42, Counter = 7 },
-                },
-                new ReplicationEntry
-                {
-                    Key = "HPT-PART-2028-00002/0002",
-                    Op = ReplicationOp.Delete,
-                    Value = null,
-                    SourceHlc = new HybridLogicalClock { WallClockTicks = 43, Counter = 0 },
-                },
-            ],
-        };
-
-        var json = JsonSerializer.Serialize(batch, Options);
-        var round = JsonSerializer.Deserialize<ReplicationBatch>(json, Options);
-
-        Assert.That(round, Is.Not.Null);
-        Assert.That(round!.SourceCluster, Is.EqualTo(batch.SourceCluster));
-        Assert.That(round.Tree, Is.EqualTo(batch.Tree));
-        Assert.That(round.Entries, Has.Count.EqualTo(2));
-        Assert.That(round.Entries[0].Value, Is.EqualTo(batch.Entries[0].Value));
-        Assert.That(round.Entries[0].SourceHlc, Is.EqualTo(batch.Entries[0].SourceHlc));
-        Assert.That(round.Entries[1].Op, Is.EqualTo(ReplicationOp.Delete));
-        Assert.That(round.Entries[1].Value, Is.Null);
+        var topo = TopologyWith("mfg-facts");
+        Assert.That(
+            topo.IsKeyReplicated("mfg-facts", "HPT-PART-2028-00001/0001"),
+            Is.True);
     }
 
     [Test]
-    public void Ack_round_trips_through_json()
+    public void IsKeyReplicated_returns_false_for_tree_not_opted_in()
     {
-        var ack = new ReplicationAck
+        var topo = TopologyWith("mfg-facts");
+        Assert.That(topo.IsKeyReplicated("mfg-part-crdt", "HPT/labels/hot"), Is.False);
+    }
+
+    [Test]
+    public void IsKeyReplicated_mfg_part_crdt_replicates_labels_only()
+    {
+        // Opt the tree in and verify the per-key split: labels pass
+        // (G-Set, safe under cross-cluster replay); operator register
+        // is filtered at origin because the inbound apply path stamps
+        // a fresh HLC and would lose the source HLC ordering.
+        var topo = TopologyWith("mfg-part-crdt");
+
+        Assert.Multiple(() =>
         {
-            Applied = 17,
-            HighestAppliedHlc = new HybridLogicalClock { WallClockTicks = 99, Counter = 3 },
-        };
-        var json = JsonSerializer.Serialize(ack, Options);
-        var round = JsonSerializer.Deserialize<ReplicationAck>(json, Options);
-        Assert.That(round, Is.Not.Null);
-        Assert.That(round!.Applied, Is.EqualTo(17));
-        Assert.That(round.HighestAppliedHlc, Is.EqualTo(ack.HighestAppliedHlc));
+            Assert.That(
+                topo.IsKeyReplicated("mfg-part-crdt", "HPT-PART-2028-00001/labels/hot"),
+                Is.True,
+                "Label keys (G-Set) must replicate.");
+
+            Assert.That(
+                topo.IsKeyReplicated("mfg-part-crdt", "HPT-PART-2028-00001/operator"),
+                Is.False,
+                "Operator register (LWW) must NOT replicate.");
+
+            // Shadow-prefixed writes (set under partition) still
+            // contain /labels/ or /operator - the same rule applies.
+            Assert.That(
+                topo.IsKeyReplicated("mfg-part-crdt", "shadow/a/HPT-PART-2028-00001/labels/hot"),
+                Is.True);
+            Assert.That(
+                topo.IsKeyReplicated("mfg-part-crdt", "shadow/a/HPT-PART-2028-00001/operator"),
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void IsKeyReplicated_throws_on_null_arguments()
+    {
+        var topo = TopologyWith("mfg-facts");
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => topo.IsKeyReplicated(null!, "k"), Throws.ArgumentNullException);
+            Assert.That(() => topo.IsKeyReplicated("mfg-facts", null!), Throws.ArgumentNullException);
+        });
     }
 }

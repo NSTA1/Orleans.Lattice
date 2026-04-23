@@ -82,8 +82,13 @@ internal sealed class LatticeReplicationFilter(
             return;
         }
 
-        if (!topology.IsReplicated(treeName))
+        if (!topology.IsKeyReplicated(treeName, originalKey))
         {
+            // Either the tree isn't opted in at all, or the tree has
+            // a per-key filter that this key doesn't pass. The only
+            // shipped per-key filter is the mfg-part-crdt split:
+            // labels replicate, operator register does not. See
+            // ReplicationTopology.IsKeyReplicated remarks.
             return;
         }
 
