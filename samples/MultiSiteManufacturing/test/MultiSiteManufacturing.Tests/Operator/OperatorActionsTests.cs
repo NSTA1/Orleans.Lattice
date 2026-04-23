@@ -264,4 +264,69 @@ public class OperatorActionsTests
 
         Assert.That(latticeState, Is.EqualTo(ComplianceState.Nominal));
     }
+
+    [Test]
+    public async Task FixAsync_emits_single_UseAsIs_MrbDisposition_at_CincinnatiMrb()
+    {
+        var (actions, _, router) = NewSut();
+        var serial = new PartSerialNumber("HPT-BLD-S1-2025-99400");
+
+        var result = await actions.FixAsync(serial, OperatorId.Demo);
+
+        var facts = await router.GetBackend("lattice").GetFactsAsync(serial);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(facts, Has.Count.EqualTo(1));
+            Assert.That(result.Forwarded, Is.True);
+            Assert.That(result.Held, Is.False);
+            Assert.That(result.Site, Is.EqualTo(ProcessSite.CincinnatiMrb));
+
+            Assert.That(facts[0], Is.InstanceOf<MrbDisposition>());
+            Assert.That(((MrbDisposition)facts[0]).Disposition, Is.EqualTo(MrbDispositionKind.UseAsIs));
+            Assert.That(facts[0].Site, Is.EqualTo(ProcessSite.CincinnatiMrb));
+        });
+    }
+
+    [Test]
+    public async Task FixAsync_restores_agreement_when_part_is_Flagged_on_baseline()
+    {
+        var (actions, _, router) = NewSut();
+        var serial = new PartSerialNumber("HPT-BLD-S1-2025-99401");
+
+        // Seed a Flagged state on both backends by racing the trio; under
+        // a deterministic single-threaded emission the baseline fold may
+        // still end up Flagged because arrival order is NCR-Pass-MRB and
+        // that's a valid demotion path — so to be robust we explicitly
+        // raise a minor NCR and leave it unresolved.
+        await actions.RaiseNonConformanceAsync(
+            serial,
+            ncNumber: "NC-FIX-TEST",
+            defectCode: "D1",
+            severity: NcSeverity.Minor,
+            site: ProcessSite.ToulouseNdtLab,
+            op: OperatorId.Demo);
+
+        var baselineBefore = await router.GetBackend("baseline").GetStateAsync(serial);
+        var latticeBefore = await router.GetBackend("lattice").GetStateAsync(serial);
+        Assert.That(baselineBefore, Is.EqualTo(ComplianceState.FlaggedForReview));
+        Assert.That(latticeBefore, Is.EqualTo(ComplianceState.FlaggedForReview));
+
+        // Apply the single-fact fix: UseAsIs demotes Flagged -> Nominal in
+        // both folds (arrival-order and HLC-order) because a singleton
+        // batch cannot be reordered.
+        var result = await actions.FixAsync(serial, OperatorId.Demo);
+
+        var baselineAfter = await router.GetBackend("baseline").GetStateAsync(serial);
+        var latticeAfter = await router.GetBackend("lattice").GetStateAsync(serial);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Forwarded, Is.True);
+            Assert.That(baselineAfter, Is.EqualTo(ComplianceState.Nominal));
+            Assert.That(latticeAfter, Is.EqualTo(ComplianceState.Nominal));
+            Assert.That(baselineAfter, Is.EqualTo(latticeAfter),
+                "Fix must restore baseline ↔ lattice agreement");
+        });
+    }
 }

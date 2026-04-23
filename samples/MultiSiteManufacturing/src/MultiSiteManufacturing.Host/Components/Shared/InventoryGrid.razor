@@ -56,14 +56,28 @@
                             <td><StateBadge State="@part.LatticeState" /></td>
                             <td>@part.FactCount</td>
                             <td>
-                                <button type="button"
-                                        class="outline race-button"
-                                        disabled="@busy"
-                                        aria-busy="@(busy ? "true" : "false")"
-                                        title="Race an order-sensitive three-fact trio for @serial.Value — NCR(Minor) → Inspection(Pass) → MRB(UseAsIs) — emitted concurrently. Lattice always folds by HLC back to Nominal; baseline folds in arrival order. Tip: enable the 'Baseline reorder storm' preset (or set a multi-second site delay) first — the shuffled arrival order will surface the trio as a red row in the Divergence feed (Flagged on baseline, Nominal on lattice)."
-                                        @onclick="() => RaceAsync(serial)">
-                                    ⚠ Race
-                                </button>
+                                @if (part.Diverges)
+                                {
+                                    <button type="button"
+                                            class="outline race-button fix-button"
+                                            disabled="@busy"
+                                            aria-busy="@(busy ? "true" : "false")"
+                                            title="Fix the baseline ↔ lattice divergence on @serial.Value by emitting a single MRB(UseAsIs) with a fresh HLC. Works for the common Flagged-vs-Nominal divergence (both folds see UseAsIs last and demote to Nominal). Will not fix terminal Scrap or unarmed Rework divergence — those require a full retest sequence."
+                                            @onclick="() => FixAsync(serial)">
+                                        ✓ Fix
+                                    </button>
+                                }
+                                else
+                                {
+                                    <button type="button"
+                                            class="outline race-button"
+                                            disabled="@busy"
+                                            aria-busy="@(busy ? "true" : "false")"
+                                            title="Race an order-sensitive three-fact trio for @serial.Value — NCR(Minor) → Inspection(Pass) → MRB(UseAsIs) — emitted concurrently. Lattice always folds by HLC back to Nominal; baseline folds in arrival order. Tip: enable the 'Baseline reorder storm' preset (or set a multi-second site delay) first — the shuffled arrival order will surface the trio as a red row in the Divergence feed (Flagged on baseline, Nominal on lattice)."
+                                            @onclick="() => RaceAsync(serial)">
+                                        ⚠ Race
+                                    </button>
+                                }
                             </td>
                         </tr>
                     }
@@ -120,6 +134,34 @@
         }
         return $"Race for {serial.Value}: NCR → Pass → MRB(UseAsIs) trio forwarded — watch the divergence feed";
     }
+
+    private async Task FixAsync(PartSerialNumber serial)
+    {
+        if (!_inFlight.Add(serial))
+        {
+            return;
+        }
+        StateHasChanged();
+        try
+        {
+            var result = await Actions.FixAsync(serial, OperatorId.Demo);
+            _lastRace = new RaceStatus(BuildFixMessage(serial, result), result.Held);
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Fix failed for {Serial}", serial.Value);
+            _lastRace = new RaceStatus($"Fix for {serial.Value} failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _inFlight.Remove(serial);
+        }
+    }
+
+    private static string BuildFixMessage(PartSerialNumber serial, FixResult r) =>
+        r.Held
+            ? $"Fix for {serial.Value}: MRB UseAsIs held at {r.Site} (site paused or delayed)"
+            : $"Fix for {serial.Value}: MRB UseAsIs forwarded through {r.Site} — divergence should clear";
 
     private sealed record RaceStatus(string Message, bool AllHeld);
 }

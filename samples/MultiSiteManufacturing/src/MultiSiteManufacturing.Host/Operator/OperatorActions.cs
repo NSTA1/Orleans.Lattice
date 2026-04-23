@@ -300,6 +300,63 @@ public sealed class OperatorActions(FederationRouter router, OperatorClock clock
     }
 
     /// <summary>
+    /// Emits a single <see cref="MrbDisposition"/> (UseAsIs) at
+    /// <see cref="ProcessSite.CincinnatiMrb"/> with a fresh monotonic
+    /// HLC, intended to restore agreement between the baseline and
+    /// lattice backends for a part that is currently diverging in the
+    /// <see cref="ComplianceState.FlaggedForReview"/> state. Exposed on
+    /// the dashboard as a per-row <b>✓ Fix</b> button that replaces the
+    /// <b>⚠ Race</b> button whenever
+    /// <c>PartSummaryUpdate.Diverges</c> is true.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only one fact is emitted (no concurrency, no race), so backend
+    /// reorder buffers see a singleton batch and cannot shuffle it. The
+    /// HLC is strictly greater than every prior fact for the part, so
+    /// both folds see the UseAsIs as the final disposition:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><c>NaiveFold</c> (baseline, arrival order) appends the
+    ///   UseAsIs after every prior fact and demotes
+    ///   <see cref="ComplianceState.FlaggedForReview"/> to
+    ///   <see cref="ComplianceState.Nominal"/>.</item>
+    ///   <item><c>ComplianceFold</c> (lattice, HLC order) applies the
+    ///   UseAsIs last and reaches the same terminal state.</item>
+    /// </list>
+    /// <para>
+    /// This fixes the common divergence produced by the
+    /// <see cref="RaceAsync"/> trio under chaos (baseline Flagged vs.
+    /// lattice Nominal). It does <i>not</i> demote unarmed
+    /// <see cref="ComplianceState.Rework"/> or terminal
+    /// <see cref="ComplianceState.Scrap"/> — those divergences require
+    /// a proper retest + re-disposition sequence and are deliberately
+    /// not auto-fixable from a single click.
+    /// </para>
+    /// </remarks>
+    public async Task<FixResult> FixAsync(
+        PartSerialNumber serial,
+        OperatorId op,
+        CancellationToken cancellationToken = default)
+    {
+        var ncNumber = $"FIX-{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}";
+        var fact = new MrbDisposition
+        {
+            Serial = serial,
+            FactId = Guid.NewGuid(),
+            Hlc = clock.Next(),
+            Site = ProcessSite.CincinnatiMrb,
+            Operator = op,
+            Description = $"Fix: MRB UseAsIs {ncNumber} to restore baseline ↔ lattice agreement",
+            NcNumber = ncNumber,
+            Disposition = MrbDispositionKind.UseAsIs,
+        };
+
+        var forwarded = await router.EmitAsync(fact, cancellationToken);
+        return new FixResult(forwarded, ProcessSite.CincinnatiMrb);
+    }
+
+    /// <summary>
     /// Canonical <see cref="ProcessSite"/> for each <see cref="ProcessStage"/>. Mirrors
     /// the mapping in <c>InventoryServiceImpl</c> so gRPC- and UI-driven facts land at the
     /// same physical site.
@@ -331,4 +388,17 @@ public readonly record struct RaceResult(int Forwarded, int Held, ProcessSite Si
 
     /// <summary>Total facts attempted (<see cref="Forwarded"/> + <see cref="Held"/>).</summary>
     public int Total => Forwarded + Held;
+}
+
+/// <summary>
+/// Outcome of <see cref="OperatorActions.FixAsync"/>: whether the single
+/// MRB UseAsIs disposition reached the backends or was held at the
+/// origin site grain (paused or buffered for reorder).
+/// </summary>
+/// <param name="Forwarded">True when the fact fanned out to both backends and raised <c>FactRouted</c>.</param>
+/// <param name="Site">Origin site the fix was emitted at (Cincinnati MRB).</param>
+public readonly record struct FixResult(bool Forwarded, ProcessSite Site)
+{
+    /// <summary>True when the fact was held by the origin site grain.</summary>
+    public bool Held => !Forwarded;
 }
