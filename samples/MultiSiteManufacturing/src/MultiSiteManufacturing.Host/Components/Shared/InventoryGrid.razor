@@ -56,7 +56,16 @@
                             <td><StateBadge State="@part.LatticeState" /></td>
                             <td>@part.FactCount</td>
                             <td>
-                                @if (part.Diverges)
+                                @* Scrap is terminal on both folds — no fact can move a scrapped
+                                   part, so neither Race nor Fix would have any effect. Hide the
+                                   action cell entirely (including a diverged Scrap-vs-non-Scrap
+                                   row, which Fix can't reconcile either). *@
+                                @if (part.BaselineState == ComplianceState.Scrap
+                                     || part.LatticeState == ComplianceState.Scrap)
+                                {
+                                    <small class="race-status race-status-held">—</small>
+                                }
+                                else if (part.Diverges)
                                 {
                                     <button type="button"
                                             class="outline race-button fix-button"
