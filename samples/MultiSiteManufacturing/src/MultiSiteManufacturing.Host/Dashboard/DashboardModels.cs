@@ -27,7 +27,7 @@ public sealed record PartSummaryUpdate
     /// <summary>Total number of facts recorded against the part in the lattice backend.</summary>
     public required int FactCount { get; init; }
 
-    /// <summary>True when the baseline and lattice states disagree (drives the divergence feed).</summary>
+    /// <summary>True when the baseline and lattice states disagree (drives the red row highlight in <c>InventoryGrid</c>).</summary>
     public bool Diverges => BaselineState != LatticeState;
 }
 
@@ -58,9 +58,10 @@ public sealed record ChaosOverview
 }
 
 /// <summary>
-/// One row of the divergence feed — pushed whenever a part's
+/// Divergence state change for a single part — pushed whenever its
 /// baseline-vs-lattice agreement status flips (enters divergence, stays
-/// divergent with new states, or resolves).
+/// divergent with new states, or resolves). Consumed by the
+/// <c>WatchDivergence</c> gRPC stream.
 /// </summary>
 public sealed record DivergenceEvent
 {

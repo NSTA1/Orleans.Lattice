@@ -213,8 +213,8 @@ public sealed class OperatorActions(FederationRouter router, OperatorClock clock
     /// preset or when <see cref="SiteConfig.ReorderEnabled"/> flushes a
     /// previously-paused site's queue — baseline cannot demote a flag
     /// that has not yet been raised, and the part diverges from lattice.
-    /// This is the canonical UI-driven way to produce a row in the
-    /// divergence feed.
+    /// This is the canonical UI-driven way to surface a red-highlighted
+    /// row in the inventory grid.
     /// </para>
     /// <para>
     /// All three facts flow through <see cref="FederationRouter.EmitAsync"/>

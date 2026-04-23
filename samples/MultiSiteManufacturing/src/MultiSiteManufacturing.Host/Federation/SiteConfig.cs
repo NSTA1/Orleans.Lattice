@@ -133,8 +133,8 @@ public enum ChaosPreset
     /// only — incoming writes are buffered and flushed in shuffled
     /// order. Combined with the <b>Race</b> row action, this is the
     /// canonical way to force baseline into an arrival-order fold that
-    /// disagrees with lattice's HLC-order fold, producing a red row in
-    /// the divergence feed.
+    /// disagrees with lattice's HLC-order fold, highlighting the
+    /// affected row in the inventory grid.
     /// </summary>
     BaselineReorderStorm,
 }

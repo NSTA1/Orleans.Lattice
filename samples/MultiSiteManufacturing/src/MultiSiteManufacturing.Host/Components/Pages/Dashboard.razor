@@ -26,10 +26,7 @@
 
 <ChaosBanner />
 
-<div class="dashboard-grid">
-    <InventoryGrid Parts="@_parts.Values" />
-    <DivergencePanel Parts="@_parts.Values" />
-</div>
+<InventoryGrid Parts="@_parts.Values" />
 
 @code {
     private readonly Dictionary<PartSerialNumber, PartSummaryUpdate> _parts = new();

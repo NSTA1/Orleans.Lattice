@@ -323,15 +323,17 @@ set changes. Divergence emerges organically from chaos-induced reorder
 │  Multi-Site Manufacturing — Digital Thread Demo           [ ☰ Chaos ] │ ← fly-out toggle
 ├─────────────────────────────────────────────────────────────────────┤
 │  Filters: family [▼]  state [▼]  site [▼]            [+ New part]    │
-├──────────────────────────────┬──────────────────────────────────────┤
-│  Inventory                   │  Divergence feed                      │
-│  ┌──────┬──────┬────────┐    │  ┌────────────┬──────────┬────────┐  │
-│  │ SN   │ Stage│ State  │    │  │ SN         │ Baseline │ Lattice│  │
-│  │ ...  │ ...  │ [Rework]   │  │ HPT-...142 │ Nominal  │ Rework │  │  ← red row
-│  │      │      │         │    │  │  ...       │          │        │  │
-│  └──────┴──────┴────────┘    │  └────────────┴──────────┴────────┘  │
-│  (click part → detail pane)  │                                      │
-└──────────────────────────────┴──────────────────────────────────────┘
+├─────────────────────────────────────────────────────────────────────┤
+│  Inventory                                                           │
+│  ┌──────────────┬────────┬──────────┬──────────┬───────┬──────────┐  │
+│  │ SN           │ Stage  │ Baseline │ Lattice  │ Facts │ Actions  │  │
+│  │ HPT-...142   │ NDT    │ [Review] │ [Nominal]│   7   │  ✓ Fix   │  │ ← red row
+│  │ HPT-...143   │ Mach.  │ [Nominal]│ [Nominal]│   3   │  ⚠ Race  │  │
+│  │  ...         │  ...   │   ...    │   ...    │  ...  │   ...    │  │
+│  └──────────────┴────────┴──────────┴──────────┴───────┴──────────┘  │
+│  (rows where baseline ≠ lattice are highlighted red; click serial →  │
+│   detail pane)                                                       │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 7.2 Chaos fly-out
@@ -357,8 +359,8 @@ Sections inside the fly-out:
    - *Customs hold*: delays Nagoya Heat Treatment by 8 s.
    - *MRB weekend*: pauses Cincinnati MRB entirely.
    - *Lattice storage flakes*: applies a 10 % transient fault rate and
-     50–250 ms jitter to the **lattice** backend only — drives the
-     divergence feed organically.
+     50–250 ms jitter to the **lattice** backend only — surfaces
+     baseline ↔ lattice divergence as red-highlighted rows organically.
    - *Clear all*: resets every site and every backend to nominal.
 4. **Active chaos summary** — a prominent banner at the top of the
    dashboard (outside the fly-out) showing "⚠ 2 sites paused, 1 delayed,

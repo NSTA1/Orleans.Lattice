@@ -141,7 +141,7 @@
         {
             return $"Race for {serial.Value}: {r.Forwarded}/3 trio facts forwarded, {r.Held} held";
         }
-        return $"Race for {serial.Value}: NCR → Pass → MRB(UseAsIs) trio forwarded — watch the divergence feed";
+        return $"Race for {serial.Value}: NCR → Pass → MRB(UseAsIs) trio forwarded — baseline and lattice may now disagree (row turns red if they do)";
     }
 
     private async Task FixAsync(PartSerialNumber serial)
