@@ -1,9 +1,9 @@
 @* Chaos fly-out side panel. Slides in from the right when the operator
    clicks the "☰ Chaos" button in the layout header. Three sections:
-   per-site controls, backend storage chaos, canned presets. All state
-   is persisted durably and survives a process restart; the fly-out
-   subscribes to chaos-config-change notifications so it re-renders
-   whenever anything changes anywhere. *@
+   canned presets (top, for quick demo flow), per-site controls,
+   backend storage chaos. All state is persisted durably and survives a
+   process restart; the fly-out subscribes to chaos-config-change
+   notifications so it re-renders whenever anything changes anywhere. *@
 
 @implements IAsyncDisposable
 @inject FederationRouter Router
@@ -25,6 +25,26 @@
             All chaos state is persisted and survives a process restart.
         </small>
     </header>
+
+    <section aria-labelledby="chaos-presets-heading">
+        <h3 id="chaos-presets-heading">Canned presets</h3>
+        <p><small>Single-click scenarios that configure multiple knobs at once.</small></p>
+        <div class="preset-buttons">
+            @foreach (var preset in ChaosPresetInfo.All)
+            {
+                <button class="outline"
+                        disabled="@_busy"
+                        title="@ChaosPresetInfo.GetDescription(preset)"
+                        @onclick="() => TriggerPresetAsync(preset)">
+                    @ChaosPresetInfo.GetDisplayName(preset)
+                </button>
+            }
+        </div>
+        @if (_lastPresetDescription is not null)
+        {
+            <p><small><em>@_lastPresetDescription</em></small></p>
+        }
+    </section>
 
     <section aria-labelledby="chaos-sites-heading">
         <h3 id="chaos-sites-heading">Per-site controls</h3>
@@ -154,26 +174,6 @@
                     </footer>
                 </article>
             }
-        }
-    </section>
-
-    <section aria-labelledby="chaos-presets-heading">
-        <h3 id="chaos-presets-heading">Canned presets</h3>
-        <p><small>Single-click scenarios that configure multiple knobs at once.</small></p>
-        <div class="preset-buttons">
-            @foreach (var preset in ChaosPresetInfo.All)
-            {
-                <button class="outline"
-                        disabled="@_busy"
-                        title="@ChaosPresetInfo.GetDescription(preset)"
-                        @onclick="() => TriggerPresetAsync(preset)">
-                    @ChaosPresetInfo.GetDisplayName(preset)
-                </button>
-            }
-        </div>
-        @if (_lastPresetDescription is not null)
-        {
-            <p><small><em>@_lastPresetDescription</em></small></p>
         }
     </section>
 
