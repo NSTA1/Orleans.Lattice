@@ -61,19 +61,7 @@
     <article>
         <header>
             <strong>Inventory By Activity</strong>
-            <small> · B+ tree range scan</small>
         </header>
-        <p>
-            <small>
-                Click a site to run a live <code>ILattice.ScanEntriesAsync</code>
-                over the <code>@SiteActivityIndex.TreeId</code> tree. Every
-                routed <code>Fact</code> writes one index entry keyed by
-                <code>{site}/{hlc}/{serial}</code> with a short activity
-                label as the value; the listing below is the result of
-                reading the <code>{site}/</code> prefix in reverse, deduped
-                to the most recent activity per part.
-            </small>
-        </p>
         <ul class="tabs" role="tablist" aria-label="Activity site filter">
             @foreach (var s in ProcessSiteInfo.InLifecycleOrder)
             {
