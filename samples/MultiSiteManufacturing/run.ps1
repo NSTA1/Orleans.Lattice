@@ -1,20 +1,21 @@
 <#
 .SYNOPSIS
-  Launches the Multi-Site Manufacturing sample (M14: Docker Compose).
+  Launches the Multi-Site Manufacturing sample (M14: Docker Compose + Traefik).
 
 .DESCRIPTION
   The sample runs as two independent Orleans clusters ("forge" +
   "heattreat"), each with two silos and its own Azurite, all inside
-  Docker Compose. Only HTTP ports 5001..5004 are exposed to the host:
+  Docker Compose. A per-cluster Traefik reverse proxy provides sticky-
+  session load balancing across the cluster's two silos. Only TWO host
+  ports are published:
 
-    http://localhost:5001  silo-forge-a      (forge cluster, UI + gRPC)
-    http://localhost:5002  silo-forge-b      (forge cluster, UI + gRPC)
-    http://localhost:5003  silo-heattreat-a  (heattreat cluster)
-    http://localhost:5004  silo-heattreat-b  (heattreat cluster)
+    http://localhost:5001  traefik-forge      -> silo-forge-a | silo-forge-b
+    http://localhost:5002  traefik-heattreat  -> silo-heattreat-a | silo-heattreat-b
 
-  Orleans silo + gateway traffic and Azurite endpoints live on internal
-  Compose networks only (forge-net, heattreat-net, wan). See
-  docker-compose.yml for the topology, and plan.md §14 for rationale.
+  Individual silo HTTP ports (:8080), Orleans silo (:11111) and gateway
+  (:30000) ports, and Azurite endpoints live on internal Compose
+  networks only (forge-net, heattreat-net, wan). See docker-compose.yml
+  for the topology, and plan.md §14 for rationale.
 
   For the legacy host-process launcher (no Docker), use run-legacy.ps1.
 
@@ -33,8 +34,8 @@
 
 .EXAMPLE
   ./run.ps1
-    Build the image (if needed), start all services, wait until healthy,
-    then print the four host URLs and exit. Containers keep running.
+    Build the image (if needed), start all services, wait until the two
+    Traefik entrypoints accept TCP, then print the two cluster URLs.
 
 .EXAMPLE
   ./run.ps1 -Logs
@@ -117,10 +118,8 @@ try {
     }
 
     $urls = @(
-        @{ Name = "silo-forge-a";      Port = 5001 }
-        @{ Name = "silo-forge-b";      Port = 5002 }
-        @{ Name = "silo-heattreat-a";  Port = 5003 }
-        @{ Name = "silo-heattreat-b";  Port = 5004 }
+        @{ Name = "traefik-forge     (forge cluster)";     Port = 5001 }
+        @{ Name = "traefik-heattreat (heattreat cluster)"; Port = 5002 }
     )
 
     foreach ($u in $urls) {
@@ -129,15 +128,17 @@ try {
             Write-Host "ready" -ForegroundColor Green
         } else {
             Write-Host "TIMEOUT" -ForegroundColor Red
-            Write-Host "  Check: docker compose logs $($u.Name)"
+            # Traefik itself comes up in ~1s; a timeout here usually means
+            # no healthy backend silo, so point the operator at silo logs.
+            Write-Host "  Check: docker compose logs traefik-forge traefik-heattreat"
+            Write-Host "  Check: docker compose logs silo-forge-a silo-forge-b silo-heattreat-a silo-heattreat-b"
         }
     }
 
     Write-Host ""
-    Write-Host "Dashboard URLs:" -ForegroundColor Cyan
-    foreach ($u in $urls) {
-        Write-Host ("  http://localhost:{0}  ({1})" -f $u.Port, $u.Name)
-    }
+    Write-Host "Cluster URLs (sticky-LB via Traefik):" -ForegroundColor Cyan
+    Write-Host "  http://localhost:5001  forge     (routes to silo-forge-a | silo-forge-b)"
+    Write-Host "  http://localhost:5002  heattreat (routes to silo-heattreat-a | silo-heattreat-b)"
     Write-Host ""
     Write-Host "Useful commands:" -ForegroundColor Cyan
     Write-Host "  ./run.ps1 -Logs                       tail all silo logs"
@@ -150,3 +151,4 @@ try {
 finally {
     Pop-Location
 }
+

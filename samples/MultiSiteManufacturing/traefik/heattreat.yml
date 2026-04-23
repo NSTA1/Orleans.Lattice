@@ -1,0 +1,25 @@
+# Traefik dynamic config for the heattreat cluster (file provider).
+# See traefik/forge.yml for rationale.
+http:
+  routers:
+    heattreat-web:
+      rule: "PathPrefix(`/`)"
+      entryPoints:
+        - web
+      service: heattreat-web
+
+  services:
+    heattreat-web:
+      loadBalancer:
+        sticky:
+          cookie:
+            name: msmfg_heattreat_affinity
+            httpOnly: true
+            sameSite: lax
+        servers:
+          - url: "http://silo-heattreat-a:8080"
+          - url: "http://silo-heattreat-b:8080"
+        healthCheck:
+          path: "/"
+          interval: "2s"
+          timeout: "1s"
