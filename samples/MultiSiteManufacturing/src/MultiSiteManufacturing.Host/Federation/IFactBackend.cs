@@ -8,9 +8,10 @@ namespace MultiSiteManufacturing.Host.Federation;
 /// </summary>
 /// <remarks>
 /// The sample ships two implementations — <c>BaselineFactBackend</c>
-/// (arrival-order, LWW-ish) and <c>LatticeFactBackend</c> (Orleans.Lattice
-/// fact log, HLC-ordered fold) — so the dashboard can contrast their
-/// answers when chaos-induced reorder makes them diverge.
+/// (arrival-order fold over an unreconciled append log) and
+/// <c>LatticeFactBackend</c> (Orleans.Lattice fact log, HLC-ordered fold)
+/// — so the dashboard can contrast their answers when concurrent writes or
+/// chaos-induced reorder make them diverge.
 /// </remarks>
 public interface IFactBackend
 {

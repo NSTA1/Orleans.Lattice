@@ -140,9 +140,9 @@ Max of:
 │              ┌───────────────┴────────────────┐       │
 │              ▼                                ▼       │
 │      Orleans grains                  Orleans.Lattice  │
-│      (baseline LWW +                 (fact store,     │
-│       IProcessSiteGrain              Azure Table      │
-│       IPartGrain)                    Storage)         │
+│      (arrival-order base-            (fact store,     │
+│       line + IProcessSite-           Azure Table      │
+│       Grain + IPartGrain)            Storage)         │
 └──────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -447,7 +447,7 @@ asked for.
 | Layer | Framework | What's covered |
 |---|---|---|
 | Domain fold | NUnit | Every fact kind, every severity transition, `MRBDisposition(UseAsIs)` demotion, idempotency under duplicate facts |
-| Backends | NUnit + TestCluster | Baseline LWW vs. Lattice divergence under reorder |
+| Backends | NUnit + TestCluster | Arrival-order baseline vs. HLC-ordered lattice divergence under concurrent writes and reorder |
 | Site grain | NUnit + TestCluster | `IProcessSiteGrain` persistence, pause/resume semantics, preset fan-out |
 | Seeder | NUnit | Idempotency (runs twice → same counts), spread correctness (every state bucket populated) |
 | gRPC contracts | NUnit + `Grpc.Net.Client` in-proc channel | Request/response shape, error codes, stream completion on cancel |
