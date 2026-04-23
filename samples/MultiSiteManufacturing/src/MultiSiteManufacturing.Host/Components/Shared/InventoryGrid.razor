@@ -82,7 +82,7 @@
                                             class="outline race-button"
                                             disabled="@busy"
                                             aria-busy="@(busy ? "true" : "false")"
-                                            title="Race an order-sensitive three-fact trio for @serial.Value — NCR(Minor) → Inspection(Pass) → MRB(UseAsIs) — emitted concurrently. Lattice always folds by HLC back to Nominal; the arrival-order baseline applies the trio in whichever order the scheduler delivers them, so concurrent emission alone is often enough to land on Flagged. Enable the 'Baseline reorder storm' preset (or set a multi-second site delay) to make the divergence more reliable."
+                                            title="Race an order-sensitive three-fact trio for @serial.Value — NCR(Minor) → Inspection(Pass) → MRB(UseAsIs) — emitted concurrently. Lattice always folds by HLC back to Nominal; the arrival-order baseline applies the trio in whichever order the scheduler delivers them, so concurrent emission alone is often enough to land on Flagged."
                                             @onclick="() => RaceAsync(serial)">
                                         ⚠ Race
                                     </button>
