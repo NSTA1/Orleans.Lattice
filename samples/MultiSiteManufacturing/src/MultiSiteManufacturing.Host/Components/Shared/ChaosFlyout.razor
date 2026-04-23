@@ -11,16 +11,10 @@
 
 <aside class="chaos-flyout @(IsOpen ? "open" : null)" aria-hidden="@(IsOpen ? "false" : "true")">
     <header>
-        <nav>
-            <ul>
-                <li><strong>☰ Chaos controls</strong></li>
-            </ul>
-            <ul>
-                <li>
-                    <button class="secondary" @onclick="OnClose" aria-label="Close chaos fly-out">✕</button>
-                </li>
-            </ul>
-        </nav>
+        <div class="chaos-flyout-header">
+            <strong>☰ Chaos controls</strong>
+            <button class="secondary chaos-flyout-close" @onclick="OnClose" aria-label="Close chaos fly-out">✕</button>
+        </div>
         <small>
             All chaos state is persisted and survives a process restart.
         </small>
