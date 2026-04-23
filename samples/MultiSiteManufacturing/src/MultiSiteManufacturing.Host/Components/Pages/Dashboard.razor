@@ -2,6 +2,7 @@
 @implements IDisposable
 @inject DashboardBroadcaster Broadcaster
 @inject NavigationManager Nav
+@inject ILogger<Dashboard> Log
 
 <PageTitle>Inventory · Multi-Site Manufacturing</PageTitle>
 
@@ -64,6 +65,10 @@
             }
         }
         catch (OperationCanceledException) { /* expected on dispose */ }
+        catch (Exception ex)
+        {
+            Log.LogError(ex, "Dashboard subscriber loop crashed");
+        }
     }
 
     public void Dispose()

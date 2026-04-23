@@ -1,4 +1,5 @@
 using MultiSiteManufacturing.Host.Domain;
+using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Operator;
 using MultiSiteManufacturing.Tests.Federation;
 using Orleans.Lattice.Primitives;
@@ -201,5 +202,89 @@ public class OperatorActionsTests
             Assert.That(facts[0].Hlc < facts[1].Hlc, Is.True);
             Assert.That(facts[1].Hlc < facts[2].Hlc, Is.True);
         });
+    }
+
+    [Test]
+    public async Task BurstAsync_emits_requested_count_of_visual_pass_inspections()
+    {
+        var (actions, _, router) = NewSut();
+        var serial = new PartSerialNumber("HPT-BLD-S1-2025-99200");
+
+        var result = await actions.BurstAsync(serial, 5, OperatorId.Demo);
+
+        var facts = await router.GetBackend("lattice").GetFactsAsync(serial);
+        Assert.That(facts, Has.Count.EqualTo(5));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Forwarded, Is.EqualTo(5));
+            Assert.That(result.Held, Is.EqualTo(0));
+            Assert.That(result.Site, Is.EqualTo(ProcessSite.StuttgartCmmLab));
+            Assert.That(result.Total, Is.EqualTo(5));
+            Assert.That(result.AllHeld, Is.False);
+            foreach (var fact in facts)
+            {
+                Assert.That(fact, Is.InstanceOf<InspectionRecorded>());
+                var ins = (InspectionRecorded)fact;
+                Assert.That(ins.Inspection, Is.EqualTo(Inspection.Visual));
+                Assert.That(ins.Outcome, Is.EqualTo(InspectionOutcome.Pass));
+                Assert.That(ins.Site, Is.EqualTo(ProcessSite.StuttgartCmmLab));
+            }
+            // HLCs strictly increasing
+            for (var i = 1; i < facts.Count; i++)
+            {
+                Assert.That(facts[i - 1].Hlc < facts[i].Hlc, Is.True);
+            }
+        });
+    }
+
+    [Test]
+    public async Task BurstAsync_reports_all_held_when_site_is_paused()
+    {
+        var (actions, _, router) = NewSut();
+        var serial = new PartSerialNumber("HPT-BLD-S1-2025-99203");
+
+        await router.ConfigureSiteAsync(
+            ProcessSite.StuttgartCmmLab,
+            new SiteConfig { IsPaused = true });
+        try
+        {
+            var result = await actions.BurstAsync(serial, 4, OperatorId.Demo);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.Forwarded, Is.EqualTo(0));
+                Assert.That(result.Held, Is.EqualTo(4));
+                Assert.That(result.Site, Is.EqualTo(ProcessSite.StuttgartCmmLab));
+                Assert.That(result.AllHeld, Is.True);
+            });
+        }
+        finally
+        {
+            // Restore to nominal so later tests aren't affected; the
+            // drained facts will fan out to the lattice backend.
+            await router.ConfigureSiteAsync(ProcessSite.StuttgartCmmLab, SiteConfig.Nominal);
+        }
+    }
+
+    [Test]
+    public void BurstAsync_rejects_zero_count()
+    {
+        var (actions, _, _) = NewSut();
+        var serial = new PartSerialNumber("HPT-BLD-S1-2025-99201");
+
+        Assert.That(
+            async () => await actions.BurstAsync(serial, 0, OperatorId.Demo),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public void BurstAsync_rejects_negative_count()
+    {
+        var (actions, _, _) = NewSut();
+        var serial = new PartSerialNumber("HPT-BLD-S1-2025-99202");
+
+        Assert.That(
+            async () => await actions.BurstAsync(serial, -3, OperatorId.Demo),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
     }
 }

@@ -194,6 +194,64 @@ public sealed class OperatorActions(FederationRouter router, OperatorClock clock
     }
 
     /// <summary>
+    /// Emits a burst of <paramref name="count"/> benign
+    /// <see cref="InspectionRecorded"/> facts (Visual / Pass at
+    /// <see cref="ProcessSite.StuttgartCmmLab"/>) against
+    /// <paramref name="serial"/>. Intended as a UI-driven helper to
+    /// generate fact volume — for example, to surface baseline-vs-lattice
+    /// divergence when a lattice-only chaos preset is active. All facts
+    /// flow through <see cref="FederationRouter"/> and therefore honour
+    /// any active site- or backend-level chaos.
+    /// </summary>
+    /// <param name="serial">Target part serial.</param>
+    /// <param name="count">Number of facts to emit. Must be positive.</param>
+    /// <param name="op">Operator stamped onto each fact.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// A <see cref="BurstResult"/> summarising how many of the
+    /// <paramref name="count"/> emitted facts were forwarded through the
+    /// federation fan-out versus held by the origin site grain (paused
+    /// or buffered for reorder).
+    /// </returns>
+    public async Task<BurstResult> BurstAsync(
+        PartSerialNumber serial,
+        int count,
+        OperatorId op,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+
+        const ProcessSite site = ProcessSite.StuttgartCmmLab;
+        var forwarded = 0;
+        var held = 0;
+        for (var i = 0; i < count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var fact = new InspectionRecorded
+            {
+                Serial = serial,
+                FactId = Guid.NewGuid(),
+                Hlc = clock.Next(),
+                Site = site,
+                Operator = op,
+                Description = $"Burst visual inspection {i + 1}/{count}: Pass",
+                Inspection = Inspection.Visual,
+                Outcome = InspectionOutcome.Pass,
+                Measurements = new Dictionary<string, string>(),
+            };
+            if (await router.EmitAsync(fact, cancellationToken))
+            {
+                forwarded++;
+            }
+            else
+            {
+                held++;
+            }
+        }
+        return new BurstResult(forwarded, held, site);
+    }
+
+    /// <summary>
     /// Canonical <see cref="ProcessSite"/> for each <see cref="ProcessStage"/>. Mirrors
     /// the mapping in <c>InventoryServiceImpl</c> so gRPC- and UI-driven facts land at the
     /// same physical site.
@@ -208,4 +266,21 @@ public sealed class OperatorActions(FederationRouter router, OperatorClock clock
         ProcessStage.FAI => ProcessSite.BristolFai,
         _ => ProcessSite.OhioForge,
     };
+}
+
+/// <summary>
+/// Outcome of <see cref="OperatorActions.BurstAsync"/>: how many of the
+/// requested facts were forwarded through federation fan-out versus
+/// held at the origin site grain (paused or buffered for reorder).
+/// </summary>
+/// <param name="Forwarded">Count of facts that reached the backends and raised <c>FactRouted</c>.</param>
+/// <param name="Held">Count of facts held by the origin site grain's chaos config.</param>
+/// <param name="Site">Origin site all burst facts were emitted at.</param>
+public readonly record struct BurstResult(int Forwarded, int Held, ProcessSite Site)
+{
+    /// <summary>True when every emitted fact was held (no downstream side effects).</summary>
+    public bool AllHeld => Forwarded == 0 && Held > 0;
+
+    /// <summary>Total facts attempted (<see cref="Forwarded"/> + <see cref="Held"/>).</summary>
+    public int Total => Forwarded + Held;
 }

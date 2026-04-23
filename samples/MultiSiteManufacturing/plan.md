@@ -478,6 +478,7 @@ the test suite — keeps CI fast and hermetic).
 | M9 | **Operator action forms:** `OperatorClock` (monotonic HLC singleton) + `OperatorActions` facade (6 fact-kind methods) + `NewPartDialog` + "+ New part" button on Dashboard + clickable serials in `InventoryGrid` + `/parts/{serial}` detail page with fact trail & 5 action forms (process step, inspection, NCR, MRB, rework, FAI) + 9 `OperatorActionsTests` | ✅ done |
 | **M10** | **Chaos fly-out** (two-section: site controls + backend storage chaos) with canned presets + active-chaos banner — `ChaosFlyout.razor` (slide-in side panel wired to `FederationRouter` + `DashboardBroadcaster`), `ChaosPresetInfo` (display name + description metadata), `MainLayout.razor` toggle + slide-in CSS, 5 `ChaosPresetInfoTests` | ✅ done |
 | M11 | Divergence feed (organic, from chaos-induced reorder + backend fault rate) wired into dashboard + `WatchDivergence` gRPC stream | ✅ done |
+| M11a | Per-row **⚡ Burst** button on `InventoryGrid` — emits 10 `InspectionRecorded(Visual, Pass)` facts via `OperatorActions.BurstAsync`; combined with the *Lattice storage flakes* preset this is the canonical UI-driven way to force divergence to appear in the feed | ✅ done |
 | M12 | README, glossary, architecture doc, Azurite setup instructions, screenshots | 0.5 day |
 | M13 | Test pass, polish, Chaos-category stress test | 0.5 day |
 

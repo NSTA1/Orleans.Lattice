@@ -1,13 +1,30 @@
 @* Read-only inventory table. Parent owns the live subscription; this
    component just renders whatever <see cref="Parts"/> is handed to it. *@
+@inject OperatorActions Actions
+@inject ILogger<InventoryGrid> Log
+
+@{
+    // Snapshot into a stable list so concurrent mutation of the parent's
+    // backing dictionary (DashboardBroadcaster pushes on every FactRouted)
+    // can't throw "Collection was modified" during enumeration — which
+    // previously broke the Blazor circuit mid-click and made the row
+    // appear to "jump" without emitting facts.
+    var rows = Parts.OrderBy(p => p.Serial.Value).ToList();
+}
 
 <article>
     <header>
         <strong>Inventory</strong>
-        <small> · @Parts.Count() part@(Parts.Count() == 1 ? "" : "s")</small>
+        <small> · @rows.Count part@(rows.Count == 1 ? "" : "s")</small>
+        @if (_lastBurst is { } status)
+        {
+            <small class="burst-status @(status.AllHeld ? "burst-status-held" : null)">
+                · @status.Message
+            </small>
+        }
     </header>
 
-    @if (!Parts.Any())
+    @if (rows.Count == 0)
     {
         <p><em>No parts yet. The seeder populates a small set on first non-test run.</em></p>
     }
@@ -23,18 +40,31 @@
                         <th scope="col">Baseline</th>
                         <th scope="col">Lattice</th>
                         <th scope="col">Facts</th>
+                        <th scope="col">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var part in Parts.OrderBy(p => p.Serial.Value))
+                    @foreach (var part in rows)
                     {
-                        <tr class="@(part.Diverges ? "divergent-row" : null)">
-                            <td class="inventory-nowrap"><code><a href="/parts/@part.Serial.Value">@part.Serial.Value</a></code></td>
+                        var serial = part.Serial;
+                        var busy = _inFlight.Contains(serial);
+                        <tr @key="serial.Value" class="@(part.Diverges ? "divergent-row" : null)">
+                            <td class="inventory-nowrap"><code><a href="/parts/@serial.Value">@serial.Value</a></code></td>
                             <td class="inventory-nowrap">@part.Family</td>
                             <td>@(part.LatestStage?.ToString() ?? "—")</td>
                             <td><StateBadge State="@part.BaselineState" /></td>
                             <td><StateBadge State="@part.LatticeState" /></td>
                             <td>@part.FactCount</td>
+                            <td>
+                                <button type="button"
+                                        class="outline burst-button"
+                                        disabled="@busy"
+                                        aria-busy="@(busy ? "true" : "false")"
+                                        title="Emit a burst of @BurstCount Visual/Pass inspection facts for @serial.Value through the federation router. Non-destructive (state-preserving for Nominal parts). Tip: enable the 'Lattice storage flakes' chaos preset first — a fraction of writes will drop on the lattice backend, producing a row in the Divergence feed."
+                                        @onclick="() => BurstAsync(serial)">
+                                    ⚡ Burst ×@BurstCount
+                                </button>
+                            </td>
                         </tr>
                     }
                 </tbody>
@@ -44,6 +74,55 @@
 </article>
 
 @code {
+    /// <summary>Number of facts emitted per burst click. Kept small so the dashboard stays readable.</summary>
+    private const int BurstCount = 10;
+
     /// <summary>Parts to display; caller provides a fresh enumerable on every render.</summary>
     [Parameter, EditorRequired] public IEnumerable<PartSummaryUpdate> Parts { get; set; } = [];
+
+    private readonly HashSet<PartSerialNumber> _inFlight = [];
+    private BurstStatus? _lastBurst;
+
+    private async Task BurstAsync(PartSerialNumber serial)
+    {
+        if (!_inFlight.Add(serial))
+        {
+            return;
+        }
+        StateHasChanged();
+        try
+        {
+            var result = await Actions.BurstAsync(serial, BurstCount, OperatorId.Demo);
+            _lastBurst = new BurstStatus(
+                BuildMessage(serial, result),
+                result.AllHeld);
+        }
+        catch (Exception ex)
+        {
+            // Swallow into the log so a transient chaos-induced failure
+            // (which is the whole point of the burst button) doesn't tear
+            // down the Blazor circuit.
+            Log.LogWarning(ex, "Burst failed for {Serial}", serial.Value);
+            _lastBurst = new BurstStatus($"Burst for {serial.Value} failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _inFlight.Remove(serial);
+        }
+    }
+
+    private static string BuildMessage(PartSerialNumber serial, BurstResult r)
+    {
+        if (r.AllHeld)
+        {
+            return $"Burst for {serial.Value}: all {r.Held} facts held at {r.Site} (site paused or buffered for reorder)";
+        }
+        if (r.Held > 0)
+        {
+            return $"Burst for {serial.Value}: {r.Forwarded} forwarded, {r.Held} held at {r.Site}";
+        }
+        return $"Burst for {serial.Value}: {r.Forwarded} facts forwarded through {r.Site}";
+    }
+
+    private sealed record BurstStatus(string Message, bool AllHeld);
 }

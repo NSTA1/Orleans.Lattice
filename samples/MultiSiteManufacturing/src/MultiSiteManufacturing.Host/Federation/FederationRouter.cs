@@ -59,7 +59,14 @@ public sealed class FederationRouter(
     /// then either forwards it (optionally after an artificial delay) or
     /// leaves it held by the grain.
     /// </summary>
-    public async Task EmitAsync(Fact fact, CancellationToken cancellationToken = default)
+    /// <returns>
+    /// <see langword="true"/> if the fact was forwarded through the
+    /// backends (fan-out ran and <see cref="FactRouted"/> was raised);
+    /// <see langword="false"/> if the site grain held it (paused or
+    /// buffered for reorder) — in which case no downstream side effects
+    /// occur until a later unpause or reorder flush.
+    /// </returns>
+    public async Task<bool> EmitAsync(Fact fact, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(fact);
 
@@ -74,10 +81,10 @@ public sealed class FederationRouter(
 
         if (!admission.Forward)
         {
-            logger.LogDebug(
-                "Fact {FactId} held at {Site} (paused or buffered)",
+            logger.LogInformation(
+                "Fact {FactId} held at {Site} (paused or buffered for reorder)",
                 fact.FactId, fact.Site);
-            return;
+            return false;
         }
 
         if (admission.DelayMs > 0)
@@ -86,6 +93,7 @@ public sealed class FederationRouter(
         }
 
         await FanOutAsync(fact, cancellationToken);
+        return true;
     }
 
     /// <summary>
