@@ -27,6 +27,9 @@ public static class ChaosPresetInfo
             [ChaosPreset.LatticeStorageFlakes] = (
                 "Lattice storage flakes",
                 "Apply a 10% transient failure rate and 50–250 ms jitter to the lattice backend only — drives baseline-vs-lattice divergence."),
+            [ChaosPreset.BaselineReorderStorm] = (
+                "Baseline reorder storm",
+                "Open a 300 ms reorder window on the baseline backend only — writes flush in shuffled arrival order. Pair with the per-row ⚠ Race button to force divergence (baseline flags, lattice stays Nominal via HLC-ordered fold)."),
         };
 
     /// <summary>All presets in declaration order (suitable for button rows).</summary>

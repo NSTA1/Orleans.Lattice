@@ -205,86 +205,63 @@ public class OperatorActionsTests
     }
 
     [Test]
-    public async Task BurstAsync_emits_requested_count_of_visual_pass_inspections()
+    public async Task RaceAsync_emits_NCR_Inspection_and_MRB_in_strict_HLC_order()
     {
         var (actions, _, router) = NewSut();
-        var serial = new PartSerialNumber("HPT-BLD-S1-2025-99200");
+        var serial = new PartSerialNumber("HPT-BLD-S1-2025-99300");
 
-        var result = await actions.BurstAsync(serial, 5, OperatorId.Demo);
+        var result = await actions.RaceAsync(serial, OperatorId.Demo);
 
         var facts = await router.GetBackend("lattice").GetFactsAsync(serial);
-        Assert.That(facts, Has.Count.EqualTo(5));
+
+        // Sort by HLC — that's the lattice fold order — and assert the
+        // trio kind/site contract.
+        var inHlcOrder = facts.OrderBy(f => f.Hlc.WallClockTicks)
+                              .ThenBy(f => f.Hlc.Counter)
+                              .ToList();
+
         Assert.Multiple(() =>
         {
-            Assert.That(result.Forwarded, Is.EqualTo(5));
+            Assert.That(facts, Has.Count.EqualTo(3));
+            Assert.That(result.Forwarded, Is.EqualTo(3));
             Assert.That(result.Held, Is.EqualTo(0));
-            Assert.That(result.Site, Is.EqualTo(ProcessSite.StuttgartCmmLab));
-            Assert.That(result.Total, Is.EqualTo(5));
-            Assert.That(result.AllHeld, Is.False);
-            foreach (var fact in facts)
-            {
-                Assert.That(fact, Is.InstanceOf<InspectionRecorded>());
-                var ins = (InspectionRecorded)fact;
-                Assert.That(ins.Inspection, Is.EqualTo(Inspection.Visual));
-                Assert.That(ins.Outcome, Is.EqualTo(InspectionOutcome.Pass));
-                Assert.That(ins.Site, Is.EqualTo(ProcessSite.StuttgartCmmLab));
-            }
-            // HLCs strictly increasing
-            for (var i = 1; i < facts.Count; i++)
-            {
-                Assert.That(facts[i - 1].Hlc < facts[i].Hlc, Is.True);
-            }
+            Assert.That(result.Site, Is.EqualTo(ProcessSite.CincinnatiMrb));
+
+            Assert.That(inHlcOrder[0], Is.InstanceOf<NonConformanceRaised>());
+            Assert.That(((NonConformanceRaised)inHlcOrder[0]).Severity, Is.EqualTo(NcSeverity.Minor));
+            Assert.That(inHlcOrder[0].Site, Is.EqualTo(ProcessSite.ToulouseNdtLab));
+
+            Assert.That(inHlcOrder[1], Is.InstanceOf<InspectionRecorded>());
+            Assert.That(((InspectionRecorded)inHlcOrder[1]).Outcome, Is.EqualTo(InspectionOutcome.Pass));
+            Assert.That(inHlcOrder[1].Site, Is.EqualTo(ProcessSite.StuttgartCmmLab));
+
+            Assert.That(inHlcOrder[2], Is.InstanceOf<MrbDisposition>());
+            Assert.That(((MrbDisposition)inHlcOrder[2]).Disposition, Is.EqualTo(MrbDispositionKind.UseAsIs));
+            Assert.That(inHlcOrder[2].Site, Is.EqualTo(ProcessSite.CincinnatiMrb));
+
+            // NCR and MRB carry the same ncNumber — that's the linkage that
+            // lets UseAsIs actually demote the flag under HLC-ordered fold.
+            Assert.That(
+                ((MrbDisposition)inHlcOrder[2]).NcNumber,
+                Is.EqualTo(((NonConformanceRaised)inHlcOrder[0]).NcNumber));
         });
     }
 
     [Test]
-    public async Task BurstAsync_reports_all_held_when_site_is_paused()
+    public async Task RaceAsync_yields_Nominal_state_on_lattice_backend()
     {
         var (actions, _, router) = NewSut();
-        var serial = new PartSerialNumber("HPT-BLD-S1-2025-99203");
+        var serial = new PartSerialNumber("HPT-BLD-S1-2025-99301");
 
-        await router.ConfigureSiteAsync(
-            ProcessSite.StuttgartCmmLab,
-            new SiteConfig { IsPaused = true });
-        try
-        {
-            var result = await actions.BurstAsync(serial, 4, OperatorId.Demo);
+        await actions.RaceAsync(serial, OperatorId.Demo);
 
-            Assert.Multiple(() =>
-            {
-                Assert.That(result.Forwarded, Is.EqualTo(0));
-                Assert.That(result.Held, Is.EqualTo(4));
-                Assert.That(result.Site, Is.EqualTo(ProcessSite.StuttgartCmmLab));
-                Assert.That(result.AllHeld, Is.True);
-            });
-        }
-        finally
-        {
-            // Restore to nominal so later tests aren't affected; the
-            // drained facts will fan out to the lattice backend.
-            await router.ConfigureSiteAsync(ProcessSite.StuttgartCmmLab, SiteConfig.Nominal);
-        }
-    }
+        // The three facts are emitted concurrently (see
+        // <see cref="OperatorActions.RaceAsync"/>) so baseline's
+        // arrival-order fold is race-dependent and may legitimately end
+        // up Flagged. Lattice, however, folds in HLC order and is
+        // deterministic: UseAsIs demotes Flagged back to Nominal.
+        var latticeState = await router.GetBackend("lattice").GetStateAsync(serial);
 
-    [Test]
-    public void BurstAsync_rejects_zero_count()
-    {
-        var (actions, _, _) = NewSut();
-        var serial = new PartSerialNumber("HPT-BLD-S1-2025-99201");
-
-        Assert.That(
-            async () => await actions.BurstAsync(serial, 0, OperatorId.Demo),
-            Throws.InstanceOf<ArgumentOutOfRangeException>());
-    }
-
-    [Test]
-    public void BurstAsync_rejects_negative_count()
-    {
-        var (actions, _, _) = NewSut();
-        var serial = new PartSerialNumber("HPT-BLD-S1-2025-99202");
-
-        Assert.That(
-            async () => await actions.BurstAsync(serial, -3, OperatorId.Demo),
-            Throws.InstanceOf<ArgumentOutOfRangeException>());
+        Assert.That(latticeState, Is.EqualTo(ComplianceState.Nominal));
     }
 }

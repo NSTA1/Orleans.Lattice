@@ -16,9 +16,9 @@
     <header>
         <strong>Inventory</strong>
         <small> · @rows.Count part@(rows.Count == 1 ? "" : "s")</small>
-        @if (_lastBurst is { } status)
+        @if (_lastRace is { } status)
         {
-            <small class="burst-status @(status.AllHeld ? "burst-status-held" : null)">
+            <small class="race-status @(status.AllHeld ? "race-status-held" : null)">
                 · @status.Message
             </small>
         }
@@ -57,12 +57,12 @@
                             <td>@part.FactCount</td>
                             <td>
                                 <button type="button"
-                                        class="outline burst-button"
+                                        class="outline race-button"
                                         disabled="@busy"
                                         aria-busy="@(busy ? "true" : "false")"
-                                        title="Emit a burst of @BurstCount Visual/Pass inspection facts for @serial.Value through the federation router. Non-destructive (state-preserving for Nominal parts). Tip: enable the 'Lattice storage flakes' chaos preset first — a fraction of writes will drop on the lattice backend, producing a row in the Divergence feed."
-                                        @onclick="() => BurstAsync(serial)">
-                                    ⚡ Burst ×@BurstCount
+                                        title="Race an order-sensitive three-fact trio for @serial.Value — NCR(Minor) → Inspection(Pass) → MRB(UseAsIs) — emitted concurrently. Lattice always folds by HLC back to Nominal; baseline folds in arrival order. Tip: enable the 'Baseline reorder storm' preset (or set a multi-second site delay) first — the shuffled arrival order will surface the trio as a red row in the Divergence feed (Flagged on baseline, Nominal on lattice)."
+                                        @onclick="() => RaceAsync(serial)">
+                                    ⚠ Race
                                 </button>
                             </td>
                         </tr>
@@ -74,16 +74,13 @@
 </article>
 
 @code {
-    /// <summary>Number of facts emitted per burst click. Kept small so the dashboard stays readable.</summary>
-    private const int BurstCount = 10;
-
     /// <summary>Parts to display; caller provides a fresh enumerable on every render.</summary>
     [Parameter, EditorRequired] public IEnumerable<PartSummaryUpdate> Parts { get; set; } = [];
 
     private readonly HashSet<PartSerialNumber> _inFlight = [];
-    private BurstStatus? _lastBurst;
+    private RaceStatus? _lastRace;
 
-    private async Task BurstAsync(PartSerialNumber serial)
+    private async Task RaceAsync(PartSerialNumber serial)
     {
         if (!_inFlight.Add(serial))
         {
@@ -92,18 +89,18 @@
         StateHasChanged();
         try
         {
-            var result = await Actions.BurstAsync(serial, BurstCount, OperatorId.Demo);
-            _lastBurst = new BurstStatus(
-                BuildMessage(serial, result),
+            var result = await Actions.RaceAsync(serial, OperatorId.Demo);
+            _lastRace = new RaceStatus(
+                BuildRaceMessage(serial, result),
                 result.AllHeld);
         }
         catch (Exception ex)
         {
             // Swallow into the log so a transient chaos-induced failure
-            // (which is the whole point of the burst button) doesn't tear
+            // (which is the whole point of the race button) doesn't tear
             // down the Blazor circuit.
-            Log.LogWarning(ex, "Burst failed for {Serial}", serial.Value);
-            _lastBurst = new BurstStatus($"Burst for {serial.Value} failed: {ex.Message}", true);
+            Log.LogWarning(ex, "Race failed for {Serial}", serial.Value);
+            _lastRace = new RaceStatus($"Race for {serial.Value} failed: {ex.Message}", true);
         }
         finally
         {
@@ -111,18 +108,18 @@
         }
     }
 
-    private static string BuildMessage(PartSerialNumber serial, BurstResult r)
+    private static string BuildRaceMessage(PartSerialNumber serial, RaceResult r)
     {
         if (r.AllHeld)
         {
-            return $"Burst for {serial.Value}: all {r.Held} facts held at {r.Site} (site paused or buffered for reorder)";
+            return $"Race for {serial.Value}: all {r.Held}/3 trio facts held (site paused or reorder-buffered)";
         }
         if (r.Held > 0)
         {
-            return $"Burst for {serial.Value}: {r.Forwarded} forwarded, {r.Held} held at {r.Site}";
+            return $"Race for {serial.Value}: {r.Forwarded}/3 trio facts forwarded, {r.Held} held";
         }
-        return $"Burst for {serial.Value}: {r.Forwarded} facts forwarded through {r.Site}";
+        return $"Race for {serial.Value}: NCR → Pass → MRB(UseAsIs) trio forwarded — watch the divergence feed";
     }
 
-    private sealed record BurstStatus(string Message, bool AllHeld);
+    private sealed record RaceStatus(string Message, bool AllHeld);
 }

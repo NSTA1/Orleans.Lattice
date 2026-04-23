@@ -63,6 +63,9 @@ message BackendChaosConfig {
   int32 jitter_ms_max = 2;
   double transient_failure_rate = 3;
   double write_amplification_rate = 4;
+  // When positive, the decorator buffers writes for this many ms then
+  // flushes them in shuffled order (plan §4.3 Tier 2).
+  int32 reorder_window_ms = 5;
 }
 
 message BackendChaosState {

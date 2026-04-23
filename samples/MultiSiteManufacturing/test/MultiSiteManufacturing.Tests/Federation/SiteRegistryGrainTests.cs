@@ -74,4 +74,23 @@ public class SiteRegistryGrainTests
         var states = await Registry.ListSitesAsync();
         Assert.That(states.All(s => s.Config == SiteConfig.Nominal), Is.True);
     }
+
+    [Test]
+    public async Task ApplyPresetAsync_BaselineReorderStorm_configures_baseline_reorder_window_only()
+    {
+        await Registry.ApplyPresetAsync(ChaosPreset.BaselineReorderStorm);
+
+        var baseline = await _fixture.GrainFactory.GetGrain<IBackendChaosGrain>("baseline").GetConfigAsync();
+        var lattice = await _fixture.GrainFactory.GetGrain<IBackendChaosGrain>("lattice").GetConfigAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(baseline.ReorderWindowMs, Is.GreaterThan(0),
+                "BaselineReorderStorm preset must open a reorder window on the baseline backend.");
+            Assert.That(lattice.ReorderWindowMs, Is.EqualTo(0),
+                "Preset must target baseline only; lattice backend stays nominal.");
+        });
+
+        await Registry.ApplyPresetAsync(ChaosPreset.ClearAll);
+    }
 }

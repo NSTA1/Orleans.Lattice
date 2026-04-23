@@ -127,4 +127,14 @@ public enum ChaosPreset
     /// without touching site chaos (plan §7.2).
     /// </summary>
     LatticeStorageFlakes,
+
+    /// <summary>
+    /// Opens a 300 ms reorder window on the <c>baseline</c> backend
+    /// only — incoming writes are buffered and flushed in shuffled
+    /// order. Combined with the <b>Race</b> row action, this is the
+    /// canonical way to force baseline into an arrival-order fold that
+    /// disagrees with lattice's HLC-order fold, producing a red row in
+    /// the divergence feed.
+    /// </summary>
+    BaselineReorderStorm,
 }

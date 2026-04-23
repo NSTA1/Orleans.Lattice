@@ -78,4 +78,25 @@ public class BackendChaosGrainTests
                 grain.ConfigureAsync(new BackendChaosConfig { WriteAmplificationRate = -0.1 }));
         });
     }
+
+    [Test]
+    public void ConfigureAsync_rejects_negative_reorder_window()
+    {
+        var grain = _fixture.GrainFactory.GetGrain<IBackendChaosGrain>("neg-reorder-" + Guid.NewGuid());
+        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            grain.ConfigureAsync(new BackendChaosConfig { ReorderWindowMs = -1 }));
+    }
+
+    [Test]
+    public async Task ConfigureAsync_persists_reorder_window()
+    {
+        var key = "reorder-" + Guid.NewGuid();
+        var grain = _fixture.GrainFactory.GetGrain<IBackendChaosGrain>(key);
+
+        var stored = await grain.ConfigureAsync(new BackendChaosConfig { ReorderWindowMs = 300 });
+        Assert.That(stored.ReorderWindowMs, Is.EqualTo(300));
+
+        var reread = await grain.GetConfigAsync();
+        Assert.That(reread.ReorderWindowMs, Is.EqualTo(300));
+    }
 }

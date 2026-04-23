@@ -73,6 +73,16 @@ internal sealed class SiteRegistryGrain(IGrainFactory grains) : Grain, ISiteRegi
                     },
                 };
                 break;
+            case ChaosPreset.BaselineReorderStorm:
+                siteTargets = [];
+                backendTargets = new Dictionary<string, BackendChaosConfig>
+                {
+                    ["baseline"] = new BackendChaosConfig
+                    {
+                        ReorderWindowMs = 300,
+                    },
+                };
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(preset), preset, "Unknown chaos preset.");
         }

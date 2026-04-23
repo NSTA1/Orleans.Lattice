@@ -28,6 +28,11 @@ internal sealed class BackendChaosGrain(
             throw new ArgumentOutOfRangeException(
                 nameof(config), config.JitterMsMax, "JitterMsMax must be >= JitterMsMin.");
         }
+        if (config.ReorderWindowMs < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(config), config.ReorderWindowMs, "ReorderWindowMs must be non-negative.");
+        }
 
         state.State.Config = config;
         await state.WriteStateAsync();

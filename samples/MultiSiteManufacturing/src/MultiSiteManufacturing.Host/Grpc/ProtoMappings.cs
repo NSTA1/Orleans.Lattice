@@ -178,6 +178,7 @@ internal static class ProtoMappings
         JitterMsMax = config.JitterMsMax,
         TransientFailureRate = config.TransientFailureRate,
         WriteAmplificationRate = config.WriteAmplificationRate,
+        ReorderWindowMs = config.ReorderWindowMs,
     };
 
     public static BackendChaosConfig FromProto(V1.BackendChaosConfig? config)
@@ -192,6 +193,7 @@ internal static class ProtoMappings
             JitterMsMax = config.JitterMsMax,
             TransientFailureRate = config.TransientFailureRate,
             WriteAmplificationRate = config.WriteAmplificationRate,
+            ReorderWindowMs = config.ReorderWindowMs,
         };
     }
 

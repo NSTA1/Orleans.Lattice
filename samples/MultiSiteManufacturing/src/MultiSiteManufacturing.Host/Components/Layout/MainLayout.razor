@@ -139,11 +139,11 @@
     .preset-buttons button {
         flex: 1 1 auto;
     }
-    /* Burst button in the inventory grid: fixed width + compact padding
+    /* Race button in the inventory grid: fixed width + compact padding
        so the aria-busy spinner state (Pico-provided) can't reflow the
-       "Actions" column. Without this, toggling between ⚡ and spinner
+       "Actions" column. Without this, toggling between ⚠ and spinner
        visibly shifts the row. */
-    .burst-button {
+    .race-button {
         min-width: 7.5rem;
         padding: 0.25rem 0.5rem;
         margin: 0;
@@ -160,18 +160,18 @@
        disabled state is already a clear visual signal and a moving
        spinner inside a fixed-width button was the source of the
        horizontal flicker. */
-    .burst-button[aria-busy="true"]::before {
+    .race-button[aria-busy="true"]::before {
         display: none;
     }
 
-    /* Inline "last burst" status line inside the inventory header.
+    /* Inline "last race" status line inside the inventory header.
        Muted by default; amber when every fact was held so the operator
        notices their chaos config is suppressing downstream effects. */
-    .burst-status {
+    .race-status {
         margin-left: 0.5rem;
         color: var(--pico-muted-color);
     }
-    .burst-status-held {
+    .race-status-held {
         color: #b45309; /* amber-700 */
         font-weight: 600;
     }

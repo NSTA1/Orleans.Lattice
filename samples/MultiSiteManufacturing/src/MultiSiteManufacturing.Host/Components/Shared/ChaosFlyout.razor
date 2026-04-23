@@ -138,6 +138,13 @@
                                    aria-label="@backend.Name write amplification rate" />
                         </label>
                     </div>
+                    <div class="grid">
+                        <label title="Positive values buffer incoming writes for this many milliseconds and flush them in shuffled arrival order. Apply to one backend only to force divergence on order-sensitive fact sequences (e.g. NCR → MRB(UseAsIs)).">
+                            Reorder window (ms)
+                            <input type="number" min="0" step="50" @bind="edit.ReorderWindowMs"
+                                   aria-label="@backend.Name reorder window milliseconds" />
+                        </label>
+                    </div>
                     <footer>
                         <button class="outline"
                                 disabled="@(_busy || !edit.IsDirty(backend.Config))"
@@ -369,6 +376,7 @@
         public int JitterMsMax { get; set; }
         public double TransientFailureRate { get; set; }
         public double WriteAmplificationRate { get; set; }
+        public int ReorderWindowMs { get; set; }
 
         public static BackendConfigEdit From(BackendChaosConfig c) => new()
         {
@@ -376,6 +384,7 @@
             JitterMsMax = c.JitterMsMax,
             TransientFailureRate = c.TransientFailureRate,
             WriteAmplificationRate = c.WriteAmplificationRate,
+            ReorderWindowMs = c.ReorderWindowMs,
         };
 
         public BackendChaosConfig ToConfig() => new()
@@ -384,12 +393,14 @@
             JitterMsMax = JitterMsMax,
             TransientFailureRate = TransientFailureRate,
             WriteAmplificationRate = WriteAmplificationRate,
+            ReorderWindowMs = ReorderWindowMs,
         };
 
         public bool IsDirty(BackendChaosConfig current) =>
             JitterMsMin != current.JitterMsMin
             || JitterMsMax != current.JitterMsMax
             || Math.Abs(TransientFailureRate - current.TransientFailureRate) > 1e-9
-            || Math.Abs(WriteAmplificationRate - current.WriteAmplificationRate) > 1e-9;
+            || Math.Abs(WriteAmplificationRate - current.WriteAmplificationRate) > 1e-9
+            || ReorderWindowMs != current.ReorderWindowMs;
     }
 }

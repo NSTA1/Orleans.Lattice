@@ -194,61 +194,109 @@ public sealed class OperatorActions(FederationRouter router, OperatorClock clock
     }
 
     /// <summary>
-    /// Emits a burst of <paramref name="count"/> benign
-    /// <see cref="InspectionRecorded"/> facts (Visual / Pass at
-    /// <see cref="ProcessSite.StuttgartCmmLab"/>) against
-    /// <paramref name="serial"/>. Intended as a UI-driven helper to
-    /// generate fact volume — for example, to surface baseline-vs-lattice
-    /// divergence when a lattice-only chaos preset is active. All facts
-    /// flow through <see cref="FederationRouter"/> and therefore honour
-    /// any active site- or backend-level chaos.
+    /// Emits an order-sensitive three-fact "race" trio against
+    /// <paramref name="serial"/> at three different origin sites:
+    /// <list type="number">
+    ///   <item><see cref="NonConformanceRaised"/> (Minor) at <see cref="ProcessSite.ToulouseNdtLab"/>.</item>
+    ///   <item><see cref="InspectionRecorded"/> (Visual / Pass) at <see cref="ProcessSite.StuttgartCmmLab"/>.</item>
+    ///   <item><see cref="MrbDisposition"/> (UseAsIs) at <see cref="ProcessSite.CincinnatiMrb"/>.</item>
+    /// </list>
     /// </summary>
-    /// <param name="serial">Target part serial.</param>
-    /// <param name="count">Number of facts to emit. Must be positive.</param>
-    /// <param name="op">Operator stamped onto each fact.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// <para>
+    /// HLCs are strictly monotonic in the listed order, so <c>ComplianceFold</c>
+    /// (lattice backend) always reads the trio as
+    /// <c>Nominal → Flagged → Flagged → Nominal</c>. <c>NaiveFold</c>
+    /// (baseline backend) applies facts in <i>arrival</i> order; whenever
+    /// the three facts land in any order other than the emission order
+    /// — e.g. under the <see cref="ChaosPreset.BaselineReorderStorm"/>
+    /// preset or when <see cref="SiteConfig.ReorderEnabled"/> flushes a
+    /// previously-paused site's queue — baseline cannot demote a flag
+    /// that has not yet been raised, and the part diverges from lattice.
+    /// This is the canonical UI-driven way to produce a row in the
+    /// divergence feed.
+    /// </para>
+    /// <para>
+    /// All three facts flow through <see cref="FederationRouter.EmitAsync"/>
+    /// and therefore honour any active site- or backend-level chaos.
+    /// </para>
+    /// </remarks>
     /// <returns>
-    /// A <see cref="BurstResult"/> summarising how many of the
-    /// <paramref name="count"/> emitted facts were forwarded through the
-    /// federation fan-out versus held by the origin site grain (paused
-    /// or buffered for reorder).
+    /// A <see cref="RaceResult"/> summarising how many of the three
+    /// facts were forwarded versus held at an origin site grain. The
+    /// <see cref="RaceResult.Site"/> reports
+    /// <see cref="ProcessSite.CincinnatiMrb"/> as the principal site
+    /// (the decisive MRB disposition).
     /// </returns>
-    public async Task<BurstResult> BurstAsync(
+    public async Task<RaceResult> RaceAsync(
         PartSerialNumber serial,
-        int count,
         OperatorId op,
         CancellationToken cancellationToken = default)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
-
-        const ProcessSite site = ProcessSite.StuttgartCmmLab;
-        var forwarded = 0;
-        var held = 0;
-        for (var i = 0; i < count; i++)
+        var ncNumber = $"NCR-{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}";
+        var facts = new Fact[]
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var fact = new InspectionRecorded
+            new NonConformanceRaised
             {
                 Serial = serial,
                 FactId = Guid.NewGuid(),
                 Hlc = clock.Next(),
-                Site = site,
+                Site = ProcessSite.ToulouseNdtLab,
                 Operator = op,
-                Description = $"Burst visual inspection {i + 1}/{count}: Pass",
+                Description = $"Race: NCR {ncNumber} raised (Minor)",
+                NcNumber = ncNumber,
+                DefectCode = "DEMO-RACE",
+                Severity = NcSeverity.Minor,
+            },
+            new InspectionRecorded
+            {
+                Serial = serial,
+                FactId = Guid.NewGuid(),
+                Hlc = clock.Next(),
+                Site = ProcessSite.StuttgartCmmLab,
+                Operator = op,
+                Description = "Race: re-check visual inspection Pass",
                 Inspection = Inspection.Visual,
                 Outcome = InspectionOutcome.Pass,
                 Measurements = new Dictionary<string, string>(),
-            };
-            if (await router.EmitAsync(fact, cancellationToken))
+            },
+            new MrbDisposition
+            {
+                Serial = serial,
+                FactId = Guid.NewGuid(),
+                Hlc = clock.Next(),
+                Site = ProcessSite.CincinnatiMrb,
+                Operator = op,
+                Description = $"Race: MRB UseAsIs for {ncNumber}",
+                NcNumber = ncNumber,
+                Disposition = MrbDispositionKind.UseAsIs,
+            },
+        };
+
+        // Fire all three concurrently. HLCs were stamped sequentially
+        // above so the lattice (HLC-sorted) fold remains deterministic
+        // (Nominal -> Flagged -> Flagged -> Nominal). Baseline applies
+        // facts in arrival order, so racing emissions + per-site delays
+        // + (optionally) the backend reorder buffer can deliver the
+        // MRB or Inspection <i>before</i> the NCR — at which point
+        // baseline cannot demote a flag that has not yet been raised
+        // and the part diverges from lattice.
+        var tasks = new Task<bool>[facts.Length];
+        for (var i = 0; i < facts.Length; i++)
+        {
+            tasks[i] = router.EmitAsync(facts[i], cancellationToken);
+        }
+        var results = await Task.WhenAll(tasks);
+
+        var forwarded = 0;
+        foreach (var r in results)
+        {
+            if (r)
             {
                 forwarded++;
             }
-            else
-            {
-                held++;
-            }
         }
-        return new BurstResult(forwarded, held, site);
+        return new RaceResult(forwarded, results.Length - forwarded, ProcessSite.CincinnatiMrb);
     }
 
     /// <summary>
@@ -269,14 +317,14 @@ public sealed class OperatorActions(FederationRouter router, OperatorClock clock
 }
 
 /// <summary>
-/// Outcome of <see cref="OperatorActions.BurstAsync"/>: how many of the
-/// requested facts were forwarded through federation fan-out versus
-/// held at the origin site grain (paused or buffered for reorder).
+/// Outcome of <see cref="OperatorActions.RaceAsync"/>: how many of the
+/// three race-trio facts were forwarded through federation fan-out
+/// versus held at an origin site grain (paused or buffered for reorder).
 /// </summary>
 /// <param name="Forwarded">Count of facts that reached the backends and raised <c>FactRouted</c>.</param>
-/// <param name="Held">Count of facts held by the origin site grain's chaos config.</param>
-/// <param name="Site">Origin site all burst facts were emitted at.</param>
-public readonly record struct BurstResult(int Forwarded, int Held, ProcessSite Site)
+/// <param name="Held">Count of facts held by an origin site grain's chaos config.</param>
+/// <param name="Site">Principal origin site for the race (Cincinnati MRB — the decisive disposition).</param>
+public readonly record struct RaceResult(int Forwarded, int Held, ProcessSite Site)
 {
     /// <summary>True when every emitted fact was held (no downstream side effects).</summary>
     public bool AllHeld => Forwarded == 0 && Held > 0;
