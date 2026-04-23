@@ -23,9 +23,10 @@ namespace MultiSiteManufacturing.Host.Dashboard;
 /// channels — the sample is single-silo and the update volume is
 /// modest (one fact per operator action plus seed traffic).
 /// </remarks>
-public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
+public sealed class DashboardBroadcaster : IHostedService
 {
     private readonly FederationRouter _router;
+    private readonly IGrainFactory _grainFactory;
     private readonly ILogger<DashboardBroadcaster> _logger;
     private readonly ConcurrentDictionary<Guid, Channel<PartSummaryUpdate>> _partSubs = new();
     private readonly ConcurrentDictionary<Guid, Channel<ChaosOverview>> _chaosSubs = new();
@@ -38,9 +39,10 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
     private readonly ConcurrentDictionary<PartSerialNumber, (ComplianceState Baseline, ComplianceState Lattice)> _lastStates = new();
 
     /// <summary>Creates the broadcaster (DI ctor).</summary>
-    public DashboardBroadcaster(FederationRouter router, ILogger<DashboardBroadcaster> logger)
+    public DashboardBroadcaster(FederationRouter router, IGrainFactory grainFactory, ILogger<DashboardBroadcaster> logger)
     {
         _router = router;
+        _grainFactory = grainFactory;
         _logger = logger;
     }
 
@@ -82,7 +84,10 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
     {
         var sites = await _router.ListSitesAsync();
         var backends = await _router.ListBackendChaosAsync();
-        return BuildOverview(sites, backends);
+        var partitioned = await _grainFactory
+            .GetGrain<IPartitionChaosGrain>(IPartitionChaosGrain.SingletonKey)
+            .IsPartitionedAsync();
+        return BuildOverview(sites, backends, partitioned);
     }
 
     /// <summary>
@@ -321,15 +326,13 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
 
         var facts = factsTask.Result;
         var latticeState = ComplianceFold.Fold(facts);
-        ProcessStage? latestStage = null;
-        for (var i = facts.Count - 1; i >= 0; i--)
-        {
-            if (facts[i] is ProcessStepCompleted step)
-            {
-                latestStage = step.Stage;
-                break;
-            }
-        }
+        // "Latest stage" reflects the part's furthest-along lifecycle
+        // milestone, not just the last ProcessStepCompleted. The facts
+        // list is HLC-ascending so the tail is the newest fact; map it
+        // to a ProcessStage by fact kind — InspectionRecorded → NDT,
+        // NCR/MRB/Rework → MRB, FinalAcceptance → FAI — otherwise a
+        // FAI-accepted part would still show Machining.
+        var latestStage = facts.Count == 0 ? null : StageOf(facts[^1]);
 
         return new PartSummaryUpdate
         {
@@ -342,9 +345,21 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
         };
     }
 
+    private static ProcessStage? StageOf(Fact fact) => fact switch
+    {
+        ProcessStepCompleted step => step.Stage,
+        InspectionRecorded => ProcessStage.NDT,
+        NonConformanceRaised => ProcessStage.MRB,
+        MrbDisposition => ProcessStage.MRB,
+        ReworkCompleted => ProcessStage.MRB,
+        FinalAcceptance => ProcessStage.FAI,
+        _ => null,
+    };
+
     private static ChaosOverview BuildOverview(
         IReadOnlyList<SiteState> sites,
-        IReadOnlyList<BackendChaosState> backends)
+        IReadOnlyList<BackendChaosState> backends,
+        bool partitionActive)
     {
         var paused = 0;
         var delayed = 0;
@@ -371,6 +386,7 @@ public sealed class DashboardBroadcaster : IHostedService, IAsyncDisposable
             DelayedSites = delayed,
             ReorderingSites = reordering,
             FlakyBackends = flaky,
+            PartitionActive = partitionActive,
         };
     }
 

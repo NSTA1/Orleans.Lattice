@@ -137,4 +137,19 @@ public enum ChaosPreset
     /// affected row in the inventory grid.
     /// </summary>
     BaselineReorderStorm,
+
+    /// <summary>
+    /// Simulates an inter-silo network partition (plan §M12c). When
+    /// active, each silo accepts only writes for parts whose serial
+    /// hashes to its own "half" of the cluster — silo A keeps the
+    /// even-hash parts, silo B keeps the odd-hash parts — and drops
+    /// the rest on the floor at router ingress. The partition is
+    /// simulation-only: the shared lattice tree still reflects every
+    /// accepted write, so on heal (ClearAll or a direct
+    /// ConfigurePartitionAsync call) both silos converge immediately.
+    /// This is <i>not</i> a true Orleans transport-level partition;
+    /// it exists to let a demo show "two browser tabs write different
+    /// subsets during a partition, both sets are visible after heal".
+    /// </summary>
+    SiloPartition,
 }

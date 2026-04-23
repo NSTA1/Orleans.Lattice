@@ -30,6 +30,9 @@ public static class ChaosPresetInfo
             [ChaosPreset.BaselineReorderStorm] = (
                 "Baseline reorder storm",
                 "Open a 300 ms reorder window on the baseline backend only — writes flush in shuffled arrival order. Pair with the per-row ⚠ Race button to force divergence (baseline flags, lattice stays Nominal via HLC-ordered fold)."),
+            [ChaosPreset.SiloPartition] = (
+                "Silo partition",
+                "Simulate an inter-silo network partition: each silo accepts only writes for the half of the serial-hash space it owns. Open two browser tabs (http://localhost:5001 and :5002), emit facts on both, then click Clear all — the merged state is visible from both silos."),
         };
 
     /// <summary>All presets in declaration order (suitable for button rows).</summary>

@@ -1,6 +1,7 @@
 @page "/"
 @implements IDisposable
 @inject DashboardBroadcaster Broadcaster
+@inject SiteActivityIndex Index
 @inject NavigationManager Nav
 @inject ILogger<Dashboard> Log
 
@@ -17,27 +18,156 @@
     </p>
 </hgroup>
 
-<p>
-    <button @onclick="() => _showNewPart = true">+ New part</button>
-</p>
-
 <NewPartDialog IsOpen="_showNewPart"
                OnClose="() => _showNewPart = false"
                OnCreated="OnPartCreated" />
 
 <ChaosBanner />
 
-<InventoryGrid Parts="@_parts.Values" />
+<InventoryGrid Parts="@_parts.Values" OnNewPart="() => _showNewPart = true" />
+
+<article>
+    <header>
+        <strong>Parts by site</strong>
+        <small> · B+ tree range scan (plan §M12d)</small>
+    </header>
+    <p>
+        <small>
+            Click a site to run a live <code>ILattice.ScanEntriesAsync</code>
+            over the <code>@SiteActivityIndex.TreeId</code> tree. Every
+            routed <code>Fact</code> writes one index entry keyed by
+            <code>{site}/{hlc}/{serial}</code> with a short activity
+            label as the value; the listing below is the result of
+            reading the <code>{site}/</code> prefix in reverse, deduped
+            to the most recent activity per part.
+        </small>
+    </p>
+    <nav>
+        <ul>
+            @foreach (var s in ProcessSiteInfo.InLifecycleOrder)
+            {
+                <li>
+                    <a href="#parts-by-site"
+                       aria-current="@(_selectedSite == s ? "page" : null)"
+                       @onclick="() => SelectSiteAsync(s)"
+                       @onclick:preventDefault="true">
+                        @ProcessSiteInfo.GetDisplayName(s)
+                    </a>
+                </li>
+            }
+        </ul>
+    </nav>
+
+    <div id="parts-by-site">
+        @if (_selectedSite is null)
+        {
+            <p><small><em>No site selected.</em></small></p>
+        }
+        else if (_siteLoadError is not null)
+        {
+            <p role="alert">@_siteLoadError</p>
+        }
+        else if (_siteEntries is null)
+        {
+            <p aria-busy="true">Scanning <code>@_selectedSite</code>…</p>
+        }
+        else if (_siteEntries.Count == 0)
+        {
+            <p>
+                <em>
+                    No parts have completed a process step at
+                    @ProcessSiteInfo.GetDisplayName(_selectedSite.Value) yet.
+                </em>
+            </p>
+        }
+        else
+        {
+            <figure>
+                <table role="grid">
+                    <thead>
+                        <tr>
+                            <th scope="col">Serial</th>
+                            <th scope="col">Latest activity at @ProcessSiteInfo.GetDisplayName(_selectedSite.Value)</th>
+                            <th scope="col">When</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entry in _siteEntries)
+                        {
+                            <tr>
+                                <td class="inventory-nowrap">
+                                    <code><a href="/parts/@entry.Serial.Value">@entry.Serial.Value</a></code>
+                                </td>
+                                <td>@entry.Activity</td>
+                                <td class="inventory-nowrap"><small>@FormatWhen(entry.Hlc)</small></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </figure>
+            <small>
+                @_siteEntries.Count entr@(_siteEntries.Count == 1 ? "y" : "ies") ·
+                range-scan result for <code>@_selectedSite/</code>.
+            </small>
+        }
+    </div>
+</article>
 
 @code {
     private readonly Dictionary<PartSerialNumber, PartSummaryUpdate> _parts = new();
     private CancellationTokenSource? _cts;
     private bool _showNewPart;
 
+    private ProcessSite? _selectedSite;
+    private IReadOnlyList<SiteActivityIndexEntry>? _siteEntries;
+    private string? _siteLoadError;
+
     private void OnPartCreated(PartSerialNumber serial)
     {
         _showNewPart = false;
         Nav.NavigateTo($"/parts/{serial.Value}");
+    }
+
+    private async Task SelectSiteAsync(ProcessSite site)
+    {
+        _selectedSite = site;
+        _siteEntries = null;
+        _siteLoadError = null;
+        StateHasChanged();
+
+        try
+        {
+            _siteEntries = await Index.ListAtSiteAsync(site);
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Range scan failed for site {Site}", site);
+            _siteLoadError = $"Range scan failed: {ex.Message}";
+            _siteEntries = [];
+        }
+    }
+
+    private static string FormatWhen(Orleans.Lattice.Primitives.HybridLogicalClock hlc)
+    {
+        var ticks = hlc.WallClockTicks;
+        if (ticks <= 0 || ticks > DateTime.MaxValue.Ticks)
+        {
+            return "—";
+        }
+        var when = new DateTime(ticks, DateTimeKind.Utc);
+        // Anything older than 2000 is a synthetic / uninitialised HLC
+        // (test fixtures, early seeds) — don't render a nonsensical
+        // "700000d ago".
+        if (when.Year < 2000)
+        {
+            return "—";
+        }
+        var delta = DateTime.UtcNow - when;
+        if (delta.TotalSeconds < 0) return "just now";
+        if (delta.TotalSeconds < 60) return $"{(int)delta.TotalSeconds}s ago";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
+        return $"{(int)delta.TotalDays}d ago";
     }
 
     protected override async Task OnInitializedAsync()

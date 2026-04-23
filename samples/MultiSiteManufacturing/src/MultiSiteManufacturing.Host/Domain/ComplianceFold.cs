@@ -22,6 +22,9 @@ namespace MultiSiteManufacturing.Host.Domain;
 ///   <item><c>MrbDisposition(Scrap | ReturnToVendor)</c> → terminal <see cref="ComplianceState.Scrap"/>.</item>
 ///   <item><c>ReworkCompleted(retestPassed=true)</c> → arms the retest flag
 ///   when in <see cref="ComplianceState.Rework"/>.</item>
+///   <item><c>ReworkCompleted(retestPassed=false)</c> → escalates to at
+///   least <see cref="ComplianceState.FlaggedForReview"/> (a failed retest
+///   is defect evidence) and clears the retest-armed flag.</item>
 ///   <item><c>FinalAcceptance</c> → asserts completion; no state change
 ///   (its presence without outstanding severity is the "done" signal).</item>
 /// </list>

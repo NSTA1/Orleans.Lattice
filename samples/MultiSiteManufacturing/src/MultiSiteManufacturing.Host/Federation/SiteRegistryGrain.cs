@@ -83,6 +83,12 @@ internal sealed class SiteRegistryGrain(IGrainFactory grains) : Grain, ISiteRegi
                     },
                 };
                 break;
+            case ChaosPreset.SiloPartition:
+                // No site / backend knobs — the router handles the
+                // partition flag directly via IPartitionChaosGrain.
+                siteTargets = [];
+                backendTargets = EmptyBackendTargets;
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(preset), preset, "Unknown chaos preset.");
         }

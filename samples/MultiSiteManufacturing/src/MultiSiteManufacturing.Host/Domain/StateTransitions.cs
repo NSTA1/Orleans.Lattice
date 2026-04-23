@@ -62,7 +62,12 @@ internal static class StateTransitions
                     : (current, retestArmed);
 
             case ReworkCompleted { RetestPassed: false }:
-                return (current, false);
+                // A failed retest is observable defect evidence. Even if an
+                // earlier UseAsIs (possibly from a race trio) demoted the
+                // part to Nominal, recording a failed retest must escalate
+                // it back into the review/rework band so the operator's
+                // click has a visible effect.
+                return (Max(current, ComplianceState.FlaggedForReview), false);
 
             case FinalAcceptance:
                 return (current, retestArmed);

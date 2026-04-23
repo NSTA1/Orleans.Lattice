@@ -27,6 +27,12 @@
     @if (rows.Count == 0)
     {
         <p><em>No parts yet. The seeder populates a small set on first non-test run.</em></p>
+        @if (OnNewPart.HasDelegate)
+        {
+            <div style="display: flex; justify-content: flex-end;">
+                <button type="button" @onclick="OnNewPart">+ New part</button>
+            </div>
+        }
     }
     else
     {
@@ -91,6 +97,16 @@
                         </tr>
                     }
                 </tbody>
+                @if (OnNewPart.HasDelegate)
+                {
+                    <tfoot>
+                        <tr>
+                            <td colspan="7" style="text-align: right;">
+                                <button type="button" @onclick="OnNewPart">+ New part</button>
+                            </td>
+                        </tr>
+                    </tfoot>
+                }
             </table>
         </figure>
     }
@@ -99,6 +115,9 @@
 @code {
     /// <summary>Parts to display; caller provides a fresh enumerable on every render.</summary>
     [Parameter, EditorRequired] public IEnumerable<PartSummaryUpdate> Parts { get; set; } = [];
+
+    /// <summary>Invoked when the operator clicks the trailing "+ New part" row. Optional.</summary>
+    [Parameter] public EventCallback OnNewPart { get; set; }
 
     private readonly HashSet<PartSerialNumber> _inFlight = [];
     private RaceStatus? _lastRace;

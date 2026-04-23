@@ -26,6 +26,10 @@
             {
                 <li><code>@backend</code> backend flaky (jitter / faults / amplification)</li>
             }
+            @if (overview.PartitionActive)
+            {
+                <li>inter-silo partition active — CRDT writes diverging until heal</li>
+            }
         </ul>
     </article>
 }

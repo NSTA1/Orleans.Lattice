@@ -152,6 +152,8 @@ public sealed class InventorySeeder(
         await EmitForgeAsync(ctx, ct);
         await EmitStageAsync(ctx, ProcessStage.HeatTreat, ProcessSite.NagoyaHeatTreat, "heat-treat complete", ct);
         await EmitStageAsync(ctx, ProcessStage.Machining, ProcessSite.StuttgartMachining, "machining complete", ct);
+        await EmitInspectionAsync(ctx, Inspection.CMM, InspectionOutcome.Pass,
+            ProcessSite.StuttgartCmmLab, "CMM pass", ct);
         await EmitNonConformanceAsync(ctx, NcSeverity.Major, $"NC-{seq:D5}-B",
             ProcessSite.ToulouseNdtLab, "eddy-current indication (major)", ct);
         await EmitMrbAsync(ctx, MrbDispositionKind.Rework, $"NC-{seq:D5}-B",
@@ -176,6 +178,9 @@ public sealed class InventorySeeder(
         var ctx = PartContext.Create(seq);
         await EmitForgeAsync(ctx, ct);
         await EmitStageAsync(ctx, ProcessStage.HeatTreat, ProcessSite.NagoyaHeatTreat, "heat-treat complete", ct);
+        await EmitStageAsync(ctx, ProcessStage.Machining, ProcessSite.StuttgartMachining, "machining complete", ct);
+        await EmitInspectionAsync(ctx, Inspection.CMM, InspectionOutcome.Pass,
+            ProcessSite.StuttgartCmmLab, "CMM pass", ct);
         await EmitNonConformanceAsync(ctx, NcSeverity.Critical, $"NC-{seq:D5}-X",
             ProcessSite.ToulouseNdtLab, "X-ray: critical void", ct);
     }
@@ -295,6 +300,19 @@ public sealed class InventorySeeder(
     /// </summary>
     private sealed class PartContext
     {
+        // Spread seeded parts across the last ~5 days so per-part activity
+        // streams have room to breathe without spilling into the future. Each
+        // part starts ~(5d / TotalParts) after the previous one, and facts
+        // inside a part advance by a jittered 10m–2h gap — so the dashboard
+        // "When" column shows realistic spacing (e.g. Forge 3d ago, Heat Treat
+        // 2d ago, Machining 18h ago, FAI 1h ago) instead of everything landing
+        // in the same millisecond.
+        private static readonly long SeedWindowSpanTicks = TimeSpan.FromDays(5).Ticks;
+        private static readonly long SeedWindowStartTicks =
+            DateTimeOffset.UtcNow.Ticks - SeedWindowSpanTicks;
+        private static readonly long PerPartStrideTicks =
+            SeedWindowSpanTicks / Math.Max(1, TotalParts);
+
         public PartSerialNumber Serial { get; }
         private HybridLogicalClock _hlc;
         private int _factOrdinal;
@@ -304,7 +322,11 @@ public sealed class InventorySeeder(
         {
             _seq = seq;
             Serial = serial;
-            _hlc = new HybridLogicalClock { WallClockTicks = (long)seq * 1_000_000, Counter = 0 };
+            _hlc = new HybridLogicalClock
+            {
+                WallClockTicks = SeedWindowStartTicks + (long)(seq - 1) * PerPartStrideTicks,
+                Counter = 0,
+            };
         }
 
         public static PartContext Create(int seq) =>
@@ -312,9 +334,22 @@ public sealed class InventorySeeder(
 
         public HybridLogicalClock NextHlc()
         {
+            // Deterministic 60–180 minute gap between consecutive facts,
+            // seeded by the current HLC so reseeds over the same data
+            // produce the same schedule. Clamped to "now" so the final
+            // facts of late parts don't drift into the future if the
+            // seeder is slow.
+            var hash = (uint)(_hlc.WallClockTicks ^ ((long)_seq * 2654435761L));
+            var gapMinutes = 60 + (int)(hash % 121U);
+            var nextTicks = _hlc.WallClockTicks + TimeSpan.FromMinutes(gapMinutes).Ticks;
+            var nowTicks = DateTimeOffset.UtcNow.Ticks;
+            if (nextTicks > nowTicks)
+            {
+                nextTicks = nowTicks;
+            }
             _hlc = new HybridLogicalClock
             {
-                WallClockTicks = _hlc.WallClockTicks + 1,
+                WallClockTicks = nextTicks,
                 Counter = 0,
             };
             return _hlc;

@@ -50,11 +50,19 @@ public sealed record ChaosOverview
     /// <summary>Backends with any non-nominal chaos knob engaged.</summary>
     public required IReadOnlyList<string> FlakyBackends { get; init; }
 
+    /// <summary>
+    /// True when the simulated inter-silo partition is active
+    /// (plan §M12c). Surfaced on the chaos banner so operators can see
+    /// at a glance why two silos may be disagreeing.
+    /// </summary>
+    public required bool PartitionActive { get; init; }
+
     /// <summary>True if any chaos knob anywhere is engaged.</summary>
     public bool Any => PausedSites > 0
         || DelayedSites > 0
         || ReorderingSites > 0
-        || FlakyBackends.Count > 0;
+        || FlakyBackends.Count > 0
+        || PartitionActive;
 }
 
 /// <summary>

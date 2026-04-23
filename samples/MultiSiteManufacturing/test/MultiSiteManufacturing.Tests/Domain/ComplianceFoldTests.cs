@@ -163,6 +163,62 @@ public class ComplianceFoldTests
         Assert.That(ComplianceFold.Fold(facts), Is.EqualTo(ComplianceState.FlaggedForReview));
     }
 
+    [Test]
+    public void ReworkCompleted_retestFailed_escalates_Nominal_to_FlaggedForReview()
+    {
+        // A failed retest arriving against a part the fold currently sees as
+        // Nominal (e.g. after a prior UseAsIs demotion) must still be
+        // observable — a failed retest is defect evidence.
+        var facts = new Fact[]
+        {
+            new ReworkCompleted
+            {
+                Serial = Serial, FactId = Guid.NewGuid(), Hlc = Hlc(1),
+                Site = ProcessSite.StuttgartMachining, Operator = Op,
+                Description = "rework op; retest FAILED",
+                ReworkOperation = "re-blend", RetestPassed = false,
+            },
+        };
+        Assert.That(ComplianceFold.Fold(facts), Is.EqualTo(ComplianceState.FlaggedForReview));
+    }
+
+    [Test]
+    public void ReworkCompleted_retestFailed_preserves_higher_Rework_state()
+    {
+        // For a part already in Rework, a failed retest must not demote it —
+        // Max(Rework, FlaggedForReview) = Rework.
+        var facts = new Fact[]
+        {
+            Nc(1, "NC-1", NcSeverity.Major, ProcessSite.ToulouseNdtLab),
+            new ReworkCompleted
+            {
+                Serial = Serial, FactId = Guid.NewGuid(), Hlc = Hlc(2),
+                Site = ProcessSite.StuttgartMachining, Operator = Op,
+                Description = "rework op; retest FAILED",
+                ReworkOperation = "re-blend", RetestPassed = false,
+            },
+        };
+        Assert.That(ComplianceFold.Fold(facts), Is.EqualTo(ComplianceState.Rework));
+    }
+
+    [Test]
+    public void ReworkCompleted_retestFailed_does_not_escalate_terminal_Scrap()
+    {
+        // Scrap is terminal; a late retest-failed must not touch it.
+        var facts = new Fact[]
+        {
+            Nc(1, "NC-1", NcSeverity.Critical, ProcessSite.ToulouseNdtLab),
+            new ReworkCompleted
+            {
+                Serial = Serial, FactId = Guid.NewGuid(), Hlc = Hlc(2),
+                Site = ProcessSite.StuttgartMachining, Operator = Op,
+                Description = "rework op; retest FAILED",
+                ReworkOperation = "re-blend", RetestPassed = false,
+            },
+        };
+        Assert.That(ComplianceFold.Fold(facts), Is.EqualTo(ComplianceState.Scrap));
+    }
+
     // --- helpers ------------------------------------------------------------
 
     private static HybridLogicalClock Hlc(long tick) =>

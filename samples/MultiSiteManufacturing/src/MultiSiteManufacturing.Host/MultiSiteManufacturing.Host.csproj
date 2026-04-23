@@ -16,6 +16,8 @@
     <PackageReference Include="Microsoft.Orleans.Reminders" Version="10.1.0" />
     <PackageReference Include="Microsoft.Orleans.Streaming" Version="10.1.0" />
     <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.1.0" />
   </ItemGroup>
 
   <ItemGroup>

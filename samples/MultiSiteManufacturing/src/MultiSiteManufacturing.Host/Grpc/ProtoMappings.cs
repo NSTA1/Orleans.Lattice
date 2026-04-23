@@ -121,6 +121,8 @@ internal static class ProtoMappings
         V1.ChaosPreset.CustomsHold => ChaosPreset.CustomsHold,
         V1.ChaosPreset.MrbWeekend => ChaosPreset.MrbWeekend,
         V1.ChaosPreset.LatticeStorageFlakes => ChaosPreset.LatticeStorageFlakes,
+        V1.ChaosPreset.BaselineReorderStorm => ChaosPreset.BaselineReorderStorm,
+        V1.ChaosPreset.SiloPartition => ChaosPreset.SiloPartition,
         _ => throw new ArgumentOutOfRangeException(nameof(preset), preset, "Unspecified preset"),
     };
 

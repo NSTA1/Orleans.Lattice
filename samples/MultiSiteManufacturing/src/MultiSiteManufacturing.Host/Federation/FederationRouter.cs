@@ -14,16 +14,30 @@ namespace MultiSiteManufacturing.Host.Federation;
 /// for the fact's origin site so pause / delay configuration takes effect
 /// before fan-out. Facts held by a paused site are released through
 /// <see cref="ConfigureSiteAsync"/> and <see cref="ApplyPresetAsync"/>.
+/// <para>
+/// When the M12c silo-partition preset is active the router also
+/// consults <see cref="IPartitionChaosGrain"/>: each silo accepts only
+/// the half of the serial-hash space assigned to it (silo A keeps
+/// <c>hash % 2 == 0</c>, silo B keeps <c>hash % 2 == 1</c>). Dropped
+/// facts are logged but otherwise invisible to the caller — the
+/// <see cref="EmitAsync"/> return value is <c>false</c> just as it
+/// would be for a fact held at a paused site.
+/// </para>
 /// </remarks>
 public sealed class FederationRouter(
     IEnumerable<IFactBackend> backends,
     IGrainFactory grains,
-    ILogger<FederationRouter> logger)
+    ILogger<FederationRouter> logger,
+    SiloIdentity? siloIdentity = null)
 {
     private readonly IReadOnlyList<IFactBackend> _backends = [.. backends];
+    private readonly SiloIdentity _silo = siloIdentity ?? new SiloIdentity("a", IsPrimary: true);
 
     /// <summary>Backends that receive every emitted fact, indexed by <see cref="IFactBackend.Name"/>.</summary>
     public IReadOnlyList<IFactBackend> Backends => _backends;
+
+    /// <summary>Identity of the silo hosting this router instance.</summary>
+    public SiloIdentity Silo => _silo;
 
     /// <summary>
     /// Raised after a fact has been fanned out to every backend. Used
@@ -63,12 +77,26 @@ public sealed class FederationRouter(
     /// <see langword="true"/> if the fact was forwarded through the
     /// backends (fan-out ran and <see cref="FactRouted"/> was raised);
     /// <see langword="false"/> if the site grain held it (paused or
-    /// buffered for reorder) — in which case no downstream side effects
-    /// occur until a later unpause or reorder flush.
+    /// buffered for reorder), the silo-partition preset dropped it, or
+    /// any other ingress filter suppressed fan-out — in which case no
+    /// downstream side effects occur until a later unpause or reorder
+    /// flush.
     /// </returns>
     public async Task<bool> EmitAsync(Fact fact, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(fact);
+
+        // M12c: silo-partition filter. Dropped facts never touch the
+        // site grain or the backends so they produce no visible side
+        // effects on the current silo; the other silo (which owns the
+        // opposite hash bucket) accepts the write.
+        if (await IsDroppedByPartitionAsync(fact))
+        {
+            logger.LogInformation(
+                "Fact {FactId} dropped on silo {Silo} by partition filter (serial {Serial})",
+                fact.FactId, _silo.Id, fact.Serial.Value);
+            return false;
+        }
 
         var admission = await SiteGrain(fact.Site).AdmitAsync(fact);
 
@@ -97,6 +125,23 @@ public sealed class FederationRouter(
     }
 
     /// <summary>
+    /// Returns whether the silo-partition preset is currently active on
+    /// the cluster.
+    /// </summary>
+    public Task<bool> IsPartitionedAsync() =>
+        grains.GetGrain<IPartitionChaosGrain>(IPartitionChaosGrain.SingletonKey).IsPartitionedAsync();
+
+    /// <summary>
+    /// Toggles the silo-partition preset. Returns the resulting value.
+    /// </summary>
+    public async Task<bool> ConfigurePartitionAsync(bool partitioned)
+    {
+        var value = await grains.GetGrain<IPartitionChaosGrain>(IPartitionChaosGrain.SingletonKey).SetPartitionedAsync(partitioned);
+        RaiseChaosConfigChanged();
+        return value;
+    }
+
+    /// <summary>
     /// Updates a single site's chaos configuration and fans out any facts
     /// the grain released from its pending queue (pause → unpause).
     /// Returns the site's fresh <see cref="SiteState"/> snapshot.
@@ -121,6 +166,16 @@ public sealed class FederationRouter(
         ChaosPreset preset,
         CancellationToken cancellationToken = default)
     {
+        // Partition toggle: SiloPartition sets the flag; ClearAll clears it.
+        if (preset == ChaosPreset.SiloPartition)
+        {
+            await grains.GetGrain<IPartitionChaosGrain>(IPartitionChaosGrain.SingletonKey).SetPartitionedAsync(true);
+        }
+        else if (preset == ChaosPreset.ClearAll)
+        {
+            await grains.GetGrain<IPartitionChaosGrain>(IPartitionChaosGrain.SingletonKey).SetPartitionedAsync(false);
+        }
+
         var drained = await Registry.ApplyPresetAsync(preset);
         await ReleaseAsync(drained, cancellationToken);
         var snapshot = await Registry.ListSitesAsync();
@@ -175,6 +230,43 @@ public sealed class FederationRouter(
 
     private IProcessSiteGrain SiteGrain(ProcessSite site) =>
         grains.GetGrain<IProcessSiteGrain>(site.ToString());
+
+    private async Task<bool> IsDroppedByPartitionAsync(Fact fact)
+    {
+        if (!await IsPartitionedAsync())
+        {
+            return false;
+        }
+
+        // M12c partitioning: deterministic hash-based filter. Silo A
+        // (IsPrimary == true) keeps even-hash serials; silo B keeps
+        // odd. Using string.GetHashCode is fine for a demo — we only
+        // need the same answer on every call, not cryptographic
+        // quality. Ordinal hash keeps the split stable across runs
+        // (string.GetHashCode() is randomized per process).
+        var hash = OrdinalHash(fact.Serial.Value);
+        var evenBucket = (hash & 1) == 0;
+        return evenBucket != _silo.IsPrimary;
+    }
+
+    /// <summary>
+    /// Process-stable FNV-1a hash. Used so the M12c partition filter
+    /// produces the same "which silo owns this serial" answer on every
+    /// silo (unlike <see cref="string.GetHashCode()"/>, which is
+    /// randomized per process).
+    /// </summary>
+    private static uint OrdinalHash(string value)
+    {
+        const uint offset = 2166136261;
+        const uint prime = 16777619;
+        var hash = offset;
+        foreach (var c in value)
+        {
+            hash ^= c;
+            hash *= prime;
+        }
+        return hash;
+    }
 
     private async Task FanOutAsync(Fact fact, CancellationToken cancellationToken)
     {

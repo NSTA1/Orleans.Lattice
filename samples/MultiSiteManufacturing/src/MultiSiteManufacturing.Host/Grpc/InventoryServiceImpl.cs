@@ -136,15 +136,14 @@ public sealed class InventoryServiceImpl(FederationRouter router)
         var state = await lattice.GetStateAsync(serial, cancellationToken);
         var facts = await lattice.GetFactsAsync(serial, cancellationToken);
 
-        var latestStage = V1.ProcessStage.Unspecified;
-        for (var i = facts.Count - 1; i >= 0; i--)
-        {
-            if (facts[i] is ProcessStepCompleted step)
-            {
-                latestStage = ProtoMappings.ToProto(step.Stage);
-                break;
-            }
-        }
+        // See DashboardBroadcaster.StageOf — "latest stage" is the
+        // lifecycle milestone of the newest fact (HLC-ascending list,
+        // so facts[^1]), not merely the last ProcessStepCompleted.
+        var latestStage = facts.Count == 0
+            ? V1.ProcessStage.Unspecified
+            : StageOf(facts[^1]) is { } stage
+                ? ProtoMappings.ToProto(stage)
+                : V1.ProcessStage.Unspecified;
 
         return new V1.PartSummary
         {
@@ -154,6 +153,17 @@ public sealed class InventoryServiceImpl(FederationRouter router)
             State = ProtoMappings.ToProto(state),
         };
     }
+
+    private static ProcessStage? StageOf(Fact fact) => fact switch
+    {
+        ProcessStepCompleted step => step.Stage,
+        InspectionRecorded => ProcessStage.NDT,
+        NonConformanceRaised => ProcessStage.MRB,
+        MrbDisposition => ProcessStage.MRB,
+        ReworkCompleted => ProcessStage.MRB,
+        FinalAcceptance => ProcessStage.FAI,
+        _ => null,
+    };
 
     private static string InferFamily(PartSerialNumber serial)
     {

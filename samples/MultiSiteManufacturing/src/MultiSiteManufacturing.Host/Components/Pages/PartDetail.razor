@@ -3,6 +3,7 @@
 @inject FederationRouter Router
 @inject DashboardBroadcaster Broadcaster
 @inject OperatorActions Actions
+@inject PartCrdtStore Crdt
 @inject NavigationManager Nav
 
 <PageTitle>@Serial · Part detail</PageTitle>
@@ -35,6 +36,54 @@ else
         </article>
 
         <article>
+            <header><strong>CRDT state (Orleans.Lattice)</strong></header>
+            <dl>
+                <dt>Current operator (LWW)</dt>
+                <dd>
+                    @if (_currentOperator is { } op)
+                    {
+                        <code>@op.Value</code>
+                    }
+                    else
+                    {
+                        <em>none</em>
+                    }
+                </dd>
+                <dt>Process labels (G-Set)</dt>
+                <dd>
+                    @if (_labels.Count == 0)
+                    {
+                        <em>none</em>
+                    }
+                    else
+                    {
+                        @foreach (var label in _labels)
+                        {
+                            <span class="state-badge" style="background:#546e7a; margin-right:0.25rem">@label</span>
+                        }
+                    }
+                </dd>
+            </dl>
+            <form @onsubmit="AssignOperatorAsync" @onsubmit:preventDefault>
+                <label>Assign operator
+                    <input type="text" @bind="_operatorInput" placeholder="operator:alice" />
+                </label>
+                <button type="submit" disabled="@_busy">Assign (LWW)</button>
+            </form>
+            <form @onsubmit="AddLabelAsync" @onsubmit:preventDefault>
+                <label>Add process label
+                    <input type="text" @bind="_labelInput" placeholder="heat-lot-X" />
+                </label>
+                <button type="submit" disabled="@_busy">Add label (G-Set)</button>
+            </form>
+            <small>
+                Operator is a last-writer-wins register; concurrent writes from silo A
+                and silo B converge on the higher lattice HLC. Labels are a grow-only
+                set — adds on either silo union without conflict.
+            </small>
+        </article>
+
+        <article>
             <header><strong>Fact trail</strong></header>
             @if (_facts.Count == 0)
             {
@@ -42,55 +91,85 @@ else
             }
             else
             {
-                <ol>
-                    @foreach (var fact in _facts.OrderBy(f => f.Hlc.WallClockTicks).ThenBy(f => f.Hlc.Counter))
-                    {
-                        <li>
-                            <small><code>@fact.Hlc</code> · @fact.Site · @fact.Operator.Value</small><br />
-                            <strong>@fact.GetType().Name</strong>: @fact.Description
-                        </li>
-                    }
-                </ol>
+                <p><em>@_facts.Count fact(s) — see trail below.</em></p>
             }
         </article>
     </div>
 
     <h2>Record action</h2>
 
-    <details open>
-        <summary>Complete process step</summary>
-        <form @onsubmit="CompleteStepAsync" @onsubmit:preventDefault>
-            <label>Stage
-                <select @bind="_stepStage">
-                    @foreach (var s in _stages) { <option value="@s">@s</option> }
-                </select>
-            </label>
-            <label>Heat lot (optional)<input type="text" @bind="_heatLot" /></label>
-            <button type="submit" disabled="@_busy">Emit ProcessStepCompleted</button>
-        </form>
-    </details>
+    @switch (_suggestion.Action)
+    {
+        case NextAction.Terminal:
+            <p><em>No further actions — part is in a terminal state.</em></p>
+            break;
 
-    <details>
-        <summary>Record inspection</summary>
-        <form @onsubmit="RecordInspectionAsync" @onsubmit:preventDefault>
-            <label>Inspection
-                <select @bind="_inspection">
-                    @foreach (var i in _inspections) { <option value="@i">@i</option> }
-                </select>
-            </label>
-            <label>Outcome
-                <select @bind="_inspectionOutcome">
-                    @foreach (var o in _outcomes) { <option value="@o">@o</option> }
-                </select>
-            </label>
-            <label>Site
-                <select @bind="_inspectionSite">
-                    @foreach (var s in _sites) { <option value="@s">@s</option> }
-                </select>
-            </label>
-            <button type="submit" disabled="@_busy">Emit InspectionRecorded</button>
-        </form>
-    </details>
+        case NextAction.IssueMrb:
+            <article>
+                <header>
+                    <strong>Open NCR: <code>@_suggestion.OpenNcNumber</code></strong> — choose MRB disposition:
+                </header>
+                <div role="group">
+                    <button type="button" disabled="@_busy"
+                            @onclick="() => DispositionAsync(MrbDispositionKind.UseAsIs, _suggestion.OpenNcNumber!)">
+                        Use as is
+                    </button>
+                    <button type="button" disabled="@_busy"
+                            @onclick="() => DispositionAsync(MrbDispositionKind.Rework, _suggestion.OpenNcNumber!)">
+                        Rework
+                    </button>
+                    <button type="button" class="secondary" disabled="@_busy"
+                            @onclick="() => DispositionAsync(MrbDispositionKind.Scrap, _suggestion.OpenNcNumber!)">
+                        Scrap
+                    </button>
+                    <button type="button" class="secondary" disabled="@_busy"
+                            @onclick="() => DispositionAsync(MrbDispositionKind.ReturnToVendor, _suggestion.OpenNcNumber!)">
+                        Return to vendor
+                    </button>
+                </div>
+            </article>
+            break;
+
+        case NextAction.RecordNdtInspection:
+            <article>
+                <header><strong>NDT inspection pending</strong> — record outcome:</header>
+                <div role="group">
+                    <button type="button" disabled="@_busy"
+                            @onclick="() => RecordNdtAsync(InspectionOutcome.Pass)">
+                        Record NDT Pass
+                    </button>
+                    <button type="button" class="secondary" disabled="@_busy"
+                            @onclick="() => RecordNdtAsync(InspectionOutcome.Fail)">
+                        Record NDT Fail
+                    </button>
+                </div>
+                <small>A Fail does not auto-raise an NCR — use the form below if a defect warrants one.</small>
+            </article>
+            break;
+
+        case NextAction.CompleteRework:
+            <article>
+                <header><strong>Rework ordered</strong> — record completion + retest outcome:</header>
+                <div role="group">
+                    <button type="button" disabled="@_busy"
+                            @onclick="() => CompleteReworkAsync(true)">
+                        Rework complete (retest passed)
+                    </button>
+                    <button type="button" class="secondary" disabled="@_busy"
+                            @onclick="() => CompleteReworkAsync(false)">
+                        Rework complete (retest failed)
+                    </button>
+                </div>
+            </article>
+            break;
+
+        default:
+            <button type="button" class="contrast" disabled="@_busy"
+                    @onclick="() => RunSuggestedAsync(_suggestion.Action)">
+                Next: @LabelFor(_suggestion.Action)
+            </button>
+            break;
+    }
 
     <details>
         <summary>Raise non-conformance</summary>
@@ -111,41 +190,27 @@ else
         </form>
     </details>
 
-    <details>
-        <summary>MRB disposition</summary>
-        <form @onsubmit="DispositionAsync" @onsubmit:preventDefault>
-            <label>NC number<input type="text" @bind="_mrbNcNumber" /></label>
-            <label>Disposition
-                <select @bind="_mrbKind">
-                    @foreach (var d in _dispositions) { <option value="@d">@d</option> }
-                </select>
-            </label>
-            <button type="submit" disabled="@_busy">Emit MrbDisposition</button>
-        </form>
-    </details>
-
-    <details>
-        <summary>Complete rework</summary>
-        <form @onsubmit="CompleteReworkAsync" @onsubmit:preventDefault>
-            <label>Rework operation<input type="text" @bind="_reworkOp" placeholder="Weld repair" /></label>
-            <label><input type="checkbox" @bind="_retestPassed" role="switch" /> Retest passed</label>
-            <button type="submit" disabled="@_busy">Emit ReworkCompleted</button>
-        </form>
-    </details>
-
-    <details>
-        <summary>Sign-off FAI</summary>
-        <form @onsubmit="SignOffFaiAsync" @onsubmit:preventDefault>
-            <label>FAI report id<input type="text" @bind="_faiReportId" /></label>
-            <label>Inspector id<input type="text" @bind="_inspectorId" /></label>
-            <label><input type="checkbox" @bind="_certIssued" role="switch" /> Certificate issued</label>
-            <button type="submit" disabled="@_busy">Emit FinalAcceptance</button>
-        </form>
-    </details>
-
     @if (_actionError is not null)
     {
         <p role="alert" style="color:var(--pico-color-red-500)">@_actionError</p>
+    }
+
+    <h2>Fact trail</h2>
+    @if (_facts.Count == 0)
+    {
+        <p><em>No facts yet.</em></p>
+    }
+    else
+    {
+        <ol>
+            @foreach (var fact in _facts.OrderBy(f => f.Hlc.WallClockTicks).ThenBy(f => f.Hlc.Counter))
+            {
+                <li>
+                    <small><code>@fact.Hlc</code> · @fact.Site · @fact.Operator.Value</small><br />
+                    <strong>@fact.GetType().Name</strong>: @fact.Description
+                </li>
+            }
+        </ol>
     }
 }
 
@@ -158,37 +223,25 @@ else
     private IReadOnlyList<Fact>? _facts;
     private ComplianceState _baselineState;
     private ComplianceState _latticeState;
+    private NextActionSuggestion _suggestion;
     private string? _loadError;
     private string? _actionError;
     private bool _busy;
     private CancellationTokenSource? _cts;
 
-    // Form state
-    private static readonly ProcessStage[] _stages =
-        [ProcessStage.Forge, ProcessStage.HeatTreat, ProcessStage.Machining,
-         ProcessStage.NDT, ProcessStage.MRB, ProcessStage.FAI];
-    private static readonly Inspection[] _inspections = Enum.GetValues<Inspection>();
-    private static readonly InspectionOutcome[] _outcomes = Enum.GetValues<InspectionOutcome>();
+    // Raise-NCR form state (only branch that needs free-text operator input).
     private static readonly ProcessSite[] _sites = Enum.GetValues<ProcessSite>();
     private static readonly NcSeverity[] _severities = Enum.GetValues<NcSeverity>();
-    private static readonly MrbDispositionKind[] _dispositions = Enum.GetValues<MrbDispositionKind>();
-
-    private ProcessStage _stepStage = ProcessStage.Forge;
-    private string? _heatLot;
-    private Inspection _inspection = _inspections[0];
-    private InspectionOutcome _inspectionOutcome = InspectionOutcome.Pass;
-    private ProcessSite _inspectionSite = ProcessSite.ToulouseNdtLab;
     private string _ncNumber = "";
     private string _defectCode = "";
     private NcSeverity _ncSeverity = NcSeverity.Major;
     private ProcessSite _ncSite = ProcessSite.CincinnatiMrb;
-    private string _mrbNcNumber = "";
-    private MrbDispositionKind _mrbKind = MrbDispositionKind.UseAsIs;
-    private string _reworkOp = "";
-    private bool _retestPassed = true;
-    private string _faiReportId = "";
-    private string _inspectorId = "";
-    private bool _certIssued = true;
+
+    // CRDT state
+    private OperatorId? _currentOperator;
+    private HashSet<string> _labels = new();
+    private string _operatorInput = "";
+    private string _labelInput = "";
 
     protected override async Task OnParametersSetAsync()
     {
@@ -210,6 +263,9 @@ else
             _facts = await lattice.GetFactsAsync(serial, ct);
             _baselineState = await baseline.GetStateAsync(serial, ct);
             _latticeState = await lattice.GetStateAsync(serial, ct);
+            _suggestion = NextActionResolver.Resolve(_facts);
+            _currentOperator = await Crdt.GetOperatorAsync(serial, ct);
+            _labels = new HashSet<string>(await Crdt.GetLabelsAsync(serial, ct));
             _loadError = null;
         }
         catch (OperationCanceledException) { }
@@ -235,36 +291,80 @@ else
         catch (OperationCanceledException) { }
     }
 
-    private Task CompleteStepAsync() => RunAsync(ct =>
-        Actions.CompleteProcessStepAsync(
-            new PartSerialNumber(Serial), _stepStage, OperatorId.Demo,
-            heatLot: string.IsNullOrWhiteSpace(_heatLot) ? null : _heatLot,
-            cancellationToken: ct));
+    private static string LabelFor(NextAction action) => action switch
+    {
+        NextAction.CompleteHeatTreat => "Complete Heat Treat",
+        NextAction.CompleteMachining => "Complete Machining",
+        NextAction.RecordCmmInspection => "Record CMM inspection (Pass)",
+        NextAction.RecordNdtInspection => "Record NDT inspection",
+        NextAction.SignOffFai => "Sign off FAI",
+        NextAction.CompleteRework => "Complete rework",
+        NextAction.IssueMrb => "Issue MRB disposition",
+        _ => action.ToString(),
+    };
 
-    private Task RecordInspectionAsync() => RunAsync(ct =>
+    private Task RunSuggestedAsync(NextAction action) => action switch
+    {
+        NextAction.CompleteHeatTreat => RunAsync(ct =>
+            Actions.CompleteProcessStepAsync(
+                new PartSerialNumber(Serial), ProcessStage.HeatTreat, OperatorId.Demo, cancellationToken: ct)),
+        NextAction.CompleteMachining => RunAsync(ct =>
+            Actions.CompleteProcessStepAsync(
+                new PartSerialNumber(Serial), ProcessStage.Machining, OperatorId.Demo, cancellationToken: ct)),
+        NextAction.RecordCmmInspection => RunAsync(ct =>
+            Actions.RecordInspectionAsync(
+                new PartSerialNumber(Serial), Inspection.CMM, InspectionOutcome.Pass,
+                ProcessSite.StuttgartCmmLab, OperatorId.Demo, cancellationToken: ct)),
+        NextAction.SignOffFai => RunAsync(ct =>
+            Actions.SignOffFaiAsync(
+                new PartSerialNumber(Serial),
+                faiReportId: $"FAI-{Serial}-{DateTimeOffset.UtcNow:yyyyMMddHHmm}",
+                inspectorId: "inspector:demo",
+                certificateIssued: true,
+                OperatorId.Demo, cancellationToken: ct)),
+        _ => Task.CompletedTask,
+    };
+
+    private Task RecordNdtAsync(InspectionOutcome outcome) => RunAsync(ct =>
         Actions.RecordInspectionAsync(
-            new PartSerialNumber(Serial), _inspection, _inspectionOutcome,
-            _inspectionSite, OperatorId.Demo, cancellationToken: ct));
+            new PartSerialNumber(Serial), Inspection.FPI, outcome,
+            ProcessSite.ToulouseNdtLab, OperatorId.Demo, cancellationToken: ct));
+
+    private Task DispositionAsync(MrbDispositionKind kind, string ncNumber) => RunAsync(ct =>
+        Actions.DispositionMrbAsync(
+            new PartSerialNumber(Serial), ncNumber, kind, OperatorId.Demo, cancellationToken: ct));
+
+    private Task CompleteReworkAsync(bool retestPassed) => RunAsync(ct =>
+        Actions.CompleteReworkAsync(
+            new PartSerialNumber(Serial),
+            reworkOperation: "Weld repair",
+            retestPassed: retestPassed,
+            OperatorId.Demo, cancellationToken: ct));
 
     private Task RaiseNcAsync() => RunAsync(ct =>
         Actions.RaiseNonConformanceAsync(
             new PartSerialNumber(Serial), _ncNumber, _defectCode, _ncSeverity,
             _ncSite, OperatorId.Demo, cancellationToken: ct));
 
-    private Task DispositionAsync() => RunAsync(ct =>
-        Actions.DispositionMrbAsync(
-            new PartSerialNumber(Serial), _mrbNcNumber, _mrbKind,
-            OperatorId.Demo, cancellationToken: ct));
+    private Task AssignOperatorAsync() => RunAsync(async ct =>
+    {
+        if (string.IsNullOrWhiteSpace(_operatorInput)) return;
+        await Crdt.AssignOperatorAsync(
+            new PartSerialNumber(Serial),
+            new OperatorId(_operatorInput.Trim()),
+            ct);
+        _operatorInput = "";
+    });
 
-    private Task CompleteReworkAsync() => RunAsync(ct =>
-        Actions.CompleteReworkAsync(
-            new PartSerialNumber(Serial), _reworkOp, _retestPassed,
-            OperatorId.Demo, cancellationToken: ct));
-
-    private Task SignOffFaiAsync() => RunAsync(ct =>
-        Actions.SignOffFaiAsync(
-            new PartSerialNumber(Serial), _faiReportId, _inspectorId,
-            _certIssued, OperatorId.Demo, cancellationToken: ct));
+    private Task AddLabelAsync() => RunAsync(async ct =>
+    {
+        if (string.IsNullOrWhiteSpace(_labelInput)) return;
+        await Crdt.AddLabelAsync(
+            new PartSerialNumber(Serial),
+            _labelInput.Trim(),
+            ct);
+        _labelInput = "";
+    });
 
     private async Task RunAsync(Func<CancellationToken, Task> action)
     {

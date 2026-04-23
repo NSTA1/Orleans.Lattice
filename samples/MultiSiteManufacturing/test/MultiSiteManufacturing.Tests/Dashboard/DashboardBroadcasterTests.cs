@@ -25,7 +25,7 @@ public sealed class DashboardBroadcasterTests
 
     private DashboardBroadcaster NewBroadcaster(FederationRouter router)
     {
-        var broadcaster = new DashboardBroadcaster(router, NullLogger<DashboardBroadcaster>.Instance);
+        var broadcaster = new DashboardBroadcaster(router, _fixture.GrainFactory, NullLogger<DashboardBroadcaster>.Instance);
         broadcaster.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
         return broadcaster;
     }
