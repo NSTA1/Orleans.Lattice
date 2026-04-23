@@ -25,12 +25,6 @@
 
 <ChaosFlyout IsOpen="_chaosOpen" OnClose="CloseChaos" />
 
-<footer class="container">
-    <small>
-        Orleans.Lattice sample · baseline vs lattice federation ·
-        Pico.css (CDN) · Blazor Server
-    </small>
-</footer>
 
 @code {
     private bool _chaosOpen;
@@ -50,7 +44,6 @@
         max-width: min(1800px, calc(100vw - 2rem));
     }
 
-    /* State badges — intentionally tiny; a full design pass comes in M12. */
     .state-badge {
         display: inline-block;
         padding: 0.15rem 0.5rem;
@@ -176,6 +169,57 @@
     }
     .race-status-held {
         color: #b45309; /* amber-700 */
+        font-weight: 600;
+    }
+
+    /* Tab bar for switching between top-level dashboard views
+       (Inventory vs. Inventory By Activity). Styled to sit flush
+       above the tab panels with a single bottom border; the active
+       tab lifts that border into the primary accent colour. The
+       same class is reused inside the activity panel for its
+       per-site filter strip. */
+    .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0;
+        list-style: none;
+        padding-left: 0;
+        margin: 0 0 1rem 0;
+        border-bottom: 1px solid var(--pico-muted-border-color);
+    }
+    .tabs li {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+    .tabs li::marker {
+        content: "";
+    }
+    .tabs button,
+    .tabs a {
+        background: transparent;
+        color: var(--pico-muted-color);
+        border: none;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        padding: 0.5rem 1rem;
+        margin: 0;
+        cursor: pointer;
+        font-weight: normal;
+        box-shadow: none;
+        text-decoration: none;
+        display: inline-block;
+    }
+    .tabs button:hover,
+    .tabs a:hover {
+        color: var(--pico-color);
+        background: transparent;
+        text-decoration: none;
+    }
+    .tabs button[aria-selected="true"],
+    .tabs a[aria-selected="true"] {
+        color: var(--pico-primary);
+        border-bottom-color: var(--pico-primary);
         font-weight: 600;
     }
 </style>

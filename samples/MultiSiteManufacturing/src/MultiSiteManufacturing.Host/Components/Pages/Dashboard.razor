@@ -9,7 +9,7 @@
 
 <hgroup>
     <h1 style="user-select: none; outline: none;" tabindex="-1">Inventory</h1>
-    <p>
+    <p style="padding:10px;">
         Live view of every turbine-engine part in flight — from raw forging
         through heat treatment, machining, NDT, MRB, and final acceptance.
         <br/>Create a part, advance it through each process stage, record
@@ -24,31 +24,63 @@
 
 <ChaosBanner />
 
-<InventoryGrid Parts="@_parts.Values" OnNewPart="() => _showNewPart = true" />
+<ul class="tabs" role="tablist" aria-label="Dashboard views">
+    <li>
+        <button type="button"
+                role="tab"
+                id="tab-inventory"
+                aria-controls="panel-inventory"
+                aria-selected="@(_activeTab == DashboardTab.Inventory ? "true" : "false")"
+                @onclick="() => SelectTab(DashboardTab.Inventory)">
+            Inventory
+        </button>
+    </li>
+    <li>
+        <button type="button"
+                role="tab"
+                id="tab-activity"
+                aria-controls="panel-activity"
+                aria-selected="@(_activeTab == DashboardTab.Activity ? "true" : "false")"
+                @onclick="() => SelectTab(DashboardTab.Activity)">
+            Inventory By Activity
+        </button>
+    </li>
+</ul>
 
-<article>
-    <header>
-        <strong>Parts by site</strong>
-        <small> · B+ tree range scan (plan §M12d)</small>
-    </header>
-    <p>
-        <small>
-            Click a site to run a live <code>ILattice.ScanEntriesAsync</code>
-            over the <code>@SiteActivityIndex.TreeId</code> tree. Every
-            routed <code>Fact</code> writes one index entry keyed by
-            <code>{site}/{hlc}/{serial}</code> with a short activity
-            label as the value; the listing below is the result of
-            reading the <code>{site}/</code> prefix in reverse, deduped
-            to the most recent activity per part.
-        </small>
-    </p>
-    <nav>
-        <ul>
+<div id="panel-inventory"
+     role="tabpanel"
+     aria-labelledby="tab-inventory"
+     hidden="@(_activeTab != DashboardTab.Inventory)">
+    <InventoryGrid Parts="@_parts.Values" OnNewPart="() => _showNewPart = true" />
+</div>
+
+<div id="panel-activity"
+     role="tabpanel"
+     aria-labelledby="tab-activity"
+     hidden="@(_activeTab != DashboardTab.Activity)">
+    <article>
+        <header>
+            <strong>Inventory By Activity</strong>
+            <small> · B+ tree range scan</small>
+        </header>
+        <p>
+            <small>
+                Click a site to run a live <code>ILattice.ScanEntriesAsync</code>
+                over the <code>@SiteActivityIndex.TreeId</code> tree. Every
+                routed <code>Fact</code> writes one index entry keyed by
+                <code>{site}/{hlc}/{serial}</code> with a short activity
+                label as the value; the listing below is the result of
+                reading the <code>{site}/</code> prefix in reverse, deduped
+                to the most recent activity per part.
+            </small>
+        </p>
+        <ul class="tabs" role="tablist" aria-label="Activity site filter">
             @foreach (var s in ProcessSiteInfo.InLifecycleOrder)
             {
                 <li>
-                    <a href="#parts-by-site"
-                       aria-current="@(_selectedSite == s ? "page" : null)"
+                    <a href="#panel-activity"
+                       role="tab"
+                       aria-selected="@(_selectedSite == s ? "true" : "false")"
                        @onclick="() => SelectSiteAsync(s)"
                        @onclick:preventDefault="true">
                         @ProcessSiteInfo.GetDisplayName(s)
@@ -56,71 +88,92 @@
                 </li>
             }
         </ul>
-    </nav>
 
-    <div id="parts-by-site">
-        @if (_selectedSite is null)
-        {
-            <p><small><em>No site selected.</em></small></p>
-        }
-        else if (_siteLoadError is not null)
-        {
-            <p role="alert">@_siteLoadError</p>
-        }
-        else if (_siteEntries is null)
-        {
-            <p aria-busy="true">Scanning <code>@_selectedSite</code>…</p>
-        }
-        else if (_siteEntries.Count == 0)
-        {
-            <p>
-                <em>
-                    No parts have completed a process step at
-                    @ProcessSiteInfo.GetDisplayName(_selectedSite.Value) yet.
-                </em>
-            </p>
-        }
-        else
-        {
-            <figure>
-                <table role="grid">
-                    <thead>
-                        <tr>
-                            <th scope="col">Serial</th>
-                            <th scope="col">Latest activity at @ProcessSiteInfo.GetDisplayName(_selectedSite.Value)</th>
-                            <th scope="col">When</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var entry in _siteEntries)
-                        {
+        <div>
+            @if (_selectedSite is null)
+            {
+                <p><small><em>No site selected.</em></small></p>
+            }
+            else if (_siteLoadError is not null)
+            {
+                <p role="alert">@_siteLoadError</p>
+            }
+            else if (_scanBusy)
+            {
+                <p aria-busy="true">Scanning <code>@_selectedSite</code>…</p>
+            }
+            else if (_siteEntries is null)
+            {
+                <p><small><em>Select a site above to scan.</em></small></p>
+            }
+            else if (_siteEntries.Count == 0)
+            {
+                <p>
+                    <em>
+                        No parts have completed a process step at
+                        @ProcessSiteInfo.GetDisplayName(_selectedSite.Value) yet.
+                    </em>
+                </p>
+            }
+            else
+            {
+                <figure>
+                    <table role="grid">
+                        <thead>
                             <tr>
-                                <td class="inventory-nowrap">
-                                    <code><a href="/parts/@entry.Serial.Value">@entry.Serial.Value</a></code>
-                                </td>
-                                <td>@entry.Activity</td>
-                                <td class="inventory-nowrap"><small>@FormatWhen(entry.Hlc)</small></td>
+                                <th scope="col">Serial</th>
+                                <th scope="col">Latest activity at @ProcessSiteInfo.GetDisplayName(_selectedSite.Value)</th>
+                                <th scope="col">When</th>
                             </tr>
-                        }
-                    </tbody>
-                </table>
-            </figure>
-            <small>
-                @_siteEntries.Count entr@(_siteEntries.Count == 1 ? "y" : "ies") ·
-                range-scan result for <code>@_selectedSite/</code>.
-            </small>
-        }
-    </div>
-</article>
+                        </thead>
+                        <tbody>
+                            @foreach (var entry in _siteEntries)
+                            {
+                                <tr>
+                                    <td class="inventory-nowrap">
+                                        <code><a href="/parts/@entry.Serial.Value">@entry.Serial.Value</a></code>
+                                    </td>
+                                    <td>@entry.Activity</td>
+                                    <td class="inventory-nowrap"><small>@FormatWhen(entry.Hlc)</small></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </figure>
+                <small>
+                    @_siteEntries.Count entr@(_siteEntries.Count == 1 ? "y" : "ies") ·
+                    range-scan result for <code>@_selectedSite/</code>.
+                </small>
+            }
+        </div>
+    </article>
+</div>
 
 @code {
+    private enum DashboardTab { Inventory, Activity }
+
+    /// <summary>
+    /// Delay before the "Scanning…" busy indicator replaces the previous
+    /// site's results. Scans that complete inside this window render
+    /// straight to the new result set with no visible flicker. The first
+    /// scan in a tab session bypasses this debounce because there's no
+    /// previous data to hold on to — an aria-busy indicator is better
+    /// than a blank pane.
+    /// </summary>
+    private static readonly TimeSpan ScanBusyDebounce = TimeSpan.FromMilliseconds(200);
+
     private readonly Dictionary<PartSerialNumber, PartSummaryUpdate> _parts = new();
     private CancellationTokenSource? _cts;
     private bool _showNewPart;
 
+    private DashboardTab _activeTab = DashboardTab.Inventory;
     private ProcessSite? _selectedSite;
     private IReadOnlyList<SiteActivityIndexEntry>? _siteEntries;
     private string? _siteLoadError;
+    private bool _scanBusy;
+    private int _scanSeq;
+
+    private void SelectTab(DashboardTab tab) => _activeTab = tab;
 
     private void OnPartCreated(PartSerialNumber serial)
     {
@@ -130,20 +183,71 @@
 
     private async Task SelectSiteAsync(ProcessSite site)
     {
+        var mySeq = ++_scanSeq;
         _selectedSite = site;
-        _siteEntries = null;
         _siteLoadError = null;
+
+        // First scan in this tab session: there's nothing to show, so
+        // flip to busy immediately. Subsequent scans keep the previous
+        // site's results visible and only show the busy indicator if
+        // the new scan is still outstanding after ScanBusyDebounce.
+        var isFirstLoad = _siteEntries is null;
+        if (isFirstLoad)
+        {
+            _scanBusy = true;
+        }
         StateHasChanged();
 
+        var scanTask = Index.ListAtSiteAsync(site);
+
+        if (!isFirstLoad)
+        {
+            _ = DebouncedBusyAsync(mySeq, scanTask);
+        }
+
+        IReadOnlyList<SiteActivityIndexEntry> result;
+        string? error = null;
         try
         {
-            _siteEntries = await Index.ListAtSiteAsync(site);
+            result = await scanTask;
         }
         catch (Exception ex)
         {
             Log.LogWarning(ex, "Range scan failed for site {Site}", site);
-            _siteLoadError = $"Range scan failed: {ex.Message}";
-            _siteEntries = [];
+            error = $"Range scan failed: {ex.Message}";
+            result = [];
+        }
+
+        // Drop the result if the operator has clicked another site in
+        // the meantime — the newer scan owns the UI.
+        if (mySeq != _scanSeq)
+        {
+            return;
+        }
+
+        _siteEntries = result;
+        _siteLoadError = error;
+        _scanBusy = false;
+        StateHasChanged();
+    }
+
+    private async Task DebouncedBusyAsync(int seq, Task scanTask)
+    {
+        try
+        {
+            await Task.Delay(ScanBusyDebounce);
+        }
+        catch (TaskCanceledException)
+        {
+            return;
+        }
+
+        // Only flip to busy if this scan is still the latest *and* the
+        // scan task itself hasn't completed in the meantime.
+        if (seq == _scanSeq && !scanTask.IsCompleted && !_scanBusy)
+        {
+            _scanBusy = true;
+            await InvokeAsync(StateHasChanged);
         }
     }
 

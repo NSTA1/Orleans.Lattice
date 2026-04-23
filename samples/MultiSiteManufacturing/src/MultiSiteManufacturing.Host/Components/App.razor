@@ -6,8 +6,13 @@
     <base href="/" />
     <title>Multi-Site Manufacturing</title>
     <!-- Pico.css v2 (classless CSS framework) served from jsDelivr CDN;
-         intentionally not added to the project per sample constraint. -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@@picocss/pico@@2/css/pico.min.css" />
+         intentionally not added to the project per sample constraint.
+         SRI hash pinned to the exact bytes served for pico@2 — update
+         this alongside any version bump. -->
+    <link rel="stylesheet"
+          href="https://cdn.jsdelivr.net/npm/@@picocss/pico@@2/css/pico.min.css"
+          integrity="sha384-L1dWfspMTHU/ApYnFiMz2QID/PlP1xCW9visvBdbEkOLkSSWsP6ZJWhPw6apiXxU"
+          crossorigin="anonymous" />
     <HeadOutlet @rendermode="RenderMode.InteractiveServer" />
 </head>
 <body>
