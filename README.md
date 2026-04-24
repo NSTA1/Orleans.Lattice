@@ -34,7 +34,7 @@ The system is designed around a few core properties:
   ordered scans always see a consistent view of the data, even while
   shards are splitting underneath. A concurrent `CountAsync` during a
   mid-split workload will return the exact number of live keys.
-  See [Consistency](docs/consistency.md) for the per-operation
+  See [Consistency](docs/lattice/consistency.md) for the per-operation
   guarantee matrix.
 * **Crash-safe by construction.** Every multi-step operation — splits,
   promotions, bulk grafts, snapshots — persists its intent before any
@@ -48,7 +48,7 @@ The system is designed around a few core properties:
   algebraic (commutative, associative, idempotent merges). There is no
   Paxos, no Raft, no distributed lock manager.
 
-Behavior is validated end-to-end by a suite of [chaos tests](docs/chaos-tests.md)
+Behavior is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos-tests.md)
 that hammer a live cluster with concurrent reads, writes, scans, and
 shard splits — optionally with random storage-write faults, and
 separately under online resize and online reshard — and assert
@@ -71,7 +71,7 @@ both live consistency and eventual convergence.
 | **Online Reshard** | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on an existing tree. Takes an offline snapshot to a new physical tree, swaps the alias, and soft-deletes the old data. The tree is unavailable during the snapshot phase but immediately accessible after the swap. Undoable within the retention window. |
 | **Scalable writes** | Keys are hash-sharded across a configurable number of independent sub-trees (default 64). No single-root bottleneck. Shards split further at runtime as load grows. |
-| **Strongly-consistent scans** | `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` return the exact live key set even during concurrent adaptive shard splits, via per-slot reconciliation against a monotonic `ShardMap.Version` and bounded optimistic retry. See [Consistency](docs/consistency.md). |
+| **Strongly-consistent scans** | `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` return the exact live key set even during concurrent adaptive shard splits, via per-slot reconciliation against a monotonic `ShardMap.Version` and bounded optimistic retry. See [Consistency](docs/lattice/consistency.md). |
 | **Snapshots** | Create a point-in-time copy of a tree: offline (source locked — tree unavailable during copy) or online (source available, strictly consistent via shadow-forward + LWW drain), with optional sizing overrides for the destination. |
 | **Soft delete & recovery** | Trees can be soft-deleted with a configurable retention window. Recovery restores full access; purge permanently removes all data. |
 | **Tombstone cleanup** | Reminder-driven compaction removes expired tombstones shard-by-shard, with crash-safe progress tracking. |
@@ -80,9 +80,9 @@ both live consistency and eventual convergence.
 
 ## Quick Start
 
-See the [API Reference](docs/api.md) for setup instructions, silo configuration, and full usage examples.
+See the [API Reference](docs/lattice/api.md) for setup instructions, silo configuration, and full usage examples.
 
-For sample projects which exercise `ILattice`, see [Samples](docs/samples.md).
+For sample projects which exercise `ILattice`, see [Samples](docs/lattice/samples.md).
 
 ## Documentation
 
@@ -90,30 +90,30 @@ Detailed design documentation is split by concept:
 
 | Document | Contents |
 |---|---|
-| [API Reference](docs/api.md) | Public `ILattice` interface, batch operations, options, serializable types |
-| [Architecture](docs/architecture.md) | Grain layers, sharding, root promotion, bounded retry, grain mapping, capacity |
-| [Atomic Writes](docs/atomic-writes.md) | `SetManyAtomicAsync` all-or-nothing guarantees, saga coordinator, compensation via LWW, crash recovery |
-| [Benchmarks](docs/benchmarks.md) | Prerequisites, running benchmarks, interpreting results |
-| [Bulk Loading](docs/bulk-loading.md) | One-shot build, streaming ingestion, two-phase graft, recovery guarantees |
-| [Chaos Tests](docs/chaos-tests.md) | Happy-path, fault-injection, online-resize, and online-reshard chaos integration tests; invariants proven; recovery surfaces exercised |
-| [Configuration](docs/configuration.md) | Options reference, per-tree overrides, immutability constraints, storage provider |
-| [Consistency](docs/consistency.md) | Per-operation consistency guarantees for every `ILattice` method: linearizable, strongly consistent, snapshot, and eventually consistent classifications |
-| [Diagnostics](docs/diagnostics.md) | `ILattice.DiagnoseAsync` tree health snapshot: per-shard depth/live-keys/tombstones/hotness, shallow vs deep mode, caching, recent-splits ring buffer |
-| [Durable Cursors](docs/durable-cursors.md) | Stateful `ILatticeCursorGrain` design, grain lifecycle, effective-range resumption, idle-TTL self-cleanup, performance characteristics |
-| [Events](docs/events.md) | Per-tree `LatticeTreeEvent` Orleans stream: event kinds, `OperationId` correlation for atomic writes, delivery semantics, setup |
-| [Metrics](docs/metrics.md) | `System.Diagnostics.Metrics` instruments published on the `orleans.lattice` meter: shard counters, leaf latency histograms, cache hit/miss, OpenTelemetry registration |
-| [Online Reshard](docs/online-reshard.md) | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
-| [Read Caching](docs/caching.md) | Delta-based `[StatelessWorker]` cache, split-aware pruning |
-| [Shard Splitting](docs/shard-splitting.md) | Adaptive online splits, shadow-write design, autonomic monitor, suppression rules, scan semantics during splits, tunables |
-| [Snapshots](docs/snapshots.md) | Offline and online snapshot modes, crash safety, sizing overrides |
-| [State Primitives](docs/state-primitives.md) | Hybrid logical clocks, LWW registers, monotonic split state, version vectors, state deltas |
-| [Tombstone Compaction](docs/tombstone-compaction.md) | Reminder-driven cleanup, grace periods, configuration |
-| [Tree Deletion](docs/tree-deletion.md) | Soft delete, recovery, manual purge, deferred purge |
-| [Tree Registry](docs/tree-registry.md) | Internal registry tree, automatic registration, config priority, tree enumeration |
-| [Tree Sizing](docs/tree-sizing.md) | Resizing an existing tree: `ResizeAsync` phase machine, shadow-forwarding drain, alias swap, undo window, operational considerations |
-| [Tree Storage](docs/tree-storage.md) | Per-provider storage limits, leaf/internal node size estimation, per-provider sizing recommendations, default-configuration assessment, key trade-offs |
-| [Tree Structure](docs/tree-structure.md) | Internal/leaf node layout, two-phase leaf splits, idempotent split propagation |
-| [TTL](docs/ttl.md) | Per-entry time-to-live: `SetAsync(ttl)`, server-side absolute expiry, read-path filtering, preservation across splits / snapshots / resize / merge / saga compensation, CRDT replication invariant |
+| [API Reference](docs/lattice/api.md) | Public `ILattice` interface, batch operations, options, serializable types |
+| [Architecture](docs/lattice/architecture.md) | Grain layers, sharding, root promotion, bounded retry, grain mapping, capacity |
+| [Atomic Writes](docs/lattice/atomic-writes.md) | `SetManyAtomicAsync` all-or-nothing guarantees, saga coordinator, compensation via LWW, crash recovery |
+| [Benchmarks](docs/lattice/benchmarks.md) | Prerequisites, running benchmarks, interpreting results |
+| [Bulk Loading](docs/lattice/bulk-loading.md) | One-shot build, streaming ingestion, two-phase graft, recovery guarantees |
+| [Chaos Tests](docs/lattice/chaos-tests.md) | Happy-path, fault-injection, online-resize, and online-reshard chaos integration tests; invariants proven; recovery surfaces exercised |
+| [Configuration](docs/lattice/configuration.md) | Options reference, per-tree overrides, immutability constraints, storage provider |
+| [Consistency](docs/lattice/consistency.md) | Per-operation consistency guarantees for every `ILattice` method: linearizable, strongly consistent, snapshot, and eventually consistent classifications |
+| [Diagnostics](docs/lattice/diagnostics.md) | `ILattice.DiagnoseAsync` tree health snapshot: per-shard depth/live-keys/tombstones/hotness, shallow vs deep mode, caching, recent-splits ring buffer |
+| [Durable Cursors](docs/lattice/durable-cursors.md) | Stateful `ILatticeCursorGrain` design, grain lifecycle, effective-range resumption, idle-TTL self-cleanup, performance characteristics |
+| [Events](docs/lattice/events.md) | Per-tree `LatticeTreeEvent` Orleans stream: event kinds, `OperationId` correlation for atomic writes, delivery semantics, setup |
+| [Metrics](docs/lattice/metrics.md) | `System.Diagnostics.Metrics` instruments published on the `orleans.lattice` meter: shard counters, leaf latency histograms, cache hit/miss, OpenTelemetry registration |
+| [Online Reshard](docs/lattice/online-reshard.md) | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
+| [Read Caching](docs/lattice/caching.md) | Delta-based `[StatelessWorker]` cache, split-aware pruning |
+| [Shard Splitting](docs/lattice/shard-splitting.md) | Adaptive online splits, shadow-write design, autonomic monitor, suppression rules, scan semantics during splits, tunables |
+| [Snapshots](docs/lattice/snapshots.md) | Offline and online snapshot modes, crash safety, sizing overrides |
+| [State Primitives](docs/lattice/state-primitives.md) | Hybrid logical clocks, LWW registers, monotonic split state, version vectors, state deltas |
+| [Tombstone Compaction](docs/lattice/tombstone-compaction.md) | Reminder-driven cleanup, grace periods, configuration |
+| [Tree Deletion](docs/lattice/tree-deletion.md) | Soft delete, recovery, manual purge, deferred purge |
+| [Tree Registry](docs/lattice/tree-registry.md) | Internal registry tree, automatic registration, config priority, tree enumeration |
+| [Tree Sizing](docs/lattice/tree-sizing.md) | Resizing an existing tree: `ResizeAsync` phase machine, shadow-forwarding drain, alias swap, undo window, operational considerations |
+| [Tree Storage](docs/lattice/tree-storage.md) | Per-provider storage limits, leaf/internal node size estimation, per-provider sizing recommendations, default-configuration assessment, key trade-offs |
+| [Tree Structure](docs/lattice/tree-structure.md) | Internal/leaf node layout, two-phase leaf splits, idempotent split propagation |
+| [TTL](docs/lattice/ttl.md) | Per-entry time-to-live: `SetAsync(ttl)`, server-side absolute expiry, read-path filtering, preservation across splits / snapshots / resize / merge / saga compensation, CRDT replication invariant |
 
 ## Performance Characteristics
 

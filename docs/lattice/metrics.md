@@ -129,7 +129,7 @@ are elided by the runtime.
 
 ## Relationship to `DiagnoseAsync`
 
-`ILattice.DiagnoseAsync` ([docs/diagnostics.md](diagnostics.md)) returns a
+`ILattice.DiagnoseAsync` ([docs/lattice/diagnostics.md](diagnostics.md)) returns a
 point-in-time snapshot intended for operator inspection and troubleshooting.
 The metrics pipeline described here is the **continuous** telemetry feed for
 dashboards and alerting. Both are sourced from the same underlying grain state

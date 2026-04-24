@@ -14,7 +14,7 @@ Follow these phases in order. Complete each phase fully before moving to the nex
 
 1. Read `roadmap.md` to find the feature being requested.
 2. Read `.github/copilot-instructions.md` and all files under `.github/instructions/` to internalize project conventions.
-3. Read `docs/api.md` and any other docs referenced by the feature to understand the current public API surface.
+3. Read `docs/lattice/api.md` and any other docs referenced by the feature to understand the current public API surface.
 4. Search the codebase for existing patterns that the new feature should follow (e.g. how existing grain methods are structured, how extension methods are organized, how similar features were implemented).
 5. Identify every file that needs to be created or modified before writing any code.
 
@@ -65,11 +65,11 @@ Write tests following the conventions in `.github/instructions/testing.instructi
 
 Update documentation in the same change:
 
-1. **`docs/api.md`** — Add or update tables, signatures, and examples for any new or changed public API.
+1. **`docs/lattice/api.md`** — Add or update tables, signatures, and examples for any new or changed public API.
 2. **`.github/copilot-instructions.md`** — Update the namespace table, serializable types table, or any other section affected by the change.
 3. **`.github/instructions/*.instructions.md`** — Update grain key conventions, primitives tables, or testing instructions if affected.
 4. **`roadmap.md`** — Mark the feature as complete (`[x]`).
-5. **`docs/*.md`** — Update any topic-specific doc that covers changed behavior. Add new docs to the `README.md` documentation table if applicable.
+5. **`docs/lattice/*.md`** — Update any topic-specific doc that covers changed behavior. Add new docs to the `README.md` documentation table if applicable.
 
 ### Phase 6 — Verify
 
@@ -130,7 +130,7 @@ One-paragraph description of what the feature does and why.
 
 ### Documentation
 
-- `docs/file.md` — what was added or changed.
+- `docs/lattice/file.md` — what was added or changed.
 - `.github/copilot-instructions.md` — what was updated.
 
 ### Housekeeping
