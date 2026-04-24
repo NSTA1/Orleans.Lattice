@@ -131,7 +131,7 @@ flowchart LR
             chaosLat["ChaosFactBackend<br/>(lattice)"]
             baseBE["Baseline backend<br/>(arrival-order grains)"]
             latBE["Lattice backend<br/>(HLC-ordered fold)"]
-            broadcaster["DashboardBroadcaster<br/>(Channel&lt;T&gt;)"]
+            broadcaster["DashboardBroadcaster<br/>(Channel&lt;T&gt; · cluster stream)"]
         end
 
         subgraph orleans["Orleans grains"]
@@ -153,6 +153,7 @@ flowchart LR
         filter["LatticeReplicationFilter<br/>(IOutgoingGrainCallFilter)"]
         repClient["ReplicationHttpClient"]
         inbound["POST /replicate/{tree}<br/>(minimal API)"]
+        dashStream[/"Azure Storage Queue stream<br/>DashboardStreams · msmfg.dashboard.facts<br/>queue msmfgdashboard-0<br/>(durable cluster-wide fan-out)"/]
     end
 
     tables[("Azure Table Storage<br/>msmfgGrainState<br/>msmfgLatticeFacts")]
@@ -169,7 +170,9 @@ flowchart LR
     latBE --> facts
     latBE --> siteIdx
     latBE --> crdt
-    router -.->|"events"| broadcaster
+    router -.->|"FactRouted · FactReplicated · ChaosConfigChanged"| broadcaster
+    broadcaster -.->|"publish Fact"| dashStream
+    dashStream -.->|"subscribe → fan out to circuits"| broadcaster
     broadcaster -.-> razor
 
     latBE -->|"SetAsync / DeleteAsync"| filter
@@ -214,7 +217,7 @@ flowchart TB
     router -->|"AdmitAsync"| siteG
     router -->|"IsPartitioned"| partG
     router -->|"GetConfig"| backG
-    router -.->|"FactRouted · ChaosConfigChanged"| broadcaster
+    router -.->|"FactRouted · FactReplicated · ChaosConfigChanged"| broadcaster
 
     siteReg -->|"WatchSites · preset fan-out"| siteG
     siteReg -.->|"SiteStateChanged"| broadcaster

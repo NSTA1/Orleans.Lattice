@@ -445,10 +445,51 @@ changes (grain callback, router completion, etc.). The Razor component
 receives messages, applies them to its local view-model, and calls
 `InvokeAsync(StateHasChanged)`.
 
-No polling. No `Timer`. No `setInterval`. Browser reload reconnects the
-SignalR circuit; components resubscribe on `OnInitializedAsync`.
+**Cluster-wide fan-out via an Orleans Azure Storage Queue stream.**
+`FederationRouter` events (`FactRouted`, `FactReplicated`) are
+silo-local, but a Blazor Server circuit is pinned to one silo — so a
+naïve local-only fan-out would only reach users whose circuit happens
+to live on the silo that handled the fact. To fix this,
+`DashboardBroadcaster` on every silo publishes each incoming fact to a
+single cluster-wide Orleans stream backed by **Azure Storage Queues**
+(provider `DashboardStreams`, namespace `msmfg.dashboard.facts`,
+queue `msmfgdashboard-0`) and subscribes to the same stream. Orleans
+stream pub/sub delivers each message to every subscribed silo, where
+the local broadcaster rebuilds the `PartSummaryUpdate` /
+`SiteActivityIndexEntry` and writes to its per-circuit `Channel<T>`
+instances. A fact therefore reaches every Blazor circuit regardless of
+which silo originated it or which silo the user is connected to. The
+in-memory / single-silo quick-start swaps the queue provider for the
+memory-stream provider under the same name so the broadcaster wiring
+is identical across modes.
 
-The gRPC server-streaming RPCs are thin adapters over the same channels.
+Durability + reliability properties of the queue provider:
+
+- **Silo restart / transient outage.** Messages enqueued while a silo
+  is down are picked up when it comes back — the feed self-heals
+  without operator action.
+- **PubSubStore (Azure Table).** Subscription metadata is persisted
+  in Azure Table Storage so a silo restart resumes existing
+  subscriptions rather than resetting the feed.
+- **Publish retries.** `DashboardBroadcaster.PublishToBroadcastStreamAsync`
+  retries transient publish failures (100 ms / 400 ms / 2 s
+  exponential backoff) before logging at Warning and dropping the
+  update — a single lost publish means one missed animation tick,
+  not a persistent feed outage.
+- **Subscribe retries.** `StartAsync` retries `SubscribeAsync` with
+  bounded backoff (up to ~32 s across five attempts) so slow queue
+  provisioning or PubSubStore readiness at silo startup doesn't
+  crash the host; a permanent failure logs at Error and leaves the
+  silo functional without the live feed (page reloads fall back to
+  the initial snapshot path).
+- **Mid-flight reconnect.** The subscription is registered with an
+  `onError` callback that kicks off a background resubscribe, so a
+  transient queue-agent fault doesn't silently silence the silo.
+- **Poison-fact isolation.** `OnBroadcastReceived` wraps fan-out in
+  a top-level try/catch; a single bad fact is logged and dropped
+  rather than allowed to propagate back into Orleans, which would
+  otherwise retry delivery indefinitely and block every subsequent
+  message on the same queue.
 
 ## 8. Bulk-load strategy
 
@@ -549,7 +590,7 @@ the test suite — keeps CI fast and hermetic).
 | M5 | gRPC contracts (proto) + service implementations + contract tests via in-proc channel | ✅ done |
 | M6 | Bulk-load seeder + `IInventorySeedStateGrain` + idempotency test + deterministic seed | ✅ done |
 | M7 | **Fault-injection infrastructure (§4.3):** `ChaosFactBackend : IFactBackend` decorator + `IBackendChaosGrain` (jitter, transient fault rate, write amplification) + wire reorder buffer in `ProcessSiteGrain` (Tier 3) + `ListBackends` / `ConfigureBackend` RPCs on `SiteControlService` + "Lattice storage flakes" preset + domain tests for all three tiers | ✅ done |
-| M8 | Dashboard (Blazor Server) — parts grid, part-detail page, live push via `DashboardBroadcaster` / channel hub | ✅ done |
+| M8 | Dashboard (Blazor Server) — parts grid, part-detail page, live push via `DashboardBroadcaster` / channel hub, with cluster-wide fan-out over an Orleans Azure Storage Queue stream (provider `DashboardStreams`, namespace `msmfg.dashboard.facts`, PubSubStore in Azure Table) so every silo's Blazor circuits see every fact and the feed survives silo restarts | ✅ done |
 | M9 | Operator actions — next-action resolver, `OperatorActions` facade, UI buttons driving `InventoryService` / `FactIngressService` | ✅ done |
 | M10 | Chaos fly-out side panel — site chaos rows, backend chaos sliders, canned presets, active-chaos banner | ✅ done |
 | M11 | Federation routing hardening — deterministic fan-out, `FactRouted` / `ChaosConfigChanged` events, dashboard subscriber | ✅ done |

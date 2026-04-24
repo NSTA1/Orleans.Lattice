@@ -240,6 +240,23 @@ owned by the underlying service (`InventoryService`, `SiteRegistry`,
 whenever domain state changes; the component applies the message to
 its local view-model and calls `InvokeAsync(StateHasChanged)`.
 
+`DashboardBroadcaster` additionally publishes every routed or
+replicated `Fact` to a cluster-wide Orleans stream backed by Azure
+Storage Queues (provider `DashboardStreams`, namespace
+`msmfg.dashboard.facts`, single queue `msmfgdashboard-0`) and
+subscribes to the same stream on every silo. This is what lets a
+Blazor circuit pinned to silo B receive live updates for facts that
+landed on silo A — each silo's broadcaster is both publisher and
+subscriber, and the per-circuit `Channel<T>` fan-out runs only on the
+receiving side of the stream, so the same code path handles
+local-origin and peer-origin facts uniformly. The queue-backed
+transport also gives the feed durability: messages enqueued while a
+silo is restarting or briefly unreachable are picked up once it
+reconnects, subscription metadata is persisted in the Azure Table
+`PubSubStore`, and the broadcaster adds bounded retries around
+publish and subscribe plus a top-level catch in the receive handler
+so a single poison fact can't stall the queue.
+
 No polling. No `Timer`. No `setInterval`. gRPC server-streaming RPCs
 are thin adapters over the same channels.
 

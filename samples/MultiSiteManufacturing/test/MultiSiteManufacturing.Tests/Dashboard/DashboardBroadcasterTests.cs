@@ -5,6 +5,7 @@ using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Lattice;
 using MultiSiteManufacturing.Tests.Federation;
 using NUnit.Framework;
+using Orleans.Runtime;
 using static MultiSiteManufacturing.Tests.Federation.FactFixtures;
 
 namespace MultiSiteManufacturing.Tests.Dashboard;
@@ -27,7 +28,18 @@ public sealed class DashboardBroadcasterTests
 
     private DashboardBroadcaster NewBroadcaster(FederationRouter router)
     {
-        var broadcaster = new DashboardBroadcaster(router, _fixture.GrainFactory, NullLogger<DashboardBroadcaster>.Instance);
+        // Unique stream id per broadcaster isolates stream traffic
+        // from other tests sharing this [OneTimeSetUp] cluster, so
+        // stale pub/sub events from a prior test can't leak into this
+        // one. Production code path uses DefaultBroadcastStreamId.
+        var streamId = StreamId.Create(
+            DashboardBroadcaster.StreamNamespace,
+            $"broadcast-{Guid.NewGuid():N}");
+        var broadcaster = new DashboardBroadcaster(
+            router,
+            _fixture.Cluster.Client,
+            NullLogger<DashboardBroadcaster>.Instance,
+            streamId);
         broadcaster.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
         return broadcaster;
     }
@@ -392,5 +404,58 @@ public sealed class DashboardBroadcasterTests
 
         var completed = await Task.WhenAny(loop, Task.Delay(TimeSpan.FromSeconds(5)));
         Assert.That(completed, Is.SameAs(loop), "Site-activity subscriber loop did not complete after cancellation.");
+    }
+
+    /// <summary>
+    /// Cross-silo fan-out: a fact routed through broadcaster A's
+    /// router must reach a subscriber attached to broadcaster B when
+    /// both broadcasters share the same stream id. This is the actual
+    /// mechanism that lets a Blazor circuit pinned to silo B see a
+    /// fact that landed on silo A — broadcaster A publishes to the
+    /// cluster-wide stream, broadcaster B (subscribed to the same
+    /// stream) fans it out into its local channels.
+    /// </summary>
+    [Test]
+    public async Task Stream_publish_on_one_broadcaster_fans_out_on_another()
+    {
+        var sharedStreamId = Orleans.Runtime.StreamId.Create(
+            DashboardBroadcaster.StreamNamespace,
+            $"broadcast-shared-{Guid.NewGuid():N}");
+
+        var (routerA, _, _) = _fixture.NewRouter();
+        var (routerB, _, _) = _fixture.NewRouter();
+
+        await using var broadcasterA = new DashboardBroadcaster(
+            routerA, _fixture.Cluster.Client, NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
+        await broadcasterA.StartAsync(CancellationToken.None);
+
+        await using var broadcasterB = new DashboardBroadcaster(
+            routerB, _fixture.Cluster.Client, NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
+        await broadcasterB.StartAsync(CancellationToken.None);
+
+        var serial = new PartSerialNumber("HPT-BLD-XSILO-91001");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        // Subscriber attached ONLY to broadcaster B.
+        var subscriberB = broadcasterB.SubscribeSiteActivity(cts.Token).GetAsyncEnumerator(cts.Token);
+        var moveTask = subscriberB.MoveNextAsync().AsTask();
+        await Task.Delay(100, cts.Token);
+
+        // Fact routes through routerA → broadcasterA publishes to the
+        // stream → broadcasterB receives and fans out to its local
+        // activity subscribers. The subscriber attached to B must see it.
+        await routerA.EmitAsync(Step(serial, tick: 13, ProcessStage.Forge, ProcessSite.OhioForge));
+
+        var moved = await moveTask;
+
+        Assert.That(moved, Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(subscriberB.Current.Serial, Is.EqualTo(serial));
+            Assert.That(subscriberB.Current.Site, Is.EqualTo(ProcessSite.OhioForge));
+            Assert.That(subscriberB.Current.Activity, Is.EqualTo($"Step: {ProcessStage.Forge}"));
+        });
+
+        await subscriberB.DisposeAsync();
     }
 }

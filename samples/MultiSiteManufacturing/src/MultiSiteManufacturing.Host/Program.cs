@@ -1,4 +1,5 @@
 using Azure.Data.Tables;
+using Azure.Storage.Queues;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using Orleans.Lattice;
@@ -40,6 +41,14 @@ var useInMemoryStorage = builder.Environment.IsEnvironment("Testing")
 var tableStorageConnectionString =
     builder.Configuration.GetConnectionString("AzureTableStorage")
     ?? "UseDevelopmentStorage=true";
+
+// Queue storage for the dashboard broadcast stream. Falls back to the
+// same account as table storage (Azurite exposes both services on one
+// connection string); override via the ConnectionStrings:AzureQueueStorage
+// setting if the deployment puts queues on a different account.
+var queueStorageConnectionString =
+    builder.Configuration.GetConnectionString("AzureQueueStorage")
+    ?? tableStorageConnectionString;
 
 // Cluster section — per-cluster ports, cluster id, etc.
 var clusterSection = builder.Configuration.GetSection("Cluster");
@@ -115,6 +124,13 @@ builder.Host.UseOrleans(silo =>
         silo.AddMemoryGrainStorageAsDefault();
         silo.AddMemoryGrainStorage("msmfgGrainState");
         silo.AddLattice((services, name) => services.AddMemoryGrainStorage(name));
+
+        // Dashboard broadcast stream — in-memory variant. This path is
+        // only used by the single-silo quick-start so cluster-wide
+        // fan-out is a no-op; the memory provider keeps the broadcaster
+        // wiring identical to the production code path.
+        silo.AddMemoryStreams(DashboardBroadcaster.StreamProviderName);
+        silo.AddMemoryGrainStorage("PubSubStore");
     }
     else
     {
@@ -152,6 +168,35 @@ builder.Host.UseOrleans(silo =>
             {
                 options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
             });
+        });
+
+        // Cluster-wide dashboard broadcast stream backed by Azure
+        // Storage Queues. Every silo's DashboardBroadcaster publishes
+        // each inbound fact onto this stream and subscribes to it, so
+        // every Blazor Server circuit — regardless of which silo hosts
+        // it — receives every fact. Durable transport survives silo
+        // restarts and transient outages: queued messages are picked
+        // up when subscribers reconnect. PubSubStore (Azure Table)
+        // backs subscription metadata so subscriptions survive restart
+        // too.
+        silo.AddAzureQueueStreams(
+            DashboardBroadcaster.StreamProviderName,
+            configurator =>
+            {
+                configurator.ConfigureAzureQueue(ob => ob.Configure(options =>
+                {
+                    options.QueueServiceClient = new QueueServiceClient(queueStorageConnectionString);
+                    // A small queue count keeps ordering predictable
+                    // for a modest-volume dashboard feed. Orleans hashes
+                    // the StreamId across these queues; single-queue
+                    // gives strict FIFO which is what the dashboard
+                    // wants (no reorder relative to publish).
+                    options.QueueNames = new List<string> { "msmfgdashboard-0" };
+                }));
+            });
+        silo.AddAzureTableGrainStorage("PubSubStore", options =>
+        {
+            options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
         });
     }
 });

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using MultiSiteManufacturing.Host;
@@ -32,6 +33,7 @@ public sealed class FederationTestClusterFixture
     {
         var builder = new TestClusterBuilder(initialSilosCount: 1);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+        builder.AddClientBuilderConfigurator<ClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
     }
@@ -79,6 +81,28 @@ public sealed class FederationTestClusterFixture
             siloBuilder.AddMemoryGrainStorage("msmfgGrainState");
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            // Dashboard broadcast stream: mirrors the production silo
+            // configuration in Program.cs so DashboardBroadcaster can
+            // publish and subscribe during tests without ceremony.
+            siloBuilder.AddMemoryStreams(MultiSiteManufacturing.Host.Dashboard.DashboardBroadcaster.StreamProviderName);
+            siloBuilder.AddMemoryGrainStorage("PubSubStore");
+        }
+    }
+
+    /// <summary>
+    /// Registers the dashboard broadcast stream provider on the
+    /// TestCluster's client-side DI container. The cluster client uses
+    /// a DI container separate from the silo's, so
+    /// <see cref="DashboardBroadcaster"/> — which resolves the provider
+    /// through <see cref="IClusterClient"/> — needs the provider wired
+    /// here as well as on each silo.
+    /// </summary>
+    private sealed class ClientConfigurator : IClientBuilderConfigurator
+    {
+        public void Configure(IConfiguration configuration, IClientBuilder clientBuilder)
+        {
+            clientBuilder.AddMemoryStreams(
+                MultiSiteManufacturing.Host.Dashboard.DashboardBroadcaster.StreamProviderName);
         }
     }
 }
