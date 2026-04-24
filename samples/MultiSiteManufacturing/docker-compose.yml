@@ -1,40 +1,71 @@
 # MultiSiteManufacturing - Docker Compose topology (M14 + Traefik).
 #
 # Two Orleans clusters, each with its own Azurite and its own internal
-# cluster network. A shared "wan" network carries only the cross-cluster
-# HTTP replication traffic. A Traefik reverse proxy per cluster provides
-# sticky-session load balancing across the cluster's two silos - so
-# Blazor Server's SignalR circuit pins to one silo for the lifetime of
-# the browser tab while the operator still sees a single host endpoint
-# per cluster.
+# cluster network. There is NO shared silo-to-silo network: a forge
+# silo cannot resolve or open a TCP connection to a heattreat silo,
+# and vice versa. The only bridge between the two clusters is the
+# Traefik reverse proxy in front of each cluster, which is multi-homed
+# onto both cluster networks:
+#
+#   traefik-forge      : forge-net + heattreat-net
+#   traefik-heattreat  : heattreat-net + forge-net
+#
+# That means a forge silo reaches the heattreat cluster by POSTing to
+# `traefik-heattreat` (reachable on forge-net because traefik-heattreat
+# is attached to forge-net) and Traefik then forwards the request onto
+# heattreat-net to one of the heattreat silos. Nothing else crosses.
+#
+# Each Traefik provides its cluster's single public endpoint:
+#   - Sticky-session load balancing across the cluster's two silos for
+#     the Blazor UI (SignalR must pin to one silo per browser tab).
+#   - Round-robin (non-sticky) load balancing across the same two silos
+#     for the cross-cluster replication POSTs on /replicate/*.
 #
 # Only TWO host ports are published:
-#   5001 -> traefik-forge     -> sticky LB across silo-forge-a / silo-forge-b
-#   5002 -> traefik-heattreat -> sticky LB across silo-heattreat-a / silo-heattreat-b
+#   5001 -> traefik-forge     -> sticky LB (UI) + round-robin (replication)
+#   5002 -> traefik-heattreat -> sticky LB (UI) + round-robin (replication)
 #
 # Silo HTTP (:8080), Orleans silo (:11111), and gateway (:30000) ports
 # are `expose`-d only on their internal networks - nothing silo-side
 # is reachable from the host.
 #
-# Networks:
-#   forge-net:      azurite-forge, silo-forge-a, silo-forge-b, traefik-forge
-#   heattreat-net:  azurite-heattreat, silo-heattreat-a, silo-heattreat-b, traefik-heattreat
-#   wan:            all four silos (replication only; neither Azurite nor Traefik on wan)
+# Networks (full membership):
+#   forge-net:      azurite-forge, silo-forge-{a,b}, traefik-forge,
+#                   traefik-heattreat   (as the cross-cluster ingress)
+#   heattreat-net:  azurite-heattreat, silo-heattreat-{a,b}, traefik-heattreat,
+#                   traefik-forge       (as the cross-cluster ingress)
 #
-# Replication deliberately does NOT go through Traefik - it is a
-# stateless HTTP POST with no session affinity and is already made
-# silo-resilient by the app-layer multi-URL failover in
-# ReplicationHttpClient. Keeping replication direct over `wan` keeps
-# the Traefik surface purely a Blazor/UI concern.
+# Cluster isolation properties:
+#   silo-forge-a  -> silo-forge-b       : direct (forge-net)           OK
+#   silo-forge-*  -> traefik-heattreat  : direct (forge-net)           OK
+#   silo-forge-*  -> silo-heattreat-*   : NO SHARED NETWORK - blocked  OK
 #
-# Simulate a cross-cluster partition:
-#   docker network disconnect msmfg_wan silo-forge-a
-#   docker network disconnect msmfg_wan silo-forge-b
-#   docker network connect    msmfg_wan silo-forge-a
-#   docker network connect    msmfg_wan silo-forge-b
+# Replication path in this topology:
+#   silo-forge-X  --(forge-net)--> traefik-heattreat --(heattreat-net)--> silo-heattreat-{a|b}
 #
-# That is a genuine transport-level partition, not the hash-filter sim
-# in FederationRouter.IsDroppedByPartitionAsync (Tier 4) - the two Tier
+# The peer config lists a single URL per peer (the peer's Traefik,
+# resolvable on the local cluster network because the peer Traefik is
+# multi-homed there). ReplicationHttpClient still supports a multi-URL
+# BaseUrls list for topologies that want explicit per-silo failover
+# instead of an LB (for example a multi-zone deployment where each
+# zone has its own Traefik); here we use the one-URL form because
+# Traefik's active health check already evicts unhealthy silos from
+# rotation within ~2s.
+#
+# Simulate a cross-cluster partition (Tier 5):
+#   # Sever forge -> heattreat (remove peer Traefik from local cluster net):
+#   docker network disconnect msmfg_forge-net     msmfg-traefik-heattreat
+#   docker network disconnect msmfg_heattreat-net msmfg-traefik-forge
+#   # Restore:
+#   docker network connect    msmfg_forge-net     msmfg-traefik-heattreat
+#   docker network connect    msmfg_heattreat-net msmfg-traefik-forge
+#
+# Disconnecting the peer Traefik from the local cluster net removes
+# the only route from local silos to the peer cluster; the replicator's
+# HTTP POST fails, exponential backoff engages, and on reconnect the
+# replog drains in HLC order. That is a genuine transport-level
+# partition, not the hash-filter sim in
+# FederationRouter.IsDroppedByPartitionAsync (Tier 4) - the two Tier
 # types coexist; Tier 5 is network-level, Tier 4 stays as a fast-path
 # simulation that requires no docker interaction.
 
@@ -44,8 +75,6 @@ networks:
   forge-net:
     driver: bridge
   heattreat-net:
-    driver: bridge
-  wan:
     driver: bridge
 
 volumes:
@@ -131,7 +160,12 @@ services:
     ports:
       - "5001:80"
     networks:
+      # Multi-homed: forge-net reaches its own backend silos; heattreat-net
+      # makes this Traefik the cross-cluster ingress for heattreat silos
+      # (they POST /replicate/* here). No `wan` - the two cluster nets
+      # are the only bridges, and only Traefiks span both.
       - forge-net
+      - heattreat-net
 
   silo-forge-a:
     <<: *silo-common
@@ -150,16 +184,19 @@ services:
       SILO_ID: "a"
       Seeder__Enabled: "true"
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-forge:10000/devstoreaccount1;QueueEndpoint=http://azurite-forge:10001/devstoreaccount1;TableEndpoint=http://azurite-forge:10002/devstoreaccount1;"
-      # Replication peers: reach EITHER heattreat silo DIRECTLY over
-      # the wan network (not via Traefik - replication is stateless
-      # and already has app-layer multi-URL failover).
+      # Replication peers: a single URL per peer pointing at the peer's
+      # Traefik. The peer Traefik is resolvable on forge-net because it
+      # is multi-homed there; forge silos have NO route to heattreat
+      # silos directly (no shared network). Traefik's round-robin
+      # /replicate/* router + active health check handles per-silo
+      # failover on the peer side. The multi-URL BaseUrls list is still
+      # supported (see ReplicationHttpClient) and is recommended for
+      # multi-zone topologies where each zone has its own Traefik.
       Replication__Peers__0__Name: "heattreat"
-      Replication__Peers__0__BaseUrls__0: "http://silo-heattreat-a:8080"
-      Replication__Peers__0__BaseUrls__1: "http://silo-heattreat-b:8080"
+      Replication__Peers__0__BaseUrls__0: "http://traefik-heattreat:80"
     command: ["--cluster", "forge", "--silo-id", "a"]
     networks:
       - forge-net
-      - wan
 
   silo-forge-b:
     <<: *silo-common
@@ -181,12 +218,10 @@ services:
       Seeder__Enabled: "false"
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-forge:10000/devstoreaccount1;QueueEndpoint=http://azurite-forge:10001/devstoreaccount1;TableEndpoint=http://azurite-forge:10002/devstoreaccount1;"
       Replication__Peers__0__Name: "heattreat"
-      Replication__Peers__0__BaseUrls__0: "http://silo-heattreat-a:8080"
-      Replication__Peers__0__BaseUrls__1: "http://silo-heattreat-b:8080"
+      Replication__Peers__0__BaseUrls__0: "http://traefik-heattreat:80"
     command: ["--cluster", "forge", "--silo-id", "b"]
     networks:
       - forge-net
-      - wan
 
   # ----- Heattreat cluster ---------------------------------------------
   azurite-heattreat:
@@ -228,7 +263,11 @@ services:
     ports:
       - "5002:80"
     networks:
+      # Multi-homed: heattreat-net reaches its own backend silos;
+      # forge-net makes this Traefik the cross-cluster ingress for
+      # forge silos (they POST /replicate/* here).
       - heattreat-net
+      - forge-net
 
   silo-heattreat-a:
     <<: *silo-common
@@ -248,12 +287,10 @@ services:
       Seeder__Enabled: "false"
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-heattreat:10000/devstoreaccount1;QueueEndpoint=http://azurite-heattreat:10001/devstoreaccount1;TableEndpoint=http://azurite-heattreat:10002/devstoreaccount1;"
       Replication__Peers__0__Name: "forge"
-      Replication__Peers__0__BaseUrls__0: "http://silo-forge-a:8080"
-      Replication__Peers__0__BaseUrls__1: "http://silo-forge-b:8080"
+      Replication__Peers__0__BaseUrls__0: "http://traefik-forge:80"
     command: ["--cluster", "heattreat", "--silo-id", "a"]
     networks:
       - heattreat-net
-      - wan
 
   silo-heattreat-b:
     <<: *silo-common
@@ -275,10 +312,8 @@ services:
       Seeder__Enabled: "false"
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-heattreat:10000/devstoreaccount1;QueueEndpoint=http://azurite-heattreat:10001/devstoreaccount1;TableEndpoint=http://azurite-heattreat:10002/devstoreaccount1;"
       Replication__Peers__0__Name: "forge"
-      Replication__Peers__0__BaseUrls__0: "http://silo-forge-a:8080"
-      Replication__Peers__0__BaseUrls__1: "http://silo-forge-b:8080"
+      Replication__Peers__0__BaseUrls__0: "http://traefik-forge:80"
     command: ["--cluster", "heattreat", "--silo-id", "b"]
     networks:
       - heattreat-net
-      - wan
 

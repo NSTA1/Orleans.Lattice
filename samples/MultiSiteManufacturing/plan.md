@@ -788,31 +788,60 @@ accidental.
 
 ### 12.2 Topology
 
-Three networks, scoped so that cluster-internal traffic (Orleans silo
-membership, gateway, grain calls, Azurite table/blob/queue) cannot
-leave its cluster:
+Two networks, scoped so that no silo in one cluster shares a network
+with a silo in the other cluster. The **only** bridge between clusters
+is the Traefik proxy, which is multi-homed onto both cluster nets:
 
 | Network | Purpose | Services |
 |---|---|---|
-| `forge-net` | Forge cluster membership + Azurite access | `azurite-forge`, `silo-forge-a`, `silo-forge-b` |
-| `heattreat-net` | Heattreat cluster membership + Azurite access | `azurite-heattreat`, `silo-heattreat-a`, `silo-heattreat-b` |
-| `wan` | Cross-cluster HTTP replication only | all four silos (not the Azurites) |
+| `forge-net` | Forge cluster membership + Azurite access + cross-cluster ingress for heattreat | `azurite-forge`, `silo-forge-{a,b}`, `traefik-forge`, **`traefik-heattreat`** |
+| `heattreat-net` | Heattreat cluster membership + Azurite access + cross-cluster ingress for forge | `azurite-heattreat`, `silo-heattreat-{a,b}`, `traefik-heattreat`, **`traefik-forge`** |
 
-Azurite is deliberately **not** on the `wan` network — each cluster's
-storage is only reachable from its own silos, mirroring the real
-per-site storage isolation M13 models.
+There is **no** shared `wan` network. The peer Traefik is attached to
+the local cluster net specifically so local silos can resolve and
+reach it, without ever being on a network a peer silo can see. The
+resulting isolation guarantees:
 
-Only four host ports are published:
+| From → To | Path | Reachable? |
+|---|---|---|
+| `silo-forge-a` → `silo-forge-b` | `forge-net` | Yes (direct, same cluster) |
+| `silo-forge-*` → `traefik-heattreat` | `forge-net` (Traefik is multi-homed) | Yes (via proxy) |
+| `silo-forge-*` → `silo-heattreat-*` | — | **No shared network — blocked** |
+| `silo-heattreat-*` → `silo-forge-*` | — | **No shared network — blocked** |
+| `azurite-forge` ↔ `azurite-heattreat` | — | No shared network — blocked |
+
+Azurite is deliberately reachable only from its own silos, mirroring
+the real per-site storage isolation the cross-cluster design models.
+
+Only **two** host ports are published — one per cluster, both going to
+that cluster's Traefik:
 
 | Host port | Container | Role |
 |---|---|---|
-| 5001 | `silo-forge-a:8080` | Forge UI + gRPC + replication inbound |
-| 5002 | `silo-forge-b:8080` | Forge UI + gRPC |
-| 5003 | `silo-heattreat-a:8080` | Heattreat UI + gRPC + replication inbound |
-| 5004 | `silo-heattreat-b:8080` | Heattreat UI + gRPC |
+| 5001 | `traefik-forge:80` | Forge UI (sticky LB) + replication inbound (round-robin LB) |
+| 5002 | `traefik-heattreat:80` | Heattreat UI (sticky LB) + replication inbound (round-robin LB) |
 
-Orleans silo and gateway ports (11111 / 30000) are `EXPOSE`-d only
-inside each cluster network; no host publish.
+Silo HTTP (`:8080`), Orleans silo (`:11111`), and gateway (`:30000`)
+are `expose`-d only on their internal networks — no silo port is
+reachable from the host. Each Traefik runs two routers against the
+same backend pool:
+
+| Router | Rule | LB strategy | Why |
+|---|---|---|---|
+| `{cluster}-replicate` | `PathPrefix(`/replicate`)`, priority 100 | round-robin + active health check | Replication POSTs are stateless; either silo can apply a batch; faster convergence on silo restart than app-layer URL walking. |
+| `{cluster}-web` | `PathPrefix(`/`)` | sticky cookie (`msmfg_{cluster}_affinity`) | Blazor Server's SignalR circuit must pin to a single silo for the browser tab's lifetime, or the reconnect handshake tears the circuit down. |
+
+Replication path under this topology:
+
+```
+silo-forge-X  --(forge-net)--> traefik-heattreat --(heattreat-net)--> silo-heattreat-{a|b}
+```
+
+The peer config therefore lists a single URL per peer
+(`http://traefik-heattreat:80` from forge; `http://traefik-forge:80`
+from heattreat). `ReplicationHttpClient` still walks a multi-URL
+`BaseUrls` list; see §12.3 for the three deployment shapes the list
+supports.
 
 ### 12.3 Config override via env vars
 
@@ -822,11 +851,30 @@ the fields that differ:
 
 - `ConnectionStrings__AzureTableStorage` → `http://azurite-{cluster}:10002/...`
 - `Replication__Peers__0__Name` → peer cluster short name.
-- `Replication__Peers__0__BaseUrls__0` + `Replication__Peers__0__BaseUrls__1`
-  → the peer cluster's silo-A and silo-B HTTP endpoints. The list is
-  tried in order by `ReplicationHttpClient.SendAsync`, giving
-  cross-cluster failover when one peer silo is restarting or
-  disconnected from `wan`.
+- `Replication__Peers__0__BaseUrls__0` → `http://traefik-{peer}:80`.
+  A single URL per peer because Traefik's round-robin `/replicate/*`
+  router plus its 2 s health check handles silo-level failover inside
+  the peer cluster. `ReplicationHttpClient.SendAsync` still iterates
+  the list in order and short-circuits on first 2xx, so adding more
+  URLs only matters for topologies where the client — not an LB — is
+  the unit of failover. The three supported shapes:
+
+    1. **Single LB endpoint (the Compose default).** One URL per peer.
+       Traefik absorbs silo churn; the client never notices.
+    2. **Explicit per-silo fan-out (localhost dev, no LB).** One URL
+       per silo — the shape `appsettings.cluster.*.json` ships with
+       for `dotnet run` without Docker. The client tries each silo in
+       order until one accepts the batch.
+    3. **Multi-zone failover (advanced).** One URL per availability
+       zone, each pointing at that zone's regional LB — e.g.
+       `https://heattreat-az1.example.com`,
+       `https://heattreat-az2.example.com`. The client stays on the
+       primary zone while it's healthy and only falls over when every
+       silo behind that zone's LB has failed. Because the walk
+       short-circuits on first success, the primary zone absorbs all
+       traffic under nominal conditions — ideal when cross-zone
+       bandwidth is metered.
+
 - `Cluster__SiloPortA=11111 Cluster__SiloPortB=11111` — both silos can
   use the same Orleans port since each container has its own IP.
 - `ASPNETCORE_URLS=http://+:8080` — `Program.cs` skips its own
@@ -840,38 +888,29 @@ the fields that differ:
 ### 12.4 Genuine partition (Tier 5)
 
 ```
-docker network disconnect msmfg_wan msmfg-silo-forge-a
-docker network disconnect msmfg_wan msmfg-silo-forge-b
+# Sever forge -> heattreat (remove peer Traefik from local cluster net):
+docker network disconnect msmfg_forge-net     msmfg-traefik-heattreat
+docker network disconnect msmfg_heattreat-net msmfg-traefik-forge
 # ... demonstrate divergence ...
-docker network connect    msmfg_wan msmfg-silo-forge-a
-docker network connect    msmfg_wan msmfg-silo-forge-b
+docker network connect    msmfg_forge-net     msmfg-traefik-heattreat
+docker network connect    msmfg_heattreat-net msmfg-traefik-forge
 ```
 
-While disconnected, the replog continues to grow on the forge side,
-the replicator's backoff timer fires on every tick, and heattreat sees
-nothing. On reconnect the replicator ships the accumulated batch in
-HLC order and heattreat converges. This is a genuine transport drop,
-complementing (not replacing) the Tier-4 hash-filter sim which remains
-useful in tests where Docker is not available.
+Disconnecting the peer Traefik from the local cluster net removes the
+only route from local silos to the peer cluster (recall: silos have no
+direct network path to peer silos in this topology — the Traefik is
+the single chokepoint by design). The replicator's HTTP POST fails,
+exponential backoff engages, and the replog grows locally. The peer
+cluster sees nothing. On reconnect the replicator ships the
+accumulated batch in HLC order and the peer converges. This is a
+genuine transport drop, complementing (not replacing) the Tier-4
+hash-filter sim which remains useful in tests where Docker is not
+available.
 
-### 12.5 Test surface
-
-The Docker topology is a developer-experience upgrade; no new
-automated tests. The existing unit-test suite
-(`test/MultiSiteManufacturing.Tests/`) runs against the in-memory
-silo fixture and is unaffected by the Compose work.
-
-### 12.6 Replication observability in the top bar
-
-The dashboard top bar renders a live replication strip next to the
-operator identity: cluster + silo id (`forge/A`), seconds since last
-ship, seconds since last inbound apply, per-side row counts, the last
-peer name, and a send-error badge when the most recent attempt failed.
-Counters are **cluster-wide** and **persistent** — they live in a
-`ClusterReplicationStatsGrain` (`IGrainWithStringKey`, keyed by the
-cluster's short name) backed by `msmfgGrainState`, so both silos of a
-cluster report the same numbers and the view survives a silo restart.
-`ReplicationActivityTracker` is a thin fire-and-forget façade over
-that grain — hot-path writes never back-pressure on storage latency.
-The strip refreshes once per second via a Blazor Server `Timer`.
+Disconnecting a single silo from its own cluster net is a different
+failure mode (the silo is removed from the UI/replication LB by
+Traefik's health check within ~2 s, and Orleans re-activates the
+replicator grain on the surviving silo); the cross-cluster topology
+is unaffected. "Silo X of the peer cluster is restarting" is handled
+by the peer Traefik with no visible hiccup to the local cluster.
 

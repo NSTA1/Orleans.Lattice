@@ -7,8 +7,24 @@
 # discovered routers and returning 404 for every request. The file
 # provider has no such dependency and the silo container names resolve
 # over the shared forge-net bridge network.
+#
+# Two routers share the same backend pool but with different LB
+# strategies:
+#   - forge-replicate  /replicate/*  round-robin, no sticky cookie.
+#                      Priority 100 so it wins against the / catch-all.
+#                      Reached by the peer cluster's silos over `wan`.
+#   - forge-web        /             sticky cookie. Blazor Server's
+#                      SignalR circuit pins to one silo per browser tab.
 http:
   routers:
+    forge-replicate:
+      rule: "PathPrefix(`/replicate`)"
+
+      priority: 100
+      entryPoints:
+        - web
+      service: forge-replicate
+
     forge-web:
       rule: "PathPrefix(`/`)"
       entryPoints:
@@ -16,6 +32,20 @@ http:
       service: forge-web
 
   services:
+    forge-replicate:
+      loadBalancer:
+        # No sticky cookie: replication POSTs are stateless and both
+        # silos share the same Azure Table Storage and lattice trees,
+        # so any silo can apply an inbound batch. Round-robin + active
+        # health check gives automatic per-silo failover within ~2s.
+        servers:
+          - url: "http://silo-forge-a:8080"
+          - url: "http://silo-forge-b:8080"
+        healthCheck:
+          path: "/"
+          interval: "2s"
+          timeout: "1s"
+
     forge-web:
       loadBalancer:
         # Both forge silos behind one sticky cookie. Blazor Server's

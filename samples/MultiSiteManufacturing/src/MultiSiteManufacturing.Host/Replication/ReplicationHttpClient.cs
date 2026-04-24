@@ -13,12 +13,48 @@ namespace MultiSiteManufacturing.Host.Replication;
 /// <remarks>
 /// <para>
 /// <b>Failover.</b> Each peer cluster carries a list of base URLs
-/// (<see cref="ReplicationPeer.BaseUrls"/>) covering every silo of
-/// the remote cluster. <see cref="SendAsync"/> tries them in order
-/// and moves on to the next on any transport failure or non-success
-/// status, so a single peer-silo restart never stalls shipping. Only
-/// when <i>every</i> URL fails does the call raise an exception and
-/// bump the <see cref="ReplicationActivityTracker"/> error counter.
+/// (<see cref="ReplicationPeer.BaseUrls"/>). <see cref="SendAsync"/>
+/// tries them in order and moves on to the next on any transport
+/// failure or non-success status, so failed URLs never stall
+/// shipping. Only when <i>every</i> URL fails does the call raise an
+/// exception and bump the <see cref="ReplicationActivityTracker"/>
+/// error counter.
+/// </para>
+/// <para>
+/// <b>Deployment shapes.</b> The BaseUrls list is flexible on purpose:
+/// <list type="bullet">
+/// <item>
+/// <description>
+/// <b>Single LB endpoint (default in Docker Compose).</b> One URL
+/// per peer pointing at the peer cluster's Traefik (or any L7 LB).
+/// Traefik's round-robin router for <c>/replicate/*</c> plus its
+/// active health check handles per-silo failover inside the peer
+/// cluster within ~2 s, so the client just needs one URL.
+/// </description>
+/// </item>
+/// <item>
+/// <description>
+/// <b>Explicit per-silo fan-out (localhost dev, no LB).</b> One URL
+/// per silo. The client walks the list until one silo accepts the
+/// batch. Matches the shape of <c>appsettings.cluster.*.json</c>
+/// when running outside Docker.
+/// </description>
+/// </item>
+/// <item>
+/// <description>
+/// <b>Multi-zone failover (advanced).</b> One URL per availability
+/// zone, each pointing at that zone's regional LB (for example
+/// <c>https://heattreat-az1.example.com</c>,
+/// <c>https://heattreat-az2.example.com</c>). The client stays on
+/// the first zone while it's healthy and only falls over to the next
+/// zone when every silo behind the current zone's LB has failed.
+/// Because the list is walked in order and short-circuits on first
+/// success, the primary zone absorbs all traffic under nominal
+/// conditions — ideal when zones are charged for cross-zone
+/// bandwidth.
+/// </description>
+/// </item>
+/// </list>
 /// </para>
 /// <para>
 /// <b>Authentication</b> is a shared-secret bearer token in the
