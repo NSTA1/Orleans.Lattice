@@ -20,8 +20,8 @@ link is the peer Traefik, multi-homed onto both cluster networks.
 ```mermaid
 flowchart TB
     subgraph host["Developer host"]
-        browser1["Browser — US UI<br/>http://localhost:5001"]
-        browser2["Browser — EU UI<br/>http://localhost:5002"]
+        browser1["Browser — US UI<br/>localhost:5001"]
+        browser2["Browser — EU UI<br/>localhost:5002"]
     end
 
     subgraph usNet["us-net"]
