@@ -22,6 +22,12 @@
 .PARAMETER Down
   Stop and remove all containers, networks, and named volumes.
 
+.PARAMETER Clean
+  Wipe any pre-existing containers, networks, and named volumes before
+  starting the stack. Use this when you want a fresh run with no seeded
+  state carried over from a previous ./run.ps1 invocation. Ignored when
+  combined with -Down or -Logs.
+
 .PARAMETER Logs
   Tail logs from all silos (follow mode). Ctrl+C detaches without
   stopping the containers.
@@ -45,11 +51,16 @@
   ./run.ps1 -Down
     Tear everything down including the Azurite volumes (seeded state
     is deleted — next ./run.ps1 will re-seed).
+
+.EXAMPLE
+  ./run.ps1 -Clean
+    Wipe any previous state, then build and start the stack fresh.
 #>
 param(
   [switch]$Down,
   [switch]$Logs,
   [switch]$NoBuild,
+  [switch]$Clean,
   [string]$Service
 )
 
@@ -82,6 +93,12 @@ try {
             & docker compose logs -f
         }
         return
+    }
+
+    if ($Clean) {
+        Write-Host "Clearing pre-existing msmfg state (containers, networks, volumes)..." -ForegroundColor Yellow
+        & docker compose down --volumes --remove-orphans
+        if ($LASTEXITCODE -ne 0) { throw "docker compose down failed (exit $LASTEXITCODE)." }
     }
 
     if (-not $NoBuild) {
@@ -146,6 +163,7 @@ try {
     Write-Host "  docker compose ps                  show container state"
     Write-Host "  docker network disconnect msmfg_wan msmfg-silo-us-a"
     Write-Host "                                     simulate a cross-cluster partition"
+    Write-Host "  ./run.ps1 -Clean                   wipe state, then start fresh"
     Write-Host "  ./run.ps1 -Down                    stop + wipe volumes"
 }
 finally {
