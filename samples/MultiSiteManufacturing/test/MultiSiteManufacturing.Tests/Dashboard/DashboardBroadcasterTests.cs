@@ -237,4 +237,43 @@ public sealed class DashboardBroadcasterTests
         Assert.That(row.BaselineState, Is.EqualTo(ComplianceState.Nominal));
         Assert.That(row.Resolved, Is.False);
     }
+
+    [Test]
+    public async Task FactReplicated_pushes_PartSummaryUpdate_to_subscriber()
+    {
+        // The inbound replication endpoint raises FactReplicated after a
+        // peer-originated fact has been applied + replayed into the local
+        // baseline. The broadcaster must wire that event alongside
+        // FactRouted so the peer cluster's dashboard refreshes without
+        // polling. BuildSummaryAsync reads facts from the lattice, so
+        // for the update to be non-empty we seed the lattice as the
+        // real inbound path would (the minimal-API handler SetAsyncs
+        // the replicated bytes into the local lattice before raising
+        // FactReplicated).
+        var (router, _, lattice) = _fixture.NewRouter();
+        await using var broadcaster = NewBroadcaster(router);
+        var serial = new PartSerialNumber("HPT-BLD-S1-2028-90200");
+        var fact = Step(serial, tick: 1, ProcessStage.Forge, ProcessSite.OhioForge);
+
+        await lattice.EmitAsync(fact, CancellationToken.None);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var subscriber = broadcaster.SubscribePartUpdates(cts.Token).GetAsyncEnumerator(cts.Token);
+        var moveTask = subscriber.MoveNextAsync().AsTask();
+        await Task.Delay(50, cts.Token);
+
+        router.RaiseFactReplicated(fact);
+        var moved = await moveTask;
+
+        Assert.That(moved, Is.True);
+        var update = subscriber.Current;
+        Assert.Multiple(() =>
+        {
+            Assert.That(update.Serial, Is.EqualTo(serial));
+            Assert.That(update.FactCount, Is.GreaterThanOrEqualTo(1));
+            Assert.That(update.LatestStage, Is.EqualTo(ProcessStage.Forge));
+        });
+
+        await subscriber.DisposeAsync();
+    }
 }

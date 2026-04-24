@@ -181,6 +181,7 @@ flowchart LR
 
     inbound --> latBE
     inbound -->|"decode + replay (mfg-facts only)"| baseBE
+    inbound -.->|"FactReplicated"| broadcaster
 
     orleans --- tables
     lattice --- tables
@@ -333,6 +334,8 @@ sequenceDiagram
         Note over Filter: Sees replay flag → skips replog append<br/>(loop broken)
         Inbound->>PeerBase: decode + EmitAsync (Set entries only, mfg-facts tree)
         Note over Inbound,PeerBase: Baseline has no retraction concept —<br/>Delete entries skipped
+        Inbound->>Inbound: RaiseFactReplicated(fact)
+        Note over Inbound: DashboardBroadcaster pushes<br/>PartSummaryUpdate to Blazor subs
         Inbound-->>Traefik: 200 OK
         Traefik-->>Rep: ack
         Rep->>Rep: advance Cursor, persist

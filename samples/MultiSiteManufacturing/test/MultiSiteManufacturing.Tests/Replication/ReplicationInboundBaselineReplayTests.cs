@@ -39,7 +39,7 @@ public sealed class ReplicationInboundBaselineReplayTests
         var fact = Nc(serial, tick: 1, ncNumber: "NC-R-1", NcSeverity.Minor, ProcessSite.ToulouseNdtLab);
         var payload = FactJsonCodec.Encode(fact);
 
-        await ReplicationInboundEndpoint.TryReplayToBaselineAsync(
+        var replayed = await ReplicationInboundEndpoint.TryReplayToBaselineAsync(
             _baseline, payload, sourceCluster: "us", key: "replog-key",
             NullLogger.Instance, CancellationToken.None);
 
@@ -48,6 +48,8 @@ public sealed class ReplicationInboundBaselineReplayTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(replayed, Is.Not.Null, "Successful replay must return the decoded fact.");
+            Assert.That(replayed!.FactId, Is.EqualTo(fact.FactId));
             Assert.That(facts, Has.Count.EqualTo(1));
             Assert.That(facts[0].FactId, Is.EqualTo(fact.FactId));
             Assert.That(state, Is.EqualTo(ComplianceState.FlaggedForReview));
@@ -55,15 +57,19 @@ public sealed class ReplicationInboundBaselineReplayTests
     }
 
     [Test]
-    public void Malformed_payload_is_swallowed_without_throwing()
+    public async Task Malformed_payload_is_swallowed_without_throwing()
     {
         // A payload that fails to decode must never abort the caller;
         // the batch continues past the bad entry so the rest of the
-        // facts still apply.
+        // facts still apply, and the helper signals "don't raise the
+        // dashboard event" by returning null.
         var garbage = new byte[] { 0x7b, 0x99, 0x00 }; // "{" + invalid UTF-8
 
-        Assert.DoesNotThrowAsync(() => ReplicationInboundEndpoint.TryReplayToBaselineAsync(
+        Fact? result = null;
+        Assert.DoesNotThrowAsync(async () => result = await ReplicationInboundEndpoint.TryReplayToBaselineAsync(
             _baseline, garbage, sourceCluster: "us", key: "bad-key",
             NullLogger.Instance, CancellationToken.None));
+
+        Assert.That(result, Is.Null);
     }
 }

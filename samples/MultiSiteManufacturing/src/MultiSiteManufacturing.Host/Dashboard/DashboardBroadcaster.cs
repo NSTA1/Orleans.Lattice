@@ -10,7 +10,8 @@ namespace MultiSiteManufacturing.Host.Dashboard;
 
 /// <summary>
 /// In-process pub/sub hub that feeds the Blazor dashboard.
-/// Subscribes to <see cref="FederationRouter.FactRouted"/> and
+/// Subscribes to <see cref="FederationRouter.FactRouted"/>, 
+/// <see cref="FederationRouter.FactReplicated"/>, and
 /// <see cref="FederationRouter.ChaosConfigChanged"/>, derives
 /// <see cref="PartSummaryUpdate"/> / <see cref="ChaosOverview"/> records,
 /// and broadcasts them to every active subscriber via per-subscriber
@@ -22,6 +23,16 @@ namespace MultiSiteManufacturing.Host.Dashboard;
 /// iterate until disposal. Back-pressure is handled by unbounded
 /// channels — the sample is single-silo and the update volume is
 /// modest (one fact per operator action plus seed traffic).
+/// <para>
+/// Locally-emitted facts arrive via <c>FactRouted</c>;
+/// peer-replicated facts arrive via <c>FactReplicated</c> (raised
+/// by the inbound replication endpoint after baseline replay). Both
+/// events share the same handler because the downstream work —
+/// rebuild a <see cref="PartSummaryUpdate"/> and fan it out — is
+/// identical regardless of fact origin. This is what lets a peer
+/// cluster's dashboard refresh automatically as replicated facts
+/// land.
+/// </para>
 /// </remarks>
 public sealed class DashboardBroadcaster : IHostedService
 {
@@ -50,6 +61,7 @@ public sealed class DashboardBroadcaster : IHostedService
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _router.FactRouted += OnFactRouted;
+        _router.FactReplicated += OnFactRouted;
         _router.ChaosConfigChanged += OnChaosConfigChanged;
         return Task.CompletedTask;
     }
@@ -58,6 +70,7 @@ public sealed class DashboardBroadcaster : IHostedService
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _router.FactRouted -= OnFactRouted;
+        _router.FactReplicated -= OnFactRouted;
         _router.ChaosConfigChanged -= OnChaosConfigChanged;
         return Task.CompletedTask;
     }

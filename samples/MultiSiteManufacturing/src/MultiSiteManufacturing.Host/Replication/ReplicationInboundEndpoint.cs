@@ -71,6 +71,7 @@ internal static class ReplicationInboundEndpoint
             ReplicationTopology topology,
             ReplicationActivityTracker activity,
             BaselineFactBackend baselineBackend,
+            FederationRouter router,
             ILoggerFactory loggerFactory,
             CancellationToken cancellationToken) =>
         {
@@ -136,9 +137,21 @@ internal static class ReplicationInboundEndpoint
 
                             if (replayToBaseline)
                             {
-                                await TryReplayToBaselineAsync(
+                                var replayed = await TryReplayToBaselineAsync(
                                     baselineBackend, bytes, batch.SourceCluster, entry.Key, log, cancellationToken)
                                     .ConfigureAwait(false);
+
+                                // Fire-and-forget dashboard notification:
+                                // the broadcaster fans out per-part summary
+                                // updates to active UI subscribers. Only
+                                // raised on successful decode + emit — a
+                                // subscriber that can't find the fact in
+                                // the baseline would be confused by a
+                                // spurious event.
+                                if (replayed is not null)
+                                {
+                                    router.RaiseFactReplicated(replayed);
+                                }
                             }
                         }
                         else
@@ -190,12 +203,18 @@ internal static class ReplicationInboundEndpoint
     /// Exceptions are logged and swallowed — a single malformed or
     /// un-decodable entry must not abort the replication batch.
     /// </summary>
+    /// <returns>
+    /// The decoded <see cref="Fact"/> when both decode and emit
+    /// succeeded, so the caller can raise
+    /// <see cref="FederationRouter.FactReplicated"/>; otherwise
+    /// <see langword="null"/>.
+    /// </returns>
     /// <remarks>
     /// Exposed as <c>internal</c> so unit tests can exercise the
     /// decode + emit path without standing up the full minimal-API
     /// host.
     /// </remarks>
-    internal static async Task TryReplayToBaselineAsync(
+    internal static async Task<Fact?> TryReplayToBaselineAsync(
         BaselineFactBackend baseline,
         byte[] payload,
         string sourceCluster,
@@ -213,18 +232,20 @@ internal static class ReplicationInboundEndpoint
             log.LogWarning(ex,
                 "Inbound replication: baseline replay skipped — decode failed for key {Key} source {Source}",
                 key, sourceCluster);
-            return;
+            return null;
         }
 
         try
         {
             await baseline.EmitAsync(fact, cancellationToken).ConfigureAwait(false);
+            return fact;
         }
         catch (Exception ex)
         {
             log.LogWarning(ex,
                 "Inbound replication: baseline emit failed for fact {FactId} serial {Serial} source {Source}",
                 fact.FactId, fact.Serial.Value, sourceCluster);
+            return null;
         }
     }
 }

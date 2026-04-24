@@ -49,6 +49,25 @@ public sealed class FederationRouter(
     public event EventHandler<Fact>? FactRouted;
 
     /// <summary>
+    /// Raised after a fact applied by the inbound replication handler
+    /// has been replayed into the local <c>baseline</c> backend. Lets
+    /// the dashboard broadcaster push live part-summary updates on the
+    /// peer cluster without polling, so replicated facts appear in the
+    /// UI as they land. Handlers must be non-blocking; exceptions are
+    /// swallowed by the raiser.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="FactRouted"/>: locally-emitted facts
+    /// raise <c>FactRouted</c> (after fan-out through the router);
+    /// replicated facts raise <c>FactReplicated</c> (after the inbound
+    /// endpoint applied them to the local lattice and re-emitted the
+    /// payload into the local baseline). Subscribers that only care
+    /// about UI freshness typically wire both events to the same
+    /// handler.
+    /// </remarks>
+    public event EventHandler<Fact>? FactReplicated;
+
+    /// <summary>
     /// Raised after any change to site or backend chaos configuration
     /// (direct configure, preset, backend config). Subscribers that
     /// render "active chaos" UI refresh their snapshots on this signal.
@@ -316,6 +335,30 @@ public sealed class FederationRouter(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "FactRouted subscriber threw for fact {FactId}", fact.FactId);
+        }
+    }
+
+    /// <summary>
+    /// Raises <see cref="FactReplicated"/> after a peer-originated
+    /// fact has been applied to the local lattice and replayed into
+    /// the local baseline. Called by the inbound replication endpoint.
+    /// Exceptions thrown by subscribers are swallowed and logged.
+    /// </summary>
+    internal void RaiseFactReplicated(Fact fact)
+    {
+        ArgumentNullException.ThrowIfNull(fact);
+        var handler = FactReplicated;
+        if (handler is null)
+        {
+            return;
+        }
+        try
+        {
+            handler(this, fact);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "FactReplicated subscriber threw for fact {FactId}", fact.FactId);
         }
     }
 
