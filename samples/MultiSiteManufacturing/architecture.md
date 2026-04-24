@@ -1,4 +1,3 @@
-
 # MultiSiteManufacturing — architecture
 
 Structural view of the sample: physical and network topology, how a
@@ -21,24 +20,24 @@ link is the peer Traefik, multi-homed onto both cluster networks.
 ```mermaid
 flowchart TB
     subgraph host["Developer host"]
-        browser1["Browser — forge UI<br/>http://localhost:5001"]
-        browser2["Browser — heattreat UI<br/>http://localhost:5002"]
+        browser1["Browser — US UI<br/>http://localhost:5001"]
+        browser2["Browser — EU UI<br/>http://localhost:5002"]
     end
 
-    subgraph forgeNet["forge-net"]
-        azF["azurite-forge<br/>:10000/10001/10002"]
-        siloFA["silo-forge-a<br/>HTTP :8080 · Silo :11111 · GW :30000"]
-        siloFB["silo-forge-b<br/>HTTP :8080 · Silo :11111 · GW :30000"]
-        tFE["traefik-forge<br/>:80 (multi-homed)"]
-        tHE1["traefik-heattreat<br/>(multi-homed)"]
+    subgraph usNet["us-net"]
+        azF["azurite-us<br/>:10000/10001/10002"]
+        siloFA["silo-us-a<br/>HTTP :8080 · Silo :11111 · GW :30000"]
+        siloFB["silo-us-b<br/>HTTP :8080 · Silo :11111 · GW :30000"]
+        tFE["traefik-us<br/>:80 (multi-homed)"]
+        tHE1["traefik-eu<br/>(multi-homed)"]
     end
 
-    subgraph heatNet["heattreat-net"]
-        azH["azurite-heattreat<br/>:10000/10001/10002"]
-        siloHA["silo-heattreat-a<br/>HTTP :8080 · Silo :11111 · GW :30000"]
-        siloHB["silo-heattreat-b<br/>HTTP :8080 · Silo :11111 · GW :30000"]
-        tHE2["traefik-heattreat<br/>:80 (multi-homed)"]
-        tFE2["traefik-forge<br/>(multi-homed)"]
+    subgraph euNet["eu-net"]
+        azH["azurite-eu<br/>:10000/10001/10002"]
+        siloHA["silo-eu-a<br/>HTTP :8080 · Silo :11111 · GW :30000"]
+        siloHB["silo-eu-b<br/>HTTP :8080 · Silo :11111 · GW :30000"]
+        tHE2["traefik-eu<br/>:80 (multi-homed)"]
+        tFE2["traefik-us<br/>(multi-homed)"]
     end
 
     browser1 -->|"host :5001"| tFE
@@ -69,18 +68,18 @@ Reachability matrix:
 
 | From → To | Path | Reachable? |
 |---|---|---|
-| `silo-forge-a` → `silo-forge-b` | `forge-net` | Yes (same cluster) |
-| `silo-forge-*` → `traefik-heattreat` | `forge-net` (Traefik multi-homed) | Yes |
-| `silo-forge-*` → `silo-heattreat-*` | — | **No shared network — blocked** |
-| `silo-heattreat-*` → `silo-forge-*` | — | **No shared network — blocked** |
-| `azurite-forge` ↔ `azurite-heattreat` | — | **No shared network — blocked** |
+| `silo-us-a` → `silo-us-b` | `us-net` | Yes (same cluster) |
+| `silo-us-*` → `traefik-eu` | `us-net` (Traefik multi-homed) | Yes |
+| `silo-us-*` → `silo-eu-*` | — | **No shared network — blocked** |
+| `silo-eu-*` → `silo-us-*` | — | **No shared network — blocked** |
+| `azurite-us` ↔ `azurite-eu` | — | **No shared network — blocked** |
 
 Only two host ports are published:
 
 | Host port | Container | Role |
 |---|---|---|
-| 5001 | `traefik-forge:80` | Forge UI (sticky) + replication inbound (round-robin) |
-| 5002 | `traefik-heattreat:80` | Heattreat UI (sticky) + replication inbound (round-robin) |
+| 5001 | `traefik-us:80` | US UI (sticky) + replication inbound (round-robin) |
+| 5002 | `traefik-eu:80` | EU UI (sticky) + replication inbound (round-robin) |
 
 Silo HTTP (`:8080`), Orleans silo (`:11111`), and gateway (`:30000`)
 ports are internal-only.
@@ -98,12 +97,12 @@ Disconnecting the peer Traefik from the local cluster network removes
 the only route from local silos to the peer cluster.
 
 ```powershell
-# Sever forge ↔ heattreat:
-docker network disconnect msmfg_forge-net     msmfg-traefik-heattreat
-docker network disconnect msmfg_heattreat-net msmfg-traefik-forge
+# Sever US ↔ EU:
+docker network disconnect msmfg_us-net msmfg-traefik-eu
+docker network disconnect msmfg_eu-net msmfg-traefik-us
 # ... demonstrate divergence ...
-docker network connect    msmfg_forge-net     msmfg-traefik-heattreat
-docker network connect    msmfg_heattreat-net msmfg-traefik-forge
+docker network connect    msmfg_us-net msmfg-traefik-eu
+docker network connect    msmfg_eu-net msmfg-traefik-us
 ```
 
 ---
@@ -296,22 +295,22 @@ Range-scan patterns:
 
 ## 5. Cross-cluster replication flow
 
-A single operator write on the forge cluster, propagating to the
-heattreat cluster.
+A single operator write on the US cluster, propagating to the
+EU cluster.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant UI as Blazor UI (forge)
+    participant UI as Blazor UI (us)
     participant Router as FederationRouter
     participant Lat as Lattice backend
-    participant Tree as mfg-facts (forge)
+    participant Tree as mfg-facts (us)
     participant Filter as LatticeReplicationFilter
-    participant Replog as _replog__mfg-facts (forge)
-    participant Rep as IReplicatorGrain<br/>("mfg-facts|heattreat")
-    participant Traefik as traefik-heattreat
-    participant Inbound as POST /replicate/mfg-facts<br/>(heattreat silo)
-    participant PeerTree as mfg-facts (heattreat)
+    participant Replog as _replog__mfg-facts (us)
+    participant Rep as IReplicatorGrain<br/>("mfg-facts|eu")
+    participant Traefik as traefik-eu
+    participant Inbound as POST /replicate/mfg-facts<br/>(eu silo)
+    participant PeerTree as mfg-facts (eu)
 
     UI->>Router: EmitFact(env)
     Router->>Lat: AppendAsync(env)
@@ -325,8 +324,8 @@ sequenceDiagram
         Rep->>Rep: dedupe by key, keep highest HLC
         Rep->>Tree: GetAsync(key) — current value + HLC
         Rep->>Traefik: POST /replicate/mfg-facts (batch)
-        Traefik->>Inbound: round-robin to silo-heattreat-{a|b}
-        Inbound->>Inbound: RequestContext["lattice.replay"] = "forge"
+        Traefik->>Inbound: round-robin to silo-eu-{a|b}
+        Inbound->>Inbound: RequestContext["lattice.replay"] = "us"
         Inbound->>PeerTree: SetAsync / DeleteAsync per entry
         PeerTree-->>Filter: outgoing call completes
         Note over Filter: Sees replay flag → skips replog append<br/>(loop broken)
@@ -362,7 +361,7 @@ Compose overrides only what has to change in containers:
 | `Replication__Peers__0__BaseUrls__0` | Peer Traefik URL (one entry — Traefik handles silo failover). |
 | `Cluster__SiloPortA` / `SiloPortB` | Both `11111` under Compose — each container has its own IP. |
 | `ASPNETCORE_URLS` | `http://+:8080` in Compose; `Program.cs` skips its own `UseUrls` when this is set. |
-| `Seeder__Enabled` | Explicit boolean — `true` on `silo-forge-a`, `false` elsewhere. |
+| `Seeder__Enabled` | Explicit boolean — `true` on `silo-us-a`, `false` elsewhere. |
 
 `ReplicationHttpClient.SendAsync` still iterates a multi-URL
 `BaseUrls` list, so three deployment shapes are supported:

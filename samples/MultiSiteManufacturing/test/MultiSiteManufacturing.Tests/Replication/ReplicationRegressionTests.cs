@@ -101,7 +101,7 @@ public sealed class ReplicationLogWriterHlcTests
         grains: null!,
         topology: new ReplicationTopology
         {
-            LocalCluster = "forge",
+            LocalCluster = "us",
             SharedSecret = "s",
             Peers = [],
             ReplicatedTrees = [],

@@ -142,10 +142,10 @@ public sealed class ReplicationTopology
     /// config root. Expected JSON shape under <c>"Replication"</c>:
     /// <code>
     ///   "Replication": {
-    ///     "LocalCluster": "forge",
+    ///     "LocalCluster": "us",
     ///     "SharedSecret": "...",
     ///     "Peers": [
-    ///       { "Name": "heattreat", "BaseUrls": [ "http://silo-heattreat-a:8080", "http://silo-heattreat-b:8080" ] }
+    ///       { "Name": "eu", "BaseUrls": [ "http://silo-eu-a:8080", "http://silo-eu-b:8080" ] }
     ///     ],
     ///     "ReplicatedTrees": [ "mfg-facts", "mfg-site-activity-index" ]
     ///   }

@@ -1,4 +1,3 @@
-
 # MultiSiteManufacturing — glossary
 
 Terms used throughout the sample. Split into the **domain** side
@@ -49,9 +48,9 @@ Terms used throughout the sample. Split into the **domain** side
 | **Orleans** | Distributed actor framework ("virtual actors" called grains) used by the sample for single-writer-per-entity coordination, timers, reminders, and persistence. |
 | **Grain** | Virtual actor — a uniquely-keyed, single-threaded object managed by Orleans. Transparently activated on first use and deactivated when idle. |
 | **Grain interface** | The public API of a grain (`ISomethingGrain`). All grain calls go through this interface. |
-| **Grain key** | The identity of a grain instance. In this sample, strings like `"mfg-facts|heattreat"` or enum values like `ProcessSite.OhioForge`. |
+| **Grain key** | The identity of a grain instance. In this sample, strings like `"mfg-facts|eu"` or enum values like `ProcessSite.OhioForge`. |
 | **Silo** | An Orleans host process. This sample runs two silos per cluster. |
-| **Cluster** | A set of silos sharing a membership table. The sample runs two — `forge` and `heattreat`. |
+| **Cluster** | A set of silos sharing a membership table. The sample runs two — `us` and `eu`. |
 | **Grain storage** | Orleans' persistent state facility. Here backed by Azure Table Storage (`msmfgGrainState`). |
 | **Grain timer** | A periodic callback registered inside a grain activation. No minimum period; auto-disposed on deactivation. Used for the replicator's 3-second shipping loop. |
 | **Reminder** | Durable, cluster-wide scheduled callback surviving silo restarts. Minimum period of 1 minute. Used for the replicator keepalive and the replog janitor. |

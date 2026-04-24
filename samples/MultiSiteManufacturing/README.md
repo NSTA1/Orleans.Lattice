@@ -51,7 +51,7 @@ each modelling a distinct real-world failure class:
 
 The supported local topology is Docker Compose: two Azurite containers,
 four silos (two per cluster), and a Traefik proxy per cluster — host
-ports `5001` (forge) and `5002` (heattreat).
+ports `5001` (US) and `5002` (EU).
 
 ```powershell
 ./run.ps1

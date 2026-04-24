@@ -44,8 +44,8 @@ namespace MultiSiteManufacturing.Host.Replication;
 /// <description>
 /// <b>Multi-zone failover (advanced).</b> One URL per availability
 /// zone, each pointing at that zone's regional LB (for example
-/// <c>https://heattreat-az1.example.com</c>,
-/// <c>https://heattreat-az2.example.com</c>). The client stays on
+/// <c>https://eu-az1.example.com</c>,
+/// <c>https://eu-az2.example.com</c>). The client stays on
 /// the first zone while it's healthy and only falls over to the next
 /// zone when every silo behind the current zone's LB has failed.
 /// Because the list is walked in order and short-circuits on first

@@ -3,18 +3,18 @@
   Launches the Multi-Site Manufacturing sample (M14: Docker Compose + Traefik).
 
 .DESCRIPTION
-  The sample runs as two independent Orleans clusters ("forge" +
-  "heattreat"), each with two silos and its own Azurite, all inside
+  The sample runs as two independent Orleans clusters ("us" +
+  "eu"), each with two silos and its own Azurite, all inside
   Docker Compose. A per-cluster Traefik reverse proxy provides sticky-
   session load balancing across the cluster's two silos. Only TWO host
   ports are published:
 
-    http://localhost:5001  traefik-forge      -> silo-forge-a | silo-forge-b
-    http://localhost:5002  traefik-heattreat  -> silo-heattreat-a | silo-heattreat-b
+    http://localhost:5001  traefik-us  -> silo-us-a | silo-us-b
+    http://localhost:5002  traefik-eu  -> silo-eu-a | silo-eu-b
 
   Individual silo HTTP ports (:8080), Orleans silo (:11111) and gateway
   (:30000) ports, and Azurite endpoints live on internal Compose
-  networks only (forge-net, heattreat-net, wan). See docker-compose.yml
+  networks only (us-net, eu-net, wan). See docker-compose.yml
   for the topology, and plan.md §14 for rationale.
 
   For the legacy host-process launcher (no Docker), use run-legacy.ps1.
@@ -30,7 +30,7 @@
   Skip "docker compose build" — reuse the cached msmfg-host:dev image.
 
 .PARAMETER Service
-  Restrict -Logs to a single compose service, e.g. silo-forge-a.
+  Restrict -Logs to a single compose service, e.g. silo-us-a.
 
 .EXAMPLE
   ./run.ps1
@@ -118,8 +118,8 @@ try {
     }
 
     $urls = @(
-        @{ Name = "traefik-forge     (forge cluster)";     Port = 5001 }
-        @{ Name = "traefik-heattreat (heattreat cluster)"; Port = 5002 }
+        @{ Name = "traefik-us (US cluster)"; Port = 5001 }
+        @{ Name = "traefik-eu (EU cluster)"; Port = 5002 }
     )
 
     foreach ($u in $urls) {
@@ -130,23 +130,23 @@ try {
             Write-Host "TIMEOUT" -ForegroundColor Red
             # Traefik itself comes up in ~1s; a timeout here usually means
             # no healthy backend silo, so point the operator at silo logs.
-            Write-Host "  Check: docker compose logs traefik-forge traefik-heattreat"
-            Write-Host "  Check: docker compose logs silo-forge-a silo-forge-b silo-heattreat-a silo-heattreat-b"
+            Write-Host "  Check: docker compose logs traefik-us traefik-eu"
+            Write-Host "  Check: docker compose logs silo-us-a silo-us-b silo-eu-a silo-eu-b"
         }
     }
 
     Write-Host ""
     Write-Host "Cluster URLs (sticky-LB via Traefik):" -ForegroundColor Cyan
-    Write-Host "  http://localhost:5001  forge     (routes to silo-forge-a | silo-forge-b)"
-    Write-Host "  http://localhost:5002  heattreat (routes to silo-heattreat-a | silo-heattreat-b)"
+    Write-Host "  http://localhost:5001  US cluster (routes to silo-us-a | silo-us-b)"
+    Write-Host "  http://localhost:5002  EU cluster (routes to silo-eu-a | silo-eu-b)"
     Write-Host ""
     Write-Host "Useful commands:" -ForegroundColor Cyan
-    Write-Host "  ./run.ps1 -Logs                       tail all silo logs"
-    Write-Host "  ./run.ps1 -Logs -Service silo-forge-a tail one silo"
-    Write-Host "  docker compose ps                     show container state"
-    Write-Host "  docker network disconnect msmfg_wan msmfg-silo-forge-a"
-    Write-Host "                                        simulate a cross-cluster partition"
-    Write-Host "  ./run.ps1 -Down                       stop + wipe volumes"
+    Write-Host "  ./run.ps1 -Logs                    tail all silo logs"
+    Write-Host "  ./run.ps1 -Logs -Service silo-us-a tail one silo"
+    Write-Host "  docker compose ps                  show container state"
+    Write-Host "  docker network disconnect msmfg_wan msmfg-silo-us-a"
+    Write-Host "                                     simulate a cross-cluster partition"
+    Write-Host "  ./run.ps1 -Down                    stop + wipe volumes"
 }
 finally {
     Pop-Location

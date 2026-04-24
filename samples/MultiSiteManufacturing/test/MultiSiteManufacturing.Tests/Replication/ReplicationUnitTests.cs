@@ -19,11 +19,11 @@ public sealed class ReplogKeyCodecTests
     public void Encode_and_decode_round_trip_preserves_components()
     {
         var hlc = new HybridLogicalClock { WallClockTicks = 1234567890123456789, Counter = 42 };
-        var encoded = ReplogKeyCodec.Encode(hlc, "forge", ReplicationOp.Set, "mfg-facts/HPT-PART-2028-00001/0001");
+        var encoded = ReplogKeyCodec.Encode(hlc, "us", ReplicationOp.Set, "mfg-facts/HPT-PART-2028-00001/0001");
 
         Assert.That(ReplogKeyCodec.TryDecode(encoded, out var decodedHlc, out var cluster, out var op, out var key), Is.True);
         Assert.That(decodedHlc, Is.EqualTo(hlc));
-        Assert.That(cluster, Is.EqualTo("forge"));
+        Assert.That(cluster, Is.EqualTo("us"));
         Assert.That(op, Is.EqualTo(ReplicationOp.Set));
         Assert.That(key, Is.EqualTo("mfg-facts/HPT-PART-2028-00001/0001"));
     }
@@ -34,13 +34,13 @@ public sealed class ReplogKeyCodecTests
         var early = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 };
         var later = new HybridLogicalClock { WallClockTicks = 100, Counter = 1 };
 
-        var forgeEarly = ReplogKeyCodec.Encode(early, "forge", ReplicationOp.Set, "k");
-        var heatEarly = ReplogKeyCodec.Encode(early, "heattreat", ReplicationOp.Set, "k");
-        var forgeLater = ReplogKeyCodec.Encode(later, "forge", ReplicationOp.Set, "k");
+        var euEarly = ReplogKeyCodec.Encode(early, "eu", ReplicationOp.Set, "k");
+        var usEarly = ReplogKeyCodec.Encode(early, "us", ReplicationOp.Set, "k");
+        var euLater = ReplogKeyCodec.Encode(later, "eu", ReplicationOp.Set, "k");
 
-        Assert.That(string.CompareOrdinal(forgeEarly, heatEarly), Is.LessThan(0),
-            "Same HLC: 'forge' must sort before 'heattreat'");
-        Assert.That(string.CompareOrdinal(heatEarly, forgeLater), Is.LessThan(0),
+        Assert.That(string.CompareOrdinal(euEarly, usEarly), Is.LessThan(0),
+            "Same HLC: 'eu' must sort before 'us'");
+        Assert.That(string.CompareOrdinal(usEarly, euLater), Is.LessThan(0),
             "Later HLC must sort above earlier HLC regardless of cluster");
     }
 
@@ -56,8 +56,8 @@ public sealed class ReplogKeyCodecTests
     public void StartAfter_is_strictly_above_cursor()
     {
         var cursor = new HybridLogicalClock { WallClockTicks = 100, Counter = 5 };
-        var atCursor = ReplogKeyCodec.Encode(cursor, "forge", ReplicationOp.Set, "k");
-        var start = ReplogKeyCodec.StartAfter(cursor, "forge");
+        var atCursor = ReplogKeyCodec.Encode(cursor, "us", ReplicationOp.Set, "k");
+        var start = ReplogKeyCodec.StartAfter(cursor, "us");
         Assert.That(string.CompareOrdinal(start, atCursor), Is.GreaterThan(0));
     }
 
@@ -90,9 +90,9 @@ public sealed class ReplicationTopologyTests
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Replication:LocalCluster"] = "forge",
+                ["Replication:LocalCluster"] = "us",
                 ["Replication:SharedSecret"] = "s",
-                ["Replication:Peers:0:Name"] = "heattreat",
+                ["Replication:Peers:0:Name"] = "eu",
                 ["Replication:Peers:0:BaseUrl"] = "http://localhost:5003",
                 ["Replication:ReplicatedTrees:0"] = "mfg-facts",
                 ["Replication:ReplicatedTrees:1"] = "mfg-site-activity-index",
@@ -103,10 +103,10 @@ public sealed class ReplicationTopologyTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(topo.LocalCluster, Is.EqualTo("forge"));
+            Assert.That(topo.LocalCluster, Is.EqualTo("us"));
             Assert.That(topo.SharedSecret, Is.EqualTo("s"));
             Assert.That(topo.Peers, Has.Count.EqualTo(1));
-            Assert.That(topo.Peers[0].Name, Is.EqualTo("heattreat"));
+            Assert.That(topo.Peers[0].Name, Is.EqualTo("eu"));
             Assert.That(topo.Peers[0].BaseUrls, Has.Count.EqualTo(1));
             Assert.That(topo.Peers[0].BaseUrls[0].ToString(), Is.EqualTo("http://localhost:5003/"));
             Assert.That(topo.ReplicatedTrees, Is.EquivalentTo(new[] { "mfg-facts", "mfg-site-activity-index" }));
@@ -122,9 +122,9 @@ public sealed class ReplicationTopologyTests
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Replication:LocalCluster"] = "forge",
+                ["Replication:LocalCluster"] = "us",
                 ["Replication:SharedSecret"] = "s",
-                ["Replication:Peers:0:Name"] = "heattreat",
+                ["Replication:Peers:0:Name"] = "eu",
                 ["Replication:Peers:0:BaseUrl"] = "http://localhost:5003",
             })
             .Build();
@@ -139,9 +139,9 @@ public sealed class ReplicationTopologyTests
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Replication:LocalCluster"] = "forge",
+                ["Replication:LocalCluster"] = "us",
                 ["Replication:SharedSecret"] = "s",
-                ["Replication:Peers:0:Name"] = "heattreat",
+                ["Replication:Peers:0:Name"] = "eu",
                 ["Replication:Peers:0:BaseUrl"] = "not-a-url",
             })
             .Build();
@@ -154,7 +154,7 @@ public sealed class ReplicationTopologyTests
     {
         var topo = new ReplicationTopology
         {
-            LocalCluster = "forge",
+            LocalCluster = "us",
             SharedSecret = "s",
             Peers = [],
             ReplicatedTrees = ["mfg-facts"],
@@ -166,9 +166,9 @@ public sealed class ReplicationTopologyTests
 
     private static ReplicationTopology TopologyWith(params string[] trees) => new()
     {
-        LocalCluster = "forge",
+        LocalCluster = "us",
         SharedSecret = "s",
-        Peers = [new ReplicationPeer("heattreat", [new Uri("http://localhost:5003")])],
+        Peers = [new ReplicationPeer("eu", [new Uri("http://localhost:5003")])],
         ReplicatedTrees = trees,
     };
 

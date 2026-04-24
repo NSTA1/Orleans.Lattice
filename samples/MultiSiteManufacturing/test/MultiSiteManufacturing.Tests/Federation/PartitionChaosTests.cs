@@ -34,7 +34,7 @@ public class PartitionChaosTests
             [baseline, lattice],
             _fixture.GrainFactory,
             NullLogger<FederationRouter>.Instance,
-            new SiloIdentity(isPrimary ? "a" : "b", isPrimary, ClusterName: "forge"));
+            new SiloIdentity(isPrimary ? "a" : "b", isPrimary, ClusterName: "us"));
     }
 
     [Test]

@@ -3,7 +3,7 @@ namespace MultiSiteManufacturing.Host.Replication.Grains;
 /// <summary>
 /// Cluster-wide singleton grain that aggregates replication activity
 /// counters and timestamps for the local cluster. Grain key is the
-/// cluster name (e.g. <c>"forge"</c>), so both silos in the cluster
+/// cluster name (e.g. <c>"us"</c>), so both silos in the cluster
 /// route to the same activation — a UI tab on silo A sees ships
 /// performed by silo B in real time, and the numbers survive a full
 /// cluster restart (persisted to <c>msmfgGrainState</c>).

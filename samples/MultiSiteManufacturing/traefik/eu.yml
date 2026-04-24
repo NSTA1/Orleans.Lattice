@@ -1,43 +1,43 @@
-# Traefik dynamic config for the heattreat cluster (file provider).
-# See traefik/forge.yml for rationale and router-split explanation.
+# Traefik dynamic config for the EU cluster (file provider).
+# See traefik/us.yml for rationale and router-split explanation.
 http:
   routers:
-    heattreat-replicate:
+    eu-replicate:
       rule: "PathPrefix(`/replicate`)"
 
       entryPoints:
         - web
-      service: heattreat-replicate
+      service: eu-replicate
 
-    heattreat-web:
+    eu-web:
       rule: "PathPrefix(`/`)"
       entryPoints:
         - web
-      service: heattreat-web
+      service: eu-web
 
   services:
-    heattreat-replicate:
+    eu-replicate:
       loadBalancer:
         # Round-robin, no sticky cookie: replication POSTs are
         # stateless and either silo can apply a batch.
         servers:
-          - url: "http://silo-heattreat-a:8080"
-          - url: "http://silo-heattreat-b:8080"
+          - url: "http://silo-eu-a:8080"
+          - url: "http://silo-eu-b:8080"
         healthCheck:
           path: "/"
           interval: "2s"
           timeout: "1s"
 
-    heattreat-web:
+    eu-web:
       loadBalancer:
         sticky:
           cookie:
-            name: msmfg_heattreat_affinity
+            name: msmfg_eu_affinity
             httpOnly: true
             sameSite: lax
         servers:
-          - url: "http://silo-heattreat-a:8080"
-          - url: "http://silo-heattreat-b:8080"
+          - url: "http://silo-eu-a:8080"
+          - url: "http://silo-eu-b:8080"
         healthCheck:
           path: "/"
           interval: "2s"

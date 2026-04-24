@@ -67,7 +67,7 @@ public sealed class FederationTestClusterFixture
             [baseline, lattice],
             GrainFactory,
             NullLogger<FederationRouter>.Instance,
-            new SiloIdentity("a", IsPrimary: true, ClusterName: "forge"));
+            new SiloIdentity("a", IsPrimary: true, ClusterName: "us"));
         return (router, baseline, lattice);
     }
 

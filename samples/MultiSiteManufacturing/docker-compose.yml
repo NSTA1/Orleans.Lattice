@@ -1,19 +1,19 @@
 # MultiSiteManufacturing - Docker Compose topology (M14 + Traefik).
 #
 # Two Orleans clusters, each with its own Azurite and its own internal
-# cluster network. There is NO shared silo-to-silo network: a forge
-# silo cannot resolve or open a TCP connection to a heattreat silo,
+# cluster network. There is NO shared silo-to-silo network: a US
+# silo cannot resolve or open a TCP connection to an EU silo,
 # and vice versa. The only bridge between the two clusters is the
 # Traefik reverse proxy in front of each cluster, which is multi-homed
 # onto both cluster networks:
 #
-#   traefik-forge      : forge-net + heattreat-net
-#   traefik-heattreat  : heattreat-net + forge-net
+#   traefik-us    : us-net + eu-net
+#   traefik-eu    : eu-net + us-net
 #
-# That means a forge silo reaches the heattreat cluster by POSTing to
-# `traefik-heattreat` (reachable on forge-net because traefik-heattreat
-# is attached to forge-net) and Traefik then forwards the request onto
-# heattreat-net to one of the heattreat silos. Nothing else crosses.
+# That means a US silo reaches the EU cluster by POSTing to
+# `traefik-eu` (reachable on us-net because traefik-eu
+# is attached to us-net) and Traefik then forwards the request onto
+# eu-net to one of the EU silos. Nothing else crosses.
 #
 # Each Traefik provides its cluster's single public endpoint:
 #   - Sticky-session load balancing across the cluster's two silos for
@@ -22,26 +22,26 @@
 #     for the cross-cluster replication POSTs on /replicate/*.
 #
 # Only TWO host ports are published:
-#   5001 -> traefik-forge     -> sticky LB (UI) + round-robin (replication)
-#   5002 -> traefik-heattreat -> sticky LB (UI) + round-robin (replication)
+#   5001 -> traefik-us -> sticky LB (UI) + round-robin (replication)
+#   5002 -> traefik-eu -> sticky LB (UI) + round-robin (replication)
 #
 # Silo HTTP (:8080), Orleans silo (:11111), and gateway (:30000) ports
 # are `expose`-d only on their internal networks - nothing silo-side
 # is reachable from the host.
 #
 # Networks (full membership):
-#   forge-net:      azurite-forge, silo-forge-{a,b}, traefik-forge,
-#                   traefik-heattreat   (as the cross-cluster ingress)
-#   heattreat-net:  azurite-heattreat, silo-heattreat-{a,b}, traefik-heattreat,
-#                   traefik-forge       (as the cross-cluster ingress)
+#   us-net: azurite-us, silo-us-{a,b}, traefik-us,
+#           traefik-eu   (as the cross-cluster ingress)
+#   eu-net: azurite-eu, silo-eu-{a,b}, traefik-eu,
+#           traefik-us   (as the cross-cluster ingress)
 #
 # Cluster isolation properties:
-#   silo-forge-a  -> silo-forge-b       : direct (forge-net)           OK
-#   silo-forge-*  -> traefik-heattreat  : direct (forge-net)           OK
-#   silo-forge-*  -> silo-heattreat-*   : NO SHARED NETWORK - blocked  OK
+#   silo-us-a  -> silo-us-b     : direct (us-net)             OK
+#   silo-us-*  -> traefik-eu    : direct (us-net)             OK
+#   silo-us-*  -> silo-eu-*     : NO SHARED NETWORK - blocked OK
 #
 # Replication path in this topology:
-#   silo-forge-X  --(forge-net)--> traefik-heattreat --(heattreat-net)--> silo-heattreat-{a|b}
+#   silo-us-X  --(us-net)--> traefik-eu --(eu-net)--> silo-eu-{a|b}
 #
 # The peer config lists a single URL per peer (the peer's Traefik,
 # resolvable on the local cluster network because the peer Traefik is
@@ -53,12 +53,12 @@
 # rotation within ~2s.
 #
 # Simulate a cross-cluster partition (Tier 5):
-#   # Sever forge -> heattreat (remove peer Traefik from local cluster net):
-#   docker network disconnect msmfg_forge-net     msmfg-traefik-heattreat
-#   docker network disconnect msmfg_heattreat-net msmfg-traefik-forge
+#   # Sever us -> eu (remove peer Traefik from local cluster net):
+#   docker network disconnect msmfg_us-net msmfg-traefik-eu
+#   docker network disconnect msmfg_eu-net msmfg-traefik-us
 #   # Restore:
-#   docker network connect    msmfg_forge-net     msmfg-traefik-heattreat
-#   docker network connect    msmfg_heattreat-net msmfg-traefik-forge
+#   docker network connect    msmfg_us-net msmfg-traefik-eu
+#   docker network connect    msmfg_eu-net msmfg-traefik-us
 #
 # Disconnecting the peer Traefik from the local cluster net removes
 # the only route from local silos to the peer cluster; the replicator's
@@ -72,14 +72,14 @@
 name: msmfg
 
 networks:
-  forge-net:
+  us-net:
     driver: bridge
-  heattreat-net:
+  eu-net:
     driver: bridge
 
 volumes:
-  azurite-forge-data:
-  azurite-heattreat-data:
+  azurite-us-data:
+  azurite-eu-data:
 
 x-silo-common: &silo-common
   build:
@@ -118,10 +118,10 @@ x-traefik-common: &traefik-common
   restart: unless-stopped
 
 services:
-  # ----- Forge cluster --------------------------------------------------
-  azurite-forge:
+  # ----- US cluster -----------------------------------------------------
+  azurite-us:
     image: mcr.microsoft.com/azure-storage/azurite:latest
-    container_name: msmfg-azurite-forge
+    container_name: msmfg-azurite-us
     restart: unless-stopped
     command:
       - "azurite"
@@ -135,9 +135,9 @@ services:
       - "/data"
       - "--skipApiVersionCheck"
     volumes:
-      - azurite-forge-data:/data
+      - azurite-us-data:/data
     networks:
-      - forge-net
+      - us-net
     healthcheck:
       # Azurite ships on a Node base image so the healthcheck uses node
       # to probe the Table port - no curl/nc available in the image.
@@ -147,31 +147,31 @@ services:
       retries: 20
       start_period: 5s
 
-  traefik-forge:
+  traefik-us:
     <<: *traefik-common
-    container_name: msmfg-traefik-forge
+    container_name: msmfg-traefik-us
     command:
       - "--providers.file.filename=/etc/traefik/dynamic.yml"
       - "--providers.file.watch=true"
       - "--entrypoints.web.address=:80"
       - "--log.level=INFO"
     volumes:
-      - ./traefik/forge.yml:/etc/traefik/dynamic.yml:ro
+      - ./traefik/us.yml:/etc/traefik/dynamic.yml:ro
     ports:
       - "5001:80"
     networks:
-      # Multi-homed: forge-net reaches its own backend silos; heattreat-net
-      # makes this Traefik the cross-cluster ingress for heattreat silos
+      # Multi-homed: us-net reaches its own backend silos; eu-net
+      # makes this Traefik the cross-cluster ingress for EU silos
       # (they POST /replicate/* here). No `wan` - the two cluster nets
       # are the only bridges, and only Traefiks span both.
-      - forge-net
-      - heattreat-net
+      - us-net
+      - eu-net
 
-  silo-forge-a:
+  silo-us-a:
     <<: *silo-common
-    container_name: msmfg-silo-forge-a
+    container_name: msmfg-silo-us-a
     depends_on:
-      azurite-forge:
+      azurite-us:
         condition: service_healthy
     environment:
       ASPNETCORE_URLS: "http://+:8080"
@@ -180,31 +180,31 @@ services:
       Cluster__SiloPortB: "11111"
       Cluster__GatewayPortA: "30000"
       Cluster__GatewayPortB: "30000"
-      CLUSTER_NAME: "forge"
+      CLUSTER_NAME: "us"
       SILO_ID: "a"
       Seeder__Enabled: "true"
-      ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-forge:10000/devstoreaccount1;QueueEndpoint=http://azurite-forge:10001/devstoreaccount1;TableEndpoint=http://azurite-forge:10002/devstoreaccount1;"
+      ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-us:10000/devstoreaccount1;QueueEndpoint=http://azurite-us:10001/devstoreaccount1;TableEndpoint=http://azurite-us:10002/devstoreaccount1;"
       # Replication peers: a single URL per peer pointing at the peer's
-      # Traefik. The peer Traefik is resolvable on forge-net because it
-      # is multi-homed there; forge silos have NO route to heattreat
-      # silos directly (no shared network). Traefik's round-robin
+      # Traefik. The peer Traefik is resolvable on us-net because it
+      # is multi-homed there; US silos have NO route to EU silos
+      # directly (no shared network). Traefik's round-robin
       # /replicate/* router + active health check handles per-silo
       # failover on the peer side. The multi-URL BaseUrls list is still
       # supported (see ReplicationHttpClient) and is recommended for
       # multi-zone topologies where each zone has its own Traefik.
-      Replication__Peers__0__Name: "heattreat"
-      Replication__Peers__0__BaseUrls__0: "http://traefik-heattreat:80"
-    command: ["--cluster", "forge", "--silo-id", "a"]
+      Replication__Peers__0__Name: "eu"
+      Replication__Peers__0__BaseUrls__0: "http://traefik-eu:80"
+    command: ["--cluster", "us", "--silo-id", "a"]
     networks:
-      - forge-net
+      - us-net
 
-  silo-forge-b:
+  silo-us-b:
     <<: *silo-common
-    container_name: msmfg-silo-forge-b
+    container_name: msmfg-silo-us-b
     depends_on:
-      azurite-forge:
+      azurite-us:
         condition: service_healthy
-      silo-forge-a:
+      silo-us-a:
         condition: service_started
     environment:
       ASPNETCORE_URLS: "http://+:8080"
@@ -213,20 +213,20 @@ services:
       Cluster__SiloPortB: "11111"
       Cluster__GatewayPortA: "30000"
       Cluster__GatewayPortB: "30000"
-      CLUSTER_NAME: "forge"
+      CLUSTER_NAME: "us"
       SILO_ID: "b"
       Seeder__Enabled: "false"
-      ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-forge:10000/devstoreaccount1;QueueEndpoint=http://azurite-forge:10001/devstoreaccount1;TableEndpoint=http://azurite-forge:10002/devstoreaccount1;"
-      Replication__Peers__0__Name: "heattreat"
-      Replication__Peers__0__BaseUrls__0: "http://traefik-heattreat:80"
-    command: ["--cluster", "forge", "--silo-id", "b"]
+      ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-us:10000/devstoreaccount1;QueueEndpoint=http://azurite-us:10001/devstoreaccount1;TableEndpoint=http://azurite-us:10002/devstoreaccount1;"
+      Replication__Peers__0__Name: "eu"
+      Replication__Peers__0__BaseUrls__0: "http://traefik-eu:80"
+    command: ["--cluster", "us", "--silo-id", "b"]
     networks:
-      - forge-net
+      - us-net
 
-  # ----- Heattreat cluster ---------------------------------------------
-  azurite-heattreat:
+  # ----- EU cluster -----------------------------------------------------
+  azurite-eu:
     image: mcr.microsoft.com/azure-storage/azurite:latest
-    container_name: msmfg-azurite-heattreat
+    container_name: msmfg-azurite-eu
     restart: unless-stopped
     command:
       - "azurite"
@@ -240,9 +240,9 @@ services:
       - "/data"
       - "--skipApiVersionCheck"
     volumes:
-      - azurite-heattreat-data:/data
+      - azurite-eu-data:/data
     networks:
-      - heattreat-net
+      - eu-net
     healthcheck:
       test: ["CMD-SHELL", "node -e \"require('net').createConnection(10002,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))\""]
       interval: 5s
@@ -250,30 +250,30 @@ services:
       retries: 20
       start_period: 5s
 
-  traefik-heattreat:
+  traefik-eu:
     <<: *traefik-common
-    container_name: msmfg-traefik-heattreat
+    container_name: msmfg-traefik-eu
     command:
       - "--providers.file.filename=/etc/traefik/dynamic.yml"
       - "--providers.file.watch=true"
       - "--entrypoints.web.address=:80"
       - "--log.level=INFO"
     volumes:
-      - ./traefik/heattreat.yml:/etc/traefik/dynamic.yml:ro
+      - ./traefik/eu.yml:/etc/traefik/dynamic.yml:ro
     ports:
       - "5002:80"
     networks:
-      # Multi-homed: heattreat-net reaches its own backend silos;
-      # forge-net makes this Traefik the cross-cluster ingress for
-      # forge silos (they POST /replicate/* here).
-      - heattreat-net
-      - forge-net
+      # Multi-homed: eu-net reaches its own backend silos;
+      # us-net makes this Traefik the cross-cluster ingress for
+      # US silos (they POST /replicate/* here).
+      - eu-net
+      - us-net
 
-  silo-heattreat-a:
+  silo-eu-a:
     <<: *silo-common
-    container_name: msmfg-silo-heattreat-a
+    container_name: msmfg-silo-eu-a
     depends_on:
-      azurite-heattreat:
+      azurite-eu:
         condition: service_healthy
     environment:
       ASPNETCORE_URLS: "http://+:8080"
@@ -282,23 +282,23 @@ services:
       Cluster__SiloPortB: "11111"
       Cluster__GatewayPortA: "30000"
       Cluster__GatewayPortB: "30000"
-      CLUSTER_NAME: "heattreat"
+      CLUSTER_NAME: "eu"
       SILO_ID: "a"
       Seeder__Enabled: "false"
-      ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-heattreat:10000/devstoreaccount1;QueueEndpoint=http://azurite-heattreat:10001/devstoreaccount1;TableEndpoint=http://azurite-heattreat:10002/devstoreaccount1;"
-      Replication__Peers__0__Name: "forge"
-      Replication__Peers__0__BaseUrls__0: "http://traefik-forge:80"
-    command: ["--cluster", "heattreat", "--silo-id", "a"]
+      ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-eu:10000/devstoreaccount1;QueueEndpoint=http://azurite-eu:10001/devstoreaccount1;TableEndpoint=http://azurite-eu:10002/devstoreaccount1;"
+      Replication__Peers__0__Name: "us"
+      Replication__Peers__0__BaseUrls__0: "http://traefik-us:80"
+    command: ["--cluster", "eu", "--silo-id", "a"]
     networks:
-      - heattreat-net
+      - eu-net
 
-  silo-heattreat-b:
+  silo-eu-b:
     <<: *silo-common
-    container_name: msmfg-silo-heattreat-b
+    container_name: msmfg-silo-eu-b
     depends_on:
-      azurite-heattreat:
+      azurite-eu:
         condition: service_healthy
-      silo-heattreat-a:
+      silo-eu-a:
         condition: service_started
     environment:
       ASPNETCORE_URLS: "http://+:8080"
@@ -307,13 +307,13 @@ services:
       Cluster__SiloPortB: "11111"
       Cluster__GatewayPortA: "30000"
       Cluster__GatewayPortB: "30000"
-      CLUSTER_NAME: "heattreat"
+      CLUSTER_NAME: "eu"
       SILO_ID: "b"
       Seeder__Enabled: "false"
-      ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-heattreat:10000/devstoreaccount1;QueueEndpoint=http://azurite-heattreat:10001/devstoreaccount1;TableEndpoint=http://azurite-heattreat:10002/devstoreaccount1;"
-      Replication__Peers__0__Name: "forge"
-      Replication__Peers__0__BaseUrls__0: "http://traefik-forge:80"
-    command: ["--cluster", "heattreat", "--silo-id", "b"]
+      ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-eu:10000/devstoreaccount1;QueueEndpoint=http://azurite-eu:10001/devstoreaccount1;TableEndpoint=http://azurite-eu:10002/devstoreaccount1;"
+      Replication__Peers__0__Name: "us"
+      Replication__Peers__0__BaseUrls__0: "http://traefik-us:80"
+    command: ["--cluster", "eu", "--silo-id", "b"]
     networks:
-      - heattreat-net
+      - eu-net
 

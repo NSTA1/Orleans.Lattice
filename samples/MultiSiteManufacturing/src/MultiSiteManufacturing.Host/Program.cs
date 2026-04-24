@@ -16,13 +16,13 @@ using MultiSiteManufacturing.Host.Replication;
 var builder = WebApplication.CreateBuilder(args);
 
 // Cluster-aware bootstrap. The sample launches as one of two
-// independent Orleans clusters — "forge" and "heattreat" — selected via
+// independent Orleans clusters — "us" and "eu" — selected via
 // the --cluster command-line argument. Each cluster has its own ClusterId,
 // its own Azurite instance, and its own HTTP port range. A per-cluster
 // overlay file (appsettings.cluster.{name}.json) supplies connection
 // strings, ports, and the replication topology; it's merged on top of
 // appsettings.json so shared defaults still apply.
-var clusterName = ResolveArg(args, "--cluster", builder.Configuration["CLUSTER_NAME"]) ?? "forge";
+var clusterName = ResolveArg(args, "--cluster", builder.Configuration["CLUSTER_NAME"]) ?? "us";
 builder.Configuration.AddJsonFile($"appsettings.cluster.{clusterName}.json", optional: false, reloadOnChange: false);
 
 // The default WebApplicationBuilder config chain is:
@@ -209,7 +209,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<DashboardBroadcast
 //      silo, `false` forces it off. Useful in docker-compose / CI
 //      where the topology is declarative.
 //   2. Otherwise, the default heuristic runs the seeder only on the
-//      primary silo of the "forge" cluster — the convention the
+//      primary silo of the "us" cluster — the convention the
 //      sample's docker-compose and run.ps1 topologies rely on.
 var isSeeder = false;
 if (!builder.Environment.IsEnvironment("Testing"))
@@ -222,7 +222,7 @@ if (!builder.Environment.IsEnvironment("Testing"))
     else
     {
         isSeeder = isPrimarySilo
-            && string.Equals(clusterName, "forge", StringComparison.OrdinalIgnoreCase);
+            && string.Equals(clusterName, "us", StringComparison.OrdinalIgnoreCase);
     }
 }
 if (isSeeder)
