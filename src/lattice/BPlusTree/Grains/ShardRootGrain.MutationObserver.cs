@@ -39,6 +39,10 @@ internal sealed partial class ShardRootGrain
             // Observers that need per-key resolution must synthesize deletes
             // from the tree's current key set.
             Timestamp = HybridLogicalClock.Zero,
+            // Range deletes read the ambient origin at publish time — there
+            // is no per-key LwwValue to pull from — so replication consumers
+            // can skip re-forwarding ranges that originated on another cluster.
+            OriginClusterId = LatticeOriginContext.Current,
         };
         return mutationObservers.PublishAsync(mutation);
     }

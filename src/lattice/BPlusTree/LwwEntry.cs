@@ -42,9 +42,19 @@ internal readonly record struct LwwEntry
     [Id(4)] public long ExpiresAtTicks { get; init; }
 
     /// <summary>
+    /// Identifier of the cluster that authored the mutation the entry
+    /// represents, or <c>null</c> for a local write. Round-trips verbatim
+    /// through <see cref="LwwValue{T}.OriginClusterId"/> across every raw
+    /// bulk-load / snapshot / saga-pre-value path. Wire-compatible: legacy
+    /// persisted state decodes to <c>null</c>.
+    /// </summary>
+    [Id(5)] public string? OriginClusterId { get; init; }
+
+    /// <summary>
     /// Constructs an <see cref="LwwEntry"/> from a <see cref="LwwValue{T}"/>,
-    /// preserving all LWW metadata (value, timestamp, tombstone flag, and
-    /// expiry).
+
+    /// preserving all LWW metadata (value, timestamp, tombstone flag,
+    /// expiry, and origin cluster id).
     /// </summary>
     public LwwEntry(string key, LwwValue<byte[]> lww)
     {
@@ -53,6 +63,7 @@ internal readonly record struct LwwEntry
         Timestamp = lww.Timestamp;
         IsTombstone = lww.IsTombstone;
         ExpiresAtTicks = lww.ExpiresAtTicks;
+        OriginClusterId = lww.OriginClusterId;
     }
 
     /// <summary>
@@ -64,6 +75,7 @@ internal readonly record struct LwwEntry
         Timestamp = Timestamp,
         IsTombstone = IsTombstone,
         ExpiresAtTicks = ExpiresAtTicks,
+        OriginClusterId = OriginClusterId,
     };
 }
 

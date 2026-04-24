@@ -154,4 +154,31 @@ public sealed class MutationObserverIntegrationTests
         Assert.That(mine[0].Value, Is.EqualTo(new byte[] { 1 }));
         Assert.That(mine[1].Value, Is.EqualTo(new byte[] { 2 }));
     }
+
+    [Test]
+    public async Task SetAsync_stamps_OriginClusterId_end_to_end_through_pipeline()
+    {
+        var tree = await _fixture.CreateTreeAsync("obs-e2e-origin");
+
+        using (LatticeOriginContext.With("cluster-peer"))
+        {
+            await tree.SetAsync("k", Encoding.UTF8.GetBytes("v"));
+        }
+
+        var m = await WaitForAsync(m =>
+            m.Kind == MutationKind.Set && m.Key == "k" && m.TreeId == "obs-e2e-origin");
+        Assert.That(m.OriginClusterId, Is.EqualTo("cluster-peer"));
+    }
+
+    [Test]
+    public async Task SetAsync_publishes_null_origin_when_context_unset()
+    {
+        var tree = await _fixture.CreateTreeAsync("obs-e2e-origin-null");
+
+        await tree.SetAsync("k", [1]);
+
+        var m = await WaitForAsync(m =>
+            m.Kind == MutationKind.Set && m.Key == "k" && m.TreeId == "obs-e2e-origin-null");
+        Assert.That(m.OriginClusterId, Is.Null);
+    }
 }

@@ -263,6 +263,7 @@ internal sealed class AtomicWriteGrain(
                 Value = existed ? raw!.Value.Value : null,
                 Existed = existed,
                 ExpiresAtTicks = existed ? raw!.Value.ExpiresAtTicks : 0,
+                OriginClusterId = existed ? raw!.Value.OriginClusterId : null,
             });
         }
 
@@ -404,29 +405,32 @@ internal sealed class AtomicWriteGrain(
 
             try
             {
-                if (pre.Existed && pre.Value is not null)
+                using (LatticeOriginContext.With(pre.OriginClusterId))
                 {
-                    if (pre.ExpiresAtTicks > 0)
+                    if (pre.Existed && pre.Value is not null)
                     {
-                        // Preserve the original absolute expiry by computing
-                        // the remaining time-to-live against the current wall
-                        // clock. If the entry's expiry has already elapsed,
-                        // treat it as absent and tombstone instead — public
-                        // reads would already hide an expired entry.
-                        var remainingTicks = pre.ExpiresAtTicks - DateTimeOffset.UtcNow.UtcTicks;
-                        if (remainingTicks <= 0)
-                            await lattice.DeleteAsync(pre.Key);
+                        if (pre.ExpiresAtTicks > 0)
+                        {
+                            // Preserve the original absolute expiry by computing
+                            // the remaining time-to-live against the current wall
+                            // clock. If the entry's expiry has already elapsed,
+                            // treat it as absent and tombstone instead — public
+                            // reads would already hide an expired entry.
+                            var remainingTicks = pre.ExpiresAtTicks - DateTimeOffset.UtcNow.UtcTicks;
+                            if (remainingTicks <= 0)
+                                await lattice.DeleteAsync(pre.Key);
+                            else
+                                await lattice.SetAsync(pre.Key, pre.Value, TimeSpan.FromTicks(remainingTicks));
+                        }
                         else
-                            await lattice.SetAsync(pre.Key, pre.Value, TimeSpan.FromTicks(remainingTicks));
+                        {
+                            await lattice.SetAsync(pre.Key, pre.Value);
+                        }
                     }
                     else
                     {
-                        await lattice.SetAsync(pre.Key, pre.Value);
+                        await lattice.DeleteAsync(pre.Key);
                     }
-                }
-                else
-                {
-                    await lattice.DeleteAsync(pre.Key);
                 }
 
                 state.State.NextIndex--;

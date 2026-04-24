@@ -168,7 +168,8 @@ internal sealed partial class BPlusLeafGrain(
                 // The key belongs to this leaf — write it here.
                 state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
                 state.State.Version.Tick(ReplicaId);
-                var entry = LwwValue<byte[]>.CreateWithExpiry(value, state.State.Clock, expiresAtTicks);
+                var entry = LwwValue<byte[]>.CreateWithExpiry(value, state.State.Clock, expiresAtTicks)
+                    with { OriginClusterId = LatticeOriginContext.Current };
                 if (state.State.Entries.TryGetValue(key, out var prev))
                     state.State.Entries[key] = LwwValue<byte[]>.Merge(prev, entry);
                 else
@@ -185,7 +186,8 @@ internal sealed partial class BPlusLeafGrain(
 
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
         state.State.Version.Tick(ReplicaId);
-        var newEntry = LwwValue<byte[]>.CreateWithExpiry(value, state.State.Clock, expiresAtTicks);
+        var newEntry = LwwValue<byte[]>.CreateWithExpiry(value, state.State.Clock, expiresAtTicks)
+            with { OriginClusterId = LatticeOriginContext.Current };
 
         if (state.State.Entries.TryGetValue(key, out var existing))
         {
@@ -235,7 +237,8 @@ internal sealed partial class BPlusLeafGrain(
 
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
         state.State.Version.Tick(ReplicaId);
-        var tombstone = LwwValue<byte[]>.Tombstone(state.State.Clock);
+        var tombstone = LwwValue<byte[]>.Tombstone(state.State.Clock)
+            with { OriginClusterId = LatticeOriginContext.Current };
         state.State.Entries[key] = tombstone;
         await PersistAsync();
         LatticeMetrics.LeafTombstonesCreated.Add(1, LeafTreeTag());
@@ -270,7 +273,8 @@ internal sealed partial class BPlusLeafGrain(
 
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
         state.State.Version.Tick(ReplicaId);
-        var tombstone = LwwValue<byte[]>.Tombstone(state.State.Clock);
+        var tombstone = LwwValue<byte[]>.Tombstone(state.State.Clock)
+            with { OriginClusterId = LatticeOriginContext.Current };
 
         foreach (var key in keysToDelete)
         {
