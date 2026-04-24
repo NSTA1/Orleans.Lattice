@@ -7,8 +7,8 @@ using static MultiSiteManufacturing.Tests.Federation.FactFixtures;
 namespace MultiSiteManufacturing.Tests.Federation;
 
 /// <summary>
-/// Covers the <see cref="ChaosPreset.SiloPartition"/> router filter
-/// (plan §M12c): when the partition flag is set, each silo accepts
+/// Covers the <see cref="ChaosPreset.ClusterSplit"/> router filter:
+/// when the partition flag is set, each silo inside a cluster accepts
 /// only the half of the serial-hash space it owns; ClearAll heals.
 /// </summary>
 [TestFixture]
@@ -102,17 +102,34 @@ public class PartitionChaosTests
     }
 
     [Test]
-    public async Task SiloPartition_preset_sets_partition_flag()
+    public async Task ClusterSplit_preset_sets_partition_flag()
     {
         var router = BuildRouter(isPrimary: true);
         await router.ConfigurePartitionAsync(false);
 
-        await router.ApplyPresetAsync(ChaosPreset.SiloPartition);
+        await router.ApplyPresetAsync(ChaosPreset.ClusterSplit);
 
         Assert.That(await router.IsPartitionedAsync(), Is.True);
 
-        // Leave the flag cleared so subsequent tests aren''t poisoned.
+        // Leave the flag cleared so subsequent tests aren't poisoned.
         await router.ConfigurePartitionAsync(false);
+    }
+
+    [Test]
+    public async Task ReplicationDisconnect_preset_sets_disconnect_flag()
+    {
+        var router = BuildRouter(isPrimary: true);
+        var grain = _fixture.GrainFactory
+            .GetGrain<IReplicationDisconnectGrain>(IReplicationDisconnectGrain.SingletonKey);
+        await grain.SetDisconnectedAsync(false);
+
+        await router.ApplyPresetAsync(ChaosPreset.ReplicationDisconnect);
+
+        Assert.That(await grain.IsDisconnectedAsync(), Is.True);
+
+        // ClearAll heals both flags.
+        await router.ApplyPresetAsync(ChaosPreset.ClearAll);
+        Assert.That(await grain.IsDisconnectedAsync(), Is.False);
     }
 }
 

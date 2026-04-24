@@ -166,14 +166,22 @@ public sealed class FederationRouter(
         ChaosPreset preset,
         CancellationToken cancellationToken = default)
     {
-        // Partition toggle: SiloPartition sets the flag; ClearAll clears it.
-        if (preset == ChaosPreset.SiloPartition)
+        // Chaos toggles:
+        //  * ClusterSplit         → intra-cluster hash filter on
+        //  * ReplicationDisconnect → cross-cluster HTTP replication paused
+        //  * ClearAll             → both flags cleared
+        if (preset == ChaosPreset.ClusterSplit)
         {
             await grains.GetGrain<IPartitionChaosGrain>(IPartitionChaosGrain.SingletonKey).SetPartitionedAsync(true);
+        }
+        else if (preset == ChaosPreset.ReplicationDisconnect)
+        {
+            await grains.GetGrain<IReplicationDisconnectGrain>(IReplicationDisconnectGrain.SingletonKey).SetDisconnectedAsync(true);
         }
         else if (preset == ChaosPreset.ClearAll)
         {
             await grains.GetGrain<IPartitionChaosGrain>(IPartitionChaosGrain.SingletonKey).SetPartitionedAsync(false);
+            await grains.GetGrain<IReplicationDisconnectGrain>(IReplicationDisconnectGrain.SingletonKey).SetDisconnectedAsync(false);
         }
 
         var drained = await Registry.ApplyPresetAsync(preset);

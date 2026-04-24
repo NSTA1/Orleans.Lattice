@@ -28,7 +28,11 @@
             }
             @if (overview.PartitionActive)
             {
-                <li>inter-silo partition active — CRDT writes diverging until heal</li>
+                <li>cluster split active — CRDT writes diverging until heal</li>
+            }
+            @if (overview.ReplicationDisconnected)
+            {
+                <li>cross-cluster replication disconnected — replog growing locally until heal</li>
             }
         </ul>
     </article>

@@ -87,7 +87,10 @@ public sealed class DashboardBroadcaster : IHostedService
         var partitioned = await _grainFactory
             .GetGrain<IPartitionChaosGrain>(IPartitionChaosGrain.SingletonKey)
             .IsPartitionedAsync();
-        return BuildOverview(sites, backends, partitioned);
+        var replicationDisconnected = await _grainFactory
+            .GetGrain<IReplicationDisconnectGrain>(IReplicationDisconnectGrain.SingletonKey)
+            .IsDisconnectedAsync();
+        return BuildOverview(sites, backends, partitioned, replicationDisconnected);
     }
 
     /// <summary>
@@ -359,7 +362,8 @@ public sealed class DashboardBroadcaster : IHostedService
     private static ChaosOverview BuildOverview(
         IReadOnlyList<SiteState> sites,
         IReadOnlyList<BackendChaosState> backends,
-        bool partitionActive)
+        bool partitionActive,
+        bool replicationDisconnected)
     {
         var paused = 0;
         var delayed = 0;
@@ -387,6 +391,7 @@ public sealed class DashboardBroadcaster : IHostedService
             ReorderingSites = reordering,
             FlakyBackends = flaky,
             PartitionActive = partitionActive,
+            ReplicationDisconnected = replicationDisconnected,
         };
     }
 

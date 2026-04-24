@@ -139,17 +139,35 @@ public enum ChaosPreset
     BaselineReorderStorm,
 
     /// <summary>
-    /// Simulates an inter-silo network partition (plan §M12c). When
-    /// active, each silo accepts only writes for parts whose serial
-    /// hashes to its own "half" of the cluster — silo A keeps the
-    /// even-hash parts, silo B keeps the odd-hash parts — and drops
-    /// the rest on the floor at router ingress. The partition is
-    /// simulation-only: the shared lattice tree still reflects every
-    /// accepted write, so on heal (ClearAll or a direct
-    /// ConfigurePartitionAsync call) both silos converge immediately.
-    /// This is <i>not</i> a true Orleans transport-level partition;
-    /// it exists to let a demo show "two browser tabs write different
-    /// subsets during a partition, both sets are visible after heal".
+    /// Simulates an inter-silo network partition between the two silos
+    /// inside a single Orleans cluster. When active, each silo accepts
+    /// only writes for parts whose serial hashes to its own "half" of
+    /// the cluster — silo A keeps the even-hash parts, silo B keeps the
+    /// odd-hash parts — and drops the rest on the floor at router
+    /// ingress. The split is simulation-only: the shared lattice tree
+    /// still reflects every accepted write, so on heal (ClearAll or a
+    /// direct ConfigurePartitionAsync call) both silos converge
+    /// immediately. This is <i>not</i> a true Orleans transport-level
+    /// partition; it exists to let a demo show "two browser tabs write
+    /// different subsets during a split, both sets are visible after
+    /// heal". Scope: intra-cluster only — has no effect on cross-cluster
+    /// HTTP replication (use <see cref="ReplicationDisconnect"/> for
+    /// that).
     /// </summary>
-    SiloPartition,
+    ClusterSplit,
+
+    /// <summary>
+    /// Pauses cross-cluster HTTP replication in both directions.
+    /// Outbound: <c>ReplicatorGrain.TickAsync</c> early-returns without
+    /// shipping batches. Inbound: <c>POST /replicate/{tree}</c> returns
+    /// HTTP 503 so the peer backs off. The local replog keeps growing
+    /// while disconnected; on <see cref="ClearAll"/> the flag clears
+    /// and replication resumes from the current cursor, catching the
+    /// peer up with the accumulated backlog. This is the app-level
+    /// equivalent of <c>docker network disconnect msmfg_wan</c> — it
+    /// lets the operator demonstrate cross-cluster divergence and
+    /// convergence-on-heal from the browser without touching the
+    /// compose CLI.
+    /// </summary>
+    ReplicationDisconnect,
 }

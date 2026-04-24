@@ -51,18 +51,26 @@ public sealed record ChaosOverview
     public required IReadOnlyList<string> FlakyBackends { get; init; }
 
     /// <summary>
-    /// True when the simulated inter-silo partition is active
-    /// (plan §M12c). Surfaced on the chaos banner so operators can see
-    /// at a glance why two silos may be disagreeing.
+    /// True when the simulated inter-silo cluster-split partition is
+    /// active. Surfaced on the chaos banner so operators can see at a
+    /// glance why two silos inside one cluster may be disagreeing.
     /// </summary>
     public required bool PartitionActive { get; init; }
+
+    /// <summary>
+    /// True when the cross-cluster replication-disconnect chaos preset
+    /// is active. Outbound ship + inbound apply are both paused; the
+    /// local replog grows until <c>ClearAll</c> resumes replication.
+    /// </summary>
+    public required bool ReplicationDisconnected { get; init; }
 
     /// <summary>True if any chaos knob anywhere is engaged.</summary>
     public bool Any => PausedSites > 0
         || DelayedSites > 0
         || ReorderingSites > 0
         || FlakyBackends.Count > 0
-        || PartitionActive;
+        || PartitionActive
+        || ReplicationDisconnected;
 }
 
 /// <summary>

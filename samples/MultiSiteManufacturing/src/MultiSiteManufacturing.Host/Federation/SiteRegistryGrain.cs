@@ -83,9 +83,12 @@ internal sealed class SiteRegistryGrain(IGrainFactory grains) : Grain, ISiteRegi
                     },
                 };
                 break;
-            case ChaosPreset.SiloPartition:
+            case ChaosPreset.ClusterSplit:
+            case ChaosPreset.ReplicationDisconnect:
                 // No site / backend knobs — the router handles the
-                // partition flag directly via IPartitionChaosGrain.
+                // cluster-split flag via IPartitionChaosGrain and the
+                // replication-disconnect flag via
+                // IReplicationDisconnectGrain.
                 siteTargets = [];
                 backendTargets = EmptyBackendTargets;
                 break;

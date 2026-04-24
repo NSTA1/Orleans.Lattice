@@ -53,7 +53,7 @@ concrete vertical. The sample must:
   host-process launcher (`run-legacy.ps1`) remains available for the
   "no Docker" quick-start.
 - True Orleans transport-level partition at the router layer. M12c
-  simulates an inter-silo partition via a router-level hash filter; it
+  simulates an intra-cluster split via a router-level hash filter; it
   does not drop packets between silos. (M14 adds a genuine Tier-5
   transport-level partition option via `docker network disconnect` —
   see §4.3 — but the Tier-4 hash-filter sim still exists as the fast
@@ -225,8 +225,12 @@ Tables used:
   configuration for jitter, transient failure rate, and write
   amplification (see §4.3 Tier 2).
 - `IPartitionChaosGrain` — M12 addition. Singleton flag flipped by
-  `ChaosPreset.SiloPartition`; consulted by each silo's
-  `FederationRouter.IsDroppedByPartitionAsync` and by `PartCrdtStore`.
+  `ChaosPreset.ClusterSplit`; consulted by each silo's
+  ``FederationRouter.IsDroppedByPartitionAsync` and by `PartCrdtStore`.
+- `IReplicationDisconnectGrain` — M14 addition. Singleton flag flipped by
+  `ChaosPreset.ReplicationDisconnect`; consulted by
+  `ReplicatorGrain.TickAsync` (outbound ship) and the
+  `POST /replicate/{tree}` inbound endpoint (503 short-circuit).
 
 The `FederationRouter` consults `IProcessSiteGrain` when routing each
 fact. This moves chaos state from "ephemeral process memory" to
@@ -244,7 +248,8 @@ from the UI and from tests.
 | 1 | `IProcessSiteGrain.AdmitAsync` (origin site) | Site unavailable, WAN latency, out-of-order delivery from a region | `IsPaused`, `DelayMs`, `ReorderEnabled` | Pause + delay built in M4; reorder buffer wired in M7 |
 | 2 | `ChaosFactBackend : IFactBackend` decorator (per backend) | Transient storage failure, per-call jitter, duplicate writes; applied to one backend only to create baseline-vs-lattice divergence | `JitterMsMin`, `JitterMsMax`, `TransientFailureRate`, `WriteAmplificationRate` on `IBackendChaosGrain` keyed by backend name | M7 |
 | 3 | Reorder buffer inside `ProcessSiteGrain` | Cross-site out-of-order arrival after a regional pause lifts | `ReorderEnabled` flag on `SiteConfig` | M7 |
-| 4 | `FederationRouter.IsDroppedByPartitionAsync` + `PartCrdtStore` shadow prefix | Simulated inter-silo partition (not true transport drop) | `IPartitionChaosGrain.IsPartitioned`, toggled by `ChaosPreset.SiloPartition` | M12 |
+| 4 | `FederationRouter.IsDroppedByPartitionAsync` + `PartCrdtStore` shadow prefix | Simulated inter-silo partition (not true transport drop) | `IPartitionChaosGrain.IsPartitioned`, toggled by `ChaosPreset.ClusterSplit` | M12 |
+| 4b | `ReplicatorGrain.TickAsync` early-return + `POST /replicate/{tree}` 503 | App-level cross-cluster replication pause — outbound ship and inbound apply both suppressed; replog grows locally, resumes from cursor on heal | `IReplicationDisconnectGrain.IsDisconnected`, toggled by `ChaosPreset.ReplicationDisconnect` | M14 |
 | 5 | `docker network disconnect msmfg_wan <silo>` | **Genuine** cross-cluster transport partition — silos on the disconnected container can't reach the peer cluster's `/replicate/{tree}` endpoint; replog grows locally, replicator backs off, replay resumes after `docker network connect`. | Manual `docker network` commands (Compose-only) | M14 |
 
 Storage-provider-level chaos (wrapping the `TableServiceClient` itself)
@@ -273,10 +278,10 @@ samples/MultiSiteManufacturing/
 │   │       ├── common.proto
 │   │       ├── inventory.proto
 │   │       ├── facts.proto
+│   │       ├── facts.proto
 │   │       ├── sites.proto
 │   │       └── compliance.proto
 │   └── MultiSiteManufacturing.Host/                  (net10.0, Microsoft.NET.Sdk.Web)
-│       ├── Program.cs
 │       ├── Domain/         (shared POCO / records, fold, next-action resolver)
 │       ├── Baseline/       (baseline backend + grains)
 │       ├── Lattice/        (lattice backend + fact store + CRDT store + site activity index)
@@ -354,6 +359,7 @@ presets) to the per-backend `IBackendChaosGrain` instances.
 rpc GetPartCompliance   (GetPartComplianceRequest)   returns (PartComplianceView);
 rpc WatchDivergence     (google.protobuf.Empty)      returns (stream DivergenceReport);
 ```
+```
 
 `DivergenceReport` is the "baseline says X, lattice says Y" feed — one row
 per part where the two backends currently disagree, pushed whenever the
@@ -361,7 +367,6 @@ set changes. Divergence emerges organically from chaos-induced reorder
 (no scripted trigger).
 
 ## 7. UI design (Blazor Server)
-
 ### 7.1 Layout
 
 ```
@@ -371,8 +376,8 @@ set changes. Divergence emerges organically from chaos-induced reorder
 │  Filters: family [▼]  state [▼]  site [▼]            [+ New part]    │
 ├─────────────────────────────────────────────────────────────────────┤
 │  Inventory                                                           │
+│  Inventory                                                           │
 │  ┌──────────────┬────────┬──────────┬──────────┬───────┬──────────┐  │
-│  │ SN           │ Stage  │ Baseline │ Lattice  │ Facts │ Actions  │  │
 │  │ HPT-...142   │ NDT    │ [Review] │ [Nominal]│   7   │  ✓ Fix   │  │ ← red row
 │  │ HPT-...143   │ Mach.  │ [Nominal]│ [Nominal]│   3   │  ⚠ Race  │  │
 │  │  ...         │  ...   │   ...    │   ...    │  ...  │   ...    │  │
@@ -403,20 +408,28 @@ Sections inside the fly-out:
    knobs at once:
    - *Transoceanic backhaul outage*: pauses Stuttgart CMM Lab +
      Toulouse NDT Lab, delay 4 s.
+     Toulouse NDT Lab, delay 4 s.
    - *Customs hold*: delays Nagoya Heat Treatment by 8 s.
    - *MRB weekend*: pauses Cincinnati MRB entirely.
    - *Lattice storage flakes*: applies a 10 % transient fault rate and
      50–250 ms jitter to the **lattice** backend only — surfaces
      baseline ↔ lattice divergence as red-highlighted rows organically.
-   - *Silo partition* (M12): flips `IPartitionChaosGrain.IsPartitioned`
-     so inter-silo facts and CRDT writes are confined to silo-local
+   - *Cluster split* (M12): flips `IPartitionChaosGrain.IsPartitioned`
      shadow prefixes until the flag clears; `PartitionHealHostedService`
-     promotes the shadows on heal.
-   - *Clear all*: resets every site, every backend, and the partition
-     flag to nominal.
+     promotes the shadows on heal. Intra-cluster only — cross-cluster
+     replication still runs.
+   - *Replication disconnect* (M14): flips
+     `IReplicationDisconnectGrain.IsDisconnected` so the outbound
+     replicator tick is a no-op and the inbound endpoint returns 503.
+     The local replog grows until the flag clears, at which point
+     replication resumes from the current cursor and catches the peer
+     up with the accumulated backlog. The app-level equivalent of
+     `docker network disconnect msmfg_wan`.
+   - *Clear all*: resets every site, every backend, the cluster-split
+     flag, and the replication-disconnect flag to nominal.
 4. **Active chaos summary** — a prominent banner at the top of the
    dashboard (outside the fly-out) showing "⚠ 2 sites paused, 1 delayed,
-   lattice backend flaky, inter-silo partition active" so the operator
+   lattice backend flaky, cluster split active, cross-cluster replication disconnected" so the operator
    can never leave the fly-out open, forget about it, and be confused by
    downstream effects.
 
@@ -532,8 +545,8 @@ the test suite — keeps CI fast and hermetic).
 ## 10. Milestones
 
 | # | Deliverable | Status |
-|---:|---|---|
-| M0 | Plan reviewed + accepted | ✅ done |
+| M6 | Bulk-load seeder + `IInventorySeedStateGrain` + idempotency test + deterministic seed | ✅ done |
+| M7 | **Fault-injection infrastructure (§4.3):** `ChaosFactBackend : IFactBackend` decorator + `IBackendChaosGrain` (jitter, transient fault rate, write amplification) + wire reorder buffer in `ProcessSiteGrain` (Tier 3) + `ListBackends` / `ConfigureBackend` RPCs on `SiteControlService` + "Lattice storage flakes" preset + domain tests for all three tiers | ✅ done |
 | M1 | Repo restructure: scaffold new dir tree, solution/csproj setup, Azurite+Table Storage wired in `Program.cs`, build green on empty projects | ✅ done |
 | M2 | Domain + fold + NUnit fold tests | ✅ done |
 | M3 | Baseline + Lattice backends + `IFactBackend` + fan-out router | ✅ done |

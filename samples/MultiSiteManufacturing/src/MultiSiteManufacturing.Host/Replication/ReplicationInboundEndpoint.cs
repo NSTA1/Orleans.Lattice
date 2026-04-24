@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MultiSiteManufacturing.Host.Federation;
 using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
@@ -60,6 +61,16 @@ internal static class ReplicationInboundEndpoint
                 || !string.Equals(token.ToString(), topology.SharedSecret, StringComparison.Ordinal))
             {
                 return Results.Unauthorized();
+            }
+
+            // Replication-disconnect chaos preset: refuse inbound
+            // replication so the peer backs off. 503 signals a
+            // transient unavailability — the peer will retry.
+            if (await grains
+                .GetGrain<IReplicationDisconnectGrain>(IReplicationDisconnectGrain.SingletonKey)
+                .IsDisconnectedAsync())
+            {
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
             }
 
             if (batch is null

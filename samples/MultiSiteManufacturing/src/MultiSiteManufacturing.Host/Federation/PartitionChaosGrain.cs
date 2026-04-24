@@ -11,7 +11,7 @@ public interface IPartitionChaosGrain : IGrainWithIntegerKey
     /// <summary>Fixed integer key used to address the singleton grain.</summary>
     public const long SingletonKey = 0;
 
-    /// <summary>Returns whether a silo partition is currently in effect.</summary>
+    /// <summary>Returns whether a cluster-split partition is currently in effect.</summary>
     Task<bool> IsPartitionedAsync();
 
     /// <summary>Sets the partition flag and returns the resulting value.</summary>
@@ -47,3 +47,4 @@ public sealed record PartitionChaosState
     /// <summary>True when the silo-partition simulation is active.</summary>
     [Id(0)] public bool IsPartitioned { get; set; }
 }
+

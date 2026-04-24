@@ -1,5 +1,6 @@
 using System.Net.Http;
 using Microsoft.Extensions.Logging;
+using MultiSiteManufacturing.Host.Federation;
 using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
@@ -83,6 +84,16 @@ internal sealed class ReplicatorGrain(
     public async Task TickAsync()
     {
         if (_peer is null)
+        {
+            return;
+        }
+
+        // Replication-disconnect chaos preset: skip outbound ship. The
+        // local replog keeps growing; when the flag clears, the next
+        // tick resumes from the existing cursor.
+        if (await grains
+            .GetGrain<IReplicationDisconnectGrain>(IReplicationDisconnectGrain.SingletonKey)
+            .IsDisconnectedAsync())
         {
             return;
         }
