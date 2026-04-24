@@ -58,16 +58,16 @@ message PresetResult {
   repeated SiteState sites = 1;
 }
 
-// Backend chaos (plan §4.3 Tier 2). Jitter and transient failures are
-// applied to one backend at a time to surface baseline-vs-lattice
-// divergence organically. Nominal config = all zero.
+// Backend chaos. Jitter and transient failures are applied to one
+// backend at a time to surface baseline-vs-lattice divergence
+// organically. Nominal config = all zero.
 message BackendChaosConfig {
   int32 jitter_ms_min = 1;
   int32 jitter_ms_max = 2;
   double transient_failure_rate = 3;
   double write_amplification_rate = 4;
   // When positive, the decorator buffers writes for this many ms then
-  // flushes them in shuffled order (plan §4.3 Tier 2).
+  // flushes them in shuffled order.
   int32 reorder_window_ms = 5;
 }
 

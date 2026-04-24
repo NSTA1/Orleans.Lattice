@@ -8,14 +8,13 @@ using MultiSiteManufacturing.Tests.Federation;
 namespace MultiSiteManufacturing.Tests.Lattice;
 
 /// <summary>
-/// Covers <see cref="PartCrdtStore"/> (plan §M12b): the LWW
-/// current-operator register and the G-Set process-label set, both
-/// backed by an Orleans.Lattice tree. Also covers the plan §M12c
-/// partition-awareness: writes during partition land in a silo-local
-/// shadow prefix, cross-silo reads diverge, and
-/// <see cref="PartCrdtStore.HealLocalShadowAsync"/> promotes the
-/// shadow into the shared prefix so LWW/G-Set merge becomes visible
-/// from every silo.
+/// Covers <see cref="PartCrdtStore"/>: the LWW current-operator
+/// register and the G-Set process-label set, both backed by an
+/// Orleans.Lattice tree. Also covers partition-awareness: writes
+/// during partition land in a silo-local shadow prefix, cross-silo
+/// reads diverge, and <see cref="PartCrdtStore.HealLocalShadowAsync"/>
+/// promotes the shadow into the shared prefix so LWW/G-Set merge
+/// becomes visible from every silo.
 /// </summary>
 [TestFixture]
 public class PartCrdtStoreTests
@@ -161,7 +160,7 @@ public class PartCrdtStoreTests
         Assert.ThrowsAsync<ArgumentException>(() => _store.AddLabelAsync(serial, "   "));
     }
 
-    // ---------- plan §M12c: partition-aware writes + heal ----------
+    // ---------- partition-aware writes + heal ----------
 
     [Test]
     public async Task Partitioned_operator_writes_go_to_shadow_and_are_invisible_to_other_silo()

@@ -8,8 +8,8 @@ namespace MultiSiteManufacturing.Host.Federation;
 /// (<c>msmfgGrainState</c>), so chaos choices survive a process restart.
 /// </summary>
 /// <remarks>
-/// Plan §4.3 Tier 2. The <see cref="ChaosFactBackend"/> decorator reads
-/// the config on every emit; read paths bypass the grain.
+/// The <see cref="ChaosFactBackend"/> decorator reads the config on
+/// every emit; read paths bypass the grain.
 /// </remarks>
 public interface IBackendChaosGrain : IGrainWithStringKey
 {

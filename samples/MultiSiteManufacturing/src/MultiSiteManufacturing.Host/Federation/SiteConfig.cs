@@ -23,7 +23,7 @@ public readonly record struct SiteConfig
     /// When true, the grain accumulates admitted facts in a small
     /// reorder buffer and flushes them in shuffled order once the
     /// buffer fills (window size <see cref="ReorderWindowSize"/>).
-    /// Models cross-site out-of-order arrival (plan §4.3 Tier 3).
+    /// Models cross-site out-of-order arrival.
     /// </summary>
     [Id(2)] public bool ReorderEnabled { get; init; }
 
@@ -71,7 +71,7 @@ public readonly record struct SiteAdmission
     /// <summary>
     /// Hold admission that also returns a shuffled batch of previously
     /// buffered facts for the router to release. Produced when a reorder
-    /// window fills (plan §4.3 Tier 3).
+    /// window fills.
     /// </summary>
     public static SiteAdmission ReorderFlush(IReadOnlyList<Fact> drained) =>
         new() { Forward = false, DelayMs = 0, ShuffledDrain = drained };
@@ -106,7 +106,7 @@ public sealed record SiteConfigureResult
     [Id(1)] public required IReadOnlyList<Fact> Drained { get; init; }
 }
 
-/// <summary>Canned chaos presets exposed in the UI fly-out (plan §7.2).</summary>
+/// <summary>Canned chaos presets exposed in the UI fly-out.</summary>
 public enum ChaosPreset
 {
     /// <summary>Resets every site to <see cref="SiteConfig.Nominal"/>.</summary>
@@ -124,7 +124,7 @@ public enum ChaosPreset
     /// <summary>
     /// Applies a 10% transient-failure rate and 50–250 ms jitter to the
     /// <c>lattice</c> backend only. Drives baseline-vs-lattice divergence
-    /// without touching site chaos (plan §7.2).
+    /// without touching site chaos.
     /// </summary>
     LatticeStorageFlakes,
 

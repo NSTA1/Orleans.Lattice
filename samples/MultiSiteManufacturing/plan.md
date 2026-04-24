@@ -4,7 +4,6 @@
 > 163/163 non-chaos tests green). Docs (README, glossary, architecture,
 > Azurite setup, screenshots) remain as a follow-up outside the milestone
 > numbering.
-> All §12 review items resolved below.
 
 ## 1. Goals
 
@@ -555,13 +554,13 @@ the test suite — keeps CI fast and hermetic).
 | M10 | Chaos fly-out side panel — site chaos rows, backend chaos sliders, canned presets, active-chaos banner | ✅ done |
 | M11 | Federation routing hardening — deterministic fan-out, `FactRouted` / `ChaosConfigChanged` events, dashboard subscriber | ✅ done |
 | M12 | Intra-cluster silo partition (§4.3 Tier 4): `IPartitionChaosGrain`, FNV-1a ordinal hash filter in `FederationRouter`, `PartCrdtStore` shadow-prefix writes, `PartitionHealHostedService`, `SiteActivityIndex` secondary B+ tree, two-silo `run.ps1` launcher | ✅ done |
-| M13 | **Cross-cluster replication (§13):** two independent Orleans clusters (`forge`, `heattreat`) each with two silos and its own Azurite, linked by per-tree HTTP replication over an HLC-ordered replog. Opt-in per tree, loop-broken via `RequestContext`, compacted by a janitor grain, with FUTURE seams for the library-native change-feed + continuous-merge capability. | ✅ done |
-| M14 | **Docker Compose topology (§14):** replace the localhost multi-process launcher with a Compose file that runs two Azurite containers and four silos across three networks (`forge-net`, `heattreat-net`, `wan`), publishing only HTTP ports 5001–5004 to the host. `Program.cs` honours `ASPNETCORE_URLS` and binds Orleans endpoints on `0.0.0.0`. `run.ps1` is a `docker compose` wrapper. Enables Tier-5 genuine transport-level partition via `docker network disconnect`. | ✅ done |
+| M13 | **Cross-cluster replication (§11):** two independent Orleans clusters (`forge`, `heattreat`) each with two silos and its own Azurite, linked by per-tree HTTP replication over an HLC-ordered replog. Opt-in per tree, loop-broken via `RequestContext`, compacted by a janitor grain, with FUTURE seams for the library-native change-feed + continuous-merge capability. | ✅ done |
+| M14 | **Docker Compose topology (§12):** replace the localhost multi-process launcher with a Compose file that runs two Azurite containers and four silos across three networks (`forge-net`, `heattreat-net`, `wan`), publishing only HTTP ports 5001–5004 to the host. `Program.cs` honours `ASPNETCORE_URLS` and binds Orleans endpoints on `0.0.0.0`. `run.ps1` is a `docker compose` wrapper. Enables Tier-5 genuine transport-level partition via `docker network disconnect`. | ✅ done |
 | — | Docs (README.md, `docs/architecture.md`, `docs/glossary.md`, Azurite setup, screenshots) | 🗒️ deferred, outside milestone numbering |
 
-## 13. Cross-cluster replication (M13)
+## 11. Cross-cluster replication (M13)
 
-### 13.1 Motivation
+### 11.1 Motivation
 
 Up through M12 the sample ran as a single Orleans cluster with two
 silos — a reasonable HA topology, but not what "multi-site" actually
@@ -579,7 +578,7 @@ library gains its planned change-feed / cross-tree continuous-merge
 capability — at which point the M13 replicator collapses into a thin
 adapter over the library primitive.
 
-### 13.2 Topology
+### 11.2 Topology
 
 Each cluster is a full Orleans deployment:
 
@@ -598,7 +597,7 @@ over plain HTTP to localhost peer ports — the replication loop is
 transport-agnostic at the protocol boundary but trivially observable on
 the dev box.
 
-### 13.3 What requires replication (the discovery problem)
+### 11.3 What requires replication (the discovery problem)
 
 The replicator's core question is "what has changed locally since I
 last synced with peer X?". M13 answers it with an **HLC-ordered
@@ -639,7 +638,7 @@ replication log** (the "replog") maintained per replicated tree.
 > it is — the replog is purely the discovery mechanism. Each file
 > carries a `FUTURE:` comment marking the replacement seam.
 
-### 13.4 Replicator grain
+### 11.4 Replicator grain
 
 One `IReplicatorGrain` per `(tree, peer-cluster)` pair, grain key
 `"{tree}|{peer}"`. Backed by Orleans grain storage on the
@@ -687,7 +686,7 @@ Tick loop:
    state, reschedule immediately if more is pending; on failure,
    exponential backoff.
 
-### 13.5 Inbound endpoint
+### 11.5 Inbound endpoint
 
 A minimal API endpoint on each silo: `POST /replicate/{tree}`. The
 handler validates the shared-secret header, then for each entry:
@@ -701,7 +700,7 @@ else
 ```
 
 Idempotency is a consequence of the sample's key disciplines — see
-§13.7. No HLC is threaded through on apply; the receiver's lattice
+§11.7. No HLC is threaded through on apply; the receiver's lattice
 assigns its own HLC, which is fine for immutable-keyed trees. The
 LWW-register half of `mfg-part-crdt` (the `/operator` key) would be
 a divergence risk under the same apply path, so the outgoing
@@ -711,14 +710,14 @@ and the inbound endpoint never sees them. The FUTURE seam for
 library-native source-HLC-preserving apply is exactly the place
 where that filter goes away and the register can replicate too.
 
-### 13.6 Compaction
+### 11.6 Compaction
 
 `IReplogJanitorGrain` per tree (reminder every 10 min): reads every
 peer replicator's `Cursor`, takes the **min**, and deletes replog
 entries with `hlc <= min - retention` (retention = 24 h). Never prunes
 ahead of the slowest peer.
 
-### 13.7 Which trees opt in, and why
+### 11.7 Which trees opt in, and why
 
 `ReplicationTopology.ReplicatedTrees` is explicit **tree-level**
 opt-in; `ReplicationTopology.IsKeyReplicated(tree, key)` layers an
@@ -742,9 +741,9 @@ filter today. All other replicated trees use write-once immutable
 keys and `IsKeyReplicated` is the identity for them. When
 `Orleans.Lattice` ships native source-HLC-preserving apply, the
 operator-register filter collapses and the whole tree can replicate
-unconditionally — that is the future seam referenced in §13.3.
+unconditionally — that is the future seam referenced in §11.3.
 
-### 13.8 Failure modes and anti-entropy
+### 11.8 Failure modes and anti-entropy
 
 - **Peer unreachable** — reminder retries with backoff.
 - **Filter fails after a primary write succeeds** — narrow race. A
@@ -755,7 +754,7 @@ unconditionally — that is the future seam referenced in §13.3.
 - **A → B → A replay cycle** — broken by the `lattice.replay`
   `RequestContext` flag.
 
-### 13.9 Test surface
+### 11.9 Test surface
 
 Integration-style end-to-end tests (two full Orleans clusters) are out
 of scope for the Orleans `TestingHost` fixture used by the rest of the
@@ -771,12 +770,12 @@ the deterministic pieces:
 All tests live in `test/MultiSiteManufacturing.Tests/Replication/` and
 run with the rest of the suite (`dotnet test --filter "TestCategory!=Chaos"`).
 Two-cluster end-to-end is exercised manually via `run.ps1` (launches
-two Azurites + four silos on the per-cluster ports documented in §13.2).
+two Azurites + four silos on the per-cluster ports documented in §11.2).
 
 
-## 14. Docker Compose topology (M14)
+## 12. Docker Compose topology (M14)
 
-### 14.1 Motivation
+### 12.1 Motivation
 
 Through M13 the sample ran via `run.ps1` spawning two Azurite processes
 and four silo processes on the developer machine, clustering over
@@ -787,7 +786,7 @@ still a single flat loopback address space. M14 replaces the process
 launcher with Docker Compose so the topology is structural, not
 accidental.
 
-### 14.2 Topology
+### 12.2 Topology
 
 Three networks, scoped so that cluster-internal traffic (Orleans silo
 membership, gateway, grain calls, Azurite table/blob/queue) cannot
@@ -815,7 +814,7 @@ Only four host ports are published:
 Orleans silo and gateway ports (11111 / 30000) are `EXPOSE`-d only
 inside each cluster network; no host publish.
 
-### 14.3 Config override via env vars
+### 12.3 Config override via env vars
 
 `appsettings.cluster.{name}.json` still ships the same localhost defaults.
 In Docker, compose overrides just
@@ -838,7 +837,7 @@ the fields that differ:
   `silo-forge-a` and `Seeder__Enabled=false` on the other three silos
   so the seed decision lives declaratively in the topology file.
 
-### 14.4 Genuine partition (Tier 5)
+### 12.4 Genuine partition (Tier 5)
 
 ```
 docker network disconnect msmfg_wan msmfg-silo-forge-a
@@ -855,14 +854,14 @@ HLC order and heattreat converges. This is a genuine transport drop,
 complementing (not replacing) the Tier-4 hash-filter sim which remains
 useful in tests where Docker is not available.
 
-### 14.5 Test surface
+### 12.5 Test surface
 
 The Docker topology is a developer-experience upgrade; no new
 automated tests. The existing unit-test suite
 (`test/MultiSiteManufacturing.Tests/`) runs against the in-memory
 silo fixture and is unaffected by the Compose work.
 
-### 14.6 Replication observability in the top bar
+### 12.6 Replication observability in the top bar
 
 The dashboard top bar renders a live replication strip next to the
 operator identity: cluster + silo id (`forge/A`), seconds since last

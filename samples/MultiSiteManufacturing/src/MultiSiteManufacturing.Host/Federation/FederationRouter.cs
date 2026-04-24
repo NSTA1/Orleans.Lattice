@@ -100,7 +100,7 @@ public sealed class FederationRouter(
 
         var admission = await SiteGrain(fact.Site).AdmitAsync(fact);
 
-        // Tier 3 (plan §4.3): a reorder flush returns a shuffled batch of
+        // Tier 3: a reorder flush returns a shuffled batch of
         // previously-buffered facts for the router to release.
         if (admission.ShuffledDrain is { Count: > 0 } drained)
         {
@@ -196,8 +196,8 @@ public sealed class FederationRouter(
 
     /// <summary>
     /// Returns a snapshot of every registered backend's chaos
-    /// configuration (plan §4.3 Tier 2). One entry per
-    /// <see cref="IFactBackend.Name"/>, in registration order.
+    /// configuration. One entry per <see cref="IFactBackend.Name"/>,
+    /// in registration order.
     /// </summary>
     public async Task<IReadOnlyList<BackendChaosState>> ListBackendChaosAsync()
     {

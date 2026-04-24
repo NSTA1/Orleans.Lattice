@@ -99,8 +99,8 @@ public sealed class ReplicationTopology
     /// the source HLC ordering and can make the two clusters resolve
     /// the register to different winners under concurrent writes. The
     /// filter keeps the register strictly cluster-local until the
-    /// library ships native source-HLC-preserving apply (see plan
-    /// §13.7 + the FUTURE seam in <see cref="LatticeReplicationFilter"/>).
+    /// library ships native source-HLC-preserving apply (see the
+    /// FUTURE seam in <see cref="LatticeReplicationFilter"/>).
     /// </para>
     /// <para>
     /// Every other replicated tree (<c>mfg-facts</c>,
@@ -232,7 +232,7 @@ public sealed class ReplicationTopology
     /// immutable write-once keys, so cross-cluster replay is
     /// trivially safe. <c>mfg-part-crdt</c> is <b>not</b> on the
     /// default list — its LWW-register half would diverge under the
-    /// current application-layer apply path (see plan §13.7).
+    /// current application-layer apply path.
     /// </summary>
     public static string[] DefaultReplicatedTrees =>
     [

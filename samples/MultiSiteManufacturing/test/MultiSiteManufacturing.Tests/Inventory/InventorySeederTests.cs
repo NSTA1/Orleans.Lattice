@@ -7,8 +7,8 @@ namespace MultiSiteManufacturing.Tests.Inventory;
 
 /// <summary>
 /// Verifies <see cref="InventorySeeder"/> deterministically produces the
-/// plan §8.1 spread and is safe to invoke more than once (idempotent via
-/// <see cref="IInventorySeedStateGrain"/>).
+/// documented seed spread and is safe to invoke more than once
+/// (idempotent via <see cref="IInventorySeedStateGrain"/>).
 /// </summary>
 [TestFixture]
 public sealed class InventorySeederTests

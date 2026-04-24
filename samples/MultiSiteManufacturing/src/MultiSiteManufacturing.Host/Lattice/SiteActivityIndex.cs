@@ -18,7 +18,7 @@ namespace MultiSiteManufacturing.Host.Lattice;
 /// "Inspection: CMM Pass", "MRB: UseAsIs"). The index tree is a pure
 /// B+ tree demo — its sole purpose is to answer "which parts are at
 /// site X right now?" via a native descending range scan over the
-/// site prefix (plan §M12d).
+/// site prefix.
 /// </summary>
 /// <remarks>
 /// <para>

@@ -9,7 +9,7 @@ namespace MultiSiteManufacturing.Host.Federation;
 /// configured.
 /// </summary>
 /// <remarks>
-/// Plan §4.3 Tier 2. Read paths (<see cref="GetStateAsync"/>,
+/// Read paths (<see cref="GetStateAsync"/>,
 /// <see cref="GetFactsAsync"/>, <see cref="ListPartsAsync"/>) pass
 /// straight through to the inner backend — chaos only affects writes,
 /// mirroring real storage failure modes (partial writes, retry
@@ -21,10 +21,10 @@ public sealed class ChaosFactBackend : IFactBackend
     private readonly IGrainFactory _grains;
     private readonly Func<Random> _rngFactory;
 
-    // Reorder buffer state (plan §4.3 Tier 2 "ReorderWindowMs"). A single
-    // pending batch per decorator instance; the first write to arrive
-    // opens the window and schedules a flush, subsequent writes within
-    // the window join the same batch and share its (shuffled) drain.
+    // Reorder buffer state (ReorderWindowMs). A single pending batch per
+    // decorator instance; the first write to arrive opens the window and
+    // schedules a flush, subsequent writes within the window join the
+    // same batch and share its (shuffled) drain.
     private readonly object _reorderLock = new();
     private List<ReorderEntry>? _pendingBatch;
     private Task? _flushTask;

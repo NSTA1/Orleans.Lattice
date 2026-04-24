@@ -7,7 +7,7 @@ namespace MultiSiteManufacturing.Host.Domain;
 /// converge on the same state.
 /// </summary>
 /// <remarks>
-/// <para>Transitions (see <c>plan.md §3.4</c>):</para>
+/// <para>Transitions:</para>
 /// <list type="bullet">
 ///   <item><c>ProcessStepCompleted</c> → no state change.</item>
 ///   <item><c>InspectionRecorded(Pass)</c> → no state change; arms the retest

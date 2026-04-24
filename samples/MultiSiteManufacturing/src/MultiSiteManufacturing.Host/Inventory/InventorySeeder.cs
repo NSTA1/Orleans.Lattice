@@ -8,9 +8,9 @@ namespace MultiSiteManufacturing.Host.Inventory;
 
 /// <summary>
 /// Bulk-loads a small, diverse spread of parts into the federation on
-/// silo startup (plan §8). The seed is deterministic — same serial
-/// numbers, same facts, same HLCs across runs — so demos look identical
-/// every time the host starts against a fresh storage account.
+/// silo startup. The seed is deterministic — same serial numbers, same
+/// facts, same HLCs across runs — so demos look identical every time
+/// the host starts against a fresh storage account.
 /// </summary>
 /// <remarks>
 /// <para>

@@ -7,7 +7,7 @@ namespace MultiSiteManufacturing.Tests.Federation;
 /// <summary>
 /// Verifies the <see cref="ChaosFactBackend"/> decorator: nominal
 /// pass-through, transient failure injection, write amplification, and
-/// read-path pass-through (plan §4.3 Tier 2).
+/// read-path pass-through.
 /// </summary>
 [TestFixture]
 public class ChaosFactBackendTests
@@ -135,7 +135,7 @@ public class ChaosFactBackendTests
         // Seed-2 produces a deterministic shuffle that is not the identity
         // permutation for N=5 under Fisher–Yates, so arrival order at the
         // inner backend differs from emission order — that's the whole
-        // point of the reorder buffer (plan §4.3 Tier 2).
+        // point of the reorder buffer.
         var decorator = new ChaosFactBackend(baseline, _fixture.GrainFactory, () => new Random(2));
 
         await _fixture.GrainFactory.GetGrain<IBackendChaosGrain>(baseline.Name)

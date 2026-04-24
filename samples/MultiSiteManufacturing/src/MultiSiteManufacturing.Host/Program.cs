@@ -15,7 +15,7 @@ using MultiSiteManufacturing.Host.Replication;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// M13: cluster-aware bootstrap. The sample now launches as one of two
+// Cluster-aware bootstrap. The sample launches as one of two
 // independent Orleans clusters — "forge" and "heattreat" — selected via
 // the --cluster command-line argument. Each cluster has its own ClusterId,
 // its own Azurite instance, and its own HTTP port range. A per-cluster
@@ -58,13 +58,13 @@ var httpPort = isPrimarySilo
     ? clusterSection.GetValue("HttpPortA", 5001)
     : clusterSection.GetValue("HttpPortB", 5002);
 
-// M14: when running under Docker Compose, ASPNETCORE_URLS is set by the
+// When running under Docker Compose, ASPNETCORE_URLS is set by the
 // container env (typically "http://+:8080") and must be honoured as-is —
 // binding to "localhost" inside a container only binds the loopback
 // interface and the host-side port publish (5001..5004) never reaches
-// the app. For the legacy host-process path (run.ps1 in -Legacy mode,
-// or plain `dotnet run`), ASPNETCORE_URLS is unset and we fall back to
-// the per-A/B httpPort from the cluster overlay.
+// the app. For the host-process path (plain `dotnet run`),
+// ASPNETCORE_URLS is unset and we fall back to the per-A/B httpPort
+// from the cluster overlay.
 if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ASPNETCORE_URLS")))
 {
     builder.WebHost.UseUrls($"http://localhost:{httpPort}");
@@ -81,7 +81,7 @@ builder.WebHost.UseStaticWebAssets();
 
 builder.Services.AddSingleton(new SiloIdentity(siloId, isPrimarySilo, clusterName));
 
-// M13: load the replication topology once and publish as a singleton
+// Load the replication topology once and publish as a singleton
 // so the outgoing filter, the log writer, the inbound endpoint, and
 // the replicator grain all share one immutable view.
 var replicationTopology = ReplicationTopology.Load(builder.Configuration);
@@ -102,7 +102,7 @@ if (!useInMemoryStorage && replicationTopology.IsEnabled)
 
 builder.Host.UseOrleans(silo =>
 {
-    // M13: register the outgoing grain-call filter so every ILattice
+    // Register the outgoing grain-call filter so every ILattice
     // SetAsync/DeleteAsync invocation flows through the filter and is
     // appended to the replog for opted-in trees.
     silo.AddOutgoingGrainCallFilter<LatticeReplicationFilter>();
@@ -162,8 +162,8 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 // Federation: one concrete backend per name, each wrapped in a
-// ChaosFactBackend decorator so IBackendChaosGrain (plan §4.3 Tier 2)
-// can inject jitter, transient failures, and write amplification.
+// ChaosFactBackend decorator so IBackendChaosGrain can inject jitter,
+// transient failures, and write amplification.
 builder.Services.AddSingleton<BaselineFactBackend>();
 builder.Services.AddSingleton<LatticeFactBackend>();
 builder.Services.AddSingleton<IFactBackend>(sp => new ChaosFactBackend(
@@ -178,16 +178,16 @@ builder.Services.AddSingleton<FederationRouter>();
 builder.Services.AddSingleton<OperatorClock>();
 builder.Services.AddScoped<OperatorActions>();
 
-// M12b: CRDT-typed grain state backed by Orleans.Lattice. Singleton
+// CRDT-typed grain state backed by Orleans.Lattice. Singleton
 // because it wraps a single ILattice grain reference and holds no
 // per-call state.
 builder.Services.AddSingleton<PartCrdtStore>();
 
-// M12c: drains this silo's CRDT shadow prefix back into the shared
+// Drains this silo's CRDT shadow prefix back into the shared
 // prefix when the simulated inter-silo partition heals.
 builder.Services.AddHostedService<PartitionHealHostedService>();
 
-// M12d: keeps a lightweight B+ tree index of {site}/{stage}/{serial}
+// Keeps a lightweight B+ tree index of {site}/{stage}/{serial}
 // entries so the "Parts by site" page can render a live per-site
 // inventory via a range scan on ILattice. The index subscribes to
 // FederationRouter.FactRouted and writes one entry per Fact — every
@@ -199,7 +199,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SiteActivityIndex>
 builder.Services.AddSingleton<DashboardBroadcaster>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DashboardBroadcaster>());
 
-// M13: seeder runs on exactly one silo of exactly one cluster so the
+// Seeder runs on exactly one silo of exactly one cluster so the
 // two clusters don't race and produce duplicate keys. Suppressed in
 // the Testing environment so contract tests start against empty state.
 //
@@ -243,7 +243,7 @@ app.MapGrpcService<SiteControlServiceImpl>();
 app.MapGrpcService<ComplianceServiceImpl>();
 app.MapGrpcService<InventoryServiceImpl>();
 
-// M13: inbound replication endpoint. Authenticated via
+// Inbound replication endpoint. Authenticated via
 // X-Replication-Token shared secret (see ReplicationTopology.SharedSecret).
 app.MapReplicationEndpoint();
 

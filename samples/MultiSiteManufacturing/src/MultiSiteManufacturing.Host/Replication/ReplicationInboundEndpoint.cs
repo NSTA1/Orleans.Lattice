@@ -25,8 +25,8 @@ namespace MultiSiteManufacturing.Host.Replication;
 /// <c>mfg-site-activity-index</c> use write-once keys, so repeated
 /// apply of the same entry is a no-op. <c>mfg-part-crdt</c> labels
 /// are G-Set (idempotent by construction); the LWW-register half
-/// has a known cross-cluster divergence risk (plan §13.7) — opt in
-/// with that caveat.
+/// has a known cross-cluster divergence risk — opt in with that
+/// caveat.
 /// </para>
 /// <para>
 /// <b>FUTURE seam.</b> When the library gains cross-tree continuous

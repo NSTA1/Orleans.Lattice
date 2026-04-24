@@ -5,7 +5,7 @@ namespace MultiSiteManufacturing.Host.Domain;
 /// <summary>
 /// Human-readable metadata for <see cref="ChaosPreset"/> values — used by
 /// the chaos fly-out to render operator-friendly labels and tooltips for
-/// each canned preset button (plan §7.2).
+/// each canned preset button.
 /// </summary>
 public static class ChaosPresetInfo
 {

@@ -7,10 +7,10 @@ namespace MultiSiteManufacturing.Host.Federation;
 /// turns something on via the chaos fly-out.
 /// </summary>
 /// <remarks>
-/// Plan §4.3 Tier 2: applying faults to <b>one</b> backend only is the
-/// canonical way to surface baseline-vs-lattice divergence without a
-/// scripted saga. Faults are applied on write paths only; read paths
-/// pass through unchanged.
+/// Applying faults to <b>one</b> backend only is the canonical way to
+/// surface baseline-vs-lattice divergence without a scripted saga.
+/// Faults are applied on write paths only; read paths pass through
+/// unchanged.
 /// </remarks>
 [GenerateSerializer, Immutable]
 public readonly record struct BackendChaosConfig
@@ -40,9 +40,9 @@ public readonly record struct BackendChaosConfig
     /// <para>
     /// Setting <see cref="ReorderWindowMs"/> on <b>one</b> backend only is
     /// the canonical way to surface baseline-vs-lattice divergence on
-    /// order-sensitive fact sequences (plan §4.3 Tier 2). With the value
-    /// set on the <c>baseline</c> backend, <see cref="Domain.NaiveFold"/>
-    /// sees a shuffled arrival order and diverges, while
+    /// order-sensitive fact sequences. With the value set on the
+    /// <c>baseline</c> backend, <see cref="Domain.NaiveFold"/> sees a
+    /// shuffled arrival order and diverges, while
     /// <see cref="Domain.ComplianceFold"/> (lattice) re-sorts by HLC and
     /// remains correct.
     /// </para>
@@ -54,7 +54,7 @@ public readonly record struct BackendChaosConfig
 /// <summary>
 /// Observable snapshot of one backend's chaos configuration, published to
 /// the gRPC <c>ListBackends</c> / <c>ConfigureBackend</c> feed and the
-/// Blazor chaos fly-out (M10).
+/// Blazor chaos fly-out.
 /// </summary>
 [GenerateSerializer, Immutable]
 public readonly record struct BackendChaosState

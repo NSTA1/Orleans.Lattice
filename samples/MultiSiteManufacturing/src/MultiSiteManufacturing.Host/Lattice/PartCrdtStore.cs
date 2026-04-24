@@ -6,8 +6,7 @@ namespace MultiSiteManufacturing.Host.Lattice;
 
 /// <summary>
 /// CRDT-typed state for a part, backed directly by an
-/// <see cref="ILattice"/> B+ tree (plan §M12b). Two sub-kinds are
-/// exposed:
+/// <see cref="ILattice"/> B+ tree. Two sub-kinds are exposed:
 /// <list type="bullet">
 ///   <item>
 ///     <b>Current operator</b> — a last-writer-wins register. Stored
@@ -29,7 +28,7 @@ namespace MultiSiteManufacturing.Host.Lattice;
 /// the baseline and lattice fact backends.
 ///
 /// <para>
-/// <b>Partition awareness (plan §M12c).</b> When
+/// <b>Partition awareness.</b> When
 /// <see cref="IPartitionChaosGrain"/> reports the simulated inter-silo
 /// partition is active, every write from this silo is redirected to a
 /// silo-local shadow prefix (<c>shadow/{siloId}/…</c>) instead of the

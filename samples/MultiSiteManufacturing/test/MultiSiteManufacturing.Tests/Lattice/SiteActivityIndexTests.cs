@@ -7,9 +7,9 @@ using static MultiSiteManufacturing.Tests.Federation.FactFixtures;
 namespace MultiSiteManufacturing.Tests.Lattice;
 
 /// <summary>
-/// Covers <see cref="SiteActivityIndex"/> (plan §M12d): range scans
-/// over the B+ tree index that powers the "parts at $site" view, for
-/// every fact type (not just <see cref="ProcessStepCompleted"/>).
+/// Covers <see cref="SiteActivityIndex"/>: range scans over the B+ tree
+/// index that powers the "parts at $site" view, for every fact type
+/// (not just <see cref="ProcessStepCompleted"/>).
 /// </summary>
 [TestFixture]
 public class SiteActivityIndexTests

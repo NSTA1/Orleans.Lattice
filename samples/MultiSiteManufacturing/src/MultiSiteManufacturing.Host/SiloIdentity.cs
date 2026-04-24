@@ -2,11 +2,10 @@ namespace MultiSiteManufacturing.Host;
 
 /// <summary>
 /// Identifies the current silo instance — used by services that
-/// partition behaviour by silo (for example the M12c silo-partition
-/// chaos preset) and by the M13 cross-cluster replication
-/// subsystem, which needs the cluster name to stamp replog keys and
-/// to select the matching <c>appsettings.cluster.{name}.json</c>
-/// overlay.
+/// partition behaviour by silo (for example the silo-partition
+/// chaos preset) and by the cross-cluster replication subsystem,
+/// which needs the cluster name to stamp replog keys and to select
+/// the matching <c>appsettings.cluster.{name}.json</c> overlay.
 /// </summary>
 /// <param name="Id">
 /// Short silo identifier supplied via the <c>--silo-id</c> command-line
@@ -16,7 +15,7 @@ namespace MultiSiteManufacturing.Host;
 /// <c>true</c> when this silo is the primary (silo A). Only the primary
 /// runs the <see cref="MultiSiteManufacturing.Host.Inventory.InventorySeeder"/>
 /// to prevent secondary-silo restarts from re-seeding the shared
-/// storage account. With M13 cross-cluster replication, seeding is
+/// storage account. With cross-cluster replication, seeding is
 /// additionally restricted to the primary silo of the
 /// <see cref="MultiSiteManufacturing.Host.SiloIdentity.ClusterName"/>
 /// == <c>"forge"</c> cluster — cluster <c>heattreat</c> receives its

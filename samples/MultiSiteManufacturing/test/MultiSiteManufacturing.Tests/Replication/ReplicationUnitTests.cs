@@ -6,7 +6,7 @@ using Orleans.Lattice.Primitives;
 namespace MultiSiteManufacturing.Tests.Replication;
 
 /// <summary>
-/// Unit tests for the deterministic pieces of the M13 cross-cluster
+/// Unit tests for the deterministic pieces of the cross-cluster
 /// replication subsystem — replog key codec, topology config loader,
 /// and wire-type JSON round-trip. These run without an Orleans
 /// cluster and are the first line of defence before the integration

@@ -5,9 +5,9 @@ using static MultiSiteManufacturing.Tests.Federation.FactFixtures;
 namespace MultiSiteManufacturing.Tests.Federation;
 
 /// <summary>
-/// Keystone M3 test: the baseline backend (arrival-order fold) and the
-/// lattice backend (HLC-ordered fold) must disagree when facts arrive in
-/// non-HLC order. This is the divergence the M10 dashboard feed surfaces.
+/// The baseline backend (arrival-order fold) and the lattice backend
+/// (HLC-ordered fold) must disagree when facts arrive in non-HLC order.
+/// This is the divergence the dashboard feed surfaces.
 /// </summary>
 [TestFixture]
 public class FederationRouterTests

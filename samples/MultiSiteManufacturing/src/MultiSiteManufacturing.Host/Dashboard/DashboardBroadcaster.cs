@@ -9,7 +9,7 @@ using MultiSiteManufacturing.Host.Federation;
 namespace MultiSiteManufacturing.Host.Dashboard;
 
 /// <summary>
-/// In-process pub/sub hub that feeds the Blazor dashboard (plan §7.3).
+/// In-process pub/sub hub that feeds the Blazor dashboard.
 /// Subscribes to <see cref="FederationRouter.FactRouted"/> and
 /// <see cref="FederationRouter.ChaosConfigChanged"/>, derives
 /// <see cref="PartSummaryUpdate"/> / <see cref="ChaosOverview"/> records,

@@ -7,9 +7,7 @@ namespace MultiSiteManufacturing.Host.Federation;
 /// value, keyed by the site's PascalCase name (e.g. <c>OhioForge</c>).
 /// Holds the site's pause / delay / reorder configuration plus the queue
 /// of facts paused mid-flight. State persists to Azure Table Storage
-/// (<c>msmfgGrainState</c>), so chaos choices survive a process restart —
-/// exactly the behaviour plan §4.2 calls out as the whole point of
-/// moving chaos out of ephemeral router memory.
+/// (<c>msmfgGrainState</c>), so chaos choices survive a process restart.
 /// </summary>
 public interface IProcessSiteGrain : IGrainWithStringKey
 {

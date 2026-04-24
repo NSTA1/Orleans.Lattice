@@ -6,8 +6,8 @@ namespace MultiSiteManufacturing.Tests.Federation;
 
 /// <summary>
 /// Verifies the reorder buffer on <see cref="ProcessSiteGrain"/>
-/// (plan §4.3 Tier 3) and the <c>LatticeStorageFlakes</c> preset fan-out
-/// into <see cref="IBackendChaosGrain"/>.
+/// and the <c>LatticeStorageFlakes</c> preset fan-out into
+/// <see cref="IBackendChaosGrain"/>.
 /// </summary>
 [TestFixture]
 public class ReorderAndBackendPresetTests

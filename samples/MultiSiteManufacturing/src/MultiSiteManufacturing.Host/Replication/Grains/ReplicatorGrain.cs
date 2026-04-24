@@ -9,7 +9,7 @@ namespace MultiSiteManufacturing.Host.Replication.Grains;
 
 /// <summary>
 /// Reminder-driven replicator. See <see cref="IReplicatorGrain"/> for
-/// the contract and plan §13.4 for the overall design.
+/// the contract.
 /// </summary>
 /// <remarks>
 /// <para>
