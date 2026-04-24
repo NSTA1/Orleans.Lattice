@@ -1,0 +1,18 @@
+@* Tiny helper that renders a <see cref="ComplianceState"/> as a coloured chip. *@
+
+<span class="state-badge @CssClass">@Label</span>
+
+@code {
+    /// <summary>Compliance state to display.</summary>
+    [Parameter, EditorRequired] public ComplianceState State { get; set; }
+
+    private string CssClass => $"state-{State.ToString().ToLowerInvariant()}";
+
+    // Display shortening: "FlaggedForReview" is too long for the chip and
+    // reads as operator jargon anyway — surface it as just "Review".
+    private string Label => State switch
+    {
+        ComplianceState.FlaggedForReview => "Review",
+        _ => State.ToString(),
+    };
+}

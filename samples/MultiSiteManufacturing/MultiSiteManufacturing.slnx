@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/MultiSiteManufacturing.Contracts/MultiSiteManufacturing.Contracts.csproj" />
+  <Project Path="src/MultiSiteManufacturing.Host/MultiSiteManufacturing.Host.csproj" />
+  <Project Path="test/MultiSiteManufacturing.Tests/MultiSiteManufacturing.Tests.csproj" />
+</Solution>

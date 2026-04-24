@@ -1,0 +1,195 @@
+@* Read-only inventory table. Parent owns the live subscription; this
+   component just renders whatever <see cref="Parts"/> is handed to it. *@
+@inject OperatorActions Actions
+@inject ILogger<InventoryGrid> Log
+
+@{
+    // Snapshot into a stable list so concurrent mutation of the parent's
+    // backing dictionary (DashboardBroadcaster pushes on every FactRouted)
+    // can't throw "Collection was modified" during enumeration — which
+    // previously broke the Blazor circuit mid-click and made the row
+    // appear to "jump" without emitting facts.
+    var rows = Parts.OrderBy(p => p.Serial.Value).ToList();
+}
+
+<article>
+    <header>
+        <strong>Inventory</strong>
+        <small> · @rows.Count part@(rows.Count == 1 ? "" : "s")</small>
+        @if (_lastRace is { } status)
+        {
+            <small class="race-status @(status.AllHeld ? "race-status-held" : null)">
+                · @status.Message
+            </small>
+        }
+    </header>
+
+    @if (rows.Count == 0)
+    {
+        <p><em>No parts yet. The seeder populates a small set on first non-test run.</em></p>
+        @if (OnNewPart.HasDelegate)
+        {
+            <div style="display: flex; justify-content: flex-end;">
+                <button type="button" @onclick="OnNewPart">+ New part</button>
+            </div>
+        }
+    }
+    else
+    {
+        <figure>
+            <table role="grid">
+                <thead>
+                    <tr>
+                        <th scope="col">Serial</th>
+                        <th scope="col">Family</th>
+                        <th scope="col">Latest stage</th>
+                        <th scope="col">Baseline</th>
+                        <th scope="col">Lattice</th>
+                        <th scope="col">Facts</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var part in rows)
+                    {
+                        var serial = part.Serial;
+                        var busy = _inFlight.Contains(serial);
+                        <tr @key="serial.Value" class="@(part.Diverges ? "divergent-row" : null)">
+                            <td class="inventory-nowrap"><code><a href="/parts/@serial.Value">@serial.Value</a></code></td>
+                            <td class="inventory-nowrap">@part.Family</td>
+                            <td>@(part.LatestStage?.ToString() ?? "—")</td>
+                            <td><StateBadge State="@part.BaselineState" /></td>
+                            <td><StateBadge State="@part.LatticeState" /></td>
+                            <td>@part.FactCount</td>
+                            <td>
+                                @* Scrap is terminal on both folds — no fact can move a scrapped
+                                   part, so neither Race nor Fix would have any effect. Hide the
+                                   action cell entirely (including a diverged Scrap-vs-non-Scrap
+                                   row, which Fix can't reconcile either). *@
+                                @if (part.BaselineState == ComplianceState.Scrap
+                                     || part.LatticeState == ComplianceState.Scrap)
+                                {
+                                    <small class="race-status race-status-held">—</small>
+                                }
+                                else if (part.Diverges)
+                                {
+                                    <button type="button"
+                                            class="outline race-button fix-button"
+                                            disabled="@busy"
+                                            aria-busy="@(busy ? "true" : "false")"
+                                            title="Fix the baseline ↔ lattice divergence on @serial.Value by emitting a single MRB(UseAsIs) with a fresh HLC. Works for the common Flagged-vs-Nominal divergence (both folds see UseAsIs last and demote to Nominal). Will not fix terminal Scrap or unarmed Rework divergence — those require a full retest sequence."
+                                            @onclick="() => FixAsync(serial)">
+                                        ✓ Fix
+                                    </button>
+                                }
+                                else
+                                {
+                                    <button type="button"
+                                            class="outline race-button"
+                                            disabled="@busy"
+                                            aria-busy="@(busy ? "true" : "false")"
+                                            title="Race an order-sensitive three-fact trio for @serial.Value — NCR(Minor) → Inspection(Pass) → MRB(UseAsIs) — emitted concurrently. Lattice always folds by HLC back to Nominal; the arrival-order baseline applies the trio in whichever order the scheduler delivers them, so concurrent emission alone is often enough to land on Flagged."
+                                            @onclick="() => RaceAsync(serial)">
+                                        ⚠ Race
+                                    </button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+                @if (OnNewPart.HasDelegate)
+                {
+                    <tfoot>
+                        <tr>
+                            <td colspan="7" style="text-align: right;">
+                                <button type="button" @onclick="OnNewPart">+ New part</button>
+                            </td>
+                        </tr>
+                    </tfoot>
+                }
+            </table>
+        </figure>
+    }
+</article>
+
+@code {
+    /// <summary>Parts to display; caller provides a fresh enumerable on every render.</summary>
+    [Parameter, EditorRequired] public IEnumerable<PartSummaryUpdate> Parts { get; set; } = [];
+
+    /// <summary>Invoked when the operator clicks the trailing "+ New part" row. Optional.</summary>
+    [Parameter] public EventCallback OnNewPart { get; set; }
+
+    private readonly HashSet<PartSerialNumber> _inFlight = [];
+    private RaceStatus? _lastRace;
+
+    private async Task RaceAsync(PartSerialNumber serial)
+    {
+        if (!_inFlight.Add(serial))
+        {
+            return;
+        }
+        StateHasChanged();
+        try
+        {
+            var result = await Actions.RaceAsync(serial, OperatorId.Demo);
+            _lastRace = new RaceStatus(
+                BuildRaceMessage(serial, result),
+                result.AllHeld);
+        }
+        catch (Exception ex)
+        {
+            // Swallow into the log so a transient chaos-induced failure
+            // (which is the whole point of the race button) doesn't tear
+            // down the Blazor circuit.
+            Log.LogWarning(ex, "Race failed for {Serial}", serial.Value);
+            _lastRace = new RaceStatus($"Race for {serial.Value} failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _inFlight.Remove(serial);
+        }
+    }
+
+    private static string BuildRaceMessage(PartSerialNumber serial, RaceResult r)
+    {
+        if (r.AllHeld)
+        {
+            return $"Race for {serial.Value}: all {r.Held}/3 trio facts held (site paused or reorder-buffered)";
+        }
+        if (r.Held > 0)
+        {
+            return $"Race for {serial.Value}: {r.Forwarded}/3 trio facts forwarded, {r.Held} held";
+        }
+        return $"Race for {serial.Value}: NCR → Pass → MRB(UseAsIs) trio forwarded — baseline and lattice may now disagree (row turns red if they do)";
+    }
+
+    private async Task FixAsync(PartSerialNumber serial)
+    {
+        if (!_inFlight.Add(serial))
+        {
+            return;
+        }
+        StateHasChanged();
+        try
+        {
+            var result = await Actions.FixAsync(serial, OperatorId.Demo);
+            _lastRace = new RaceStatus(BuildFixMessage(serial, result), result.Held);
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning(ex, "Fix failed for {Serial}", serial.Value);
+            _lastRace = new RaceStatus($"Fix for {serial.Value} failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _inFlight.Remove(serial);
+        }
+    }
+
+    private static string BuildFixMessage(PartSerialNumber serial, FixResult r) =>
+        r.Held
+            ? $"Fix for {serial.Value}: MRB UseAsIs held at {r.Site} (site paused or delayed)"
+            : $"Fix for {serial.Value}: MRB UseAsIs forwarded through {r.Site} — divergence should clear";
+
+    private sealed record RaceStatus(string Message, bool AllHeld);
+}

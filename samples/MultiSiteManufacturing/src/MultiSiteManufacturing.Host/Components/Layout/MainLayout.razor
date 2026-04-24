@@ -1,0 +1,338 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject MultiSiteManufacturing.Host.SiloIdentity Silo
+@inject MultiSiteManufacturing.Host.Replication.ReplicationActivityTracker Replication
+
+<header class="container">
+    <nav>
+        <ul>
+            <li><strong>Multi-Site Manufacturing</strong></li>
+        </ul>
+        <ul class="topbar-status">
+            <li><small>operator: <kbd>demo</kbd></small></li>
+            <li>
+                <small>silo: <kbd>@($"{Silo.ClusterName}/{Silo.Id.ToUpperInvariant()}")</kbd></small>
+            </li>
+            <li>
+                <small title="@SentTooltip">
+                    sent:
+                    <kbd class="@SentClass">@SentLabel</kbd>
+                </small>
+            </li>
+            <li>
+                <small title="@ReceivedTooltip">
+                    recv:
+                    <kbd class="@ReceivedClass">@ReceivedLabel</kbd>
+                </small>
+            </li>
+            @if (_snapshot.SendErrors > 0)
+            {
+                <li>
+                    <small title="@($"{_snapshot.SendErrors} outbound error(s); last at {_snapshot.LastSendErrorUtc:HH:mm:ss}Z")">
+                        <kbd class="repl-bad">err @_snapshot.SendErrors</kbd>
+                    </small>
+                </li>
+            }
+            <li>
+                <button class="secondary"
+                        aria-expanded="@_chaosOpen.ToString().ToLowerInvariant()"
+                        aria-controls="chaos-flyout"
+                        @onclick="ToggleChaos">
+                    ☰ Chaos
+                </button>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+<main class="container">
+    @Body
+</main>
+
+<ChaosFlyout IsOpen="_chaosOpen" OnClose="CloseChaos" />
+
+
+@code {
+    private bool _chaosOpen;
+    private System.Threading.Timer? _refresh;
+    private MultiSiteManufacturing.Host.Replication.ReplicationActivitySnapshot _snapshot =
+        new(null, null, 0, 0, 0, 0, 0, null, null, null);
+
+    protected override void OnInitialized()
+    {
+        // Kick an immediate refresh so the bar renders with real values
+        // (when non-zero) rather than the all-zero default snapshot.
+        _ = RefreshAsync();
+
+        // 1 s tick — drives the "Ns ago" relative timestamps and picks
+        // up new sends/receives from the cluster-wide stats grain.
+        _refresh = new System.Threading.Timer(_ => InvokeAsync(RefreshAsync),
+            null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    private async Task RefreshAsync()
+    {
+        try
+        {
+            _snapshot = await Replication.SnapshotAsync();
+            StateHasChanged();
+        }
+        catch
+        {
+            // Snapshot is best-effort; swallow and try again on the next tick.
+        }
+    }
+
+    public void Dispose() => _refresh?.Dispose();
+
+    private void ToggleChaos() => _chaosOpen = !_chaosOpen;
+    private void CloseChaos() => _chaosOpen = false;
+
+    private string SentLabel => FormatActivity(_snapshot.LastSentUtc, _snapshot.BatchesSent, _snapshot.RowsSent);
+    private string ReceivedLabel => FormatActivity(_snapshot.LastReceivedUtc, _snapshot.BatchesReceived, _snapshot.RowsReceived);
+
+    private string SentClass => FreshnessClass(_snapshot.LastSentUtc);
+    private string ReceivedClass => FreshnessClass(_snapshot.LastReceivedUtc);
+
+    private string SentTooltip => _snapshot.LastSentPeer is null
+        ? "No outbound batches yet."
+        : $"Last peer: {_snapshot.LastSentPeer} · {_snapshot.BatchesSent} batches · {_snapshot.RowsSent} rows · last at {_snapshot.LastSentUtc:HH:mm:ss}Z";
+
+    private string ReceivedTooltip => _snapshot.LastReceivedPeer is null
+        ? "No inbound batches yet."
+        : $"Last peer: {_snapshot.LastReceivedPeer} · {_snapshot.BatchesReceived} batches · {_snapshot.RowsReceived} rows · last at {_snapshot.LastReceivedUtc:HH:mm:ss}Z";
+
+    private static string FormatActivity(DateTime? lastUtc, long batches, long rows)
+    {
+        if (lastUtc is null)
+        {
+            return "—";
+        }
+        var age = DateTime.UtcNow - lastUtc.Value;
+        return $"{FormatAge(age)} · {batches}b/{rows}r";
+    }
+
+    private static string FormatAge(TimeSpan age)
+    {
+        if (age.TotalSeconds < 1)   return "now";
+        if (age.TotalSeconds < 60)  return $"{(int)age.TotalSeconds}s ago";
+        if (age.TotalMinutes < 60)  return $"{(int)age.TotalMinutes}m ago";
+        if (age.TotalHours   < 24)  return $"{(int)age.TotalHours}h ago";
+        return $"{(int)age.TotalDays}d ago";
+    }
+
+    private static string FreshnessClass(DateTime? lastUtc)
+    {
+        if (lastUtc is null) return "repl-idle";
+        var age = DateTime.UtcNow - lastUtc.Value;
+        if (age.TotalSeconds < 10) return "repl-fresh";
+        if (age.TotalSeconds < 60) return "repl-warn";
+        return "repl-stale";
+    }
+}
+
+<style>
+    /* Top-bar replication strip. Each kbd colour-codes freshness so a
+       glance tells you whether the cluster is actively replicating. */
+    .topbar-status {
+        gap: 0.75rem;
+    }
+    .topbar-status li {
+        display: inline-flex;
+        align-items: center;
+    }
+    .topbar-status kbd.repl-fresh { background: #2d8a3e; color: #fff; }
+    .topbar-status kbd.repl-warn  { background: #d18f2a; color: #fff; }
+    .topbar-status kbd.repl-stale { background: #b83a3a; color: #fff; }
+    .topbar-status kbd.repl-idle  { background: var(--pico-muted-color); color: #fff; }
+    .topbar-status kbd.repl-bad   { background: #b83a3a; color: #fff; }
+
+    /* Widen the default Pico container — at standard widths Pico caps at
+       ~1130px which wraps the Serial / Family columns hard on a 1080p
+       display. Give the dashboard real estate up to 1800px while keeping
+       a small gutter on ultra-wide monitors. */
+    body > header.container,
+    body > main.container,
+    body > footer.container {
+        max-width: min(1800px, calc(100vw - 2rem));
+    }
+
+    .state-badge {
+        display: inline-block;
+        padding: 0.15rem 0.5rem;
+        border-radius: 0.25rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #fff;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .state-nominal          { background: #2d8a3e; }
+    .state-underinspection  { background: #3b7ab8; }
+    .state-flaggedforreview { background: #d18f2a; }
+    .state-rework           { background: #d46b2a; }
+    .state-scrap            { background: #b83a3a; }
+
+    .chaos-banner {
+        margin-bottom: 1rem;
+    }
+    .divergent-row td {
+        background-color: rgba(184, 58, 58, 0.08);
+    }
+    /* Serial numbers (`HPT-BLD-S1-2028-00001`) and family codes are
+       identifiers — never wrap them mid-token. */
+    .inventory-nowrap {
+        white-space: nowrap;
+    }
+
+    /* Chaos fly-out. Slides in from the right; the scrim sits
+       underneath to dim the dashboard and close on outside-click. */
+    .chaos-flyout {
+        position: fixed;
+        top: 0;
+        right: 0;
+        height: 100vh;
+        width: min(1100px, 100vw);
+        background: var(--pico-background-color);
+        border-left: 1px solid var(--pico-muted-border-color);
+        box-shadow: -4px 0 16px rgba(0, 0, 0, 0.15);
+        transform: translateX(100%);
+        transition: transform 0.25s ease-in-out;
+        overflow-y: auto;
+        padding: 1rem 1.5rem;
+        z-index: 1000;
+    }
+    .chaos-flyout.open {
+        transform: translateX(0);
+    }
+    .chaos-flyout-scrim {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.35);
+        z-index: 999;
+    }
+    .chaos-flyout section {
+        margin-top: 1.5rem;
+    }
+    .chaos-flyout-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+    }
+    .chaos-flyout-close {
+        width: auto;
+        padding: 0.25rem 0.6rem;
+        margin: 0;
+        line-height: 1;
+    }
+    .chaos-flyout .backend-row {
+        padding: 0.75rem 1rem;
+    }
+    /* Per-site table: give numeric inputs enough room for 4-5 digit
+       values (e.g. "8000" ms) without clipping. Pico's default narrow
+       table input style was crushing them. */
+    .chaos-flyout table input[type="number"] {
+        min-width: 6rem;
+        width: 100%;
+    }
+    .chaos-flyout table td,
+    .chaos-flyout table th {
+        white-space: nowrap;
+    }
+    .preset-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+    .preset-buttons button {
+        flex: 1 1 auto;
+    }
+    /* Race button in the inventory grid: fixed width + compact padding
+       so the aria-busy spinner state (Pico-provided) can't reflow the
+       "Actions" column. Without this, toggling between ⚠ and spinner
+       visibly shifts the row. */
+    .race-button {
+        min-width: 7.5rem;
+        padding: 0.25rem 0.5rem;
+        margin: 0;
+        font-size: 0.85rem;
+        white-space: nowrap;
+        /* Reserve room for Pico's aria-busy spinner so toggling it on/off
+           doesn't reflow the column. Pico injects a ::before pseudo-element
+           sized roughly 1em — we hard-allocate the width via a fixed
+           box model below. */
+        box-sizing: border-box;
+        width: 7.5rem;
+    }
+    /* Hide the spinner Pico adds via aria-busy="true"; the button's
+       disabled state is already a clear visual signal and a moving
+       spinner inside a fixed-width button was the source of the
+       horizontal flicker. */
+    .race-button[aria-busy="true"]::before {
+        display: none;
+    }
+
+    /* Inline "last race" status line inside the inventory header.
+       Muted by default; amber when every fact was held so the operator
+       notices their chaos config is suppressing downstream effects. */
+    .race-status {
+        margin-left: 0.5rem;
+        color: var(--pico-muted-color);
+    }
+    .race-status-held {
+        color: #b45309; /* amber-700 */
+        font-weight: 600;
+    }
+
+    /* Tab bar for switching between top-level dashboard views
+       (Inventory vs. Inventory By Activity). Styled to sit flush
+       above the tab panels with a single bottom border; the
+       active tab lifts that border into the primary accent
+       colour. The same class is reused inside the activity
+       panel for its per-site filter strip. */
+    .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0;
+        list-style: none;
+        padding-left: 0;
+        margin: 0 0 1rem 0;
+        border-bottom: 1px solid var(--pico-muted-border-color);
+    }
+    .tabs li {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+    .tabs li::marker {
+        content: "";
+    }
+    .tabs button,
+    .tabs a {
+        background: transparent;
+        color: var(--pico-muted-color);
+        border: none;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        padding: 0.5rem 1rem;
+        margin: 0;
+        cursor: pointer;
+        font-weight: normal;
+        box-shadow: none;
+        text-decoration: none;
+        display: inline-block;
+    }
+    .tabs button:hover,
+    .tabs a:hover {
+        color: var(--pico-color);
+        background: transparent;
+        text-decoration: none;
+    }
+    .tabs button[aria-selected="true"],
+    .tabs a[aria-selected="true"] {
+        color: var(--pico-primary);
+        border-bottom-color: var(--pico-primary);
+        font-weight: 600;
+    }
+</style>

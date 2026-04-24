@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package multisitemfg.v1;
+
+option csharp_namespace = "MultiSiteManufacturing.Contracts.V1";
+
+import "common.proto";
+
+service InventoryService {
+  rpc CreatePart     (CreatePartRequest)     returns (Part);
+  rpc GetPart        (GetPartRequest)        returns (PartView);
+  rpc ListParts      (ListPartsRequest)      returns (stream PartSummary);
+  rpc WatchPart      (WatchPartRequest)      returns (stream PartView);
+  rpc WatchInventory (WatchInventoryRequest) returns (stream PartSummary);
+}
+
+message CreatePartRequest {
+  string family = 1;
+  string operator_id = 2;
+  // Optional seed stage. Defaults to PROCESS_STAGE_FORGE.
+  ProcessStage initial_stage = 3;
+}
+
+message Part {
+  string serial = 1;
+  string family = 2;
+}
+
+message PartSummary {
+  string serial = 1;
+  string family = 2;
+  ProcessStage latest_stage = 3;
+  ComplianceState state = 4;
+}
+
+message PartView {
+  string serial = 1;
+  string family = 2;
+  ComplianceState baseline_state = 3;
+  ComplianceState lattice_state = 4;
+  repeated FactSummary facts = 5;
+}
+
+message FactSummary {
+  string fact_id = 1;
+  Hlc hlc = 2;
+  ProcessSite site = 3;
+  string kind = 4;
+  string description = 5;
+}
+
+message GetPartRequest {
+  string serial = 1;
+}
+
+message ListPartsRequest {
+  // Empty in v1; reserved for future filters.
+}
+
+message WatchPartRequest {
+  string serial = 1;
+}
+
+message WatchInventoryRequest {
+  // Empty in v1.
+}

@@ -1,0 +1,51 @@
+using MultiSiteManufacturing.Host.Federation;
+
+namespace MultiSiteManufacturing.Host.Domain;
+
+/// <summary>
+/// Human-readable metadata for <see cref="ChaosPreset"/> values — used by
+/// the chaos fly-out to render operator-friendly labels and tooltips for
+/// each canned preset button.
+/// </summary>
+public static class ChaosPresetInfo
+{
+    private static readonly IReadOnlyDictionary<ChaosPreset, (string DisplayName, string Description)> Info =
+        new Dictionary<ChaosPreset, (string, string)>
+        {
+            [ChaosPreset.ClearAll] = (
+                "Clear all",
+                "Reset every site and backend to nominal. Any queued facts are released."),
+            [ChaosPreset.TransoceanicBackhaulOutage] = (
+                "Transoceanic backhaul outage",
+                "Pause Stuttgart CMM Lab + Toulouse NDT Lab and add 4s of delay — models a transatlantic WAN outage."),
+            [ChaosPreset.CustomsHold] = (
+                "Customs hold",
+                "Add 8s of delay at Nagoya Heat Treatment — models a shipment stuck at customs."),
+            [ChaosPreset.MrbWeekend] = (
+                "MRB weekend",
+                "Pause Cincinnati MRB entirely — models the MRB being closed over a long weekend."),
+            [ChaosPreset.LatticeStorageFlakes] = (
+                "Lattice storage flakes",
+                "Apply a 10% transient failure rate and 50–250 ms jitter to the lattice backend only — drives baseline-vs-lattice divergence."),
+            [ChaosPreset.BaselineReorderStorm] = (
+                "Baseline reorder storm",
+                "Open a 300 ms reorder window on the baseline backend only — writes flush in shuffled arrival order. Pair with the per-row ⚠ Race button to force divergence (baseline flags, lattice stays Nominal via HLC-ordered fold)."),
+            [ChaosPreset.ClusterSplit] = (
+                "Cluster split",
+                "Simulate an inter-silo network partition inside a cluster: each silo accepts only writes for the half of the serial-hash space it owns. Intra-cluster only — cross-cluster replication still runs. Open two browser tabs (http://localhost:5001 and :5002), emit facts on both, then click Clear all — the merged state is visible from both silos."),
+            [ChaosPreset.ReplicationDisconnect] = (
+                "Replication disconnect",
+                "Pause cross-cluster HTTP replication in both directions — outbound ship and inbound apply. The local replog keeps growing while disconnected; Clear all resumes replication and lets the peer catch up from the accumulated backlog. Demonstrates cross-cluster divergence and convergence-on-heal without touching the docker CLI."),
+        };
+
+    /// <summary>All presets in declaration order (suitable for button rows).</summary>
+    public static IReadOnlyList<ChaosPreset> All { get; } = Enum.GetValues<ChaosPreset>();
+
+    /// <summary>Short label suitable for a button.</summary>
+    public static string GetDisplayName(ChaosPreset preset) =>
+        Info.TryGetValue(preset, out var info) ? info.DisplayName : preset.ToString();
+
+    /// <summary>One-sentence description of the real-world scenario the preset models.</summary>
+    public static string GetDescription(ChaosPreset preset) =>
+        Info.TryGetValue(preset, out var info) ? info.Description : string.Empty;
+}

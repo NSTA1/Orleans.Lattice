@@ -1,0 +1,71 @@
+# Traefik dynamic config for the US cluster (file provider).
+#
+# We use the file provider instead of the docker provider because the
+# docker provider requires a working unix socket mount into the Traefik
+# container, which fails on Docker Desktop Windows with "Error response
+# from daemon" on every label lookup - leaving Traefik with zero
+# discovered routers and returning 404 for every request. The file
+# provider has no such dependency and the silo container names resolve
+# over the shared us-net bridge network.
+#
+# Two routers share the same backend pool but with different LB
+# strategies:
+#   - us-replicate     /replicate/*  round-robin, no sticky cookie.
+#                      Priority 100 so it wins against the / catch-all.
+#                      Reached by the peer cluster's silos over `wan`.
+#   - us-web           /             sticky cookie. Blazor Server's
+#                      SignalR circuit pins to one silo per browser tab.
+http:
+  routers:
+    us-replicate:
+      rule: "PathPrefix(`/replicate`)"
+
+      priority: 100
+      entryPoints:
+        - web
+      service: us-replicate
+
+    us-web:
+      rule: "PathPrefix(`/`)"
+
+      entryPoints:
+        - web
+      service: us-web
+
+  services:
+    us-replicate:
+      loadBalancer:
+        # No sticky cookie: replication POSTs are stateless and both
+        # silos share the same Azure Table Storage and lattice trees,
+        # so any silo can apply an inbound batch. Round-robin + active
+        # health check gives automatic per-silo failover within ~2s.
+        servers:
+          - url: "http://silo-us-a:8080"
+          - url: "http://silo-us-b:8080"
+        healthCheck:
+          path: "/"
+          interval: "2s"
+          timeout: "1s"
+
+    us-web:
+      loadBalancer:
+        # Both US silos behind one sticky cookie. Blazor Server's
+        # SignalR circuit MUST pin to a single silo for the lifetime of
+        # the browser tab, or the reconnect handshake lands on the wrong
+        # silo and the circuit is torn down.
+        sticky:
+          cookie:
+            name: msmfg_us_affinity
+            httpOnly: true
+            sameSite: lax
+        servers:
+          - url: "http://silo-us-a:8080"
+          - url: "http://silo-us-b:8080"
+        # Active health check: evict a silo from rotation if it errors
+        # out, re-probe frequently so a restarted silo rejoins quickly
+        # and a silently-dead silo is taken out of sticky rotation
+        # within a couple of seconds rather than ten.
+        healthCheck:
+          path: "/"
+          interval: "2s"
+          timeout: "1s"

@@ -1,0 +1,100 @@
+@* Pico.css semantic modal dialog for operator-driven "+ New part" action.
+   Parent toggles via Show/Close; raises OnCreated with the new serial so
+   the caller can navigate to /parts/{serial}. *@
+
+@inject OperatorActions Actions
+
+<dialog open="@IsOpen">
+    <article>
+        <header>
+            <a href="#" aria-label="Close" class="close" @onclick="Close" @onclick:preventDefault></a>
+            <strong>Create new part</strong>
+        </header>
+
+        <label>
+            Part family
+            <input type="text" @bind="_family" placeholder="e.g. HPT-BLD-S1" />
+        </label>
+
+        <label>
+            Initial stage
+            <select @bind="_stage">
+                @foreach (var stage in _stages)
+                {
+                    <option value="@stage">@stage</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            Operator id
+            <input type="text" @bind="_operator" />
+        </label>
+
+        @if (_error is not null)
+        {
+            <p><small style="color:var(--pico-color-red-500)">@_error</small></p>
+        }
+
+        <footer>
+            <button class="secondary" @onclick="Close" disabled="@_busy">Cancel</button>
+            <button @onclick="SubmitAsync" disabled="@_busy">@(_busy ? "Creating…" : "Create part")</button>
+        </footer>
+    </article>
+</dialog>
+
+@code {
+    private static readonly ProcessStage[] _stages =
+        [ProcessStage.Forge, ProcessStage.HeatTreat, ProcessStage.Machining,
+         ProcessStage.NDT, ProcessStage.MRB, ProcessStage.FAI];
+
+    private string _family = "HPT-BLD-S1";
+    private ProcessStage _stage = ProcessStage.Forge;
+    private string _operator = OperatorId.Demo.Value;
+    private bool _busy;
+    private string? _error;
+
+    /// <summary>Whether the dialog is rendered in its open state.</summary>
+    [Parameter] public bool IsOpen { get; set; }
+
+    /// <summary>Fired when the dialog wants to close (cancel or successful submit).</summary>
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    /// <summary>Fired after a successful create, with the newly-allocated serial.</summary>
+    [Parameter] public EventCallback<PartSerialNumber> OnCreated { get; set; }
+
+    private async Task Close()
+    {
+        _error = null;
+        await OnClose.InvokeAsync();
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_family))
+        {
+            _error = "Family is required.";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var serial = await Actions.CreatePartAsync(
+                new PartFamily(_family.Trim()),
+                _stage,
+                new OperatorId(string.IsNullOrWhiteSpace(_operator) ? OperatorId.Demo.Value : _operator.Trim()));
+            await OnCreated.InvokeAsync(serial);
+            await OnClose.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

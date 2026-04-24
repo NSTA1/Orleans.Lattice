@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>MultiSiteManufacturing.Host</RootNamespace>
+    <AssemblyName>MultiSiteManufacturing.Host</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!-- Docker image trim: the container entrypoint is `dotnet <dll>`,
+         so the native apphost launcher is dead weight (~78 KB). And
+         we only ship English error messages, so suppress the 13
+         locale satellite DLL folders (~1 MB). Both are harmless for
+         local `dotnet run` on Windows/Mac/Linux as well - apphost is
+         generated for `dotnet run` separately. -->
+    <UseAppHost>false</UseAppHost>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.70.0" />
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Orleans.Reminders" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Orleans.Streaming" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Orleans.Streaming.AzureStorage" Version="10.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MultiSiteManufacturing.Contracts\MultiSiteManufacturing.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice\Orleans.Lattice.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Copy per-cluster overlay files next to the built DLL so the
+         host can find them when launched via `dotnet <dll>` from any
+         working directory (run.ps1 also pins WorkingDirectory, but
+         this makes it robust to manual invocations too). The Web SDK
+         already includes these as Content items by default — we only
+         need to flip CopyToOutputDirectory via Update. -->
+    <Content Update="appsettings.cluster.*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MultiSiteManufacturing.Tests" />
+  </ItemGroup>
+
+</Project>
