@@ -4,6 +4,8 @@ Orleans.Lattice publishes metadata-only event notifications on a per-tree Orlean
 
 Publication is opt-in (`LatticeOptions.PublishEvents` silo-wide default, overridable per tree via `ILattice.SetPublishEventsEnabledAsync`), **fire-and-forget**, and never affects the write-path outcome: a missing stream provider or a downstream queue failure is logged at `Warning` and swallowed. Events carry only metadata — **key name and operation kind, never the value bytes** — so subscribers that need the new value must `GetAsync` it themselves.
 
+> **Tree events vs. [mutation observers](api.md#mutation-observers).** Pick events when you need out-of-process, fire-and-forget, metadata-only notifications for UI updates, cache invalidation, dashboards, or audit projections. Pick [`IMutationObserver`](api.md#mutation-observers) when you need an in-process, synchronous hook with the full value bytes on the write path — typically to feed a replication WAL or transactional outbox in another library. Observers add latency to every write in the silo; events do not.
+
 ## Event shape
 
 ```csharp verify
@@ -132,4 +134,5 @@ The override is persisted on the tree's registry entry (`TreeRegistryEntry.Publi
 
 - [Configuration](configuration.md#publishevents) — option reference.
 - [Atomic Writes](atomic-writes.md) — how `SetManyAtomicAsync` stamps `OperationId` on every per-entry event.
+- [Mutation observers](api.md#mutation-observers) — the in-process, synchronous, value-carrying alternative for write-path integrations.
 - [`ILattice` API reference](api.md#ilattice) — full method surface.

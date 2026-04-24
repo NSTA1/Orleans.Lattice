@@ -72,7 +72,7 @@ public class ShardRootGrainShadowForwardTrackingTests
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shadowTarget);
 
         logger ??= NullLogger<ShardRootGrain>.Instance;
-        var grain = new ShardRootGrain(context, state, factory, optionsResolver, logger);
+        var grain = new ShardRootGrain(context, state, factory, optionsResolver, logger, TestMutationObservers.NoObservers());
 
         return new Harness
         {

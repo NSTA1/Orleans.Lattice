@@ -92,6 +92,10 @@ internal static class TypeAliases
     internal const string LatticeTreeEvent = "ol.lte";
     internal const string LatticeTreeEventKind = "ol.ltk";
 
+    // Mutation observer hook
+    internal const string LatticeMutation = "ol.mut";
+    internal const string MutationKind = "ol.muk";
+
     // Grain interfaces — each must be applied via [Alias(...)] on the
     // interface declaration so the Orleans manifest carries a stable,
     // short wire-format identity independent of CLR type names.

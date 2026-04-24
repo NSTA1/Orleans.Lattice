@@ -72,7 +72,7 @@ public class ShardRootGrainConsistentScanTests
 
         return new Harness
         {
-            Grain = new ShardRootGrain(context, state, factory, optionsResolver, Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance),
+            Grain = new ShardRootGrain(context, state, factory, optionsResolver, Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance, TestMutationObservers.NoObservers()),
             Leaf = leaf,
             State = state,
         };
