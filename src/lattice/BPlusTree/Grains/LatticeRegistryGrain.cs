@@ -24,6 +24,7 @@ internal sealed class LatticeRegistryGrain(
     public async Task RegisterAsync(string treeId, TreeRegistryEntry? entry = null)
     {
         ArgumentNullException.ThrowIfNull(treeId);
+        ThrowIfReservedPrefix(treeId, nameof(treeId));
 
         // Idempotent — if already registered, preserve existing config.
         if (await Registry.ExistsAsync(treeId))
@@ -55,10 +56,32 @@ internal sealed class LatticeRegistryGrain(
         };
     }
 
+    /// <summary>
+    /// Rejects user-supplied tree IDs whose names collide with the library's
+    /// reserved system-tree namespace. The <see cref="LatticeConstants.SystemTreePrefix"/>
+    /// check is the umbrella guard — it subsumes
+    /// <see cref="LatticeConstants.ReplogTreePrefix"/> and the registry tree
+    /// itself (<see cref="LatticeConstants.RegistryTreeId"/>). Internal
+    /// callers that legitimately bootstrap system trees bypass
+    /// <see cref="RegisterAsync"/> entirely, so this guard only fires on
+    /// user-supplied IDs.
+    /// </summary>
+    private static void ThrowIfReservedPrefix(string treeId, string paramName)
+    {
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+            throw new ArgumentException(
+                $"Tree ID '{treeId}' is reserved: names starting with '{LatticeConstants.SystemTreePrefix}' " +
+                "are reserved for internal Lattice system trees (including the " +
+                $"'{LatticeConstants.ReplogTreePrefix}' prefix used by Orleans.Lattice.Replication). " +
+                "Choose a tree ID that does not start with an underscore-prefixed Lattice namespace.",
+                paramName);
+    }
+
     public async Task UpdateAsync(string treeId, TreeRegistryEntry entry)
     {
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(entry);
+        ThrowIfReservedPrefix(treeId, nameof(treeId));
 
         await Registry.SetAsync(treeId, SerializeEntry(entry));
     }

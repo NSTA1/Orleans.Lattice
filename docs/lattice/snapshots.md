@@ -59,7 +59,9 @@ await tree.SnapshotAsync("my-tree-compact", SnapshotMode.Offline,
 - **Destination must not exist**: the destination tree ID must not already be
   registered in the tree registry. Choose a new tree ID for each snapshot.
 - **No system prefix**: the destination tree ID must not start with the reserved
-  `_lattice_` prefix.
+  `_lattice_` prefix. This umbrella namespace covers the registry tree itself
+  and the `_lattice_replog_` prefix reserved for the `Orleans.Lattice.Replication`
+  package's internal write-ahead-log trees.
 
 ## Crash Safety
 
