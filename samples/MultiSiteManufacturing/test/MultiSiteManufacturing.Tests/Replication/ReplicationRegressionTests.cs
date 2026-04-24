@@ -126,32 +126,48 @@ public sealed class ReplicationLogWriterHlcTests
     [Test]
     public void NextHlc_bumps_counter_when_wall_ticks_dont_advance()
     {
-        // Call rapidly in a tight loop so multiple invocations almost
-        // certainly land in the same wall-clock tick.
+        // Deterministically force the counter-bump branch: seed
+        // _wallCeiling into the future so every NextHlc call takes
+        // the "else" path and increments the counter. The previous
+        // form of this test relied on a tight loop landing multiple
+        // calls inside the same wall tick, which fails on machines
+        // where DateTime.UtcNow.Ticks advances between successive
+        // reads.
         var writer = NewWriter();
-        var samples = new HybridLogicalClock[100];
+        var future = DateTime.UtcNow.Ticks + TimeSpan.FromMinutes(1).Ticks;
+        SetWallCeiling(writer, future);
+
+        var samples = new HybridLogicalClock[5];
         for (var i = 0; i < samples.Length; i++)
         {
             samples[i] = InvokeNextHlc(writer);
         }
 
-        // At least one consecutive pair must share wall ticks (the
-        // counter-bump branch exists precisely for this case). Every
-        // pair must still be strictly monotonic.
-        var sawCounterBump = false;
-        for (var i = 1; i < samples.Length; i++)
+        Assert.Multiple(() =>
         {
-            Assert.That(samples[i].CompareTo(samples[i - 1]), Is.GreaterThan(0),
-                $"Monotonicity broke at index {i}");
-            if (samples[i].WallClockTicks == samples[i - 1].WallClockTicks)
+            // Every sample landed on the seeded future tick.
+            foreach (var s in samples)
             {
-                sawCounterBump = true;
+                Assert.That(s.WallClockTicks, Is.EqualTo(future));
+            }
+
+            // Counter strictly monotonic inside the tick (0, 1, 2, …).
+            for (var i = 1; i < samples.Length; i++)
+            {
+                Assert.That(samples[i].CompareTo(samples[i - 1]), Is.GreaterThan(0),
+                    $"Monotonicity broke at index {i}");
                 Assert.That(samples[i].Counter, Is.GreaterThan(samples[i - 1].Counter));
             }
-        }
+        });
+    }
 
-        Assert.That(sawCounterBump, Is.True,
-            "100 rapid calls should land at least one pair in the same wall tick.");
+    private static void SetWallCeiling(ReplicationLogWriter writer, long value)
+    {
+        var field = typeof(ReplicationLogWriter).GetField(
+            "_wallCeiling",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("ReplicationLogWriter._wallCeiling not found.");
+        field.SetValue(writer, value);
     }
 }
 
