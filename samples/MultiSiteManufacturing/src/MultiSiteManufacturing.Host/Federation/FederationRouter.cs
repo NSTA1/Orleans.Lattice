@@ -28,10 +28,10 @@ public sealed class FederationRouter(
     IEnumerable<IFactBackend> backends,
     IGrainFactory grains,
     ILogger<FederationRouter> logger,
-    SiloIdentity? siloIdentity = null)
+    SiloIdentity siloIdentity)
 {
     private readonly IReadOnlyList<IFactBackend> _backends = [.. backends];
-    private readonly SiloIdentity _silo = siloIdentity ?? new SiloIdentity("a", IsPrimary: true, ClusterName: "forge");
+    private readonly SiloIdentity _silo = siloIdentity ?? throw new ArgumentNullException(nameof(siloIdentity));
 
     /// <summary>Backends that receive every emitted fact, indexed by <see cref="IFactBackend.Name"/>.</summary>
     public IReadOnlyList<IFactBackend> Backends => _backends;

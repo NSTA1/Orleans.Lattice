@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using MultiSiteManufacturing.Host;
 using MultiSiteManufacturing.Host.Baseline;
 using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Lattice;
@@ -65,7 +66,8 @@ public sealed class FederationTestClusterFixture
         var router = new FederationRouter(
             [baseline, lattice],
             GrainFactory,
-            NullLogger<FederationRouter>.Instance);
+            NullLogger<FederationRouter>.Instance,
+            new SiloIdentity("a", IsPrimary: true, ClusterName: "forge"));
         return (router, baseline, lattice);
     }
 

@@ -109,14 +109,15 @@ internal sealed class ReplicatorGrain(
 
             // If the batch was full there's likely more pending —
             // kick the next tick immediately instead of waiting for
-            // the reminder.
+            // the timer. Route through AsReference so the call goes
+            // through the grain scheduler (respects reentrancy /
+            // single-activation) instead of a raw thread-pool Task.
             if (shipped >= BatchSize)
             {
-                _ = Task.Run(async () =>
-                {
-                    try { await TickAsync(); }
-                    catch (Exception ex) { logger.LogWarning(ex, "Cascading tick failed"); }
-                });
+                _ = this.AsReference<IReplicatorGrain>().TickAsync()
+                    .ContinueWith(
+                        t => logger.LogWarning(t.Exception, "Cascading tick failed"),
+                        TaskContinuationOptions.OnlyOnFaulted);
             }
         }
         catch (Exception ex)
@@ -224,9 +225,20 @@ internal sealed class ReplicatorGrain(
 
         var ack = await http.SendAsync(_peer, batch, cancellationToken);
 
+        // Advance the cursor strictly to what the peer actually acked.
+        // A partial-apply (ack.Applied < entries.Count) returns an
+        // earlier HighestAppliedHlc; advancing to highestInBatch there
+        // would silently skip the unapplied tail and lose writes. Only
+        // when every entry was acked do we treat highestInBatch and
+        // ack.HighestAppliedHlc as equivalent (and defensively take
+        // the later of the two).
+        var newCursor = ack.Applied == entries.Count
+            ? (ack.HighestAppliedHlc.CompareTo(highestInBatch) >= 0 ? ack.HighestAppliedHlc : highestInBatch)
+            : ack.HighestAppliedHlc;
+
         state.State = state.State with
         {
-            Cursor = highestInBatch,
+            Cursor = newCursor,
             LastContactUtc = DateTimeOffset.UtcNow,
             TotalRowsShipped = state.State.TotalRowsShipped + ack.Applied,
         };

@@ -59,9 +59,16 @@ internal sealed class ReplicationLogWriter(
         }
         catch (Exception ex)
         {
-            // Replog append failure is non-fatal — the anti-entropy
-            // sweep will resurface the write on the next periodic
-            // reconciliation. Log at Warning so it's visible.
+            // Replog append failure is non-fatal to the caller —
+            // their lattice write has already succeeded at this
+            // point (the outgoing call filter awaits this append
+            // AFTER the user's call). Log at Warning so a storage
+            // hiccup is visible in operator logs; a failure here
+            // drops one replog entry, which means one write won't
+            // ship cross-cluster until the same key is re-written.
+            // There is no anti-entropy sweep to compensate — an
+            // idempotent re-post or manual re-shipping is the
+            // recovery path.
             logger.LogWarning(ex,
                 "Replog append failed for tree {Tree} key {Key} op {Op}",
                 tree, originalKey, op);
@@ -70,8 +77,10 @@ internal sealed class ReplicationLogWriter(
 
     /// <summary>
     /// Mint the next HLC for a replog entry. Monotonic within a
-    /// single process; across processes the cluster-id tiebreaker in
-    /// the replog key keeps ordering deterministic.
+    /// single process. This HLC is independent of any HLC maintained
+    /// internally by the lattice — the replog uses its own monotonic
+    /// sequence so encoding is self-contained and cross-cluster
+    /// ordering is decided by (HLC, cluster-id) in the replog key.
     /// </summary>
     private HybridLogicalClock NextHlc()
     {

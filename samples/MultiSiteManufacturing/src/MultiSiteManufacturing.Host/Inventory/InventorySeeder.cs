@@ -117,23 +117,6 @@ public sealed class InventorySeeder(
         await EmitForgeAsync(ctx, ct);
     }
 
-    private async Task EmitThroughHeatTreatAsync(int seq, CancellationToken ct)
-    {
-        var ctx = PartContext.Create(seq);
-        await EmitForgeAsync(ctx, ct);
-        await EmitStageAsync(ctx, ProcessStage.HeatTreat, ProcessSite.NagoyaHeatTreat, "heat-treat complete", ct);
-    }
-
-    private async Task EmitThroughMachiningAsync(int seq, CancellationToken ct)
-    {
-        var ctx = PartContext.Create(seq);
-        await EmitForgeAsync(ctx, ct);
-        await EmitStageAsync(ctx, ProcessStage.HeatTreat, ProcessSite.NagoyaHeatTreat, "heat-treat complete", ct);
-        await EmitStageAsync(ctx, ProcessStage.Machining, ProcessSite.StuttgartMachining, "machining complete", ct);
-        await EmitInspectionAsync(ctx, Inspection.CMM, InspectionOutcome.Pass,
-            ProcessSite.StuttgartCmmLab, "CMM pass", ct);
-    }
-
     private async Task EmitFlaggedForReviewAsync(int seq, CancellationToken ct)
     {
         var ctx = PartContext.Create(seq);
@@ -293,10 +276,15 @@ public sealed class InventorySeeder(
     }
 
     /// <summary>
-    /// Per-part mutable context that hands out deterministic HLCs and
-    /// fact ids. Wall-clock ticks are derived from the sequence number
-    /// (<c>seq * 1_000_000</c>) so every part occupies its own HLC band
-    /// and a re-run against a fresh store produces identical timestamps.
+    /// Per-part mutable context that hands out monotonic HLCs and
+    /// fact ids. Each part starts in its own slot of a rolling 5-day
+    /// seed window — the slot is derived from the sequence number —
+    /// and <see cref="NextHlc"/> advances by a jittered 60–180 minute
+    /// gap per fact. Determinism is preserved across reseeds that
+    /// happen inside the same 5-day window; the window itself scrolls
+    /// with wall-clock time so the dashboard always shows "recent"
+    /// activity, which means two reseeds hours apart will differ in
+    /// absolute timestamps while the intra-part cadence stays stable.
     /// </summary>
     private sealed class PartContext
     {

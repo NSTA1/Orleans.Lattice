@@ -1,8 +1,9 @@
 # MultiSiteManufacturing Sample — Plan
 
-> Status: **M1–M12 complete** (committed on `feature/sample-manufacturing`,
-> 148/148 tests green). **Next: M13 — docs (README, glossary, architecture,
-> Azurite setup, screenshots).**
+> Status: **M1–M14 complete** (committed on `feature/sample-manufacturing`,
+> 163/163 non-chaos tests green). Docs (README, glossary, architecture,
+> Azurite setup, screenshots) remain as a follow-up outside the milestone
+> numbering.
 > All §12 review items resolved below.
 
 ## 1. Goals
@@ -16,9 +17,9 @@ concrete vertical. The sample must:
    can create parts, advance them through process stages, record
    inspections, raise non-conformances, issue MRB dispositions, and sign
    off FAI, and the sample behaves like a minimal MES/QMS thin slice.
-2. Bulk-load a realistic **pre-seeded inventory** on silo startup (~50
-   parts across every lifecycle state) so the dashboard looks lived-in the
-   moment the browser connects.
+2. Bulk-load a realistic **pre-seeded inventory** on silo startup (5
+   representative parts — one per reachable `ComplianceState` outcome)
+   so the dashboard looks lived-in the moment the browser connects.
 3. Expose all outside-facing APIs over **gRPC**, using server-streaming
    RPCs for any feed that's naturally a subscription (part views, site
    states).
@@ -49,13 +50,11 @@ concrete vertical. The sample must:
 - Kubernetes / production orchestration. M14 adds Docker Compose as the
   supported local topology (two clusters × two silos × per-cluster
   Azurite, only HTTP ports 5001–5004 exposed to the host), but there is
-  no Helm chart, no k8s manifest, and no TLS/auth hardening. The legacy
-  host-process launcher (`run-legacy.ps1`) remains available for the
-  "no Docker" quick-start.
+  no Helm chart, no k8s manifest, and no TLS/auth hardening.
 - True Orleans transport-level partition at the router layer. M12c
   simulates an intra-cluster split via a router-level hash filter; it
   does not drop packets between silos. (M14 adds a genuine Tier-5
-  transport-level partition option via `docker network disconnect` —
+  transport-level partition option via `docker network disconnect` — 
   see §4.3 — but the Tier-4 hash-filter sim still exists as the fast
   path that requires no Docker interaction.)
 
@@ -278,7 +277,6 @@ samples/MultiSiteManufacturing/
 │   │       ├── common.proto
 │   │       ├── inventory.proto
 │   │       ├── facts.proto
-│   │       ├── facts.proto
 │   │       ├── sites.proto
 │   │       └── compliance.proto
 │   └── MultiSiteManufacturing.Host/                  (net10.0, Microsoft.NET.Sdk.Web)
@@ -359,7 +357,6 @@ presets) to the per-backend `IBackendChaosGrain` instances.
 rpc GetPartCompliance   (GetPartComplianceRequest)   returns (PartComplianceView);
 rpc WatchDivergence     (google.protobuf.Empty)      returns (stream DivergenceReport);
 ```
-```
 
 `DivergenceReport` is the "baseline says X, lattice says Y" feed — one row
 per part where the two backends currently disagree, pushed whenever the
@@ -390,8 +387,8 @@ set changes. Divergence emerges organically from chaos-induced reorder
 ### 7.2 Chaos fly-out
 
 Triggered by the top-right `☰ Chaos` button; slides in from the right.
-All chaos state lives in `IProcessSiteGrain` / `IBackendChaosGrain` /
-`IPartitionChaosGrain` (all persistent); reloading the browser re-renders
+All chaos state lives in `IProcessSiteGrain` / `IBackendChaosGrain` /`
+IPartitionChaosGrain` (all persistent); reloading the browser re-renders
 the current state from grain storage. The fly-out open/closed bit is
 UI-local.
 
@@ -407,7 +404,6 @@ Sections inside the fly-out:
 3. **Canned presets** — single-click buttons that configure multiple
    knobs at once:
    - *Transoceanic backhaul outage*: pauses Stuttgart CMM Lab +
-     Toulouse NDT Lab, delay 4 s.
      Toulouse NDT Lab, delay 4 s.
    - *Customs hold*: delays Nagoya Heat Treatment by 8 s.
    - *MRB weekend*: pauses Cincinnati MRB entirely.
@@ -444,7 +440,7 @@ Each Blazor component that displays live data owns an
 `IAsyncEnumerable<T>` subscription acquired in `OnInitializedAsync` and
 cancelled in `Dispose`. Internally these subscriptions are backed by
 **`System.Threading.Channels.Channel<T>`** owned by the underlying
-services (`InventoryService`, `SiteRegistry`, `DivergenceTracker`,
+services (`InventoryService`, `SiteRegistry`, `DivergenceTracker``,
 `DashboardBroadcaster`). The services push whenever the domain state
 changes (grain callback, router completion, etc.). The Razor component
 receives messages, applies them to its local view-model, and calls
@@ -459,33 +455,34 @@ The gRPC server-streaming RPCs are thin adapters over the same channels.
 
 ### 8.1 Seed shape
 
-On startup (silo A only, under localhost clustering), a `IHostedService`
-(`InventorySeeder`) bulk-loads ~50 parts across a spread of lifecycle
-states:
+On startup (every silo; gated by a singleton `IInventorySeedStateGrain`
+flag persisted to Azure Table Storage so only the first silo to win
+the race actually seeds), a `IHostedService` (`InventorySeeder`) bulk-loads
+**5 parts** — one representative per reachable `ComplianceState` outcome —
+to keep the demo inventory small and readable while still exercising every
+fold transition the UI needs to render:
 
-| Count | State | Stage reached |
+| Seq | State | Stage reached |
 |---:|---|---|
-| 10 | `Nominal` | Forge only |
-| 8  | `Nominal` | HeatTreat complete |
-| 14 | `Nominal` | Machining complete, CMM pass *(absorbs the original `UnderInspection` bucket — see note)* |
-| 6  | `FlaggedForReview` | NDT raised minor NC |
-| 5  | `Rework` | MRB dispositioned rework |
-| 4  | `Nominal` | FAI signed off (fully complete) |
-| 3  | `Scrap` | Critical NC |
+| 1 | `Nominal` | Forge only |
+| 2 | `Nominal` | Full lifecycle including FAI signed off |
+| 3 | `FlaggedForReview` | Machining + CMM pass, then NDT raised minor NC |
+| 4 | `Rework` | Major NC + MRB Rework disposition |
+| 5 | `Scrap` | Critical NC |
 
-> **Seed-shape deviation (M6):** the original plan reserved 6 parts for
-> `UnderInspection`, but the fact grammar has no `InspectionStarted`
-> transition — `UnderInspection` is not reachable by folding any fact
-> sequence in v1. Those 6 parts were folded into the Machining+CMM pass
-> bucket so the total remains 50. The deviation is also documented in
-> `InventorySeeder` XML comments.
+> **Reachability note:** the fact grammar has no `InspectionStarted`
+> transition, so `UnderInspection` is not reachable by folding any fact
+> sequence in v1. The seed therefore skips it. The constant
+> `InventorySeeder.TotalParts = 5` is the canonical count referenced by
+> the idempotency test.
 
-Serial numbers are deterministic (`HPT-BLD-S1-2028-00001` … `-00050`) so
-running the sample always produces the same seeded inventory for demos.
-
-HLCs are seeded across a 5-day window with at least a 60-minute stride
-between consecutive activities on the same part (jitter 60–180 min) so
-the seeded dashboard looks like it's been running for days, not seconds.
+Serial numbers are deterministic (`HPT-BLD-S1-2028-00001` … `-00005`)
+across runs, so the same five parts show up every time. HLCs are
+**not** deterministic across runs — each fact is stamped relative to
+`DateTimeOffset.UtcNow` so the dashboard always shows "recent"
+activity (the seed window scrolls with wall-clock time); within a
+single run the intra-part cadence is a jittered 60–180 minute gap and
+the ordering between parts is stable.
 
 ### 8.2 Implementation
 
@@ -534,7 +531,7 @@ asked for.
 | Partition chaos (M12) | NUnit | `FederationRouter.IsDroppedByPartitionAsync` hash filter; two-router simulation against one test cluster |
 | Seeder | NUnit | Idempotency (runs twice → same counts), spread correctness (every state bucket populated) |
 | gRPC contracts | NUnit + `Grpc.Net.Client` in-proc channel | Request/response shape, error codes, stream completion on cancel |
-| UI smoke | `bUnit` (tentative) | Dashboard renders, chaos fly-out opens, clicking a canned preset configures the expected sites. Scope TBD — may defer. |
+| UI smoke | not implemented | Dashboard renders, chaos fly-out opens, clicking a canned preset configures the expected sites. Deferred — the gRPC + grain + backend test layers cover the logic; the UI is thin Razor over services. |
 
 Chaos-style long-running tests remain `[Category("Chaos")]` and excluded
 from the iterative dev filter.
@@ -545,8 +542,7 @@ the test suite — keeps CI fast and hermetic).
 ## 10. Milestones
 
 | # | Deliverable | Status |
-| M6 | Bulk-load seeder + `IInventorySeedStateGrain` + idempotency test + deterministic seed | ✅ done |
-| M7 | **Fault-injection infrastructure (§4.3):** `ChaosFactBackend : IFactBackend` decorator + `IBackendChaosGrain` (jitter, transient fault rate, write amplification) + wire reorder buffer in `ProcessSiteGrain` (Tier 3) + `ListBackends` / `ConfigureBackend` RPCs on `SiteControlService` + "Lattice storage flakes" preset + domain tests for all three tiers | ✅ done |
+|---|---|---|
 | M1 | Repo restructure: scaffold new dir tree, solution/csproj setup, Azurite+Table Storage wired in `Program.cs`, build green on empty projects | ✅ done |
 | M2 | Domain + fold + NUnit fold tests | ✅ done |
 | M3 | Baseline + Lattice backends + `IFactBackend` + fan-out router | ✅ done |
@@ -554,8 +550,14 @@ the test suite — keeps CI fast and hermetic).
 | M5 | gRPC contracts (proto) + service implementations + contract tests via in-proc channel | ✅ done |
 | M6 | Bulk-load seeder + `IInventorySeedStateGrain` + idempotency test + deterministic seed | ✅ done |
 | M7 | **Fault-injection infrastructure (§4.3):** `ChaosFactBackend : IFactBackend` decorator + `IBackendChaosGrain` (jitter, transient fault rate, write amplification) + wire reorder buffer in `ProcessSiteGrain` (Tier 3) + `ListBackends` / `ConfigureBackend` RPCs on `SiteControlService` + "Lattice storage flakes" preset + domain tests for all three tiers | ✅ done |
+| M8 | Dashboard (Blazor Server) — parts grid, part-detail page, live push via `DashboardBroadcaster` / channel hub | ✅ done |
+| M9 | Operator actions — next-action resolver, `OperatorActions` facade, UI buttons driving `InventoryService` / `FactIngressService` | ✅ done |
+| M10 | Chaos fly-out side panel — site chaos rows, backend chaos sliders, canned presets, active-chaos banner | ✅ done |
+| M11 | Federation routing hardening — deterministic fan-out, `FactRouted` / `ChaosConfigChanged` events, dashboard subscriber | ✅ done |
+| M12 | Intra-cluster silo partition (§4.3 Tier 4): `IPartitionChaosGrain`, FNV-1a ordinal hash filter in `FederationRouter`, `PartCrdtStore` shadow-prefix writes, `PartitionHealHostedService`, `SiteActivityIndex` secondary B+ tree, two-silo `run.ps1` launcher | ✅ done |
 | M13 | **Cross-cluster replication (§13):** two independent Orleans clusters (`forge`, `heattreat`) each with two silos and its own Azurite, linked by per-tree HTTP replication over an HLC-ordered replog. Opt-in per tree, loop-broken via `RequestContext`, compacted by a janitor grain, with FUTURE seams for the library-native change-feed + continuous-merge capability. | ✅ done |
-| M14 | **Docker Compose topology (§14):** replace the localhost multi-process launcher with a Compose file that runs two Azurite containers and four silos across three networks (`forge-net`, `heattreat-net`, `wan`), publishing only HTTP ports 5001–5004 to the host. `Program.cs` honours `ASPNETCORE_URLS` and binds Orleans endpoints on `0.0.0.0`. `run.ps1` becomes a `docker compose` wrapper; the legacy host-process launcher survives as `run-legacy.ps1`. Enables Tier-5 genuine transport-level partition via `docker network disconnect`. | ✅ done |
+| M14 | **Docker Compose topology (§14):** replace the localhost multi-process launcher with a Compose file that runs two Azurite containers and four silos across three networks (`forge-net`, `heattreat-net`, `wan`), publishing only HTTP ports 5001–5004 to the host. `Program.cs` honours `ASPNETCORE_URLS` and binds Orleans endpoints on `0.0.0.0`. `run.ps1` is a `docker compose` wrapper. Enables Tier-5 genuine transport-level partition via `docker network disconnect`. | ✅ done |
+| — | Docs (README.md, `docs/architecture.md`, `docs/glossary.md`, Azurite setup, screenshots) | 🗒️ deferred, outside milestone numbering |
 
 ## 13. Cross-cluster replication (M13)
 
@@ -815,8 +817,8 @@ inside each cluster network; no host publish.
 
 ### 14.3 Config override via env vars
 
-`appsettings.cluster.{name}.json` still ships the same localhost
-defaults used by `run-legacy.ps1`. In Docker, compose overrides just
+`appsettings.cluster.{name}.json` still ships the same localhost defaults.
+In Docker, compose overrides just
 the fields that differ:
 
 - `ConnectionStrings__AzureTableStorage` → `http://azurite-{cluster}:10002/...`
@@ -825,8 +827,7 @@ the fields that differ:
   → the peer cluster's silo-A and silo-B HTTP endpoints. The list is
   tried in order by `ReplicationHttpClient.SendAsync`, giving
   cross-cluster failover when one peer silo is restarting or
-  disconnected from `wan`. A legacy single `Replication__Peers__0__BaseUrl`
-  scalar is still honoured for the `run-legacy.ps1` path.
+  disconnected from `wan`.
 - `Cluster__SiloPortA=11111 Cluster__SiloPortB=11111` — both silos can
   use the same Orleans port since each container has its own IP.
 - `ASPNETCORE_URLS=http://+:8080` — `Program.cs` skips its own
@@ -874,3 +875,4 @@ cluster report the same numbers and the view survives a silo restart.
 `ReplicationActivityTracker` is a thin fire-and-forget façade over
 that grain — hot-path writes never back-pressure on storage latency.
 The strip refreshes once per second via a Blazor Server `Timer`.
+

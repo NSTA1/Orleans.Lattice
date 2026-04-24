@@ -94,9 +94,14 @@ internal sealed class LatticeReplicationFilter(
 
         var op = methodName == "SetAsync" ? ReplicationOp.Set : ReplicationOp.Delete;
 
-        // Fire-and-forget replog append — we never want to slow the
-        // caller on storage latency. Failures are logged inside the
-        // writer and compensated for by the anti-entropy sweep.
-        _ = writer.AppendAsync(treeName, originalKey, op, CancellationToken.None);
+        // Await the replog append inline. The original design was
+        // fire-and-forget with "compensation from an anti-entropy
+        // sweep" — but no sweep exists in this sample, so a dropped
+        // append means the write never ships. Inline append trades
+        // one extra lattice write of latency per replicated user
+        // mutation for at-least-once semantics; the writer already
+        // swallows and logs storage failures so a transient hiccup
+        // never propagates to the caller.
+        await writer.AppendAsync(treeName, originalKey, op, CancellationToken.None).ConfigureAwait(false);
     }
 }
