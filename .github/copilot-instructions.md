@@ -25,7 +25,7 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
 
 | Element | Convention | Example |
 |---|---|---|
-| Public API namespace | `Orleans.Lattice` | `ILattice`, `LatticeOptions`, `SnapshotMode`, `LatticeExtensions` |
+| Public API namespace | `Orleans.Lattice` | `ILattice`, `LatticeOptions`, `SnapshotMode`, `LatticeExtensions`, `IMutationObserver`, `LatticeMutation`, `MutationKind` |
 | Internal namespace | `Orleans.Lattice.{Area}` | `Orleans.Lattice.BPlusTree.Grains` |
 | Test namespace | `Orleans.Lattice.Tests.{Area}` | `Orleans.Lattice.Tests.BPlusTree.Grains` |
 | Grain interface | `I{Name}Grain` (prefix `I`, suffix `Grain`) | `IBPlusLeafGrain` |

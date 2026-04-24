@@ -13,7 +13,8 @@ internal sealed partial class BPlusLeafGrain(
     IGrainContext context,
     [PersistentState("leaf", LatticeOptions.StorageProviderName)] IPersistentState<LeafNodeState> state,
     IGrainFactory grainFactory,
-    LatticeOptionsResolver optionsResolver) : IBPlusLeafGrain
+    LatticeOptionsResolver optionsResolver,
+    MutationObserverDispatcher mutationObservers) : IBPlusLeafGrain
 {
     private static readonly Dictionary<string, LwwValue<byte[]>> EmptyEntries = new();
 
@@ -157,6 +158,8 @@ internal sealed partial class BPlusLeafGrain(
             if (string.Compare(key, state.State.SplitKey!, StringComparison.Ordinal) >= 0)
             {
                 // The key belongs to the new sibling — forward it there.
+                // The sibling publishes its own mutation notification after persist,
+                // so we do not publish one here to avoid a duplicate for the same key.
                 var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.SplitSiblingId!.Value);
                 await sibling.SetAsync(key, value, expiresAtTicks);
             }
@@ -171,6 +174,10 @@ internal sealed partial class BPlusLeafGrain(
                 else
                     state.State.Entries[key] = entry;
                 await PersistAsync();
+                if (mutationObservers.HasObservers)
+                {
+                    await PublishSetAsync(key, state.State.Entries[key]);
+                }
             }
 
             return recovered;
@@ -196,6 +203,14 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         await PersistAsync();
+        if (mutationObservers.HasObservers)
+        {
+            // After a split, the key may have migrated to the new sibling —
+            // fall back to newEntry, which is guaranteed by strict-HLC-tick
+            // monotonicity to be the committed LWW winner.
+            var published = state.State.Entries.TryGetValue(key, out var committed) ? committed : newEntry;
+            await PublishSetAsync(key, published);
+        }
         return splitResult;
     }
 
@@ -220,9 +235,11 @@ internal sealed partial class BPlusLeafGrain(
 
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
         state.State.Version.Tick(ReplicaId);
-        state.State.Entries[key] = LwwValue<byte[]>.Tombstone(state.State.Clock);
+        var tombstone = LwwValue<byte[]>.Tombstone(state.State.Clock);
+        state.State.Entries[key] = tombstone;
         await PersistAsync();
         LatticeMetrics.LeafTombstonesCreated.Add(1, LeafTreeTag());
+        await PublishDeleteAsync(key, tombstone);
         return true;
     }
 

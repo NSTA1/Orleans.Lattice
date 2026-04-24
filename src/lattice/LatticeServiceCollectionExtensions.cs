@@ -26,6 +26,7 @@ public static class LatticeServiceCollectionExtensions
         configureStorage(builder, LatticeOptions.StorageProviderName);
         builder.Services.AddSingleton<IValidateOptions<LatticeOptions>, LatticeOptionsValidator>();
         builder.Services.AddSingleton<LatticeOptionsResolver>();
+        builder.Services.AddSingleton<MutationObserverDispatcher>();
         return builder;
     }
 

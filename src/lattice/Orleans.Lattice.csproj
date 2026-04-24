@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice</PackageId>
     <Version>3.0.0</Version>
-    <Description>Distributed B+ tree implementation for Microsoft Orleans.</Description>
+    <Description>Distributed B+ tree implementation (with CRDT primitives) for Microsoft Orleans.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
     <RepositoryType>git</RepositoryType>

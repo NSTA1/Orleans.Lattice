@@ -28,7 +28,7 @@ public partial class BPlusLeafGrainTests
             maxLeafKeys: maxLeafKeys,
             shardCount: 1,
             factory: grainFactory);
-        return new BPlusLeafGrain(context, state, grainFactory, resolver);
+        return new BPlusLeafGrain(context, state, grainFactory, resolver, TestMutationObservers.NoObservers());
     }
 
     // --- Split recovery ---

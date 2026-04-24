@@ -388,6 +388,83 @@ await tree.SetPublishEventsEnabledAsync(null, cancellationToken);
 
 For subscribing to the published events on the cluster client, see `SubscribeToEventsAsync` under [`LatticeExtensions`](#latticeextensions).
 
+## Mutation observers
+
+`IMutationObserver` is a grain-side extensibility hook invoked synchronously after every durably-committed mutation, before the grain method returns to the caller. It is the primary seam for building replication write-ahead logs, change-feed producers, and external audit consumers without reaching into grain internals.
+
+> **Mutation observers vs. [tree events](events.md).** Both surface "something changed" notifications, but they target different consumers:
+>
+> - **`IMutationObserver` is in-process, synchronous, and carries the full value bytes.** It runs on the grain's scheduler before the write returns, so the caller's latency is the observer's latency. Use it when a downstream component (replication WAL, outbox) must see the *value* at commit time and must be on the write path — typically another library, not application code.
+> - **Tree events are out-of-process, asynchronous, and metadata-only** (key + kind + HLC — *no value bytes*). They ride Orleans Streams and are fire-and-forget from the grain's perspective. Use them for UI updates, cache invalidation, dashboards, audit projections — anything that can tolerate at-most-once delivery and is willing to `GetAsync` the value itself if needed.
+>
+> A single write typically fires both: the observer first (inline, with value), then an event (post-commit, metadata-only). Choose observers when you need the value and the write path; choose events for everything else.
+
+Register one or more observers in the silo DI container — they are resolved as `IEnumerable<IMutationObserver>`, so multiple can coexist. When no observer is registered the hook is zero-cost: the grain checks `HasObservers` and short-circuits before allocating the payload.
+
+```csharp
+// Implement IMutationObserver as a singleton service:
+public sealed class MyReplicationObserver : IMutationObserver
+{
+    public Task OnMutationAsync(LatticeMutation mutation, CancellationToken ct)
+    {
+        // Inspect mutation.TreeId, mutation.Kind, mutation.Key, mutation.Value,
+        // mutation.Timestamp, mutation.IsTombstone, mutation.ExpiresAtTicks,
+        // and for DeleteRange also mutation.EndExclusiveKey.
+        return Task.CompletedTask;
+    }
+}
+```
+
+Register it on the silo:
+
+```csharp
+siloBuilder.ConfigureServices(services =>
+    services.AddSingleton<IMutationObserver, MyReplicationObserver>());
+```
+
+### Emission points and shape
+
+| Mutation | Emitted by | `Kind` | Notes |
+|----------|------------|--------|-------|
+| `SetAsync` (all overloads) | `BPlusLeafGrain` | `Set` | One event per key. `Value` is the committed bytes; `Timestamp` is the stamped HLC; `ExpiresAtTicks` carries the TTL deadline verbatim (or `0` for no-expiry). |
+| `DeleteAsync` | `BPlusLeafGrain` | `Delete` | One event per tombstoned key. `IsTombstone` is `true`, `Value` is `null`. Absent-key deletes publish nothing. |
+| `DeleteRangeAsync` | `ShardRootGrain` | `DeleteRange` | One event **per shard** that received the range (not per key and not per user call), emitted **even when the shard matched zero live keys** so replication consumers propagate the range to peer clusters unconditionally. A single `ILattice.DeleteRangeAsync` call against an N-shard tree produces up to N identical-payload `DeleteRange` mutations; consumers that need exactly-once delivery per user call must dedup on `(TreeId, Key, EndExclusiveKey)`. `Key` carries `startInclusive`; `EndExclusiveKey` carries `endExclusive`; `Timestamp` is `HybridLogicalClock.Zero` because a single range may produce many per-leaf HLCs. |
+
+`MergeEntriesAsync` / `MergeManyAsync` and other internal convergence paths deliberately do not publish — they are downstream of the originating write (which already published) and surfacing them would double-count.
+
+### Failure semantics
+
+The dispatcher wraps every observer call in a `try` / `catch`. Exceptions are logged as a warning with `ObserverType`, `TreeId`, `Key`, and `Kind`, and the dispatcher continues with the remaining observers — a faulty observer cannot short-circuit its peers or the write path. Strict-vs-best-effort propagation is the consumer's concern: an observer that wants strict semantics can itself queue durably and rethrow from a background flush, but the grain write is already durable by the time the hook fires.
+
+### Ordering and durability
+
+Observers see a mutation only after `PersistAsync()` has returned — the mutation is guaranteed durable before any observer is invoked. The hook runs on the grain's single-threaded scheduler, so observer invocations for a given key are serialised relative to subsequent mutations on that key.
+
+### Pitfalls and recommended pattern
+
+`IMutationObserver` is an intentionally thin, inline hook — it is not a safe place to do real I/O. The following sharp edges are inherent to the design; implementations that ignore them will add latency to every write in the silo.
+
+- **Every millisecond inside the observer is a millisecond added to the caller's write latency**, because the hook runs on the grain's single-threaded scheduler and is awaited before the grain method returns. Do not issue synchronous HTTP calls, database writes, or cross-cluster sends directly from `OnMutationAsync`.
+- **Exceptions are logged and swallowed.** The write has already been persisted and cannot be rolled back; if the observer throws, the caller is never told. Consumers that need at-least-once delivery must durably record the mutation themselves (local WAL / outbox) before returning and retry out-of-band.
+- **Merge paths are silent by design.** `MergeEntriesAsync` / `MergeManyAsync`, shard-split shadow-forward, saga compensation rollback, and snapshot / restore bulk loads do not fire the hook — they are replays of mutations already published at their origin.
+- **`DeleteRange` fires once per shard, not per user call**, with `Key = startInclusive`, `EndExclusiveKey = endExclusive`, and `Timestamp = HybridLogicalClock.Zero`. A single `ILattice.DeleteRangeAsync` call against an N-shard tree produces up to N identical-payload `DeleteRange` mutations — idempotent by design but noisy. Consumers that need exactly-once delivery per user call must dedup on `(TreeId, Key, EndExclusiveKey)`; observers that need per-key granularity must expand the range themselves.
+- **Ordering is per-grain, not global.** Successive mutations on the same key observe strict order; mutations across different keys, leaves, or trees do not. Impose a global order downstream if you need one (the per-mutation HLC is designed for this).
+- **A single registration fires for every tree in the silo.** In multi-tenant deployments, filter on `LatticeMutation.TreeId` in the first line of `OnMutationAsync` before doing any real work.
+
+**Recommended pattern.** Enqueue the mutation onto a bounded `Channel<LatticeMutation>` and drain it from a background `IHostedService`. The grain write path then only pays the cost of a channel write; all real I/O (replication, change-feed, audit) runs off the grain scheduler and can apply its own batching, retry, and backpressure policies independently.
+
+```csharp
+public sealed class QueueingObserver(Channel<LatticeMutation> queue) : IMutationObserver
+{
+    public Task OnMutationAsync(LatticeMutation mutation, CancellationToken ct)
+    {
+        // TryWrite is non-blocking; the drain service handles backpressure.
+        queue.Writer.TryWrite(mutation);
+        return Task.CompletedTask;
+    }
+}
+```
+
 ## Metrics
 
 Orleans.Lattice publishes `System.Diagnostics.Metrics` instruments on a single static meter named `orleans.lattice`, exposed via `Orleans.Lattice.LatticeMetrics`. Instruments are grouped into five tiers: shard-level ops (`shard.reads`, `shard.writes`, `shard.splits_committed`), leaf-level latencies and counters (`leaf.write.duration`, `leaf.scan.duration`, `leaf.compaction.duration`, `leaf.tombstones.created`, `leaf.tombstones.reaped`, `leaf.tombstones.expired`, `leaf.splits`), the read cache (`cache.hits`, `cache.misses`), saga / coordinator / lifecycle outcomes (`atomic_write.completed`, `coordinator.completed`, `tree.lifecycle`), and events / configuration (`events.published`, `events.dropped`, `config.changed`). Every measurement is tagged with `tree` (logical tree id); shard instruments additionally carry `shard` (physical shard index), scan histograms carry `operation` (`keys` or `entries`), saga / coordinator / lifecycle / event counters carry `outcome`, `kind`, or `reason`, and `config.changed` carries `config` (e.g. `publish_events`). Subscribe once with `.AddMeter("orleans.lattice")` on your OpenTelemetry `MeterProviderBuilder`; see [Metrics](metrics.md) for the full instrument catalog, tag conventions, and registration example.

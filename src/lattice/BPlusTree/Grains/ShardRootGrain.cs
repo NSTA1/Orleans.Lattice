@@ -16,7 +16,8 @@ internal sealed partial class ShardRootGrain(
     [PersistentState("shardroot", LatticeOptions.StorageProviderName)] IPersistentState<ShardRootState> state,
     IGrainFactory grainFactory,
     LatticeOptionsResolver optionsResolver,
-    ILogger<ShardRootGrain> logger) : IShardRootGrain
+    ILogger<ShardRootGrain> logger,
+    MutationObserverDispatcher mutationObservers) : IShardRootGrain
 {
     private string? _treeId;
     private string TreeId => _treeId ??= ComputeTreeId();
@@ -422,6 +423,7 @@ internal sealed partial class ShardRootGrain(
         }
 
         await forwardTask;
+        await PublishDeleteRangeAsync(startInclusive, endExclusive);
         return totalDeleted;
     }
 
