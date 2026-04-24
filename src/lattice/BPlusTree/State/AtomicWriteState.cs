@@ -32,6 +32,17 @@ internal sealed class AtomicPreValue
     /// to <c>0</c>, matching a no-TTL entry).
     /// </summary>
     [Id(3)] public long ExpiresAtTicks { get; set; }
+
+    /// <summary>
+    /// Origin cluster id captured from the pre-saga entry's
+    /// <see cref="Primitives.LwwValue{T}.OriginClusterId"/>, or <c>null</c>
+    /// when the key was absent or authored locally. Restored through
+    /// <see cref="LatticeOriginContext.With"/> during compensation so the
+    /// rolled-back value re-lands with its original origin stamp.
+    /// Wire-compatible: missing field on legacy persisted state decodes
+    /// to <c>null</c>.
+    /// </summary>
+    [Id(4)] public string? OriginClusterId { get; set; }
 }
 
 /// <summary>

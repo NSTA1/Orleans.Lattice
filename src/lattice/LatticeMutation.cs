@@ -65,4 +65,16 @@ public readonly record struct LatticeMutation
     /// <see cref="MutationKind.Set"/>; always <c>0</c> for deletes.
     /// </summary>
     [Id(7)] public long ExpiresAtTicks { get; init; }
+
+    /// <summary>
+    /// Identifier of the cluster that authored this mutation, or
+    /// <c>null</c> for a local write. Populated at commit time from the
+    /// ambient <see cref="LatticeOriginContext"/> so replication-aware
+    /// observers can skip re-forwarding mutations that originated
+    /// elsewhere and avoid replication loops. Always <c>null</c> on
+    /// <see cref="MutationKind.DeleteRange"/> unless the range-delete call
+    /// was itself stamped with an origin — range deletes read the context
+    /// at publish time rather than pulling from a per-key <c>LwwValue</c>.
+    /// </summary>
+    [Id(8)] public string? OriginClusterId { get; init; }
 }

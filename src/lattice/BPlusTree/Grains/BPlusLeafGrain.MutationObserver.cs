@@ -28,6 +28,7 @@ internal sealed partial class BPlusLeafGrain
             Timestamp = committed.Timestamp,
             IsTombstone = committed.IsTombstone,
             ExpiresAtTicks = committed.ExpiresAtTicks,
+            OriginClusterId = committed.OriginClusterId,
         };
         return mutationObservers.PublishAsync(mutation);
     }
@@ -46,6 +47,7 @@ internal sealed partial class BPlusLeafGrain
             Key = key,
             Timestamp = tombstone.Timestamp,
             IsTombstone = true,
+            OriginClusterId = tombstone.OriginClusterId,
         };
         return mutationObservers.PublishAsync(mutation);
     }

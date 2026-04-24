@@ -25,6 +25,20 @@ internal readonly record struct LwwValue<T>
     /// </summary>
     [Id(3)] public long ExpiresAtTicks { get; init; }
 
+    /// <summary>
+    /// Identifier of the cluster that authored this mutation, or <c>null</c>
+    /// when the write originated locally. Stamped at commit time from the
+    /// ambient <see cref="LatticeOriginContext"/> inside the grain write
+    /// path and preserved verbatim across shadow-forward, saga
+    /// prepare/compensate, tree snapshot / restore, bulk-load, and merge.
+    /// Exposed on the public <see cref="LatticeMutation"/> surface so
+    /// downstream <see cref="IMutationObserver"/> consumers (notably the
+    /// replication package) can skip re-forwarding mutations that
+    /// originated elsewhere. Wire-compatible: legacy persisted state
+    /// without this field decodes to <c>null</c>.
+    /// </summary>
+    [Id(4)] public string? OriginClusterId { get; init; }
+
     public static LwwValue<T> Create(T value, HybridLogicalClock timestamp) =>
         new() { Value = value, Timestamp = timestamp };
 

@@ -112,4 +112,45 @@ public class LwwValueTests
         Assert.That(winner.Value, Is.EqualTo("new"));
         Assert.That(winner.ExpiresAtTicks, Is.EqualTo(999L));
     }
+
+    // --- OriginClusterId ---
+
+    [Test]
+    public void Create_defaults_OriginClusterId_to_null()
+    {
+        var v = LwwValue<string>.Create("x", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
+        Assert.That(v.OriginClusterId, Is.Null);
+    }
+
+    [Test]
+    public void With_expression_sets_OriginClusterId()
+    {
+        var v = LwwValue<string>.Create("x", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 })
+            with { OriginClusterId = "cluster-east" };
+        Assert.That(v.OriginClusterId, Is.EqualTo("cluster-east"));
+        Assert.That(v.Value, Is.EqualTo("x"));
+        Assert.That(v.IsTombstone, Is.False);
+    }
+
+    [Test]
+    public void Tombstone_can_carry_OriginClusterId()
+    {
+        var t = LwwValue<string>.Tombstone(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 })
+            with { OriginClusterId = "peer-a" };
+        Assert.That(t.IsTombstone, Is.True);
+        Assert.That(t.OriginClusterId, Is.EqualTo("peer-a"));
+    }
+
+    [Test]
+    public void Merge_preserves_OriginClusterId_of_winning_value()
+    {
+        var older = LwwValue<string>.Create("old", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 })
+            with { OriginClusterId = "cluster-old" };
+        var newer = LwwValue<string>.Create("new", new HybridLogicalClock { WallClockTicks = 2, Counter = 0 })
+            with { OriginClusterId = "cluster-new" };
+
+        var winner = LwwValue<string>.Merge(older, newer);
+        Assert.That(winner.Value, Is.EqualTo("new"));
+        Assert.That(winner.OriginClusterId, Is.EqualTo("cluster-new"));
+    }
 }
