@@ -1,8 +1,13 @@
 @page "/"
+@page "/inventory"
+@page "/activity"
+@page "/activity/{Site}"
+@using Microsoft.JSInterop
 @implements IDisposable
 @inject DashboardBroadcaster Broadcaster
 @inject SiteActivityIndex Index
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 @inject ILogger<Dashboard> Log
 
 <PageTitle>Inventory · Multi-Site Manufacturing</PageTitle>
@@ -65,13 +70,14 @@
         <ul class="tabs" role="tablist" aria-label="Activity site filter">
             @foreach (var s in ProcessSiteInfo.InLifecycleOrder)
             {
+                var site = s;
                 <li>
-                    <a href="#panel-activity"
+                    <a href="@($"/activity/{site}")"
                        role="tab"
-                       aria-selected="@(_selectedSite == s ? "true" : "false")"
-                       @onclick="() => SelectSiteAsync(s)"
+                       aria-selected="@(_selectedSite == site ? "true" : "false")"
+                       @onclick="() => NavigateToSite(site)"
                        @onclick:preventDefault="true">
-                        @ProcessSiteInfo.GetDisplayName(s)
+                        @ProcessSiteInfo.GetDisplayName(site)
                     </a>
                 </li>
             }
@@ -161,7 +167,139 @@
     private bool _scanBusy;
     private int _scanSeq;
 
-    private void SelectTab(DashboardTab tab) => _activeTab = tab;
+    /// <summary>
+    /// Route parameter bound to <c>/activity/{Site}</c>. Consumed once at
+    /// component initialization to seed the initial deep-link state; all
+    /// subsequent tab clicks update the URL via <c>history.pushState</c>
+    /// rather than Blazor's router so the live component instance keeps
+    /// its scan state rather than being torn down by enhanced navigation.
+    /// </summary>
+    [Parameter] public string? Site { get; set; }
+
+    private async Task SelectTab(DashboardTab tab)
+    {
+        if (_activeTab == tab)
+        {
+            return;
+        }
+
+        _activeTab = tab;
+        // Preserve the last-selected site when flipping back to the
+        // Activity tab so the operator doesn't lose their place.
+        var path = tab switch
+        {
+            DashboardTab.Activity when _selectedSite is not null => $"/activity/{_selectedSite.Value}",
+            DashboardTab.Activity => "/activity",
+            _ => "/inventory",
+        };
+        await PushUrlAsync(path);
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Handle an activity-site tab click. Updates in-memory state
+    /// directly and pushes the new URL via <c>history.pushState</c> so
+    /// the browser address bar + Back/Forward stack reflect the
+    /// selection without round-tripping through Blazor's router.
+    /// </summary>
+    private async Task NavigateToSite(ProcessSite site)
+    {
+        if (_selectedSite == site)
+        {
+            return;
+        }
+
+        _activeTab = DashboardTab.Activity;
+        await PushUrlAsync($"/activity/{site}");
+        await SelectSiteAsync(site);
+    }
+
+    /// <summary>
+    /// Push a new URL into the browser history without triggering
+    /// Blazor's router. Falls back silently during prerender, where
+    /// JS interop is unavailable.
+    /// </summary>
+    private async Task PushUrlAsync(string path)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("history.pushState", null, string.Empty, path);
+        }
+        catch (InvalidOperationException)
+        {
+            // Prerender pass — JS interop unavailable; URL will be set
+            // correctly on the interactive pass via the @page routes.
+        }
+        catch (JSDisconnectedException)
+        {
+            // Circuit torn down between render and click; safe to ignore.
+        }
+    }
+
+    /// <summary>
+    /// Apply initial state from the matched route so deep links like
+    /// <c>/activity/OhioForge</c> land on the right tab with a scan in
+    /// flight.
+    /// </summary>
+    private async Task ApplyInitialRouteAsync()
+    {
+        var relative = Nav.ToBaseRelativePath(Nav.Uri);
+        var pathOnly = relative.Split('?', '#')[0].Trim('/');
+        var firstSegment = pathOnly.Length == 0
+            ? string.Empty
+            : pathOnly.Split('/', 2)[0];
+
+        _activeTab = string.Equals(firstSegment, "activity", StringComparison.OrdinalIgnoreCase)
+            ? DashboardTab.Activity
+            : DashboardTab.Inventory;
+
+        if (_activeTab == DashboardTab.Activity
+            && !string.IsNullOrWhiteSpace(Site)
+            && Enum.TryParse<ProcessSite>(Site, ignoreCase: true, out var parsed)
+            && ProcessSiteInfo.InLifecycleOrder.Contains(parsed))
+        {
+            await SelectSiteAsync(parsed);
+        }
+    }
+
+    /// <summary>
+    /// Handle browser Back/Forward by re-parsing the URL. This is the
+    /// only navigation path that still goes through Blazor's router
+    /// since <c>history.pushState</c> from our click handlers does
+    /// not raise <see cref="NavigationManager.LocationChanged"/>
+    /// </summary>
+    private async void OnLocationChanged(object? sender, LocationChangedEventArgs args)
+    {
+        var relative = Nav.ToBaseRelativePath(args.Location);
+        var pathOnly = relative.Split('?', '#')[0].Trim('/');
+        var segments = pathOnly.Length == 0
+            ? Array.Empty<string>()
+            : pathOnly.Split('/');
+
+        var desiredTab = segments.Length > 0
+            && string.Equals(segments[0], "activity", StringComparison.OrdinalIgnoreCase)
+            ? DashboardTab.Activity
+            : DashboardTab.Inventory;
+
+        ProcessSite? desiredSite = null;
+        if (desiredTab == DashboardTab.Activity
+            && segments.Length >= 2
+            && Enum.TryParse<ProcessSite>(segments[1], ignoreCase: true, out var parsed)
+            && ProcessSiteInfo.InLifecycleOrder.Contains(parsed))
+        {
+            desiredSite = parsed;
+        }
+
+        _activeTab = desiredTab;
+        await InvokeAsync(StateHasChanged);
+
+        if (desiredTab == DashboardTab.Activity
+            && desiredSite is not null
+            && desiredSite != _selectedSite)
+        {
+            await SelectSiteAsync(desiredSite.Value);
+        }
+    }
 
     private void OnPartCreated(PartSerialNumber serial)
     {
@@ -264,6 +402,10 @@
 
     protected override async Task OnInitializedAsync()
     {
+        await ApplyInitialRouteAsync();
+
+        Nav.LocationChanged += OnLocationChanged;
+
         var initial = await Broadcaster.GetInitialPartsAsync();
         foreach (var part in initial)
         {
@@ -293,6 +435,7 @@
 
     public void Dispose()
     {
+        Nav.LocationChanged -= OnLocationChanged;
         _cts?.Cancel();
         _cts?.Dispose();
     }
