@@ -180,6 +180,7 @@ flowchart LR
     janG -->|"prune ≤ min(cursor) − 24h"| replog
 
     inbound --> latBE
+    inbound -->|"decode + replay (mfg-facts only)"| baseBE
 
     orleans --- tables
     lattice --- tables
@@ -311,6 +312,7 @@ sequenceDiagram
     participant Traefik as traefik-eu
     participant Inbound as POST /replicate/mfg-facts<br/>(eu silo)
     participant PeerTree as mfg-facts (eu)
+    participant PeerBase as Baseline backend (eu)
 
     UI->>Router: EmitFact(env)
     Router->>Lat: AppendAsync(env)
@@ -329,6 +331,8 @@ sequenceDiagram
         Inbound->>PeerTree: SetAsync / DeleteAsync per entry
         PeerTree-->>Filter: outgoing call completes
         Note over Filter: Sees replay flag → skips replog append<br/>(loop broken)
+        Inbound->>PeerBase: decode + EmitAsync (Set entries only, mfg-facts tree)
+        Note over Inbound,PeerBase: Baseline has no retraction concept —<br/>Delete entries skipped
         Inbound-->>Traefik: 200 OK
         Traefik-->>Rep: ack
         Rep->>Rep: advance Cursor, persist
@@ -346,6 +350,7 @@ Failure modes and their recovery:
 | A → B → A cycle | Would re-append replog on inbound apply | Broken by `RequestContext["lattice.replay"]` check in the filter. |
 | Cluster split preset | `IReplicationDisconnectGrain.IsDisconnected = true` | Tick is a no-op; inbound returns 503; replog grows locally; resumes from cursor on clear. |
 | Tier-5 `docker network disconnect` | HTTP POST fails at transport layer | Identical to "peer unreachable"; replicator backs off, catches up on reconnect. |
+| Baseline replay decode fails | Single entry skipped on peer's baseline; lattice apply still succeeds | Logged; subsequent entries continue to apply. Baseline is a demo-visualisation backend, not a correctness-critical store. |
 
 ---
 

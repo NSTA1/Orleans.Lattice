@@ -63,7 +63,14 @@ defect evidence and must remain observable, even when a prior
 fan-out `FederationRouter`:
 
 - **Baseline** — an Orleans grain per part that appends facts in
-  arrival order. Drifts under chaos-induced reorder.
+  arrival order. Drifts under chaos-induced reorder. On peer
+  clusters the baseline is *also* fed by the inbound replication
+  endpoint (decoding every replicated `mfg-facts` Set entry and
+  re-emitting it locally), which models naive event-log
+  replication — enough for cold-seed parity across clusters, but
+  still vulnerable to divergence under concurrent writes because
+  the peer applies replicated batches in HLC order while the
+  originating cluster applied its local writes in arrival order.
 - **Lattice** — persists facts to the `mfg-facts` tree and computes
   `ComplianceState` by scanning and folding in HLC order. Converges
   under reorder.

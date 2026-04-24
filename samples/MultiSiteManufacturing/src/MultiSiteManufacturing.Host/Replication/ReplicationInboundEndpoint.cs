@@ -3,7 +3,10 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MultiSiteManufacturing.Host.Baseline;
+using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
+using MultiSiteManufacturing.Host.Lattice;
 using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
@@ -29,6 +32,21 @@ namespace MultiSiteManufacturing.Host.Replication;
 /// caveat.
 /// </para>
 /// <para>
+/// <b>Baseline replay.</b> For the <see cref="LatticeFactBackend.FactTreeId"/>
+/// tree, every successfully-applied <see cref="ReplicationOp.Set"/>
+/// entry is also decoded and fed to the local
+/// <see cref="BaselineFactBackend"/>. This models naive event-log
+/// replication for the baseline backend — it lets a peer cluster's
+/// baseline track the same fact set a local emit would produce, so
+/// cold-seed state on the peer matches the seeding cluster.
+/// The replog stays lattice-only (this is a one-way replay from the
+/// lattice stream into the peer's baseline); <see cref="ReplicationOp.Delete"/>
+/// entries are ignored because the baseline has no fact-retraction
+/// concept. Decode / emit failures are logged and the batch
+/// continues — baseline is a demo-visualisation backend and a
+/// single-entry loss is preferable to breaking replication.
+/// </para>
+/// <para>
 /// <b>FUTURE seam.</b> When the library gains cross-tree continuous
 /// merge, the receiver's apply loop becomes a merge invocation that
 /// preserves the source HLC — at which point the LWW-register
@@ -52,6 +70,7 @@ internal static class ReplicationInboundEndpoint
             IGrainFactory grains,
             ReplicationTopology topology,
             ReplicationActivityTracker activity,
+            BaselineFactBackend baselineBackend,
             ILoggerFactory loggerFactory,
             CancellationToken cancellationToken) =>
         {
@@ -89,6 +108,11 @@ internal static class ReplicationInboundEndpoint
             var applied = 0;
             var highest = HybridLogicalClock.Zero;
 
+            // Only the fact-tree feeds the baseline backend. Other
+            // replicated trees (site activity index, part CRDT) have
+            // no baseline analogue.
+            var replayToBaseline = string.Equals(tree, LatticeFactBackend.FactTreeId, StringComparison.Ordinal);
+
             // Cycle break: the outgoing call filter reads this flag and
             // skips appending to the local replog for every SetAsync /
             // DeleteAsync invoked below. Stamp once outside the loop;
@@ -109,6 +133,13 @@ internal static class ReplicationInboundEndpoint
                         else if (entry.Value is { Length: > 0 } bytes)
                         {
                             await lattice.SetAsync(entry.Key, bytes, cancellationToken).ConfigureAwait(false);
+
+                            if (replayToBaseline)
+                            {
+                                await TryReplayToBaselineAsync(
+                                    baselineBackend, bytes, batch.SourceCluster, entry.Key, log, cancellationToken)
+                                    .ConfigureAwait(false);
+                            }
                         }
                         else
                         {
@@ -151,5 +182,49 @@ internal static class ReplicationInboundEndpoint
         });
 
         return app;
+    }
+
+    /// <summary>
+    /// Decodes a replicated <c>mfg-facts</c> payload and feeds the
+    /// resulting <see cref="Fact"/> into <paramref name="baseline"/>.
+    /// Exceptions are logged and swallowed — a single malformed or
+    /// un-decodable entry must not abort the replication batch.
+    /// </summary>
+    /// <remarks>
+    /// Exposed as <c>internal</c> so unit tests can exercise the
+    /// decode + emit path without standing up the full minimal-API
+    /// host.
+    /// </remarks>
+    internal static async Task TryReplayToBaselineAsync(
+        BaselineFactBackend baseline,
+        byte[] payload,
+        string sourceCluster,
+        string key,
+        ILogger log,
+        CancellationToken cancellationToken)
+    {
+        Fact fact;
+        try
+        {
+            fact = FactJsonCodec.Decode(payload);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex,
+                "Inbound replication: baseline replay skipped — decode failed for key {Key} source {Source}",
+                key, sourceCluster);
+            return;
+        }
+
+        try
+        {
+            await baseline.EmitAsync(fact, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex,
+                "Inbound replication: baseline emit failed for fact {FactId} serial {Serial} source {Source}",
+                fact.FactId, fact.Serial.Value, sourceCluster);
+        }
     }
 }
