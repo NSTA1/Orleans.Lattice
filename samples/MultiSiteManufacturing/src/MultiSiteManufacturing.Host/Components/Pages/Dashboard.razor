@@ -168,6 +168,19 @@
     private int _scanSeq;
 
     /// <summary>
+    /// Live entries that arrived on the activity subscription while the
+    /// initial range scan for <see cref="_selectedSite"/> was still in
+    /// flight. Drained into <see cref="_siteEntries"/> after the scan
+    /// lands so no per-fact updates are lost between
+    /// <see cref="SelectSiteAsync"/> kick-off and result commit.
+    /// Keyed by scan sequence so a late-arriving event for a site the
+    /// operator has already left is discarded rather than attached to
+    /// the new site's buffer.
+    /// </summary>
+    private readonly List<SiteActivityIndexEntry> _pendingActivity = new();
+    private int _pendingActivityScanSeq = -1;
+
+    /// <summary>
     /// Route parameter bound to <c>/activity/{Site}</c>. Consumed once at
     /// component initialization to seed the initial deep-link state; all
     /// subsequent tab clicks update the URL via <c>history.pushState</c>
@@ -313,6 +326,13 @@
         _selectedSite = site;
         _siteLoadError = null;
 
+        // Reset the pending-live buffer for the new scan so events for
+        // the previous site can't leak into this result. Events that
+        // arrive for `site` between here and the scan's completion are
+        // captured by OnActivityEntry.
+        _pendingActivity.Clear();
+        _pendingActivityScanSeq = mySeq;
+
         // First scan in this tab session: there's nothing to show, so
         // flip to busy immediately. Subsequent scans keep the previous
         // site's results visible and only show the busy indicator if
@@ -351,10 +371,97 @@
             return;
         }
 
-        _siteEntries = result;
+        // Merge any live entries that landed during the scan on top of
+        // the scan result, then stop buffering — subsequent live
+        // entries go straight into _siteEntries.
+        var merged = new List<SiteActivityIndexEntry>(result);
+        foreach (var pending in _pendingActivity)
+        {
+            MergeLiveEntry(merged, pending);
+        }
+        _pendingActivity.Clear();
+        _pendingActivityScanSeq = -1;
+
+        _siteEntries = merged;
         _siteLoadError = error;
         _scanBusy = false;
         StateHasChanged();
+    }
+
+    /// <summary>
+    /// Handler for a live site-activity entry pushed by the broadcaster.
+    /// Routes the entry to the currently-selected site's view (merging
+    /// into the committed result) or to the pending buffer if the
+    /// initial range scan hasn't landed yet. Entries for other sites
+    /// or while the Activity tab is hidden are dropped — re-selecting
+    /// the site re-runs the full range scan.
+    /// </summary>
+    private async Task OnActivityEntry(SiteActivityIndexEntry entry)
+    {
+        if (_activeTab != DashboardTab.Activity
+            || _selectedSite is not { } site
+            || entry.Site != site)
+        {
+            return;
+        }
+
+        // Scan still in flight: capture the entry so it can be merged
+        // in once the result lands.
+        if (_siteEntries is null || _pendingActivityScanSeq == _scanSeq)
+        {
+            _pendingActivity.Add(entry);
+            return;
+        }
+
+        var next = new List<SiteActivityIndexEntry>(_siteEntries);
+        if (MergeLiveEntry(next, entry))
+        {
+            _siteEntries = next;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>
+    /// Merges <paramref name="entry"/> into <paramref name="entries"/>,
+    /// keeping the most-recent HLC per serial and preserving the
+    /// HLC-descending order that <see cref="SiteActivityIndex.ListAtSiteAsync"/>
+    /// produces. Returns <c>true</c> when the list changed.
+    /// </summary>
+    private static bool MergeLiveEntry(List<SiteActivityIndexEntry> entries, SiteActivityIndexEntry entry)
+    {
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (entries[i].Serial != entry.Serial)
+            {
+                continue;
+            }
+
+            if (entries[i].Hlc >= entry.Hlc)
+            {
+                // Stale or duplicate — nothing to do.
+                return false;
+            }
+
+            entries.RemoveAt(i);
+            InsertDescending(entries, entry);
+            return true;
+        }
+
+        InsertDescending(entries, entry);
+        return true;
+    }
+
+    private static void InsertDescending(List<SiteActivityIndexEntry> entries, SiteActivityIndexEntry entry)
+    {
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (entries[i].Hlc < entry.Hlc)
+            {
+                entries.Insert(i, entry);
+                return;
+            }
+        }
+        entries.Add(entry);
     }
 
     private async Task DebouncedBusyAsync(int seq, Task scanTask)
@@ -414,6 +521,7 @@
 
         _cts = new CancellationTokenSource();
         _ = ConsumeAsync(_cts.Token);
+        _ = ConsumeActivityAsync(_cts.Token);
     }
 
     private async Task ConsumeAsync(CancellationToken ct)
@@ -430,6 +538,22 @@
         catch (Exception ex)
         {
             Log.LogError(ex, "Dashboard subscriber loop crashed");
+        }
+    }
+
+    private async Task ConsumeActivityAsync(CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var entry in Broadcaster.SubscribeSiteActivity(ct))
+            {
+                await OnActivityEntry(entry);
+            }
+        }
+        catch (OperationCanceledException) { /* expected on dispose */ }
+        catch (Exception ex)
+        {
+            Log.LogError(ex, "Dashboard activity subscriber loop crashed");
         }
     }
 

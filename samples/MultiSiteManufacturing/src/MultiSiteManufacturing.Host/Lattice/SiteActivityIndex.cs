@@ -133,8 +133,12 @@ public sealed class SiteActivityIndex(
     /// <summary>
     /// Short, human-readable label describing what happened at a
     /// site — these render directly into the parts-by-site grid.
+    /// Exposed so the dashboard broadcaster can build a
+    /// <see cref="SiteActivityIndexEntry"/> for a live fact without
+    /// round-tripping through the lattice (the range scan writes the
+    /// same label under <see cref="AppendAsync"/>).
     /// </summary>
-    private static string DescribeActivity(Fact fact) => fact switch
+    public static string DescribeActivity(Fact fact) => fact switch
     {
         ProcessStepCompleted s => $"Step: {s.Stage}",
         InspectionRecorded i => $"Inspection: {i.Inspection} {i.Outcome}",

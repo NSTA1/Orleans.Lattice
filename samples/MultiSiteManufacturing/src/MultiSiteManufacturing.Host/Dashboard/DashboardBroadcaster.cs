@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
+using MultiSiteManufacturing.Host.Lattice;
 
 namespace MultiSiteManufacturing.Host.Dashboard;
 
@@ -42,6 +43,7 @@ public sealed class DashboardBroadcaster : IHostedService
     private readonly ConcurrentDictionary<Guid, Channel<PartSummaryUpdate>> _partSubs = new();
     private readonly ConcurrentDictionary<Guid, Channel<ChaosOverview>> _chaosSubs = new();
     private readonly ConcurrentDictionary<Guid, Channel<DivergenceEvent>> _divSubs = new();
+    private readonly ConcurrentDictionary<Guid, Channel<SiteActivityIndexEntry>> _activitySubs = new();
 
     // Remembers the last-published (baseline, lattice) state per part so
     // PublishPartAsync can decide whether a fresh summary should also
@@ -62,6 +64,8 @@ public sealed class DashboardBroadcaster : IHostedService
     {
         _router.FactRouted += OnFactRouted;
         _router.FactReplicated += OnFactRouted;
+        _router.FactRouted += OnFactRoutedForActivity;
+        _router.FactReplicated += OnFactRoutedForActivity;
         _router.ChaosConfigChanged += OnChaosConfigChanged;
         return Task.CompletedTask;
     }
@@ -71,6 +75,8 @@ public sealed class DashboardBroadcaster : IHostedService
     {
         _router.FactRouted -= OnFactRouted;
         _router.FactReplicated -= OnFactRouted;
+        _router.FactRouted -= OnFactRoutedForActivity;
+        _router.FactReplicated -= OnFactRoutedForActivity;
         _router.ChaosConfigChanged -= OnChaosConfigChanged;
         return Task.CompletedTask;
     }
@@ -216,6 +222,48 @@ public sealed class DashboardBroadcaster : IHostedService
         }
     }
 
+    /// <summary>
+    /// Live feed of site-activity entries — one message per fact
+    /// routed locally (<see cref="FederationRouter.FactRouted"/>) or
+    /// replicated from a peer cluster
+    /// (<see cref="FederationRouter.FactReplicated"/>). The dashboard's
+    /// "Inventory By Activity" sub-tab consumes this and merges entries
+    /// that match its currently-selected <see cref="ProcessSite"/> into
+    /// the displayed grid so a user watching a site sub-tab sees new
+    /// activity appear immediately without re-running the range scan.
+    /// </summary>
+    /// <remarks>
+    /// The broadcaster does not filter by site — every subscriber
+    /// receives every entry and filters client-side. Volumes are
+    /// modest (one entry per fact) and the per-subscriber channel is
+    /// unbounded, matching the back-pressure model of the existing
+    /// <see cref="SubscribePartUpdates"/> and
+    /// <see cref="SubscribeChaosChanges"/> feeds.
+    /// </remarks>
+    public async IAsyncEnumerable<SiteActivityIndexEntry> SubscribeSiteActivity(
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var id = Guid.NewGuid();
+        var channel = Channel.CreateUnbounded<SiteActivityIndexEntry>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false,
+        });
+        _activitySubs[id] = channel;
+        try
+        {
+            await foreach (var entry in channel.Reader.ReadAllAsync(cancellationToken))
+            {
+                yield return entry;
+            }
+        }
+        finally
+        {
+            _activitySubs.TryRemove(id, out _);
+            channel.Writer.TryComplete();
+        }
+    }
+
     /// <inheritdoc />
     public ValueTask DisposeAsync()
     {
@@ -231,9 +279,14 @@ public sealed class DashboardBroadcaster : IHostedService
         {
             sub.Writer.TryComplete();
         }
+        foreach (var sub in _activitySubs.Values)
+        {
+            sub.Writer.TryComplete();
+        }
         _partSubs.Clear();
         _chaosSubs.Clear();
         _divSubs.Clear();
+        _activitySubs.Clear();
         _lastStates.Clear();
         return ValueTask.CompletedTask;
     }
@@ -241,6 +294,32 @@ public sealed class DashboardBroadcaster : IHostedService
     private void OnFactRouted(object? sender, Fact fact) => _ = PublishPartAsync(fact);
 
     private void OnChaosConfigChanged(object? sender, EventArgs e) => _ = PublishChaosAsync();
+
+    private void OnFactRoutedForActivity(object? sender, Fact fact)
+    {
+        // Build the entry directly from the in-memory fact so live
+        // updates don't pay a lattice round-trip. The label is
+        // identical to the one SiteActivityIndex.AppendAsync writes
+        // into the index tree, so a subsequent range-scan refresh
+        // renders the same text. Exceptions here must not propagate
+        // back into the router's fan-out.
+        try
+        {
+            var entry = new SiteActivityIndexEntry(
+                fact.Site,
+                fact.Serial,
+                fact.Hlc,
+                SiteActivityIndex.DescribeActivity(fact));
+            foreach (var sub in _activitySubs.Values)
+            {
+                sub.Writer.TryWrite(entry);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fan out site-activity entry for fact {FactId}", fact.FactId);
+        }
+    }
 
     private async Task PublishPartAsync(Fact fact)
     {

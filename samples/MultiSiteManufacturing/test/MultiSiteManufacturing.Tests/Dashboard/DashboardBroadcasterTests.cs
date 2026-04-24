@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using MultiSiteManufacturing.Host.Dashboard;
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
+using MultiSiteManufacturing.Host.Lattice;
 using MultiSiteManufacturing.Tests.Federation;
 using NUnit.Framework;
 using static MultiSiteManufacturing.Tests.Federation.FactFixtures;
@@ -9,6 +10,7 @@ using static MultiSiteManufacturing.Tests.Federation.FactFixtures;
 namespace MultiSiteManufacturing.Tests.Dashboard;
 
 /// <summary>
+///
 /// Tests the in-process pub/sub hub that bridges
 /// <see cref="FederationRouter"/> events to Blazor Server components.
 /// </summary>
@@ -275,5 +277,120 @@ public sealed class DashboardBroadcasterTests
         });
 
         await subscriber.DisposeAsync();
+    }
+
+    [Test]
+    public async Task FactRouted_pushes_SiteActivityIndexEntry_to_subscriber()
+    {
+        var (router, _, _) = _fixture.NewRouter();
+        await using var broadcaster = NewBroadcaster(router);
+        var serial = new PartSerialNumber("HPT-BLD-S1-2028-90300");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var subscriber = broadcaster.SubscribeSiteActivity(cts.Token).GetAsyncEnumerator(cts.Token);
+
+        var moveTask = subscriber.MoveNextAsync().AsTask();
+        await Task.Delay(50, cts.Token);
+
+        var fact = Step(serial, tick: 10, ProcessStage.Forge, ProcessSite.OhioForge);
+        await router.EmitAsync(fact);
+
+        var moved = await moveTask;
+
+        Assert.That(moved, Is.True);
+        var entry = subscriber.Current;
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.Serial, Is.EqualTo(serial));
+            Assert.That(entry.Site, Is.EqualTo(ProcessSite.OhioForge));
+            Assert.That(entry.Hlc, Is.EqualTo(fact.Hlc));
+            Assert.That(entry.Activity, Is.EqualTo($"Step: {ProcessStage.Forge}"));
+        });
+
+        await subscriber.DisposeAsync();
+    }
+
+    [Test]
+    public async Task FactReplicated_pushes_SiteActivityIndexEntry_to_subscriber()
+    {
+        // A peer-originated fact must appear on the activity feed so a
+        // user watching a site sub-tab on the receiving cluster sees
+        // replicated activity immediately — the whole point of wiring
+        // both FactRouted and FactReplicated into the activity fan-out.
+        var (router, _, _) = _fixture.NewRouter();
+        await using var broadcaster = NewBroadcaster(router);
+        var serial = new PartSerialNumber("HPT-BLD-S1-2028-90301");
+        var fact = Step(serial, tick: 11, ProcessStage.Forge, ProcessSite.OhioForge);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var subscriber = broadcaster.SubscribeSiteActivity(cts.Token).GetAsyncEnumerator(cts.Token);
+        var moveTask = subscriber.MoveNextAsync().AsTask();
+        await Task.Delay(50, cts.Token);
+
+        router.RaiseFactReplicated(fact);
+        var moved = await moveTask;
+
+        Assert.That(moved, Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(subscriber.Current.Serial, Is.EqualTo(serial));
+            Assert.That(subscriber.Current.Site, Is.EqualTo(ProcessSite.OhioForge));
+            Assert.That(subscriber.Current.Activity, Is.EqualTo($"Step: {ProcessStage.Forge}"));
+        });
+
+        await subscriber.DisposeAsync();
+    }
+
+    [Test]
+    public async Task SubscribeSiteActivity_fans_out_to_multiple_subscribers()
+    {
+        var (router, _, _) = _fixture.NewRouter();
+        await using var broadcaster = NewBroadcaster(router);
+        var serial = new PartSerialNumber("HPT-BLD-S1-2028-90302");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var sub1 = broadcaster.SubscribeSiteActivity(cts.Token).GetAsyncEnumerator(cts.Token);
+        var sub2 = broadcaster.SubscribeSiteActivity(cts.Token).GetAsyncEnumerator(cts.Token);
+
+        var move1 = sub1.MoveNextAsync().AsTask();
+        var move2 = sub2.MoveNextAsync().AsTask();
+        await Task.Delay(50, cts.Token);
+
+        await router.EmitAsync(Step(serial, tick: 12, ProcessStage.Forge, ProcessSite.OhioForge));
+
+        Assert.That(await move1, Is.True);
+        Assert.That(await move2, Is.True);
+        Assert.That(sub1.Current.Serial, Is.EqualTo(serial));
+        Assert.That(sub2.Current.Serial, Is.EqualTo(serial));
+
+        await sub1.DisposeAsync();
+        await sub2.DisposeAsync();
+    }
+
+    [Test]
+    public async Task SubscribeSiteActivity_cancellation_completes_loop()
+    {
+        var (router, _, _) = _fixture.NewRouter();
+        await using var broadcaster = NewBroadcaster(router);
+
+        using var cts = new CancellationTokenSource();
+        var loop = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var _ in broadcaster.SubscribeSiteActivity(cts.Token))
+                {
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected.
+            }
+        });
+
+        cts.Cancel();
+
+        var completed = await Task.WhenAny(loop, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.That(completed, Is.SameAs(loop), "Site-activity subscriber loop did not complete after cancellation.");
     }
 }
