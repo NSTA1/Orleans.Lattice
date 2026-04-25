@@ -101,6 +101,52 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeReplication_registers_change_feed_by_default()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var feed = provider.GetRequiredService<IChangeFeed>();
+        Assert.That(feed, Is.InstanceOf<ChangeFeed>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_change_feed_is_registered_as_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<IChangeFeed>();
+        var second = provider.GetRequiredService<IChangeFeed>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_change_feed()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<IChangeFeed>();
+        services.AddSingleton<IChangeFeed>(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<IChangeFeed>(), Is.SameAs(custom));
+    }
+
+    [Test]
     public void AddLatticeReplication_registers_change_feed_observer()
     {
         var services = new ServiceCollection();
