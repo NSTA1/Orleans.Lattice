@@ -53,6 +53,12 @@ Per-tree overrides are honoured: the observer resolves options via `IOptionsMoni
 
 Filters are precompiled per tree id and cached on the observer so the commit-time hot path is bounded by a `ConcurrentDictionary` lookup, a single bool, and at most one delegate plus a linear prefix scan. The cache is invalidated on `IOptionsMonitor.OnChange`, so reconfiguring filters at runtime takes effect on the next mutation per tree.
 
+## Failure semantics
+
+WAL-append failures propagate. A failure inside `IReplogSink.WriteAsync` flows back out of the commit-time observer, and because the observer fires inside the originating grain's write path, the failure surfaces as the same exception the underlying storage provider threw — the calling `ILattice.SetAsync` / `DeleteAsync` / `DeleteRangeAsync` observes it. This guarantees that every committed mutation is also captured for replication.
+
+There is intentionally no opt-in "best-effort" mode that would catch the exception and let the primary write report success while silently dropping the change-feed record. Silent change-feed drops are exactly the hazard commit-time capture exists to remove; a host that wants different semantics for a specific tree should compose its own `IMutationObserver` rather than configure correctness away.
+
 ## API
 
 `IReplogShardGrain` is internal to the replication package. Members:

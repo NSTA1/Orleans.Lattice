@@ -67,9 +67,9 @@ Fixes the three highest-cost sample shortcuts: ship-time reads, post-write best-
   Subscriber API for in-process consumers (tests, bridges, custom transports): `IChangeFeed.Subscribe(treeName, cursorHlc)` returning `IAsyncEnumerable<ReplogEntry>`. The outbound ship loop in later phases is one consumer among many.
   *Future-compat:* this is the seam future C-050 (background materialiser) subscribes to. Keep the contract pure-pull, cursor-driven, and free of replication-specific assumptions (no peer id, no transport-shaped acks). A `Subscribe` parameter for "include locally-originated entries" must default to `true` — the materialiser needs them.
 
-- [ ] **R-014 — Strict-vs-best-effort append modes**
-  `LatticeReplicationOptions.AppendMode = Strict | BestEffort` (default `Strict`). In `Strict` mode, WAL failure surfaces to the caller of `ILattice.SetAsync` / etc.; in `BestEffort` mode, failures are logged and the write succeeds (current sample behaviour — retained but no longer default). Removes the sample's "writer swallows storage failures" silent-drop hazard.
-  *Future-compat:* `Strict` is the v2 commit semantics (C-030: WAL append = commit). The mode flag survives; in v2 `BestEffort` is removed (or becomes meaningless because there is no separate primary write to fall back to).
+- [x] **R-014 — Strict-only commit semantics**
+  WAL failures propagate. A failure inside `IReplogSink.WriteAsync` flows back out of the commit-time observer and surfaces to the caller of `ILattice.SetAsync` / `DeleteAsync` / `DeleteRangeAsync` as the same exception the underlying storage provider threw — guaranteeing every committed mutation is also captured for replication. There is intentionally no opt-in "best-effort" mode that would let the primary write report success while silently dropping the change-feed record; silent change-feed drops are exactly the hazard commit-time capture exists to remove. A host that needs different semantics for a specific tree should compose its own `IMutationObserver` rather than configure correctness away.
+  *Future-compat:* this matches the v2 commit semantics (C-030: WAL append = commit) — no behaviour change required when the WAL becomes the sole durability mechanism.
 
 ---
 
