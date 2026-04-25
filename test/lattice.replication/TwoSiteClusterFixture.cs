@@ -41,9 +41,19 @@ internal sealed class TwoSiteClusterFixture
     /// <summary>Recording replog sink registered on every silo of <see cref="SiteB"/>.</summary>
     public RecordingReplogSink SiteBSink { get; private set; } = null!;
 
+    /// <summary>
+    /// Captures every measurement recorded on the
+    /// <c>orleans.lattice.replication</c> meter while the fixture is alive.
+    /// Lets convergence tests assert on counter / histogram / gauge values
+    /// rather than only on side effects.
+    /// </summary>
+    public ReplicationMetricsRecorder Metrics { get; private set; } = null!;
+
     /// <summary>Stands up both sites and waits for them to become ready.</summary>
     public async Task InitializeAsync()
     {
+        Metrics = new ReplicationMetricsRecorder(LatticeReplicationMetrics.MeterName);
+
         SiteATransport = new LoopbackTransport();
         SiteBTransport = new LoopbackTransport();
         Transports[SiteAClusterId] = SiteATransport;
@@ -72,6 +82,8 @@ internal sealed class TwoSiteClusterFixture
             await SiteB.StopAllSilosAsync();
             await SiteB.DisposeAsync();
         }
+
+        Metrics?.Dispose();
 
         Transports.TryRemove(SiteAClusterId, out _);
         Transports.TryRemove(SiteBClusterId, out _);

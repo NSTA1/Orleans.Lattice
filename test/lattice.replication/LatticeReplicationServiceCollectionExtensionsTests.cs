@@ -99,6 +99,21 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeReplication_registers_replication_peer_stats_singleton()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<ReplicationPeerStats>();
+        var second = provider.GetRequiredService<ReplicationPeerStats>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
     public void AddLatticeReplication_registers_change_feed_observer_only_once()
     {
         var services = new ServiceCollection();

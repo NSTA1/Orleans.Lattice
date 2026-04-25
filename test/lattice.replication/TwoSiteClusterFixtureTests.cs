@@ -54,4 +54,27 @@ public class TwoSiteClusterFixtureTests
         });
         await Task.CompletedTask;
     }
+
+    [Test]
+    public void Fixture_metrics_recorder_captures_replication_meter_emissions()
+    {
+        // Exercise the meter directly so the assertion does not depend on
+        // a future ship-path implementation; the fixture is wired so that
+        // any later phase emitting on the replication meter is observable
+        // through `Metrics`.
+        LatticeReplicationMetrics.ShipDuration.Record(7.5,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "fixture-tree"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "fixture-peer"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, "ok"));
+
+        var records = _fixture.Metrics
+            .ForInstrument("orleans.lattice.replication.ship.duration")
+            .ToArray();
+
+        Assert.That(records, Has.Some.Matches<MeterRecord>(r =>
+            r.Value == 7.5 &&
+            r.Tags.Any(t => t.Key == "tree" && (string?)t.Value == "fixture-tree") &&
+            r.Tags.Any(t => t.Key == "peer" && (string?)t.Value == "fixture-peer") &&
+            r.Tags.Any(t => t.Key == "outcome" && (string?)t.Value == "ok")));
+    }
 }
