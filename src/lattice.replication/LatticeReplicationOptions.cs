@@ -4,10 +4,12 @@ namespace Orleans.Lattice.Replication;
 /// Configuration options for <c>Orleans.Lattice.Replication</c>. Register a named
 /// instance to override settings for a specific tree:
 /// <code>
-/// siloBuilder.Services.Configure&lt;LatticeReplicationOptions&gt;("my-tree", o => o.ReplicatedTrees = new[] { "my-tree" });
+/// siloBuilder.Services.Configure&lt;LatticeReplicationOptions&gt;("my-tree", o => o.KeyFilter = k => k.StartsWith("repl/"));
 /// </code>
 /// The unnamed (default) instance applies cluster-wide. Per-tree overrides
-/// follow the same named-options pattern as <c>LatticeOptions</c>.
+/// follow the same named-options pattern as <c>LatticeOptions</c>; the
+/// commit-time observer resolves the per-tree instance via
+/// <c>IOptionsMonitor&lt;LatticeReplicationOptions&gt;.Get(treeId)</c>.
 /// </summary>
 public class LatticeReplicationOptions
 {
@@ -22,11 +24,38 @@ public class LatticeReplicationOptions
     public string ClusterId { get; set; } = DefaultClusterId;
 
     /// <summary>
-    /// Names of the trees that participate in replication. An empty
-    /// collection means "no trees are replicated"; the default is empty so
-    /// replication is opt-in per tree.
+    /// Per-tree opt-in allowlist. <c>null</c> (the default) means
+    /// "every tree is replicated"; an empty collection means "no trees are
+    /// replicated"; a non-empty collection restricts replication to the
+    /// named trees only. Membership is checked at commit time on the
+    /// producer side, so a mutation against a tree outside the allowlist
+    /// never reaches the WAL.
     /// </summary>
-    public IReadOnlyCollection<string> ReplicatedTrees { get; set; } = Array.Empty<string>();
+    public IReadOnlyCollection<string>? ReplicatedTrees { get; set; }
+
+    /// <summary>
+    /// Optional per-key filter evaluated on the producer side at commit
+    /// time. When non-<c>null</c>, only mutations whose key satisfies the
+    /// predicate are forwarded to the WAL; rejected mutations never touch
+    /// replication state. Combines with <see cref="KeyPrefixes"/> as a
+    /// logical AND - both filters must accept the key for it to replicate.
+    /// <para>
+    /// For <see cref="MutationKind.DeleteRange"/> mutations the predicate
+    /// is evaluated against the inclusive start key only; replicating a
+    /// range with mixed-prefix keys is the responsibility of the caller.
+    /// </para>
+    /// </summary>
+    public Func<string, bool>? KeyFilter { get; set; }
+
+    /// <summary>
+    /// Optional declarative prefix allowlist evaluated on the producer
+    /// side at commit time. <c>null</c> or empty means "no prefix
+    /// restriction"; a non-empty collection restricts replication to keys
+    /// that start with at least one of the listed prefixes. Combines with
+    /// <see cref="KeyFilter"/> as a logical AND - both filters must
+    /// accept the key for it to replicate.
+    /// </summary>
+    public IReadOnlyCollection<string>? KeyPrefixes { get; set; }
 
     /// <summary>
     /// Number of write-ahead-log partitions per replicated tree. Each
