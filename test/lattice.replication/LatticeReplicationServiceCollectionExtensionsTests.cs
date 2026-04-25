@@ -235,12 +235,10 @@ public class LatticeReplicationServiceCollectionExtensionsTests
             Assert.That(monitor.Get("special").ClusterId, Is.EqualTo("named"));
             // The unnamed (default) instance carries the value supplied to AddLatticeReplication.
             Assert.That(monitor.CurrentValue.ClusterId, Is.EqualTo("default"));
-            // A different named tree that has no override falls through to the
-            // unconfigured default - which the validator rejects, because an
-            // empty ClusterId would produce unattributable replog entries.
-            Assert.That(
-                () => monitor.Get("other"),
-                Throws.TypeOf<OptionsValidationException>());
+            // AddLatticeReplication applies its baseline to every named
+            // options instance via ConfigureAll, so a tree with no
+            // dedicated override inherits the cluster-wide cluster id.
+            Assert.That(monitor.Get("other").ClusterId, Is.EqualTo("default"));
         });
     }
 }

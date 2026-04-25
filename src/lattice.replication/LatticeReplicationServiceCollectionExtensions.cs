@@ -25,7 +25,13 @@ public static class LatticeReplicationServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(configure);
 
-        builder.Services.Configure(configure);
+        // ConfigureAll so the cluster-wide setup is the baseline for every
+        // named (per-tree) options instance; per-tree overrides registered via
+        // ConfigureLatticeReplication(treeName, ...) layer on top. The
+        // commit-time observer resolves options via Get(treeId), so the
+        // baseline must be visible to every named lookup - not only the
+        // default instance.
+        builder.Services.ConfigureAll(configure);
         builder.Services.TryAddSingleton<IReplicationTransport, NoOpReplicationTransport>();
         builder.Services.TryAddSingleton<IReplogSink, ShardedReplogSink>();
         builder.Services.TryAddSingleton<ReplicationPeerStats>();
