@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Replication;
 
@@ -26,6 +27,11 @@ public static class LatticeReplicationServiceCollectionExtensions
 
         builder.Services.Configure(configure);
         builder.Services.TryAddSingleton<IReplicationTransport, NoOpReplicationTransport>();
+        builder.Services.TryAddSingleton<IReplogSink, NoOpReplogSink>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IMutationObserver, ReplicationMutationObserver>());
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<LatticeReplicationOptions>, LatticeReplicationOptionsValidator>());
         return builder;
     }
 

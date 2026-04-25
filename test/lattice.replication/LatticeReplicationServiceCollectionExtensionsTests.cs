@@ -71,6 +71,50 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeReplication_registers_no_op_replog_sink_by_default()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var sink = provider.GetRequiredService<IReplogSink>();
+        Assert.That(sink, Is.InstanceOf<NoOpReplogSink>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_registers_change_feed_observer()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var observers = provider.GetServices<IMutationObserver>().ToArray();
+        Assert.That(observers, Has.Some.InstanceOf<ReplicationMutationObserver>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_registers_change_feed_observer_only_once()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var observers = provider.GetServices<IMutationObserver>()
+            .OfType<ReplicationMutationObserver>().ToArray();
+        Assert.That(observers, Has.Length.EqualTo(1));
+    }
+
+    [Test]
     public void AddLatticeReplication_binds_default_options()
     {
         var services = new ServiceCollection();
@@ -158,8 +202,12 @@ public class LatticeReplicationServiceCollectionExtensionsTests
             Assert.That(monitor.Get("special").ClusterId, Is.EqualTo("named"));
             // The unnamed (default) instance carries the value supplied to AddLatticeReplication.
             Assert.That(monitor.CurrentValue.ClusterId, Is.EqualTo("default"));
-            // A different named tree that has no override falls through to a fresh defaults instance.
-            Assert.That(monitor.Get("other").ClusterId, Is.EqualTo(LatticeReplicationOptions.DefaultClusterId));
+            // A different named tree that has no override falls through to the
+            // unconfigured default - which the validator rejects, because an
+            // empty ClusterId would produce unattributable replog entries.
+            Assert.That(
+                () => monitor.Get("other"),
+                Throws.TypeOf<OptionsValidationException>());
         });
     }
 }
