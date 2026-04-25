@@ -23,7 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice" Version="[3.1.1,)" />
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
     <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.1.0" />
   </ItemGroup>
 

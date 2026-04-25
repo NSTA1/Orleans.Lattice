@@ -29,4 +29,17 @@ internal static class ReplicationTypeAliases
 
     /// <summary>Alias for a paged WAL read result.</summary>
     internal const string ReplogShardPage = "olr.wp";
+
+    // Per-origin high-water-mark types
+
+    /// <summary>Alias for the per-origin HWM grain interface.</summary>
+    internal const string IReplicationHighWaterMarkGrain = "olr.gh";
+
+    /// <summary>Alias for the per-origin HWM persistent state class.</summary>
+    internal const string ReplicationHighWaterMarkState = "olr.hs";
+
+    // Inbound apply pipeline
+
+    /// <summary>Alias for the apply-result return value.</summary>
+    internal const string ApplyResult = "olr.ar";
 }
