@@ -38,4 +38,22 @@ public class LatticeReplicationOptionsTests
             Assert.That(opts.ReplicatedTrees, Is.EqualTo(new[] { "t1", "t2" }));
         });
     }
+
+    [Test]
+    public void New_instance_has_default_replog_partitions()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ReplogPartitions, Is.EqualTo(LatticeReplicationOptions.DefaultReplogPartitions));
+    }
+
+    [Test]
+    public void DefaultReplogPartitions_is_one() =>
+        Assert.That(LatticeReplicationOptions.DefaultReplogPartitions, Is.EqualTo(1));
+
+    [Test]
+    public void ReplogPartitions_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { ReplogPartitions = 16 };
+        Assert.That(opts.ReplogPartitions, Is.EqualTo(16));
+    }
 }

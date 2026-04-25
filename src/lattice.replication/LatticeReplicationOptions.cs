@@ -29,6 +29,19 @@ public class LatticeReplicationOptions
     public IReadOnlyCollection<string> ReplicatedTrees { get; set; } = Array.Empty<string>();
 
     /// <summary>
+    /// Number of write-ahead-log partitions per replicated tree. Each
+    /// captured <see cref="ReplogEntry"/> is routed to a single
+    /// <c>IReplogShardGrain</c> activation keyed by
+    /// <c>{treeId}/{partition}</c>, where <c>partition</c> is a stable hash
+    /// of the entry's key modulo this value. Defaults to <see cref="DefaultReplogPartitions"/>
+    /// (a single per-tree WAL, sufficient for low-fan-in workloads); raise
+    /// to fan WAL writes across multiple grain activations on hot trees.
+    /// Must be at least <c>1</c>; the registered options validator rejects
+    /// non-positive values at first-resolve time.
+    /// </summary>
+    public int ReplogPartitions { get; set; } = DefaultReplogPartitions;
+
+    /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
     /// represents "unset". This default is rejected by
     /// <c>LatticeReplicationOptionsValidator</c> so a host that calls
@@ -36,4 +49,11 @@ public class LatticeReplicationOptions
     /// without supplying a cluster id fails fast on first options resolution.
     /// </summary>
     public const string DefaultClusterId = "";
+
+    /// <summary>
+    /// Default value for <see cref="ReplogPartitions"/>: a single WAL
+    /// partition per replicated tree. Adequate for low-fan-in workloads;
+    /// raise for hot trees that benefit from parallel WAL append paths.
+    /// </summary>
+    public const int DefaultReplogPartitions = 1;
 }

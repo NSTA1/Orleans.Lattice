@@ -71,9 +71,10 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     }
 
     [Test]
-    public void AddLatticeReplication_registers_no_op_replog_sink_by_default()
+    public void AddLatticeReplication_registers_sharded_replog_sink_by_default()
     {
         var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
@@ -81,13 +82,29 @@ public class LatticeReplicationServiceCollectionExtensionsTests
 
         var provider = services.BuildServiceProvider();
         var sink = provider.GetRequiredService<IReplogSink>();
-        Assert.That(sink, Is.InstanceOf<NoOpReplogSink>());
+        Assert.That(sink, Is.InstanceOf<ShardedReplogSink>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_replog_sink()
+    {
+        var services = new ServiceCollection();
+        var custom = new NoOpReplogSink();
+        services.AddSingleton<IReplogSink>(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<IReplogSink>(), Is.SameAs(custom));
     }
 
     [Test]
     public void AddLatticeReplication_registers_change_feed_observer()
     {
         var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
@@ -117,6 +134,7 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     public void AddLatticeReplication_registers_change_feed_observer_only_once()
     {
         var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
