@@ -31,7 +31,7 @@ Minimum viable package + hosting surface so every subsequent phase has a place t
 - [x] **R-000 — Package scaffolding and DI surface**
   New `src/lattice.replication/Orleans.Lattice.Replication.csproj` targeting `net10.0` with a project reference to `Orleans.Lattice`. Public DI entry point `ISiloBuilder.AddLatticeReplication(Action<LatticeReplicationOptions>)` registers core grains, the change-feed subscription, and a no-op `IReplicationTransport`. Public options type `LatticeReplicationOptions` mirrors the layout of `LatticeOptions` (per-tree where it makes sense). Test project `test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj` with a two-site cluster fixture (two two-silo "sites" joined by an in-memory `LoopbackTransport`) so every subsequent phase has an integration harness.
 
-- [ ] **R-001 — Baseline per-peer metrics**
+- [x] **R-001 — Baseline per-peer metrics**
   Static `Meter "orleans.lattice.replication"` with day-one instruments: `entries_behind`, `bytes_behind`, `consecutive_errors`, `last_contact_seconds`, `ship_duration`, `apply_duration`. Every subsequent phase adds tags/instruments to the same meter. Wired into `R-000`'s test fixture so convergence tests can assert on counters rather than side effects.
 
 ---
