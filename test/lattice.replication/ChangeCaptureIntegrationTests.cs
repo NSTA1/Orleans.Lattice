@@ -123,4 +123,68 @@ public class ChangeCaptureIntegrationTests
             _fixture.SiteBSink.Entries.Skip(beforeB).Any(e => e.TreeId == tree),
             Is.False);
     }
+
+    [Test]
+    public async Task SetAsync_under_remote_origin_context_preserves_remote_origin_on_replog_entry()
+    {
+        // End-to-end cycle-break check: a caller forwarding a remote write
+        // wraps the lattice call in LatticeOriginContext.With(peerClusterId)
+        // and expects the replog entry to carry the peer's id verbatim,
+        // never the local cluster id. Without this guarantee the remote
+        // write would loop back out as if it were locally authored.
+        const string tree = "ccap-remote-origin";
+        var lattice = _fixture.SiteA.Client.GetGrain<ILattice>(tree);
+
+        var before = _fixture.SiteASink.Entries.Count;
+        using (LatticeOriginContext.With(TwoSiteClusterFixture.SiteBClusterId))
+        {
+            await lattice.SetAsync("k", new byte[] { 4, 2 });
+        }
+
+        var entries = _fixture.SiteASink.Entries.Skip(before)
+            .Where(e => e.TreeId == tree && e.Key == "k").ToArray();
+        Assert.That(entries, Is.Not.Empty);
+        Assert.That(entries[^1].OriginClusterId, Is.EqualTo(TwoSiteClusterFixture.SiteBClusterId));
+    }
+
+    [Test]
+    public async Task DeleteAsync_under_remote_origin_context_preserves_remote_origin_on_tombstone_entry()
+    {
+        const string tree = "ccap-remote-origin-del";
+        var lattice = _fixture.SiteA.Client.GetGrain<ILattice>(tree);
+
+        await lattice.SetAsync("gone", new byte[] { 9 });
+        var beforeDelete = _fixture.SiteASink.Entries.Count;
+        using (LatticeOriginContext.With(TwoSiteClusterFixture.SiteBClusterId))
+        {
+            await lattice.DeleteAsync("gone");
+        }
+
+        var deletes = _fixture.SiteASink.Entries.Skip(beforeDelete)
+            .Where(e => e.TreeId == tree && e.Key == "gone" && e.Op == ReplogOp.Delete)
+            .ToArray();
+        Assert.That(deletes, Is.Not.Empty);
+        Assert.That(deletes[^1].OriginClusterId, Is.EqualTo(TwoSiteClusterFixture.SiteBClusterId));
+    }
+
+    [Test]
+    public async Task DeleteRangeAsync_under_remote_origin_context_preserves_remote_origin_on_range_entry()
+    {
+        const string tree = "ccap-remote-origin-range";
+        var lattice = _fixture.SiteA.Client.GetGrain<ILattice>(tree);
+        await lattice.SetAsync("a", new byte[] { 1 });
+        await lattice.SetAsync("b", new byte[] { 2 });
+
+        var before = _fixture.SiteASink.Entries.Count;
+        using (LatticeOriginContext.With(TwoSiteClusterFixture.SiteBClusterId))
+        {
+            await lattice.DeleteRangeAsync("a", "z");
+        }
+
+        var ranges = _fixture.SiteASink.Entries.Skip(before)
+            .Where(e => e.TreeId == tree && e.Op == ReplogOp.DeleteRange)
+            .ToArray();
+        Assert.That(ranges, Is.Not.Empty);
+        Assert.That(ranges[^1].OriginClusterId, Is.EqualTo(TwoSiteClusterFixture.SiteBClusterId));
+    }
 }
