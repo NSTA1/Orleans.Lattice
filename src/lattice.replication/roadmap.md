@@ -10,6 +10,18 @@ Feature plan for the `Orleans.Lattice.Replication` package — a cross-cluster r
 
 ---
 
+## Forward compatibility with the WAL-only future
+
+A separate forward-looking design — [`docs/future.md`](../../docs/future.md) — sketches a v2 in which the WAL becomes the **sole** durability mechanism and the storage provider becomes a materialised projection. That direction is not committed work, but several items on this roadmap are direct building blocks for it. To keep the door open, every item below is implemented under three constraints:
+
+1. **The WAL entry schema is the canonical mutation record**, not a replication-only side-car. `ReplogEntry` already carries the operation, key, value-or-delta, HLC and origin cluster id — the same shape a future local apply pipeline would consume.
+2. **`IChangeFeed` (R-013) treats the outbound replication ship loop as one consumer among many.** A future background materialiser, secondary index, or projection rebuilder can subscribe at the same seam without replication being installed.
+3. **Per-origin HWM (R-023) is keyed `(tree, originClusterId)`, but the shape generalises to local apply.** A `null`/local origin is already a valid key; a future log-replay-on-activation path uses the same table without schema changes.
+
+Where a phase item makes a choice that affects forward compatibility, it is annotated *Future-compat:* below. Net-new work that this roadmap explicitly does **not** ship — but does not block either — is captured at the end of `docs/future.md`.
+
+---
+
 ## Guiding principles
 
 Each phase below has an explicit "what the sample gets wrong" entry from the design doc it is fixing. Don't carry forward the sample's shortcuts:
@@ -43,17 +55,21 @@ Fixes the three highest-cost sample shortcuts: ship-time reads, post-write best-
 - [x] **R-010 — Commit-time change capture**
   Grain-side capture inside `ShardRootGrain` / `BPlusLeafGrain` write paths (via a `Orleans.Lattice`-side hook the core library exposes — tracked as a dependency on the core roadmap). Each mutation emits a fully-formed `ReplogEntry` containing the op (`Set` / `Delete` / `DeleteRange`), the value *or* delta, the HLC, the target key, the tree id, and the origin cluster id (R-020). The entry is persisted before the write returns. Replaces the sample's `Outgoing*CallFilter` host-level append.
 
-- [ ] **R-011 — Single-writer per-shard WAL journal**
+- [x] **R-011 — Single-writer per-shard WAL journal**
   Per-shard write-ahead log (`IReplogShardGrain` keyed by `{treeId}/{shardIndex}`) is the single source of truth for replication. Mutations append-then-apply (not apply-then-best-effort-append); the WAL-append is the commit point. `ReplogEntry` carries op + full value *or* typed delta. Removes the sample's read-amplification (`primary.GetAsync(origKey)` in `ShipOneBatchAsync`) and the "writes coalesced between append and ship collapse silently" / "false-delete on intervening delete" data-loss bugs.
+  *Future-compat:* the grain shape, dense sequence numbers, and `ReplogShardEntry` envelope are reusable as the v2 commit-point WAL (future C-020/C-030). The leaf grain still persists today; promoting the WAL to *the* commit point is a future change to the core lib's commit path, not a wire format change here.
 
 - [ ] **R-012 — Per-tree opt-in and per-key filter**
   `LatticeReplicationOptions.ReplicatedTrees` (names) + `LatticeReplicationOptions.KeyFilter` (`Func<string, bool>` or declarative prefix set) — parity with the sample's `mfg-part-crdt` label-only split. The filter runs on the *producer* side so non-replicated mutations never touch the WAL.
+  *Future-compat:* in the v2 WAL-only model the WAL must capture every mutation regardless of replication scope (because storage materialisation reads it too). Implement the filter as a *replication consumer* predicate, not a producer-side gate, so a future local materialiser sees every entry. The current "non-replicated mutations never touch the WAL" wording stays accurate for today; it becomes "non-replicated mutations are not shipped" under v2.
 
 - [ ] **R-013 — `IChangeFeed` public surface**
   Subscriber API for in-process consumers (tests, bridges, custom transports): `IChangeFeed.Subscribe(treeName, cursorHlc)` returning `IAsyncEnumerable<ReplogEntry>`. The outbound ship loop in later phases is one consumer among many.
+  *Future-compat:* this is the seam future C-050 (background materialiser) subscribes to. Keep the contract pure-pull, cursor-driven, and free of replication-specific assumptions (no peer id, no transport-shaped acks). A `Subscribe` parameter for "include locally-originated entries" must default to `true` — the materialiser needs them.
 
 - [ ] **R-014 — Strict-vs-best-effort append modes**
   `LatticeReplicationOptions.AppendMode = Strict | BestEffort` (default `Strict`). In `Strict` mode, WAL failure surfaces to the caller of `ILattice.SetAsync` / etc.; in `BestEffort` mode, failures are logged and the write succeeds (current sample behaviour — retained but no longer default). Removes the sample's "writer swallows storage failures" silent-drop hazard.
+  *Future-compat:* `Strict` is the v2 commit semantics (C-030: WAL append = commit). The mode flag survives; in v2 `BestEffort` is removed (or becomes meaningless because there is no separate primary write to fall back to).
 
 ---
 
@@ -72,6 +88,7 @@ Makes cycle-break durable, enables exactly-once apply, unlocks transitive topolo
 
 - [ ] **R-023 — Per-origin high-water-mark table**
   Receiver-side `{(tree, originClusterId) → lastAppliedHlc}` persistent map. Inbound apply checks HWM before merging; re-delivery of `(origin, hlc)` is a no-op. Turns at-least-once delivery into at-most-once apply — required for correctness under typed CRDT counters/sets (phase 3).
+  *Future-compat:* the `(tree, origin)` key shape generalises to v2 C-040: a local-origin row tracks the materialiser's apply progress and a remote-origin row tracks each peer. Keep the table and its grain interface neutral about who writes which row; do not assume `originClusterId != self`.
 
 - [ ] **R-024 — HWM-driven snapshot integration point**
   The HWM table is the handoff contract for the bootstrap protocol (phase 5): a newly-bootstrapped peer starts incremental replication from `hwm[(tree, origin)]` and the HWM guarantees the handoff is exactly-once across the snapshot/incremental boundary.
@@ -84,6 +101,7 @@ The real CRDT payoff — active-active convergence for the primitives the librar
 
 - [ ] **R-030 — Delta contract for core primitives**
   Typed delta records for each replicable primitive the core library ships: `LwwRegisterDelta` (value + HLC + origin), `OrSetDelta` (adds + removes with dot context), `PnCounterDelta` (per-replica +/- increments), `VersionVectorDelta` (vector merge). Each is `readonly record struct`, `[GenerateSerializer][Immutable]` with a stable `[Alias]` constant in a new `ReplicationTypeAliases` class.
+  *Future-compat:* these delta types are the v2 commit payload (C-010). The contract — produced by the core lib, consumed by replication — is identical in v1 and v2; the only change in v2 is that the local apply path also consumes them rather than writing through the leaf state directly.
 
 - [ ] **R-031 — Delta emission at commit**
   Grain-side commit path (R-010) emits a typed delta when the value type is a recognised CRDT primitive; falls through to opaque-byte `LwwRegisterDelta` for schemaless `byte[]`. Reversal path on the receiver applies via the primitive's `Merge(delta)` operation — **never** via `SetAsync`.
@@ -129,6 +147,7 @@ Required before any production deployment. Without it, a peer whose cursor falls
 
 - [ ] **R-050 — `ISnapshotProvider` abstraction**
   Sender-side: streaming `as-of` HLC range scan over the primary tree (not the replog). Backed by the core library's stateful cursor grain (`F-033` from the core roadmap) so snapshots are resumable on silo failover. Chunked by key range so snapshot streams don't monopolise a single shard.
+  *Future-compat:* the same interface satisfies v2 C-060 (snapshot + WAL-tail restore for fast local recovery). Today it scans the primary tree and is consumed by the bootstrap protocol; in v2 it scans the materialised projection and is consumed by both bootstrap and crash recovery. Avoid hard-coding "remote peer" in the API surface — keep it `ISnapshotProvider.ExportAsync(treeName, asOfHlc, ct)` and let the consumer decide what to do with the stream.
 
 - [ ] **R-051 — Receiver-side bootstrap state machine**
   States: `RequestingSnapshot` → `ApplyingSnapshot` → `IncrementalHandoff` → `LiveIncremental`. On snapshot completion the receiver pins the snapshot's as-of HLC `h` in its per-origin HWM (R-023) and switches to incremental from `h`. The HWM dedupe in R-023 makes the handoff exactly-once regardless of snapshot/incremental overlap.
@@ -150,6 +169,7 @@ Ops polish and production-grade reliability. Within this phase, **R-060 (DLQ) is
 
 - [ ] **R-061 — GC by min-acked cursor**
   Replace the sample's wall-clock TTL janitor with a GC predicate of `entry.hlc < min(ackedCursor_peer_i)` across all subscribed peers. Trims aggressively while guaranteeing every subscribed peer can always resume without a snapshot. A lagging peer pins the log — coupled with a "lag alert" metric (R-064) operators notice before it becomes a bootstrap scenario. TTL remains as a hard ceiling (configurable) to bound worst-case disk usage.
+  *Future-compat:* the GC predicate must consult **every** consumer's cursor, not just remote peers. In v2 the local materialiser is one such consumer and a lagging materialiser must pin the log exactly the same way a lagging peer does. Express the predicate as `min(cursor across IChangeFeed subscribers)` rather than `min(cursor across remote peers)`.
 
 - [ ] **R-062 — Receiver-side flow control**
   Ack envelope carries `SuggestedBatchSize` and `PauseForMs` hints; sender respects both. Struggling receiver throttles without timing out; recovered receiver re-accelerates. Removes the sample's "sender always ships `BatchSize`" blind-push behaviour.

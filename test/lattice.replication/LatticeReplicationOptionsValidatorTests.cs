@@ -81,6 +81,45 @@ public class LatticeReplicationOptionsValidatorTests
         Assert.That(result.Succeeded, Is.True);
     }
 
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_replog_partitions_is_non_positive(int partitions)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ReplogPartitions = partitions,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ReplogPartitions)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_default_replog_partitions()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_for_high_replog_partitions()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", ReplogPartitions = 64 };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
     [Test]
     public void Validate_runs_per_named_options_instance()
     {
