@@ -3,10 +3,14 @@ name: Publish
 on:
   push:
     tags:
+      # Core library:        vX.Y.Z[-suffix]
+      # Replication package: repl-vX.Y.Z[-suffix]
       - 'v[0-9]+.[0-9]+.[0-9]+*'
+      - 'repl-v[0-9]+.[0-9]+.[0-9]+*'
 
 jobs:
-  publish:
+  publish-core:
+    if: startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -30,14 +34,62 @@ jobs:
       - name: Build
         run: dotnet build --no-restore --configuration Release -p:Version=${{ steps.version.outputs.VERSION }}
 
-      - name: Test (chaos first — isolate flaky-prone surface)
-        run: dotnet test --no-build --configuration Release --filter "TestCategory=Chaos"
+      - name: Test core (chaos first — isolate flaky-prone surface)
+        run: dotnet test test/lattice/Orleans.Lattice.Tests.csproj --no-build --configuration Release --filter "TestCategory=Chaos"
 
-      - name: Test (deterministic)
-        run: dotnet test --no-build --configuration Release --filter "TestCategory!=Chaos"
+      - name: Test core (deterministic)
+        run: dotnet test test/lattice/Orleans.Lattice.Tests.csproj --no-build --configuration Release --filter "TestCategory!=Chaos"
 
       - name: Pack
         run: dotnet pack src/lattice/Orleans.Lattice.csproj --no-build --configuration Release -p:PackageVersion=${{ steps.version.outputs.VERSION }} --output ./artifacts
+
+      - name: NuGet login (OIDC)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: NuGet push
+        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
+
+      - name: Create GitHub Release
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-replication:
+    if: startsWith(github.ref_name, 'repl-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#repl-v}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release -p:Version=${{ steps.version.outputs.VERSION }}
+
+      - name: Test replication (chaos first — isolate flaky-prone surface)
+        run: dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --no-build --configuration Release --filter "TestCategory=Chaos"
+
+      - name: Test replication (deterministic)
+        run: dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --no-build --configuration Release --filter "TestCategory!=Chaos"
+
+      - name: Pack
+        run: dotnet pack src/lattice.replication/Orleans.Lattice.Replication.csproj --no-build --configuration Release -p:PackageVersion=${{ steps.version.outputs.VERSION }} --output ./artifacts
 
       - name: NuGet login (OIDC)
         uses: NuGet/login@v1

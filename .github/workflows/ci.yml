@@ -43,6 +43,25 @@ jobs:
               - '!docs/**'
               - '!samples/**'
 
+      # Per-package detection. Default `some` quantifier: a filter is true if
+      # any changed file matches any listed pattern. `core` covers the core
+      # library subtree; `replication` covers the replication package subtree.
+      # When neither matched (e.g. the PR only edits Orleans.Lattice.slnx or a
+      # shared root file) we conservatively run both.
+      - name: Detect package scope
+        id: scope
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            core:
+              - 'src/lattice/**'
+              - 'test/lattice/**'
+              - 'docs/lattice/**'
+            replication:
+              - 'src/lattice.replication/**'
+              - 'test/lattice.replication/**'
+              - 'docs/lattice.replication/**'
+
       - name: Setup .NET
         if: steps.filter.outputs.code == 'true'
         uses: actions/setup-dotnet@v4
@@ -85,13 +104,25 @@ jobs:
         if: steps.filter.outputs.nonSample == 'true'
         run: dotnet build --no-restore --configuration Release
 
-      - name: Test (chaos first — isolate flaky-prone surface)
-        if: steps.filter.outputs.nonSample == 'true'
-        run: dotnet test --no-build --configuration Release --filter "TestCategory=Chaos" --logger "trx;LogFileName=chaos.trx"
+      # Per-package test execution. A package is tested when its own subtree
+      # changed (`scope.<pkg> == 'true'`) or when only shared/root files
+      # changed (neither subtree matched) so we don't silently skip the suite
+      # for an Orleans.Lattice.slnx edit.
+      - name: Test core (chaos first — isolate flaky-prone surface)
+        if: steps.filter.outputs.nonSample == 'true' && (steps.scope.outputs.core == 'true' || steps.scope.outputs.replication != 'true')
+        run: dotnet test test/lattice/Orleans.Lattice.Tests.csproj --no-build --configuration Release --filter "TestCategory=Chaos" --logger "trx;LogFileName=core-chaos.trx"
 
-      - name: Test (deterministic)
-        if: steps.filter.outputs.nonSample == 'true'
-        run: dotnet test --no-build --configuration Release --filter "TestCategory!=Chaos" --logger "trx;LogFileName=results.trx"
+      - name: Test core (deterministic)
+        if: steps.filter.outputs.nonSample == 'true' && (steps.scope.outputs.core == 'true' || steps.scope.outputs.replication != 'true')
+        run: dotnet test test/lattice/Orleans.Lattice.Tests.csproj --no-build --configuration Release --filter "TestCategory!=Chaos" --logger "trx;LogFileName=core-results.trx"
+
+      - name: Test replication (chaos first — isolate flaky-prone surface)
+        if: steps.filter.outputs.nonSample == 'true' && (steps.scope.outputs.replication == 'true' || steps.scope.outputs.core != 'true')
+        run: dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --no-build --configuration Release --filter "TestCategory=Chaos" --logger "trx;LogFileName=replication-chaos.trx"
+
+      - name: Test replication (deterministic)
+        if: steps.filter.outputs.nonSample == 'true' && (steps.scope.outputs.replication == 'true' || steps.scope.outputs.core != 'true')
+        run: dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --no-build --configuration Release --filter "TestCategory!=Chaos" --logger "trx;LogFileName=replication-results.trx"
 
       # Upload test results even if the Test step fails.
       - name: Upload test results

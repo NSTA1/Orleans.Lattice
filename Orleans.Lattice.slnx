@@ -1,4 +1,6 @@
 <Solution>
   <Project Path="src/lattice/Orleans.Lattice.csproj" />
+  <Project Path="src/lattice.replication/Orleans.Lattice.Replication.csproj" />
   <Project Path="test/lattice/Orleans.Lattice.Tests.csproj" />
+  <Project Path="test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj" />
 </Solution>
