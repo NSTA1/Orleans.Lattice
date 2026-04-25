@@ -1,4 +1,3 @@
-
 # Orleans.Lattice.Replication Roadmap
 
 Feature plan for the `Orleans.Lattice.Replication` package — a cross-cluster replication library layered on top of `Orleans.Lattice`. This roadmap follows the upgrade order recommended in [`docs/replication-design.md` §9](../../docs/lattice.replication/replication-design.md), with the `MultiSiteManufacturing` sample's pull-over-HTTP / gRPC-push pipeline treated as the reference "what to promote, what to fix" artifact.
@@ -29,7 +28,7 @@ Preserve what the sample got right (design doc §8): per-peer HLC cursor, advanc
 
 Minimum viable package + hosting surface so every subsequent phase has a place to land and is testable end-to-end.
 
-- [ ] **R-000 — Package scaffolding and DI surface**
+- [x] **R-000 — Package scaffolding and DI surface**
   New `src/lattice.replication/Orleans.Lattice.Replication.csproj` targeting `net10.0` with a project reference to `Orleans.Lattice`. Public DI entry point `ISiloBuilder.AddLatticeReplication(Action<LatticeReplicationOptions>)` registers core grains, the change-feed subscription, and a no-op `IReplicationTransport`. Public options type `LatticeReplicationOptions` mirrors the layout of `LatticeOptions` (per-tree where it makes sense). Test project `test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj` with a two-site cluster fixture (two two-silo "sites" joined by an in-memory `LoopbackTransport`) so every subsequent phase has an integration harness.
 
 - [ ] **R-001 — Baseline per-peer metrics**
