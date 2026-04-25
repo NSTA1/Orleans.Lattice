@@ -18,7 +18,7 @@ internal sealed partial class LatticeGrain(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     LatticeOptionsResolver optionsResolver,
     IServiceProvider services,
-    ILogger<LatticeGrain> logger) : ILattice, ISystemLattice
+    ILogger<LatticeGrain> logger) : ILattice, ISystemLattice, IReplicationApplyGrain
 {
     private string? _treeIdCache;
     private string TreeId => _treeIdCache ??= context.GrainId.Key.ToString()!;

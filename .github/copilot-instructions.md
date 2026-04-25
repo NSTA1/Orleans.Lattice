@@ -28,7 +28,7 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
 | Public API namespace | `Orleans.Lattice` | `ILattice`, `LatticeOptions`, `SnapshotMode`, `LatticeExtensions`, `IMutationObserver`, `LatticeMutation`, `MutationKind` |
 | Internal namespace | `Orleans.Lattice.{Area}` | `Orleans.Lattice.BPlusTree.Grains` |
 | Test namespace | `Orleans.Lattice.Tests.{Area}` | `Orleans.Lattice.Tests.BPlusTree.Grains` |
-| Replication public API namespace | `Orleans.Lattice.Replication` | `LatticeReplicationOptions`, `IReplicationTransport`, `IChangeFeed`, `LatticeReplicationServiceCollectionExtensions`, `ReplogEntry`, `ReplogOp`, `LatticeReplicationMetrics`, `ReplicationPeerStats`, `ReplicationPeerSnapshot` |
+| Replication public API namespace | `Orleans.Lattice.Replication` | `LatticeReplicationOptions`, `IReplicationTransport`, `IChangeFeed`, `IReplicationApplier`, `ApplyResult`, `LatticeReplicationServiceCollectionExtensions`, `ReplogEntry`, `ReplogOp`, `LatticeReplicationMetrics`, `ReplicationPeerStats`, `ReplicationPeerSnapshot` |
 | Replication internal namespace | `Orleans.Lattice.Replication.{Area}` | `Orleans.Lattice.Replication.Grains` (future) |
 | Replication test namespace | `Orleans.Lattice.Replication.Tests.{Area}` | `Orleans.Lattice.Replication.Tests` |
 | Grain interface | `I{Name}Grain` (prefix `I`, suffix `Grain`) | `IBPlusLeafGrain` |

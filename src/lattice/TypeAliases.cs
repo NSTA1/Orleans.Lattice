@@ -117,4 +117,5 @@ internal static class TypeAliases
     internal const string ITreeSnapshotGrain = "ol.gsn";
     internal const string ITreeReshardGrain = "ol.gtx";
     internal const string ILatticeStats = "ol.gls";
+    internal const string IReplicationApplyGrain = "ol.gra";
 }
