@@ -11,6 +11,7 @@ internal sealed partial class LatticeGrain
     /// <inheritdoc />
     public async Task ReshardAsync(int newShardCount, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var reshard = grainFactory.GetGrain<ITreeReshardGrain>(TreeId);
         await reshard.ReshardAsync(newShardCount);
@@ -19,6 +20,7 @@ internal sealed partial class LatticeGrain
     /// <inheritdoc />
     public async Task<bool> IsReshardCompleteAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var reshard = grainFactory.GetGrain<ITreeReshardGrain>(TreeId);
         return await reshard.IsIdleAsync();

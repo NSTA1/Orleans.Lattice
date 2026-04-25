@@ -7,6 +7,7 @@ internal sealed partial class LatticeGrain
 {
     public async Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
@@ -40,6 +41,7 @@ internal sealed partial class LatticeGrain
 
     public async Task DeleteTreeAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await deletion.DeleteTreeAsync();
@@ -47,6 +49,7 @@ internal sealed partial class LatticeGrain
 
     public async Task RecoverTreeAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await deletion.RecoverAsync();
@@ -54,6 +57,7 @@ internal sealed partial class LatticeGrain
 
     public async Task PurgeTreeAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await deletion.PurgeNowAsync();
@@ -61,6 +65,7 @@ internal sealed partial class LatticeGrain
 
     public async Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         await resize.ResizeAsync(newMaxLeafKeys, newMaxInternalChildren);
@@ -68,6 +73,7 @@ internal sealed partial class LatticeGrain
 
     public async Task UndoResizeAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         await resize.UndoResizeAsync();
@@ -76,6 +82,7 @@ internal sealed partial class LatticeGrain
     public async Task SnapshotAsync(string destinationTreeId, SnapshotMode mode,
         int? maxLeafKeys = null, int? maxInternalChildren = null, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
         await snapshot.SnapshotAsync(destinationTreeId, mode, maxLeafKeys, maxInternalChildren);
@@ -83,6 +90,7 @@ internal sealed partial class LatticeGrain
 
     public async Task<bool> TreeExistsAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         return await registry.ExistsAsync(TreeId);
@@ -90,6 +98,7 @@ internal sealed partial class LatticeGrain
 
     public async Task<IReadOnlyList<string>> GetAllTreeIdsAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         return await registry.GetAllTreeIdsAsync();
@@ -97,6 +106,7 @@ internal sealed partial class LatticeGrain
 
     public async Task SetPublishEventsEnabledAsync(bool? enabled, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.SetPublishEventsAsync(TreeId, enabled);
@@ -110,6 +120,7 @@ internal sealed partial class LatticeGrain
 
     public async Task MergeAsync(string sourceTreeId, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var merge = grainFactory.GetGrain<ITreeMergeGrain>(TreeId);
         await merge.MergeAsync(sourceTreeId);
@@ -117,6 +128,7 @@ internal sealed partial class LatticeGrain
 
     public async Task<bool> IsMergeCompleteAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var merge = grainFactory.GetGrain<ITreeMergeGrain>(TreeId);
         return await merge.IsCompleteAsync();
@@ -124,6 +136,7 @@ internal sealed partial class LatticeGrain
 
     public async Task<bool> IsSnapshotCompleteAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
         return await snapshot.IsIdleAsync();
@@ -131,6 +144,7 @@ internal sealed partial class LatticeGrain
 
     public async Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         return await resize.IsIdleAsync();

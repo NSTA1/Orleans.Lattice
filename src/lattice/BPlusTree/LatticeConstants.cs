@@ -13,6 +13,24 @@ internal static class LatticeConstants
     public const string SystemTreePrefix = "_lattice_";
 
     /// <summary>
+    /// Reserved tree-name prefix used by the <c>Orleans.Lattice.Replication</c>
+    /// package for its internal write-ahead-log (WAL) trees, named
+    /// <c>_lattice_replog_{treeId}/{shardIndex}</c>. User-supplied tree IDs
+    /// matching this prefix are rejected at
+    /// <see cref="ILatticeRegistry.RegisterAsync"/> with
+    /// <see cref="ArgumentException"/>, guaranteeing the replication package
+    /// a collision-free namespace.
+    /// <para>
+    /// Subsumed by <see cref="SystemTreePrefix"/> (any <c>_lattice_replog_</c>
+    /// name also starts with <c>_lattice_</c>, so it inherits the same
+    /// registry / monitor / routing bypasses as other system trees). Exposed
+    /// as a named constant so downstream replication code can reference the
+    /// prefix by name rather than hardcoding the string literal.
+    /// </para>
+    /// </summary>
+    public const string ReplogTreePrefix = "_lattice_replog_";
+
+    /// <summary>
     /// The tree ID of the internal registry tree that stores tree metadata
     /// (existence and per-tree <see cref="LatticeOptions"/> overrides).
     /// Each key is a user tree ID; each value is the serialized

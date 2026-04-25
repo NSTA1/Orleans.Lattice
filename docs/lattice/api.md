@@ -593,3 +593,15 @@ Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Nev
 Lattice exposes a single public entry-point — `ILattice`. All other grain interfaces (`IShardRootGrain`, `IBPlusLeafGrain`, `IBPlusInternalGrain`, `ILeafCacheGrain`, `ILatticeRegistry`, `ITombstoneCompactionGrain`, `ITreeDeletionGrain`, `ITreeResizeGrain`, `ITreeSnapshotGrain`, `ITreeMergeGrain`, `ITreeShardSplitGrain`, `IHotShardMonitorGrain`, `IAtomicWriteGrain`, `ILatticeCursorGrain`, `ITreeReshardGrain`, `ILatticeStats`) are declared `internal` and are not visible to consumer assemblies. The C# type system enforces the boundary at compile time — external code cannot name, reference, or invoke these interfaces. Internal DTOs associated with these interfaces (e.g. `SplitResult`, `KeysPage`, `EntriesPage`, `LatticeConstants`) are also `internal`.
 
 A small number of types remain `public` because they appear directly on the `ILattice` surface or its typed extensions: `HybridLogicalClock`, `VersionedValue`, `Versioned<T>`, `RoutingInfo`, and `ShardMap` (transitively via `RoutingInfo`).
+
+## Reserved Tree Prefixes
+
+Lattice reserves tree-name prefixes for internal use. User code must never address a tree whose id starts with `_lattice_` — including (but not limited to) `_lattice_trees` (the registry) and `_lattice_replog_` (reserved for the forthcoming replication package's write-ahead-log trees).
+
+The reservation is enforced as an **unbypassable** three-layer guarantee:
+
+1. **Registry guard.** `ILatticeRegistry.RegisterAsync` / `UpdateAsync` throw `ArgumentException` for any `treeId` starting with the reserved prefix.
+2. **Public-surface guard.** Every method on `ILattice` — reads, writes, scans, cursors, counts, diagnostics, and tree-lifecycle operations — throws `InvalidOperationException` with an actionable remediation message when the activation's primary key starts with the reserved prefix. Reads are as guarded as writes because namespace enumeration is as sensitive as mutation for a reserved tree.
+3. **No internal bypass is visible.** The library's own code that legitimately bootstraps system trees resolves an internal grain interface that is not visible to external assemblies. The C# type system therefore makes the public guard unbypassable from user code.
+
+The guard rejects only leading matches. A tree id such as `"my_lattice_table"` (reserved prefix appears in the middle, not at the start) is valid.

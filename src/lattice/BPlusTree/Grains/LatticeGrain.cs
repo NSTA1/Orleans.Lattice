@@ -18,15 +18,32 @@ internal sealed partial class LatticeGrain(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     LatticeOptionsResolver optionsResolver,
     IServiceProvider services,
-    ILogger<LatticeGrain> logger) : ILattice
+    ILogger<LatticeGrain> logger) : ILattice, ISystemLattice
 {
-    private string TreeId => context.GrainId.Key.ToString()!;
+    private string? _treeIdCache;
+    private string TreeId => _treeIdCache ??= context.GrainId.Key.ToString()!;
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
     private bool _compactionEnsured;
     private bool _monitorEnsured;
     private string? _physicalTreeId;
     private ShardMap? _shardMap;
     private readonly PublishEventsGate _eventsGate = new();
+
+    /// <summary>
+    /// Rejects any public <see cref="ILattice"/> call targeting a reserved
+    /// system-tree name (any id starting with
+    /// <see cref="LatticeConstants.SystemTreePrefix"/>, which includes the
+    /// registry tree and the replog prefix). Internal library code that
+    /// legitimately addresses system trees resolves
+    /// <see cref="ISystemLattice"/> instead and bypasses this guard via
+    /// explicit interface implementation.
+    /// </summary>
+    private void ThrowIfSystemTree()
+    {
+        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Tree ID '{TreeId}' is reserved for internal Lattice system trees and cannot be addressed via the public ILattice surface. Choose a tree name that does not start with '{LatticeConstants.SystemTreePrefix}'.");
+    }
 
     private async Task PublishEventAsync(LatticeTreeEventKind kind, string? key = null, int? shardIndex = null)
     {
@@ -36,7 +53,16 @@ internal sealed partial class LatticeGrain(
         await LatticeEventPublisher.PublishAsync(services, opts, evt, logger);
     }
 
-    public async Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
+    public Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        return GetAsyncCore(key, cancellationToken);
+    }
+
+    async Task<byte[]?> ISystemLattice.GetAsync(string key, CancellationToken cancellationToken)
+        => await GetAsyncCore(key, cancellationToken);
+
+    private async Task<byte[]?> GetAsyncCore(string key, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
@@ -67,6 +93,7 @@ internal sealed partial class LatticeGrain(
 
     public async Task<VersionedValue> GetWithVersionAsync(string key, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
         var shard = await GetShardGrainAsync(key);
@@ -94,7 +121,16 @@ internal sealed partial class LatticeGrain(
         }
     }
 
-    public async Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default)
+    public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        return ExistsAsyncCore(key, cancellationToken);
+    }
+
+    async Task<bool> ISystemLattice.ExistsAsync(string key, CancellationToken cancellationToken)
+        => await ExistsAsyncCore(key, cancellationToken);
+
+    private async Task<bool> ExistsAsyncCore(string key, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
@@ -125,6 +161,7 @@ internal sealed partial class LatticeGrain(
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(keys);
         cancellationToken.ThrowIfCancellationRequested();
         try
@@ -191,7 +228,16 @@ internal sealed partial class LatticeGrain(
         }
     }
 
-    public async Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
+    public Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        return SetAsyncCore(key, value, cancellationToken);
+    }
+
+    async Task ISystemLattice.SetAsync(string key, byte[] value, CancellationToken cancellationToken)
+        => await SetAsyncCore(key, value, cancellationToken);
+
+    private async Task SetAsyncCore(string key, byte[] value, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
@@ -228,6 +274,7 @@ internal sealed partial class LatticeGrain(
     /// <inheritdoc />
     public async Task SetAsync(string key, byte[] value, TimeSpan ttl, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         if (ttl <= TimeSpan.Zero)
@@ -273,6 +320,7 @@ internal sealed partial class LatticeGrain(
 
     public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         cancellationToken.ThrowIfCancellationRequested();
@@ -309,6 +357,7 @@ internal sealed partial class LatticeGrain(
 
     public async Task<byte[]?> GetOrSetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         cancellationToken.ThrowIfCancellationRequested();
@@ -346,6 +395,7 @@ internal sealed partial class LatticeGrain(
 
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         await EnsureCompactionReminderAsync();
@@ -428,6 +478,7 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     public Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return Task.CompletedTask;
@@ -449,6 +500,7 @@ internal sealed partial class LatticeGrain(
         string operationId,
         CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(entries);
         ValidateOperationId(operationId);
         cancellationToken.ThrowIfCancellationRequested();
@@ -467,7 +519,16 @@ internal sealed partial class LatticeGrain(
                 nameof(operationId));
     }
 
-    public async Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
+    public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        return DeleteAsyncCore(key, cancellationToken);
+    }
+
+    async Task<bool> ISystemLattice.DeleteAsync(string key, CancellationToken cancellationToken)
+        => await DeleteAsyncCore(key, cancellationToken);
+
+    private async Task<bool> DeleteAsyncCore(string key, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
@@ -503,6 +564,7 @@ internal sealed partial class LatticeGrain(
 
     public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();
@@ -558,6 +620,7 @@ internal sealed partial class LatticeGrain(
 
     public async Task<int> CountAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
@@ -609,13 +672,6 @@ internal sealed partial class LatticeGrain(
         var (physicalTreeId, shardMap0) = await GetRoutingAsync();
         cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap0.GetPhysicalShardIndices();
-
-        // System trees never participate in adaptive splits, and reading the
-        // registry's shard map for a system tree would create a circular
-        // call chain (the registry itself is backed by an ILattice tree).
-        // Use the fast simple-fan-out path.
-        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
-            return await SimpleSumCountAsync(physicalTreeId, physicalShards);
 
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var maxRetries = Math.Max(1, Options.MaxScanRetries);
@@ -794,6 +850,7 @@ internal sealed partial class LatticeGrain(
 
     public async Task<IReadOnlyList<int>> CountPerShardAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
@@ -815,21 +872,6 @@ internal sealed partial class LatticeGrain(
     {
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
         var physicalShards = shardMap.GetPhysicalShardIndices();
-
-        // System trees never participate in adaptive splits — fast path.
-        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
-        {
-            var simpleTasks = new Task<int>[physicalShards.Count];
-            for (int i = 0; i < physicalShards.Count; i++)
-            {
-                var sh = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
-                simpleTasks[i] = sh.CountAsync();
-            }
-            await Task.WhenAll(simpleTasks);
-            var simple = new int[physicalShards.Count];
-            for (int i = 0; i < physicalShards.Count; i++) simple[i] = simpleTasks[i].Result;
-            return simple;
-        }
 
         // Mirror CountAsyncCore's per-slot routing so per-shard
         // counts are also topology-consistent with the observed map. Without
@@ -974,6 +1016,11 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     public async Task<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default)
     {
+        // NOTE: intentionally NOT guarded — `GetRoutingAsync` is called by the
+        // library's own internal coordinator grains (saga compensation, stats,
+        // cursor) which sometimes resolve routing for their owning tree before
+        // dispatching further internal calls. It does not read or mutate user
+        // data; the shard grains enforce the real boundary on reads/writes.
         cancellationToken.ThrowIfCancellationRequested();
         var physicalTreeId = await GetPhysicalTreeIdAsync();
         if (_shardMap is not null) return new RoutingInfo(physicalTreeId, _shardMap);
@@ -998,6 +1045,7 @@ internal sealed partial class LatticeGrain(
     /// <inheritdoc />
     public Task<TreeDiagnosticReport> DiagnoseAsync(bool deep = false, CancellationToken cancellationToken = default)
     {
+        ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var stats = grainFactory.GetGrain<ILatticeStats>(TreeId);
         return stats.GetReportAsync(deep, cancellationToken);
