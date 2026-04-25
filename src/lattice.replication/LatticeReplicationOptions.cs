@@ -15,7 +15,9 @@ public class LatticeReplicationOptions
     /// Stable identifier for the local Orleans cluster. Stamped on every
     /// replicated mutation so receivers can attribute the origin and break
     /// replication cycles. Must be globally unique across every cluster that
-    /// participates in replication.
+    /// participates in replication, and must be set to a non-empty value -
+    /// the registered <c>IValidateOptions&lt;LatticeReplicationOptions&gt;</c>
+    /// rejects an empty or whitespace cluster id at first-resolve time.
     /// </summary>
     public string ClusterId { get; set; } = DefaultClusterId;
 
@@ -26,6 +28,12 @@ public class LatticeReplicationOptions
     /// </summary>
     public IReadOnlyCollection<string> ReplicatedTrees { get; set; } = Array.Empty<string>();
 
-    /// <summary>Default value for <see cref="ClusterId"/> (empty string — must be set explicitly before replication is useful).</summary>
+    /// <summary>
+    /// Default value for <see cref="ClusterId"/>: an empty sentinel that
+    /// represents "unset". This default is rejected by
+    /// <c>LatticeReplicationOptionsValidator</c> so a host that calls
+    /// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>
+    /// without supplying a cluster id fails fast on first options resolution.
+    /// </summary>
     public const string DefaultClusterId = "";
 }

@@ -21,6 +21,7 @@ internal sealed class TwoSiteClusterFixture
     public const string SiteBClusterId = "site-b";
 
     private static readonly ConcurrentDictionary<string, LoopbackTransport> Transports = new();
+    private static readonly ConcurrentDictionary<string, RecordingReplogSink> Sinks = new();
 
     /// <summary>The first site's two-silo test cluster.</summary>
     public TestCluster SiteA { get; private set; } = null!;
@@ -34,6 +35,12 @@ internal sealed class TwoSiteClusterFixture
     /// <summary>Loopback transport registered on every silo of <see cref="SiteB"/>.</summary>
     public LoopbackTransport SiteBTransport { get; private set; } = null!;
 
+    /// <summary>Recording replog sink registered on every silo of <see cref="SiteA"/>.</summary>
+    public RecordingReplogSink SiteASink { get; private set; } = null!;
+
+    /// <summary>Recording replog sink registered on every silo of <see cref="SiteB"/>.</summary>
+    public RecordingReplogSink SiteBSink { get; private set; } = null!;
+
     /// <summary>Stands up both sites and waits for them to become ready.</summary>
     public async Task InitializeAsync()
     {
@@ -41,6 +48,11 @@ internal sealed class TwoSiteClusterFixture
         SiteBTransport = new LoopbackTransport();
         Transports[SiteAClusterId] = SiteATransport;
         Transports[SiteBClusterId] = SiteBTransport;
+
+        SiteASink = new RecordingReplogSink();
+        SiteBSink = new RecordingReplogSink();
+        Sinks[SiteAClusterId] = SiteASink;
+        Sinks[SiteBClusterId] = SiteBSink;
 
         SiteA = await BuildSiteAsync<SiteASiloConfigurator>();
         SiteB = await BuildSiteAsync<SiteBSiloConfigurator>();
@@ -63,6 +75,8 @@ internal sealed class TwoSiteClusterFixture
 
         Transports.TryRemove(SiteAClusterId, out _);
         Transports.TryRemove(SiteBClusterId, out _);
+        Sinks.TryRemove(SiteAClusterId, out _);
+        Sinks.TryRemove(SiteBClusterId, out _);
     }
 
     private static async Task<TestCluster> BuildSiteAsync<TConfigurator>()
@@ -86,6 +100,13 @@ internal sealed class TwoSiteClusterFixture
         if (Transports.TryGetValue(clusterId, out var transport))
         {
             siloBuilder.Services.AddSingleton<IReplicationTransport>(transport);
+        }
+
+        // Replace the default no-op replog sink with the per-site recorder so
+        // change-feed tests can assert on captured entries.
+        if (Sinks.TryGetValue(clusterId, out var sink))
+        {
+            siloBuilder.Services.AddSingleton<IReplogSink>(sink);
         }
     }
 

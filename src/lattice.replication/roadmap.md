@@ -40,7 +40,7 @@ Minimum viable package + hosting surface so every subsequent phase has a place t
 
 Fixes the three highest-cost sample shortcuts: ship-time reads, post-write best-effort append, and host-level outgoing-call filter.
 
-- [ ] **R-010 — Commit-time change capture**
+- [x] **R-010 — Commit-time change capture**
   Grain-side capture inside `ShardRootGrain` / `BPlusLeafGrain` write paths (via a `Orleans.Lattice`-side hook the core library exposes — tracked as a dependency on the core roadmap). Each mutation emits a fully-formed `ReplogEntry` containing the op (`Set` / `Delete` / `DeleteRange`), the value *or* delta, the HLC, the target key, the tree id, and the origin cluster id (R-020). The entry is persisted before the write returns. Replaces the sample's `Outgoing*CallFilter` host-level append.
 
 - [ ] **R-011 — Single-writer per-shard WAL journal**
