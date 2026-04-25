@@ -7,11 +7,11 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 public partial class LatticeRegistryGrainTests
 {
-    private static (LatticeRegistryGrain grain, ILattice registryTree) CreateGrain()
+    private static (LatticeRegistryGrain grain, ISystemLattice registryTree) CreateGrain()
     {
         var grainFactory = Substitute.For<IGrainFactory>();
-        var registryTree = Substitute.For<ILattice>();
-        grainFactory.GetGrain<ILattice>(LatticeConstants.RegistryTreeId).Returns(registryTree);
+        var registryTree = Substitute.For<ISystemLattice>();
+        grainFactory.GetGrain<ISystemLattice>(LatticeConstants.RegistryTreeId).Returns(registryTree);
 
         var grain = new LatticeRegistryGrain(grainFactory);
         return (grain, registryTree);

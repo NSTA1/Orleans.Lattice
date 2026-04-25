@@ -100,6 +100,7 @@ internal static class TypeAliases
     // interface declaration so the Orleans manifest carries a stable,
     // short wire-format identity independent of CLR type names.
     internal const string ILattice = "ol.gl";
+    internal const string ISystemLattice = "ol.gsl";
     internal const string ILatticeRegistry = "ol.glr";
     internal const string ILatticeCursorGrain = "ol.glc";
     internal const string IAtomicWriteGrain = "ol.gaw";

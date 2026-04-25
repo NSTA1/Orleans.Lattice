@@ -62,12 +62,31 @@ internal sealed partial class LatticeGrain
     /// reconciled.
     /// </para>
     /// </summary>
-    public async IAsyncEnumerable<string> KeysAsync(
+    public IAsyncEnumerable<string> KeysAsync(
         string? startInclusive = null,
         string? endExclusive = null,
         bool reverse = false,
         bool? prefetch = null,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        return KeysAsyncCore(startInclusive, endExclusive, reverse, prefetch, cancellationToken);
+    }
+
+    IAsyncEnumerable<string> ISystemLattice.KeysAsync(
+        string? startInclusive,
+        string? endExclusive,
+        bool reverse,
+        bool? prefetch,
+        CancellationToken cancellationToken)
+        => KeysAsyncCore(startInclusive, endExclusive, reverse, prefetch, cancellationToken);
+
+    private async IAsyncEnumerable<string> KeysAsyncCore(
+        string? startInclusive,
+        string? endExclusive,
+        bool reverse,
+        bool? prefetch,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var (physicalTreeId, shardMap0) = await GetRoutingAsync();

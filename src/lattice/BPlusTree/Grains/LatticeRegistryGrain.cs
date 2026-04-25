@@ -19,7 +19,11 @@ internal sealed class LatticeRegistryGrain(
 {
     private static readonly byte[] EmptyEntry = SerializeEntry(new TreeRegistryEntry());
 
-    private ILattice Registry => grainFactory.GetGrain<ILattice>(LatticeConstants.RegistryTreeId);
+    // Uses the internal ISystemLattice surface so the registry can address its
+    // own backing system tree (`_lattice_trees`). The public ILattice surface
+    // rejects any call targeting a reserved system-tree id and would otherwise
+    // make the registry impossible to implement on top of Lattice itself.
+    private ISystemLattice Registry => grainFactory.GetGrain<ISystemLattice>(LatticeConstants.RegistryTreeId);
 
     public async Task RegisterAsync(string treeId, TreeRegistryEntry? entry = null)
     {

@@ -132,7 +132,10 @@ public partial class LatticeGrainTests
             virtualShardCount: LatticeConstants.DefaultShardCount);
         SetupShardRoot(factory);
 
-        await grain.GetAsync("k1");
+        // The public ILattice surface rejects system-tree ids — the registry
+        // grain bootstraps through the internal ISystemLattice bypass. This
+        // test exercises the same routing logic via that bypass.
+        await ((ISystemLattice)grain).GetAsync("k1");
 
         // System trees must never call the registry (would deadlock the bootstrap).
         await registry.DidNotReceive().GetShardMapAsync(Arg.Any<string>());
