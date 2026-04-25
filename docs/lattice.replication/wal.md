@@ -82,3 +82,7 @@ This design fixes three sample-pipeline shortcuts called out in the [replication
 
 - Unit tests against the grain (`ReplogShardGrainTests`) instantiate it with `FakePersistentState<ReplogShardState>` and `Substitute.For<IGrainContext>()`.
 - Integration tests (`ReplogShardWalIntegrationTests`) bring up a single-silo `TestCluster` with `AddLattice` + `AddLatticeReplication` and assert that WAL entries appear after `ILattice.SetAsync` / `DeleteAsync`.
+
+## Reading from the WAL
+
+Direct grain access is the low-level entry point; in-process consumers should use [`IChangeFeed`](./change-feed.md) instead. The change feed walks every WAL partition for a tree, filters by HLC cursor and origin, and merges the result in HLC ascending order — the seam the outbound shipper and the future local materialiser plug into.
