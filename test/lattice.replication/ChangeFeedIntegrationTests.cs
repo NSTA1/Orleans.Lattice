@@ -156,6 +156,15 @@ public class ChangeFeedIntegrationTests
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLatticeReplication(opts => opts.ClusterId = ClusterId);
+
+            // Tests use ad-hoc tree ids; opt every tree in to LwwRegister so
+            // the commit-time observer doesn't short-circuit.
+            siloBuilder.Services.AddSingleton<IReplicationModeResolver, AllowAllLwwRegisterResolver>();
         }
+    }
+
+    private sealed class AllowAllLwwRegisterResolver : IReplicationModeResolver
+    {
+        public ReplicationMode? Resolve(string treeId) => ReplicationMode.LwwRegister;
     }
 }

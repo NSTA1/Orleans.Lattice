@@ -160,5 +160,91 @@ public class LatticeReplicationOptionsValidatorTests
 
         Assert.That(monitor.CurrentValue.ClusterId, Is.EqualTo("ok"));
     }
+
+    // ------------------------------------------------------------------
+    // R-032 — replicated-trees dictionary validation
+    // ------------------------------------------------------------------
+
+    [TestCase("")]
+    [TestCase("   ")]
+    public void Validate_fails_when_replicated_trees_contains_blank_key(string key)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ReplicatedTrees = new Dictionary<string, ReplicationMode>
+            {
+                [key] = ReplicationMode.LwwRegister,
+            },
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ReplicatedTrees)));
+        });
+    }
+
+    [TestCase(ReplicationMode.OrSet)]
+    [TestCase(ReplicationMode.PnCounter)]
+    [TestCase(ReplicationMode.VersionVector)]
+    public void Validate_fails_when_replicated_trees_declares_non_lww_mode(ReplicationMode mode)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ReplicatedTrees = new Dictionary<string, ReplicationMode>
+            {
+                ["t"] = mode,
+            },
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(mode.ToString()));
+            Assert.That(result.FailureMessage, Does.Contain(nameof(ReplicationMode.LwwRegister)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_null_replicated_trees()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", ReplicatedTrees = null };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_for_empty_replicated_trees()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ReplicatedTrees = new Dictionary<string, ReplicationMode>(),
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_for_lww_register_replicated_trees()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ReplicatedTrees = new Dictionary<string, ReplicationMode>
+            {
+                ["t1"] = ReplicationMode.LwwRegister,
+                ["t2"] = ReplicationMode.LwwRegister,
+            },
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
 }
 

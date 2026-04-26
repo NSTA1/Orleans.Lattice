@@ -40,6 +40,32 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "of zero or less leaves no partitions to route to.");
         }
 
+        if (options.ReplicatedTrees is { } trees)
+        {
+            foreach (var kvp in trees)
+            {
+                if (string.IsNullOrWhiteSpace(kvp.Key))
+                {
+                    return ValidateOptionsResult.Fail(
+                        $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ReplicatedTrees)} "
+                        + $"must not contain null, empty, or whitespace tree-id keys ({scope}). "
+                        + "Every replicated tree must be declared by its concrete tree id so the "
+                        + "commit-time observer can resolve the per-tree replication mode.");
+                }
+
+                if (kvp.Value != ReplicationMode.LwwRegister)
+                {
+                    return ValidateOptionsResult.Fail(
+                        $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ReplicatedTrees)} "
+                        + $"declares tree '{kvp.Key}' with mode '{kvp.Value}' ({scope}), but only "
+                        + $"'{nameof(ReplicationMode.LwwRegister)}' is currently supported. Typed CRDT "
+                        + "modes (OrSet, PnCounter, VersionVector) require the core library to expose "
+                        + "the typed primitive value surface so the observer can recognise the value "
+                        + "type at commit time, and will be enabled in a later release.");
+                }
+            }
+        }
+
         return ValidateOptionsResult.Success;
     }
 }

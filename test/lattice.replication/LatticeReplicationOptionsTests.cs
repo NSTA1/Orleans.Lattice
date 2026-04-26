@@ -41,10 +41,15 @@ public class LatticeReplicationOptionsTests
     public void Properties_are_settable()
     {
         Func<string, bool> filter = k => k.Length > 0;
+        var trees = new Dictionary<string, ReplicationMode>
+        {
+            ["t1"] = ReplicationMode.LwwRegister,
+            ["t2"] = ReplicationMode.LwwRegister,
+        };
         var opts = new LatticeReplicationOptions
         {
             ClusterId = "site-a",
-            ReplicatedTrees = new[] { "t1", "t2" },
+            ReplicatedTrees = trees,
             KeyFilter = filter,
             KeyPrefixes = new[] { "repl/" },
         };
@@ -52,7 +57,7 @@ public class LatticeReplicationOptionsTests
         Assert.Multiple(() =>
         {
             Assert.That(opts.ClusterId, Is.EqualTo("site-a"));
-            Assert.That(opts.ReplicatedTrees, Is.EqualTo(new[] { "t1", "t2" }));
+            Assert.That(opts.ReplicatedTrees, Is.SameAs(trees));
             Assert.That(opts.KeyFilter, Is.SameAs(filter));
             Assert.That(opts.KeyPrefixes, Is.EqualTo(new[] { "repl/" }));
         });

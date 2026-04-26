@@ -21,6 +21,7 @@ public class ReplogEntryTests
             Assert.That(entry.IsTombstone, Is.False);
             Assert.That(entry.ExpiresAtTicks, Is.EqualTo(0L));
             Assert.That(entry.OriginClusterId, Is.Null);
+            Assert.That(entry.Mode, Is.EqualTo(ReplicationMode.LwwRegister));
         });
     }
 
@@ -54,6 +55,13 @@ public class ReplogEntryTests
             Assert.That(entry.ExpiresAtTicks, Is.EqualTo(42L));
             Assert.That(entry.OriginClusterId, Is.EqualTo("site-a"));
         });
+    }
+
+    [Test]
+    public void Mode_is_settable_via_object_initialiser()
+    {
+        var entry = new ReplogEntry { TreeId = "t", Key = "k", Mode = ReplicationMode.LwwRegister };
+        Assert.That(entry.Mode, Is.EqualTo(ReplicationMode.LwwRegister));
     }
 
     [Test]

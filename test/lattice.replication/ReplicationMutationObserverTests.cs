@@ -9,6 +9,8 @@ namespace Orleans.Lattice.Replication.Tests;
 [TestFixture]
 public class ReplicationMutationObserverTests
 {
+    private const string DefaultTree = "tree";
+
     private static IOptionsMonitor<LatticeReplicationOptions> Monitor(string clusterId) =>
         Monitor(new LatticeReplicationOptions { ClusterId = clusterId });
 
@@ -19,6 +21,19 @@ public class ReplicationMutationObserverTests
         monitor.Get(Arg.Any<string>()).Returns(options);
         return monitor;
     }
+
+    /// <summary>
+    /// Permissive resolver used by the unit tests that focus on
+    /// per-key filters / origin stamping. Opts every tree id in to
+    /// <see cref="ReplicationMode.LwwRegister"/>; tests that exercise mode
+    /// resolution itself construct an explicit resolver instead.
+    /// </summary>
+    private sealed class AllowAllResolver : IReplicationModeResolver
+    {
+        public ReplicationMode? Resolve(string treeId) => ReplicationMode.LwwRegister;
+    }
+
+    private static IReplicationModeResolver AllowAll() => new AllowAllResolver();
 
     private sealed class CapturingSink : IReplogSink
     {
@@ -34,12 +49,12 @@ public class ReplicationMutationObserverTests
     public async Task Set_mutation_emits_entry_with_value_and_local_origin()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"));
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
         var ts = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
 
         await observer.OnMutationAsync(new LatticeMutation
         {
-            TreeId = "tree",
+            TreeId = DefaultTree,
             Kind = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1, 2, 3 },
@@ -51,7 +66,7 @@ public class ReplicationMutationObserverTests
         var e = sink.Entries[0];
         Assert.Multiple(() =>
         {
-            Assert.That(e.TreeId, Is.EqualTo("tree"));
+            Assert.That(e.TreeId, Is.EqualTo(DefaultTree));
             Assert.That(e.Op, Is.EqualTo(ReplogOp.Set));
             Assert.That(e.Key, Is.EqualTo("k"));
             Assert.That(e.EndExclusiveKey, Is.Null);
@@ -60,6 +75,7 @@ public class ReplicationMutationObserverTests
             Assert.That(e.IsTombstone, Is.False);
             Assert.That(e.ExpiresAtTicks, Is.EqualTo(100L));
             Assert.That(e.OriginClusterId, Is.EqualTo("site-a"));
+            Assert.That(e.Mode, Is.EqualTo(ReplicationMode.LwwRegister));
         });
     }
 
@@ -67,11 +83,11 @@ public class ReplicationMutationObserverTests
     public async Task Delete_mutation_emits_entry_with_tombstone_flag()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"));
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
-            TreeId = "tree",
+            TreeId = DefaultTree,
             Kind = MutationKind.Delete,
             Key = "gone",
             IsTombstone = true,
@@ -85,6 +101,7 @@ public class ReplicationMutationObserverTests
             Assert.That(e.IsTombstone, Is.True);
             Assert.That(e.Value, Is.Null);
             Assert.That(e.OriginClusterId, Is.EqualTo("site-a"));
+            Assert.That(e.Mode, Is.EqualTo(ReplicationMode.LwwRegister));
         });
     }
 
@@ -92,11 +109,11 @@ public class ReplicationMutationObserverTests
     public async Task DeleteRange_mutation_emits_entry_with_end_exclusive_key()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"));
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
-            TreeId = "tree",
+            TreeId = DefaultTree,
             Kind = MutationKind.DeleteRange,
             Key = "a",
             EndExclusiveKey = "z",
@@ -117,11 +134,11 @@ public class ReplicationMutationObserverTests
     public async Task Existing_origin_cluster_id_is_preserved_for_remote_replays()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"));
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
-            TreeId = "tree",
+            TreeId = DefaultTree,
             Kind = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 7 },
@@ -134,17 +151,12 @@ public class ReplicationMutationObserverTests
     [Test]
     public async Task Local_cluster_id_is_forwarded_verbatim_when_origin_unset()
     {
-        // Real registrations are guarded by LatticeReplicationOptionsValidator,
-        // which rejects an empty ClusterId before any observer call. This unit
-        // test bypasses validation by injecting options directly, so the
-        // observer's documented behaviour is to forward the configured value
-        // as-is rather than substitute null.
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-x"));
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-x"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
-            TreeId = "tree",
+            TreeId = DefaultTree,
             Kind = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 7 },
@@ -156,7 +168,7 @@ public class ReplicationMutationObserverTests
     [Test]
     public void Unknown_mutation_kind_throws_invalid_operation()
     {
-        var observer = new ReplicationMutationObserver(new CapturingSink(), Monitor("site-a"));
+        var observer = new ReplicationMutationObserver(new CapturingSink(), Monitor("site-a"), AllowAll());
 
         Assert.That(
             async () => await observer.OnMutationAsync(
@@ -169,12 +181,12 @@ public class ReplicationMutationObserverTests
     public async Task Sink_cancellation_token_is_forwarded()
     {
         var sink = Substitute.For<IReplogSink>();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"));
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
         using var cts = new CancellationTokenSource();
 
         await observer.OnMutationAsync(new LatticeMutation
         {
-            TreeId = "tree",
+            TreeId = DefaultTree,
             Kind = MutationKind.Set,
             Key = "k",
             Value = Array.Empty<byte>(),
@@ -183,70 +195,90 @@ public class ReplicationMutationObserverTests
         await sink.Received(1).WriteAsync(Arg.Any<ReplogEntry>(), cts.Token);
     }
 
-    // ------------------------------------------------------------------
-    // R-012 — producer-side filters
-    // ------------------------------------------------------------------
-
     [Test]
-    public async Task Tree_allowlist_null_replicates_every_tree()
+    public async Task Constructor_throws_on_null_sink()
     {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
-        {
-            ClusterId = "site-a",
-            ReplicatedTrees = null,
-        }));
-
-        await observer.OnMutationAsync(SetMutation("any-tree", "k"), CancellationToken.None);
-
-        Assert.That(sink.Entries, Has.Count.EqualTo(1));
+        await Task.CompletedTask;
+        Assert.That(
+            () => new ReplicationMutationObserver(null!, Monitor("site-a"), AllowAll()),
+            Throws.ArgumentNullException);
     }
 
     [Test]
-    public async Task Tree_allowlist_empty_skips_every_tree()
+    public async Task Constructor_throws_on_null_options()
+    {
+        await Task.CompletedTask;
+        Assert.That(
+            () => new ReplicationMutationObserver(new CapturingSink(), null!, AllowAll()),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task Constructor_throws_on_null_mode_resolver()
+    {
+        await Task.CompletedTask;
+        Assert.That(
+            () => new ReplicationMutationObserver(new CapturingSink(), Monitor("site-a"), null!),
+            Throws.ArgumentNullException);
+    }
+
+    // ------------------------------------------------------------------
+    // R-032 — declared replication mode is the gate
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task Mode_resolver_null_skips_mutation()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
-        {
-            ClusterId = "site-a",
-            ReplicatedTrees = Array.Empty<string>(),
-        }));
+        var resolver = Substitute.For<IReplicationModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns((ReplicationMode?)null);
 
-        await observer.OnMutationAsync(SetMutation("any-tree", "k"), CancellationToken.None);
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver);
+
+        await observer.OnMutationAsync(SetMutation("undeclared", "k"), CancellationToken.None);
 
         Assert.That(sink.Entries, Is.Empty);
     }
 
     [Test]
-    public async Task Tree_allowlist_includes_only_listed_trees()
+    public async Task Mode_resolver_value_is_stamped_on_entry()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
+        var resolver = Substitute.For<IReplicationModeResolver>();
+        resolver.Resolve("declared").Returns(ReplicationMode.LwwRegister);
+        resolver.Resolve("undeclared").Returns((ReplicationMode?)null);
+
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver);
+
+        await observer.OnMutationAsync(SetMutation("declared", "k"), CancellationToken.None);
+        await observer.OnMutationAsync(SetMutation("undeclared", "k"), CancellationToken.None);
+
+        Assert.Multiple(() =>
         {
-            ClusterId = "site-a",
-            ReplicatedTrees = new[] { "yes" },
-        }));
-
-        await observer.OnMutationAsync(SetMutation("yes", "k1"), CancellationToken.None);
-        await observer.OnMutationAsync(SetMutation("no", "k2"), CancellationToken.None);
-
-        Assert.That(sink.Entries.Select(e => e.TreeId).ToArray(), Is.EqualTo(new[] { "yes" }));
+            Assert.That(sink.Entries, Has.Count.EqualTo(1));
+            Assert.That(sink.Entries[0].TreeId, Is.EqualTo("declared"));
+            Assert.That(sink.Entries[0].Mode, Is.EqualTo(ReplicationMode.LwwRegister));
+        });
     }
 
     [Test]
-    public async Task Tree_allowlist_membership_is_case_sensitive()
+    public async Task Mode_resolver_is_consulted_per_mutation()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
-        {
-            ClusterId = "site-a",
-            ReplicatedTrees = new[] { "Tree" },
-        }));
+        var resolver = Substitute.For<IReplicationModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns(ReplicationMode.LwwRegister);
 
-        await observer.OnMutationAsync(SetMutation("tree", "k"), CancellationToken.None);
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver);
 
-        Assert.That(sink.Entries, Is.Empty);
+        await observer.OnMutationAsync(SetMutation("t", "k1"), CancellationToken.None);
+        await observer.OnMutationAsync(SetMutation("t", "k2"), CancellationToken.None);
+
+        resolver.Received(2).Resolve("t");
     }
+
+    // ------------------------------------------------------------------
+    // R-012 — producer-side per-key filters (mode resolver permissive)
+    // ------------------------------------------------------------------
 
     [Test]
     public async Task Key_filter_rejecting_predicate_skips_mutation()
@@ -256,7 +288,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyFilter = static k => k.StartsWith("ok/"),
-        }));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "ok/1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "skip/1"), CancellationToken.None);
@@ -272,7 +304,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyFilter = null,
-        }));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "anything"), CancellationToken.None);
 
@@ -287,7 +319,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyPrefixes = Array.Empty<string>(),
-        }));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "any"), CancellationToken.None);
 
@@ -302,7 +334,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { "a/", "b/" },
-        }));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "a/1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "b/2"), CancellationToken.None);
@@ -321,7 +353,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { "Repl/" },
-        }));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "repl/1"), CancellationToken.None);
 
@@ -335,16 +367,13 @@ public class ReplicationMutationObserverTests
         var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
         {
             ClusterId = "site-a",
-            ReplicatedTrees = new[] { "t" },
             KeyFilter = static k => k.EndsWith("-keep"),
             KeyPrefixes = new[] { "x/" },
-        }));
+        }), AllowAll());
 
-        // Only the entry that satisfies tree, prefix, and predicate passes.
         await observer.OnMutationAsync(SetMutation("t", "x/a-keep"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "x/a-drop"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "y/a-keep"), CancellationToken.None);
-        await observer.OnMutationAsync(SetMutation("other", "x/a-keep"), CancellationToken.None);
 
         Assert.That(
             sink.Entries.Select(e => e.Key).ToArray(),
@@ -354,26 +383,25 @@ public class ReplicationMutationObserverTests
     [Test]
     public async Task Filters_resolve_per_tree_named_options_instance()
     {
-        // Configure the default options to deny everything (empty allowlist),
-        // but configure the named "vip" tree to opt back in. The observer
+        // Configure default options to apply a deny-all key filter, but
+        // override the named "vip" tree to allow everything. The observer
         // resolves options via Get(treeId) so the per-tree override wins.
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         var defaults = new LatticeReplicationOptions
         {
             ClusterId = "site-a",
-            ReplicatedTrees = Array.Empty<string>(),
+            KeyFilter = static _ => false,
         };
         var vip = new LatticeReplicationOptions
         {
             ClusterId = "site-a",
-            ReplicatedTrees = new[] { "vip" },
         };
         monitor.CurrentValue.Returns(defaults);
         monitor.Get(Arg.Any<string>()).Returns(defaults);
         monitor.Get("vip").Returns(vip);
 
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, monitor);
+        var observer = new ReplicationMutationObserver(sink, monitor, AllowAll());
 
         await observer.OnMutationAsync(SetMutation("vip", "k"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("other", "k"), CancellationToken.None);
@@ -388,8 +416,8 @@ public class ReplicationMutationObserverTests
         var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
         {
             ClusterId = "site-a",
-            ReplicatedTrees = Array.Empty<string>(),
-        }));
+            KeyFilter = static _ => false,
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "k"), CancellationToken.None);
 
@@ -404,7 +432,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { "a/" },
-        }));
+        }), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -439,7 +467,7 @@ public class ReplicationMutationObserverTests
         monitor.CurrentValue.Returns(opts);
         monitor.Get(Arg.Any<string>()).Returns(opts);
 
-        using var observer = new ReplicationMutationObserver(new CapturingSink(), monitor);
+        using var observer = new ReplicationMutationObserver(new CapturingSink(), monitor, AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t1", "k1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t1", "k2"), CancellationToken.None);
@@ -465,7 +493,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyFilter = _ => { calls++; return true; },
-        }));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "k1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "k2"), CancellationToken.None);
@@ -490,12 +518,11 @@ public class ReplicationMutationObserverTests
         var deny = new LatticeReplicationOptions
         {
             ClusterId = "site-a",
-            ReplicatedTrees = Array.Empty<string>(),
+            KeyFilter = static _ => false,
         };
         var allow = new LatticeReplicationOptions
         {
             ClusterId = "site-a",
-            ReplicatedTrees = null,
         };
         var current = deny;
         monitor.CurrentValue.Returns(_ => current);
@@ -507,13 +534,11 @@ public class ReplicationMutationObserverTests
         });
 
         var sink = new CapturingSink();
-        using var observer = new ReplicationMutationObserver(sink, monitor);
+        using var observer = new ReplicationMutationObserver(sink, monitor, AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "k"), CancellationToken.None);
-        Assert.That(sink.Entries, Is.Empty, "Initial deny-all options should suppress the write.");
+        Assert.That(sink.Entries, Is.Empty, "Initial deny-all filter should suppress the write.");
 
-        // Mutate the underlying options and signal the change. The next
-        // mutation must rebuild the compiled filter from the new snapshot.
         current = allow;
         Assert.That(changeCallback, Is.Not.Null);
         changeCallback!.Invoke(allow, null);
@@ -540,17 +565,13 @@ public class ReplicationMutationObserverTests
         });
 
         var sink = new CapturingSink();
-        using var observer = new ReplicationMutationObserver(sink, monitor);
+        using var observer = new ReplicationMutationObserver(sink, monitor, AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "k1"), CancellationToken.None);
 
-        // Mutating the options instance reference without firing OnChange
-        // must not affect the cached cluster id - the snapshot is the
-        // source of truth until invalidation.
         current = v2;
         await observer.OnMutationAsync(SetMutation("t", "k2"), CancellationToken.None);
 
-        // After OnChange the next mutation rebuilds and observes v2.
         changeCallback!.Invoke(v2, null);
         await observer.OnMutationAsync(SetMutation("t", "k3"), CancellationToken.None);
 
@@ -568,7 +589,7 @@ public class ReplicationMutationObserverTests
         monitor.Get(Arg.Any<string>()).Returns(new LatticeReplicationOptions { ClusterId = "x" });
         monitor.OnChange(Arg.Any<Action<LatticeReplicationOptions, string?>>()).Returns(subscription);
 
-        var observer = new ReplicationMutationObserver(new CapturingSink(), monitor);
+        var observer = new ReplicationMutationObserver(new CapturingSink(), monitor, AllowAll());
         observer.Dispose();
 
         subscription.Received(1).Dispose();
@@ -582,7 +603,7 @@ public class ReplicationMutationObserverTests
         monitor.Get(Arg.Any<string>()).Returns(new LatticeReplicationOptions { ClusterId = "x" });
         monitor.OnChange(Arg.Any<Action<LatticeReplicationOptions, string?>>()).Returns((IDisposable?)null);
 
-        var observer = new ReplicationMutationObserver(new CapturingSink(), monitor);
+        var observer = new ReplicationMutationObserver(new CapturingSink(), monitor, AllowAll());
 
         Assert.DoesNotThrow(() => observer.Dispose());
         Assert.DoesNotThrow(() => observer.Dispose());
@@ -596,7 +617,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { null!, "ok/" },
-        }));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "ok/1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "skip/1"), CancellationToken.None);
@@ -612,12 +633,10 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { (string)null!, null! },
-        }));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "anything"), CancellationToken.None);
 
-        // After filtering null entries the collection is empty, which is
-        // documented as "no prefix restriction" - every key passes.
         Assert.That(sink.Entries, Has.Count.EqualTo(1));
     }
 

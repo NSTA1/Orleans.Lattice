@@ -24,14 +24,22 @@ public class LatticeReplicationOptions
     public string ClusterId { get; set; } = DefaultClusterId;
 
     /// <summary>
-    /// Per-tree opt-in allowlist. <c>null</c> (the default) means
-    /// "every tree is replicated"; an empty collection means "no trees are
-    /// replicated"; a non-empty collection restricts replication to the
-    /// named trees only. Membership is checked at commit time on the
-    /// producer side, so a mutation against a tree outside the allowlist
-    /// never reaches the WAL.
+    /// Per-tree opt-in map. Each entry declares both that the named tree
+    /// participates in replication and which <see cref="ReplicationMode"/>
+    /// receivers should use to apply its captured entries. <c>null</c>
+    /// (the default) and an empty map both mean "no trees are replicated";
+    /// there is no implicit "all trees" wildcard. The producer cannot
+    /// recognise CRDT primitives by inspection (the core library stores
+    /// every value as opaque <c>byte[]</c>), so explicit mode declaration
+    /// is the only way the observer knows how a remote receiver will merge
+    /// the value - opting trees in implicitly would silently fall back to
+    /// last-writer-wins and risk concurrent-update data loss.
+    /// <para>
+    /// Membership is checked at commit time on the producer side, so a
+    /// mutation against a tree outside this map never reaches the WAL.
+    /// </para>
     /// </summary>
-    public IReadOnlyCollection<string>? ReplicatedTrees { get; set; }
+    public IReadOnlyDictionary<string, ReplicationMode>? ReplicatedTrees { get; set; }
 
     /// <summary>
     /// Optional per-key filter evaluated on the producer side at commit

@@ -177,6 +177,35 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeReplication_registers_default_mode_resolver()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var resolver = provider.GetRequiredService<IReplicationModeResolver>();
+        Assert.That(resolver, Is.InstanceOf<ReplicationModeResolver>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_mode_resolver()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<IReplicationModeResolver>();
+        services.AddSingleton<IReplicationModeResolver>(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<IReplicationModeResolver>(), Is.SameAs(custom));
+    }
+
+    [Test]
     public void AddLatticeReplication_registers_change_feed_observer_only_once()
     {
         var services = new ServiceCollection();

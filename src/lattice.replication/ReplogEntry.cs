@@ -82,5 +82,15 @@ public readonly record struct ReplogEntry
     /// hand-constructed entries used in tests.
     /// </summary>
     [Id(8)] public string? OriginClusterId { get; init; }
+
+    /// <summary>
+    /// Declared <see cref="ReplicationMode"/> the receiver should use to
+    /// apply this entry. Stamped at commit time from the producer-side
+    /// <see cref="IReplicationModeResolver"/>; defaults to
+    /// <see cref="ReplicationMode.LwwRegister"/> for hand-constructed
+    /// entries and for entries decoded from older wire formats that
+    /// pre-date this field.
+    /// </summary>
+    [Id(9)] public ReplicationMode Mode { get; init; }
 }
 
