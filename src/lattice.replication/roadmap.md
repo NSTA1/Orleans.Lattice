@@ -44,19 +44,19 @@ The phase structure below groups items thematically. This section is the canonic
 
 ### Critical path — unblock typed CRDT replication and the wire envelope
 
-1. **R-031 — Typed-delta dispatch on declared mode** `[deps: Core F-038 ✓ shipped, R-032 ✓]`
-   *Unblocked now.* Closes the Phase 3 dispatch loop on top of F-038's typed primitive surface. Lifts the validator restriction that rejects every mode other than `LwwRegister`. Highest immediate value because it's the first item that's actually reachable from user code without an opaque-bytes shim.
+1. **R-031 ✓ shipped — Typed-delta dispatch on declared mode**
+   Closed the Phase 3 dispatch loop on top of F-038's typed primitive surface. Validator now accepts every defined `ReplicationMode`; the receiver-side applier dispatches Set ops on `entry.Mode` to a state-merge path through `ILattice` for typed CRDTs.
 
 2. **R-072 — `IChangeFeed` cursor shape decision** `[deps: none]`
    Pure design decision, gates R-041. Can run in parallel with R-031.
 
 3. **R-070 — `IWalStorageProvider` abstraction** `[deps: none]`
-   Gates R-071 and (transitively) R-041. Runnable in parallel with R-031 and R-072.
+   Gates R-071 and (transitively) R-041. Runnable in parallel with R-072.
 
 4. **R-071 — Turn-safe batching protocol** `[deps: R-070]`
    Locks the v2 commit hot path's shape before it ships in anger.
 
-5. **R-033 — Active-active convergence test matrix** `[deps: R-031]`
+5. **R-033 — Active-active convergence test matrix** `[deps: R-031 ✓]`
    Hardens the Phase 3 correctness bar (chaos category) before any wire-format work commits the contract.
 
 ### Wire format + transport
@@ -231,10 +231,8 @@ This phase deliberately reorders the two items below from the design doc's narra
 
   *Future-compat:* in v2 the local materialiser also dispatches on `Mode`, so adding the field here keeps the WAL entry schema canonical for both today's replication consumer and tomorrow's local-apply consumer. The resolver's `(treeId) → mode?` shape generalises to the local-origin row that v2 needs.
 
-- [ ] **R-031 — Typed-delta dispatch on declared mode** *(depends on R-032 ✓ + Core F-038)*
-  Producer- and receiver-side dispatch onto `ReplicationMode` declared by R-032. For `LwwRegister` mode the commit-time observer emits the existing `byte[]` payload as an `LwwRegisterDelta`-shaped `ReplogEntry`; the receiver applies via `LwwRegisterDelta.Merge` (lexicographic max on `(HLC, originClusterId)`) — never via `SetAsync`. For `OrSet` / `PnCounter` / `VersionVector` modes the producer extracts the matching typed delta from the value bytes (which now carry a known schema because the user authored through the typed primitive surface F-038 ships), and the receiver applies via the primitive's `Merge(delta)` operation. The previously-implicit opaque-bytes fallback is gone — every emission is now a typed delta whose type is determined by the declared mode, not by inference.
-
-  Receiver-side dispatch on unknown delta types routes to the DLQ (R-060) rather than silently merging by bytes; there is no fallback path. The validator relaxation lifts R-032's "only `LwwRegister` allowed" rule once F-038 ships the typed primitive surface that makes the other modes reachable from user code.
+- [x] **R-031 — Typed-delta dispatch on declared mode** *(depends on R-032 ✓ + Core F-038 ✓)*
+  Producer- and receiver-side dispatch onto `ReplicationMode` declared by R-032. **Implemented:** `LatticeReplicationOptionsValidator` now accepts every defined `ReplicationMode` value (rejection switched from "non-`LwwRegister`" to `!Enum.IsDefined`); the receiver-side `ReplicationApplier.ApplyPointAsync` dispatches `Set` ops on `entry.Mode`. `LwwRegister` keeps the existing path through `IReplicationApplyGrain.ApplySetAsync` (preserves the source HLC verbatim). `OrSet` / `PnCounter` / `VersionVector` route through a generic `ApplyStateMergeAsync<TState>` helper that deserialises the captured value bytes via `JsonLatticeSerializer<TState>.Default`, reads the local state under optimistic concurrency (`ILattice.GetWithVersionAsync` → `MergeFrom` → `ILattice.SetIfVersionAsync`) inside a `LatticeOriginContext.With(entry.OriginClusterId)` scope so the receiver-side commit-time observer publishes the foreign origin and the producer-side ship loop's origin filter excludes the resulting WAL entry — the durable, async-boundary-safe cycle-break for state-merge CRDTs. CAS retry budget is `StateMergeMaxAttempts = 16`, mirroring the typed accessors' authoring-side budgets. Unknown enum values throw `InvalidOperationException` with the integer cast embedded in the message; future versions will route them to a dead-letter queue. Per-origin HWM dedupe still runs for typed CRDT modes (idempotent merge makes it optional for correctness; it short-circuits redundant grain calls). Range deletes and `Delete` ops are unaffected by this item — only the `Set` op gained mode dispatch. Covered by 8 new unit tests in `ReplicationApplierTests` (one dispatch test per typed mode, HWM advance, HWM dedupe under typed CRDT, null-value guard, CAS retry, unknown-mode throw, `IReplicationApplyGrain` bypass) and 4 new integration tests in `ReplicationApplyIntegrationTests` (`OrSet` end-to-end convergence with a concurrent local add, `PnCounter` cross-replica sum, `VersionVector` pointwise-max preserving the higher local clock, and HWM dedupe of an `OrSet` re-delivery). The validator unit test was refactored from a "rejects non-`LwwRegister`" parametrised test to "succeeds for every defined `ReplicationMode`" + a new "rejects undefined integer cast" case. Full suite is green: 321/321 replication tests + 1520/1520 core tests (non-Chaos).
 
 - [ ] **R-033 — Active-active convergence test matrix** *(depends on R-031 ✓)*
   Chaos-category integration tests (`[Category("Chaos")]`, excluded from inner-loop runs per repo convention): concurrent adds/removes on an OR-Set across 3+ clusters with random network partitions converge to the same set; concurrent increments on a PN-Counter across N clusters sum correctly; LWW register under concurrent writes picks the highest `(hlc, origin)` lexicographic pair on every cluster. Each fixture configures the relevant tree explicitly via `ReplicatedTrees[tree] = ReplicationMode.OrSet` (etc.), so the test matrix exercises the full mode declaration → producer dispatch → receiver merge pipeline rather than tripping over an implicit fallback.

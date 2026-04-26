@@ -1,3 +1,5 @@
+using Orleans.Lattice.Primitives;
+
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
@@ -30,26 +32,34 @@ public enum ReplicationMode
     LwwRegister = 0,
 
     /// <summary>
-    /// Observed-remove set. Reserved for a future release; declaring a tree
-    /// with this mode is rejected by the options validator until the core
-    /// library exposes the typed primitive value surface that lets the
-    /// observer recognise an OR-Set value at commit time.
+    /// Observed-remove set. Receivers merge the full <see cref="Primitives.OrSet"/>
+    /// state carried by the value bytes (the producer authored the value
+    /// through <see cref="CrdtLatticeExtensions.OrSet(ILattice, string)"/>,
+    /// which serialises the post-write set state). State-based merge is
+    /// commutative, associative, and idempotent — concurrent active-active
+    /// adds and removes from multiple clusters survive convergence with
+    /// their causal dot context preserved.
     /// </summary>
     OrSet = 1,
 
     /// <summary>
-    /// Positive-negative counter. Reserved for a future release; declaring
-    /// a tree with this mode is rejected by the options validator until the
-    /// core library exposes the typed primitive value surface that lets the
-    /// observer recognise a PN-Counter value at commit time.
+    /// Positive-negative counter. Receivers merge the full
+    /// <see cref="Primitives.PnCounter"/> state carried by the value bytes
+    /// (the producer authored the value through
+    /// <see cref="CrdtLatticeExtensions.PnCounter(ILattice, string)"/>) by
+    /// pointwise-max on each replica's positive and negative components.
+    /// Concurrent active-active increments and decrements from multiple
+    /// clusters sum correctly without per-replica rendezvous.
     /// </summary>
     PnCounter = 2,
 
     /// <summary>
-    /// Version vector. Reserved for a future release; declaring a tree
-    /// with this mode is rejected by the options validator until the core
-    /// library exposes the typed primitive value surface that lets the
-    /// observer recognise a version-vector value at commit time.
+    /// Version vector. Receivers merge the full
+    /// <see cref="Primitives.VersionVector"/> state carried by the value
+    /// bytes (the producer authored the value through
+    /// <see cref="CrdtLatticeExtensions.VersionVector(ILattice, string)"/>)
+    /// by pointwise-max on each replica's <see cref="Primitives.HybridLogicalClock"/>
+    /// entry. Late or duplicate delivery is a no-op.
     /// </summary>
     VersionVector = 3,
 }

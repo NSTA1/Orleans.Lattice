@@ -2,7 +2,7 @@
 
 The replication package ships a small set of typed delta records — one per replicable primitive — that form the wire contract between a producer cluster's commit-time change feed and a receiver cluster's apply pipeline. Each delta is the minimum information needed to merge the originating mutation into a remote replica without re-reading the primary.
 
-The records are defined as a contract today; commit-time emission and receiver-side application follow in the next phases.
+Today the records are defined as a contract and the receiver-side apply pipeline dispatches state-merge mutations on `ReplogEntry.Mode` for every defined `ReplicationMode` (LWW register and the three typed CRDT primitives). Producer-side delta extraction at commit time — emitting these record shapes on the wire instead of the full state bytes the typed accessors persist — follows in a later phase.
 
 ## Why typed deltas
 

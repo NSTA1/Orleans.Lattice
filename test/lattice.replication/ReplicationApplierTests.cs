@@ -347,4 +347,227 @@ public class ReplicationApplierTests
         });
         await hwm.Received(2).GetAsync(Arg.Any<CancellationToken>());
     }
+
+    // ------------------------------------------------------------------
+    // Typed CRDT mode dispatch (state-merge through ILattice)
+    // ------------------------------------------------------------------
+
+    private static (
+        ReplicationApplier Applier,
+        ILattice Lattice,
+        IReplicationApplyGrain Apply,
+        IReplicationHighWaterMarkGrain Hwm)
+        CreateTypedCrdtApplier()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var apply = Substitute.For<IReplicationApplyGrain>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var lattice = Substitute.For<ILattice>();
+        factory.GetGrain<IReplicationApplyGrain>(Tree).Returns(apply);
+        factory.GetGrain<IReplicationHighWaterMarkGrain>($"{Tree}/{RemoteCluster}").Returns(hwm);
+        factory.GetGrain<ILattice>(Tree).Returns(lattice);
+        hwm.GetAsync(Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
+        hwm.TryAdvanceAsync(Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        lattice.GetWithVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new VersionedValue { Value = null, Version = HybridLogicalClock.Zero });
+        lattice.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        return (new ReplicationApplier(factory, Monitor()), lattice, apply, hwm);
+    }
+
+    private static byte[] EncodeOrSet(Action<OrSet>? configure = null)
+    {
+        var set = new OrSet();
+        configure?.Invoke(set);
+        return JsonLatticeSerializer<OrSet>.Default.Serialize(set);
+    }
+
+    private static byte[] EncodePnCounter(Action<PnCounter>? configure = null)
+    {
+        var counter = new PnCounter();
+        configure?.Invoke(counter);
+        return JsonLatticeSerializer<PnCounter>.Default.Serialize(counter);
+    }
+
+    private static byte[] EncodeVersionVector(Action<VersionVector>? configure = null)
+    {
+        var vector = new VersionVector();
+        configure?.Invoke(vector);
+        return JsonLatticeSerializer<VersionVector>.Default.Serialize(vector);
+    }
+
+    private static readonly byte[] OrSetMember = new byte[] { 0xab };
+
+    [Test]
+    public async Task ApplyAsync_dispatches_or_set_through_lattice_state_merge()
+    {
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+        var entry = SetEntry("k", Hlc(10)) with
+        {
+            Mode = ReplicationMode.OrSet,
+            Value = EncodeOrSet(s => s.Add(OrSetMember, "site-b", 1)),
+        };
+
+        var result = await applier.ApplyAsync(entry);
+
+        Assert.That(result.Applied, Is.True);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default);
+        await lattice.Received(1).GetWithVersionAsync("k", Arg.Any<CancellationToken>());
+        await lattice.Received(1).SetIfVersionAsync(
+            "k",
+            Arg.Is<byte[]>(b => JsonLatticeSerializer<OrSet>.Default.Deserialize(b).Contains(OrSetMember)),
+            Arg.Any<HybridLogicalClock>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_dispatches_pn_counter_through_lattice_state_merge()
+    {
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+        var entry = SetEntry("k", Hlc(11)) with
+        {
+            Mode = ReplicationMode.PnCounter,
+            Value = EncodePnCounter(c => c.Increment("site-b", 5)),
+        };
+
+        var result = await applier.ApplyAsync(entry);
+
+        Assert.That(result.Applied, Is.True);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default);
+        await lattice.Received(1).SetIfVersionAsync(
+            "k",
+            Arg.Is<byte[]>(b => JsonLatticeSerializer<PnCounter>.Default.Deserialize(b).Value == 5),
+            Arg.Any<HybridLogicalClock>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_dispatches_version_vector_through_lattice_state_merge()
+    {
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+        var remoteHlc = Hlc(42, 3);
+        var entry = SetEntry("k", Hlc(12)) with
+        {
+            Mode = ReplicationMode.VersionVector,
+            Value = EncodeVersionVector(v => v.Entries["site-b"] = remoteHlc),
+        };
+
+        var result = await applier.ApplyAsync(entry);
+
+        Assert.That(result.Applied, Is.True);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default);
+        await lattice.Received(1).SetIfVersionAsync(
+            "k",
+            Arg.Is<byte[]>(b => JsonLatticeSerializer<VersionVector>.Default.Deserialize(b).GetClock("site-b") == remoteHlc),
+            Arg.Any<HybridLogicalClock>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_state_merge_advances_high_water_mark()
+    {
+        // Per-origin HWM is updated even for typed CRDT modes — re-delivery
+        // of the same (origin, hlc) pair must be a no-op.
+        var (applier, _, _, hwm) = CreateTypedCrdtApplier();
+        var ts = Hlc(99, 1);
+        var entry = SetEntry("k", ts) with
+        {
+            Mode = ReplicationMode.OrSet,
+            Value = EncodeOrSet(),
+        };
+
+        var result = await applier.ApplyAsync(entry);
+
+        Assert.That(result.HighWaterMark, Is.EqualTo(ts));
+        await hwm.Received(1).TryAdvanceAsync(ts, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_state_merge_dedupes_when_entry_below_hwm()
+    {
+        var (applier, lattice, _, hwm) = CreateTypedCrdtApplier();
+        hwm.GetAsync(Arg.Any<CancellationToken>()).Returns(Hlc(50));
+        var entry = SetEntry("k", Hlc(20)) with
+        {
+            Mode = ReplicationMode.OrSet,
+            Value = EncodeOrSet(),
+        };
+
+        var result = await applier.ApplyAsync(entry);
+
+        Assert.That(result.Applied, Is.False);
+        await lattice.DidNotReceiveWithAnyArgs().GetWithVersionAsync(default!, default);
+        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
+    }
+
+    [Test]
+    public void ApplyAsync_state_merge_throws_when_value_is_null()
+    {
+        var (applier, _, _, _) = CreateTypedCrdtApplier();
+        var entry = SetEntry("k", Hlc(1)) with
+        {
+            Mode = ReplicationMode.OrSet,
+            Value = null,
+        };
+
+        Assert.That(async () => await applier.ApplyAsync(entry), Throws.ArgumentException);
+    }
+
+    [Test]
+    public async Task ApplyAsync_state_merge_retries_on_cas_failure()
+    {
+        var (applier, lattice, _, _) = CreateTypedCrdtApplier();
+        // First two CAS attempts lose the race; third succeeds.
+        lattice.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(false, false, true);
+        var entry = SetEntry("k", Hlc(7)) with
+        {
+            Mode = ReplicationMode.OrSet,
+            Value = EncodeOrSet(s => s.Add(OrSetMember, "site-b", 1)),
+        };
+
+        var result = await applier.ApplyAsync(entry);
+
+        Assert.That(result.Applied, Is.True);
+        await lattice.Received(3).SetIfVersionAsync(
+            "k",
+            Arg.Any<byte[]>(),
+            Arg.Any<HybridLogicalClock>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void ApplyAsync_throws_for_unrecognised_replication_mode()
+    {
+        var (applier, _, _, _) = CreateTypedCrdtApplier();
+        var entry = SetEntry("k", Hlc(1)) with
+        {
+            Mode = (ReplicationMode)999,
+            Value = new byte[] { 1 },
+        };
+
+        Assert.That(
+            async () => await applier.ApplyAsync(entry),
+            Throws.InstanceOf<InvalidOperationException>().With.Message.Contain("999"));
+    }
+
+    [Test]
+    public async Task ApplyAsync_state_merge_does_not_invoke_apply_grain_for_set()
+    {
+        var (applier, _, apply, _) = CreateTypedCrdtApplier();
+        var entry = SetEntry("k", Hlc(1)) with
+        {
+            Mode = ReplicationMode.OrSet,
+            Value = EncodeOrSet(),
+        };
+
+        await applier.ApplyAsync(entry);
+
+        // Typed CRDT Set must bypass IReplicationApplyGrain.ApplySetAsync —
+        // that path stamps the source HLC verbatim, which is wrong for
+        // state-merge semantics where the persisted HLC is a fresh local
+        // tick representing the merge point.
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default);
+    }
 }
