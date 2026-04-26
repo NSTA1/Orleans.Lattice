@@ -19,6 +19,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Need full history so the package-scope discovery step can
+          # `git diff` against the PR base SHA. Shallow clone (the default)
+          # would not have the base commit available.
+          fetch-depth: 0
 
       # Classify what changed so we can skip expensive steps when the PR only
       # touches docs, or run a lightweight samples-only build when nothing
@@ -49,24 +54,48 @@ jobs:
               - '!docs/**'
               - '!samples/**'
 
-      # Per-package detection. Default `some` quantifier: a filter is true if
-      # any changed file matches any listed pattern. `core` covers the core
-      # library subtree; `replication` covers the replication package subtree.
-      # When neither matched (e.g. the PR only edits Orleans.Lattice.slnx or a
-      # shared root file) we conservatively run both.
-      - name: Detect package scope
-        id: scope
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
-            core:
-              - 'src/lattice/**'
-              - 'test/lattice/**'
-              - 'docs/lattice/**'
-            replication:
-              - 'src/lattice.replication/**'
-              - 'test/lattice.replication/**'
-              - 'docs/lattice.replication/**'
+      # Auto-discover packages by convention: each subdirectory of `src/`
+      # is a package; tests live at `test/{name}/`; docs at `docs/{name}/`.
+      # A package is in scope when any file under one of those three
+      # subtrees changed. When no package matched (e.g. the PR only edits
+      # Orleans.Lattice.slnx or a shared root file) we conservatively test
+      # every discovered package.
+      #
+      # Rationale for not using dorny/paths-filter here: its filter set is
+      # static YAML, so adding a new src/{name}/ folder would still require
+      # a workflow edit. The bash discovery below picks up new packages
+      # automatically.
+      - name: Discover changed packages
+        id: discover
+        if: steps.filter.outputs.nonSample == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          packages=()
+          for dir in src/*/; do
+            packages+=("$(basename "$dir")")
+          done
+          echo "Discovered packages: ${packages[*]}"
+
+          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+
+          matched=()
+          for name in "${packages[@]}"; do
+            if echo "$changed" | grep -qE "^(src|test|docs)/${name}/"; then
+              matched+=("$name")
+            fi
+          done
+
+          if [ ${#matched[@]} -eq 0 ]; then
+            matched=("${packages[@]}")
+            echo "No package-scoped changes detected; testing all packages."
+          fi
+
+          echo "to_test=${matched[*]}" >> "$GITHUB_OUTPUT"
+          echo "Packages to test: ${matched[*]}"
 
       - name: Setup .NET
         if: steps.filter.outputs.code == 'true'
@@ -110,25 +139,48 @@ jobs:
         if: steps.filter.outputs.nonSample == 'true'
         run: dotnet build --no-restore --configuration Release
 
-      # Per-package test execution. A package is tested when its own subtree
-      # changed (`scope.<pkg> == 'true'`) or when only shared/root files
-      # changed (neither subtree matched) so we don't silently skip the suite
-      # for an Orleans.Lattice.slnx edit.
-      - name: Test core (chaos first — isolate flaky-prone surface)
-        if: steps.filter.outputs.nonSample == 'true' && (steps.scope.outputs.core == 'true' || steps.scope.outputs.replication != 'true')
-        run: dotnet test test/lattice/Orleans.Lattice.Tests.csproj --no-build --configuration Release --filter "TestCategory=Chaos" --logger "trx;LogFileName=core-chaos.trx"
+      # Per-package test execution. Two separate top-level steps preserve the
+      # chaos-first / deterministic split from the previous static layout: all
+      # in-scope packages run their chaos suite first, then their deterministic
+      # suite. A failure in either step short-circuits the next via the default
+      # `success()` gate on subsequent steps. Per-package trx files keep test
+      # results identifiable in the upload artifact.
+      #
+      # Convention: tests at `test/{name}/*.Tests.csproj`. A discovered package
+      # without a matching test project is silently skipped (e.g. a future
+      # `src/foo/` that has no `test/foo/`).
+      - name: Test changed packages (chaos first — isolate flaky-prone surface)
+        if: steps.filter.outputs.nonSample == 'true'
+        run: |
+          set -euo pipefail
+          for name in ${{ steps.discover.outputs.to_test }}; do
+            proj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
+            if [ -z "$proj" ]; then
+              echo "::notice::No test project under test/${name}/ — skipping."
+              continue
+            fi
+            echo "::group::Test ${name} (chaos)"
+            dotnet test "$proj" --no-build --configuration Release \
+              --filter "TestCategory=Chaos" \
+              --logger "trx;LogFileName=${name}-chaos.trx"
+            echo "::endgroup::"
+          done
 
-      - name: Test core (deterministic)
-        if: steps.filter.outputs.nonSample == 'true' && (steps.scope.outputs.core == 'true' || steps.scope.outputs.replication != 'true')
-        run: dotnet test test/lattice/Orleans.Lattice.Tests.csproj --no-build --configuration Release --filter "TestCategory!=Chaos" --logger "trx;LogFileName=core-results.trx"
-
-      - name: Test replication (chaos first — isolate flaky-prone surface)
-        if: steps.filter.outputs.nonSample == 'true' && (steps.scope.outputs.replication == 'true' || steps.scope.outputs.core != 'true')
-        run: dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --no-build --configuration Release --filter "TestCategory=Chaos" --logger "trx;LogFileName=replication-chaos.trx"
-
-      - name: Test replication (deterministic)
-        if: steps.filter.outputs.nonSample == 'true' && (steps.scope.outputs.replication == 'true' || steps.scope.outputs.core != 'true')
-        run: dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --no-build --configuration Release --filter "TestCategory!=Chaos" --logger "trx;LogFileName=replication-results.trx"
+      - name: Test changed packages (deterministic)
+        if: steps.filter.outputs.nonSample == 'true'
+        run: |
+          set -euo pipefail
+          for name in ${{ steps.discover.outputs.to_test }}; do
+            proj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
+            if [ -z "$proj" ]; then
+              continue
+            fi
+            echo "::group::Test ${name} (deterministic)"
+            dotnet test "$proj" --no-build --configuration Release \
+              --filter "TestCategory!=Chaos" \
+              --logger "trx;LogFileName=${name}-results.trx"
+            echo "::endgroup::"
+          done
 
       # Upload test results even if the Test step fails.
       - name: Upload test results
