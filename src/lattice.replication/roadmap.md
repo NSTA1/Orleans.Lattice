@@ -36,6 +36,110 @@ Preserve what the sample got right (design doc §8): per-peer HLC cursor, advanc
 
 ---
 
+## 🎯 Outstanding — Implementation Order
+
+The phase structure below groups items thematically. This section is the canonical **execution order** — what to pick up next once the previous item lands. Each heading calls out outstanding dependencies (core `F-###` items still on `../lattice/roadmap.md` and prior `R-###` items in this list). Items at the same indentation level are independent and can run in parallel.
+
+> Notation: `[deps: …]` lists outstanding work that must land first. `[deps: none]` means the item is ready to start today. `✓` marks a satisfied dependency.
+
+### Critical path — unblock typed CRDT replication and the wire envelope
+
+1. **R-031 — Typed-delta dispatch on declared mode** `[deps: Core F-038 ✓ shipped, R-032 ✓]`
+   *Unblocked now.* Closes the Phase 3 dispatch loop on top of F-038's typed primitive surface. Lifts the validator restriction that rejects every mode other than `LwwRegister`. Highest immediate value because it's the first item that's actually reachable from user code without an opaque-bytes shim.
+
+2. **R-072 — `IChangeFeed` cursor shape decision** `[deps: none]`
+   Pure design decision, gates R-041. Can run in parallel with R-031.
+
+3. **R-070 — `IWalStorageProvider` abstraction** `[deps: none]`
+   Gates R-071 and (transitively) R-041. Runnable in parallel with R-031 and R-072.
+
+4. **R-071 — Turn-safe batching protocol** `[deps: R-070]`
+   Locks the v2 commit hot path's shape before it ships in anger.
+
+5. **R-033 — Active-active convergence test matrix** `[deps: R-031]`
+   Hardens the Phase 3 correctness bar (chaos category) before any wire-format work commits the contract.
+
+### Wire format + transport
+
+6. **R-040 — `IReplicationTransport` abstraction** `[deps: none]`
+   Pluggable seam. Can run in parallel with the critical-path items above.
+
+7. **R-041 — Orleans-serializer binary framing** `[deps: R-072, R-070, R-040]`
+   First item that hardens the on-the-wire envelope; everything after it is incremental on top.
+
+8. **R-042 — gRPC streaming push transport** `[deps: R-041]`
+   Sub-second latency story; lifts the sample's reference implementation.
+
+### Production hardening (must-have before any real deployment)
+
+9. **R-060 — Poison-entry DLQ** `[deps: none]`
+   **Highest priority in Phase 6** — a single poison entry today stalls the pipeline forever. Land before production rollout of R-042. Runnable in parallel with the wire-format items.
+
+10. **R-061 — GC by min-acked cursor** `[deps: none]`
+    Required before R-052 (auto-bootstrap detects "fall-off-the-log" against the GC predicate). Runnable in parallel with R-060.
+
+11. **R-064 — Per-peer observability** `[deps: none]`
+    Lag histograms, growth/ship ratios, DLQ counters. Land before R-065 (health check consumes the same meter) and before R-033's chaos suite asserts on counters.
+
+### Snapshot / bootstrap (paired with core F-025)
+
+12. **R-050 — `ISnapshotProvider` abstraction** `[deps: none — co-build with Core F-025]`
+    F-025's `GetEntriesNewerThanAsync(HLC threshold)` leaf scan is the same primitive R-050 needs. Whichever lands first, the other consumes it verbatim — do not introduce a second scan API. Recommend pairing them in a single feature cycle.
+
+13. **R-051 — Receiver-side bootstrap state machine** `[deps: R-050]`
+
+14. **R-052 — Auto-bootstrap trigger** `[deps: R-051, R-061]`
+    The "fall-off-the-log" detector reads against R-061's GC predicate.
+
+15. **R-053 — Operator-driven re-seed** `[deps: R-051]`
+
+### Operational polish (after critical-path is in)
+
+16. **R-062 — Receiver-side flow control** `[deps: R-042]`
+
+17. **R-063 — Partitioned replog** `[deps: none]`
+    Performance under fan-in; opt-in via `ReplogPartitions`. Does not gate anything.
+
+18. **R-065 — Back-pressure `IHealthCheck`** `[deps: R-064]`
+
+19. **R-066 — Observable topology** `[deps: none]`
+
+20. **R-043 — Batch-boundary compression** `[deps: R-041]`
+
+21. **R-044 — Content-hash dedup** `[deps: R-042]`
+
+22. **R-045 — Coalesced per-peer cursor checkpointing** `[deps: R-042]`
+
+23. **R-046 — Standard transport security** `[deps: R-042]`
+    mTLS / token rotation. Required before any production multi-tenant deployment but not before single-tenant pilot.
+
+### Extended CRDT modes (gated on outstanding core primitives)
+
+These ship as paired (core primitive ↔ replication delta) deliverables — building either side in isolation freezes a contract before its consumer validates it. Order between the three is by user demand, not technical dependency.
+
+24. **R-034 — MV-Register delta + dispatch** `[deps: Core F-039 outstanding]`
+    Pair with F-039 in a single cycle.
+
+25. **R-035 — OR-Map delta + dispatch** `[deps: Core F-040 outstanding]`
+    Pair with F-040. Includes the recursive `InnerMode` wire-envelope extension.
+
+26. **R-036 — RGA sequence delta + dispatch** `[deps: Core F-041 outstanding]`
+    Pair with F-041. Highest implementation complexity of the three (sequence convergence, back-pressure for high-frequency editors).
+
+### Suggested concurrency
+
+The first wave can run in three parallel streams:
+
+| Stream | Items |
+|---|---|
+| Typed dispatch | R-031 → R-033 |
+| Wire format | R-072 → R-070 → R-071 → R-040 → R-041 → R-042 |
+| Reliability | R-060, R-061, R-064 (any order, all `deps: none`) |
+
+Streams converge before R-050 (snapshot/bootstrap), which depends on R-061 transitively via R-052 and benefits from R-064's observability for the bootstrap state machine.
+
+---
+
 ## 🔲 Phase 0 — Scaffolding
 
 Minimum viable package + hosting surface so every subsequent phase has a place to land and is testable end-to-end.
