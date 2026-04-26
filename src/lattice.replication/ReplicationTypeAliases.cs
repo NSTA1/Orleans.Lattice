@@ -43,6 +43,9 @@ internal static class ReplicationTypeAliases
     /// <summary>Alias for the apply-result return value.</summary>
     internal const string ApplyResult = "olr.ar";
 
+    /// <summary>Alias for <see cref="Replication.ReplicationAck"/>.</summary>
+    internal const string ReplicationAck = "olr.ak";
+
     // Typed CRDT deltas (commit-time wire payloads for replicable primitives)
 
     /// <summary>Alias for <see cref="LwwRegisterDelta"/>.</summary>
