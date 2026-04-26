@@ -44,6 +44,10 @@ public class RoadmapIdentifierHygieneTests
             var full = Path.GetFullPath(file);
             if (string.Equals(full, thisFile, StringComparison.OrdinalIgnoreCase)) continue;
             if (string.Equals(Path.GetFileName(full), "roadmap.md", StringComparison.OrdinalIgnoreCase)) continue;
+            // wal-design.md is a forward-looking design document that legitimately
+            // references tracker identifiers when discussing how design decisions
+            // map onto specific upcoming roadmap items. Exempted by convention.
+            if (string.Equals(Path.GetFileName(full), "wal-design.md", StringComparison.OrdinalIgnoreCase)) continue;
 
             var lines = File.ReadAllLines(full);
             for (int i = 0; i < lines.Length; i++)
