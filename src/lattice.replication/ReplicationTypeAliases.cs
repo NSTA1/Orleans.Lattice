@@ -16,6 +16,9 @@ internal static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="ReplogOp"/>.</summary>
     internal const string ReplogOp = "olr.ro";
 
+    /// <summary>Alias for <see cref="Replication.ReplicationMode"/>.</summary>
+    internal const string ReplicationMode = "olr.rm";
+
     // Per-shard write-ahead-log types
 
     /// <summary>Alias for the per-shard WAL grain interface.</summary>

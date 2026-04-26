@@ -7,10 +7,11 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="IMutationObserver"/> registered by the replication package.
 /// Captures every locally-originating mutation at commit time, builds a
 /// fully-formed <see cref="ReplogEntry"/> (op + key + value + HLC + origin
-/// + TTL), and forwards it to the registered <see cref="IReplogSink"/>
-/// before the originating grain''s write returns. Replaces the host-level
-/// outgoing-call filter used by the legacy <c>MultiSiteManufacturing</c>
-/// sample - capture is now atomic with the write.
+/// + TTL + declared <see cref="ReplicationMode"/>), and forwards it to the
+/// registered <see cref="IReplogSink"/> before the originating grain''s
+/// write returns. Replaces the host-level outgoing-call filter used by the
+/// legacy <c>MultiSiteManufacturing</c> sample - capture is now atomic
+/// with the write.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -29,25 +30,27 @@ namespace Orleans.Lattice.Replication;
 /// non-empty before any observer call can reach this code path.
 /// </para>
 /// <para>
-/// Producer-side filters (<see cref="LatticeReplicationOptions.ReplicatedTrees"/>, 
-/// <see cref="LatticeReplicationOptions.KeyFilter"/>, 
-/// <see cref="LatticeReplicationOptions.KeyPrefixes"/>) are evaluated
-/// before the sink is invoked so non-replicated mutations never reach
-/// the WAL. Per-tree configured instances are resolved via
-/// <see cref="IOptionsMonitor{TOptions}.Get(string)"/> using the
+/// Trees opt in to replication explicitly via
+/// <see cref="LatticeReplicationOptions.ReplicatedTrees"/>; the observer
+/// resolves the declared <see cref="ReplicationMode"/> through the
+/// registered <see cref="IReplicationModeResolver"/> and short-circuits
+/// before the sink is touched when the resolver returns <c>null</c>. The
+/// per-key filters (<see cref="LatticeReplicationOptions.KeyFilter"/>, 
+/// <see cref="LatticeReplicationOptions.KeyPrefixes"/>) layer on top of
+/// the mode resolution. Per-tree configured option instances are resolved
+/// via <see cref="IOptionsMonitor{TOptions}.Get(string)"/> using the
 /// mutation's tree id, so a host can override filters per tree using
 /// <see cref="LatticeReplicationServiceCollectionExtensions.ConfigureLatticeReplication(ISiloBuilder, string, Action{LatticeReplicationOptions})"/>.
 /// </para>
 /// <para>
 /// To keep the commit-time hot path tight, the observer compiles each
 /// resolved <see cref="LatticeReplicationOptions"/> instance into an
-/// immutable <see cref="CompiledFilter"/> snapshot (tree-allowlist
-/// outcome, snapshotted prefix array, key predicate, cluster id) on
-/// first use of a tree id and caches it in a
-/// <see cref="ConcurrentDictionary{TKey, TValue}"/>. The per-mutation
-/// path is then a single dictionary read, a bool, and at most one
-/// delegate / linear prefix check. The cache is invalidated via
-/// <see cref="IOptionsMonitor{TOptions}.OnChange(Action{TOptions, string})"/>
+/// immutable <see cref="CompiledFilter"/> snapshot (snapshotted prefix
+/// array, key predicate, cluster id) on first use of a tree id and caches
+/// it in a <see cref="ConcurrentDictionary{TKey, TValue}"/>. The
+/// per-mutation path is then a resolver lookup, a dictionary read, a bool,
+/// and at most one delegate / linear prefix check. The cache is invalidated
+/// via <see cref="IOptionsMonitor{TOptions}.OnChange(Action{TOptions, string})"/>
 /// so a host that reconfigures filters at runtime sees the new values
 /// on the next mutation.
 /// </para>
@@ -56,17 +59,23 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
 {
     private readonly IReplogSink _sink;
     private readonly IOptionsMonitor<LatticeReplicationOptions> _options;
+    private readonly IReplicationModeResolver _modeResolver;
     private readonly ConcurrentDictionary<string, CompiledFilter> _filters = new(StringComparer.Ordinal);
     private readonly Func<string, CompiledFilter> _factory;
     private readonly IDisposable? _changeSubscription;
 
     public ReplicationMutationObserver(
         IReplogSink sink,
-        IOptionsMonitor<LatticeReplicationOptions> options)
+        IOptionsMonitor<LatticeReplicationOptions> options,
+        IReplicationModeResolver modeResolver)
     {
+        ArgumentNullException.ThrowIfNull(sink);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(modeResolver);
         _sink = sink;
         _options = options;
-        _factory = treeId => CompiledFilter.From(treeId, _options.Get(treeId));
+        _modeResolver = modeResolver;
+        _factory = treeId => CompiledFilter.From(_options.Get(treeId));
 
         // Any options change invalidates every cached filter. ConfigureAll
         // registrations fan out to every named instance, so coarse-grained
@@ -87,14 +96,14 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
                 $"Unknown mutation kind: {mutation.Kind}"),
         };
 
-        var filter = _filters.GetOrAdd(mutation.TreeId, _factory);
-
-        // Tree allowlist outcome was decided once at compile time for this
-        // tree id; the per-mutation path is a single bool check.
-        if (!filter.IncludeTree)
+        // Mode resolution is the gate: an undeclared tree never replicates.
+        var mode = _modeResolver.Resolve(mutation.TreeId);
+        if (mode is null)
         {
             return Task.CompletedTask;
         }
+
+        var filter = _filters.GetOrAdd(mutation.TreeId, _factory);
 
         var key = mutation.Key ?? string.Empty;
         if (!filter.AcceptsKey(key))
@@ -119,6 +128,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             IsTombstone = mutation.IsTombstone,
             ExpiresAtTicks = mutation.ExpiresAtTicks,
             OriginClusterId = origin,
+            Mode = mode.Value,
         };
 
         return _sink.WriteAsync(entry, cancellationToken);
@@ -128,11 +138,12 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
     public void Dispose() => _changeSubscription?.Dispose();
 
     /// <summary>
-    /// Immutable, per-tree-id snapshot of the producer-side replication
+    /// Immutable, per-tree-id snapshot of the producer-side per-key
     /// filter. Built once per tree id on first use and cached on the
     /// observer; invalidated whenever
     /// <see cref="IOptionsMonitor{TOptions}.OnChange(Action{TOptions, string})"/>
-    /// fires.
+    /// fires. Tree-level opt-in is decided separately by the
+    /// <see cref="IReplicationModeResolver"/>.
     /// </summary>
     private sealed class CompiledFilter
     {
@@ -140,22 +151,14 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
         private readonly Func<string, bool>? _keyFilter;
 
         private CompiledFilter(
-            bool includeTree,
             string clusterId,
             string[]? prefixes,
             Func<string, bool>? keyFilter)
         {
-            IncludeTree = includeTree;
             ClusterId = clusterId;
             _prefixes = prefixes;
             _keyFilter = keyFilter;
         }
-
-        /// <summary>
-        /// <c>true</c> when the tree id this filter was built for passes
-        /// the configured tree allowlist. Decided once at compile time.
-        /// </summary>
-        public bool IncludeTree { get; }
 
         /// <summary>Snapshot of <see cref="LatticeReplicationOptions.ClusterId"/>.</summary>
         public string ClusterId { get; }
@@ -188,15 +191,8 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             return false;
         }
 
-        public static CompiledFilter From(string treeId, LatticeReplicationOptions options)
+        public static CompiledFilter From(LatticeReplicationOptions options)
         {
-            // Tree allowlist: null means "all trees"; empty means "no
-            // trees"; non-empty restricts to the listed trees. The
-            // outcome for this specific tree id is captured here so the
-            // hot path collapses to a single bool read.
-            var trees = options.ReplicatedTrees;
-            var includeTree = trees is null || trees.Contains(treeId);
-
             // Snapshot the prefix collection into a non-null array only
             // when at least one usable (non-null) prefix is configured;
             // null means "no prefix restriction" so the hot path can
@@ -220,7 +216,6 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             }
 
             return new CompiledFilter(
-                includeTree,
                 options.ClusterId,
                 prefixes,
                 options.KeyFilter);

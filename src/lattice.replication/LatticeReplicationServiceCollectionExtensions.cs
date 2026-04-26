@@ -36,6 +36,7 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<IReplogSink, ShardedReplogSink>();
         builder.Services.TryAddSingleton<IChangeFeed, ChangeFeed>();
         builder.Services.TryAddSingleton<IReplicationApplier, ReplicationApplier>();
+        builder.Services.TryAddSingleton<IReplicationModeResolver, ReplicationModeResolver>();
         builder.Services.TryAddSingleton<ReplicationPeerStats>();
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IMutationObserver, ReplicationMutationObserver>());

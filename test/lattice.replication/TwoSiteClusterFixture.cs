@@ -120,6 +120,17 @@ internal sealed class TwoSiteClusterFixture
         {
             siloBuilder.Services.AddSingleton<IReplogSink>(sink);
         }
+
+        // Integration tests use many ad-hoc tree names; replace the default
+        // options-backed mode resolver with a permissive stub that opts every
+        // tree in to LwwRegister so individual tests do not need to enumerate
+        // their tree ids on the silo configurator.
+        siloBuilder.Services.AddSingleton<IReplicationModeResolver, AllowAllLwwRegisterResolver>();
+    }
+
+    private sealed class AllowAllLwwRegisterResolver : IReplicationModeResolver
+    {
+        public ReplicationMode? Resolve(string treeId) => ReplicationMode.LwwRegister;
     }
 
     private sealed class SiteASiloConfigurator : ISiloConfigurator
