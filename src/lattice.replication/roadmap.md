@@ -188,6 +188,44 @@ Ops polish and production-grade reliability. Within this phase, **R-060 (DLQ) is
 
 ---
 
+## 🔲 Phase 7 — WAL design alignment *(design [`docs/lattice.replication/wal-design.md`](../../docs/lattice.replication/wal-design.md))*
+
+R-011 landed the per-shard WAL grain shape and dense sequence numbers, but the underlying *durability mechanism* is still Orleans grain persistence — whichever provider the host configured for `IReplogShardGrain`'s state. The WAL design doc specifies a precise turn-safe batching protocol against an append-only `(PartitionKey, RowKey)` storage model (Azure Table Storage as the canonical implementation). Phase 7 closes the gap so the WAL meets that contract without coupling the replication package to a single storage backend, and resolves the one wire-format choice that must be settled before R-041 / R-042 lock the on-the-wire envelope.
+
+These items are gating for **R-041** (binary framing) and **R-042** (gRPC push transport) — the cursor shape decision (R-072) determines whether the wire envelope keys batches by HLC or by per-shard offset, and the storage abstraction (R-070) determines what a peer's "resume from" token actually points at.
+
+- [ ] **R-070 — `IWalStorageProvider` abstraction**
+  Pluggable durability seam for `IReplogShardGrain`. New public interface in `Orleans.Lattice.Replication`:
+
+  ```csharp
+  public interface IWalStorageProvider
+  {
+      Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<ReplogShardEntry> entries, CancellationToken ct);
+      IAsyncEnumerable<ReplogShardEntry> ReadAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken ct);
+      Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken ct);
+      Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken ct);
+  }
+  ```
+
+  Configurable **per tree** via `LatticeReplicationOptions.WalStorageProvider` (a `Func<string treeId, IWalStorageProvider>` resolver) so different trees can use different backends — a hot tree on Azure Table Storage, a cold or low-volume tree on the existing Orleans grain-persistence backed default. The default resolver returns `OrleansGrainStorageWalProvider` (preserves today's R-011 behaviour, no breaking change). Ships with `AzureTableWalStorageProvider` (the canonical implementation; `PartitionKey = "{treeId}/{shardIndex}"`, `RowKey = zero-padded 19-digit offset`, payload as binary properties — directly matches design doc §3) and `InMemoryWalStorageProvider` (test fixture). Atomicity guarantee surfaced on the interface contract: `AppendBatchAsync` is all-or-nothing per call. Backends that cannot meet that (e.g. multi-partition writes) reject batches that span their atomicity unit at validation time rather than silently fragmenting them.
+  *Future-compat:* identical contract to v2 C-020 (WAL-as-sole-commit-point). Today it backs the replication-only WAL; in v2 the same provider backs the primary commit log. Per-tree configurability is an essential v2 requirement (different trees have radically different durability/cost tradeoffs once the WAL is the only commit point) and lands here so v2 inherits a settled API rather than retrofitting it.
+
+- [ ] **R-071 — Turn-safe batching protocol** *(required R-070 ✓)*
+  Refactor `IReplogShardGrain`'s internal append path to the precise model in WAL design §4: in-memory `_pendingBatch` + `_pendingAcks` + `_pendingBatchSizeBytes`, single `_inFlightFlush` task, no grain-state churn. `Append` enforces both batch limits (`Count > 100` **or** `Bytes > 4 MB` triggers an early flush of the current batch and starts a new one), creates a `TaskCompletionSource` per caller, and starts a flush iff none is in flight. `Flush` snapshots the pending batch + acks into local variables, clears the pending state for new arrivals, awaits `IWalStorageProvider.AppendBatchAsync`, and on resume completes every TCS in the captured batch (or retries the whole batch on failure — idempotent because offsets are caller-assigned). All TCS completions occur inside the grain turn; the grain never blocks. Pinned by regression tests covering: write coalescing under burst load, both batch-limit cutovers (100-count and 4 MB), retry-on-storage-failure idempotency, durability-before-ack invariant, and the "new writes accumulate during in-flight flush" property.
+  *Future-compat:* this is the v2 commit hot path. The protocol is published-once here so the v2 promotion is "swap callers from `ILattice.SetAsync → leaf state.WriteStateAsync` to `ILattice.SetAsync → IReplogShardGrain.AppendAsync`", not a redesign of the batching loop.
+
+- [ ] **R-072 — `IChangeFeed` cursor shape decision** *(decision required before R-041)*
+  WAL design §7 describes replication consuming entries "in offset order"; today `IChangeFeed.Subscribe` keys cursors by HLC (R-013). Both shapes are defensible — HLC-cursor preserves transitive-replication HLC fidelity and aligns with HWM dedupe (R-023); offset-cursor is trivially monotonic per shard, matches `RowKey` ordering 1:1, and removes HLC-skew edge cases on resume. **This item is the explicit decision point**: pick one cursor shape, document the trade, and lock it into the `IChangeFeed` contract before R-041 hardens the wire envelope. The decision affects:
+
+  - **R-013** — `Subscribe(treeName, cursorHlc)` signature may need to become `Subscribe(treeName, cursor)` with `cursor` being an opaque struct (carries either an HLC or `(shardIndex, offset)` per shape choice).
+  - **R-023** — HWM continues to key on `(tree, originClusterId) → HLC` regardless (HLC is the dedup key; cursor shape only governs *resume* tokens).
+  - **R-041** — the batch envelope's "resume-from" field shape.
+  - **R-050** — bootstrap handoff (`PinSnapshotAsync` arg type).
+
+  Recommended resolution: keep cursors HLC-shaped on the public `IChangeFeed` surface (preserves transitive replication and v2 forward-compat for cross-tree materialisers that have no notion of per-shard offset) but expose `(shardIndex, offset)` as an opaque diagnostic resume token on the internal transport-side seam used by R-042's gRPC stream. Final call lives with this item.
+
+---
+
 ## Dependencies on the core library
 
 Several phase-1 items require the core `Orleans.Lattice` library to expose a grain-side commit hook that today is only reachable via the host-level outgoing-call filter in the sample. Tracking that dependency here so it is not forgotten when promoting:
