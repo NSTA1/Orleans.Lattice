@@ -29,6 +29,12 @@ jobs:
       #   nonSample  — at least one non-doc, non-sample file changed.
       #
       # Derived: samples-only == (code == 'true' && nonSample == 'false').
+      #
+      # NOTE: patterns must use '**/*.md' for recursive markdown matching.
+      # picomatch (the matcher dorny/paths-filter uses) only treats '**' as a
+      # globstar when it stands alone as a path segment — '**.md' degrades to
+      # '*.md' and silently fails to match nested files like
+      # 'src/lattice/roadmap.md', defeating the docs-only skip.
       - name: Check for non-markdown changes
         id: filter
         uses: dorny/paths-filter@v3
@@ -36,10 +42,10 @@ jobs:
           predicate-quantifier: every
           filters: |
             code:
-              - '!**.md'
+              - '!**/*.md'
               - '!docs/**'
             nonSample:
-              - '!**.md'
+              - '!**/*.md'
               - '!docs/**'
               - '!samples/**'
 
