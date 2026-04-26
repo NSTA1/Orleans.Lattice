@@ -25,7 +25,7 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
 
 | Element | Convention | Example |
 |---|---|---|
-| Public API namespace | `Orleans.Lattice` | `ILattice`, `LatticeOptions`, `SnapshotMode`, `LatticeExtensions`, `IMutationObserver`, `LatticeMutation`, `MutationKind` |
+| Public API namespace | `Orleans.Lattice` | `ILattice`, `LatticeOptions`, `SnapshotMode`, `LatticeExtensions`, `IMutationObserver`, `LatticeMutation`, `MutationKind`, `CrdtLatticeExtensions`, `OrSetAccessor`, `PnCounterAccessor`, `VersionVectorAccessor` |
 | Internal namespace | `Orleans.Lattice.{Area}` | `Orleans.Lattice.BPlusTree.Grains` |
 | Test namespace | `Orleans.Lattice.Tests.{Area}` | `Orleans.Lattice.Tests.BPlusTree.Grains` |
 | Replication public API namespace | `Orleans.Lattice.Replication` | `LatticeReplicationOptions`, `IReplicationTransport`, `IChangeFeed`, `IReplicationApplier`, `ApplyResult`, `LatticeReplicationServiceCollectionExtensions`, `ReplogEntry`, `ReplogOp`, `ReplicationMode`, `IReplicationModeResolver`, `LatticeReplicationMetrics`, `ReplicationPeerStats`, `ReplicationPeerSnapshot`, `LwwRegisterDelta`, `OrSetDelta`, `OrSetDot`, `PnCounterDelta`, `VersionVectorDelta` |

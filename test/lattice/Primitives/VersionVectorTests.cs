@@ -187,4 +187,50 @@ public class VersionVectorTests
         Assert.That(removed, Is.EqualTo(2));
         Assert.That(vv.Entries, Is.Empty);
     }
+
+    [Test]
+    public void Merge_throws_on_null_left()
+    {
+        var v = new VersionVector();
+        Assert.That(() => VersionVector.Merge(null!, v), Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Merge_throws_on_null_right()
+    {
+        var v = new VersionVector();
+        Assert.That(() => VersionVector.Merge(v, null!), Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void MergeFrom_throws_on_null_other()
+    {
+        var v = new VersionVector();
+        Assert.That(() => v.MergeFrom(null!), Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void MergeFrom_matches_static_Merge()
+    {
+        var a = new VersionVector();
+        a.Tick("r1");
+        a.Tick("r1");
+        a.Tick("r2");
+
+        var b = new VersionVector();
+        b.Tick("r2");
+        b.Tick("r2");
+        b.Tick("r3");
+
+        var staticResult = VersionVector.Merge(a, b);
+        var inPlace = a.Clone();
+        inPlace.MergeFrom(b);
+
+        Assert.That(inPlace.Entries.Count, Is.EqualTo(staticResult.Entries.Count));
+        foreach (var (id, clock) in staticResult.Entries)
+        {
+            Assert.That(inPlace.Entries.ContainsKey(id), Is.True);
+            Assert.That(inPlace.Entries[id], Is.EqualTo(clock));
+        }
+    }
 }

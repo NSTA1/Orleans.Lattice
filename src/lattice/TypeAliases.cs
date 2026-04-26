@@ -15,6 +15,9 @@ internal static class TypeAliases
     internal const string SplitState = "ol.sps";
     internal const string StateDelta = "ol.sd";
     internal const string VersionVector = "ol.vv";
+    internal const string OrSet = "ol.ors";
+    internal const string OrSetDot = "ol.osd";
+    internal const string PnCounter = "ol.pnc";
 
     // BPlusTree State
     internal const string ChildEntry = "ol.ce";
