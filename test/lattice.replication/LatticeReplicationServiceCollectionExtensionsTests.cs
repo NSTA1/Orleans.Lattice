@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Hosting;
 using Orleans.Lattice.Replication;
+using Orleans.Serialization;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -190,6 +191,56 @@ public class LatticeReplicationServiceCollectionExtensionsTests
 
         var provider = services.BuildServiceProvider();
         Assert.That(provider.GetRequiredService<IWalStorageProvider>(), Is.SameAs(custom));
+    }
+
+    [Test]
+    public void AddLatticeReplication_registers_orleans_binary_batch_encoder_by_default()
+    {
+        var services = new ServiceCollection();
+        // The encoder depends on Serializer<ReplicationBatchEnvelope>;
+        // AddSerializer wires the Orleans serializer codec graph that
+        // makes that resolution work outside a real Orleans host.
+        services.AddSerializer();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var encoder = provider.GetRequiredService<IReplicationBatchEncoder>();
+        Assert.That(encoder, Is.InstanceOf<OrleansBinaryReplicationBatchEncoder>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_batch_encoder_is_registered_as_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddSerializer();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<IReplicationBatchEncoder>();
+        var second = provider.GetRequiredService<IReplicationBatchEncoder>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_batch_encoder()
+    {
+        var services = new ServiceCollection();
+        services.AddSerializer();
+        var custom = Substitute.For<IReplicationBatchEncoder>();
+        services.AddSingleton<IReplicationBatchEncoder>(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<IReplicationBatchEncoder>(), Is.SameAs(custom));
     }
 
     [Test]

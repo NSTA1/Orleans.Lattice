@@ -38,6 +38,7 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<IReplicationApplier, ReplicationApplier>();
         builder.Services.TryAddSingleton<IReplicationModeResolver, ReplicationModeResolver>();
         builder.Services.TryAddSingleton<IWalStorageProvider, InMemoryWalStorageProvider>();
+        builder.Services.TryAddSingleton<IReplicationBatchEncoder, OrleansBinaryReplicationBatchEncoder>();
         builder.Services.TryAddSingleton<ReplicationPeerStats>();
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IMutationObserver, ReplicationMutationObserver>());
