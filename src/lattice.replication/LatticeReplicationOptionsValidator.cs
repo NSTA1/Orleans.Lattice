@@ -53,15 +53,16 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                         + "commit-time observer can resolve the per-tree replication mode.");
                 }
 
-                if (kvp.Value != ReplicationMode.LwwRegister)
+                if (!Enum.IsDefined(kvp.Value))
                 {
                     return ValidateOptionsResult.Fail(
                         $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ReplicatedTrees)} "
-                        + $"declares tree '{kvp.Key}' with mode '{kvp.Value}' ({scope}), but only "
-                        + $"'{nameof(ReplicationMode.LwwRegister)}' is currently supported. Typed CRDT "
-                        + "modes (OrSet, PnCounter, VersionVector) require the core library to expose "
-                        + "the typed primitive value surface so the observer can recognise the value "
-                        + "type at commit time, and will be enabled in a later release.");
+                        + $"declares tree '{kvp.Key}' with an undefined "
+                        + $"{nameof(ReplicationMode)} value '{(int)kvp.Value}' ({scope}). "
+                        + $"Use one of {nameof(ReplicationMode.LwwRegister)}, "
+                        + $"{nameof(ReplicationMode.OrSet)}, "
+                        + $"{nameof(ReplicationMode.PnCounter)}, or "
+                        + $"{nameof(ReplicationMode.VersionVector)}.");
                 }
             }
         }

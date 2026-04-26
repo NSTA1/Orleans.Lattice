@@ -34,13 +34,15 @@ Three concerns the applier composes for every call:
 
 ### 1. Source-HLC and origin preservation
 
-Point applies route through the core library's apply seam, which persists the entry's `LwwValue<byte[]>` with the supplied `Timestamp` and `OriginClusterId` **verbatim** — no fresh local HLC is stamped. This is what unlocks transitive replication (A → B → C with A's HLC intact) and deterministic LWW resolution against concurrent local writes.
+For `LwwRegister` mode point applies route through the core library's apply seam, which persists the entry's `LwwValue<byte[]>` with the supplied `Timestamp` and `OriginClusterId` **verbatim** — no fresh local HLC is stamped. This is what unlocks transitive replication (A → B → C with A's HLC intact) and deterministic LWW resolution against concurrent local writes.
+
+For typed CRDT modes (`OrSet`, `PnCounter`, `VersionVector`) the applier deserialises the captured value bytes as the typed primitive, reads the locally-stored state under optimistic concurrency, calls the primitive's in-place `MergeFrom` operation, and writes the merged state back. The merge is wrapped in a `LatticeOriginContext.With(originClusterId)` scope so the receiver's commit-time observer publishes the foreign origin and the producer-side ship loop filters the resulting entry out. The persisted `HybridLogicalClock` is a fresh local tick (representing the merge point) — this is correct for state-based CRDTs, where the data structure itself carries the per-replica causal context.
 
 Range deletes carry `HybridLogicalClock.Zero` by design (a range walk produces many per-leaf HLCs that cannot be faithfully collapsed into a single timestamp). The receiver walks the leaf chain locally and stamps each tombstone with a freshly-ticked local HLC; the remote `OriginClusterId` rides through an ambient `LatticeOriginContext` scope so the receiver-side change-feed observer publishes it on every emitted `LatticeMutation`.
 
 ### 2. Per-origin high-water-mark dedupe
 
-The applier resolves a per-origin high-water-mark for every `(TreeId, OriginClusterId)` pair it sees. Before applying a point entry it reads the current HWM; if `entry.Timestamp <= hwm` the call is a no-op (`Applied = false`). After a successful point apply it advances the HWM monotonically — concurrent appliers that race ahead leave the HWM higher and the laggard's advance becomes a no-op, exactly the semantics at-most-once apply requires.
+The applier resolves a per-origin high-water-mark for every `(TreeId, OriginClusterId)` pair it sees. Before applying a point entry it reads the current HWM; if `entry.Timestamp <= hwm` the call is a no-op (`Applied = false`). After a successful point apply it advances the HWM monotonically — concurrent appliers that race ahead leave the HWM higher and the laggard's advance becomes a no-op, exactly the semantics at-most-once apply requires. Typed CRDT modes consult and advance the HWM the same way, even though state-based merge is naturally idempotent — the dedupe just short-circuits redundant grain calls.
 
 Range deletes bypass the HWM by design. Range applies are naturally idempotent at the leaf layer: re-running a range delete on already-tombstoned keys merges to the same state, so dedupe is unnecessary.
 
@@ -54,8 +56,13 @@ A `ReplogEntry` whose `OriginClusterId` matches the local cluster id is rejected
 
 - `entry.TreeId` is null or empty.
 - `entry.OriginClusterId` is null or empty.
-- `entry.Op == Set` and `entry.Value` is null.
+- `entry.Op == Set` and `entry.Value` is null (for any mode).
 - `entry.Op == DeleteRange` and `entry.EndExclusiveKey` is null.
+
+`InvalidOperationException` is thrown when:
+
+- `entry.Mode` is an undefined integer value (no apply rule registered).
+- A typed CRDT state-merge exhausts its CAS retry budget under sustained contention on the target key.
 
 `OperationCanceledException` is thrown when the supplied `CancellationToken` is already cancelled or fires during a grain call.
 

@@ -3,6 +3,8 @@ using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grains;
+using Microsoft.Extensions.Options;
+using NSubstitute;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -182,5 +184,162 @@ public class ReplicationApplyIntegrationTests
         await hwm.PinSnapshotAsync(Hlc(200));
 
         Assert.That(await hwm.GetAsync(), Is.EqualTo(Hlc(200)));
+    }
+
+    // ------------------------------------------------------------------
+    // Typed CRDT mode dispatch (state-merge through ILattice)
+    // ------------------------------------------------------------------
+
+    private ReplicationApplier CreateSiteBApplier()
+    {
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        var opts = new LatticeReplicationOptions { ClusterId = TwoSiteClusterFixture.SiteBClusterId };
+        monitor.CurrentValue.Returns(opts);
+        monitor.Get(Arg.Any<string>()).Returns(opts);
+        return new ReplicationApplier(_fixture.SiteB.Client, monitor);
+    }
+
+    [Test]
+    public async Task ApplyAsync_or_set_state_merge_converges_with_local_concurrent_add()
+    {
+        const string tree = "ri-orset";
+        const string key = "k";
+        var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
+        var applier = CreateSiteBApplier();
+
+        // Site B authors a local add concurrently with the remote one.
+        await lattice.OrSet(key).AddAsync(new byte[] { 1 }, "site-b");
+
+        // Build a Site A-origin OrSet payload carrying a different element.
+        var remoteSet = new OrSet();
+        remoteSet.Add(new byte[] { 2 }, "site-a", 1);
+        var entry = new ReplogEntry
+        {
+            TreeId = tree,
+            Op = ReplogOp.Set,
+            Key = key,
+            Value = JsonLatticeSerializer<OrSet>.Default.Serialize(remoteSet),
+            Timestamp = Hlc(1_000),
+            Mode = ReplicationMode.OrSet,
+            OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
+        };
+
+        var result = await applier.ApplyAsync(entry);
+
+        Assert.That(result.Applied, Is.True);
+
+        // Both adds must survive the merge — that is the whole point of OR-Set.
+        var merged = await lattice.OrSet(key).GetAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(merged.Contains(new byte[] { 1 }), Is.True, "Local Site B add must survive.");
+            Assert.That(merged.Contains(new byte[] { 2 }), Is.True, "Remote Site A add must survive.");
+        });
+    }
+
+    [Test]
+    public async Task ApplyAsync_pn_counter_state_merge_sums_per_replica_components()
+    {
+        const string tree = "ri-pncounter";
+        const string key = "k";
+        var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
+        var applier = CreateSiteBApplier();
+
+        // Site B authors +3 locally.
+        await lattice.PnCounter(key).IncrementAsync("site-b", 3);
+
+        // Site A increments +5 and decrements -2; receiver must merge both.
+        var remoteCounter = new PnCounter();
+        remoteCounter.Increment("site-a", 5);
+        remoteCounter.Decrement("site-a", 2);
+        var entry = new ReplogEntry
+        {
+            TreeId = tree,
+            Op = ReplogOp.Set,
+            Key = key,
+            Value = JsonLatticeSerializer<PnCounter>.Default.Serialize(remoteCounter),
+            Timestamp = Hlc(1_000),
+            Mode = ReplicationMode.PnCounter,
+            OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
+        };
+
+        await applier.ApplyAsync(entry);
+
+        // Local +3, remote +5 - 2 = +3 ⇒ total +6.
+        var merged = await lattice.PnCounter(key).GetAsync();
+        Assert.That(merged.Value, Is.EqualTo(6));
+    }
+
+    [Test]
+    public async Task ApplyAsync_version_vector_state_merge_pointwise_max_per_replica()
+    {
+        const string tree = "ri-vv";
+        const string key = "k";
+        var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
+        var applier = CreateSiteBApplier();
+
+        await lattice.VersionVector(key).TickAsync("site-b");
+        var localBefore = await lattice.VersionVector(key).GetAsync();
+        var localBClock = localBefore.GetClock("site-b");
+
+        var remote = new VersionVector();
+        remote.Entries["site-a"] = Hlc(7777, 9);
+        // Stale Site B clock that must be subsumed by the local higher value.
+        remote.Entries["site-b"] = HybridLogicalClock.Zero;
+        var entry = new ReplogEntry
+        {
+            TreeId = tree,
+            Op = ReplogOp.Set,
+            Key = key,
+            Value = JsonLatticeSerializer<VersionVector>.Default.Serialize(remote),
+            Timestamp = Hlc(1_000),
+            Mode = ReplicationMode.VersionVector,
+            OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
+        };
+
+        await applier.ApplyAsync(entry);
+
+        var merged = await lattice.VersionVector(key).GetAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(merged.GetClock("site-a"), Is.EqualTo(Hlc(7777, 9)));
+            Assert.That(merged.GetClock("site-b"), Is.EqualTo(localBClock),
+                "Pointwise-max must keep the higher local Site B clock, not regress to Zero.");
+        });
+    }
+
+    [Test]
+    public async Task ApplyAsync_or_set_state_merge_dedupes_under_per_origin_high_water_mark()
+    {
+        const string tree = "ri-orset-dedup";
+        const string key = "k";
+        var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
+        var applier = CreateSiteBApplier();
+        var hwm = _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>(
+            $"{tree}/{TwoSiteClusterFixture.SiteAClusterId}");
+
+        // Pin HWM above the entry timestamp — re-delivery of a typed CRDT
+        // entry must short-circuit on the HWM check just like LWW does.
+        await hwm.PinSnapshotAsync(Hlc(5_000));
+
+        var remoteSet = new OrSet();
+        remoteSet.Add(new byte[] { 9 }, "site-a", 1);
+        var entry = new ReplogEntry
+        {
+            TreeId = tree,
+            Op = ReplogOp.Set,
+            Key = key,
+            Value = JsonLatticeSerializer<OrSet>.Default.Serialize(remoteSet),
+            Timestamp = Hlc(1_000),
+            Mode = ReplicationMode.OrSet,
+            OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
+        };
+
+        var result = await applier.ApplyAsync(entry);
+
+        Assert.That(result.Applied, Is.False);
+        var merged = await lattice.OrSet(key).GetAsync();
+        Assert.That(merged.Contains(new byte[] { 9 }), Is.False,
+            "Entry below the per-origin HWM must not be merged.");
     }
 }

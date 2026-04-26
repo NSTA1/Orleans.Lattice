@@ -187,10 +187,11 @@ public class LatticeReplicationOptionsValidatorTests
         });
     }
 
+    [TestCase(ReplicationMode.LwwRegister)]
     [TestCase(ReplicationMode.OrSet)]
     [TestCase(ReplicationMode.PnCounter)]
     [TestCase(ReplicationMode.VersionVector)]
-    public void Validate_fails_when_replicated_trees_declares_non_lww_mode(ReplicationMode mode)
+    public void Validate_succeeds_for_every_defined_replication_mode(ReplicationMode mode)
     {
         var opts = new LatticeReplicationOptions
         {
@@ -201,13 +202,28 @@ public class LatticeReplicationOptionsValidatorTests
             },
         };
 
+        Assert.That(Validator.Validate(name: null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_fails_when_replicated_trees_declares_undefined_mode()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ReplicatedTrees = new Dictionary<string, ReplicationMode>
+            {
+                ["t"] = (ReplicationMode)999,
+            },
+        };
+
         var result = Validator.Validate(name: null, opts);
 
         Assert.Multiple(() =>
         {
             Assert.That(result.Failed, Is.True);
-            Assert.That(result.FailureMessage, Does.Contain(mode.ToString()));
-            Assert.That(result.FailureMessage, Does.Contain(nameof(ReplicationMode.LwwRegister)));
+            Assert.That(result.FailureMessage, Does.Contain("999"));
+            Assert.That(result.FailureMessage, Does.Contain(nameof(ReplicationMode)));
         });
     }
 

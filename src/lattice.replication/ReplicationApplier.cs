@@ -95,12 +95,33 @@ internal sealed class ReplicationApplier(
                 => throw new ArgumentException(
                     "ReplogEntry.Value must be non-null for ReplogOp.Set.",
                     nameof(entry)),
-            ReplogOp.Set => apply.ApplySetAsync(
-                entry.Key,
-                entry.Value!,
-                entry.Timestamp,
-                entry.OriginClusterId!,
-                entry.ExpiresAtTicks),
+            ReplogOp.Set => entry.Mode switch
+            {
+                ReplicationMode.LwwRegister => apply.ApplySetAsync(
+                    entry.Key,
+                    entry.Value!,
+                    entry.Timestamp,
+                    entry.OriginClusterId!,
+                    entry.ExpiresAtTicks),
+                ReplicationMode.OrSet => ApplyStateMergeAsync<OrSet>(
+                    entry,
+                    static (existing, incoming) => existing.MergeFrom(incoming),
+                    static () => new OrSet()),
+                ReplicationMode.PnCounter => ApplyStateMergeAsync<PnCounter>(
+                    entry,
+                    static (existing, incoming) => existing.MergeFrom(incoming),
+                    static () => new PnCounter()),
+                ReplicationMode.VersionVector => ApplyStateMergeAsync<VersionVector>(
+                    entry,
+                    static (existing, incoming) => existing.MergeFrom(incoming),
+                    static () => new VersionVector()),
+                _ => throw new InvalidOperationException(
+                    $"ReplogEntry on tree '{entry.TreeId}' carries unrecognised replication mode '{entry.Mode}' "
+                    + "(value="
+                    + ((int)entry.Mode).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + "). The receiver has no apply rule registered for this mode; in a future release such "
+                    + "entries will be routed to a dead-letter queue."),
+            },
             ReplogOp.Delete => apply.ApplyDeleteAsync(
                 entry.Key,
                 entry.Timestamp,
@@ -108,6 +129,63 @@ internal sealed class ReplicationApplier(
             _ => throw new InvalidOperationException(
                 $"Unsupported point-apply op {entry.Op} for entry on tree '{entry.TreeId}'."),
         };
+    }
+
+    /// <summary>
+    /// CAS retry budget for the read-merge-write loop used by typed CRDT
+    /// state-merge applies (<see cref="ReplicationMode.OrSet"/>,
+    /// <see cref="ReplicationMode.PnCounter"/>, <see cref="ReplicationMode.VersionVector"/>).
+    /// Mirrors the budget the typed accessors (<see cref="OrSetAccessor.DefaultMaxAttempts"/>,
+    /// <see cref="PnCounterAccessor.DefaultMaxAttempts"/>,
+    /// <see cref="VersionVectorAccessor.DefaultMaxAttempts"/>) use for the
+    /// authoring side, so a typical fan-in matches.
+    /// </summary>
+    private const int StateMergeMaxAttempts = 16;
+
+    private async Task ApplyStateMergeAsync<TState>(
+        ReplogEntry entry,
+        Action<TState, TState> merge,
+        Func<TState> emptyFactory)
+        where TState : class
+    {
+        if (entry.Value is null)
+        {
+            throw new ArgumentException(
+                $"ReplogEntry.Value must be non-null for {entry.Mode} state-merge apply.",
+                nameof(entry));
+        }
+
+        var lattice = grainFactory.GetGrain<ILattice>(entry.TreeId);
+        var serializer = JsonLatticeSerializer<TState>.Default;
+        var incoming = serializer.Deserialize(entry.Value);
+
+        // Stamp the remote origin onto the receiver-side mutation so the
+        // outbound change-feed observer publishes the foreign origin and
+        // the producer's outbound ship loop filters the resulting entry
+        // back out (the durable, async-boundary-safe successor to the
+        // legacy thread-local replay flag).
+        using var scope = LatticeOriginContext.With(entry.OriginClusterId);
+
+        for (var attempt = 0; attempt < StateMergeMaxAttempts; attempt++)
+        {
+            var versioned = await lattice.GetWithVersionAsync(entry.Key);
+            var existing = versioned.Value is null
+                ? emptyFactory()
+                : serializer.Deserialize(versioned.Value);
+            merge(existing, incoming);
+            var bytes = serializer.Serialize(existing);
+            var ok = await lattice.SetIfVersionAsync(entry.Key, bytes, versioned.Version);
+            if (ok)
+            {
+                return;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Replication state-merge CAS budget exhausted after {StateMergeMaxAttempts} attempts on tree "
+            + $"'{entry.TreeId}', key '{entry.Key}', mode '{entry.Mode}'. The receiver could not install the "
+            + "merged state under optimistic concurrency; reduce contention on this key or increase the "
+            + "budget in a future configuration knob.");
     }
 
     private Task ApplyRangeAsync(ReplogEntry entry, CancellationToken cancellationToken)
