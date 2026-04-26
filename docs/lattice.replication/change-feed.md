@@ -65,3 +65,20 @@ var feed = serviceProvider.GetRequiredService<IChangeFeed>();
 ## Why a separate seam from the transport
 
 The outbound shipper introduced in later phases is one consumer of the change feed; the future local materialiser is another. Keeping `IChangeFeed` free of peer ids, acks, and transport options means a future projection or background materialiser can plug in at the same seam without replication being installed.
+
+## Cursor shape — HLC on the public surface
+
+The public `IChangeFeed.Subscribe` signature accepts a `HybridLogicalClock` cursor, not a per-shard offset. Both shapes were considered:
+
+| Shape | Advantages | Disadvantages |
+|---|---|---|
+| **HLC cursor** *(chosen)* | Preserves transitive replication HLC fidelity; aligns 1:1 with the per-origin high-water-mark dedup table; cross-tree consumers (a future cross-tree materialiser) have no notion of per-shard offset. | HLC-skew at reconnect time is a (rare) edge case the consumer must handle. |
+| **`(shardIndex, offset)` cursor** | Trivially monotonic per shard; matches the underlying `WalEntry.Offset` shape 1:1; no HLC-skew edge cases at reconnect time. | Couples the public API to the internal partitioning scheme; cross-tree consumers can't use it without an HLC translation layer. |
+
+**The decision:** keep cursors HLC-shaped on every public surface. Per-shard offsets are exposed only on the internal transport-side seam used by the gRPC push transport, where reconnect resume points genuinely benefit from the offset shape. The internal `WalResumeToken` (`ShardIndex`, `Offset`) carries the offset cursor across that seam without leaking into the public API.
+
+This decision affects three downstream items:
+
+- The wire envelope's "resume from" field is HLC-shaped on the public transport contract; the internal gRPC stream may carry an opaque `WalResumeToken` alongside as a diagnostic fast-path.
+- The per-origin high-water-mark table continues to key on `(tree, originClusterId) → HLC` regardless of cursor shape — HLC is the dedup key, cursor shape only governs *resume* tokens.
+- Bootstrap snapshot pin (later phase) takes an `HybridLogicalClock` argument, not an offset.

@@ -47,13 +47,13 @@ The phase structure below groups items thematically. This section is the canonic
 1. **R-031 ✓ shipped — Typed-delta dispatch on declared mode**
    Closed the Phase 3 dispatch loop on top of F-038's typed primitive surface. Validator now accepts every defined `ReplicationMode`; the receiver-side applier dispatches Set ops on `entry.Mode` to a state-merge path through `ILattice` for typed CRDTs.
 
-2. **R-072 — `IChangeFeed` cursor shape decision** `[deps: none]`
-   Pure design decision, gates R-041. Can run in parallel with R-031.
+2. **R-072 ✓ shipped — `IChangeFeed` cursor shape decision**
+   Locked in: public `IChangeFeed.Subscribe` keeps the HLC cursor; per-shard `(ShardIndex, Offset)` cursors live on the internal `WalResumeToken` reserved for the gRPC push transport. Documented in `docs/lattice.replication/change-feed.md`.
 
-3. **R-070 — `IWalStorageProvider` abstraction** `[deps: none]`
-   Gates R-071 and (transitively) R-041. Runnable in parallel with R-072.
+3. **R-070 ✓ shipped — `IWalStorageProvider` abstraction**
+   Public `IWalStorageProvider` + `WalEntry` DTO + `LatticeReplicationOptions.WalStorageProvider` per-tree resolver + DI default `InMemoryWalStorageProvider`. Seam ships dormant; R-071 wires the grain to it.
 
-4. **R-071 — Turn-safe batching protocol** `[deps: R-070]`
+4. **R-071 — Turn-safe batching protocol** `[deps: R-070 ✓]`
    Locks the v2 commit hot path's shape before it ships in anger.
 
 5. **R-033 — Active-active convergence test matrix** `[deps: R-031 ✓]`
@@ -64,7 +64,7 @@ The phase structure below groups items thematically. This section is the canonic
 6. **R-040 — `IReplicationTransport` abstraction** `[deps: none]`
    Pluggable seam. Can run in parallel with the critical-path items above.
 
-7. **R-041 — Orleans-serializer binary framing** `[deps: R-072, R-070, R-040]`
+7. **R-041 — Orleans-serializer binary framing** `[deps: R-072 ✓, R-070 ✓, R-040]`
    First item that hardens the on-the-wire envelope; everything after it is incremental on top.
 
 8. **R-042 — gRPC streaming push transport** `[deps: R-041]`
@@ -328,35 +328,22 @@ R-011 landed the per-shard WAL grain shape and dense sequence numbers, but the u
 
 These items are gating for **R-041** (binary framing) and **R-042** (gRPC push transport) — the cursor shape decision (R-072) determines whether the wire envelope keys batches by HLC or by per-shard offset, and the storage abstraction (R-070) determines what a peer's "resume from" token actually points at.
 
-- [ ] **R-070 — `IWalStorageProvider` abstraction**
-  Pluggable durability seam for `IReplogShardGrain`. New public interface in `Orleans.Lattice.Replication`:
-
-  ```csharp
-  public interface IWalStorageProvider
-  {
-      Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<ReplogShardEntry> entries, CancellationToken ct);
-      IAsyncEnumerable<ReplogShardEntry> ReadAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken ct);
-      Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken ct);
-      Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken ct);
-  }
-  ```
-
-  Configurable **per tree** via `LatticeReplicationOptions.WalStorageProvider` (a `Func<string treeId, IWalStorageProvider>` resolver) so different trees can use different backends — a hot tree on Azure Table Storage, a cold or low-volume tree on the existing Orleans grain-persistence backed default. The default resolver returns `OrleansGrainStorageWalProvider` (preserves today's R-011 behaviour, no breaking change). Ships with `AzureTableWalStorageProvider` (the canonical implementation; `PartitionKey = "{treeId}/{shardIndex}"`, `RowKey = zero-padded 19-digit offset`, payload as binary properties — directly matches design doc §3) and `InMemoryWalStorageProvider` (test fixture). Atomicity guarantee surfaced on the interface contract: `AppendBatchAsync` is all-or-nothing per call. Backends that cannot meet that (e.g. multi-partition writes) reject batches that span their atomicity unit at validation time rather than silently fragmenting them.
-  *Future-compat:* identical contract to v2 C-020 (WAL-as-sole-commit-point). Today it backs the replication-only WAL; in v2 the same provider backs the primary commit log. Per-tree configurability is an essential v2 requirement (different trees have radically different durability/cost tradeoffs once the WAL is the only commit point) and lands here so v2 inherits a settled API rather than retrofitting it.
+- [x] **R-070 — `IWalStorageProvider` abstraction**
+  Pluggable durability seam for `IReplogShardGrain`. **Implemented:** new public `IWalStorageProvider` interface in `Orleans.Lattice.Replication` with `AppendBatchAsync`, `ReadAsync`, `GetHighestOffsetAsync`, and `TrimAsync` methods, exchanging a new public `WalEntry` (`readonly record struct`, `(Offset, ReplogEntry)`) DTO at the boundary. The `WalEntry` shape is intentionally distinct from the internal `ReplogShardEntry` grain RPC envelope so the in-cluster grain protocol can evolve without breaking host-supplied storage backends. Configurable per-tree via the new `LatticeReplicationOptions.WalStorageProvider` resolver (`Func<string treeId, IWalStorageProvider>?`); when `null` (the default), the WAL falls back to the DI-registered singleton, which `AddLatticeReplication` registers as `InMemoryWalStorageProvider` via `TryAddSingleton` (a host can pre-register its own implementation to win the registration). Atomicity is surfaced on the interface contract: `AppendBatchAsync` is all-or-nothing per call, and backends that cannot meet that for a particular batch must reject it at validation time rather than fragmenting silently. Offsets are caller-assigned, dense, and validated against the persisted tail by the in-memory provider. **Scope note:** the seam ships dormant — `IReplogShardGrain` itself is not yet rewired to the provider (that is the turn-safe batching protocol work, R-071). Today's persistence still flows through `IPersistentState<ReplogShardState>`; configuring `WalStorageProvider` does not yet change observable behaviour. The canonical Azure Table Storage implementation (matching the `(PartitionKey, RowKey) = ({TreeId}/{ShardIndex}, zero-padded-19-digit-offset)` layout described in `wal-design.md`) is deferred to a separate package so the core replication library does not pull in an Azure dependency. Covered by `WalEntryTests` (4 tests; record equality, default values, init), `InMemoryWalStorageProviderTests` (24 tests covering append density, all-or-nothing failure isolation, read-from-offset-exclusive semantics, max-entries cap, trim idempotency, per-shard isolation, null/cancellation guards on every method), and three new DI tests in `LatticeReplicationServiceCollectionExtensionsTests` (default registration, singleton lifetime, pre-registered-singleton-wins).
+  *Future-compat:* identical contract to the future v2 commit-point WAL. Today it backs the replication-only WAL; in v2 the same provider backs the primary commit log. Per-tree configurability is an essential v2 requirement and lands here so v2 inherits a settled API rather than retrofitting it.
 
 - [ ] **R-071 — Turn-safe batching protocol** *(required R-070 ✓)*
   Refactor `IReplogShardGrain`'s internal append path to the precise model in WAL design §4: in-memory `_pendingBatch` + `_pendingAcks` + `_pendingBatchSizeBytes`, single `_inFlightFlush` task, no grain-state churn. `Append` enforces both batch limits (`Count > 100` **or** `Bytes > 4 MB` triggers an early flush of the current batch and starts a new one), creates a `TaskCompletionSource` per caller, and starts a flush iff none is in flight. `Flush` snapshots the pending batch + acks into local variables, clears the pending state for new arrivals, awaits `IWalStorageProvider.AppendBatchAsync`, and on resume completes every TCS in the captured batch (or retries the whole batch on failure — idempotent because offsets are caller-assigned). All TCS completions occur inside the grain turn; the grain never blocks. Pinned by regression tests covering: write coalescing under burst load, both batch-limit cutovers (100-count and 4 MB), retry-on-storage-failure idempotency, durability-before-ack invariant, and the "new writes accumulate during in-flight flush" property.
   *Future-compat:* this is the v2 commit hot path. The protocol is published-once here so the v2 promotion is "swap callers from `ILattice.SetAsync → leaf state.WriteStateAsync` to `ILattice.SetAsync → IReplogShardGrain.AppendAsync`", not a redesign of the batching loop.
 
-- [ ] **R-072 — `IChangeFeed` cursor shape decision** *(decision required before R-041)*
-  WAL design §7 describes replication consuming entries "in offset order"; today `IChangeFeed.Subscribe` keys cursors by HLC (R-013). Both shapes are defensible — HLC-cursor preserves transitive-replication HLC fidelity and aligns with HWM dedupe (R-023); offset-cursor is trivially monotonic per shard, matches `RowKey` ordering 1:1, and removes HLC-skew edge cases on resume. **This item is the explicit decision point**: pick one cursor shape, document the trade, and lock it into the `IChangeFeed` contract before R-041 hardens the wire envelope. The decision affects:
+- [x] **R-072 — `IChangeFeed` cursor shape decision** *(decision required before R-041)*
+  WAL design §7 describes replication consuming entries "in offset order"; today `IChangeFeed.Subscribe` keys cursors by HLC (R-013). Both shapes are defensible — HLC-cursor preserves transitive-replication HLC fidelity and aligns with HWM dedupe (R-023); offset-cursor is trivially monotonic per shard, matches `RowKey` ordering 1:1, and removes HLC-skew edge cases on resume. **Decision (locked in):** the public `IChangeFeed.Subscribe` contract stays HLC-cursor-shaped — preserves transitive replication HLC fidelity, aligns 1:1 with the per-origin high-water-mark dedup table, and matches the shape a future cross-tree materialiser needs (no notion of per-shard offset). Per-shard `(ShardIndex, Offset)` cursors are exposed only on the internal transport-side seam via a new `internal readonly record struct WalResumeToken` ([Id(0)] ShardIndex, [Id(1)] Offset; `[GenerateSerializer][Immutable]` with stable `[Alias]`) reserved for the gRPC push transport. Receivers store this token alongside their per-origin HWM purely as a diagnostic fast-path; the HWM remains the authoritative dedup key. Documented in `docs/lattice.replication/change-feed.md` (new "Cursor shape" section comparing the two options) and inline on `WalResumeToken` itself. Locks the decision before the wire envelope hardens. Covered by 5 `WalResumeTokenTests` (default values, init, equality including per-component differentiation).
 
-  - **R-013** — `Subscribe(treeName, cursorHlc)` signature may need to become `Subscribe(treeName, cursor)` with `cursor` being an opaque struct (carries either an HLC or `(shardIndex, offset)` per shape choice).
+  Downstream impact:
+  - **R-013** — no signature change. `Subscribe(treeName, cursorHlc, includeLocalOrigin, ct)` stays as-is.
   - **R-023** — HWM continues to key on `(tree, originClusterId) → HLC` regardless (HLC is the dedup key; cursor shape only governs *resume* tokens).
-  - **R-041** — the batch envelope's "resume-from" field shape.
-  - **R-050** — bootstrap handoff (`PinSnapshotAsync` arg type).
-
-  Recommended resolution: keep cursors HLC-shaped on the public `IChangeFeed` surface (preserves transitive replication and v2 forward-compat for cross-tree materialisers that have no notion of per-shard offset) but expose `(shardIndex, offset)` as an opaque diagnostic resume token on the internal transport-side seam used by R-042's gRPC stream. Final call lives with this item.
+  - **R-041** — the batch envelope's public "resume-from" field is HLC-shaped; the gRPC stream may carry an opaque `WalResumeToken` alongside as a diagnostic fast-path.
+  - **R-050** — bootstrap handoff (`PinSnapshotAsync` arg type) takes `HybridLogicalClock`, not an offset.
 
 ---
 
