@@ -61,10 +61,10 @@ The phase structure below groups items thematically. This section is the canonic
 
 ### Wire format + transport
 
-6. **R-040 — `IReplicationTransport` abstraction** `[deps: none]`
+6. **R-040 ✓ shipped — `IReplicationTransport` abstraction**
    Pluggable seam. Can run in parallel with the critical-path items above.
 
-7. **R-041 — Orleans-serializer binary framing** `[deps: R-072 ✓, R-070 ✓, R-040]`
+7. **R-041 — Orleans-serializer binary framing** `[deps: R-072 ✓, R-070 ✓, R-040 ✓]`
    First item that hardens the on-the-wire envelope; everything after it is incremental on top.
 
 8. **R-042 — gRPC streaming push transport** `[deps: R-041]`
@@ -252,7 +252,7 @@ This phase deliberately reorders the two items below from the design doc's narra
 
 Latency drops from reminder-cadence (~60 s) to sub-second; bandwidth improves ~2× from dropping JSON base64; deduplication makes no-op re-sets free.
 
-- [ ] **R-040 — `IReplicationTransport` abstraction**
+- [x] **R-040 — `IReplicationTransport` abstraction**
   Pluggable seam. Implementations: `LoopbackTransport` (test fixture, R-000), `HttpTransport` (sample's pull path, lifted), `GrpcPushTransport` (sample's push path, lifted). The library ships all three; hosts pick via options. The outbound ship loop is transport-agnostic.
 
 - [ ] **R-041 — Orleans-serializer binary framing**
