@@ -102,4 +102,62 @@ public class LatticeReplicationOptionsTests
             Assert.That(opts.WalStorageProvider!("any"), Is.SameAs(custom));
         });
     }
+
+    // ------------------------------------------------------------------
+    // Turn-safe batching options
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void DefaultWalMaxBatchEntries_is_one_hundred() =>
+        Assert.That(LatticeReplicationOptions.DefaultWalMaxBatchEntries, Is.EqualTo(100));
+
+    [Test]
+    public void DefaultWalMaxBatchBytes_is_four_megabytes() =>
+        Assert.That(LatticeReplicationOptions.DefaultWalMaxBatchBytes, Is.EqualTo(4L * 1024 * 1024));
+
+    [Test]
+    public void DefaultWalMaxPendingBatches_is_four() =>
+        Assert.That(LatticeReplicationOptions.DefaultWalMaxPendingBatches, Is.EqualTo(4));
+
+    [Test]
+    public void New_instance_has_default_wal_max_batch_entries()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.WalMaxBatchEntries, Is.EqualTo(LatticeReplicationOptions.DefaultWalMaxBatchEntries));
+    }
+
+    [Test]
+    public void New_instance_has_default_wal_max_batch_bytes()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.WalMaxBatchBytes, Is.EqualTo(LatticeReplicationOptions.DefaultWalMaxBatchBytes));
+    }
+
+    [Test]
+    public void New_instance_has_default_wal_max_pending_batches()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.WalMaxPendingBatches, Is.EqualTo(LatticeReplicationOptions.DefaultWalMaxPendingBatches));
+    }
+
+    [Test]
+    public void WalMaxBatchEntries_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { WalMaxBatchEntries = 25 };
+        Assert.That(opts.WalMaxBatchEntries, Is.EqualTo(25));
+    }
+
+    [Test]
+    public void WalMaxBatchBytes_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { WalMaxBatchBytes = 1024 };
+        Assert.That(opts.WalMaxBatchBytes, Is.EqualTo(1024L));
+    }
+
+    [Test]
+    public void WalMaxPendingBatches_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { WalMaxPendingBatches = 8 };
+        Assert.That(opts.WalMaxPendingBatches, Is.EqualTo(8));
+    }
 }

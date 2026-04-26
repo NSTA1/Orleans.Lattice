@@ -24,9 +24,6 @@ internal static class ReplicationTypeAliases
     /// <summary>Alias for the per-shard WAL grain interface.</summary>
     internal const string IReplogShardGrain = "olr.gw";
 
-    /// <summary>Alias for the per-shard WAL persistent state class.</summary>
-    internal const string ReplogShardState = "olr.ws";
-
     /// <summary>Alias for a single sequenced entry returned from a WAL read.</summary>
     internal const string ReplogShardEntry = "olr.we";
 

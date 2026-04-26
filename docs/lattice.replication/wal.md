@@ -23,7 +23,7 @@ Routing of a mutation to a partition is deterministic and process-independent: a
    IReplogShardGrain "{treeId}/{partition}"
                        │
                        ▼
-              IPersistentState<ReplogShardState>
+                IWalStorageProvider
 ```
 
 ## Configuration
@@ -74,7 +74,7 @@ There is intentionally no opt-in "best-effort" mode that would catch the excepti
 
 ## Persistence
 
-State is stored under the persistent state name `replog-shard` against the standard lattice storage provider (`LatticeOptions.StorageProviderName`). Every successful append performs a `WriteStateAsync` before returning, making the WAL append the commit point for replication.
+State is durably persisted via the configured `IWalStorageProvider` (see [Pluggable durability](#pluggable-durability--iwalstorageprovider) below). The grain itself holds no Orleans grain state; every successful `AppendBatchAsync` call against the provider is the commit point for replication, and the grain recovers its next-offset counter on activation by calling `GetHighestOffsetAsync`.
 
 ## Why a WAL grain rather than ship-time read
 
@@ -86,7 +86,7 @@ This design fixes three sample-pipeline shortcuts called out in the [replication
 
 ## Testing
 
-- Unit tests against the grain (`ReplogShardGrainTests`) instantiate it with `FakePersistentState<ReplogShardState>` and `Substitute.For<IGrainContext>()`.
+- Unit tests against the grain (`ReplogShardGrainTests`) instantiate it with substituted `IGrainContext`/`IServiceProvider`/`IOptionsMonitor<LatticeReplicationOptions>` and an `InMemoryWalStorageProvider`, calling the internal `InitializeForTestingAsync` test seam to bypass Orleans activation.
 - Integration tests (`ReplogShardWalIntegrationTests`) bring up a single-silo `TestCluster` with `AddLattice` + `AddLatticeReplication` and assert that WAL entries appear after `ILattice.SetAsync` / `DeleteAsync`.
 
 ## Reading from the WAL
@@ -139,9 +139,56 @@ When `LatticeReplicationOptions.WalStorageProvider` is `null` (the default), the
 |---|---|
 | `InMemoryWalStorageProvider` | Default. Stores every appended entry in process memory. Suitable for tests, single-process samples, and pilot deployments before a durable backend is wired up. State is lost on silo restart. |
 
-The grain itself is **not yet rewired** to call the provider — that is the next phase of work (turn-safe batching protocol). The seam ships dormant so host configuration is stable before the grain's internal commit hot path moves over to it. Today's persistence still flows through `IPersistentState<ReplogShardState>`; configuring `WalStorageProvider` does not yet change observable behaviour.
-
 A canonical Azure Table Storage implementation (matching the `(PartitionKey, RowKey) = ({TreeId}/{ShardIndex}, zero-padded 19-digit Offset)` layout described in [`wal-design.md`](./wal-design.md)) is planned as a separate package so the core replication library does not pull in an Azure dependency.
+
+## Turn-safe batching protocol
+
+The WAL grain's `AppendAsync` hot path implements the turn-safe batching protocol from [`wal-design.md`](./wal-design.md) §4. Each call accumulates into an in-memory pending batch held on the grain instance; a single in-flight flush at a time fans the batch out to `IWalStorageProvider.AppendBatchAsync` and completes per-caller `TaskCompletionSource<long>` instances when the provider acknowledges durability.
+
+```text
+AppendAsync(entry)
+    │  assigns offset = _nextOffset++
+    │  appends WalEntry to _pendingBatch
+    │  parks a TCS in _pendingAcks
+    │  if no flush in flight → StartFlush()
+    ▼
+returns await tcs.Task    ◄── completes once provider acks the batch
+```
+
+Two batch limits are enforced at append-time:
+
+| Option | Default | Trigger |
+|---|---|---|
+| `WalMaxBatchEntries` | `100` | Adding the new entry would push the pending count above the cap; the current batch is flushed first, then the new entry starts the next batch. |
+| `WalMaxBatchBytes` | `4 MB` | Adding the new entry's estimated serialised size would exceed the byte budget; same cutover. The size estimate is `key.Length * 2 + value.Length + 128` bytes — UTF-16 worst case for the key plus a constant envelope overhead. |
+
+Cutovers wait for the in-flight flush before the next batch can start, which provides natural back-pressure under burst load: a single shard cannot accumulate more than two batches' worth of pending state at any instant.
+
+### Activation recovery
+
+On grain activation, `OnActivateAsync` calls `IWalStorageProvider.GetHighestOffsetAsync` and sets `_nextOffset = highest + 1`. The persisted log is the single source of truth for the next-offset counter — the grain holds no Orleans grain state of its own.
+
+### Deactivation drain
+
+`OnDeactivateAsync` awaits any in-flight flush and then triggers (and awaits) a final flush of any remaining pending entries, so a graceful deactivation never leaves a caller observing a hung TCS.
+
+### Failure semantics
+
+A flush failure is fail-fast for every affected caller:
+
+1. The next-offset counter rolls back to the start of the failed batch (`_nextOffset = batch[0].Offset`) so the dense-offset invariant against the provider is preserved.
+2. Every TCS in the failed batch is faulted with the underlying storage exception.
+3. Every TCS in the *currently-accumulating* pending batch is also faulted — those entries had been assigned offsets above the now-rolled-back gap, so their offsets are stale and the calls must restart fresh.
+4. The pending batch is reset; subsequent `AppendAsync` calls resume cleanly from the rolled-back `_nextOffset`.
+
+This contract makes WAL append failures observable inline at the originating writer (the same path as the synchronous `IPersistentState`-backed implementation it replaced) rather than being silently coalesced into a later batch.
+
+> **Contributor note — synchronously-completing providers.** `FlushAsync` starts with `await Task.Yield()` so the returned `Task` is observably incomplete by the time `StartFlush` assigns it to `_inFlightFlush`. Without that yield, an `IWalStorageProvider` whose `AppendBatchAsync` returns a synchronously-completed task (the in-memory provider does this) would run the entire flush body inline before the assignment lands; the `finally { _inFlightFlush = null; }` would clear a field that was not yet set, then `StartFlush`'s assignment would overwrite `null` with the completed task — leaving `_inFlightFlush` permanently non-null and every subsequent `AppendAsync` parked on its TCS forever. Any future refactor of the flush loop must preserve this invariant.
+
+### What the protocol does *not* do yet
+
+- **Multiple in-flight batches.** The current implementation enforces a single in-flight flush per shard. `WalMaxPendingBatches` is reserved for a future change that lifts the cap; today it is validated (`>= 1`) but not consumed by the grain.
+- **Exact-bytes accounting.** `WalMaxBatchBytes` is enforced against an estimate (key UTF-16 worst case + value length + 128 byte envelope), not the post-serialisation byte count. The estimate is conservative for typical payloads; pathological keys or oversized envelopes can drift either way. Documented as approximate in the option's XML doc.
 
 ## Forward compatibility
 
