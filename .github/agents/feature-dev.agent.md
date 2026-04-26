@@ -83,14 +83,26 @@ Update documentation in the same change:
 
 ### Phase 7 — Review
 
-Before telling the user the work is done, self-review:
+Before telling the user the work is done, self-review. Each numbered item must be performed and **its findings reported in the chat reply** before moving on. A silent "looks good" is not a review.
 
-1. **Correctness**: Re-read every new or modified file and check for bugs. Check for off-by-one errors, missing null checks, incorrect generic constraints, wrong method signatures and unnecessary memory allocations.  Always report the review findings (especially for memory allocations), any issues found and fix them before continuing.
-2. **Test coverage**: Verify every public method and overload has at least one test. Check for missing edge cases (null serializers, empty lists, value types returning `default`).
-3. **Doc accuracy**: Verify parameter nullability in docs matches the actual signatures. Check that code examples compile. Ensure doc tables include all new types.
-4. **Convention compliance**: Verify naming, attributes, XML docs, file placement, and namespace conventions all match the rules in `.github/copilot-instructions.md`.
-5. **No Feature References**: Ensure no references to the feature (e.g. `F-XXX`, `R-XXX`) remain in the codebase outside of the roadmap definition, commit message and PR title.  There are unit tests which enforce that only roadmap files may have feature identifier references, but it's better to check before they fail.
-5. If any issues are found, fix them before declaring the work complete.
+1. **Correctness**: Re-read every new or modified file. Check for off-by-one errors, missing null checks, incorrect generic constraints, wrong method signatures, race conditions, and disposal/lifetime bugs. Report what you checked and what (if anything) you found.
+
+2. **Memory-allocation pass** *(must be performed as a discrete step — never fold this into Correctness)*: For every new or modified hot path (anything called per-request, per-batch, per-entry, per-loop-iteration, or inside a grain RPC), enumerate the allocations and classify each one in a written table or bullet list:
+   - ✅ **Acceptable / unavoidable** — language or framework constraint (e.g. gRPC `class` constraint requiring a wrapper, `params` array on a non-`ReadOnlySpan` overload). State the constraint.
+   - ⚠️ **Fix now** — avoidable allocation that should be eliminated before the work is declared complete (cached singletons reused per call, stack-allocated `KeyValuePair` spans on .NET 9+ histograms, `ArrayPool` for transient buffers, struct enumerator over `foreach` on `IEnumerable<T>`, etc.). Apply the fix; do not defer.
+   - 📝 **Documented intentional** — allocation that's costly but cannot be removed without a separate API change. Confirm a code comment explains the cost and references the seam that would eliminate it.
+
+   Specifically look for: per-call `CreateCallInvoker` / factory-style allocations; `new KeyValuePair[]` from `params` overloads on metric `Record`; LINQ on hot paths; `string` concatenation in tight loops; struct boxing through `IReadOnlyList<T>` / `IEnumerable<T>` / interface dispatch when `T` is a struct; closure captures in lambdas resolved per call; per-call `Encoding.UTF8.GetBytes` instead of `Encoder` reuse; `Array.Empty<T>()` (✅ singleton — good) vs `new T[0]` (⚠️). The point of this step is to produce evidence, not a vibe.
+
+3. **Test coverage**: Verify every public method and overload has at least one test. Check for missing edge cases (null serializers, empty lists, value types returning `default`, cancellation, disposal idempotency).
+
+4. **Doc accuracy**: Verify parameter nullability in docs matches the actual signatures. Check that code examples compile (or are correctly fenced as `text` if they reference host-level types outside the snippet harness's ambient context). Ensure doc tables include all new types.
+
+5. **Convention compliance**: Verify naming, attributes, XML docs, file placement, and namespace conventions all match the rules in `.github/copilot-instructions.md`.
+
+6. **No feature references**: Ensure no references to the feature (e.g. `F-XXX`, `R-XXX`) remain in the codebase outside of the roadmap definition, commit message, and PR title. Search across `src/`, `test/`, `docs/`, and XML doc comments. There are unit tests that enforce this, but catching it here is cheaper than fixing it after a CI run.
+
+7. **Apply fixes**: If any of the above turned up issues, fix them and re-run the relevant build + test verification before declaring the work complete.
 
 ### Phase 8 — Deliver
 
@@ -143,6 +155,7 @@ One-paragraph description of what the feature does and why.
 
 - **Never commit, push, or create a PR unless the user explicitly asks.**
 - **Never skip the review phase.** Bugs caught in review are cheaper than bugs caught in CI.
+- **The Phase 7 memory-allocation pass is mandatory and must produce a written classification.** "I checked and it looks fine" is not a memory-allocation review. Enumerate the hot-path allocations, classify each (✅ / ⚠️ / 📝), and apply every ⚠️ fix before declaring work complete. The user has had to ask for this retrospectively in the past — never assume it can be folded into the correctness pass.
 - **Always use `--body-file` for PR descriptions** to avoid shell escaping issues with backticks and special characters.
 - **Build must be clean** — zero errors, zero warnings — before declaring work complete.
 - **One feature per branch.** Branch name: `feature/fXXX-short-description`.

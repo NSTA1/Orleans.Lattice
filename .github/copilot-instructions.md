@@ -31,6 +31,8 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
 | Replication public API namespace | `Orleans.Lattice.Replication` | `LatticeReplicationOptions`, `IReplicationTransport`, `ReplicationBatch`, `ReplicationAck`, `IChangeFeed`, `IReplicationApplier`, `ApplyResult`, `LatticeReplicationServiceCollectionExtensions`, `ReplogEntry`, `ReplogOp`, `ReplicationMode`, `IReplicationModeResolver`, `LatticeReplicationMetrics`, `ReplicationPeerStats`, `ReplicationPeerSnapshot`, `LwwRegisterDelta`, `OrSetDelta`, `OrSetDot`, `PnCounterDelta`, `VersionVectorDelta`, `IWalStorageProvider`, `InMemoryWalStorageProvider`, `WalEntry`, `IReplicationBatchEncoder`, `ReplicationBatchEnvelope` |
 | Replication internal namespace | `Orleans.Lattice.Replication.{Area}` | `Orleans.Lattice.Replication.Grains` (future) |
 | Replication test namespace | `Orleans.Lattice.Replication.Tests.{Area}` | `Orleans.Lattice.Replication.Tests` |
+| gRPC transport public API namespace | `Orleans.Lattice.Replication.Grpc` | `GrpcPushTransportOptions`, `LatticeReplicationGrpcServiceCollectionExtensions` |
+| gRPC transport test namespace | `Orleans.Lattice.Replication.Grpc.Tests` | `Orleans.Lattice.Replication.Grpc.Tests` |
 | Grain interface | `I{Name}Grain` (prefix `I`, suffix `Grain`) | `IBPlusLeafGrain` |
 | Grain class | `{Name}Grain` | `BPlusLeafGrain` |
 | Async methods | Suffix `Async` | `GetAsync`, `SetAsync` |

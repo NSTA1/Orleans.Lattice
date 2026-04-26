@@ -67,8 +67,8 @@ The phase structure below groups items thematically. This section is the canonic
 7. **R-041 ✓ shipped — Orleans-serializer binary framing**
    Hardened the on-the-wire envelope: public `ReplicationBatchEnvelope` (`[Alias("olr.be")]`, wire version 1), public `IReplicationBatchEncoder` seam shaped as `void Encode(envelope, IBufferWriter<byte> writer)` so the gRPC push transport hands its stream writer directly through with zero per-batch heap allocation, and the canonical `OrleansBinaryReplicationBatchEncoder` registered via `TryAddSingleton`. Documented in `docs/lattice.replication/wire-format.md`.
 
-8. **R-042 — gRPC streaming push transport** `[deps: R-041 ✓]`
-   Sub-second latency story; lifts the sample's reference implementation. Drop the gRPC stream's writer straight into `IReplicationBatchEncoder.Encode(envelope, writer)` so the envelope's bytes never round-trip through a per-batch heap allocation — the encoder seam is already `IBufferWriter<byte>`-shaped for exactly this reason.
+8. **R-042 ✓ shipped — gRPC streaming push transport**
+   Canonical sender + receiver pair shipped in the new `Orleans.Lattice.Replication.Grpc` sub-package. Sender-side `GrpcPushTransport` replaces `NoOpReplicationTransport` via `AddLatticeReplicationGrpcPushTransport(...)`; receiver via `AddLatticeReplicationGrpcServer()` + `MapLatticeReplicationGrpcService()` on an ASP.NET Core endpoint route builder. One long-lived `GrpcChannel` per `TargetClusterId` with HTTP/2 multiplexing and a cached `CallInvoker` per peer. Wire format is the `ReplicationBatchEnvelope` from R-041; custom `Marshaller<T>` instances hand the stream's `IBufferWriter<byte>` straight through to `IReplicationBatchEncoder.Encode`. No `.proto` and no `Grpc.Tools` dependency. Documented in `docs/lattice.replication/grpc-push-transport.md`. Covered by 42 tests across 6 fixtures including 2 in-process Kestrel integration tests via `Microsoft.AspNetCore.TestHost`. mTLS / token-rotation defaults deferred to R-046; runtime peer-set updates deferred to R-066; sender-side decode round-trip elimination deferred to R-047.
 
 ### Production hardening (must-have before any real deployment)
 
@@ -113,17 +113,20 @@ The phase structure below groups items thematically. This section is the canonic
 23. **R-046 — Standard transport security** `[deps: R-042]`
     mTLS / token rotation. Required before any production multi-tenant deployment but not before single-tenant pilot.
 
+24. **R-047 — Typed-envelope `IReplicationTransport` shape** `[deps: R-042 ✓]`
+    Eliminates the sender-side decode-then-re-encode round-trip the gRPC push transport currently pays. Today `IReplicationTransport.SendAsync` takes `ReplicationBatch` whose `Payload` is `ReadOnlyMemory<byte>`, so `GrpcPushTransport.BuildEnvelope` calls `IReplicationBatchEncoder.Decode(batch.Payload)` purely to satisfy the marshaller, which then re-encodes via `Encode(envelope, IBufferWriter<byte>)`. Widen the seam to carry the typed `ReplicationBatchEnvelope` directly (or a discriminator alongside the byte[] payload) so the gRPC hot path is allocation-free beyond the box wrapper. LoopbackTransport / NoOpTransport are unaffected.
+
 ### Extended CRDT modes (gated on outstanding core primitives)
 
 These ship as paired (core primitive ↔ replication delta) deliverables — building either side in isolation freezes a contract before its consumer validates it. Order between the three is by user demand, not technical dependency.
 
-24. **R-034 — MV-Register delta + dispatch** `[deps: Core F-039 outstanding]`
+25. **R-034 — MV-Register delta + dispatch** `[deps: Core F-039 outstanding]`
     Pair with F-039 in a single cycle.
 
-25. **R-035 — OR-Map delta + dispatch** `[deps: Core F-040 outstanding]`
+26. **R-035 — OR-Map delta + dispatch** `[deps: Core F-040 outstanding]`
     Pair with F-040. Includes the recursive `InnerMode` wire-envelope extension.
 
-26. **R-036 — RGA sequence delta + dispatch** `[deps: Core F-041 outstanding]`
+27. **R-036 — RGA sequence delta + dispatch** `[deps: Core F-041 outstanding]`
     Pair with F-041. Highest implementation complexity of the three (sequence convergence, back-pressure for high-frequency editors).
 
 ### Suggested concurrency
@@ -258,8 +261,11 @@ Latency drops from reminder-cadence (~60 s) to sub-second; bandwidth improves ~2
 - [x] **R-041 — Orleans-serializer binary framing**
   Hardened the on-the-wire envelope: public `ReplicationBatchEnvelope` (`[Alias("olr.be")]`, wire version 1), public `IReplicationBatchEncoder` seam shaped as `void Encode(envelope, IBufferWriter<byte> writer)` so the gRPC push transport hands its stream writer directly through with zero per-batch heap allocation, and the canonical `OrleansBinaryReplicationBatchEncoder` registered via `TryAddSingleton`. Documented in `docs/lattice.replication/wire-format.md`.
 
-- [ ] **R-042 — gRPC streaming push transport** `[deps: R-041]`
-  Sub-second latency story; lifts the sample's reference implementation. Drop the gRPC stream's writer straight into `IReplicationBatchEncoder.Encode(envelope, writer)` so the envelope's bytes never round-trip through a per-batch heap allocation — the encoder seam is already `IBufferWriter<byte>`-shaped for exactly this reason.
+- [x] **R-042 — gRPC streaming push transport** *(required R-041 ✓)*
+  Canonical sender + receiver pair shipped in the new `Orleans.Lattice.Replication.Grpc` sub-package. Sender-side `GrpcPushTransport` replaces the default `NoOpReplicationTransport` via `AddLatticeReplicationGrpcPushTransport(options => options.PeerEndpoints[...] = ...)`; one long-lived `GrpcChannel` per `TargetClusterId` with HTTP/2 multiplexing, a cached `CallInvoker` per peer (via an internal `PeerChannel` record struct so `SendAsync` does not allocate a fresh invoker per call), and an optional per-peer `ConfigureChannel(name, GrpcChannelOptions)` callback for mTLS / custom `HttpHandler` / retry policy attachment. Receiver-side wired via `AddLatticeReplicationGrpcServer()` + `MapLatticeReplicationGrpcService()` on an ASP.NET Core endpoint route builder. Wire format is the `ReplicationBatchEnvelope` (alias `olr.be`, wire version 1) defined by R-041; the gRPC marshaller hands the stream's `IBufferWriter<byte>` straight through to `IReplicationBatchEncoder.Encode(envelope, writer)` so the envelope's bytes are written directly into the network buffer with no intermediate managed allocation on the encode path. No `.proto` file and no `Grpc.Tools` dependency: custom `Marshaller<T>` instances, internal sealed `ReplicationBatchEnvelopeBox` / `ReplicationAckBox` reference wrappers (gRPC's `Method<TRequest, TResponse>` has a `class` constraint), and a codegen-style `[BindServiceMethod]` topology (abstract `LatticeReplicationGrpcServiceBase` carries the attribute + null-tolerant static `BindService`; sealed `LatticeReplicationGrpcService` is the DI-resolved per-request handler). A static `LatticeReplicationGrpcMethodHolder.Current` bridges the DI-resolved `Method<,>` into the static binding hook because gRPC's static `BindService` callback cannot accept DI dependencies. Each `SendAsync` records `LatticeReplicationMetrics.ShipDuration` tagged `tree` / `peer` / `outcome` (allocation-free via `ValueStopwatch`). Documented in `docs/lattice.replication/grpc-push-transport.md`. Covered by 42 tests across 6 fixtures (options defaults, DI-extension wiring, transport ctor + send-validation + idempotent dispose, service Push validation + HWM accumulation + cancellation + RpcException-on-failure, `[BindServiceMethod]` null-tolerance + holder-not-initialised guard, marshaller Orleans-serializer round-trip on both wrappers, and 2 in-process Kestrel integration tests via `Microsoft.AspNetCore.TestHost` exercising the full wire round-trip end-to-end). mTLS / token-rotation defaults are deferred to R-046; runtime peer-set updates (currently host-restart-required) are deferred to R-066; sender-side decode-then-re-encode round-trip elimination is deferred to R-047.
+
+- [ ] **R-047 — Typed-envelope `IReplicationTransport` shape** `[deps: R-042]`
+  Eliminates the sender-side decode-then-re-encode round-trip the gRPC push transport currently pays. Today `IReplicationTransport.SendAsync` takes `ReplicationBatch` whose `Payload` is `ReadOnlyMemory<byte>`; `GrpcPushTransport.BuildEnvelope` calls `IReplicationBatchEncoder.Decode(batch.Payload)` purely to satisfy the gRPC marshaller, which then re-encodes the same envelope via `Encode(envelope, IBufferWriter<byte>)`. The decode allocates one `ReplogEntry` per WAL row in the batch on every send. Widen the transport seam to carry the typed `ReplicationBatchEnvelope` directly — either by adding a typed overload (`SendAsync(ReplicationBatchEnvelope envelope, string targetClusterId, CancellationToken ct)`) or by reshaping `ReplicationBatch` to carry the envelope alongside (or instead of) the byte[] payload, with a backwards-compat fallback for transports that only support bytes. After this change the gRPC hot path is genuinely zero-allocation beyond the gRPC box wrapper. LoopbackTransport / NoOpTransport are unaffected because they never re-encode.
 
 - [ ] **R-043 — Batch-boundary compression**
   Optional `gzip` / `zstd` (configurable via options, default `None`) at the batch envelope boundary. Measured in R-033's chaos suite to verify CPU cost vs. bandwidth gain on realistic payloads.

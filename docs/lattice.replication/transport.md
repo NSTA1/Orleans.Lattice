@@ -93,6 +93,8 @@ The single-method seam is the contract upcoming binary-framing and gRPC-streamin
 
 The wire format inside `Payload` is the concern of [`IReplicationBatchEncoder`](wire-format.md). The default registration is the Orleans-serializer-backed binary encoder; hosts swap to a different framing (JSON for HTTP debuggability, content-hash-prefixed for deduplication) by replacing the encoder registration via DI. Transports remain agnostic about which encoder produced the bytes.
 
+The canonical sender + receiver pair ships in the `Orleans.Lattice.Replication.Grpc` sub-package — see [`grpc-push-transport.md`](grpc-push-transport.md) for topology, registration, and operations notes.
+
 ## Caveats
 
 - **Transports do not interpret the payload.** A transport that needs to make a routing decision based on payload contents (e.g. shed-load on oversize batches) must do so via batch metadata that the framing seam exposes on the call site, not by parsing `Payload` itself. Cross-cutting concerns belong on the call envelope; the wire bytes stay opaque.
