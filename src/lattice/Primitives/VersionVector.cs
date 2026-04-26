@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Primitives;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.VersionVector)]
-internal sealed class VersionVector
+public sealed class VersionVector
 {
     [Id(0)]
     public Dictionary<string, HybridLogicalClock> Entries { get; set; } = [];
@@ -42,6 +42,8 @@ internal sealed class VersionVector
     /// </summary>
     public static VersionVector Merge(VersionVector left, VersionVector right)
     {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
         var result = new VersionVector();
 
         foreach (var (id, clock) in left.Entries)
@@ -62,6 +64,28 @@ internal sealed class VersionVector
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// In-place lattice merge: applies the pointwise-max of <paramref name="other"/>
+    /// into this vector without allocating a new instance. Equivalent to
+    /// <see cref="Merge(VersionVector, VersionVector)"/> followed by replacing
+    /// the receiver, but avoids the intermediate clone.
+    /// </summary>
+    public void MergeFrom(VersionVector other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        foreach (var (id, clock) in other.Entries)
+        {
+            if (Entries.TryGetValue(id, out var existing))
+            {
+                if (clock > existing) Entries[id] = clock;
+            }
+            else
+            {
+                Entries[id] = clock;
+            }
+        }
     }
 
     /// <summary>

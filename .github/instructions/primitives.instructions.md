@@ -50,7 +50,10 @@ public sealed class MyAggregate
 |---|---|
 | `HybridLogicalClock` | Totally-ordered timestamp (wall clock + counter) |
 | `LwwValue<T>` | Last-writer-wins register resolved by HLC. Carries optional `ExpiresAtTicks` ( TTL) — `0` means no expiry; reads filter entries where `IsExpired(nowUtcTicks)` returns `true`. |
-| `VersionVector` | Per-replica version tracking for delta extraction |
+| `VersionVector` | Per-replica version tracking for delta extraction. **Public** — also exposed through `ILattice.VersionVector(key)` as a value-surface CRDT accessor. |
+| `OrSet` | Observed-remove set CRDT (public). State-level merge unions both sides' adds and tombstones; concurrent adds and removes survive a later remove that did not observe them. Exposed through `ILattice.OrSet(key)`. |
+| `OrSetDot` | `(replicaId, counter)` dot tagged on each `OrSet` add. |
+| `PnCounter` | Positive-negative counter CRDT (public). Per-replica monotonic positive/negative components; merge is pointwise-max per side. Exposed through `ILattice.PnCounter(key)`. |
 | `StateDelta` | Captures entries changed since a given version vector |
 | `SplitState` | Enum tracking leaf/internal split lifecycle |
 

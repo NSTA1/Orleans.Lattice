@@ -504,22 +504,45 @@ var updated = versioned.Value! with { Age = 31 };
 bool success = await tree.SetIfVersionAsync("user:1", updated, versioned.Version);
 ```
 
-| Method | Signature | Description |
-|--------|-----------|-------------|
-| `GetAsync<T>` | `Task<T?> GetAsync<T>(this ILattice, string key, ILatticeSerializer<T>)` | Returns the deserialized value for `key`, or `default` if absent/tombstoned. |
-| `GetWithVersionAsync<T>` | `Task<Versioned<T>> GetWithVersionAsync<T>(this ILattice, string key, ILatticeSerializer<T>)` | Returns the deserialized value and its `HybridLogicalClock` version. Returns a `Versioned<T>` with `default` value and zero version when absent/tombstoned. |
-| `GetOrSetAsync<T>` | `Task<T?> GetOrSetAsync<T>(this ILattice, string key, T value, ILatticeSerializer<T>)` | Sets `key` to `value` only if absent/tombstoned. Returns the existing deserialized value when live, or `default` when newly written. |
-| `SetAsync<T>` | `Task SetAsync<T>(this ILattice, string key, T value, ILatticeSerializer<T>)` | Serializes and stores `value` under `key`. |
-| `SetAsync<T>` (TTL) | `Task SetAsync<T>(this ILattice, string key, T value, TimeSpan ttl, ILatticeSerializer<T>)` | Serializes and stores `value` under `key` with a time-to-live. See `ILattice.SetAsync(string, byte[], TimeSpan)` for expiry semantics. |
-| `SetIfVersionAsync<T>` | `Task<bool> SetIfVersionAsync<T>(this ILattice, string key, T value, HybridLogicalClock expectedVersion, ILatticeSerializer<T>)` | Serializes and conditionally writes `value` only if the entry's current version matches `expectedVersion`. Returns `true` if applied. |
-| `GetManyAsync<T>` | `Task<Dictionary<string, T>> GetManyAsync<T>(this ILattice, List<string> keys, ILatticeSerializer<T>)` | Fetches and deserializes multiple keys. Missing/tombstoned keys are omitted. |
-| `SetManyAsync<T>` | `Task SetManyAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and inserts/updates multiple entries in parallel. Not atomic — see `SetManyAtomicAsync<T>`. |
-| `SetManyAtomicAsync<T>` | `Task SetManyAtomicAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and atomically writes multiple entries via the saga coordinator. See `ILattice.SetManyAtomicAsync` for full semantics. |
-| `SetManyAtomicAsync<T>` (idempotency key) | `Task SetManyAtomicAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, string operationId, ILatticeSerializer<T>)` | Caller-supplied idempotency-key overload of the typed variant; delegates to `ILattice.SetManyAtomicAsync(entries, operationId)` after serializing each value. |
-| `BulkLoadAsync<T>` | `Task BulkLoadAsync<T>(this ILattice, IReadOnlyList<KeyValuePair<string, T>> entries, ILatticeSerializer<T>)` | Serializes and bulk-loads entries into an empty tree. |
-| `ScanEntriesAsync<T>` | `IAsyncEnumerable<KeyValuePair<string, T>> ScanEntriesAsync<T>(this ILattice, ILatticeSerializer<T>, string?, string?, bool, bool?, int?)` | Streams live entries, deserializing values via the provided serializer. Transparently recovers from `Orleans.Runtime.EnumerationAbortedException` — see [Scan reliability](#scan-reliability). |
-
 Each method also has a parameterless overload that defaults to `JsonLatticeSerializer<T>.Default`.
+
+## CRDT value-surface accessors
+
+`ILattice.OrSet(key)`, `ILattice.PnCounter(key)`, and `ILattice.VersionVector(key)` return lightweight, allocation-free accessors that read and write a single key under optimistic concurrency. Each accessor exposes the primitive's natural mutation API — add/remove, increment/decrement, tick/merge — instead of forcing callers to hand-roll byte arrays and CAS retry loops. The underlying state types (`OrSet`, `PnCounter`, `VersionVector`) are CRDTs whose `Merge` operation is commutative, associative, and idempotent, so concurrent updates from multiple replicas converge on the same final state without coordination.
+
+```csharp verify
+// Observed-remove set: concurrent adds and removes converge.
+await tree.OrSet("tags:42").AddAsync("urgent"u8.ToArray(), replicaId: "siloA");
+await tree.OrSet("tags:42").AddAsync("review"u8.ToArray(), replicaId: "siloA");
+bool isUrgent = await tree.OrSet("tags:42").ContainsAsync("urgent"u8.ToArray());
+
+// Positive-negative counter: concurrent increments across replicas sum.
+await tree.PnCounter("hits:home").IncrementAsync("siloA");
+await tree.PnCounter("hits:home").IncrementAsync("siloA", amount: 3);
+long hits = await tree.PnCounter("hits:home").ValueAsync();
+
+// Version vector: track per-replica causal history.
+await tree.VersionVector("vv:order:1").TickAsync("siloA");
+var vv = await tree.VersionVector("vv:order:1").GetAsync();
+```
+
+| Accessor | Method | Description |
+|----------|--------|-------------|
+| `OrSetAccessor` | `Task<OrSet> GetAsync()` | Reads the current set; returns an empty `OrSet` when the key is absent or tombstoned. |
+| `OrSetAccessor` | `Task AddAsync(byte[] element, string replicaId)` | Adds `element` with a fresh causal dot. Concurrent adds from other replicas survive a later remove that did not observe them. |
+| `OrSetAccessor` | `Task RemoveAsync(byte[] element)` | Tombstones every dot currently observed for `element`. A no-op (and a successful CAS round-trip) when the element is absent. |
+| `OrSetAccessor` | `Task<bool> ContainsAsync(byte[] element)` | Returns `true` when `element` is currently a member of the set. |
+| `OrSetAccessor` | `Task MergeAsync(OrSet other)` | Merges `other` into the stored state under CAS. |
+| `PnCounterAccessor` | `Task<PnCounter> GetAsync()` | Reads the current counter state. |
+| `PnCounterAccessor` | `Task<long> ValueAsync()` | Reads the current scalar value. |
+| `PnCounterAccessor` | `Task IncrementAsync(string replicaId, long amount = 1)` | Advances the positive component for `replicaId`. `amount` must be non-negative. |
+| `PnCounterAccessor` | `Task DecrementAsync(string replicaId, long amount = 1)` | Advances the negative component for `replicaId`. `amount` must be non-negative. |
+| `PnCounterAccessor` | `Task MergeAsync(PnCounter other)` | Merges `other` into the stored state under CAS. |
+| `VersionVectorAccessor` | `Task<VersionVector> GetAsync()` | Reads the current vector state. |
+| `VersionVectorAccessor` | `Task TickAsync(string replicaId)` | Advances the entry for `replicaId` and persists the result. |
+| `VersionVectorAccessor` | `Task MergeAsync(VersionVector other)` | Merges `other` into the stored state under CAS. |
+
+Mutating methods read-modify-write under optimistic concurrency control, retrying on CAS failure up to a per-call budget (default `OrSetAccessor.DefaultMaxAttempts` / `PnCounterAccessor.DefaultMaxAttempts` / `VersionVectorAccessor.DefaultMaxAttempts` = 16). When the budget is exhausted the accessor throws `InvalidOperationException`; raise the budget on the call site or reduce contention. Values are JSON-serialized via `JsonLatticeSerializer<T>` so the bytes on the wire are debuggable and inspectable through `ILattice.GetAsync`.
 
 ## `ILatticeSerializer<T>`
 
