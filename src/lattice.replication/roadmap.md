@@ -99,7 +99,7 @@ Makes cycle-break durable, enables exactly-once apply, unlocks transitive topolo
 
 The real CRDT payoff — active-active convergence for the primitives the library ships, rather than cross-cluster LWW-on-bytes that silently loses concurrent set adds / counter increments.
 
-- [ ] **R-030 — Delta contract for core primitives**
+- [x] **R-030 — Delta contract for core primitives**
   Typed delta records for each replicable primitive the core library ships: `LwwRegisterDelta` (value + HLC + origin), `OrSetDelta` (adds + removes with dot context), `PnCounterDelta` (per-replica +/- increments), `VersionVectorDelta` (vector merge). Each is `readonly record struct`, `[GenerateSerializer][Immutable]` with a stable `[Alias]` constant in a new `ReplicationTypeAliases` class.
   *Future-compat:* these delta types are the v2 commit payload (C-010). The contract — produced by the core lib, consumed by replication — is identical in v1 and v2; the only change in v2 is that the local apply path also consumes them rather than writing through the leaf state directly.
 

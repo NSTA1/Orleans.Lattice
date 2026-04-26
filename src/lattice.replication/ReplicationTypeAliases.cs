@@ -42,4 +42,21 @@ internal static class ReplicationTypeAliases
 
     /// <summary>Alias for the apply-result return value.</summary>
     internal const string ApplyResult = "olr.ar";
+
+    // Typed CRDT deltas (commit-time wire payloads for replicable primitives)
+
+    /// <summary>Alias for <see cref="LwwRegisterDelta"/>.</summary>
+    internal const string LwwRegisterDelta = "olr.ld";
+
+    /// <summary>Alias for <see cref="OrSetDelta"/>.</summary>
+    internal const string OrSetDelta = "olr.od";
+
+    /// <summary>Alias for <see cref="OrSetDot"/>.</summary>
+    internal const string OrSetDot = "olr.dt";
+
+    /// <summary>Alias for <see cref="PnCounterDelta"/>.</summary>
+    internal const string PnCounterDelta = "olr.pd";
+
+    /// <summary>Alias for <see cref="VersionVectorDelta"/>.</summary>
+    internal const string VersionVectorDelta = "olr.vd";
 }
