@@ -40,6 +40,30 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "of zero or less leaves no partitions to route to.");
         }
 
+        if (options.WalMaxBatchEntries < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.WalMaxBatchEntries)} "
+                + $"must be at least 1 ({scope}). The per-shard WAL grain refuses to flush a "
+                + "zero-sized batch; a non-positive value would deadlock the commit-time observer.");
+        }
+
+        if (options.WalMaxBatchBytes < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.WalMaxBatchBytes)} "
+                + $"must be at least 1 ({scope}). The byte-budget cap on a single batch must "
+                + "permit at least one entry; a non-positive value would block every flush.");
+        }
+
+        if (options.WalMaxPendingBatches < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.WalMaxPendingBatches)} "
+                + $"must be at least 1 ({scope}). The in-memory backlog cap must permit at "
+                + "least one pending batch alongside the in-flight flush.");
+        }
+
         if (options.ReplicatedTrees is { } trees)
         {
             foreach (var kvp in trees)

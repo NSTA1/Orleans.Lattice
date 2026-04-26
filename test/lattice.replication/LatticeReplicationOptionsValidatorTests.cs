@@ -262,5 +262,68 @@ public class LatticeReplicationOptionsValidatorTests
 
         Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
     }
+
+    // ------------------------------------------------------------------
+    // Turn-safe batching options
+    // ------------------------------------------------------------------
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_wal_max_batch_entries_is_non_positive(int value)
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", WalMaxBatchEntries = value };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.WalMaxBatchEntries)));
+        });
+    }
+
+    [TestCase(0L)]
+    [TestCase(-1L)]
+    public void Validate_fails_when_wal_max_batch_bytes_is_non_positive(long value)
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", WalMaxBatchBytes = value };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.WalMaxBatchBytes)));
+        });
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_wal_max_pending_batches_is_non_positive(int value)
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", WalMaxPendingBatches = value };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.WalMaxPendingBatches)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_explicitly_configured_wal_batching_options()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            WalMaxBatchEntries = 50,
+            WalMaxBatchBytes = 2 * 1024 * 1024,
+            WalMaxPendingBatches = 8,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
 }
 

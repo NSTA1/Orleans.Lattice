@@ -85,6 +85,7 @@ public class LatticeReplicationOptions
     /// <see langword="null"/> (the default), the DI-registered singleton
     /// <see cref="IWalStorageProvider"/> is used (see
     /// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>,
+
     /// which registers <see cref="InMemoryWalStorageProvider"/> as the
     /// fallback).
     /// <para>
@@ -96,6 +97,41 @@ public class LatticeReplicationOptions
     /// </para>
     /// </summary>
     public Func<string, IWalStorageProvider>? WalStorageProvider { get; set; }
+
+    /// <summary>
+    /// Maximum number of <see cref="WalEntry"/> records the per-shard WAL
+    /// grain will batch into a single <see cref="IWalStorageProvider.AppendBatchAsync"/>
+    /// call. When the in-memory pending batch reaches this count, the
+    /// next <c>Append</c> triggers a flush of the current batch before
+    /// enqueueing the new entry. Defaults to
+    /// <see cref="DefaultWalMaxBatchEntries"/>, matching the Azure Table
+    /// Storage 100-entity batch limit. Must be at least <c>1</c>.
+    /// </summary>
+    public int WalMaxBatchEntries { get; set; } = DefaultWalMaxBatchEntries;
+
+    /// <summary>
+    /// Maximum estimated serialised size (in bytes) of a single batch
+    /// supplied to <see cref="IWalStorageProvider.AppendBatchAsync"/>.
+    /// Defaults to <see cref="DefaultWalMaxBatchBytes"/>, matching the
+    /// Azure Table Storage 4 MB batch payload ceiling. The size estimate
+    /// is computed from the key length, value length, and a small
+    /// constant overhead per entry; it is a soft limit and may
+    /// under-/over-estimate the exact serialised bytes by a few percent.
+    /// Must be at least <c>1</c>.
+    /// </summary>
+    public long WalMaxBatchBytes { get; set; } = DefaultWalMaxBatchBytes;
+
+    /// <summary>
+    /// Maximum number of in-flight + pending batches the per-shard WAL
+    /// grain will hold before applying back-pressure to new
+    /// <c>Append</c> callers. The single-in-flight-flush model in v1
+    /// treats this as <c>(in-flight=1) + (pending=N-1)</c>; new
+    /// <c>Append</c> calls beyond the cap await the in-flight flush
+    /// before being enqueued. Defaults to
+    /// <see cref="DefaultWalMaxPendingBatches"/>. Must be at least
+    /// <c>1</c>.
+    /// </summary>
+    public int WalMaxPendingBatches { get; set; } = DefaultWalMaxPendingBatches;
 
     /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
@@ -112,4 +148,23 @@ public class LatticeReplicationOptions
     /// raise for hot trees that benefit from parallel WAL append paths.
     /// </summary>
     public const int DefaultReplogPartitions = 1;
+
+    /// <summary>
+    /// Default value for <see cref="WalMaxBatchEntries"/>: matches the
+    /// Azure Table Storage 100-entity batch insert limit.
+    /// </summary>
+    public const int DefaultWalMaxBatchEntries = 100;
+
+    /// <summary>
+    /// Default value for <see cref="WalMaxBatchBytes"/>: matches the
+    /// Azure Table Storage 4 MB batch payload ceiling.
+    /// </summary>
+    public const long DefaultWalMaxBatchBytes = 4 * 1024 * 1024;
+
+    /// <summary>
+    /// Default value for <see cref="WalMaxPendingBatches"/>: caps the
+    /// in-memory backlog at four full-sized batches before back-pressure
+    /// engages.
+    /// </summary>
+    public const int DefaultWalMaxPendingBatches = 4;
 }
