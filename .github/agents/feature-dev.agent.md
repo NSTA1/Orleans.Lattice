@@ -85,10 +85,11 @@ Update documentation in the same change:
 
 Before telling the user the work is done, self-review:
 
-1. **Correctness**: Re-read every new or modified file. Check for off-by-one errors, missing null checks, incorrect generic constraints, wrong method signatures.
+1. **Correctness**: Re-read every new or modified file and check for bugs. Check for off-by-one errors, missing null checks, incorrect generic constraints, wrong method signatures and unnecessary memory allocations.  Always report the review findings (especially for memory allocations), any issues found and fix them before continuing.
 2. **Test coverage**: Verify every public method and overload has at least one test. Check for missing edge cases (null serializers, empty lists, value types returning `default`).
 3. **Doc accuracy**: Verify parameter nullability in docs matches the actual signatures. Check that code examples compile. Ensure doc tables include all new types.
 4. **Convention compliance**: Verify naming, attributes, XML docs, file placement, and namespace conventions all match the rules in `.github/copilot-instructions.md`.
+5. **No Feature References**: Ensure no references to the feature (e.g. `F-XXX`, `R-XXX`) remain in the codebase outside of the roadmap definition, commit message and PR title.  There are unit tests which enforce that only roadmap files may have feature identifier references, but it's better to check before they fail.
 5. If any issues are found, fix them before declaring the work complete.
 
 ### Phase 8 — Deliver
