@@ -80,4 +80,26 @@ public class LatticeReplicationOptionsTests
         var opts = new LatticeReplicationOptions { ReplogPartitions = 16 };
         Assert.That(opts.ReplogPartitions, Is.EqualTo(16));
     }
+
+    [Test]
+    public void New_instance_has_null_wal_storage_provider()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.WalStorageProvider, Is.Null);
+    }
+
+    [Test]
+    public void WalStorageProvider_is_settable()
+    {
+        var custom = new InMemoryWalStorageProvider();
+        Func<string, IWalStorageProvider> resolver = _ => custom;
+
+        var opts = new LatticeReplicationOptions { WalStorageProvider = resolver };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(opts.WalStorageProvider, Is.SameAs(resolver));
+            Assert.That(opts.WalStorageProvider!("any"), Is.SameAs(custom));
+        });
+    }
 }

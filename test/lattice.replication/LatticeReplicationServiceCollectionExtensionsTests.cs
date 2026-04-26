@@ -147,6 +147,52 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeReplication_registers_in_memory_wal_storage_provider_by_default()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var wal = provider.GetRequiredService<IWalStorageProvider>();
+        Assert.That(wal, Is.InstanceOf<InMemoryWalStorageProvider>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_wal_storage_provider_is_registered_as_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<IWalStorageProvider>();
+        var second = provider.GetRequiredService<IWalStorageProvider>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_wal_storage_provider()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<IWalStorageProvider>();
+        services.AddSingleton<IWalStorageProvider>(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<IWalStorageProvider>(), Is.SameAs(custom));
+    }
+
+    [Test]
     public void AddLatticeReplication_registers_change_feed_observer()
     {
         var services = new ServiceCollection();

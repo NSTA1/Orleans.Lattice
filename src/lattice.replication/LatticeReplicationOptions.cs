@@ -79,6 +79,25 @@ public class LatticeReplicationOptions
     public int ReplogPartitions { get; set; } = DefaultReplogPartitions;
 
     /// <summary>
+    /// Optional per-tree <see cref="IWalStorageProvider"/> resolver. When
+    /// set, the WAL durability backend for the named tree is the value
+    /// returned by invoking the delegate with the tree id; when
+    /// <see langword="null"/> (the default), the DI-registered singleton
+    /// <see cref="IWalStorageProvider"/> is used (see
+    /// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>,
+    /// which registers <see cref="InMemoryWalStorageProvider"/> as the
+    /// fallback).
+    /// <para>
+    /// Per-tree configurability lets a host pick different durability /
+    /// cost trade-offs per tree - for example, an Azure Table Storage
+    /// backend for a hot, high-fan-in tree alongside the in-memory
+    /// default for an ephemeral test tree - without having to register
+    /// multiple competing singletons.
+    /// </para>
+    /// </summary>
+    public Func<string, IWalStorageProvider>? WalStorageProvider { get; set; }
+
+    /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
     /// represents "unset". This default is rejected by
     /// <c>LatticeReplicationOptionsValidator</c> so a host that calls
