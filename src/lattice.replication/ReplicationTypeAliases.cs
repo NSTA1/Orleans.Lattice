@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Replication;
 /// <c>olr.</c> prefix to avoid collision with core <c>Orleans.Lattice</c>
 /// aliases (which use <c>ol.</c>).
 /// </summary>
-internal static class ReplicationTypeAliases
+public static class ReplicationTypeAliases
 {
     /// <summary>Alias for <see cref="ReplogEntry"/>.</summary>
     internal const string ReplogEntry = "olr.re";
@@ -70,4 +70,9 @@ internal static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="WalResumeToken"/>.</summary>
     internal const string WalResumeToken = "olr.wt";
+
+    // Wire envelope (binary-framing seam)
+
+    /// <summary>Alias for <see cref="ReplicationBatchEnvelope"/>.</summary>
+    internal const string ReplicationBatchEnvelope = "olr.be";
 }

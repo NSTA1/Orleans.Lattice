@@ -91,6 +91,8 @@ services.AddSingleton<IReplicationTransport, MyTransport>();
 
 The single-method seam is the contract upcoming binary-framing and gRPC-streaming-push items plug into. The binary-framing item hardens the byte layout *inside* `Payload`; the gRPC streaming push item drives `SendAsync` from a long-lived server-streaming RPC and surfaces flow control / reconnect / advance-strictly-on-ack at the transport boundary. Neither changes the call shape established here.
 
+The wire format inside `Payload` is the concern of [`IReplicationBatchEncoder`](wire-format.md). The default registration is the Orleans-serializer-backed binary encoder; hosts swap to a different framing (JSON for HTTP debuggability, content-hash-prefixed for deduplication) by replacing the encoder registration via DI. Transports remain agnostic about which encoder produced the bytes.
+
 ## Caveats
 
 - **Transports do not interpret the payload.** A transport that needs to make a routing decision based on payload contents (e.g. shed-load on oversize batches) must do so via batch metadata that the framing seam exposes on the call site, not by parsing `Payload` itself. Cross-cutting concerns belong on the call envelope; the wire bytes stay opaque.

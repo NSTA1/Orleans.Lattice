@@ -64,11 +64,11 @@ The phase structure below groups items thematically. This section is the canonic
 6. **R-040 ✓ shipped — `IReplicationTransport` abstraction**
    Pluggable seam. Can run in parallel with the critical-path items above.
 
-7. **R-041 — Orleans-serializer binary framing** `[deps: R-072 ✓, R-070 ✓, R-040 ✓]`
-   First item that hardens the on-the-wire envelope; everything after it is incremental on top.
+7. **R-041 ✓ shipped — Orleans-serializer binary framing**
+   Hardened the on-the-wire envelope: public `ReplicationBatchEnvelope` (`[Alias("olr.be")]`, wire version 1), public `IReplicationBatchEncoder` seam shaped as `void Encode(envelope, IBufferWriter<byte> writer)` so the gRPC push transport hands its stream writer directly through with zero per-batch heap allocation, and the canonical `OrleansBinaryReplicationBatchEncoder` registered via `TryAddSingleton`. Documented in `docs/lattice.replication/wire-format.md`.
 
-8. **R-042 — gRPC streaming push transport** `[deps: R-041]`
-   Sub-second latency story; lifts the sample's reference implementation.
+8. **R-042 — gRPC streaming push transport** `[deps: R-041 ✓]`
+   Sub-second latency story; lifts the sample's reference implementation. Drop the gRPC stream's writer straight into `IReplicationBatchEncoder.Encode(envelope, writer)` so the envelope's bytes never round-trip through a per-batch heap allocation — the encoder seam is already `IBufferWriter<byte>`-shaped for exactly this reason.
 
 ### Production hardening (must-have before any real deployment)
 
@@ -255,11 +255,11 @@ Latency drops from reminder-cadence (~60 s) to sub-second; bandwidth improves ~2
 - [x] **R-040 — `IReplicationTransport` abstraction**
   Pluggable seam. Implementations: `LoopbackTransport` (test fixture, R-000), `HttpTransport` (sample's pull path, lifted), `GrpcPushTransport` (sample's push path, lifted). The library ships all three; hosts pick via options. The outbound ship loop is transport-agnostic.
 
-- [ ] **R-041 — Orleans-serializer binary framing**
-  Drop JSON-over-HTTP as the *canonical* format (it remains supported on `HttpTransport` for debuggability behind a flag). Default wire format is the Orleans serializer applied to a versioned envelope. ~33% inline bandwidth win on `byte[]` payloads.
+- [x] **R-041 — Orleans-serializer binary framing**
+  Hardened the on-the-wire envelope: public `ReplicationBatchEnvelope` (`[Alias("olr.be")]`, wire version 1), public `IReplicationBatchEncoder` seam shaped as `void Encode(envelope, IBufferWriter<byte> writer)` so the gRPC push transport hands its stream writer directly through with zero per-batch heap allocation, and the canonical `OrleansBinaryReplicationBatchEncoder` registered via `TryAddSingleton`. Documented in `docs/lattice.replication/wire-format.md`.
 
-- [ ] **R-042 — gRPC streaming push transport**
-  Lift the sample's `GrpcPushTransport`: long-lived `PushBatches(stream Batch)` RPC per `(peer, tree)`, reconnect-with-bounded-exponential-backoff-and-jitter, advance cursor strictly on ack. Sender flushes when the local WAL (R-011) advances rather than on reminder ticks.
+- [ ] **R-042 — gRPC streaming push transport** `[deps: R-041]`
+  Sub-second latency story; lifts the sample's reference implementation. Drop the gRPC stream's writer straight into `IReplicationBatchEncoder.Encode(envelope, writer)` so the envelope's bytes never round-trip through a per-batch heap allocation — the encoder seam is already `IBufferWriter<byte>`-shaped for exactly this reason.
 
 - [ ] **R-043 — Batch-boundary compression**
   Optional `gzip` / `zstd` (configurable via options, default `None`) at the batch envelope boundary. Measured in R-033's chaos suite to verify CPU cost vs. bandwidth gain on realistic payloads.
