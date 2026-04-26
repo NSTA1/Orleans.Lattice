@@ -1,0 +1,207 @@
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Replication;
+using Orleans.Serialization;
+
+namespace Orleans.Lattice.Replication.Tests.Deltas;
+
+/// <summary>
+/// End-to-end Orleans serializer round-trip tests for every typed CRDT
+/// delta record. These are the safety net for the wire format - the
+/// alias-hygiene tests prove an alias is registered, but only an actual
+/// serialize / deserialize round-trip proves the codegen produces a
+/// working envelope and that none of the <c>[Id(...)]</c> slots have
+/// been silently reordered or dropped.
+/// </summary>
+[TestFixture]
+public class DeltaSerializerRoundTripTests
+{
+    private ServiceProvider _services = null!;
+
+    [OneTimeSetUp]
+    public void OneTimeSetUp()
+    {
+        _services = new ServiceCollection()
+            .AddSerializer()
+            .BuildServiceProvider();
+    }
+
+    [OneTimeTearDown]
+    public void OneTimeTearDown() => _services.Dispose();
+
+    private T RoundTrip<T>(T value)
+    {
+        var serializer = _services.GetRequiredService<Serializer<T>>();
+        var bytes = serializer.SerializeToArray(value);
+        return serializer.Deserialize(bytes);
+    }
+
+    [Test]
+    public void LwwRegisterDelta_round_trips_set_payload()
+    {
+        var ts = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        var original = new LwwRegisterDelta
+        {
+            Value = new byte[] { 1, 2, 3, 4 },
+            Timestamp = ts,
+            IsTombstone = false,
+            ExpiresAtTicks = 9_876_543_210L,
+            OriginClusterId = "site-a",
+        };
+
+        var copy = RoundTrip(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Value, Is.EqualTo(original.Value));
+            Assert.That(copy.Timestamp, Is.EqualTo(original.Timestamp));
+            Assert.That(copy.IsTombstone, Is.EqualTo(original.IsTombstone));
+            Assert.That(copy.ExpiresAtTicks, Is.EqualTo(original.ExpiresAtTicks));
+            Assert.That(copy.OriginClusterId, Is.EqualTo(original.OriginClusterId));
+        });
+    }
+
+    [Test]
+    public void LwwRegisterDelta_round_trips_tombstone()
+    {
+        var ts = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        var original = LwwRegisterDelta.Tombstone(ts, "site-b");
+
+        var copy = RoundTrip(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Value, Is.Null);
+            Assert.That(copy.IsTombstone, Is.True);
+            Assert.That(copy.Timestamp, Is.EqualTo(original.Timestamp));
+            Assert.That(copy.OriginClusterId, Is.EqualTo("site-b"));
+        });
+    }
+
+    [Test]
+    public void OrSetDot_round_trips()
+    {
+        var original = new OrSetDot { Element = new byte[] { 0xCA, 0xFE }, ReplicaId = "r-1", Counter = 42L };
+
+        var copy = RoundTrip(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Element, Is.EqualTo(original.Element));
+            Assert.That(copy.ReplicaId, Is.EqualTo(original.ReplicaId));
+            Assert.That(copy.Counter, Is.EqualTo(original.Counter));
+        });
+    }
+
+    [Test]
+    public void OrSetDelta_round_trips()
+    {
+        var addOne = new OrSetDot { Element = new byte[] { 1 }, ReplicaId = "r1", Counter = 1 };
+        var addTwo = new OrSetDot { Element = new byte[] { 2 }, ReplicaId = "r1", Counter = 2 };
+        var remove = new OrSetDot { Element = new byte[] { 1 }, ReplicaId = "r2", Counter = 7 };
+        var original = new OrSetDelta
+        {
+            Adds = new[] { addOne, addTwo },
+            Removes = new[] { remove },
+        };
+
+        var copy = RoundTrip(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Adds, Has.Count.EqualTo(2));
+            Assert.That(copy.Adds[0].Element, Is.EqualTo(addOne.Element));
+            Assert.That(copy.Adds[0].ReplicaId, Is.EqualTo(addOne.ReplicaId));
+            Assert.That(copy.Adds[0].Counter, Is.EqualTo(addOne.Counter));
+            Assert.That(copy.Adds[1].Counter, Is.EqualTo(addTwo.Counter));
+            Assert.That(copy.Removes, Has.Count.EqualTo(1));
+            Assert.That(copy.Removes[0].ReplicaId, Is.EqualTo(remove.ReplicaId));
+            Assert.That(copy.Removes[0].Counter, Is.EqualTo(remove.Counter));
+        });
+    }
+
+    [Test]
+    public void OrSetDelta_empty_round_trips()
+    {
+        var copy = RoundTrip(OrSetDelta.Empty);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Adds, Is.Not.Null);
+            Assert.That(copy.Adds, Is.Empty);
+            Assert.That(copy.Removes, Is.Not.Null);
+            Assert.That(copy.Removes, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void PnCounterDelta_round_trips()
+    {
+        var original = new PnCounterDelta
+        {
+            Increments = new Dictionary<string, long> { ["r1"] = 5, ["r2"] = 100 },
+            Decrements = new Dictionary<string, long> { ["r1"] = 1 },
+        };
+
+        var copy = RoundTrip(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Increments, Has.Count.EqualTo(2));
+            Assert.That(copy.Increments["r1"], Is.EqualTo(5L));
+            Assert.That(copy.Increments["r2"], Is.EqualTo(100L));
+            Assert.That(copy.Decrements, Has.Count.EqualTo(1));
+            Assert.That(copy.Decrements["r1"], Is.EqualTo(1L));
+        });
+    }
+
+    [Test]
+    public void PnCounterDelta_empty_round_trips()
+    {
+        var copy = RoundTrip(PnCounterDelta.Empty);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Increments, Is.Not.Null);
+            Assert.That(copy.Increments, Is.Empty);
+            Assert.That(copy.Decrements, Is.Not.Null);
+            Assert.That(copy.Decrements, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void VersionVectorDelta_round_trips()
+    {
+        var clockOne = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        var clockTwo = HybridLogicalClock.Tick(clockOne);
+        var original = new VersionVectorDelta
+        {
+            Entries = new Dictionary<string, HybridLogicalClock>
+            {
+                ["r1"] = clockOne,
+                ["r2"] = clockTwo,
+            },
+        };
+
+        var copy = RoundTrip(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Entries, Has.Count.EqualTo(2));
+            Assert.That(copy.Entries["r1"], Is.EqualTo(clockOne));
+            Assert.That(copy.Entries["r2"], Is.EqualTo(clockTwo));
+        });
+    }
+
+    [Test]
+    public void VersionVectorDelta_empty_round_trips()
+    {
+        var copy = RoundTrip(VersionVectorDelta.Empty);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Entries, Is.Not.Null);
+            Assert.That(copy.Entries, Is.Empty);
+        });
+    }
+}
