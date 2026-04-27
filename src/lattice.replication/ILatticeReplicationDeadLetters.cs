@@ -23,7 +23,7 @@ public interface ILatticeReplicationDeadLetters
 
     /// <summary>
     /// Removes the parked entry with id <paramref name="entryId"/> from
-    /// <paramref name="treeId"/>''s queue without attempting to apply
+    /// <paramref name="treeId"/>'s queue without attempting to apply
     /// it. Returns <c>true</c> when an entry was removed; <c>false</c>
     /// when no entry with that id existed.
     /// </summary>

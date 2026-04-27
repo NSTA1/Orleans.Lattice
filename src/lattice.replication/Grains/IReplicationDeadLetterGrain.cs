@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Replication.Grains;
 /// <para>
 /// Grain key format: the tree id verbatim. A replicated tree therefore
 /// has at most one DLQ activation regardless of how many origin
-/// clusters publish to it; the entry''s
+/// clusters publish to it; the entry's
 /// <see cref="ReplogEntry.OriginClusterId"/> remains carried inside
 /// the parked <see cref="DeadLetterEntry.Entry"/> for diagnostic
 /// fan-out by the inspection seam.

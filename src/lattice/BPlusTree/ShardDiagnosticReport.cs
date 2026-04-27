@@ -19,14 +19,14 @@ public readonly record struct ShardDiagnosticReport
     /// </summary>
     [Id(1)] public int Depth { get; init; }
 
-    /// <summary>Whether the shard''s root node is currently a leaf (<c>true</c>) or an internal node.</summary>
+    /// <summary>Whether the shard's root node is currently a leaf (<c>true</c>) or an internal node.</summary>
     [Id(2)] public bool RootIsLeaf { get; init; }
 
     /// <summary>Number of live (non-tombstoned, non-expired) keys owned by this shard.</summary>
     [Id(3)] public long LiveKeys { get; init; }
 
     /// <summary>
-    /// Number of tombstoned or expired entries still held by this shard''s leaves.
+    /// Number of tombstoned or expired entries still held by this shard's leaves.
     /// Only populated when <see cref="ILattice.DiagnoseAsync"/> is called with
     /// <c>deep: true</c>; otherwise <c>0</c>.
     /// </summary>

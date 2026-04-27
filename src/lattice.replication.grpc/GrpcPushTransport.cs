@@ -30,7 +30,7 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// <see cref="ReplicationBatchEnvelope"/>, then hands the envelope to
 /// the gRPC marshaller. The marshaller re-encodes via the same
 /// <see cref="IReplicationBatchEncoder"/> directly into the gRPC
-/// stream''s <see cref="System.Buffers.IBufferWriter{T}"/>, so the
+/// stream's <see cref="System.Buffers.IBufferWriter{T}"/>, so the
 /// outbound bytes never allocate a managed buffer beyond the encoded
 /// length the encoder needs. The decode-then-encode round-trip on the
 /// sender side is the cost of the current opaque-bytes
@@ -162,7 +162,7 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
         // gRPC wire is type-shaped. Decode once on the sender so the
         // typed envelope can flow through the gRPC marshaller, which
         // re-encodes via the same canonical encoder directly into the
-        // gRPC stream''s buffer writer (zero managed allocation
+        // gRPC stream's buffer writer (zero managed allocation
         // beyond the encoded length). The decode-encode round-trip
         // here is the cost of the current bytes-shaped seam; widening
         // the seam to accept an envelope directly is a future
@@ -181,7 +181,7 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
         if (!options.PeerEndpoints.TryGetValue(targetClusterId, out var endpoint))
         {
             throw new InvalidOperationException(
-                $"GrpcPushTransport has no endpoint configured for target cluster ''{targetClusterId}''. "
+                $"GrpcPushTransport has no endpoint configured for target cluster '{targetClusterId}'. "
                 + $"Populate {nameof(GrpcPushTransportOptions)}.{nameof(GrpcPushTransportOptions.PeerEndpoints)} "
                 + "before the first SendAsync call to this peer.");
         }

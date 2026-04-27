@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Replication.Tests.Fakes;
 /// Builds an NSubstitute-backed <see cref="ISystemLattice"/> substitute
 /// wired to an in-memory <see cref="SortedDictionary{TKey, TValue}"/>.
 /// Lives as a builder rather than a concrete <c>ISystemLattice</c>
-/// implementation so Orleans''s TestCluster grain-type discovery does
+/// implementation so Orleans's TestCluster grain-type discovery does
 /// not pick up the test type as a competing implementation of the
 /// system-lattice grain interface.
 /// </summary>

@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <summary>
 /// Regression tests for shadow-forward task observation.
 /// Validates that every dispatched shadow-forward is observed exactly once
-/// (by the caller''s await, by the fault-logger continuation, or both) and
+/// (by the caller's await, by the fault-logger continuation, or both) and
 /// that <see cref="ShardRootGrain.SetManyAsync"/> preserves the local
 /// exception as the primary when both local and forward fail.
 /// </summary>
