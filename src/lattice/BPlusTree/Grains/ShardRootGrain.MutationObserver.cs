@@ -47,6 +47,10 @@ internal sealed partial class ShardRootGrain
             // at publish time so replication-aware observers see the
             // frontier captured at the time of the delete call.
             VectorClock = LatticeVectorClockContext.Current,
+            // Range deletes share a single transaction id across every
+            // per-shard fan-out emit so consumers that dedup or
+            // batch-correlate observe one transaction per user call.
+            TransactionId = LatticeTransactionContext.Current,
         };
         return mutationObservers.PublishAsync(mutation);
     }

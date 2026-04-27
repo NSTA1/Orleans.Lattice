@@ -242,6 +242,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         cancellationToken.ThrowIfCancellationRequested();
+        LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         await EnsureMonitorAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -284,6 +285,7 @@ internal sealed partial class LatticeGrain(
             throw new ArgumentOutOfRangeException(nameof(ttl),
                 "TTL is too large — absolute expiry would exceed DateTimeOffset.MaxValue.");
         cancellationToken.ThrowIfCancellationRequested();
+        LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         await EnsureMonitorAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -324,6 +326,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         cancellationToken.ThrowIfCancellationRequested();
+        LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         await EnsureMonitorAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -361,6 +364,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         cancellationToken.ThrowIfCancellationRequested();
+        LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         await EnsureMonitorAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -398,6 +402,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
+        LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         await EnsureMonitorAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -532,6 +537,7 @@ internal sealed partial class LatticeGrain(
     {
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
+        LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();
         var shard = await GetShardGrainAsync(key);
@@ -568,6 +574,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();
+        LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();
         int deleted;

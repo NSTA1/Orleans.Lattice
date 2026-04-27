@@ -141,4 +141,65 @@ public partial class BPlusLeafGrainTests
         var result = await grain.SetAsync("k", [1]);
         Assert.That(result, Is.Null);
     }
+
+    [Test]
+    public async Task SetAsync_publishes_TransactionId_from_ambient_context()
+    {
+        var observer = new RecordingMutationObserver();
+        var grain = CreateGrainWithObserver(observer);
+
+        var txId = Guid.NewGuid();
+        LatticeTransactionContext.Set(txId);
+        try
+        {
+            await grain.SetAsync("k", [1]);
+        }
+        finally
+        {
+            LatticeTransactionContext.Set(Guid.Empty);
+        }
+
+        Assert.That(observer.Mutations, Has.Count.EqualTo(1));
+        Assert.That(observer.Mutations[0].TransactionId, Is.EqualTo(txId));
+    }
+
+    [Test]
+    public async Task SetAsync_publishes_empty_TransactionId_when_context_unset()
+    {
+        // Ensure no ambient context survives from a sibling test.
+        LatticeTransactionContext.Set(Guid.Empty);
+
+        var observer = new RecordingMutationObserver();
+        var grain = CreateGrainWithObserver(observer);
+
+        await grain.SetAsync("k", [1]);
+
+        Assert.That(observer.Mutations, Has.Count.EqualTo(1));
+        Assert.That(observer.Mutations[0].TransactionId, Is.EqualTo(Guid.Empty));
+    }
+
+    [Test]
+    public async Task DeleteAsync_publishes_TransactionId_from_ambient_context()
+    {
+        var observer = new RecordingMutationObserver();
+        var grain = CreateGrainWithObserver(observer);
+
+        // Seed under a different (or default) tx, then delete under a fresh one.
+        LatticeTransactionContext.Set(Guid.Empty);
+        await grain.SetAsync("k", [1]);
+
+        var deleteTx = Guid.NewGuid();
+        LatticeTransactionContext.Set(deleteTx);
+        try
+        {
+            await grain.DeleteAsync("k");
+        }
+        finally
+        {
+            LatticeTransactionContext.Set(Guid.Empty);
+        }
+
+        var deleteEvent = observer.Mutations.Single(m => m.Kind == MutationKind.Delete);
+        Assert.That(deleteEvent.TransactionId, Is.EqualTo(deleteTx));
+    }
 }

@@ -40,4 +40,19 @@ public static class LatticeEventConstants
     /// this key directly.
     /// </summary>
     internal const string VectorClockRequestContextKey = "ol.vc";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry the per-transaction
+    /// identifier (a <see cref="System.Guid"/>) from the public
+    /// <see cref="ILattice"/> entry-point — or, in the saga case, the
+    /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> coordinator — down
+    /// into <see cref="BPlusTree.Grains.BPlusLeafGrain"/> /
+    /// <see cref="BPlusTree.Grains.ShardRootGrain"/> mutation publish
+    /// helpers. Stamped onto every emitted
+    /// <see cref="LatticeMutation.TransactionId"/> so replication-aware
+    /// observers can capture per-transaction state once and apply it to
+    /// every emit in the batch. Internal — consumers should read
+    /// <see cref="LatticeMutation.TransactionId"/> instead.
+    /// </summary>
+    internal const string TransactionIdRequestContextKey = "ol.txid";
 }
