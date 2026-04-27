@@ -41,6 +41,17 @@ public class ReplicationBatchEnvelopeTests
     }
 
     [Test]
+    public void CurrentMinorVersion_is_one()
+    {
+        // Diagnostic minor version is bumped on strictly additive
+        // changes to the envelope shape - e.g. a new [Id] slot on
+        // ReplogEntry that legacy peers safely decode as null. Pinning
+        // the value here guarantees a future bump is a deliberate
+        // edit, not an accidental drift.
+        Assert.That(ReplicationBatchEnvelope.CurrentMinorVersion, Is.EqualTo(1));
+    }
+
+    [Test]
     public void Properties_are_settable_via_object_initialiser()
     {
         var entry = new ReplogEntry { TreeId = "t", Op = ReplogOp.Set, Key = "k" };
@@ -163,5 +174,87 @@ public class ReplicationBatchEnvelopeTests
 
         Assert.That(copy.Entries, Has.Count.EqualTo(100));
         Assert.That(copy.Entries[57].Key, Is.EqualTo("k-57"));
+    }
+
+    [Test]
+    public void Serializer_decodes_legacy_entry_without_vector_clock_as_null()
+    {
+        // Pin the wire-additive contract: an entry authored without a
+        // commit-time vector clock (every entry produced before the
+        // causal-plus slots existed, and every local-write entry from
+        // a host that does not stamp ambient frontiers) must round-trip
+        // through the canonical encoder with VectorClock and
+        // DependencySummary both null. Receivers treat null as the
+        // empty frontier and behave identically to the per-origin-only
+        // high-water-mark check.
+        var legacy = new ReplogEntry
+        {
+            TreeId = "tree",
+            Op = ReplogOp.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            OriginClusterId = "site-a",
+            Mode = ReplicationMode.LwwRegister,
+        };
+        var original = new ReplicationBatchEnvelope
+        {
+            WireVersion = ReplicationBatchEnvelope.CurrentVersion,
+            TreeName = "tree",
+            OriginClusterId = "site-a",
+            Entries = new[] { legacy },
+        };
+
+        var bytes = _serializer.SerializeToArray(original);
+        var copy = _serializer.Deserialize(bytes);
+
+        var entry = copy.Entries.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.VectorClock, Is.Null);
+            Assert.That(entry.DependencySummary, Is.Null);
+            Assert.That(entry.Key, Is.EqualTo("k"));
+        });
+    }
+
+    [Test]
+    public void Serializer_round_trips_entry_with_vector_clock_and_dependency_summary()
+    {
+        var vc = new VersionVector();
+        vc.Entries["site-a"] = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        vc.Entries["site-b"] = HybridLogicalClock.Tick(HybridLogicalClock.Tick(HybridLogicalClock.Zero));
+
+        var entry = new ReplogEntry
+        {
+            TreeId = "tree",
+            Op = ReplogOp.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            OriginClusterId = "site-a",
+            Mode = ReplicationMode.LwwRegister,
+            VectorClock = vc,
+            DependencySummary = vc,
+        };
+        var original = new ReplicationBatchEnvelope
+        {
+            WireVersion = ReplicationBatchEnvelope.CurrentVersion,
+            TreeName = "tree",
+            OriginClusterId = "site-a",
+            Entries = new[] { entry },
+        };
+
+        var bytes = _serializer.SerializeToArray(original);
+        var copy = _serializer.Deserialize(bytes);
+
+        var decoded = copy.Entries.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.VectorClock, Is.Not.Null);
+            Assert.That(decoded.VectorClock!.Entries, Has.Count.EqualTo(2));
+            Assert.That(decoded.VectorClock.GetClock("site-a").WallClockTicks, Is.GreaterThan(0L));
+            Assert.That(decoded.DependencySummary, Is.Not.Null);
+            Assert.That(decoded.DependencySummary!.Entries, Has.Count.EqualTo(2));
+        });
     }
 }

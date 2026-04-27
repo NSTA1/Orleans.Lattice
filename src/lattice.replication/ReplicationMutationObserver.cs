@@ -117,6 +117,19 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
         // before any observer call can reach this point.
         var origin = mutation.OriginClusterId ?? filter.ClusterId;
 
+        // Defensive snapshot of the ambient causal-plus frontier:
+        // VersionVector is a mutable reference type whose Entries
+        // dictionary is publicly mutable, so retaining the supplied
+        // mutation.VectorClock reference would leave the captured entry
+        // exposed to any caller that advances the frontier after this
+        // observer returns. Cloning once and aliasing both slots to
+        // the clone preserves the "DependencySummary initially mirrors
+        // VectorClock" contract while breaking the mutation -> entry
+        // aliasing that would otherwise allow silent post-emit drift.
+        // The clone is null-safe: a non-replicated local write flows
+        // through as null and decodes back to null on legacy peers.
+        var capturedFrontier = mutation.VectorClock?.Clone();
+
         var entry = new ReplogEntry
         {
             TreeId = mutation.TreeId,
@@ -129,6 +142,15 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             ExpiresAtTicks = mutation.ExpiresAtTicks,
             OriginClusterId = origin,
             Mode = mode.Value,
+            // Causal-plus frontier: stamp the defensive snapshot so
+            // the captured entry is detached from any post-emit
+            // mutation of mutation.VectorClock. Both slots share the
+            // single clone instance - the dependency summary slot is
+            // reserved for a future Bloom-filter shape but starts
+            // identical to the absolute frontier so a receiver
+            // consulting either slot sees the same value.
+            VectorClock = capturedFrontier,
+            DependencySummary = capturedFrontier,
         };
 
         return _sink.WriteAsync(entry, cancellationToken);

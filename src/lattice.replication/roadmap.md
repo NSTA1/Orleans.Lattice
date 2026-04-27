@@ -85,7 +85,7 @@ The phase structure below groups items thematically. This section is the canonic
 
 ### Snapshot / bootstrap (paired with core F-025)
 
-12. **R-080 — Causal+ WAL entry schema** `[deps: none]`
+12. **R-080 ✓ shipped — Causal+ WAL entry schema**
     Land *before* R-050 so the snapshot handoff pins a causal-stable frontier from day one rather than retrofitting the bootstrap contract later. Adds two purely additive `[Id]` slots on `ReplogEntry` (`VectorClock`, `DependencySummary`) plus a diagnostic minor-version bump on `ReplicationBatchEnvelope`. Backwards-compat: legacy peers decode missing slots to empty maps and behave identically to today's per-origin-only HWM check. Producer-side capture happens at the existing commit-time observer site; no commit-path change. Delta-encoded per shard with **absolute** VC anchors on every batch boundary and on any entry whose predecessor was trimmed by GC, preserving the trim-from-the-head invariant. Internal `VectorClockCodec` (`EncodeDelta` / `DecodeDelta` / `EncodeAbsolute`). Documented in [`docs/lattice.replication/wal-causal-plus.md`](../../docs/lattice.replication/wal-causal-plus.md).
     *Future-compat:* the schema is the canonical mutation record for both today's replication consumer and tomorrow's local materialiser; the VC slot is what a v2 local apply path needs to dispatch causal-aware merges without a wire-format break.
 
@@ -439,7 +439,7 @@ These items are gating for **R-041** (binary framing) and **R-042** (gRPC push t
 
 Extends today's per-origin LWW + HWM convergence to causal+ consistency: writers that read-then-write across keys see their dependencies preserved on every peer, under arbitrary partition and re-delivery, without changing the WAL's commit point or ordering semantics. Every item is purely additive on the wire and off the commit path — append-then-apply, monotonic offsets, and origin stamping are unchanged.
 
-- [ ] **R-080 — Causal+ WAL entry schema**
+- [x] **R-080 — Causal+ WAL entry schema**
   Two additive `[Id]` slots on `ReplogEntry`: `[Id(10)] VectorClock` (sparse `{originClusterId → HLC}` captured at commit time, delta-encoded against the predecessor entry on the same shard, with **absolute** anchors on every batch boundary and on any entry whose predecessor was trimmed by GC so R-061's trim is safe to run unchanged) and `[Id(11)] DependencySummary` (initially aliased to the `VectorClock` itself; reserved as a distinct slot so a future Bloom-filter-shaped summary can ship without re-numbering — read-only / immutable per the perf note in §1.2). Internal `VectorClockCodec` lives in `Orleans.Lattice.Replication` with `EncodeDelta(current, predecessor)` / `DecodeDelta(...)` / `EncodeAbsolute(...)`. Producer-side capture happens at the existing commit-time observer site using shard-local state that R-081 generalises. Wire-compatible: legacy peers decode missing slots to empty maps and behave identically to today's per-origin-only HWM check. `ReplicationBatchEnvelope` minor-version bumped to `1.1` for diagnostics; `WireVersion` (alias `olr.be`) unchanged. Documented in [`docs/lattice.replication/wal-causal-plus.md`](../../docs/lattice.replication/wal-causal-plus.md). Test coverage: codec round-trip including delta-then-trim, legacy-peer decode-as-empty, sparse-map encoding stability.
 
 - [ ] **R-081 — Local vector clock generalises per-origin HWM** *(depends on R-080)*

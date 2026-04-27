@@ -89,6 +89,19 @@ public readonly record struct LatticeMutation
     /// pin or compare the frontier as needed; the library itself does
     /// not interpret it.
     /// </summary>
+    /// <remarks>
+    /// <see cref="Primitives.VersionVector"/> is a mutable reference type
+    /// whose <see cref="Primitives.VersionVector.Entries"/> dictionary is
+    /// publicly mutable. The instance carried on this slot is shared with
+    /// the originating commit site and may continue to be advanced after
+    /// <see cref="IMutationObserver.OnMutationAsync"/> returns. Observers
+    /// that retain the frontier past the observer call - for example to
+    /// stamp it on a downstream wire envelope - must defensively snapshot
+    /// the value (typically via <see cref="Primitives.VersionVector.Clone"/>);
+    /// the replication package's built-in observer does this internally so
+    /// every emitted <c>ReplogEntry</c> is detached from later producer-side
+    /// advances.
+    /// </remarks>
     [Id(9)] public Primitives.VersionVector? VectorClock { get; init; }
 
     /// <summary>
