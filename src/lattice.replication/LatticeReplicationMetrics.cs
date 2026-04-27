@@ -54,6 +54,29 @@ public static class LatticeReplicationMetrics
     public const string TagOutcome = "outcome";
 
     /// <summary>
+    /// Tag key for the dead-letter enqueue / removal reason. Values are
+    /// drawn from <see cref="ReasonDiscarded"/>, <see cref="ReasonReplayed"/>,
+    /// <see cref="ReasonEvicted"/>, and <see cref="ReasonUnknown"/>.
+    /// </summary>
+    public const string TagReason = "reason";
+
+    /// <summary>Reason tag value: entry removed by an explicit operator <c>Discard</c> call.</summary>
+    public const string ReasonDiscarded = "discarded";
+
+    /// <summary>Reason tag value: entry removed by a successful <c>Replay</c>.</summary>
+    public const string ReasonReplayed = "replayed";
+
+    /// <summary>Reason tag value: entry removed by FIFO capacity eviction during a later enqueue.</summary>
+    public const string ReasonEvicted = "evicted";
+
+    /// <summary>
+    /// Reason tag value: catch-all bucket for enqueue causes the inbound
+    /// apply pipeline could not classify more specifically. Future
+    /// observability work will partition this further.
+    /// </summary>
+    public const string ReasonUnknown = "unknown";
+
+    /// <summary>
     /// The meter that owns every replication instrument. Exposed publicly so
     /// integration tests and custom OpenTelemetry exporters can subscribe by
     /// reference rather than by name.
@@ -82,6 +105,32 @@ public static class LatticeReplicationMetrics
     public static readonly Histogram<double> ApplyDuration =
         Meter.CreateHistogram<double>("orleans.lattice.replication.apply.duration", unit: "ms",
             description: "Duration of inbound apply-batch attempts, tagged by tree, peer and outcome.");
+
+    // --- Dead-letter queue counters ---------------------------------------------
+
+    /// <summary>
+    /// Counter of <see cref="ReplogEntry"/> records parked on the per-tree
+    /// dead-letter queue after exhausting
+    /// <see cref="LatticeReplicationOptions.MaxApplyRetries"/> consecutive
+    /// apply attempts on the same
+    /// <c>(treeId, originClusterId, timestamp, key, op)</c> tuple. Tagged
+    /// by <see cref="TagTree"/> and <see cref="TagReason"/>.
+    /// </summary>
+    public static readonly Counter<long> DeadLetterEnqueued =
+        Meter.CreateCounter<long>("orleans.lattice.replication.dead_letter.enqueued", unit: "{entry}",
+            description: "Replog entries parked on the per-tree dead-letter queue, tagged by tree and reason.");
+
+    /// <summary>
+    /// Counter of entries removed from the per-tree dead-letter queue.
+    /// Tagged by <see cref="TagTree"/> and <see cref="TagReason"/>; the
+    /// reason tag distinguishes operator <c>Discard</c>
+    /// (<see cref="ReasonDiscarded"/>), successful <c>Replay</c>
+    /// (<see cref="ReasonReplayed"/>), and FIFO capacity eviction during
+    /// a later enqueue (<see cref="ReasonEvicted"/>).
+    /// </summary>
+    public static readonly Counter<long> DeadLetterRemoved =
+        Meter.CreateCounter<long>("orleans.lattice.replication.dead_letter.removed", unit: "{entry}",
+            description: "Entries removed from the per-tree dead-letter queue, tagged by tree and reason.");
 
     // --- Per-peer observable gauges ----------------------------------------------
     //

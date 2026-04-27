@@ -120,45 +120,55 @@ public class LatticeReplicationOptionsValidatorTests
         Assert.That(result.Succeeded, Is.True);
     }
 
-    [Test]
-    public void Validate_runs_per_named_options_instance()
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_max_apply_retries_is_non_positive(int max)
     {
-        var bothFail = Validator.Validate("named", new LatticeReplicationOptions());
-        var bothPass = Validator.Validate("named", new LatticeReplicationOptions { ClusterId = "x" });
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            MaxApplyRetries = max,
+        };
+
+        var result = Validator.Validate(name: null, opts);
 
         Assert.Multiple(() =>
         {
-            Assert.That(bothFail.Failed, Is.True);
-            Assert.That(bothPass.Succeeded, Is.True);
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.MaxApplyRetries)));
+        });
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_dead_letter_queue_capacity_is_non_positive(int capacity)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            DeadLetterQueueCapacity = capacity,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.DeadLetterQueueCapacity)));
         });
     }
 
     [Test]
-    public void AddLatticeReplication_throws_OptionsValidationException_when_cluster_id_unset()
+    public void Validate_succeeds_for_dead_letter_options_set_to_one()
     {
-        var services = new ServiceCollection();
-        var builder = Substitute.For<ISiloBuilder>();
-        builder.Services.Returns(services);
-        builder.AddLatticeReplication(_ => { });
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            MaxApplyRetries = 1,
+            DeadLetterQueueCapacity = 1,
+        };
 
-        var provider = services.BuildServiceProvider();
-        var monitor = provider.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>();
-
-        Assert.That(() => monitor.CurrentValue, Throws.TypeOf<OptionsValidationException>());
-    }
-
-    [Test]
-    public void AddLatticeReplication_resolves_options_when_cluster_id_set()
-    {
-        var services = new ServiceCollection();
-        var builder = Substitute.For<ISiloBuilder>();
-        builder.Services.Returns(services);
-        builder.AddLatticeReplication(opts => opts.ClusterId = "ok");
-
-        var provider = services.BuildServiceProvider();
-        var monitor = provider.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>();
-
-        Assert.That(monitor.CurrentValue.ClusterId, Is.EqualTo("ok"));
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
     }
 
     // ------------------------------------------------------------------

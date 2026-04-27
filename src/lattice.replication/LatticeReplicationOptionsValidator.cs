@@ -64,6 +64,22 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "least one pending batch alongside the in-flight flush.");
         }
 
+        if (options.MaxApplyRetries < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.MaxApplyRetries)} "
+                + $"must be at least 1 ({scope}). The dead-letter routing threshold cannot be "
+                + "zero; a value of one parks an entry on the first failure.");
+        }
+
+        if (options.DeadLetterQueueCapacity < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.DeadLetterQueueCapacity)} "
+                + $"must be at least 1 ({scope}). A zero-capacity queue cannot accept the "
+                + "very entry the apply pipeline is trying to park.");
+        }
+
         if (options.ReplicatedTrees is { } trees)
         {
             foreach (var kvp in trees)
