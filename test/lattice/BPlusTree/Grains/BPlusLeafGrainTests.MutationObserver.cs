@@ -202,4 +202,65 @@ public partial class BPlusLeafGrainTests
         var deleteEvent = observer.Mutations.Single(m => m.Kind == MutationKind.Delete);
         Assert.That(deleteEvent.TransactionId, Is.EqualTo(deleteTx));
     }
+
+    [Test]
+    public async Task SetAsync_publishes_User_category_when_no_maintenance_scope_active()
+    {
+        var observer = new RecordingMutationObserver();
+        var grain = CreateGrainWithObserver(observer);
+
+        await grain.SetAsync("k", [1]);
+
+        Assert.That(observer.Mutations, Has.Count.EqualTo(1));
+        Assert.That(observer.Mutations[0].Category, Is.EqualTo(MutationCategory.User));
+    }
+
+    [Test]
+    public async Task SetAsync_publishes_Maintenance_category_inside_maintenance_scope()
+    {
+        var observer = new RecordingMutationObserver();
+        var grain = CreateGrainWithObserver(observer);
+
+        using (LatticeMaintenanceContext.BeginScope())
+        {
+            await grain.SetAsync("k", [1]);
+        }
+
+        Assert.That(observer.Mutations, Has.Count.EqualTo(1));
+        Assert.That(observer.Mutations[0].Category, Is.EqualTo(MutationCategory.Maintenance));
+    }
+
+    [Test]
+    public async Task DeleteAsync_publishes_Maintenance_category_inside_maintenance_scope()
+    {
+        var observer = new RecordingMutationObserver();
+        var grain = CreateGrainWithObserver(observer);
+        await grain.SetAsync("k", [1]);
+
+        using (LatticeMaintenanceContext.BeginScope())
+        {
+            await grain.DeleteAsync("k");
+        }
+
+        var del = observer.Mutations.Single(m => m.Kind == MutationKind.Delete);
+        Assert.That(del.Category, Is.EqualTo(MutationCategory.Maintenance));
+    }
+
+    [Test]
+    public async Task SetAsync_returns_to_User_category_after_maintenance_scope_disposes()
+    {
+        var observer = new RecordingMutationObserver();
+        var grain = CreateGrainWithObserver(observer);
+
+        using (LatticeMaintenanceContext.BeginScope())
+        {
+            await grain.SetAsync("inside", [1]);
+        }
+        await grain.SetAsync("outside", [2]);
+
+        var inside = observer.Mutations.Single(m => m.Key == "inside");
+        var outside = observer.Mutations.Single(m => m.Key == "outside");
+        Assert.That(inside.Category, Is.EqualTo(MutationCategory.Maintenance));
+        Assert.That(outside.Category, Is.EqualTo(MutationCategory.User));
+    }
 }

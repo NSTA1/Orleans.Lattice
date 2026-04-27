@@ -98,6 +98,7 @@ internal static class TypeAliases
     // Mutation observer hook
     internal const string LatticeMutation = "ol.mut";
     internal const string MutationKind = "ol.muk";
+    internal const string MutationCategory = "ol.muc";
 
     // Grain interfaces — each must be applied via [Alias(...)] on the
     // interface declaration so the Orleans manifest carries a stable,

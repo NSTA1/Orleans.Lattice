@@ -410,7 +410,7 @@ public sealed class MyReplicationObserver : IMutationObserver
         // Inspect mutation.TreeId, mutation.Kind, mutation.Key, mutation.Value,
         // mutation.Timestamp, mutation.IsTombstone, mutation.ExpiresAtTicks,
         // mutation.OriginClusterId, mutation.VectorClock,
-        // mutation.TransactionId,
+        // mutation.TransactionId, mutation.Category,
         // and for DeleteRange also mutation.EndExclusiveKey.
         return Task.CompletedTask;
     }
@@ -443,6 +443,15 @@ Every emit carries a `Guid TransactionId` that lets observers detect when severa
 - **Convergence paths** (`MergeEntriesAsync` / `MergeManyAsync`, shard-split shadow-forward, snapshot restore) do not stamp a transaction id and emit `Guid.Empty` — these paths normally do not publish at all, but if they ever do (custom observer instrumentation), `Guid.Empty` is the documented sentinel for "no enclosing transaction".
 
 The id is computed at the public `ILattice` surface and propagated downstream via the ambient Orleans `RequestContext`. Observers that batch by transaction can group on `TransactionId`; observers that do not care can simply ignore the field.
+
+#### User vs. maintenance classification (`Category`)
+
+Every emit also carries a `MutationCategory Category` slot that classifies the mutation as either a user-driven write or a library-internal maintenance write:
+
+- **`MutationCategory.User`** (default, value `0`) — produced by every public `ILattice` write entry-point: `SetAsync` (all overloads), `DeleteAsync`, `DeleteRangeAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyAtomicAsync` (every per-key emit, including saga compensation rolls), and `BulkLoadAsync`. This is the value observers see for application-driven traffic.
+- **`MutationCategory.Maintenance`** (value `1`) — reserved for library-internal structural rewrites (resize, rebalance, compaction, internal rewrite). Convergence paths (merge / shadow-forward / snapshot restore) are deliberately silent on the observer hook today, so production observers currently see only `User`. The slot exists so replication-aware observers can skip the WAL append for maintenance traffic on replicated trees once those sites begin emitting; structural maintenance is run independently on every cluster and must not cross cluster boundaries.
+
+The classification is **independent of `OriginClusterId`** — a remote-origin maintenance mutation would still be `Maintenance` and would still be skipped by a replication observer. Wire-compatible default: legacy persisted payloads decode to `Category = User` (the zero default), so observers that ignore the field continue to work unchanged.
 
 ## Metrics
 

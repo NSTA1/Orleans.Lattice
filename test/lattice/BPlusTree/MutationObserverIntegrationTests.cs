@@ -342,4 +342,16 @@ public sealed class MutationObserverIntegrationTests
         Assert.That(mine.All(m => m.TransactionId == first), Is.True,
             "Every per-key Set emit produced by a single SetManyAsync user call must share the same transaction id.");
     }
+
+    [Test]
+    public async Task SetAsync_publishes_User_category_through_full_pipeline()
+    {
+        var tree = await _fixture.CreateTreeAsync("obs-e2e-category");
+        await tree.SetAsync("k", [1]);
+
+        var m = await WaitForAsync(m =>
+            m.Kind == MutationKind.Set && m.Key == "k" && m.TreeId == "obs-e2e-category");
+        Assert.That(m.Category, Is.EqualTo(MutationCategory.User),
+            "Public ILattice write paths must default to User category — no internal site should be wrapping them in a maintenance scope.");
+    }
 }

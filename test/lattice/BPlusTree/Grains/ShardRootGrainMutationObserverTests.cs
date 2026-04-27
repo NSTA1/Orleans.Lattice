@@ -184,4 +184,29 @@ public class ShardRootGrainMutationObserverTests
         Assert.That(h.Observer.Mutations, Has.Count.EqualTo(1));
         Assert.That(h.Observer.Mutations[0].VectorClock, Is.Null);
     }
+
+    [Test]
+    public async Task DeleteRangeAsync_stamps_User_category_outside_maintenance_scope()
+    {
+        var h = CreateHarness(leafDeletedCount: 1);
+
+        await h.Grain.DeleteRangeAsync("a", "z");
+
+        Assert.That(h.Observer.Mutations, Has.Count.EqualTo(1));
+        Assert.That(h.Observer.Mutations[0].Category, Is.EqualTo(MutationCategory.User));
+    }
+
+    [Test]
+    public async Task DeleteRangeAsync_stamps_Maintenance_category_inside_maintenance_scope()
+    {
+        var h = CreateHarness(leafDeletedCount: 1);
+
+        using (LatticeMaintenanceContext.BeginScope())
+        {
+            await h.Grain.DeleteRangeAsync("a", "z");
+        }
+
+        Assert.That(h.Observer.Mutations, Has.Count.EqualTo(1));
+        Assert.That(h.Observer.Mutations[0].Category, Is.EqualTo(MutationCategory.Maintenance));
+    }
 }
