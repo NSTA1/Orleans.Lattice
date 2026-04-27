@@ -79,7 +79,7 @@ Never rename or remove an alias — it is part of the wire format.
 
 ## Editing long markdown files (`roadmap.md`, `docs/**/*.md`)
 
-Patch-style edit tools that rely on `// ...existing code...` markers and similarity matching are **unsafe on long markdown files** that contain many adjacent bullets with similar prefixes (e.g. `- [ ] **F-043 ...`, `- [ ] **F-044 ...`, `- [ ] **F-045 ...`). The tool can silently collapse or drop neighbouring bullets and the regression is invisible until a reader notices a missing entry. This has happened repeatedly on `src/lattice/roadmap.md`.
+Patch-style edit tools that rely on `// ...existing code...` markers and similarity matching are **unsafe on long markdown files** that contain many adjacent bullets with similar prefixes (e.g. several roadmap bullets at adjacent line numbers, each starting with `- [ ] **F-` and a number, that differ only in the trailing prose). The tool can silently collapse or drop neighbouring bullets and the regression is invisible until a reader notices a missing entry. This has happened repeatedly on `src/lattice/roadmap.md`.
 
 **Required workflow for any edit to a markdown file longer than ~200 lines, or any edit to a file whose surrounding context contains repeated near-identical sibling bullets:**
 
@@ -95,8 +95,8 @@ Reference template (PowerShell):
 
 ```powershell
 $path = 'src/lattice/roadmap.md'
-$old  = '- [ ] **F-044 — Atomic-transaction boundary ...full exact line...'
-$new  = '- [x] **F-044 — Atomic-transaction boundary ...full exact line...'
+$old  = '- [ ] **F-XYZ — short description ...full exact line...'
+$new  = '- [x] **F-XYZ — short description ...full exact line...'
 $content = [System.IO.File]::ReadAllText((Resolve-Path $path))
 $count = ([regex]::Matches($content, [regex]::Escape($old))).Count
 if ($count -ne 1) { throw "expected exactly 1 match, got $count" }

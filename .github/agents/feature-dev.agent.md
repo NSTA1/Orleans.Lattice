@@ -73,13 +73,61 @@ Update documentation in the same change:
 
 ### Phase 6 — Verify
 
-1. Build the solution and confirm **zero errors and zero warnings**. Fix any nullable reference type warnings (`CS8604`, `CS8602`, `CS8625`) introduced by new or modified code.
-2. Run all tests related to the changed code and confirm they pass.
-3. Run the full test suite to ensure nothing is broken. **Exclude the `Chaos` test category** during iterative feature-dev verification — chaos tests are long-running stress suites reserved for CI and pre-PR runs, not every inner-loop check:
+The verify phase has **three sub-phases that must run in this order**. Sub-phases 6a and 6b are **hard gates** — failure means stop, fix, and re-run from the top of 6a. Do not advance to 6c until 6a and 6b are green. Do not declare work complete or open a PR if any of the three is red.
+
+#### 6a — Build clean (hard gate)
+
+Build the solution and confirm **zero errors and zero warnings**. Fix any nullable-reference-type warnings (`CS8604`, `CS8602`, `CS8625`) introduced by new or modified code.
+
+```powershell
+dotnet build -c Release --nologo /clp:ErrorsOnly
+```
+
+Report the build summary line in the chat reply.
+
+#### 6b — Hygiene gates (hard gate, runs *before* unit tests)
+
+These are **scriptable, deterministic checks** that have caused PR-time CI failures in the past. They are cheap to run locally and expensive to discover in CI. Run them **before** any unit-test invocation in 6c so a hygiene leak is caught in seconds rather than after a 90-second test run.
+
+The agent **must invoke each command below verbatim** and **paste the tail of its output into the chat reply** as evidence the gate ran. A claim of "I checked and it's clean" without the corresponding tool transcript is a protocol violation and the work is not complete.
+
+1. **Feature-tracker leak scan.** No `F-NNN` / `R-NNN` / `FX-NNN` / `G-NNN` identifiers may appear outside `roadmap.md` files (and the commit message / PR title, which are not in the working tree). The repo enforces this via `RoadmapIdentifierHygieneTests.Tracker_identifiers_appear_only_in_roadmap`. Run it directly:
 
    ```powershell
-   dotnet test --filter "TestCategory!=Chaos"
+   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~RoadmapIdentifierHygieneTests" --nologo --verbosity quiet
    ```
+
+   The output's `Failed: 0` line is the gate. If `Failed: 1`, the failure message lists every leaking file and line — fix every one (replace `F-NNN` with `F-XXX` placeholders or with a behavioural description by name) and re-run the gate from scratch.
+
+2. **Type-alias hygiene.** Dead-or-orphan alias constants are caught by `TypeAliasesTests.Every_alias_constant_is_referenced_by_exactly_one_type`. Run it directly:
+
+   ```powershell
+   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~TypeAliasesTests" --nologo --verbosity quiet
+   ```
+
+3. **Logger-category hygiene.** `AuditHygieneRegressionTests.Every_grain_uses_generic_ILogger_category` enforces typed `ILogger<T>` on every grain. Run it directly:
+
+   ```powershell
+   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~AuditHygieneRegressionTests" --nologo --verbosity quiet
+   ```
+
+4. **Docs-snippet harness.** Renames to public types break opt-in `csharp verify` snippets under `docs/`:
+
+   ```powershell
+   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~DocsSnippetCompilationTests" --nologo --verbosity quiet
+   ```
+
+If any 6b gate is red, **do not run 6c**. Fix the leak, re-run all of 6b from the top, and only proceed once every gate is green. The hygiene gates are non-negotiable: a green CI run is not a substitute for them, because CI catches them after the PR is open and a force-push is more expensive than fixing them locally.
+
+#### 6c — Test suite (full non-chaos)
+
+Only after 6a and 6b are green, run the full deterministic suite:
+
+```powershell
+dotnet test --filter "TestCategory!=Chaos"
+```
+
+Chaos tests (`[Category("Chaos")]`) are reserved for CI and pre-PR runs. Report the `Failed:` / `Passed:` / `Total:` summary line in the chat reply.
 
 ### Phase 7 — Review
 
@@ -100,9 +148,9 @@ Before telling the user the work is done, self-review. Each numbered item must b
 
 5. **Convention compliance**: Verify naming, attributes, XML docs, file placement, and namespace conventions all match the rules in `.github/copilot-instructions.md`.
 
-6. **No feature references**: Ensure no references to the feature (e.g. `F-XXX`, `R-XXX`) remain in the codebase outside of the roadmap definition, commit message, and PR title. Search across `src/`, `test/`, `docs/`, and XML doc comments. There are unit tests that enforce this, but catching it here is cheaper than fixing it after a CI run.
+6. **No feature references**: This was already enforced as a hard gate in Phase 6b. Re-confirm in the chat reply that **`Phase 6b.1` was run and passed**, with the test transcript pasted (or referenced by line in an earlier reply). Do not perform a fresh manual grep here — the test is the authority.
 
-7. **Apply fixes**: If any of the above turned up issues, fix them and re-run the relevant build + test verification before declaring the work complete.
+7. **Apply fixes**: If any of the above turned up issues, fix them and re-run **the relevant sub-phase of Phase 6** (build, hygiene, or tests) before declaring the work complete. A fix in `.github/copilot-instructions.md` or any docs file means re-running 6b.1 specifically.
 
 ### Phase 8 — Deliver
 
@@ -155,6 +203,7 @@ One-paragraph description of what the feature does and why.
 
 - **Never commit, push, or create a PR unless the user explicitly asks.**
 - **Never skip the review phase.** Bugs caught in review are cheaper than bugs caught in CI.
+- **The Phase 6b hygiene gates are unskippable and run *before* the unit-test suite.** Each gate must be invoked verbatim and its output transcript pasted into the chat reply. "I checked and it's clean" without the transcript is a protocol violation. The feature-tracker leak scan in particular has caught real CI failures during this agent's own past PRs — running it locally costs ~3 seconds; discovering it in CI costs a force-push and a wasted CI run.
 - **The Phase 7 memory-allocation pass is mandatory and must produce a written classification.** "I checked and it looks fine" is not a memory-allocation review. Enumerate the hot-path allocations, classify each (✅ / ⚠️ / 📝), and apply every ⚠️ fix before declaring work complete. The user has had to ask for this retrospectively in the past — never assume it can be folded into the correctness pass.
 - **Always use `--body-file` for PR descriptions** to avoid shell escaping issues with backticks and special characters.
 - **Build must be clean** — zero errors, zero warnings — before declaring work complete.
