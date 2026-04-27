@@ -29,4 +29,15 @@ public static class LatticeEventConstants
     /// touch this key directly.
     /// </summary>
     internal const string OriginClusterIdRequestContextKey = "ol.ocid";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry the vector-clock
+    /// frontier from an inbound replication / forwarding handler down
+    /// into <see cref="BPlusTree.Grains.BPlusLeafGrain"/>'s write methods
+    /// so the committed <c>LwwValue</c> records the frontier observed at
+    /// commit time. Public callers set this through
+    /// <see cref="LatticeVectorClockContext"/>; they should never touch
+    /// this key directly.
+    /// </summary>
+    internal const string VectorClockRequestContextKey = "ol.vc";
 }

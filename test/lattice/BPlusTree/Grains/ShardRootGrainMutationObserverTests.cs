@@ -148,4 +148,40 @@ public class ShardRootGrainMutationObserverTests
         Assert.That(h.Observer.Mutations, Has.Count.EqualTo(1));
         Assert.That(h.Observer.Mutations[0].OriginClusterId, Is.Null);
     }
+
+    [Test]
+    public async Task DeleteRangeAsync_stamps_VectorClock_from_ambient_context()
+    {
+        var h = CreateHarness(leafDeletedCount: 2);
+        try
+        {
+            var vc = new VersionVector();
+            vc.Tick("cluster-peer");
+
+            using (LatticeVectorClockContext.With(vc))
+            {
+                await h.Grain.DeleteRangeAsync("a", "z");
+            }
+
+            Assert.That(h.Observer.Mutations, Has.Count.EqualTo(1));
+            Assert.That(h.Observer.Mutations[0].Kind, Is.EqualTo(MutationKind.DeleteRange));
+            Assert.That(h.Observer.Mutations[0].VectorClock, Is.SameAs(vc));
+        }
+        finally
+        {
+            LatticeVectorClockContext.Current = null;
+        }
+    }
+
+    [Test]
+    public async Task DeleteRangeAsync_stamps_null_VectorClock_when_context_unset()
+    {
+        var h = CreateHarness(leafDeletedCount: 1);
+        LatticeVectorClockContext.Current = null;
+
+        await h.Grain.DeleteRangeAsync("a", "z");
+
+        Assert.That(h.Observer.Mutations, Has.Count.EqualTo(1));
+        Assert.That(h.Observer.Mutations[0].VectorClock, Is.Null);
+    }
 }

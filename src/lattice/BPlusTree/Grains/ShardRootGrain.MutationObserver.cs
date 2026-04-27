@@ -43,6 +43,10 @@ internal sealed partial class ShardRootGrain
             // is no per-key LwwValue to pull from — so replication consumers
             // can skip re-forwarding ranges that originated on another cluster.
             OriginClusterId = LatticeOriginContext.Current,
+            // Range deletes likewise read the ambient vector-clock context
+            // at publish time so replication-aware observers see the
+            // frontier captured at the time of the delete call.
+            VectorClock = LatticeVectorClockContext.Current,
         };
         return mutationObservers.PublishAsync(mutation);
     }

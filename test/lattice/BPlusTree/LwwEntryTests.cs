@@ -17,8 +17,10 @@ public class LwwEntryTests
     [Test]
     public void Ctor_from_LwwValue_copies_every_field()
     {
+        var vc = new VersionVector();
+        vc.Tick("peer-a");
         var lww = LwwValue<byte[]>.CreateWithExpiry([0xAA, 0xBB], Ts, expiresAtTicks: 999L)
-            with { OriginClusterId = "peer-a" };
+            with { OriginClusterId = "peer-a", VectorClock = vc };
 
         var entry = new LwwEntry("k", lww);
 
@@ -28,13 +30,16 @@ public class LwwEntryTests
         Assert.That(entry.IsTombstone, Is.False);
         Assert.That(entry.ExpiresAtTicks, Is.EqualTo(999L));
         Assert.That(entry.OriginClusterId, Is.EqualTo("peer-a"));
+        Assert.That(entry.VectorClock, Is.SameAs(vc));
     }
 
     [Test]
     public void ToLwwValue_round_trips_every_field()
     {
+        var vc = new VersionVector();
+        vc.Tick("east");
         var lww = LwwValue<byte[]>.CreateWithExpiry([1, 2, 3], Ts, expiresAtTicks: 42L)
-            with { OriginClusterId = "east" };
+            with { OriginClusterId = "east", VectorClock = vc };
 
         var roundTripped = new LwwEntry("k", lww).ToLwwValue();
 
@@ -43,6 +48,7 @@ public class LwwEntryTests
         Assert.That(roundTripped.IsTombstone, Is.False);
         Assert.That(roundTripped.ExpiresAtTicks, Is.EqualTo(42L));
         Assert.That(roundTripped.OriginClusterId, Is.EqualTo("east"));
+        Assert.That(roundTripped.VectorClock, Is.SameAs(vc));
     }
 
     [Test]
@@ -64,5 +70,28 @@ public class LwwEntryTests
         Assert.That(entry.OriginClusterId, Is.EqualTo("west"));
         Assert.That(entry.ToLwwValue().IsTombstone, Is.True);
         Assert.That(entry.ToLwwValue().OriginClusterId, Is.EqualTo("west"));
+    }
+
+    [Test]
+    public void VectorClock_defaults_to_null()
+    {
+        var lww = LwwValue<byte[]>.Create([1], Ts);
+        var entry = new LwwEntry("k", lww);
+        Assert.That(entry.VectorClock, Is.Null);
+        Assert.That(entry.ToLwwValue().VectorClock, Is.Null);
+    }
+
+    [Test]
+    public void Tombstone_round_trips_VectorClock()
+    {
+        var vc = new VersionVector();
+        vc.Tick("west");
+        var tomb = LwwValue<byte[]>.Tombstone(Ts) with { VectorClock = vc };
+        var entry = new LwwEntry("k", tomb);
+
+        Assert.That(entry.IsTombstone, Is.True);
+        Assert.That(entry.VectorClock, Is.SameAs(vc));
+        Assert.That(entry.ToLwwValue().IsTombstone, Is.True);
+        Assert.That(entry.ToLwwValue().VectorClock, Is.SameAs(vc));
     }
 }

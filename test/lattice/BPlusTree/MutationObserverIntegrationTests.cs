@@ -181,4 +181,35 @@ public sealed class MutationObserverIntegrationTests
             m.Kind == MutationKind.Set && m.Key == "k" && m.TreeId == "obs-e2e-origin-null");
         Assert.That(m.OriginClusterId, Is.Null);
     }
+
+    [Test]
+    public async Task SetAsync_stamps_VectorClock_end_to_end_through_pipeline()
+    {
+        var tree = await _fixture.CreateTreeAsync("obs-e2e-vc");
+
+        var vc = new Orleans.Lattice.Primitives.VersionVector();
+        vc.Tick("cluster-peer");
+
+        using (LatticeVectorClockContext.With(vc))
+        {
+            await tree.SetAsync("k", Encoding.UTF8.GetBytes("v"));
+        }
+
+        var m = await WaitForAsync(m =>
+            m.Kind == MutationKind.Set && m.Key == "k" && m.TreeId == "obs-e2e-vc");
+        Assert.That(m.VectorClock, Is.Not.Null);
+        Assert.That(m.VectorClock!.Entries.ContainsKey("cluster-peer"), Is.True);
+    }
+
+    [Test]
+    public async Task SetAsync_publishes_null_VectorClock_when_context_unset()
+    {
+        var tree = await _fixture.CreateTreeAsync("obs-e2e-vc-null");
+
+        await tree.SetAsync("k", [1]);
+
+        var m = await WaitForAsync(m =>
+            m.Kind == MutationKind.Set && m.Key == "k" && m.TreeId == "obs-e2e-vc-null");
+        Assert.That(m.VectorClock, Is.Null);
+    }
 }

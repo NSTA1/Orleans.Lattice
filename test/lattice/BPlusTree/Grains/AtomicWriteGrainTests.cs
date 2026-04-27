@@ -344,6 +344,39 @@ public class AtomicWriteGrainTests
         Assert.That(caught!.Message, Does.Contain("specific failure"));
     }
 
+    // --- OriginClusterId / VectorClock preservation across the saga ---
+
+    [Test]
+    public async Task ExecuteAsync_captures_OriginClusterId_and_VectorClock_from_pre_saga_entry()
+    {
+        // PrepareAsync is private — drive it through a successful ExecuteAsync
+        // and inspect the captured pre-value snapshot afterwards.
+        var (grain, state, _, lattice, shard) = CreateGrain();
+        var hlc = new HybridLogicalClock { WallClockTicks = DateTimeOffset.UtcNow.UtcTicks, Counter = 0 };
+        var vc = new VersionVector();
+        vc.Tick("origin-peer");
+        var lww = LwwValue<byte[]>.Create(new byte[] { 9 }, hlc)
+            with { OriginClusterId = "origin-peer", VectorClock = vc };
+        shard.GetRawEntryAsync("a").Returns(Task.FromResult<LwwEntry?>(new LwwEntry("a", lww)));
+        shard.GetRawEntryAsync("b").Returns(Task.FromResult<LwwEntry?>(null));
+        // All forward writes succeed so we observe the captured PreValues
+        // without compensation rewriting them.
+        lattice.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.CompletedTask);
+
+        var entries = MakeEntries(("a", [1]), ("b", [2]));
+        await grain.ExecuteAsync(TreeId, entries);
+
+        var pre = state.State.PreValues.Single(p => p.Key == "a");
+        Assert.That(pre.Existed, Is.True);
+        Assert.That(pre.OriginClusterId, Is.EqualTo("origin-peer"));
+        Assert.That(pre.VectorClock, Is.SameAs(vc));
+
+        var preB = state.State.PreValues.Single(p => p.Key == "b");
+        Assert.That(preB.Existed, Is.False);
+        Assert.That(preB.OriginClusterId, Is.Null);
+        Assert.That(preB.VectorClock, Is.Null);
+    }
+
     // --- IsCompleteAsync ---
 
     [Test]
