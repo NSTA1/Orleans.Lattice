@@ -80,6 +80,15 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "very entry the apply pipeline is trying to park.");
         }
 
+        if (options.WalRetention is { } retention && retention <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.WalRetention)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} when set ({scope}). "
+                + "A zero or negative retention would render every entry trim-eligible the moment it lands; "
+                + "leave the property unset to disable the wall-clock ceiling entirely.");
+        }
+
         if (options.ReplicatedTrees is { } trees)
         {
             foreach (var kvp in trees)

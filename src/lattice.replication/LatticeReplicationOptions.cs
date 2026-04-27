@@ -155,6 +155,28 @@ public class LatticeReplicationOptions
     public int DeadLetterQueueCapacity { get; set; } = DefaultDeadLetterQueueCapacity;
 
     /// <summary>
+    /// Optional wall-clock hard ceiling for WAL retention. When set,
+    /// the WAL garbage collector
+    /// (<see cref="ILatticeReplicationGc"/>) trims entries whose
+    /// <see cref="HybridLogicalClock.WallClockTicks"/> is older than
+    /// <c>now - WalRetention</c> regardless of consumer cursor
+    /// position - bounding worst-case disk usage even when a
+    /// registered consumer is hopelessly behind. The lagging consumer
+    /// then "falls off the log" on its next read, surfacing the gap
+    /// to the auto-bootstrap trigger (later phase).
+    /// <para>
+    /// <see langword="null"/> (the default) disables the ceiling: the
+    /// GC predicate is purely <c>min(consumer cursors)</c>, and a
+    /// lagging consumer pins the WAL until it catches up. Operators
+    /// who run with this default must monitor per-peer lag (later
+    /// phase) so they notice a stalled consumer before disk pressure
+    /// becomes critical. When set, the value must be strictly greater
+    /// than <see cref="TimeSpan.Zero"/>.
+    /// </para>
+    /// </summary>
+    public TimeSpan? WalRetention { get; set; }
+
+    /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
     /// represents "unset". This default is rejected by
     /// <c>LatticeReplicationOptionsValidator</c> so a host that calls

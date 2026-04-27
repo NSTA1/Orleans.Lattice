@@ -335,5 +335,49 @@ public class LatticeReplicationOptionsValidatorTests
 
         Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
     }
+
+    [Test]
+    public void Validate_fails_on_zero_wal_retention()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", WalRetention = TimeSpan.Zero };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.WalRetention)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_on_negative_wal_retention()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", WalRetention = TimeSpan.FromSeconds(-1) };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.WalRetention)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_when_wal_retention_is_null()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", WalRetention = null };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_for_positive_wal_retention()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", WalRetention = TimeSpan.FromHours(24) };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
 }
 

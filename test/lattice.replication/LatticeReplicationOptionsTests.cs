@@ -200,4 +200,22 @@ public class LatticeReplicationOptionsTests
         var opts = new LatticeReplicationOptions { DeadLetterQueueCapacity = 50 };
         Assert.That(opts.DeadLetterQueueCapacity, Is.EqualTo(50));
     }
+
+    // ------------------------------------------------------------------
+    // WAL retention (R-061)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void New_instance_has_null_wal_retention()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.WalRetention, Is.Null);
+    }
+
+    [Test]
+    public void WalRetention_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { WalRetention = TimeSpan.FromHours(12) };
+        Assert.That(opts.WalRetention, Is.EqualTo(TimeSpan.FromHours(12)));
+    }
 }

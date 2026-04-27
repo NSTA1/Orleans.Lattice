@@ -152,4 +152,28 @@ public class LatticeReplicationMetricsTests
             Has.Some.Matches<KeyValuePair<string, object?>>(t =>
                 t.Key == "reason" && (string?)t.Value == "replayed"));
     }
+
+    [Test]
+    public void Wal_entries_trimmed_counter_has_expected_name()
+    {
+        Assert.That(LatticeReplicationMetrics.WalEntriesTrimmed.Name,
+            Is.EqualTo("orleans.lattice.replication.wal.entries_trimmed"));
+    }
+
+    [Test]
+    public void Wal_entries_trimmed_counter_records_with_tree_tag()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.wal.entries_trimmed");
+
+        LatticeReplicationMetrics.WalEntriesTrimmed.Add(7,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-x"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(7L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "tree-x"));
+    }
 }
