@@ -35,7 +35,7 @@ The two counters are deliberately a pair:
 | `orleans.lattice.replication.wal.entries_appended` | `tree` | After a successful WAL append at the `ShardedReplogSink` seam — counts entries the producer durably committed to the local WAL. A throwing append does **not** contribute. |
 | `orleans.lattice.replication.wal.entries_shipped` | `tree`, `peer` | After a successful Push acknowledgement at the gRPC transport. Incremented by the count of entries inside the acknowledged envelope; a heartbeat / keep-alive (zero-entry) batch contributes zero. |
 
-Operators monitor `rate(wal_entries_appended) / rate(wal_entries_shipped)` per tree-peer pair. Steady-state replication keeps the ratio close to `1`. A persistently rising ratio indicates the local WAL is growing faster than the sender can ship, which is the signal R-061''s GC predicate and a future health check both consume.
+Operators monitor `rate(wal_entries_appended) / rate(wal_entries_shipped)` per tree-peer pair. Steady-state replication keeps the ratio close to `1`. A persistently rising ratio indicates the local WAL is growing faster than the sender can ship, which is the signal the min-acked-cursor WAL GC predicate and a future health check both consume.
 
 ## DLQ enqueue-reason classification
 
@@ -67,5 +67,4 @@ using var listener = new MeterListener
 };
 listener.SetMeasurementEventCallback<double>((instrument, value, tags, _) => { /* ... */ });
 listener.SetMeasurementEventCallback<long>((instrument, value, tags, _) => { /* ... */ });
-listener.Start();
-```
+listener.Start();```
