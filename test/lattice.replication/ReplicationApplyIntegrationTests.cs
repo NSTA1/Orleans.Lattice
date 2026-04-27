@@ -41,7 +41,7 @@ public class ReplicationApplyIntegrationTests
         var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
         var sourceHlc = Hlc(123_456_789, 7);
 
-        await apply.ApplySetAsync("k", new byte[] { 1, 2, 3 }, sourceHlc, TwoSiteClusterFixture.SiteAClusterId, expiresAtTicks: 0);
+        await apply.ApplySetAsync("k", new byte[] { 1, 2, 3 }, sourceHlc, TwoSiteClusterFixture.SiteAClusterId, sourceVectorClock: null, expiresAtTicks: 0);
 
         var versioned = await lattice.GetWithVersionAsync("k");
         Assert.Multiple(() =>
@@ -63,7 +63,7 @@ public class ReplicationApplyIntegrationTests
         var apply = _fixture.SiteB.Client.GetGrain<IReplicationApplyGrain>(tree);
 
         var beforeLocal = _fixture.SiteBSink.Entries.Count(e => e.TreeId == tree && e.OriginClusterId == TwoSiteClusterFixture.SiteBClusterId);
-        await apply.ApplySetAsync("k", new byte[] { 9 }, Hlc(1_000), TwoSiteClusterFixture.SiteAClusterId, expiresAtTicks: 0);
+        await apply.ApplySetAsync("k", new byte[] { 9 }, Hlc(1_000), TwoSiteClusterFixture.SiteAClusterId, sourceVectorClock: null, expiresAtTicks: 0);
         var afterLocal = _fixture.SiteBSink.Entries.Count(e => e.TreeId == tree && e.OriginClusterId == TwoSiteClusterFixture.SiteBClusterId);
 
         Assert.That(afterLocal, Is.EqualTo(beforeLocal),
@@ -77,9 +77,9 @@ public class ReplicationApplyIntegrationTests
         var apply = _fixture.SiteB.Client.GetGrain<IReplicationApplyGrain>(tree);
         var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
 
-        await apply.ApplySetAsync("k", new byte[] { 1 }, Hlc(100), TwoSiteClusterFixture.SiteAClusterId, expiresAtTicks: 0);
+        await apply.ApplySetAsync("k", new byte[] { 1 }, Hlc(100), TwoSiteClusterFixture.SiteAClusterId, sourceVectorClock: null, expiresAtTicks: 0);
         var deleteHlc = Hlc(200);
-        await apply.ApplyDeleteAsync("k", deleteHlc, TwoSiteClusterFixture.SiteAClusterId);
+        await apply.ApplyDeleteAsync("k", deleteHlc, TwoSiteClusterFixture.SiteAClusterId, sourceVectorClock: null);
 
         var versioned = await lattice.GetWithVersionAsync("k");
         Assert.That(versioned.Value, Is.Null);
@@ -96,7 +96,7 @@ public class ReplicationApplyIntegrationTests
         await lattice.SetAsync("m", new byte[] { 2 });
         await lattice.SetAsync("y", new byte[] { 3 });
 
-        await apply.ApplyDeleteRangeAsync("a", "z", TwoSiteClusterFixture.SiteAClusterId);
+        await apply.ApplyDeleteRangeAsync("a", "z", TwoSiteClusterFixture.SiteAClusterId, sourceVectorClock: null);
 
         Assert.Multiple(() =>
         {
@@ -120,7 +120,7 @@ public class ReplicationApplyIntegrationTests
 
         // Apply a remote write with an older HLC; LWW must reject.
         var olderHlc = local.Version with { WallClockTicks = local.Version.WallClockTicks - 1 };
-        await apply.ApplySetAsync("k", new byte[] { 1 }, olderHlc, TwoSiteClusterFixture.SiteAClusterId, expiresAtTicks: 0);
+        await apply.ApplySetAsync("k", new byte[] { 1 }, olderHlc, TwoSiteClusterFixture.SiteAClusterId, sourceVectorClock: null, expiresAtTicks: 0);
 
         var after = await lattice.GetWithVersionAsync("k");
         Assert.Multiple(() =>

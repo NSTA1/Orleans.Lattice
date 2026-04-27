@@ -85,7 +85,7 @@ public class ReplicationApplierTests
         var result = await applier.ApplyAsync(SetEntry("k", ts) with { ExpiresAtTicks = 99 });
 
         Assert.That(result.Applied, Is.True);
-        await apply.Received(1).ApplySetAsync("k", Arg.Any<byte[]>(), ts, RemoteCluster, 99);
+        await apply.Received(1).ApplySetAsync("k", Arg.Any<byte[]>(), ts, RemoteCluster, null, 99);
         await hwm.Received(1).TryAdvanceAsync(ts, Arg.Any<CancellationToken>());
     }
 
@@ -98,7 +98,7 @@ public class ReplicationApplierTests
         var result = await applier.ApplyAsync(DeleteEntry("k", ts));
 
         Assert.That(result.Applied, Is.True);
-        await apply.Received(1).ApplyDeleteAsync("k", ts, RemoteCluster);
+        await apply.Received(1).ApplyDeleteAsync("k", ts, RemoteCluster, null);
         await hwm.Received(1).TryAdvanceAsync(ts, Arg.Any<CancellationToken>());
     }
 
@@ -110,7 +110,7 @@ public class ReplicationApplierTests
         var result = await applier.ApplyAsync(RangeDeleteEntry("a", "z"));
 
         Assert.That(result.Applied, Is.True);
-        await apply.Received(1).ApplyDeleteRangeAsync("a", "z", RemoteCluster);
+        await apply.Received(1).ApplyDeleteRangeAsync("a", "z", RemoteCluster, null);
 
         // Range deletes carry HLC.Zero; the HWM is not advanced for them
         // because dedupe does not apply (range applies are naturally
@@ -131,7 +131,7 @@ public class ReplicationApplierTests
             Assert.That(result.Applied, Is.False);
             Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(10, 1)));
         });
-        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
         await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default, default);
     }
 
@@ -148,7 +148,7 @@ public class ReplicationApplierTests
             Assert.That(result.Applied, Is.False);
             Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(50)));
         });
-        await apply.DidNotReceiveWithAnyArgs().ApplyDeleteAsync(default!, default, default!);
+        await apply.DidNotReceiveWithAnyArgs().ApplyDeleteAsync(default!, default, default!, default);
     }
 
     [Test]
@@ -182,7 +182,7 @@ public class ReplicationApplierTests
         var result = await applier.ApplyAsync(SetEntry("k", Hlc(5), origin: LocalCluster));
 
         Assert.That(result.Applied, Is.False);
-        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
         await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default, default);
     }
 
@@ -412,7 +412,7 @@ public class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
         await lattice.Received(1).GetWithVersionAsync("k", Arg.Any<CancellationToken>());
         await lattice.Received(1).SetIfVersionAsync(
             "k",
@@ -434,7 +434,7 @@ public class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
         await lattice.Received(1).SetIfVersionAsync(
             "k",
             Arg.Is<byte[]>(b => JsonLatticeSerializer<PnCounter>.Default.Deserialize(b).Value == 5),
@@ -456,7 +456,7 @@ public class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
         await lattice.Received(1).SetIfVersionAsync(
             "k",
             Arg.Is<byte[]>(b => JsonLatticeSerializer<VersionVector>.Default.Deserialize(b).GetClock("site-b") == remoteHlc),
@@ -568,7 +568,7 @@ public class ReplicationApplierTests
         // that path stamps the source HLC verbatim, which is wrong for
         // state-merge semantics where the persisted HLC is a fresh local
         // tick representing the merge point.
-        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
     }
 
     [Test]

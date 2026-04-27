@@ -36,7 +36,7 @@ public class LatticeGrainReplicationApplyTests
         var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
         var sourceHlc = Hlc(42_000, 3);
 
-        await apply.ApplySetAsync("k", new byte[] { 7 }, sourceHlc, "site-x", expiresAtTicks: 0);
+        await apply.ApplySetAsync("k", new byte[] { 7 }, sourceHlc, "site-x", sourceVectorClock: null, expiresAtTicks: 0);
 
         var versioned = await lattice.GetWithVersionAsync("k");
         Assert.Multiple(() =>
@@ -54,7 +54,7 @@ public class LatticeGrainReplicationApplyTests
         var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
         var future = DateTime.UtcNow.AddHours(1).Ticks;
 
-        await apply.ApplySetAsync("k", new byte[] { 1 }, Hlc(10), "site-x", expiresAtTicks: future);
+        await apply.ApplySetAsync("k", new byte[] { 1 }, Hlc(10), "site-x", sourceVectorClock: null, expiresAtTicks: future);
 
         var value = await lattice.GetAsync("k");
         Assert.That(value, Is.EqualTo(new byte[] { 1 }));
@@ -71,7 +71,7 @@ public class LatticeGrainReplicationApplyTests
         var local = await lattice.GetWithVersionAsync("k");
         var deleteHlc = local.Version with { WallClockTicks = local.Version.WallClockTicks + 1_000 };
 
-        await apply.ApplyDeleteAsync("k", deleteHlc, "site-x");
+        await apply.ApplyDeleteAsync("k", deleteHlc, "site-x", sourceVectorClock: null);
 
         var after = await lattice.GetAsync("k");
         Assert.That(after, Is.Null);
@@ -88,7 +88,7 @@ public class LatticeGrainReplicationApplyTests
         var local = await lattice.GetWithVersionAsync("k");
         var olderHlc = local.Version with { WallClockTicks = local.Version.WallClockTicks - 1 };
 
-        await apply.ApplyDeleteAsync("k", olderHlc, "site-x");
+        await apply.ApplyDeleteAsync("k", olderHlc, "site-x", sourceVectorClock: null);
 
         var after = await lattice.GetAsync("k");
         Assert.That(after, Is.EqualTo(new byte[] { 1 }));
@@ -105,7 +105,7 @@ public class LatticeGrainReplicationApplyTests
         await lattice.SetAsync("b", new byte[] { 2 });
         await lattice.SetAsync("c", new byte[] { 3 });
 
-        await apply.ApplyDeleteRangeAsync("a", "c", "site-x");
+        await apply.ApplyDeleteRangeAsync("a", "c", "site-x", sourceVectorClock: null);
 
         Assert.Multiple(() =>
         {
@@ -123,7 +123,7 @@ public class LatticeGrainReplicationApplyTests
         var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
         await lattice.SetAsync("k", new byte[] { 1 });
 
-        await apply.ApplyDeleteRangeAsync("z", "a", "site-x");
+        await apply.ApplyDeleteRangeAsync("z", "a", "site-x", sourceVectorClock: null);
 
         Assert.That(await lattice.GetAsync("k"), Is.EqualTo(new byte[] { 1 }));
     }
@@ -133,7 +133,7 @@ public class LatticeGrainReplicationApplyTests
     {
         var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>("rapply-null-k");
         Assert.That(
-            async () => await apply.ApplySetAsync(null!, new byte[] { 1 }, Hlc(1), "site-x", 0),
+            async () => await apply.ApplySetAsync(null!, new byte[] { 1 }, Hlc(1), "site-x", sourceVectorClock: null, 0),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -142,7 +142,7 @@ public class LatticeGrainReplicationApplyTests
     {
         var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>("rapply-null-v");
         Assert.That(
-            async () => await apply.ApplySetAsync("k", null!, Hlc(1), "site-x", 0),
+            async () => await apply.ApplySetAsync("k", null!, Hlc(1), "site-x", sourceVectorClock: null, 0),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -151,7 +151,7 @@ public class LatticeGrainReplicationApplyTests
     {
         var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>("rapply-empty-o");
         Assert.That(
-            async () => await apply.ApplySetAsync("k", new byte[] { 1 }, Hlc(1), "", 0),
+            async () => await apply.ApplySetAsync("k", new byte[] { 1 }, Hlc(1), "", sourceVectorClock: null, 0),
             Throws.InstanceOf<ArgumentException>());
     }
 
@@ -160,7 +160,7 @@ public class LatticeGrainReplicationApplyTests
     {
         var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>("rapply-del-null-k");
         Assert.That(
-            async () => await apply.ApplyDeleteAsync(null!, Hlc(1), "site-x"),
+            async () => await apply.ApplyDeleteAsync(null!, Hlc(1), "site-x", sourceVectorClock: null),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -169,7 +169,7 @@ public class LatticeGrainReplicationApplyTests
     {
         var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>("rapply-del-empty-o");
         Assert.That(
-            async () => await apply.ApplyDeleteAsync("k", Hlc(1), ""),
+            async () => await apply.ApplyDeleteAsync("k", Hlc(1), "", sourceVectorClock: null),
             Throws.InstanceOf<ArgumentException>());
     }
 
@@ -180,14 +180,79 @@ public class LatticeGrainReplicationApplyTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                async () => await apply.ApplyDeleteRangeAsync(null!, "z", "site-x"),
+                async () => await apply.ApplyDeleteRangeAsync(null!, "z", "site-x", sourceVectorClock: null),
                 Throws.InstanceOf<ArgumentNullException>());
             Assert.That(
-                async () => await apply.ApplyDeleteRangeAsync("a", null!, "site-x"),
+                async () => await apply.ApplyDeleteRangeAsync("a", null!, "site-x", sourceVectorClock: null),
                 Throws.InstanceOf<ArgumentNullException>());
             Assert.That(
-                async () => await apply.ApplyDeleteRangeAsync("a", "z", ""),
+                async () => await apply.ApplyDeleteRangeAsync("a", "z", "", sourceVectorClock: null),
                 Throws.InstanceOf<ArgumentException>());
         });
+    }
+
+    // ------------------------------------------------------------------
+    // VC preservation through the receiver-side apply seam.
+    // Set/Delete apply paths route through MergeManyAsync (silent on the
+    // observer hook), so we read the persisted LwwEntry directly via
+    // IShardRootGrain.GetRawEntryAsync.
+    // ------------------------------------------------------------------
+
+    private async Task<LwwEntry?> ReadRawEntryAsync(string treeId, string key)
+    {
+        var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(treeId);
+        var routing = await lattice.GetRoutingAsync();
+        var slot = routing.Map.Resolve(key);
+        var shard = _fixture.Cluster.Client.GetGrain<IShardRootGrain>(
+            $"{routing.PhysicalTreeId}/{slot}");
+        return await shard.GetRawEntryAsync(key);
+    }
+
+    [Test]
+    public async Task ApplySetAsync_persists_source_vector_clock_on_raw_entry()
+    {
+        const string tree = "rapply-set-vc";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var vc = new VersionVector();
+        vc.Tick("site-x");
+        vc.Tick("site-y");
+
+        await apply.ApplySetAsync(
+            "k",
+            new byte[] { 7 },
+            Hlc(42_000, 3),
+            "site-x",
+            sourceVectorClock: vc,
+            expiresAtTicks: 0);
+
+        var entry = await ReadRawEntryAsync(tree, "k");
+        Assert.That(entry.HasValue, Is.True);
+        var e = entry!.Value;
+        Assert.Multiple(() =>
+        {
+            Assert.That(e.OriginClusterId, Is.EqualTo("site-x"));
+            Assert.That(e.VectorClock, Is.Not.Null);
+            Assert.That(e.VectorClock!.GetClock("site-x"), Is.EqualTo(vc.GetClock("site-x")));
+            Assert.That(e.VectorClock!.GetClock("site-y"), Is.EqualTo(vc.GetClock("site-y")));
+        });
+    }
+
+    [Test]
+    public async Task ApplySetAsync_with_null_vector_clock_persists_null_on_raw_entry()
+    {
+        const string tree = "rapply-set-vc-null";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+
+        await apply.ApplySetAsync(
+            "k",
+            new byte[] { 1 },
+            Hlc(10),
+            "site-x",
+            sourceVectorClock: null,
+            expiresAtTicks: 0);
+
+        var entry = await ReadRawEntryAsync(tree, "k");
+        Assert.That(entry.HasValue, Is.True);
+        Assert.That(entry!.Value.VectorClock, Is.Null);
     }
 }

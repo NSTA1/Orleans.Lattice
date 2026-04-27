@@ -1,5 +1,7 @@
 using System.Text;
 using NUnit.Framework;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -353,5 +355,63 @@ public sealed class MutationObserverIntegrationTests
             m.Kind == MutationKind.Set && m.Key == "k" && m.TreeId == "obs-e2e-category");
         Assert.That(m.Category, Is.EqualTo(MutationCategory.User),
             "Public ILattice write paths must default to User category — no internal site should be wrapping them in a maintenance scope.");
+    }
+
+    // ------------------------------------------------------------------
+    // Replication apply seam preserves VectorClock end-to-end
+    // ------------------------------------------------------------------
+    //
+    // Set/Delete apply paths route through IShardRootGrain.MergeManyAsync,
+    // which is deliberately silent on the IMutationObserver hook by design,
+    // so VectorClock preservation for Set/Delete is asserted in
+    // LatticeGrainReplicationApplyTests via the raw LwwEntry. DeleteRange
+    // walks the leaf chain and *does* fire a per-shard observer event, so
+    // we verify VectorClock preservation here against the captured payload.
+
+    [Test]
+    public async Task ApplyDeleteRangeAsync_with_source_vector_clock_stamps_per_shard_observer_payload()
+    {
+        const string treeId = "obs-e2e-rapply-range-vc";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+        await tree.SetAsync("a", [1]);
+        await tree.SetAsync("m", [2]);
+
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(treeId);
+        var vc = new VersionVector();
+        vc.Tick("site-x");
+        vc.Tick("site-y");
+
+        // Drain prior captures so we observe only the range publish.
+        MutationObserverClusterFixture.Drain();
+
+        await apply.ApplyDeleteRangeAsync("a", "z", "site-x", sourceVectorClock: vc);
+
+        var m = await WaitForAsync(m =>
+            m.Kind == MutationKind.DeleteRange && m.TreeId == treeId);
+        Assert.Multiple(() =>
+        {
+            Assert.That(m.OriginClusterId, Is.EqualTo("site-x"));
+            Assert.That(m.VectorClock, Is.Not.Null);
+            Assert.That(m.VectorClock!.GetClock("site-x"), Is.EqualTo(vc.GetClock("site-x")));
+            Assert.That(m.VectorClock!.GetClock("site-y"), Is.EqualTo(vc.GetClock("site-y")));
+        });
+    }
+
+    [Test]
+    public async Task ApplyDeleteRangeAsync_with_null_vector_clock_emits_null_on_observer_payload()
+    {
+        const string treeId = "obs-e2e-rapply-range-vc-null";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+        await tree.SetAsync("a", [1]);
+
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(treeId);
+
+        MutationObserverClusterFixture.Drain();
+
+        await apply.ApplyDeleteRangeAsync("a", "z", "site-x", sourceVectorClock: null);
+
+        var m = await WaitForAsync(m =>
+            m.Kind == MutationKind.DeleteRange && m.TreeId == treeId);
+        Assert.That(m.VectorClock, Is.Null);
     }
 }

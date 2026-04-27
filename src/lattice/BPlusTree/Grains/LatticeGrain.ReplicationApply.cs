@@ -17,6 +17,7 @@ internal sealed partial class LatticeGrain
         byte[] value,
         HybridLogicalClock sourceHlc,
         string originClusterId,
+        VersionVector? sourceVectorClock,
         long expiresAtTicks)
     {
         ThrowIfSystemTree();
@@ -26,7 +27,10 @@ internal sealed partial class LatticeGrain
 
         var lww = LwwValue<byte[]>.CreateWithExpiry(value, sourceHlc, expiresAtTicks)
             with
-            { OriginClusterId = originClusterId };
+            {
+                OriginClusterId = originClusterId,
+                VectorClock = sourceVectorClock,
+            };
 
         return ApplyMergeOneAsync(key, lww);
     }
@@ -35,7 +39,8 @@ internal sealed partial class LatticeGrain
     public Task ApplyDeleteAsync(
         string key,
         HybridLogicalClock sourceHlc,
-        string originClusterId)
+        string originClusterId,
+        VersionVector? sourceVectorClock)
     {
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
@@ -43,7 +48,10 @@ internal sealed partial class LatticeGrain
 
         var tombstone = LwwValue<byte[]>.Tombstone(sourceHlc)
             with
-            { OriginClusterId = originClusterId };
+            {
+                OriginClusterId = originClusterId,
+                VectorClock = sourceVectorClock,
+            };
 
         return ApplyMergeOneAsync(key, tombstone);
     }
@@ -52,7 +60,8 @@ internal sealed partial class LatticeGrain
     public async Task ApplyDeleteRangeAsync(
         string startInclusive,
         string endExclusive,
-        string originClusterId)
+        string originClusterId,
+        VersionVector? sourceVectorClock)
     {
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(startInclusive);
@@ -64,12 +73,15 @@ internal sealed partial class LatticeGrain
             return;
         }
 
-        // Wrap the range walk in a LatticeOriginContext scope so the
-        // shard-root range-delete observer publishes the remote origin
-        // and the outbound ship loop filters the resulting WAL entries
-        // back out — preventing the range from looping back to the
-        // authoring cluster.
-        using var scope = LatticeOriginContext.With(originClusterId);
+        // Wrap the range walk in LatticeOriginContext + LatticeVectorClockContext
+        // scopes so the per-leaf tombstones produced by the local walk are
+        // stamped with the remote origin and the remote frontier. The
+        // shard-root range-delete observer then publishes a single
+        // per-shard mutation that carries both pieces of metadata, and the
+        // outbound ship loop filters the resulting WAL entries back out —
+        // preventing the range from looping back to the authoring cluster.
+        using var originScope = LatticeOriginContext.With(originClusterId);
+        using var vcScope = LatticeVectorClockContext.With(sourceVectorClock);
 
         try
         {

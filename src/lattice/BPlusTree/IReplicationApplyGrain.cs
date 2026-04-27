@@ -41,7 +41,9 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// by <paramref name="originClusterId"/>. The persisted entry carries
     /// <paramref name="sourceHlc"/> as its <see cref="HybridLogicalClock"/>
     /// timestamp, <paramref name="originClusterId"/> as its
-    /// <see cref="LwwValue{T}.OriginClusterId"/>, and
+    /// <see cref="LwwValue{T}.OriginClusterId"/>,
+    /// <paramref name="sourceVectorClock"/> as its
+    /// <see cref="LwwValue{T}.VectorClock"/>, and
     /// <paramref name="expiresAtTicks"/> as its absolute UTC expiry
     /// (<c>0</c> for non-expiring entries).
     /// </summary>
@@ -49,27 +51,43 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// <param name="value">The committed value bytes.</param>
     /// <param name="sourceHlc">The HLC stamped by the remote cluster.</param>
     /// <param name="originClusterId">The id of the remote cluster that authored the write.</param>
+    /// <param name="sourceVectorClock">
+    /// The vector-clock frontier captured by the remote cluster at commit
+    /// time, or <c>null</c> when the producing cluster does not stamp a
+    /// frontier. Stamped verbatim onto the persisted
+    /// <see cref="LwwValue{T}.VectorClock"/> so receiver-side
+    /// causal-consistency checks see exactly the producer's view.
+    /// </param>
     /// <param name="expiresAtTicks">Absolute UTC tick expiry; <c>0</c> means no expiry.</param>
     Task ApplySetAsync(
         string key,
         byte[] value,
         HybridLogicalClock sourceHlc,
         string originClusterId,
+        VersionVector? sourceVectorClock,
         long expiresAtTicks);
 
     /// <summary>
     /// Installs a Delete tombstone authored on the remote cluster
     /// identified by <paramref name="originClusterId"/>. The tombstone is
     /// stamped with <paramref name="sourceHlc"/> so LWW resolution against
-    /// concurrent local writes is deterministic across clusters.
+    /// concurrent local writes is deterministic across clusters, and with
+    /// <paramref name="sourceVectorClock"/> so receiver-side
+    /// causal-consistency checks see the producer's frontier verbatim.
     /// </summary>
     /// <param name="key">The key the remote delete targeted.</param>
     /// <param name="sourceHlc">The HLC stamped by the remote cluster.</param>
     /// <param name="originClusterId">The id of the remote cluster that authored the delete.</param>
+    /// <param name="sourceVectorClock">
+    /// The vector-clock frontier captured by the remote cluster at commit
+    /// time, or <c>null</c> when the producing cluster does not stamp a
+    /// frontier.
+    /// </param>
     Task ApplyDeleteAsync(
         string key,
         HybridLogicalClock sourceHlc,
-        string originClusterId);
+        string originClusterId,
+        VersionVector? sourceVectorClock);
 
     /// <summary>
     /// Installs a range delete authored on the remote cluster identified
@@ -77,16 +95,26 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// chain locally and stamps each tombstone with a freshly-ticked local
     /// HLC — range deletes do not carry a single source HLC because the
     /// remote walk produced many per-leaf timestamps. The
-    /// <see cref="LatticeOriginContext"/> scope ensures the receiver-side
-    /// <see cref="MutationKind.DeleteRange"/> observer publishes the
-    /// remote origin so the outbound ship loop does not loop the range
-    /// back to the authoring cluster.
+    /// <see cref="LatticeOriginContext"/> and
+    /// <see cref="LatticeVectorClockContext"/> scopes ensure every
+    /// per-leaf tombstone produced by the local walk is stamped with the
+    /// remote origin and the remote frontier, so the receiver-side
+    /// <see cref="MutationKind.DeleteRange"/> observer publishes a
+    /// notification stamped with both pieces of metadata and the outbound
+    /// ship loop does not loop the range back to the authoring cluster.
     /// </summary>
     /// <param name="startInclusive">Inclusive start key of the range.</param>
     /// <param name="endExclusive">Exclusive end key of the range.</param>
     /// <param name="originClusterId">The id of the remote cluster that authored the range delete.</param>
+    /// <param name="sourceVectorClock">
+    /// The vector-clock frontier captured by the remote cluster at commit
+    /// time, or <c>null</c> when the producing cluster does not stamp a
+    /// frontier. Stamped onto every per-leaf tombstone via the ambient
+    /// <see cref="LatticeVectorClockContext"/>.
+    /// </param>
     Task ApplyDeleteRangeAsync(
         string startInclusive,
         string endExclusive,
-        string originClusterId);
+        string originClusterId,
+        VersionVector? sourceVectorClock);
 }

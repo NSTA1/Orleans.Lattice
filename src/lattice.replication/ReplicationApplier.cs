@@ -103,6 +103,7 @@ internal sealed class ReplicationApplier(
                     entry.Value!,
                     entry.Timestamp,
                     entry.OriginClusterId!,
+                    sourceVectorClock: null,
                     entry.ExpiresAtTicks),
                 ReplicationMode.OrSet => ApplyStateMergeAsync<OrSet>(
                     entry,
@@ -126,7 +127,8 @@ internal sealed class ReplicationApplier(
             ReplogOp.Delete => apply.ApplyDeleteAsync(
                 entry.Key,
                 entry.Timestamp,
-                entry.OriginClusterId!),
+                entry.OriginClusterId!,
+                sourceVectorClock: null),
             _ => throw new InvalidOperationException(
                 $"Unsupported point-apply op {entry.Op} for entry on tree '{entry.TreeId}'."),
         };
@@ -201,7 +203,7 @@ internal sealed class ReplicationApplier(
         }
 
         var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
-        return apply.ApplyDeleteRangeAsync(entry.Key, entry.EndExclusiveKey, entry.OriginClusterId!);
+        return apply.ApplyDeleteRangeAsync(entry.Key, entry.EndExclusiveKey, entry.OriginClusterId!, sourceVectorClock: null);
     }
 
     private IReplicationHighWaterMarkGrain GetHwmGrain(string treeId, string originClusterId) =>
