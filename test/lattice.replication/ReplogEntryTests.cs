@@ -22,6 +22,8 @@ public class ReplogEntryTests
             Assert.That(entry.ExpiresAtTicks, Is.EqualTo(0L));
             Assert.That(entry.OriginClusterId, Is.Null);
             Assert.That(entry.Mode, Is.EqualTo(ReplicationMode.LwwRegister));
+            Assert.That(entry.VectorClock, Is.Null);
+            Assert.That(entry.DependencySummary, Is.Null);
         });
     }
 
@@ -62,6 +64,57 @@ public class ReplogEntryTests
     {
         var entry = new ReplogEntry { TreeId = "t", Key = "k", Mode = ReplicationMode.LwwRegister };
         Assert.That(entry.Mode, Is.EqualTo(ReplicationMode.LwwRegister));
+    }
+
+    [Test]
+    public void VectorClock_and_dependency_summary_are_settable_via_object_initialiser()
+    {
+        var vc = new VersionVector();
+        vc.Tick("site-a");
+        var entry = new ReplogEntry
+        {
+            TreeId = "t",
+            Key = "k",
+            VectorClock = vc,
+            DependencySummary = vc,
+        };
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.VectorClock, Is.SameAs(vc));
+            Assert.That(entry.DependencySummary, Is.SameAs(vc));
+        });
+    }
+
+    // -- Gap (vii): IsTombstone + non-null VectorClock on a Set op ----
+
+    [Test]
+    public void Tombstone_flag_and_vector_clock_coexist_on_set_op_via_initialiser()
+    {
+        // Degenerate but contractually allowed: a Set entry that is
+        // also flagged as a tombstone (e.g. hand-authored test
+        // fixtures that pre-stage a tombstone for replay) carries the
+        // causal-plus frontier verbatim. The record struct does not
+        // collapse, drop, or transform either field.
+        var vc = new VersionVector();
+        vc.Tick("site-a");
+        var entry = new ReplogEntry
+        {
+            TreeId = "t",
+            Op = ReplogOp.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            IsTombstone = true,
+            VectorClock = vc,
+            DependencySummary = vc,
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.Op, Is.EqualTo(ReplogOp.Set));
+            Assert.That(entry.IsTombstone, Is.True);
+            Assert.That(entry.VectorClock, Is.SameAs(vc));
+            Assert.That(entry.DependencySummary, Is.SameAs(vc));
+        });
     }
 
     [Test]

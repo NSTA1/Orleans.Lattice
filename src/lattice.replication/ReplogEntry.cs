@@ -92,5 +92,37 @@ public readonly record struct ReplogEntry
     /// pre-date this field.
     /// </summary>
     [Id(9)] public ReplicationMode Mode { get; init; }
+
+    /// <summary>
+    /// Sparse causal-plus vector-clock frontier
+    /// (<c>{originClusterId &#8594; HybridLogicalClock}</c>) captured at
+    /// commit time. Mirrors the ambient
+    /// <see cref="LatticeVectorClockContext"/> on the originating grain
+    /// write (preserved verbatim from
+    /// <see cref="LatticeMutation.VectorClock"/>) so receivers can run a
+    /// causal dependency check before applying the entry. The slot is
+    /// strictly additive on the wire: legacy peers and entries authored
+    /// before this slot existed decode as <see langword="null"/>, which
+    /// receivers treat as the empty frontier so the apply path is
+    /// indistinguishable from today's per-origin-only high-water-mark
+    /// check. Stored as the absolute frontier on the in-memory record;
+    /// transports that need a more compact form encode through
+    /// <see cref="VectorClockCodec"/>
+    /// </summary>
+    [Id(10)] public Primitives.VersionVector? VectorClock { get; init; }
+
+    /// <summary>
+    /// Compact representation of the causal predecessors of this entry.
+    /// Initially aliased one-to-one with <see cref="VectorClock"/>: the
+    /// canonical commit-time observer stamps an identical reference into
+    /// both slots so a receiver that only consults
+    /// <see cref="DependencySummary"/> reads the same frontier the
+    /// dependency check sees. Reserved as a distinct slot so a future
+    /// summary shape (for example a Bloom filter over predecessor HLCs)
+    /// can ship without re-numbering the wire format. Decodes as
+    /// <see langword="null"/> for legacy peers and pre-causal-plus
+    /// entries.
+    /// </summary>
+    [Id(11)] public Primitives.VersionVector? DependencySummary { get; init; }
 }
 

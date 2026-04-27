@@ -1,6 +1,17 @@
 # WAL Design — Causal+ Ready (with Performance Notes)
 
-> **Status:** forward-looking design specification. Companion to [`wal-design.md`](wal-design.md) (the durable-log Phase 7 spec) and [`wal.md`](wal.md) (the current implementation). Describes the additive metadata, apply-time rules, and GC/snapshot invariants required to evolve `Orleans.Lattice.Replication` from per-origin LWW + HWM convergence to causal+ consistency, without changing the WAL's commit point or ordering semantics.
+> **Status:** partially shipped — the entry-schema seam is live as of the
+> first causal-plus delivery; receiver-side dep-check, GC predicate, and
+> snapshot cut-point remain forward-looking. The shipped pieces are the
+> two additive `[Id]` slots on `ReplogEntry` (`VectorClock`,
+> `DependencySummary`), the producer-side stamping at the commit-time
+> mutation observer, the internal `VectorClockCodec`
+> (`EncodeAbsolute` / `EncodeDelta` / `DecodeDelta`), and a diagnostic
+> minor-version bump on `ReplicationBatchEnvelope` (alias and
+> `WireVersion` unchanged so legacy peers continue to decode the new
+> entries with both slots flowing through as `null`). Companion to
+> [`wal-design.md`](wal-design.md) (the durable-log Phase 7 spec) and
+> [`wal.md`](wal.md) (the current implementation).
 
 This document defines the causal+-ready Write-Ahead Log (WAL) for `Orleans.Lattice.Replication`. It extends the existing WAL design without breaking any of its invariants:
 

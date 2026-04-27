@@ -70,4 +70,17 @@ public readonly record struct ReplicationBatchEnvelope
     /// mis-decoding.
     /// </summary>
     public const int CurrentVersion = 1;
+
+    /// <summary>
+    /// Diagnostic minor version stamped on the canonical wire format.
+    /// Bumped when a strictly additive change ships - e.g. a new
+    /// <c>[Id]</c> slot on <see cref="ReplogEntry"/> that legacy peers
+    /// safely decode as null - so logs and traces can correlate the
+    /// producer's exact envelope shape without inflating
+    /// <see cref="CurrentVersion"/> (which is reserved for breaking
+    /// changes that older receivers must reject). Has no effect on the
+    /// wire-format alias and is not consulted by the encoder /
+    /// decoder.
+    /// </summary>
+    public const int CurrentMinorVersion = 1;
 }

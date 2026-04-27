@@ -647,5 +647,228 @@ public class ReplicationMutationObserverTests
         Key = key,
         Value = new byte[] { 1 },
     };
+
+    // ------------------------------------------------------------------
+    // Causal-plus vector-clock stamping (commit-time frontier capture)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task Vector_clock_from_mutation_is_stamped_on_emitted_entry()
+    {
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+        var vc = new VersionVector();
+        var ticked = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        vc.Entries["site-a"] = ticked;
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "t",
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            VectorClock = vc,
+        }, CancellationToken.None);
+
+        var entry = sink.Entries.Single();
+        Assert.Multiple(() =>
+        {
+            // The captured frontier is a defensive clone of the
+            // mutation's VectorClock - never the same reference.
+            Assert.That(entry.VectorClock, Is.Not.SameAs(vc));
+            Assert.That(entry.VectorClock, Is.Not.Null);
+            Assert.That(entry.VectorClock!.GetClock("site-a"), Is.EqualTo(ticked));
+            Assert.That(entry.VectorClock.Entries, Has.Count.EqualTo(1));
+            // Inter-slot aliasing is preserved per spec: both slots
+            // share the single clone instance.
+            Assert.That(entry.DependencySummary, Is.SameAs(entry.VectorClock));
+        });
+    }
+
+    [Test]
+    public async Task Null_vector_clock_on_mutation_flows_through_as_null()
+    {
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "t",
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            VectorClock = null,
+        }, CancellationToken.None);
+
+        var entry = sink.Entries.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.VectorClock, Is.Null);
+            Assert.That(entry.DependencySummary, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task DeleteRange_carries_ambient_vector_clock_when_present()
+    {
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+        var vc = new VersionVector();
+        var ticked = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        vc.Entries["site-a"] = ticked;
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "t",
+            Kind = MutationKind.DeleteRange,
+            Key = "a",
+            EndExclusiveKey = "z",
+            IsTombstone = true,
+            VectorClock = vc,
+        }, CancellationToken.None);
+
+        var entry = sink.Entries.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.VectorClock, Is.Not.SameAs(vc));
+            Assert.That(entry.VectorClock, Is.Not.Null);
+            Assert.That(entry.VectorClock!.GetClock("site-a"), Is.EqualTo(ticked));
+        });
+    }
+
+    // -- Gap (i): defensive-clone contract -----------------------------
+
+    [Test]
+    public async Task Vector_clock_is_defensively_cloned_so_post_emit_mutation_does_not_leak()
+    {
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+        var vc = new VersionVector();
+        var atEmit = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        vc.Entries["site-a"] = atEmit;
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "t",
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            VectorClock = vc,
+        }, CancellationToken.None);
+
+        // Producer-side advances applied AFTER the observer returned
+        // must not leak into the captured entry. This pins the
+        // defensive-clone contract: a downstream consumer reading the
+        // entry's frontier sees the value at emit time, not the
+        // current value of the originating site's local clock.
+        vc.Tick("site-b");
+        vc.Entries["site-a"] = HybridLogicalClock.Tick(atEmit);
+
+        var entry = sink.Entries.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.VectorClock, Is.Not.SameAs(vc));
+            Assert.That(entry.VectorClock!.Entries.ContainsKey("site-b"), Is.False,
+                "post-emit advance on a new origin must not leak into the captured entry");
+            Assert.That(entry.VectorClock.GetClock("site-a"), Is.EqualTo(atEmit),
+                "post-emit advance on an existing origin must not leak into the captured entry");
+            Assert.That(entry.DependencySummary, Is.SameAs(entry.VectorClock),
+                "both slots remain aliased to the single clone (per spec)");
+        });
+    }
+
+    // -- Gap (vi): filter-rejected mutation does not emit a VC entry ---
+
+    [Test]
+    public async Task Filter_rejected_mutation_does_not_emit_even_when_vector_clock_is_set()
+    {
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            KeyPrefixes = new[] { "ok/" },
+        }), AllowAll());
+        var vc = new VersionVector();
+        vc.Tick("site-a");
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "t",
+            Kind = MutationKind.Set,
+            Key = "skip/1",
+            Value = new byte[] { 1 },
+            VectorClock = vc,
+        }, CancellationToken.None);
+
+        // The per-key filter runs before the entry is constructed, so
+        // a rejected mutation never reaches the sink even when it
+        // carries a non-null causal-plus frontier.
+        Assert.That(sink.Entries, Is.Empty);
+    }
+
+    // -- Gap (viii): options-change cache invalidation does not break VC stamping --
+
+    [Test]
+    public async Task Options_change_invalidation_does_not_break_vector_clock_stamping()
+    {
+        // The observer's per-tree filter cache is invalidated on
+        // IOptionsMonitor.OnChange. VC stamping reads from
+        // mutation.VectorClock directly (not from cached options) so
+        // an options change must have no effect on the stamping path.
+        // Capture the registered callback, fire it between emits,
+        // and assert that the VC slot is correctly stamped on both
+        // the pre-change and post-change emits.
+        var initialOptions = new LatticeReplicationOptions { ClusterId = "site-a" };
+        var changedOptions = new LatticeReplicationOptions { ClusterId = "site-a" };
+        Action<LatticeReplicationOptions, string?>? captured = null;
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.CurrentValue.Returns(initialOptions);
+        monitor.Get(Arg.Any<string>()).Returns(initialOptions);
+        monitor.OnChange(Arg.Do<Action<LatticeReplicationOptions, string?>>(h => captured = h))
+            .Returns((IDisposable?)null);
+
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, monitor, AllowAll());
+        var vc1 = new VersionVector();
+        var t1 = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        vc1.Entries["site-a"] = t1;
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "t",
+            Kind = MutationKind.Set,
+            Key = "k1",
+            Value = new byte[] { 1 },
+            VectorClock = vc1,
+        }, CancellationToken.None);
+
+        // Simulate a runtime options change: the observer clears its
+        // compiled-filter cache, but VC stamping must still work on
+        // the next emit because it does not consult the cache.
+        Assert.That(captured, Is.Not.Null, "observer must subscribe to OnChange");
+        captured!.Invoke(changedOptions, null);
+
+        var vc2 = new VersionVector();
+        var t2 = HybridLogicalClock.Tick(t1);
+        vc2.Entries["site-a"] = t2;
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "t",
+            Kind = MutationKind.Set,
+            Key = "k2",
+            Value = new byte[] { 2 },
+            VectorClock = vc2,
+        }, CancellationToken.None);
+
+        Assert.That(sink.Entries, Has.Count.EqualTo(2));
+        Assert.Multiple(() =>
+        {
+            Assert.That(sink.Entries[0].VectorClock!.GetClock("site-a"), Is.EqualTo(t1));
+            Assert.That(sink.Entries[1].VectorClock!.GetClock("site-a"), Is.EqualTo(t2));
+            Assert.That(sink.Entries[0].VectorClock, Is.Not.SameAs(sink.Entries[1].VectorClock),
+                "each emit gets its own defensive clone");
+        });
+    }
 }
 

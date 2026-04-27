@@ -131,6 +131,71 @@ public class OrleansBinaryReplicationBatchEncoderTests
         });
     }
 
+    // -- Gap (iii): end-to-end producer -> encoder -> decoder with VC --
+
+    [Test]
+    public void Encode_then_decode_preserves_vector_clock_and_dependency_summary()
+    {
+        // Closes the wire-format integration gap for R-080: the
+        // canonical encoder must carry both causal-plus slots through
+        // the IBufferWriter hot path verbatim. ReplicationBatchEnvelope
+        // tests cover Serializer<T> in isolation; this test pins the
+        // production seam (OrleansBinaryReplicationBatchEncoder) so a
+        // future rewrite of the encoder cannot silently drop the slot.
+        var vc = new VersionVector();
+        vc.Entries["site-a"] = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        vc.Entries["site-b"] = HybridLogicalClock.Tick(HybridLogicalClock.Tick(HybridLogicalClock.Zero));
+
+        var entry = new ReplogEntry
+        {
+            TreeId = "tree",
+            Op = ReplogOp.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            OriginClusterId = "site-a",
+            Mode = ReplicationMode.LwwRegister,
+            VectorClock = vc,
+            DependencySummary = vc,
+        };
+        var original = MakeEnvelope(entries: new[] { entry });
+
+        var bytes = Encode(original);
+        var copy = _encoder.Decode(bytes);
+
+        var decoded = copy.Entries.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.VectorClock, Is.Not.Null);
+            Assert.That(decoded.VectorClock!.Entries, Has.Count.EqualTo(2));
+            Assert.That(decoded.VectorClock.GetClock("site-a").WallClockTicks, Is.GreaterThan(0L));
+            Assert.That(decoded.VectorClock.GetClock("site-b").WallClockTicks, Is.GreaterThan(0L));
+            Assert.That(decoded.DependencySummary, Is.Not.Null);
+            Assert.That(decoded.DependencySummary!.Entries, Has.Count.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void Encode_then_decode_preserves_null_vector_clock_for_legacy_entries()
+    {
+        // Symmetric to the VC-present test above: an entry authored
+        // without a frontier (legacy peer, non-replicated local write)
+        // round-trips through the canonical encoder with both slots
+        // null.
+        var entry = MakeEntry();
+        var original = MakeEnvelope(entries: new[] { entry });
+
+        var bytes = Encode(original);
+        var copy = _encoder.Decode(bytes);
+
+        var decoded = copy.Entries.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.VectorClock, Is.Null);
+            Assert.That(decoded.DependencySummary, Is.Null);
+        });
+    }
+
     [Test]
     public void Encode_stamps_current_wire_version_when_caller_supplies_zero()
     {
