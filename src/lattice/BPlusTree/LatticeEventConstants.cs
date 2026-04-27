@@ -55,4 +55,16 @@ public static class LatticeEventConstants
     /// <see cref="LatticeMutation.TransactionId"/> instead.
     /// </summary>
     internal const string TransactionIdRequestContextKey = "ol.txid";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to flag the current logical
+    /// call as a library-internal maintenance write (resize / rebalance /
+    /// compaction / internal rewrite). When the key is present and set to
+    /// <c>true</c> the publish helpers stamp
+    /// <see cref="LatticeMutation.Category"/> as
+    /// <see cref="MutationCategory.Maintenance"/>; otherwise emits default
+    /// to <see cref="MutationCategory.User"/>. Internal — set through
+    /// <see cref="LatticeMaintenanceContext"/>.
+    /// </summary>
+    internal const string MaintenanceRequestContextKey = "ol.maint";
 }

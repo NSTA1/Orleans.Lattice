@@ -51,6 +51,10 @@ internal sealed partial class ShardRootGrain
             // per-shard fan-out emit so consumers that dedup or
             // batch-correlate observe one transaction per user call.
             TransactionId = LatticeTransactionContext.Current,
+            // Category mirrors the ambient maintenance flag — a structural
+            // rewrite that fan-outs a range delete inside a maintenance
+            // scope produces Maintenance emits, otherwise User.
+            Category = LatticeMaintenanceContext.Current,
         };
         return mutationObservers.PublishAsync(mutation);
     }

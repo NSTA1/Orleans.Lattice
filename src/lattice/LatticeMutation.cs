@@ -107,4 +107,20 @@ public readonly record struct LatticeMutation
     /// observers persisted before this field existed.
     /// </summary>
     [Id(10)] public Guid TransactionId { get; init; }
+
+    /// <summary>
+    /// Classifies the mutation as a user-driven write
+    /// (<see cref="MutationCategory.User"/>, the default) or a
+    /// library-internal maintenance write
+    /// (<see cref="MutationCategory.Maintenance"/>). Replication-aware
+    /// observers skip the WAL append for
+    /// <see cref="MutationCategory.Maintenance"/> emits on replicated
+    /// trees so structural maintenance does not cross cluster boundaries.
+    /// Independent of <see cref="OriginClusterId"/> — a remote-origin
+    /// maintenance emit would still be
+    /// <see cref="MutationCategory.Maintenance"/>. Defaults to
+    /// <see cref="MutationCategory.User"/> for wire compatibility with
+    /// observers persisted before this field existed.
+    /// </summary>
+    [Id(11)] public MutationCategory Category { get; init; }
 }
