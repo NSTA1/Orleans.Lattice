@@ -331,3 +331,35 @@ With the performance notes above, the design avoids the four common failure mode
 2. **Global locks or cross-shard contention** — keep apply per-shard.
 3. **Unbounded buffering** — cap, backpressure, and route overflow through the existing dead-letter pipeline with classified reason tags.
 4. **Recomputing dependency closure** — maintain the local VC incrementally.
+
+---
+
+## 12. Completeness wave — full coverage of structural & atomic write paths
+
+Sections 1–11 cover the point-write, single-tree, single-shard-per-mutation path. The five replication items R-089–R-093 (and their core-side dependencies F-043–F-046) extend the same causal+ guarantee to every write path the core library exposes, so a host that enables any one of those features still gets full causal+ semantics rather than dropping back to per-origin LWW for that specific path. Cross-tree causality is intentionally out of scope.
+
+### 12.1 Coverage matrix
+
+| Write path                                | Hazard if not covered                                                                                  | Replication item | Core dep |
+|-------------------------------------------|--------------------------------------------------------------------------------------------------------|------------------|----------|
+| `SetManyAtomic` (multi-key atomic write)  | Per-key VC drift fabricates a dependency graph the writer never authored; remote peer parks key K waiting for key K-1. | R-089            | F-044    |
+| Resize / rebalance / compaction           | Structural rewrites stamp fresh VC under maintenance pressure; pollutes the dependency graph and inflates wire traffic. | R-090            | F-045    |
+| Shard split / merge / saga shadow-forward | Shadow-forward emit captures a fresh VC against the destination shard rather than preserving the originating commit's frontier. | R-091            | F-046    |
+| Multi-shard user write (range delete, multi-leaf saga) | Per-grain VC reads disagree on cross-shard origins because each grain only sees inbound applies routed to it. | R-092            | none     |
+| Snapshot / restore (intra-cluster)        | Live HWM table is wiped on restore; receiver replays restored entries against a zeroed VC and either re-parks them or re-merges. | R-093            | F-043    |
+
+### 12.2 Design invariants preserved
+
+Every item in the completeness wave is constrained by the same rules that bound sections 1–10:
+
+- **No commit-path change.** VC capture happens at the existing commit-time observer site (R-080). The atomic-transaction boundary (F-044) is a metadata signal on `LatticeMutation`, not a new commit phase.
+- **Append-only, monotonic, durable.** No item rewrites a WAL entry, no item changes offset semantics, no item changes the commit point.
+- **Per-shard apply.** R-091's receiver-side dedupe cache and R-092's producer-side VC cache are both per-shard; no cross-shard locks.
+- **Wire-additive only.** F-043 / F-045 / F-046 are new `[Id]` slots with decode-as-empty defaults. Legacy peers and legacy persisted state continue to decode and behave identically to today's per-origin-only HWM check.
+- **Idempotent under re-delivery.** R-091's `RecentApplyCache<(origin, hlc, key, op)>` LRU is a fast-path optimisation; correctness is still bounded by the per-origin HWM (R-023) plus the dep-check (R-082).
+
+### 12.3 What is intentionally not delivered
+
+- **Atomic visibility cross-cluster.** R-089 preserves the writer's causal frontier across an atomic batch but does not deliver all-or-none cross-replica visibility. A remote reader can observe key 1 and key 3 of a 5-key atomic set before key 2 has been delivered, as long as no causal edge from the reader's prior observations is violated. Atomic visibility is strictly stronger than causal+ and would require a transactional-batch delivery primitive — flagged as a separate follow-on if demand surfaces.
+- **Cross-tree causality.** A write to tree A followed by a write to tree B does not carry a cross-tree dependency edge. Each tree has its own independent vector clock; cross-tree causal ordering would require either a cluster-global VC (which does not scale) or a cross-tree dependency graph the user explicitly opts into (out of scope for this design).
+- **Maintenance-mutation replay.** R-090 deliberately drops `MutationKind.Maintenance` on the producer; the receiver never sees them. A remote peer that needs to mirror the producer's exact tombstone-compaction state must rebuild it from the user-write replog stream that drove the data into the tree, not from the maintenance events themselves.
