@@ -413,5 +413,93 @@ public class LatticeReplicationServiceCollectionExtensionsTests
             Assert.That(monitor.Get("other").ClusterId, Is.EqualTo("default"));
         });
     }
+
+    [Test]
+    public void AddLatticeReplication_registers_in_memory_cursor_registry_by_default()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<ILatticeReplicationCursorRegistry>();
+        Assert.That(registry, Is.InstanceOf<InMemoryReplicationCursorRegistry>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_cursor_registry_is_registered_as_singleton()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<ILatticeReplicationCursorRegistry>();
+        var second = provider.GetRequiredService<ILatticeReplicationCursorRegistry>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_cursor_registry()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<ILatticeReplicationCursorRegistry>();
+        services.AddSingleton<ILatticeReplicationCursorRegistry>(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<ILatticeReplicationCursorRegistry>(), Is.SameAs(custom));
+    }
+
+    [Test]
+    public void AddLatticeReplication_registers_default_gc_implementation()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var gc = provider.GetRequiredService<ILatticeReplicationGc>();
+        Assert.That(gc, Is.InstanceOf<LatticeReplicationGc>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_gc_is_registered_as_singleton()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<ILatticeReplicationGc>();
+        var second = provider.GetRequiredService<ILatticeReplicationGc>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_gc()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<ILatticeReplicationGc>();
+        services.AddSingleton<ILatticeReplicationGc>(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<ILatticeReplicationGc>(), Is.SameAs(custom));
+    }
 }
 
