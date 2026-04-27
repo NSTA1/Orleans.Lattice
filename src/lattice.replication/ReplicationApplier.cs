@@ -71,6 +71,7 @@ internal sealed class ReplicationApplier(
         }
 
         await ApplyPointAsync(entry);
+        RecordApplyLag(entry);
 
         // Advance the HWM only after the apply commits. TryAdvanceAsync is
         // monotonic; under steady single-threaded grain semantics this call
@@ -205,4 +206,35 @@ internal sealed class ReplicationApplier(
 
     private IReplicationHighWaterMarkGrain GetHwmGrain(string treeId, string originClusterId) =>
         grainFactory.GetGrain<IReplicationHighWaterMarkGrain>($"{treeId}/{originClusterId}");
+
+    /// <summary>
+    /// Records the receiver-side replication-lag sample for a successfully
+    /// applied point operation. Lag is computed as
+    /// <c>now - entry.Timestamp.WallClockTicks</c> in milliseconds and
+    /// clamped at zero — a future-dated source HLC (the producing cluster's
+    /// wall clock leads the receiver's) reports as <c>0</c> rather than a
+    /// negative sample, which would corrupt downstream histograms.
+    /// </summary>
+    private static void RecordApplyLag(ReplogEntry entry)
+    {
+        var sourceTicks = entry.Timestamp.WallClockTicks;
+        if (sourceTicks <= 0)
+        {
+            // Source HLC was never stamped (HybridLogicalClock.Zero or a
+            // pathological negative). Reporting "now - 0" would publish
+            // a garbage multi-decade lag value; skip the sample instead.
+            return;
+        }
+
+        var deltaTicks = DateTime.UtcNow.Ticks - sourceTicks;
+        if (deltaTicks < 0)
+        {
+            deltaTicks = 0;
+        }
+
+        var ms = deltaTicks / (double)TimeSpan.TicksPerMillisecond;
+        LatticeReplicationMetrics.ApplyLag.Record(
+            ms,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, entry.TreeId));
+    }
 }

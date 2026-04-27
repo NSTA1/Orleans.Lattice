@@ -170,4 +170,45 @@ public class ShardedReplogSinkTests
             async () => await sink.WriteAsync(MakeEntry("tree", "k"), CancellationToken.None),
             Throws.InvalidOperationException.With.Message.EqualTo("boom"));
     }
+
+    [Test]
+    public async Task WriteAsync_increments_wal_entries_appended_counter_with_tree_tag()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.WalEntriesAppendedName);
+        var (sink, _, _) = CreateSink(partitions: 1);
+
+        await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(1L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "orders"));
+    }
+
+    [Test]
+    public void WriteAsync_skips_wal_entries_appended_counter_when_grain_throws()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.WalEntriesAppendedName);
+        var monitor = Monitor(partitions: 1);
+        var factory = Substitute.For<IGrainFactory>();
+        var grain = Substitute.For<IReplogShardGrain>();
+        grain.AppendAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+            .Returns<long>(_ => throw new InvalidOperationException("boom"));
+        factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(grain);
+        var sink = new ShardedReplogSink(factory, monitor);
+
+        Assert.That(
+            async () => await sink.WriteAsync(MakeEntry("tree", "k"), CancellationToken.None),
+            Throws.InvalidOperationException);
+
+        // The counter must reflect committed entries only — a thrown
+        // append does not contribute, so growth-rate vs ship-rate
+        // operators are not misled by failed appends.
+        Assert.That(collector.Measurements, Is.Empty);
+    }
 }
