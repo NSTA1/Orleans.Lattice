@@ -56,10 +56,15 @@ jobs:
 
       # Auto-discover packages by convention: each subdirectory of `src/`
       # is a package; tests live at `test/{name}/`; docs at `docs/{name}/`.
-      # A package is in scope when any file under one of those three
-      # subtrees changed. When no package matched (e.g. the PR only edits
-      # Orleans.Lattice.slnx or a shared root file) we conservatively test
-      # every discovered package.
+      # A package is in scope when any **non-markdown** file under one of
+      # those three subtrees changed. Markdown-only edits (e.g. `roadmap.md`,
+      # docs notes) skip that package's test run — the top-level `nonSample`
+      # filter already gates the whole job on at least one non-doc edit
+      # somewhere in the tree, but per-package discovery without the
+      # extension filter would still pull a heavy package's chaos suite into
+      # CI for a markdown-only edit inside its subtree. When no package
+      # matched (e.g. the PR only edits `Orleans.Lattice.slnx` or a shared
+      # root file) we conservatively test every discovered package.
       #
       # Rationale for not using dorny/paths-filter here: its filter set is
       # static YAML, so adding a new src/{name}/ folder would still require
@@ -84,7 +89,14 @@ jobs:
 
           matched=()
           for name in "${packages[@]}"; do
-            if echo "$changed" | grep -qE "^(src|test|docs)/${name}/"; then
+            # Match files under src/<name>/, test/<name>/, or docs/<name>/
+            # whose extension is not .md. A package whose only change is a
+            # markdown file (roadmap, design note, etc.) is not pulled into
+            # the test matrix — its expensive suites (e.g. chaos) would add
+            # minutes of CI runtime for a docs edit.
+            if echo "$changed" \
+                 | grep -E "^(src|test|docs)/${name}/" \
+                 | grep -qvE '\.md$'; then
               matched+=("$name")
             fi
           done
