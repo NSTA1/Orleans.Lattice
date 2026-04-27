@@ -116,4 +116,17 @@ internal sealed class AtomicWriteState
     /// the check (matches prior behaviour).
     /// </summary>
     [Id(7)] public byte[]? KeyFingerprint { get; set; }
+
+    /// <summary>
+    /// Stable per-saga transaction id minted on the first
+    /// <see cref="AtomicWritePhase.Prepare"/> and persisted across crash
+    /// recovery so the saga's per-key writes (and its compensation
+    /// rewrites) all carry the same
+    /// <see cref="LatticeMutation.TransactionId"/>. <see cref="Guid.Empty"/>
+    /// when unset (legacy persisted state from before this field
+    /// existed); a fresh activation re-mints a value lazily during
+    /// <see cref="Grains.AtomicWriteGrain.RunSagaAsync"/> so resumed
+    /// sagas continue to share an id.
+    /// </summary>
+    [Id(8)] public Guid TransactionId { get; set; }
 }

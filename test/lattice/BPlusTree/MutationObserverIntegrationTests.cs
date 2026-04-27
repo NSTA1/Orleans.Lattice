@@ -212,4 +212,134 @@ public sealed class MutationObserverIntegrationTests
             m.Kind == MutationKind.Set && m.Key == "k" && m.TreeId == "obs-e2e-vc-null");
         Assert.That(m.VectorClock, Is.Null);
     }
+
+    [Test]
+    public async Task SetAsync_publishes_non_empty_TransactionId_per_call()
+    {
+        var tree = await _fixture.CreateTreeAsync("obs-e2e-tx-single");
+
+        await tree.SetAsync("k", [1]);
+
+        var m = await WaitForAsync(m =>
+            m.Kind == MutationKind.Set && m.Key == "k" && m.TreeId == "obs-e2e-tx-single");
+        Assert.That(m.TransactionId, Is.Not.EqualTo(Guid.Empty),
+            "Public ILattice.SetAsync must mint a fresh transaction id when the caller did not supply one.");
+    }
+
+    [Test]
+    public async Task Two_successive_SetAsync_calls_produce_distinct_TransactionIds()
+    {
+        var tree = await _fixture.CreateTreeAsync("obs-e2e-tx-distinct");
+
+        await tree.SetAsync("k1", [1]);
+        await tree.SetAsync("k2", [2]);
+
+        var m1 = await WaitForAsync(m =>
+            m.Kind == MutationKind.Set && m.Key == "k1" && m.TreeId == "obs-e2e-tx-distinct");
+        var m2 = await WaitForAsync(m =>
+            m.Kind == MutationKind.Set && m.Key == "k2" && m.TreeId == "obs-e2e-tx-distinct");
+
+        Assert.That(m1.TransactionId, Is.Not.EqualTo(Guid.Empty));
+        Assert.That(m2.TransactionId, Is.Not.EqualTo(Guid.Empty));
+        Assert.That(m1.TransactionId, Is.Not.EqualTo(m2.TransactionId),
+            "Single-key writes must each get a fresh transaction id; ids must not be shared across separate user calls.");
+    }
+
+    [Test]
+    public async Task DeleteRangeAsync_per_shard_emits_share_one_TransactionId()
+    {
+        var tree = await _fixture.CreateTreeAsync("obs-e2e-tx-range");
+        await tree.SetAsync("a1", [1]);
+        await tree.SetAsync("a2", [2]);
+        await tree.SetAsync("b1", [3]);
+
+        var deleted = await tree.DeleteRangeAsync("a", "b");
+        Assert.That(deleted, Is.EqualTo(2));
+
+        // Wait for at least one range emit and then drain a brief tail
+        // window so we capture every per-shard fan-out.
+        LatticeMutation[] ranges = [];
+        var deadline = DateTime.UtcNow.AddSeconds(3);
+        while (DateTime.UtcNow < deadline)
+        {
+            ranges = MutationObserverClusterFixture.Captured
+                .Where(m => m.Kind == MutationKind.DeleteRange && m.TreeId == "obs-e2e-tx-range")
+                .ToArray();
+            if (ranges.Length >= 1) break;
+            await Task.Delay(25);
+        }
+        await Task.Delay(250);
+        ranges = MutationObserverClusterFixture.Captured
+            .Where(m => m.Kind == MutationKind.DeleteRange && m.TreeId == "obs-e2e-tx-range")
+            .ToArray();
+
+        Assert.That(ranges, Is.Not.Empty);
+        var first = ranges[0].TransactionId;
+        Assert.That(first, Is.Not.EqualTo(Guid.Empty));
+        Assert.That(ranges.All(r => r.TransactionId == first), Is.True,
+            "Every per-shard DeleteRange emit produced by one user DeleteRangeAsync call must share the same transaction id.");
+    }
+
+    [Test]
+    public async Task SetManyAtomicAsync_emits_share_a_single_TransactionId()
+    {
+        var tree = await _fixture.CreateTreeAsync("obs-e2e-tx-saga");
+
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k1", [1]),
+            new("k2", [2]),
+            new("k3", [3]),
+        };
+        await tree.SetManyAtomicAsync(entries);
+
+        // Wait until all three Set events are captured.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        List<LatticeMutation> mine;
+        while (true)
+        {
+            mine = MutationObserverClusterFixture.Captured
+                .Where(m => m.Kind == MutationKind.Set && m.TreeId == "obs-e2e-tx-saga")
+                .ToList();
+            if (mine.Count >= 3 || DateTime.UtcNow >= deadline) break;
+            await Task.Delay(25);
+        }
+
+        Assert.That(mine, Has.Count.EqualTo(3));
+        var first = mine[0].TransactionId;
+        Assert.That(first, Is.Not.EqualTo(Guid.Empty));
+        Assert.That(mine.All(m => m.TransactionId == first), Is.True,
+            "Every per-key Set emit produced by one SetManyAtomicAsync saga must share the same transaction id.");
+    }
+
+    [Test]
+    public async Task SetManyAsync_emits_share_a_single_TransactionId()
+    {
+        var tree = await _fixture.CreateTreeAsync("obs-e2e-tx-many");
+
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k1", [1]),
+            new("k2", [2]),
+            new("k3", [3]),
+        };
+        await tree.SetManyAsync(entries);
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        List<LatticeMutation> mine;
+        while (true)
+        {
+            mine = MutationObserverClusterFixture.Captured
+                .Where(m => m.Kind == MutationKind.Set && m.TreeId == "obs-e2e-tx-many")
+                .ToList();
+            if (mine.Count >= 3 || DateTime.UtcNow >= deadline) break;
+            await Task.Delay(25);
+        }
+
+        Assert.That(mine, Has.Count.EqualTo(3));
+        var first = mine[0].TransactionId;
+        Assert.That(first, Is.Not.EqualTo(Guid.Empty));
+        Assert.That(mine.All(m => m.TransactionId == first), Is.True,
+            "Every per-key Set emit produced by a single SetManyAsync user call must share the same transaction id.");
+    }
 }

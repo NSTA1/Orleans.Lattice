@@ -90,4 +90,21 @@ public readonly record struct LatticeMutation
     /// not interpret it.
     /// </summary>
     [Id(9)] public Primitives.VersionVector? VectorClock { get; init; }
+
+    /// <summary>
+    /// Identifier of the logical transaction that produced this mutation.
+    /// Single-key writes (<c>SetAsync</c>, <c>DeleteAsync</c>, <c>SetIfVersionAsync</c>,
+    /// <c>GetOrSetAsync</c>) get a fresh <see cref="Guid"/> per call.
+    /// A non-atomic <c>SetManyAsync</c> batch shares one id across every
+    /// per-key emit. A user <c>DeleteRangeAsync</c> call shares one id
+    /// across every per-shard <see cref="MutationKind.DeleteRange"/> emit.
+    /// An atomic-write saga (<c>SetManyAtomicAsync</c>) shares a single,
+    /// persisted id across every per-key emit produced by both the
+    /// execute and compensate phases — replication consumers can therefore
+    /// capture vector-clock frontier (or any other batch-wide invariant)
+    /// once per transaction and apply it identically to every emit.
+    /// Defaults to <see cref="Guid.Empty"/> for wire compatibility with
+    /// observers persisted before this field existed.
+    /// </summary>
+    [Id(10)] public Guid TransactionId { get; init; }
 }

@@ -232,6 +232,10 @@ internal sealed class AtomicWriteGrain(
         state.State.RetriesOnCurrentStep = 0;
         state.State.FailureMessage = null;
         state.State.KeyFingerprint ??= ComputeKeyFingerprint(entries);
+        if (state.State.TransactionId == Guid.Empty)
+        {
+            state.State.TransactionId = Guid.NewGuid();
+        }
 
         var lattice = grainFactory.GetGrain<ILattice>(treeId);
         var routing = await lattice.GetRoutingAsync();
@@ -293,6 +297,7 @@ internal sealed class AtomicWriteGrain(
     private async Task RunSagaAsync()
     {
         StampOperationIdContext();
+        StampTransactionIdContext();
 
         if (state.State.Phase == AtomicWritePhase.Prepare)
         {
@@ -514,6 +519,25 @@ internal sealed class AtomicWriteGrain(
         if (idx < 0 || idx == OperationKey.Length - 1) return;
         var opId = OperationKey[(idx + 1)..];
         RequestContext.Set(LatticeEventConstants.OperationIdRequestContextKey, opId);
+    }
+
+    /// <summary>
+    /// Stamps the saga's persisted transaction id onto Orleans
+    /// <see cref="RequestContext"/> so every per-key <c>SetAsync</c> /
+    /// <c>DeleteAsync</c> call the saga makes — including compensation
+    /// rewrites — surfaces with the same
+    /// <see cref="LatticeMutation.TransactionId"/>. Lazily mints an id
+    /// when persisted state is empty (e.g. legacy persisted state or a
+    /// reactivation after a crash that pre-dated this field) so resumed
+    /// sagas always share a non-empty id across their remaining emits.
+    /// </summary>
+    private void StampTransactionIdContext()
+    {
+        if (state.State.TransactionId == Guid.Empty)
+        {
+            state.State.TransactionId = Guid.NewGuid();
+        }
+        LatticeTransactionContext.Set(state.State.TransactionId);
     }
 
     private async Task PublishCompletedEventAsync()
