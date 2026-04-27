@@ -48,6 +48,12 @@ public class RoadmapIdentifierHygieneTests
             // references tracker identifiers when discussing how design decisions
             // map onto specific upcoming roadmap items. Exempted by convention.
             if (string.Equals(Path.GetFileName(full), "wal-design.md", StringComparison.OrdinalIgnoreCase)) continue;
+            // wal-causal-plus.md is a forward-looking design note whose
+            // dependency tables explicitly map replication R-### items onto
+            // their core-side F-### prerequisites; rewriting those references
+            // to "name and effect" would erase the structural mapping the doc
+            // is built around. Exempted by convention.
+            if (string.Equals(Path.GetFileName(full), "wal-causal-plus.md", StringComparison.OrdinalIgnoreCase)) continue;
 
             var lines = File.ReadAllLines(full);
             for (int i = 0; i < lines.Length; i++)

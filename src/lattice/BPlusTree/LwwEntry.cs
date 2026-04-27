@@ -51,10 +51,21 @@ internal readonly record struct LwwEntry
     [Id(5)] public string? OriginClusterId { get; init; }
 
     /// <summary>
+    /// Sparse <c>{originClusterId → HybridLogicalClock}</c> frontier
+    /// captured at commit time, or <c>null</c> when the writer did not
+    /// supply one. Round-trips verbatim through
+    /// <see cref="LwwValue{T}.VectorClock"/> across every raw bulk-load /
+    /// snapshot / saga-pre-value path so the frontier survives transfer
+    /// between shards or trees. Wire-compatible: legacy persisted state
+    /// decodes to <c>null</c>.
+    /// </summary>
+    [Id(6)] public VersionVector? VectorClock { get; init; }
+
+    /// <summary>
     /// Constructs an <see cref="LwwEntry"/> from a <see cref="LwwValue{T}"/>,
 
     /// preserving all LWW metadata (value, timestamp, tombstone flag,
-    /// expiry, and origin cluster id).
+    /// expiry, origin cluster id, and vector clock).
     /// </summary>
     public LwwEntry(string key, LwwValue<byte[]> lww)
     {
@@ -64,6 +75,7 @@ internal readonly record struct LwwEntry
         IsTombstone = lww.IsTombstone;
         ExpiresAtTicks = lww.ExpiresAtTicks;
         OriginClusterId = lww.OriginClusterId;
+        VectorClock = lww.VectorClock;
     }
 
     /// <summary>
@@ -76,6 +88,7 @@ internal readonly record struct LwwEntry
         IsTombstone = IsTombstone,
         ExpiresAtTicks = ExpiresAtTicks,
         OriginClusterId = OriginClusterId,
+        VectorClock = VectorClock,
     };
 }
 

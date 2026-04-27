@@ -264,6 +264,7 @@ internal sealed class AtomicWriteGrain(
                 Existed = existed,
                 ExpiresAtTicks = existed ? raw!.Value.ExpiresAtTicks : 0,
                 OriginClusterId = existed ? raw!.Value.OriginClusterId : null,
+                VectorClock = existed ? raw!.Value.VectorClock : null,
             });
         }
 
@@ -406,6 +407,7 @@ internal sealed class AtomicWriteGrain(
             try
             {
                 using (LatticeOriginContext.With(pre.OriginClusterId))
+                using (LatticeVectorClockContext.With(pre.VectorClock))
                 {
                     if (pre.Existed && pre.Value is not null)
                     {

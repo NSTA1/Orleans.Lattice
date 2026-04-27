@@ -39,6 +39,21 @@ internal readonly record struct LwwValue<T>
     /// </summary>
     [Id(4)] public string? OriginClusterId { get; init; }
 
+    /// <summary>
+    /// Sparse <c>{originClusterId → HybridLogicalClock}</c> frontier
+    /// captured at commit time, or <c>null</c> when the writer did not
+    /// supply one (the equivalent of an empty frontier). Stamped from
+    /// the ambient <see cref="LatticeVectorClockContext"/> inside the
+    /// grain write path and preserved verbatim across every persistence,
+    /// merge, snapshot / restore, bulk-load, compaction, saga
+    /// prepare / compensate, and shard-split shadow-forward path so the
+    /// frontier travels with the value. The library itself does not
+    /// merge or interpret the frontier — replication-aware consumers
+    /// pin or compare it as needed. Wire-compatible: legacy persisted
+    /// state without this field decodes to <c>null</c>.
+    /// </summary>
+    [Id(5)] public VersionVector? VectorClock { get; init; }
+
     public static LwwValue<T> Create(T value, HybridLogicalClock timestamp) =>
         new() { Value = value, Timestamp = timestamp };
 

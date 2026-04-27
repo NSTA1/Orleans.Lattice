@@ -77,4 +77,17 @@ public readonly record struct LatticeMutation
     /// at publish time rather than pulling from a per-key <c>LwwValue</c>.
     /// </summary>
     [Id(8)] public string? OriginClusterId { get; init; }
+
+    /// <summary>
+    /// Sparse vector-clock frontier captured at commit time, or
+    /// <c>null</c> when the writer did not supply one. Mirrors
+    /// <see cref="LwwValue{T}.VectorClock"/> on per-key
+    /// <see cref="MutationKind.Set"/> / <see cref="MutationKind.Delete"/>
+    /// observations and the ambient
+    /// <see cref="LatticeVectorClockContext"/> on
+    /// <see cref="MutationKind.DeleteRange"/>. Replication-aware observers
+    /// pin or compare the frontier as needed; the library itself does
+    /// not interpret it.
+    /// </summary>
+    [Id(9)] public Primitives.VersionVector? VectorClock { get; init; }
 }

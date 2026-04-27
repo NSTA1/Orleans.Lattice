@@ -409,6 +409,7 @@ public sealed class MyReplicationObserver : IMutationObserver
     {
         // Inspect mutation.TreeId, mutation.Kind, mutation.Key, mutation.Value,
         // mutation.Timestamp, mutation.IsTombstone, mutation.ExpiresAtTicks,
+        // mutation.OriginClusterId, mutation.VectorClock,
         // and for DeleteRange also mutation.EndExclusiveKey.
         return Task.CompletedTask;
     }

@@ -43,6 +43,17 @@ internal sealed class AtomicPreValue
     /// to <c>null</c>.
     /// </summary>
     [Id(4)] public string? OriginClusterId { get; set; }
+
+    /// <summary>
+    /// Vector-clock frontier captured from the pre-saga entry's
+    /// <see cref="Primitives.LwwValue{T}.VectorClock"/>, or <c>null</c>
+    /// when the key was absent or the entry carried no frontier.
+    /// Restored through <see cref="LatticeVectorClockContext.With"/>
+    /// during compensation so the rolled-back value re-lands with its
+    /// original frontier. Wire-compatible: missing field on legacy
+    /// persisted state decodes to <c>null</c>.
+    /// </summary>
+    [Id(5)] public Primitives.VersionVector? VectorClock { get; set; }
 }
 
 /// <summary>

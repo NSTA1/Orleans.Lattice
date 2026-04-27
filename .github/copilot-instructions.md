@@ -25,7 +25,7 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
 
 | Element | Convention | Example |
 |---|---|---|
-| Public API namespace | `Orleans.Lattice` | `ILattice`, `LatticeOptions`, `SnapshotMode`, `LatticeExtensions`, `IMutationObserver`, `LatticeMutation`, `MutationKind`, `CrdtLatticeExtensions`, `OrSetAccessor`, `PnCounterAccessor`, `VersionVectorAccessor` |
+| Public API namespace | `Orleans.Lattice` | `ILattice`, `LatticeOptions`, `SnapshotMode`, `LatticeExtensions`, `IMutationObserver`, `LatticeMutation`, `MutationKind`, `LatticeOriginContext`, `LatticeVectorClockContext`, `CrdtLatticeExtensions`, `OrSetAccessor`, `PnCounterAccessor`, `VersionVectorAccessor` |
 | Internal namespace | `Orleans.Lattice.{Area}` | `Orleans.Lattice.BPlusTree.Grains` |
 | Test namespace | `Orleans.Lattice.Tests.{Area}` | `Orleans.Lattice.Tests.BPlusTree.Grains` |
 | Replication public API namespace | `Orleans.Lattice.Replication` | `LatticeReplicationOptions`, `IReplicationTransport`, `ReplicationBatch`, `ReplicationAck`, `IChangeFeed`, `IReplicationApplier`, `ApplyResult`, `LatticeReplicationServiceCollectionExtensions`, `ReplogEntry`, `ReplogOp`, `ReplicationMode`, `IReplicationModeResolver`, `LatticeReplicationMetrics`, `ReplicationPeerStats`, `ReplicationPeerSnapshot`, `LwwRegisterDelta`, `OrSetDelta`, `OrSetDot`, `PnCounterDelta`, `VersionVectorDelta`, `IWalStorageProvider`, `InMemoryWalStorageProvider`, `WalEntry`, `IReplicationBatchEncoder`, `ReplicationBatchEnvelope`, `DeadLetterEntry`, `ILatticeReplicationDeadLetters`, `ILatticeReplicationCursorRegistry`, `InMemoryReplicationCursorRegistry`, `ReplicationCursorSnapshot`, `ILatticeReplicationGc`, `LatticeReplicationGc`, `ReplicationGcReport` |

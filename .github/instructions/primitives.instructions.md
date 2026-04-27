@@ -49,7 +49,7 @@ public sealed class MyAggregate
 | Type | Purpose |
 |---|---|
 | `HybridLogicalClock` | Totally-ordered timestamp (wall clock + counter) |
-| `LwwValue<T>` | Last-writer-wins register resolved by HLC. Carries optional `ExpiresAtTicks` ( TTL) — `0` means no expiry; reads filter entries where `IsExpired(nowUtcTicks)` returns `true`. |
+| `LwwValue<T>` | Last-writer-wins register resolved by HLC. Carries optional `ExpiresAtTicks` ( TTL) — `0` means no expiry; reads filter entries where `IsExpired(nowUtcTicks)` returns `true`. Carries optional `OriginClusterId` (cluster-of-origin stamp, authored from the ambient `LatticeOriginContext`) and optional `VectorClock` (sparse `{originClusterId → HLC}` commit-time frontier, authored from the ambient `LatticeVectorClockContext`); both default to `null` for legacy persisted state. |
 | `VersionVector` | Per-replica version tracking for delta extraction. **Public** — also exposed through `ILattice.VersionVector(key)` as a value-surface CRDT accessor. |
 | `OrSet` | Observed-remove set CRDT (public). State-level merge unions both sides' adds and tombstones; concurrent adds and removes survive a later remove that did not observe them. Exposed through `ILattice.OrSet(key)`. |
 | `OrSetDot` | `(replicaId, counter)` dot tagged on each `OrSet` add. |

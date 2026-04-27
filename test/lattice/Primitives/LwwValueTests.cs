@@ -153,4 +153,52 @@ public class LwwValueTests
         Assert.That(winner.Value, Is.EqualTo("new"));
         Assert.That(winner.OriginClusterId, Is.EqualTo("cluster-new"));
     }
+
+    // --- VectorClock ---
+
+    [Test]
+    public void Create_defaults_VectorClock_to_null()
+    {
+        var v = LwwValue<string>.Create("x", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
+        Assert.That(v.VectorClock, Is.Null);
+    }
+
+    [Test]
+    public void With_expression_sets_VectorClock()
+    {
+        var vc = new VersionVector();
+        vc.Tick("east");
+        var v = LwwValue<string>.Create("x", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 })
+            with { VectorClock = vc };
+        Assert.That(v.VectorClock, Is.SameAs(vc));
+    }
+
+    [Test]
+    public void Tombstone_can_carry_VectorClock()
+    {
+        var vc = new VersionVector();
+        vc.Tick("east");
+        var t = LwwValue<string>.Tombstone(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 })
+            with { VectorClock = vc };
+        Assert.That(t.IsTombstone, Is.True);
+        Assert.That(t.VectorClock, Is.SameAs(vc));
+    }
+
+    [Test]
+    public void Merge_preserves_VectorClock_of_winning_value()
+    {
+        var olderVc = new VersionVector();
+        olderVc.Tick("a");
+        var newerVc = new VersionVector();
+        newerVc.Tick("b");
+
+        var older = LwwValue<string>.Create("old", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 })
+            with { VectorClock = olderVc };
+        var newer = LwwValue<string>.Create("new", new HybridLogicalClock { WallClockTicks = 2, Counter = 0 })
+            with { VectorClock = newerVc };
+
+        var winner = LwwValue<string>.Merge(older, newer);
+        Assert.That(winner.Value, Is.EqualTo("new"));
+        Assert.That(winner.VectorClock, Is.SameAs(newerVc));
+    }
 }
