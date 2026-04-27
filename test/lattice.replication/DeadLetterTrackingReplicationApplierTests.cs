@@ -87,7 +87,7 @@ public class DeadLetterTrackingReplicationApplierTests
             Assert.That(result.HighWaterMark, Is.EqualTo(HybridLogicalClock.Zero));
         });
         await dlq.Received(1).EnqueueAsync(entry, "boom", 2, LatticeReplicationMetrics.ReasonSchema, Arg.Any<CancellationToken>());
-        await hwm.Received(1).TryAdvanceAsync(entry.Timestamp, Arg.Any<CancellationToken>());
+        await hwm.Received(1).TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -102,7 +102,7 @@ public class DeadLetterTrackingReplicationApplierTests
 
         Assert.That(result.Applied, Is.False);
         await dlq.Received(1).EnqueueAsync(entry, Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await hwm.DidNotReceive().TryAdvanceAsync(Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        await hwm.DidNotReceive().TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

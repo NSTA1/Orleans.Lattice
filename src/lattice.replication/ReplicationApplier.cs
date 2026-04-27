@@ -63,8 +63,8 @@ internal sealed class ReplicationApplier(
             return new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero };
         }
 
-        var hwmGrain = GetHwmGrain(entry.TreeId, entry.OriginClusterId);
-        var hwm = await hwmGrain.GetAsync(cancellationToken);
+        var hwmGrain = GetHwmGrain(entry.TreeId);
+        var hwm = await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
         if (entry.Timestamp <= hwm)
         {
             return new ApplyResult { Applied = false, HighWaterMark = hwm };
@@ -80,10 +80,10 @@ internal sealed class ReplicationApplier(
         // TryAdvanceAsync returns false — fall back to a fetch only in
         // that rare case so the steady-state apply costs one fewer grain
         // call than a naive read-after-write.
-        var advanced = await hwmGrain.TryAdvanceAsync(entry.Timestamp, cancellationToken);
+        var advanced = await hwmGrain.TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken);
         var newHwm = advanced
             ? entry.Timestamp
-            : await hwmGrain.GetAsync(cancellationToken);
+            : await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
         return new ApplyResult { Applied = true, HighWaterMark = newHwm };
     }
 
@@ -206,8 +206,8 @@ internal sealed class ReplicationApplier(
         return apply.ApplyDeleteRangeAsync(entry.Key, entry.EndExclusiveKey, entry.OriginClusterId!, sourceVectorClock: null);
     }
 
-    private IReplicationHighWaterMarkGrain GetHwmGrain(string treeId, string originClusterId) =>
-        grainFactory.GetGrain<IReplicationHighWaterMarkGrain>($"{treeId}/{originClusterId}");
+    private IReplicationHighWaterMarkGrain GetHwmGrain(string treeId) =>
+        grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeId);
 
     /// <summary>
     /// Records the receiver-side replication-lag sample for a successfully

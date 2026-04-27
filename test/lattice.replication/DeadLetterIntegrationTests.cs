@@ -138,8 +138,8 @@ public class DeadLetterIntegrationTests
         // HWM for (treeId, originClusterId) must have advanced past the
         // entry's timestamp so the canonical applier dedupes future
         // re-deliveries.
-        var hwm = _cluster.GrainFactory.GetGrain<IReplicationHighWaterMarkGrain>(TreeId + "/" + OriginCluster);
-        var advanced = await hwm.GetAsync();
+        var hwm = _cluster.GrainFactory.GetGrain<IReplicationHighWaterMarkGrain>(TreeId);
+        var advanced = await hwm.GetAsync(OriginCluster);
         Assert.That(advanced, Is.EqualTo(entry.Timestamp));
 
         Assert.That(await _inspector.DiscardAsync(TreeId, parked[0].EntryId, CancellationToken.None), Is.True);
