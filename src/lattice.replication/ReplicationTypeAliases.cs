@@ -75,4 +75,12 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="ReplicationBatchEnvelope"/>.</summary>
     internal const string ReplicationBatchEnvelope = "olr.be";
+
+    // Dead-letter queue (poison-entry park)
+
+    /// <summary>Alias for <see cref="Replication.DeadLetterEntry"/>.</summary>
+    internal const string DeadLetterEntry = "olr.dl";
+
+    /// <summary>Alias for the per-tree dead-letter queue grain interface.</summary>
+    internal const string IReplicationDeadLetterGrain = "olr.gd";
 }

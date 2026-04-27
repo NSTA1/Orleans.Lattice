@@ -134,6 +134,27 @@ public class LatticeReplicationOptions
     public int WalMaxPendingBatches { get; set; } = DefaultWalMaxPendingBatches;
 
     /// <summary>
+    /// Maximum number of consecutive failed apply attempts the inbound
+    /// pipeline tolerates for the same
+    /// <c>(treeId, originClusterId, timestamp, key, op)</c> tuple before
+    /// the entry is parked on the per-tree dead-letter queue and the
+    /// origin high-water-mark is advanced past it. Defaults to
+    /// <see cref="DefaultMaxApplyRetries"/>. Must be at least <c>1</c>;
+    /// a value of <c>1</c> means a single failure parks the entry
+    /// immediately.
+    /// </summary>
+    public int MaxApplyRetries { get; set; } = DefaultMaxApplyRetries;
+
+    /// <summary>
+    /// Maximum number of <see cref="DeadLetterEntry"/> records the
+    /// per-tree dead-letter queue retains. When the queue is full a new
+    /// enqueue evicts the oldest entry (FIFO). Defaults to
+    /// <see cref="DefaultDeadLetterQueueCapacity"/>. Must be at least
+    /// <c>1</c>.
+    /// </summary>
+    public int DeadLetterQueueCapacity { get; set; } = DefaultDeadLetterQueueCapacity;
+
+    /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
     /// represents "unset". This default is rejected by
     /// <c>LatticeReplicationOptionsValidator</c> so a host that calls
@@ -167,4 +188,18 @@ public class LatticeReplicationOptions
     /// engages.
     /// </summary>
     public const int DefaultWalMaxPendingBatches = 4;
+
+    /// <summary>
+    /// Default value for <see cref="MaxApplyRetries"/>: five consecutive
+    /// failures park the entry. Chosen as a small bound that absorbs
+    /// transient faults without dragging an origin cursor for hours.
+    /// </summary>
+    public const int DefaultMaxApplyRetries = 5;
+
+    /// <summary>
+    /// Default value for <see cref="DeadLetterQueueCapacity"/>: 1000
+    /// parked entries per tree. Bounds the inspection-seam working set
+    /// while leaving enough room to diagnose a sustained failure batch.
+    /// </summary>
+    public const int DefaultDeadLetterQueueCapacity = 1000;
 }

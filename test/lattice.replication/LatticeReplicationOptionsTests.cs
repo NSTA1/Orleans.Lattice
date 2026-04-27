@@ -160,4 +160,44 @@ public class LatticeReplicationOptionsTests
         var opts = new LatticeReplicationOptions { WalMaxPendingBatches = 8 };
         Assert.That(opts.WalMaxPendingBatches, Is.EqualTo(8));
     }
+
+    // ------------------------------------------------------------------
+    // Dead-letter queue options
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void DefaultMaxApplyRetries_is_five() =>
+        Assert.That(LatticeReplicationOptions.DefaultMaxApplyRetries, Is.EqualTo(5));
+
+    [Test]
+    public void DefaultDeadLetterQueueCapacity_is_one_thousand() =>
+        Assert.That(LatticeReplicationOptions.DefaultDeadLetterQueueCapacity, Is.EqualTo(1000));
+
+    [Test]
+    public void New_instance_has_default_max_apply_retries()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.MaxApplyRetries, Is.EqualTo(LatticeReplicationOptions.DefaultMaxApplyRetries));
+    }
+
+    [Test]
+    public void New_instance_has_default_dead_letter_queue_capacity()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.DeadLetterQueueCapacity, Is.EqualTo(LatticeReplicationOptions.DefaultDeadLetterQueueCapacity));
+    }
+
+    [Test]
+    public void MaxApplyRetries_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { MaxApplyRetries = 7 };
+        Assert.That(opts.MaxApplyRetries, Is.EqualTo(7));
+    }
+
+    [Test]
+    public void DeadLetterQueueCapacity_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { DeadLetterQueueCapacity = 50 };
+        Assert.That(opts.DeadLetterQueueCapacity, Is.EqualTo(50));
+    }
 }

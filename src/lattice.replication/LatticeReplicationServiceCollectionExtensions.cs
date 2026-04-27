@@ -35,7 +35,24 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<IReplicationTransport, NoOpReplicationTransport>();
         builder.Services.TryAddSingleton<IReplogSink, ShardedReplogSink>();
         builder.Services.TryAddSingleton<IChangeFeed, ChangeFeed>();
-        builder.Services.TryAddSingleton<IReplicationApplier, ReplicationApplier>();
+
+        // Register the canonical applier as a concrete singleton so the
+        // dead-letter tracking decorator and the inspection seam can
+        // both share the exact same activation. The IReplicationApplier
+        // public seam resolves to the decorator, which folds in the
+        // retry-tracking + DLQ-routing behaviour around the canonical
+        // implementation.
+        builder.Services.TryAddSingleton<ReplicationApplier>();
+        builder.Services.TryAddSingleton<IReplicationApplier>(sp =>
+            new DeadLetterTrackingReplicationApplier(
+                sp.GetRequiredService<ReplicationApplier>(),
+                sp.GetRequiredService<IGrainFactory>(),
+                sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>()));
+        builder.Services.TryAddSingleton<ILatticeReplicationDeadLetters>(sp =>
+            new LatticeReplicationDeadLetters(
+                sp.GetRequiredService<IGrainFactory>(),
+                sp.GetRequiredService<ReplicationApplier>()));
+
         builder.Services.TryAddSingleton<IReplicationModeResolver, ReplicationModeResolver>();
         builder.Services.TryAddSingleton<IWalStorageProvider, InMemoryWalStorageProvider>();
         builder.Services.TryAddSingleton<IReplicationBatchEncoder, OrleansBinaryReplicationBatchEncoder>();

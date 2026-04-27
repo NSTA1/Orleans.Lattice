@@ -90,4 +90,66 @@ public class LatticeReplicationMetricsTests
         Assert.That(collector.Measurements, Has.Count.EqualTo(1));
         Assert.That(collector.Measurements.Single().Value, Is.EqualTo(3.0));
     }
+
+    [Test]
+    public void Reason_tag_constants_use_canonical_values()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.TagReason, Is.EqualTo("reason"));
+            Assert.That(LatticeReplicationMetrics.ReasonDiscarded, Is.EqualTo("discarded"));
+            Assert.That(LatticeReplicationMetrics.ReasonReplayed, Is.EqualTo("replayed"));
+            Assert.That(LatticeReplicationMetrics.ReasonEvicted, Is.EqualTo("evicted"));
+            Assert.That(LatticeReplicationMetrics.ReasonUnknown, Is.EqualTo("unknown"));
+        });
+    }
+
+    [Test]
+    public void Dead_letter_counters_have_expected_names()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.DeadLetterEnqueued.Name,
+                Is.EqualTo("orleans.lattice.replication.dead_letter.enqueued"));
+            Assert.That(LatticeReplicationMetrics.DeadLetterRemoved.Name,
+                Is.EqualTo("orleans.lattice.replication.dead_letter.removed"));
+        });
+    }
+
+    [Test]
+    public void Dead_letter_enqueued_counter_records_with_tree_and_reason_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.dead_letter.enqueued");
+
+        LatticeReplicationMetrics.DeadLetterEnqueued.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.ReasonUnknown));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(1L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "t"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "reason" && (string?)t.Value == "unknown"));
+    }
+
+    [Test]
+    public void Dead_letter_removed_counter_records_with_tree_and_reason_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.dead_letter.removed");
+
+        LatticeReplicationMetrics.DeadLetterRemoved.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.ReasonReplayed));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        Assert.That(collector.Measurements.Single().Tags,
+            Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "reason" && (string?)t.Value == "replayed"));
+    }
 }
