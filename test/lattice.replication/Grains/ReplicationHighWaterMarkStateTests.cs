@@ -7,21 +7,22 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 public class ReplicationHighWaterMarkStateTests
 {
     [Test]
-    public void HighWaterMark_defaults_to_zero()
+    public void Vector_defaults_to_empty()
     {
         var state = new ReplicationHighWaterMarkState();
 
-        Assert.That(state.HighWaterMark, Is.EqualTo(HybridLogicalClock.Zero));
+        Assert.That(state.Vector.Entries, Is.Empty);
     }
 
     [Test]
-    public void HighWaterMark_is_settable()
+    public void Vector_is_settable()
     {
         var state = new ReplicationHighWaterMarkState();
-        var stamp = new HybridLogicalClock { WallClockTicks = 42, Counter = 1 };
+        var vector = new VersionVector();
+        vector.Entries["site-a"] = new HybridLogicalClock { WallClockTicks = 42, Counter = 1 };
 
-        state.HighWaterMark = stamp;
+        state.Vector = vector;
 
-        Assert.That(state.HighWaterMark, Is.EqualTo(stamp));
+        Assert.That(state.Vector, Is.SameAs(vector));
     }
 }

@@ -93,9 +93,8 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         // synchronously without throwing.
         if (entry.Op != ReplogOp.DeleteRange)
         {
-            var hwm = grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(
-                entry.TreeId + "/" + entry.OriginClusterId);
-            await hwm.TryAdvanceAsync(entry.Timestamp, cancellationToken).ConfigureAwait(false);
+            var hwm = grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(entry.TreeId);
+            await hwm.TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken).ConfigureAwait(false);
         }
 
         _failures.TryRemove(key, out _);

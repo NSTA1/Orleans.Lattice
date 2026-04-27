@@ -134,42 +134,40 @@ public class ReplicationApplyIntegrationTests
     public async Task HighWaterMarkGrain_tracks_most_recent_applied_timestamp_per_origin()
     {
         const string tree = "ri-hwm";
-        var hwm = _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>(
-            $"{tree}/{TwoSiteClusterFixture.SiteAClusterId}");
+        var origin = TwoSiteClusterFixture.SiteAClusterId;
+        var hwm = _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>(tree);
 
-        Assert.That(await hwm.GetAsync(), Is.EqualTo(HybridLogicalClock.Zero));
+        Assert.That(await hwm.GetAsync(origin), Is.EqualTo(HybridLogicalClock.Zero));
 
-        Assert.That(await hwm.TryAdvanceAsync(Hlc(10)), Is.True);
-        Assert.That(await hwm.GetAsync(), Is.EqualTo(Hlc(10)));
+        Assert.That(await hwm.TryAdvanceAsync(origin, Hlc(10)), Is.True);
+        Assert.That(await hwm.GetAsync(origin), Is.EqualTo(Hlc(10)));
 
         // Older timestamp must not advance.
-        Assert.That(await hwm.TryAdvanceAsync(Hlc(5)), Is.False);
-        Assert.That(await hwm.GetAsync(), Is.EqualTo(Hlc(10)));
+        Assert.That(await hwm.TryAdvanceAsync(origin, Hlc(5)), Is.False);
+        Assert.That(await hwm.GetAsync(origin), Is.EqualTo(Hlc(10)));
 
         // Equal timestamp does not advance.
-        Assert.That(await hwm.TryAdvanceAsync(Hlc(10)), Is.False);
+        Assert.That(await hwm.TryAdvanceAsync(origin, Hlc(10)), Is.False);
 
         // Newer timestamp advances.
-        Assert.That(await hwm.TryAdvanceAsync(Hlc(20)), Is.True);
-        Assert.That(await hwm.GetAsync(), Is.EqualTo(Hlc(20)));
+        Assert.That(await hwm.TryAdvanceAsync(origin, Hlc(20)), Is.True);
+        Assert.That(await hwm.GetAsync(origin), Is.EqualTo(Hlc(20)));
     }
 
     [Test]
     public async Task HighWaterMarkGrain_isolates_state_per_tree_and_per_origin()
     {
-        var hwmTreeA = _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>(
-            $"ri-iso-1/{TwoSiteClusterFixture.SiteAClusterId}");
-        var hwmTreeB = _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>(
-            $"ri-iso-2/{TwoSiteClusterFixture.SiteAClusterId}");
-        var hwmOtherOrigin = _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>(
-            $"ri-iso-1/site-c");
+        var origin = TwoSiteClusterFixture.SiteAClusterId;
+        var hwmTreeA = _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>("ri-iso-1");
+        var hwmTreeB = _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>("ri-iso-2");
 
-        await hwmTreeA.TryAdvanceAsync(Hlc(100));
+        await hwmTreeA.TryAdvanceAsync(origin, Hlc(100));
 
         Assert.Multiple(() =>
         {
-            Assert.That(hwmTreeB.GetAsync().Result, Is.EqualTo(HybridLogicalClock.Zero));
-            Assert.That(hwmOtherOrigin.GetAsync().Result, Is.EqualTo(HybridLogicalClock.Zero));
+            Assert.That(hwmTreeB.GetAsync(origin).Result, Is.EqualTo(HybridLogicalClock.Zero));
+            // Different origin on the same tree as Site A also reports Zero.
+            Assert.That(hwmTreeA.GetAsync("site-c").Result, Is.EqualTo(HybridLogicalClock.Zero));
         });
     }
 
@@ -177,13 +175,16 @@ public class ReplicationApplyIntegrationTests
     public async Task HighWaterMarkGrain_pin_snapshot_overwrites_unconditionally()
     {
         const string tree = "ri-pin";
-        var hwm = _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>(
-            $"{tree}/{TwoSiteClusterFixture.SiteAClusterId}");
+        var origin = TwoSiteClusterFixture.SiteAClusterId;
+        var hwm = _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>(tree);
 
-        await hwm.TryAdvanceAsync(Hlc(500));
-        await hwm.PinSnapshotAsync(Hlc(200));
+        await hwm.TryAdvanceAsync(origin, Hlc(500));
 
-        Assert.That(await hwm.GetAsync(), Is.EqualTo(Hlc(200)));
+        var frontier = new VersionVector();
+        frontier.Entries[origin] = Hlc(200);
+        await hwm.PinSnapshotAsync(Hlc(200), frontier);
+
+        Assert.That(await hwm.GetAsync(origin), Is.EqualTo(Hlc(200)));
     }
 
     // ------------------------------------------------------------------
@@ -315,12 +316,13 @@ public class ReplicationApplyIntegrationTests
         const string key = "k";
         var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
         var applier = CreateSiteBApplier();
-        var hwm = _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>(
-            $"{tree}/{TwoSiteClusterFixture.SiteAClusterId}");
+        var hwm = _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>(tree);
 
         // Pin HWM above the entry timestamp — re-delivery of a typed CRDT
         // entry must short-circuit on the HWM check just like LWW does.
-        await hwm.PinSnapshotAsync(Hlc(5_000));
+        var pinFrontier = new VersionVector();
+        pinFrontier.Entries[TwoSiteClusterFixture.SiteAClusterId] = Hlc(5_000);
+        await hwm.PinSnapshotAsync(Hlc(5_000), pinFrontier);
 
         var remoteSet = new OrSet();
         remoteSet.Add(new byte[] { 9 }, "site-a", 1);

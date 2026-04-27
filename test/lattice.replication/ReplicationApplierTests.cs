@@ -34,9 +34,9 @@ public class ReplicationApplierTests
         var apply = Substitute.For<IReplicationApplyGrain>();
         var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
         factory.GetGrain<IReplicationApplyGrain>(treeId).Returns(apply);
-        factory.GetGrain<IReplicationHighWaterMarkGrain>($"{treeId}/{originClusterId}").Returns(hwm);
-        hwm.GetAsync(Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
-        hwm.TryAdvanceAsync(Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+        factory.GetGrain<IReplicationHighWaterMarkGrain>(treeId).Returns(hwm);
+        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);
         var applier = new ReplicationApplier(factory, Monitor());
         return (applier, factory, apply, hwm);
@@ -86,7 +86,7 @@ public class ReplicationApplierTests
 
         Assert.That(result.Applied, Is.True);
         await apply.Received(1).ApplySetAsync("k", Arg.Any<byte[]>(), ts, RemoteCluster, null, 99);
-        await hwm.Received(1).TryAdvanceAsync(ts, Arg.Any<CancellationToken>());
+        await hwm.Received(1).TryAdvanceAsync(RemoteCluster, ts, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -99,7 +99,7 @@ public class ReplicationApplierTests
 
         Assert.That(result.Applied, Is.True);
         await apply.Received(1).ApplyDeleteAsync("k", ts, RemoteCluster, null);
-        await hwm.Received(1).TryAdvanceAsync(ts, Arg.Any<CancellationToken>());
+        await hwm.Received(1).TryAdvanceAsync(RemoteCluster, ts, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -115,14 +115,14 @@ public class ReplicationApplierTests
         // Range deletes carry HLC.Zero; the HWM is not advanced for them
         // because dedupe does not apply (range applies are naturally
         // idempotent at the leaf layer).
-        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default, default);
+        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
     }
 
     [Test]
     public async Task ApplyAsync_dedupes_when_entry_timestamp_equals_hwm()
     {
         var (applier, _, apply, hwm) = CreateApplier();
-        hwm.GetAsync(Arg.Any<CancellationToken>()).Returns(Hlc(10, 1));
+        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(10, 1));
 
         var result = await applier.ApplyAsync(SetEntry("k", Hlc(10, 1)));
 
@@ -132,14 +132,14 @@ public class ReplicationApplierTests
             Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(10, 1)));
         });
         await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
-        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default, default);
+        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
     }
 
     [Test]
     public async Task ApplyAsync_dedupes_when_entry_timestamp_below_hwm()
     {
         var (applier, _, apply, hwm) = CreateApplier();
-        hwm.GetAsync(Arg.Any<CancellationToken>()).Returns(Hlc(50));
+        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
 
         var result = await applier.ApplyAsync(DeleteEntry("k", Hlc(20)));
 
@@ -156,11 +156,11 @@ public class ReplicationApplierTests
     {
         var (applier, _, _, hwm) = CreateApplier();
         var current = HybridLogicalClock.Zero;
-        hwm.GetAsync(Arg.Any<CancellationToken>()).Returns(_ => current);
-        hwm.TryAdvanceAsync(Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ => current);
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
-                var candidate = (HybridLogicalClock)call[0];
+                var candidate = (HybridLogicalClock)call[1];
                 if (candidate > current)
                 {
                     current = candidate;
@@ -183,7 +183,7 @@ public class ReplicationApplierTests
 
         Assert.That(result.Applied, Is.False);
         await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
-        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default, default);
+        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
     }
 
     [Test]
@@ -251,8 +251,8 @@ public class ReplicationApplierTests
         var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
         factory.GetGrain<IReplicationApplyGrain>(Arg.Any<string>()).Returns(apply);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
-        hwm.GetAsync(Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
-        hwm.TryAdvanceAsync(Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>()).Returns(true);
+        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>()).Returns(true);
 
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         monitor.Get(Arg.Any<string>())
@@ -287,7 +287,7 @@ public class ReplicationApplierTests
             Assert.That(result.Applied, Is.False);
             Assert.That(result.HighWaterMark, Is.EqualTo(HybridLogicalClock.Zero));
         });
-        await hwm.DidNotReceiveWithAnyArgs().GetAsync(default);
+        await hwm.DidNotReceiveWithAnyArgs().GetAsync(default!, default);
     }
 
     [Test]
@@ -304,7 +304,7 @@ public class ReplicationApplierTests
             Assert.That(result.Applied, Is.True);
             Assert.That(result.HighWaterMark, Is.EqualTo(HybridLogicalClock.Zero));
         });
-        await hwm.DidNotReceiveWithAnyArgs().GetAsync(default);
+        await hwm.DidNotReceiveWithAnyArgs().GetAsync(default!, default);
     }
 
     [Test]
@@ -320,8 +320,8 @@ public class ReplicationApplierTests
 
         // Exactly one GetAsync (the pre-apply HWM check) and exactly one
         // TryAdvanceAsync (the post-apply advance). No redundant read.
-        await hwm.Received(1).GetAsync(Arg.Any<CancellationToken>());
-        await hwm.Received(1).TryAdvanceAsync(ts, Arg.Any<CancellationToken>());
+        await hwm.Received(1).GetAsync(RemoteCluster, Arg.Any<CancellationToken>());
+        await hwm.Received(1).TryAdvanceAsync(RemoteCluster, ts, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -333,9 +333,9 @@ public class ReplicationApplierTests
         // false; the applier must fall back to a fresh GetAsync so the
         // returned HighWaterMark reflects the actual post-call state.
         var (applier, _, _, hwm) = CreateApplier();
-        hwm.GetAsync(Arg.Any<CancellationToken>())
+        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(HybridLogicalClock.Zero, Hlc(99));
-        hwm.TryAdvanceAsync(Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(false);
 
         var result = await applier.ApplyAsync(SetEntry("k", Hlc(42)));
@@ -345,7 +345,7 @@ public class ReplicationApplierTests
             Assert.That(result.Applied, Is.True);
             Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(99)));
         });
-        await hwm.Received(2).GetAsync(Arg.Any<CancellationToken>());
+        await hwm.Received(2).GetAsync(RemoteCluster, Arg.Any<CancellationToken>());
     }
 
     // ------------------------------------------------------------------
@@ -364,10 +364,10 @@ public class ReplicationApplierTests
         var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
         var lattice = Substitute.For<ILattice>();
         factory.GetGrain<IReplicationApplyGrain>(Tree).Returns(apply);
-        factory.GetGrain<IReplicationHighWaterMarkGrain>($"{Tree}/{RemoteCluster}").Returns(hwm);
+        factory.GetGrain<IReplicationHighWaterMarkGrain>(Tree).Returns(hwm);
         factory.GetGrain<ILattice>(Tree).Returns(lattice);
-        hwm.GetAsync(Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
-        hwm.TryAdvanceAsync(Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);
         lattice.GetWithVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new VersionedValue { Value = null, Version = HybridLogicalClock.Zero });
@@ -480,14 +480,14 @@ public class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.HighWaterMark, Is.EqualTo(ts));
-        await hwm.Received(1).TryAdvanceAsync(ts, Arg.Any<CancellationToken>());
+        await hwm.Received(1).TryAdvanceAsync(RemoteCluster, ts, Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task ApplyAsync_state_merge_dedupes_when_entry_below_hwm()
     {
         var (applier, lattice, _, hwm) = CreateTypedCrdtApplier();
-        hwm.GetAsync(Arg.Any<CancellationToken>()).Returns(Hlc(50));
+        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
         var entry = SetEntry("k", Hlc(20)) with
         {
             Mode = ReplicationMode.OrSet,
@@ -655,7 +655,7 @@ public class ReplicationApplierTests
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.ApplyLagName);
         var (applier, _, _, hwm) = CreateApplier();
-        hwm.GetAsync(Arg.Any<CancellationToken>()).Returns(Hlc(100));
+        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
 
         // Entry timestamp <= HWM so the apply path short-circuits before
         // RecordApplyLag is reached.
