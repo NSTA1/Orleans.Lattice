@@ -86,7 +86,7 @@ public class DeadLetterTrackingReplicationApplierTests
             Assert.That(result.Applied, Is.False);
             Assert.That(result.HighWaterMark, Is.EqualTo(HybridLogicalClock.Zero));
         });
-        await dlq.Received(1).EnqueueAsync(entry, "boom", 2, Arg.Any<CancellationToken>());
+        await dlq.Received(1).EnqueueAsync(entry, "boom", 2, LatticeReplicationMetrics.ReasonSchema, Arg.Any<CancellationToken>());
         await hwm.Received(1).TryAdvanceAsync(entry.Timestamp, Arg.Any<CancellationToken>());
     }
 
@@ -101,7 +101,7 @@ public class DeadLetterTrackingReplicationApplierTests
         var result = await decorator.ApplyAsync(entry, CancellationToken.None);
 
         Assert.That(result.Applied, Is.False);
-        await dlq.Received(1).EnqueueAsync(entry, Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await dlq.Received(1).EnqueueAsync(entry, Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         await hwm.DidNotReceive().TryAdvanceAsync(Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
     }
 
@@ -127,13 +127,13 @@ public class DeadLetterTrackingReplicationApplierTests
         var success = await decorator.ApplyAsync(entry, CancellationToken.None);
 
         Assert.That(success.Applied, Is.True);
-        await dlq.DidNotReceive().EnqueueAsync(Arg.Any<ReplogEntry>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await dlq.DidNotReceive().EnqueueAsync(Arg.Any<ReplogEntry>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
 
         // The next failure now starts a fresh budget; should rethrow, not park.
         inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ => throw new InvalidOperationException("boom-2"));
         Assert.That(async () => await decorator.ApplyAsync(entry, CancellationToken.None), Throws.InvalidOperationException);
-        await dlq.DidNotReceive().EnqueueAsync(Arg.Any<ReplogEntry>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await dlq.DidNotReceive().EnqueueAsync(Arg.Any<ReplogEntry>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -158,5 +158,59 @@ public class DeadLetterTrackingReplicationApplierTests
         Assert.That(
             async () => await decorator.ApplyAsync(MakeEntry(), cts.Token),
             Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_classifies_argument_exception_as_schema_reason()
+    {
+        var (decorator, inner, dlq, _, _) = Build(maxRetries: 1);
+        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+            .Returns<Task<ApplyResult>>(_ => throw new ArgumentException("missing field"));
+
+        var entry = MakeEntry();
+        await decorator.ApplyAsync(entry, CancellationToken.None);
+
+        await dlq.Received(1).EnqueueAsync(
+            entry,
+            "missing field",
+            1,
+            LatticeReplicationMetrics.ReasonSchema,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_classifies_invalid_operation_exception_as_schema_reason()
+    {
+        var (decorator, inner, dlq, _, _) = Build(maxRetries: 1);
+        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+            .Returns<Task<ApplyResult>>(_ => throw new InvalidOperationException("bad mode"));
+
+        var entry = MakeEntry();
+        await decorator.ApplyAsync(entry, CancellationToken.None);
+
+        await dlq.Received(1).EnqueueAsync(
+            entry,
+            "bad mode",
+            1,
+            LatticeReplicationMetrics.ReasonSchema,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_classifies_other_exceptions_as_unknown_reason()
+    {
+        var (decorator, inner, dlq, _, _) = Build(maxRetries: 1);
+        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+            .Returns<Task<ApplyResult>>(_ => throw new TimeoutException("transport timed out"));
+
+        var entry = MakeEntry();
+        await decorator.ApplyAsync(entry, CancellationToken.None);
+
+        await dlq.Received(1).EnqueueAsync(
+            entry,
+            "transport timed out",
+            1,
+            LatticeReplicationMetrics.ReasonUnknown,
+            Arg.Any<CancellationToken>());
     }
 }

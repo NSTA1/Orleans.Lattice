@@ -51,8 +51,8 @@ public class ReplicationDeadLetterGrainTests
     {
         var (grain, _, _) = await CreateGrainAsync();
 
-        var id1 = await grain.EnqueueAsync(MakeEntry("a"), "boom", 5, CancellationToken.None);
-        var id2 = await grain.EnqueueAsync(MakeEntry("b"), "boom", 5, CancellationToken.None);
+        var id1 = await grain.EnqueueAsync(MakeEntry("a"), "boom", 5, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+        var id2 = await grain.EnqueueAsync(MakeEntry("b"), "boom", 5, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
 
         Assert.That(new[] { id1, id2 }, Is.EqualTo(new[] { 1L, 2L }));
     }
@@ -62,7 +62,7 @@ public class ReplicationDeadLetterGrainTests
     {
         var (grain, data, _) = await CreateGrainAsync();
 
-        await grain.EnqueueAsync(MakeEntry("a"), "boom", 5, CancellationToken.None);
+        await grain.EnqueueAsync(MakeEntry("a"), "boom", 5, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
 
         Assert.That(data.Keys, Has.Count.EqualTo(1));
         var key = data.Keys.Single();
@@ -75,8 +75,44 @@ public class ReplicationDeadLetterGrainTests
         var (grain, _, _) = await CreateGrainAsync();
 
         Assert.That(
-            async () => await grain.EnqueueAsync(MakeEntry(), null!, 0, CancellationToken.None),
+            async () => await grain.EnqueueAsync(MakeEntry(), null!, 0, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None),
             Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task EnqueueAsync_throws_on_null_reason_tag()
+    {
+        var (grain, _, _) = await CreateGrainAsync();
+
+        Assert.That(
+            async () => await grain.EnqueueAsync(MakeEntry(), "boom", 0, null!, CancellationToken.None),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task EnqueueAsync_throws_on_empty_reason_tag()
+    {
+        var (grain, _, _) = await CreateGrainAsync();
+
+        Assert.That(
+            async () => await grain.EnqueueAsync(MakeEntry(), "boom", 0, string.Empty, CancellationToken.None),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task EnqueueAsync_emits_supplied_reason_tag_on_enqueued_counter()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.dead_letter.enqueued");
+        var (grain, _, _) = await CreateGrainAsync();
+
+        await grain.EnqueueAsync(MakeEntry(), "boom", 1, LatticeReplicationMetrics.ReasonSchema, CancellationToken.None);
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        Assert.That(collector.Measurements.Single().Tags,
+            Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "reason" && (string?)t.Value == LatticeReplicationMetrics.ReasonSchema));
     }
 
     [Test]
@@ -84,9 +120,9 @@ public class ReplicationDeadLetterGrainTests
     {
         var (grain, data, _) = await CreateGrainAsync(capacity: 2);
 
-        var id1 = await grain.EnqueueAsync(MakeEntry("a"), "x", 1, CancellationToken.None);
-        var id2 = await grain.EnqueueAsync(MakeEntry("b"), "x", 1, CancellationToken.None);
-        var id3 = await grain.EnqueueAsync(MakeEntry("c"), "x", 1, CancellationToken.None);
+        var id1 = await grain.EnqueueAsync(MakeEntry("a"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+        var id2 = await grain.EnqueueAsync(MakeEntry("b"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+        var id3 = await grain.EnqueueAsync(MakeEntry("c"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
 
         var entries = await grain.ListAsync(CancellationToken.None);
         Assert.Multiple(() =>
@@ -105,7 +141,7 @@ public class ReplicationDeadLetterGrainTests
             "orleans.lattice.replication.dead_letter.enqueued");
         var (grain, _, _) = await CreateGrainAsync();
 
-        await grain.EnqueueAsync(MakeEntry(), "boom", 1, CancellationToken.None);
+        await grain.EnqueueAsync(MakeEntry(), "boom", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
 
         Assert.That(collector.Measurements, Has.Count.EqualTo(1));
         var only = collector.Measurements.Single();
@@ -127,8 +163,8 @@ public class ReplicationDeadLetterGrainTests
             "orleans.lattice.replication.dead_letter.removed");
         var (grain, _, _) = await CreateGrainAsync(capacity: 1);
 
-        await grain.EnqueueAsync(MakeEntry("a"), "x", 1, CancellationToken.None);
-        await grain.EnqueueAsync(MakeEntry("b"), "x", 1, CancellationToken.None);
+        await grain.EnqueueAsync(MakeEntry("a"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+        await grain.EnqueueAsync(MakeEntry("b"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
 
         var evictions = collector.Measurements
             .Where(m => m.Tags.Any(t => t.Key == "reason" && (string?)t.Value == LatticeReplicationMetrics.ReasonEvicted))
@@ -140,9 +176,9 @@ public class ReplicationDeadLetterGrainTests
     public async Task ListAsync_returns_entries_in_ascending_id_order()
     {
         var (grain, _, _) = await CreateGrainAsync();
-        await grain.EnqueueAsync(MakeEntry("a"), "x", 1, CancellationToken.None);
-        await grain.EnqueueAsync(MakeEntry("b"), "x", 1, CancellationToken.None);
-        await grain.EnqueueAsync(MakeEntry("c"), "x", 1, CancellationToken.None);
+        await grain.EnqueueAsync(MakeEntry("a"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+        await grain.EnqueueAsync(MakeEntry("b"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+        await grain.EnqueueAsync(MakeEntry("c"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
 
         var entries = await grain.ListAsync(CancellationToken.None);
 
@@ -155,7 +191,7 @@ public class ReplicationDeadLetterGrainTests
         var (grain, _, _) = await CreateGrainAsync();
         Assert.That(await grain.CountAsync(CancellationToken.None), Is.EqualTo(0));
 
-        await grain.EnqueueAsync(MakeEntry(), "x", 1, CancellationToken.None);
+        await grain.EnqueueAsync(MakeEntry(), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
         Assert.That(await grain.CountAsync(CancellationToken.None), Is.EqualTo(1));
     }
 
@@ -166,7 +202,7 @@ public class ReplicationDeadLetterGrainTests
             LatticeReplicationMetrics.MeterName,
             "orleans.lattice.replication.dead_letter.removed");
         var (grain, data, _) = await CreateGrainAsync();
-        var id = await grain.EnqueueAsync(MakeEntry(), "x", 1, CancellationToken.None);
+        var id = await grain.EnqueueAsync(MakeEntry(), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
 
         var removed = await grain.DiscardAsync(id, CancellationToken.None);
         var count = await grain.CountAsync(CancellationToken.None);
@@ -199,7 +235,7 @@ public class ReplicationDeadLetterGrainTests
             LatticeReplicationMetrics.MeterName,
             "orleans.lattice.replication.dead_letter.removed");
         var (grain, _, _) = await CreateGrainAsync();
-        var id = await grain.EnqueueAsync(MakeEntry(), "x", 1, CancellationToken.None);
+        var id = await grain.EnqueueAsync(MakeEntry(), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
 
         var removed = await grain.RemoveReplayedAsync(id, CancellationToken.None);
 
@@ -214,7 +250,7 @@ public class ReplicationDeadLetterGrainTests
     public async Task TryGetAsync_returns_the_parked_entry()
     {
         var (grain, _, _) = await CreateGrainAsync();
-        var id = await grain.EnqueueAsync(MakeEntry("hello"), "boom", 5, CancellationToken.None);
+        var id = await grain.EnqueueAsync(MakeEntry("hello"), "boom", 5, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
 
         var parked = await grain.TryGetAsync(id, CancellationToken.None);
 
@@ -238,8 +274,8 @@ public class ReplicationDeadLetterGrainTests
         var backing = FakeSystemLattice.Create();
         // Pre-seed via a first grain instance, then load a second.
         var (first, _, _) = await CreateGrainAsync(backing);
-        await first.EnqueueAsync(MakeEntry("a"), "x", 1, CancellationToken.None);
-        await first.EnqueueAsync(MakeEntry("b"), "x", 1, CancellationToken.None);
+        await first.EnqueueAsync(MakeEntry("a"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+        await first.EnqueueAsync(MakeEntry("b"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
 
         var (second, _, _) = await CreateGrainAsync(backing);
 
@@ -247,7 +283,7 @@ public class ReplicationDeadLetterGrainTests
         Assert.That(entries.Select(e => e.Entry.Key), Is.EqualTo(new[] { "a", "b" }));
 
         // Next id continues from the highest seen.
-        var next = await second.EnqueueAsync(MakeEntry("c"), "x", 1, CancellationToken.None);
+        var next = await second.EnqueueAsync(MakeEntry("c"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
         Assert.That(next, Is.EqualTo(3L));
     }
 

@@ -83,7 +83,8 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         // by the canonical applier, and clear the counter so a future
         // entry against the same tuple gets a fresh budget.
         var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
-        await dlq.EnqueueAsync(entry, failure.Message ?? "<no message>", attempts, cancellationToken).ConfigureAwait(false);
+        var reasonTag = ClassifyFailure(failure);
+        await dlq.EnqueueAsync(entry, failure.Message ?? "<no message>", attempts, reasonTag, cancellationToken).ConfigureAwait(false);
 
         // Advance HWM only for point-applied entries; range deletes do
         // not consult the HWM (see ReplicationApplier) so advancing it
@@ -121,5 +122,51 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         HybridLogicalClock Timestamp,
         string Key,
         ReplogOp Op);
+
+    /// <summary>
+    /// Classifies the terminal apply failure into a stable
+    /// <c>reason</c> tag value for the
+    /// <c>orleans.lattice.replication.dead_letter.enqueued</c>
+    /// counter. The mapping is intentionally conservative: only
+    /// failure shapes the canonical <see cref="ReplicationApplier"/>
+    /// (or another decorator under our control) is known to emit are
+    /// matched explicitly; everything else lands on
+    /// <see cref="LatticeReplicationMetrics.ReasonUnknown"/> rather
+    /// than guessing from message-text patterns.
+    /// </summary>
+    /// <remarks>
+    /// <list type="bullet">
+    ///   <item>
+    ///     <see cref="ArgumentException"/> — surfaced by
+    ///     <see cref="ReplicationApplier"/> for malformed entries
+    ///     (null <see cref="ReplogEntry.Value"/> on a
+    ///     <see cref="ReplogOp.Set"/>, missing <see cref="ReplogEntry.EndExclusiveKey"/>,
+    ///     empty required fields). Tagged
+    ///     <see cref="LatticeReplicationMetrics.ReasonSchema"/>.
+    ///   </item>
+    ///   <item>
+    ///     <see cref="InvalidOperationException"/> — surfaced for
+    ///     unrecognised <see cref="ReplicationMode"/> dispatch and
+    ///     CAS-budget exhaustion on state-merge applies. Both are
+    ///     payload-shape faults from the receiver's perspective and
+    ///     are tagged
+    ///     <see cref="LatticeReplicationMetrics.ReasonSchema"/>.
+    ///   </item>
+    ///   <item>
+    ///     Anything else — tagged
+    ///     <see cref="LatticeReplicationMetrics.ReasonUnknown"/>.
+    ///     Future iterations may decorate the applier to surface
+    ///     <see cref="LatticeReplicationMetrics.ReasonOversized"/> /
+    ///     <see cref="LatticeReplicationMetrics.ReasonHlcSkew"/>
+    ///     classifications when the size/skew validation seams land.
+    ///   </item>
+    /// </list>
+    /// </remarks>
+    private static string ClassifyFailure(Exception failure) => failure switch
+    {
+        ArgumentException => LatticeReplicationMetrics.ReasonSchema,
+        InvalidOperationException => LatticeReplicationMetrics.ReasonSchema,
+        _ => LatticeReplicationMetrics.ReasonUnknown,
+    };
 }
 

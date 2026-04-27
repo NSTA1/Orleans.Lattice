@@ -70,6 +70,37 @@ public static class LatticeReplicationMetrics
     public const string ReasonEvicted = "evicted";
 
     /// <summary>
+    /// Reason tag value: enqueue cause was a malformed or self-inconsistent
+    /// <see cref="ReplogEntry"/> the receiver could not interpret. Examples
+    /// include a <see cref="ReplogOp.Set"/> with a <see langword="null"/>
+    /// <see cref="ReplogEntry.Value"/>, an unrecognised
+    /// <see cref="ReplogEntry.Mode"/>, or a missing required field
+    /// (<see cref="ReplogEntry.TreeId"/> / <see cref="ReplogEntry.OriginClusterId"/>).
+    /// Surfaces from <see cref="ArgumentException"/> /
+    /// <see cref="InvalidOperationException"/> raised by the canonical
+    /// <see cref="ReplicationApplier"/>.
+    /// </summary>
+    public const string ReasonSchema = "schema";
+
+    /// <summary>
+    /// Reason tag value: enqueue cause was implausible HLC skew between
+    /// the receiver's wall clock and the entry's
+    /// <see cref="ReplogEntry.Timestamp"/>. Reserved for receivers that
+    /// surface <see cref="HybridLogicalClock"/>-related faults as
+    /// classified exceptions; the canonical applier does not currently
+    /// raise this class of failure.
+    /// </summary>
+    public const string ReasonHlcSkew = "hlc_skew";
+
+    /// <summary>
+    /// Reason tag value: enqueue cause was an entry whose serialised size
+    /// (key length + value length, plus envelope overhead) exceeded the
+    /// receiver's per-entry size ceiling. Reserved for hosts that wrap
+    /// the canonical applier in a size-validating decorator.
+    /// </summary>
+    public const string ReasonOversized = "oversized";
+
+    /// <summary>
     /// Reason tag value: catch-all bucket for enqueue causes the inbound
     /// apply pipeline could not classify more specifically. Future
     /// observability work will partition this further.
@@ -105,6 +136,54 @@ public static class LatticeReplicationMetrics
     public static readonly Histogram<double> ApplyDuration =
         Meter.CreateHistogram<double>("orleans.lattice.replication.apply.duration", unit: "ms",
             description: "Duration of inbound apply-batch attempts, tagged by tree, peer and outcome.");
+
+    /// <summary>
+    /// Histogram of receiver-side replication lag, computed at successful
+    /// apply time as <c>now - entry.Timestamp.WallClockTicks</c>. Reported
+    /// in milliseconds and clamped to a non-negative value (a future
+    /// timestamp from a faster-moving peer reports as <c>0</c> rather than
+    /// a negative sample). Recorded once per successfully applied point
+    /// operation (<see cref="ReplogOp.Set"/> / <see cref="ReplogOp.Delete"/>);
+    /// range deletes carry <see cref="HybridLogicalClock.Zero"/> by design
+    /// and do not contribute. Tagged by <see cref="TagTree"/>.
+    /// </summary>
+    public static readonly Histogram<double> ApplyLag =
+        Meter.CreateHistogram<double>("orleans.lattice.replication.apply.lag", unit: "ms",
+            description: "Receiver-side replication lag at successful apply, tagged by tree.");
+
+    // --- Throughput counters (replog growth vs. ship rate) ----------------------
+
+    /// <summary>
+    /// Counter of <see cref="ReplogEntry"/> records appended to the
+    /// per-tree write-ahead log on the local cluster. Incremented once
+    /// per successful append at the
+    /// <see cref="ShardedReplogSink"/> seam — i.e. counts entries that
+    /// have committed durably onto the WAL, not entries the producer
+    /// merely attempted to capture. Tagged by <see cref="TagTree"/>.
+    /// <para>
+    /// Pairs with <see cref="WalEntriesShipped"/> to surface the
+    /// "replog growth-rate vs. ship-rate" ratio operators monitor for
+    /// back-pressure: a steady-state replicating peer keeps the two
+    /// counters tracking each other; a stalled or overwhelmed receiver
+    /// shows growth outpacing ship.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalEntriesAppended =
+        Meter.CreateCounter<long>("orleans.lattice.replication.wal.entries_appended", unit: "{entry}",
+            description: "Replog entries committed to the local WAL, tagged by tree.");
+
+    /// <summary>
+    /// Counter of <see cref="ReplogEntry"/> records the local sender
+    /// successfully shipped to a remote peer. Incremented once per
+    /// entry inside an acknowledged outbound batch (i.e. by the count
+    /// of entries in the batch envelope, summed only on successful
+    /// ack). A failed ship — exception, RPC error, transport disposal —
+    /// does not contribute. Tagged by <see cref="TagTree"/> and
+    /// <see cref="TagPeer"/>.
+    /// </summary>
+    public static readonly Counter<long> WalEntriesShipped =
+        Meter.CreateCounter<long>("orleans.lattice.replication.wal.entries_shipped", unit: "{entry}",
+            description: "Replog entries acknowledged by a remote peer, tagged by tree and peer.");
 
     // --- Dead-letter queue counters ---------------------------------------------
 
@@ -182,4 +261,20 @@ public static class LatticeReplicationMetrics
     /// has never been contacted.
     /// </summary>
     public const string LastContactSecondsName = "orleans.lattice.replication.peer.last_contact_seconds";
+
+    /// <summary>
+    /// Canonical name of the <see cref="ApplyLag"/> histogram. Subscribers
+    /// match against this constant rather than hard-coding the string.
+    /// </summary>
+    public const string ApplyLagName = "orleans.lattice.replication.apply.lag";
+
+    /// <summary>
+    /// Canonical name of the <see cref="WalEntriesAppended"/> counter.
+    /// </summary>
+    public const string WalEntriesAppendedName = "orleans.lattice.replication.wal.entries_appended";
+
+    /// <summary>
+    /// Canonical name of the <see cref="WalEntriesShipped"/> counter.
+    /// </summary>
+    public const string WalEntriesShippedName = "orleans.lattice.replication.wal.entries_shipped";
 }

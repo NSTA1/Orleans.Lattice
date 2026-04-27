@@ -176,4 +176,106 @@ public class LatticeReplicationMetricsTests
         Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
             t.Key == "tree" && (string?)t.Value == "tree-x"));
     }
+
+    [Test]
+    public void Extended_reason_tag_constants_use_canonical_values()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ReasonSchema, Is.EqualTo("schema"));
+            Assert.That(LatticeReplicationMetrics.ReasonHlcSkew, Is.EqualTo("hlc_skew"));
+            Assert.That(LatticeReplicationMetrics.ReasonOversized, Is.EqualTo("oversized"));
+        });
+    }
+
+    [Test]
+    public void Apply_lag_histogram_has_expected_name_and_unit()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ApplyLag.Name,
+                Is.EqualTo("orleans.lattice.replication.apply.lag"));
+            Assert.That(LatticeReplicationMetrics.ApplyLag.Unit, Is.EqualTo("ms"));
+            Assert.That(LatticeReplicationMetrics.ApplyLagName,
+                Is.EqualTo(LatticeReplicationMetrics.ApplyLag.Name));
+        });
+    }
+
+    [Test]
+    public void Apply_lag_histogram_records_with_tree_tag()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.apply.lag");
+
+        LatticeReplicationMetrics.ApplyLag.Record(42.0,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-y"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(42.0));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "tree-y"));
+    }
+
+    [Test]
+    public void Wal_entries_appended_counter_has_expected_name()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.WalEntriesAppended.Name,
+                Is.EqualTo("orleans.lattice.replication.wal.entries_appended"));
+            Assert.That(LatticeReplicationMetrics.WalEntriesAppendedName,
+                Is.EqualTo(LatticeReplicationMetrics.WalEntriesAppended.Name));
+        });
+    }
+
+    [Test]
+    public void Wal_entries_appended_counter_records_with_tree_tag()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.wal.entries_appended");
+
+        LatticeReplicationMetrics.WalEntriesAppended.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(1L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "t"));
+    }
+
+    [Test]
+    public void Wal_entries_shipped_counter_has_expected_name()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.WalEntriesShipped.Name,
+                Is.EqualTo("orleans.lattice.replication.wal.entries_shipped"));
+            Assert.That(LatticeReplicationMetrics.WalEntriesShippedName,
+                Is.EqualTo(LatticeReplicationMetrics.WalEntriesShipped.Name));
+        });
+    }
+
+    [Test]
+    public void Wal_entries_shipped_counter_records_with_tree_and_peer_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.wal.entries_shipped");
+
+        LatticeReplicationMetrics.WalEntriesShipped.Add(5,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "p"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(5L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "t"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "peer" && (string?)t.Value == "p"));
+    }
 }

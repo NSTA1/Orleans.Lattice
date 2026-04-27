@@ -139,9 +139,11 @@ internal sealed class ReplicationDeadLetterGrain(
         ReplogEntry entry,
         string failureReason,
         int retryCount,
+        string reasonTag,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(failureReason);
+        ArgumentException.ThrowIfNullOrEmpty(reasonTag);
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInitialized();
 
@@ -179,7 +181,7 @@ internal sealed class ReplicationDeadLetterGrain(
         LatticeReplicationMetrics.DeadLetterEnqueued.Add(
             1,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.ReasonUnknown));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reasonTag));
 
         return assigned;
     }

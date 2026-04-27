@@ -31,11 +31,19 @@ internal sealed class ShardedReplogSink(
     IOptionsMonitor<LatticeReplicationOptions> options) : IReplogSink
 {
     /// <inheritdoc />
-    public Task WriteAsync(ReplogEntry entry, CancellationToken cancellationToken)
+    public async Task WriteAsync(ReplogEntry entry, CancellationToken cancellationToken)
     {
         var partitions = options.CurrentValue.ReplogPartitions;
         var partition = ReplogPartitionHash.Compute(entry.Key ?? string.Empty, partitions);
         var grain = grainFactory.GetGrain<IReplogShardGrain>($"{entry.TreeId}/{partition}");
-        return grain.AppendAsync(entry, cancellationToken);
+        await grain.AppendAsync(entry, cancellationToken).ConfigureAwait(false);
+
+        // Increment after the WAL grain confirms the append so the
+        // counter only reflects entries that actually committed; a
+        // throwing AppendAsync surfaces the original exception to the
+        // caller without contributing to the throughput metric.
+        LatticeReplicationMetrics.WalEntriesAppended.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, entry.TreeId ?? string.Empty));
     }
 }

@@ -99,7 +99,8 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
         }
 
         var channel = ResolvePeerChannel(batch.TargetClusterId);
-        var envelopeBox = new ReplicationBatchEnvelopeBox { Value = BuildEnvelope(batch) };
+        var envelope = BuildEnvelope(batch);
+        var envelopeBox = new ReplicationBatchEnvelopeBox { Value = envelope };
 
         var stopwatch = ValueStopwatch.StartNew();
         var outcome = "error";
@@ -113,6 +114,21 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
 
             var ackBox = await call.ResponseAsync.ConfigureAwait(false);
             outcome = "ok";
+
+            // Count successfully shipped entries on ack. The envelope's
+            // Entries collection is the authoritative count; an empty
+            // (heartbeat / keep-alive) batch contributes zero. Pairs
+            // with WalEntriesAppended on the producer side so operators
+            // can compute the growth-rate vs. ship-rate ratio.
+            var entryCount = envelope.Entries?.Count ?? 0;
+            if (entryCount > 0)
+            {
+                LatticeReplicationMetrics.WalEntriesShipped.Add(
+                    entryCount,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, batch.TreeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, batch.TargetClusterId));
+            }
+
             return ackBox.Value;
         }
         finally

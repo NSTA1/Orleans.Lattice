@@ -99,7 +99,7 @@ Two counters on the `orleans.lattice.replication` meter, both tagged with `tree`
 
 | Instrument | Tags | Meaning |
 |---|---|---|
-| `orleans.lattice.replication.dead_letter.enqueued` | `tree`, `reason=unknown` | Replog entry parked. The `unknown` bucket is a placeholder pending later enqueue-cause classification. |
+| `orleans.lattice.replication.dead_letter.enqueued` | `tree`, `reason in { schema, hlc_skew, oversized, unknown }` | Replog entry parked. The `DeadLetterTrackingReplicationApplier` decorator classifies the terminal failure exception: `ArgumentException` and `InvalidOperationException` are tagged `schema` (malformed entry, missing field, unrecognised `ReplicationMode`, CAS-budget exhaustion); every other exception type lands on `unknown`. The `hlc_skew` and `oversized` reason values are reserved for future receiver decorators that surface size / clock-skew violations as classified exceptions. |
 | `orleans.lattice.replication.dead_letter.removed` | `tree`, `reason in { discarded, replayed, evicted }` | Entry removed. `discarded` = explicit operator call; `replayed` = removed after `ReplayAsync` completed; `evicted` = FIFO capacity eviction during a later enqueue. |
 
 ## Persistence and rehydration

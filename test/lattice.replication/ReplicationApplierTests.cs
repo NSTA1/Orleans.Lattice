@@ -570,4 +570,97 @@ public class ReplicationApplierTests
         // tick representing the merge point.
         await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default);
     }
+
+    [Test]
+    public async Task ApplyAsync_records_apply_lag_for_set()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyLagName);
+        var (applier, _, _, _) = CreateApplier();
+
+        // Source HLC ~100ms in the past; lag must be > 0 and tagged by tree.
+        var pastTicks = DateTime.UtcNow.Ticks - TimeSpan.FromMilliseconds(100).Ticks;
+        await applier.ApplyAsync(SetEntry("k", Hlc(pastTicks)));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.GreaterThanOrEqualTo(0.0));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == Tree));
+    }
+
+    [Test]
+    public async Task ApplyAsync_records_apply_lag_for_delete()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyLagName);
+        var (applier, _, _, _) = CreateApplier();
+
+        var pastTicks = DateTime.UtcNow.Ticks - TimeSpan.FromMilliseconds(50).Ticks;
+        await applier.ApplyAsync(DeleteEntry("k", Hlc(pastTicks)));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public async Task ApplyAsync_clamps_apply_lag_to_zero_for_future_source_hlc()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyLagName);
+        var (applier, _, _, _) = CreateApplier();
+
+        // Source HLC clearly in the future (a peer with faster wall clock).
+        var futureTicks = DateTime.UtcNow.Ticks + TimeSpan.FromMinutes(1).Ticks;
+        await applier.ApplyAsync(SetEntry("k", Hlc(futureTicks)));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        Assert.That(collector.Measurements.Single().Value, Is.EqualTo(0.0));
+    }
+
+    [Test]
+    public async Task ApplyAsync_skips_apply_lag_for_range_delete()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyLagName);
+        var (applier, _, _, _) = CreateApplier();
+
+        await applier.ApplyAsync(RangeDeleteEntry("a", "z"));
+
+        // Range deletes carry HybridLogicalClock.Zero by design and do
+        // not contribute to the lag histogram.
+        Assert.That(collector.Measurements, Is.Empty);
+    }
+
+    [Test]
+    public async Task ApplyAsync_skips_apply_lag_when_source_hlc_is_zero()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyLagName);
+        var (applier, _, _, _) = CreateApplier();
+
+        await applier.ApplyAsync(SetEntry("k", HybridLogicalClock.Zero));
+
+        Assert.That(collector.Measurements, Is.Empty);
+    }
+
+    [Test]
+    public async Task ApplyAsync_skips_apply_lag_for_dedupe_path()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyLagName);
+        var (applier, _, _, hwm) = CreateApplier();
+        hwm.GetAsync(Arg.Any<CancellationToken>()).Returns(Hlc(100));
+
+        // Entry timestamp <= HWM so the apply path short-circuits before
+        // RecordApplyLag is reached.
+        await applier.ApplyAsync(SetEntry("k", Hlc(50)));
+
+        Assert.That(collector.Measurements, Is.Empty);
+    }
 }

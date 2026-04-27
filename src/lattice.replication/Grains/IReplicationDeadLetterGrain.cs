@@ -26,8 +26,20 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
     /// the queue is at
     /// <see cref="LatticeReplicationOptions.DeadLetterQueueCapacity"/>
     /// the oldest entry is evicted to make room (FIFO).
+    /// <para>
+    /// <paramref name="reasonTag"/> is the canonical reason value
+    /// stamped on the
+    /// <c>orleans.lattice.replication.dead_letter.enqueued</c> counter
+    /// for this enqueue. Callers pick from the <c>Reason*</c>
+    /// constants on <see cref="LatticeReplicationMetrics"/>
+    /// (<see cref="LatticeReplicationMetrics.ReasonSchema"/>,
+    /// <see cref="LatticeReplicationMetrics.ReasonHlcSkew"/>,
+    /// <see cref="LatticeReplicationMetrics.ReasonOversized"/>,
+    /// <see cref="LatticeReplicationMetrics.ReasonUnknown"/>) so the
+    /// <c>reason</c> dimension stays stable across publishers.
+    /// </para>
     /// </summary>
-    Task<long> EnqueueAsync(ReplogEntry entry, string failureReason, int retryCount, CancellationToken cancellationToken);
+    Task<long> EnqueueAsync(ReplogEntry entry, string failureReason, int retryCount, string reasonTag, CancellationToken cancellationToken);
 
     /// <summary>Returns every parked entry in ascending entry-id order. Empty list when the queue is empty.</summary>
     Task<IReadOnlyList<DeadLetterEntry>> ListAsync(CancellationToken cancellationToken);
