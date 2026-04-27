@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Replication.Grains;
 /// <c>_lattice_replog_dlq_{treeId}</c> resolved through the internal
 /// <see cref="ISystemLattice"/> surface, so the queue inherits the
 /// scaling, sharding, and persistence of the core B+ tree rather than
-/// living inside a single grain''s persistent-state row. This avoids
+/// living inside a single grain's persistent-state row. This avoids
 /// the storage-row size limit a List-in-state design would hit under
 /// sustained apply failure.
 /// </para>
@@ -269,7 +269,7 @@ internal sealed class ReplicationDeadLetterGrain(
         if (!_initialized)
         {
             throw new InvalidOperationException(
-                $"{nameof(ReplicationDeadLetterGrain)} for tree ''{_treeId}'' has not completed activation.");
+                $"{nameof(ReplicationDeadLetterGrain)} for tree '{_treeId}' has not completed activation.");
         }
     }
 

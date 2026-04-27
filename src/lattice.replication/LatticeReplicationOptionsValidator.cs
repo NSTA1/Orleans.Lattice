@@ -80,6 +80,22 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "very entry the apply pipeline is trying to park.");
         }
 
+        if (options.CausalBufferMaxEntries < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.CausalBufferMaxEntries)} "
+                + $"must be at least 1 ({scope}). The per-tree causal-apply buffer must "
+                + "permit at least one blocked entry before overflowing to the dead-letter queue.");
+        }
+
+        if (options.CausalBufferMaxBytes < 65536)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.CausalBufferMaxBytes)} "
+                + $"must be at least 65536 (64 KB) ({scope}). A smaller cap would force "
+                + "every typical entry to overflow to the dead-letter queue immediately on park.");
+        }
+
         if (options.WalRetention is { } retention && retention <= TimeSpan.Zero)
         {
             return ValidateOptionsResult.Fail(

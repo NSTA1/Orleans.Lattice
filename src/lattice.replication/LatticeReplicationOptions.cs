@@ -155,6 +155,31 @@ public class LatticeReplicationOptions
     public int DeadLetterQueueCapacity { get; set; } = DefaultDeadLetterQueueCapacity;
 
     /// <summary>
+    /// Maximum number of entries the per-tree causal-apply buffer
+    /// retains while waiting on declared causal dependencies. When
+    /// the buffer reaches this cap, parking a new entry evicts the
+    /// oldest blocked entry (FIFO) and routes it to the per-tree
+    /// dead-letter queue with reason
+    /// <see cref="LatticeReplicationMetrics.ReasonHlcSkew"/>. Defaults
+    /// to <see cref="DefaultCausalBufferMaxEntries"/>. Must be at
+    /// least <c>1</c>.
+    /// </summary>
+    public int CausalBufferMaxEntries { get; set; } = DefaultCausalBufferMaxEntries;
+
+    /// <summary>
+    /// Maximum estimated cumulative byte size of every entry parked
+    /// on the per-tree causal-apply buffer. Eviction follows the same
+    /// FIFO + dead-letter routing as <see cref="CausalBufferMaxEntries"/>.
+    /// The size estimate is computed from the key length, value
+    /// length, and a small constant overhead per entry; it is a soft
+    /// limit and may differ from the exact serialised payload by a
+    /// few percent. Defaults to <see cref="DefaultCausalBufferMaxBytes"/>.
+    /// Must be at least <c>65536</c> (64 KB) so a single typical
+    /// entry can be parked without immediately overflowing the cap.
+    /// </summary>
+    public long CausalBufferMaxBytes { get; set; } = DefaultCausalBufferMaxBytes;
+
+    /// <summary>
     /// Optional wall-clock hard ceiling for WAL retention. When set,
     /// the WAL garbage collector
     /// (<see cref="ILatticeReplicationGc"/>) trims entries whose
@@ -167,11 +192,8 @@ public class LatticeReplicationOptions
     /// <para>
     /// <see langword="null"/> (the default) disables the ceiling: the
     /// GC predicate is purely <c>min(consumer cursors)</c>, and a
-    /// lagging consumer pins the WAL until it catches up. Operators
-    /// who run with this default must monitor per-peer lag (later
-    /// phase) so they notice a stalled consumer before disk pressure
-    /// becomes critical. When set, the value must be strictly greater
-    /// than <see cref="TimeSpan.Zero"/>.
+    /// lagging consumer pins the WAL until it catches up. When set,
+    /// the value must be strictly greater than <see cref="TimeSpan.Zero"/>.
     /// </para>
     /// </summary>
     public TimeSpan? WalRetention { get; set; }
@@ -224,4 +246,21 @@ public class LatticeReplicationOptions
     /// while leaving enough room to diagnose a sustained failure batch.
     /// </summary>
     public const int DefaultDeadLetterQueueCapacity = 1000;
+
+    /// <summary>
+    /// Default value for <see cref="CausalBufferMaxEntries"/>: 1024
+    /// parked entries per tree. Sized to absorb a brief partition
+    /// healing burst from a single peer without escalating to the
+    /// dead-letter queue, while keeping the per-silo working set
+    /// bounded.
+    /// </summary>
+    public const int DefaultCausalBufferMaxEntries = 1024;
+
+    /// <summary>
+    /// Default value for <see cref="CausalBufferMaxBytes"/>: 16 MB
+    /// of cumulative parked-entry payload per tree. Sized so the
+    /// buffer's worst-case memory footprint is one to two orders of
+    /// magnitude below typical silo heap sizes.
+    /// </summary>
+    public const long DefaultCausalBufferMaxBytes = 16L * 1024L * 1024L;
 }

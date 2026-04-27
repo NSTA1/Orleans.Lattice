@@ -172,20 +172,17 @@ public class LatticeReplicationOptionsValidatorTests
     }
 
     // ------------------------------------------------------------------
-    // R-032 — replicated-trees dictionary validation
+    // Causal-apply buffer caps
     // ------------------------------------------------------------------
 
-    [TestCase("")]
-    [TestCase("   ")]
-    public void Validate_fails_when_replicated_trees_contains_blank_key(string key)
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_causal_buffer_max_entries_is_non_positive(int max)
     {
         var opts = new LatticeReplicationOptions
         {
             ClusterId = "site-a",
-            ReplicatedTrees = new Dictionary<string, ReplicationMode>
-            {
-                [key] = ReplicationMode.LwwRegister,
-            },
+            CausalBufferMaxEntries = max,
         };
 
         var result = Validator.Validate(name: null, opts);
@@ -193,38 +190,18 @@ public class LatticeReplicationOptionsValidatorTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Failed, Is.True);
-            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ReplicatedTrees)));
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.CausalBufferMaxEntries)));
         });
     }
 
-    [TestCase(ReplicationMode.LwwRegister)]
-    [TestCase(ReplicationMode.OrSet)]
-    [TestCase(ReplicationMode.PnCounter)]
-    [TestCase(ReplicationMode.VersionVector)]
-    public void Validate_succeeds_for_every_defined_replication_mode(ReplicationMode mode)
+    [TestCase(0)]
+    [TestCase(65535)]
+    public void Validate_fails_when_causal_buffer_max_bytes_is_below_64kb(long bytes)
     {
         var opts = new LatticeReplicationOptions
         {
             ClusterId = "site-a",
-            ReplicatedTrees = new Dictionary<string, ReplicationMode>
-            {
-                ["t"] = mode,
-            },
-        };
-
-        Assert.That(Validator.Validate(name: null, opts).Succeeded, Is.True);
-    }
-
-    [Test]
-    public void Validate_fails_when_replicated_trees_declares_undefined_mode()
-    {
-        var opts = new LatticeReplicationOptions
-        {
-            ClusterId = "site-a",
-            ReplicatedTrees = new Dictionary<string, ReplicationMode>
-            {
-                ["t"] = (ReplicationMode)999,
-            },
+            CausalBufferMaxBytes = bytes,
         };
 
         var result = Validator.Validate(name: null, opts);
@@ -232,42 +209,18 @@ public class LatticeReplicationOptionsValidatorTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Failed, Is.True);
-            Assert.That(result.FailureMessage, Does.Contain("999"));
-            Assert.That(result.FailureMessage, Does.Contain(nameof(ReplicationMode)));
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.CausalBufferMaxBytes)));
         });
     }
 
     [Test]
-    public void Validate_succeeds_for_null_replicated_trees()
-    {
-        var opts = new LatticeReplicationOptions { ClusterId = "site-a", ReplicatedTrees = null };
-
-        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
-    }
-
-    [Test]
-    public void Validate_succeeds_for_empty_replicated_trees()
+    public void Validate_succeeds_for_causal_buffer_max_bytes_at_64kb()
     {
         var opts = new LatticeReplicationOptions
         {
             ClusterId = "site-a",
-            ReplicatedTrees = new Dictionary<string, ReplicationMode>(),
-        };
-
-        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
-    }
-
-    [Test]
-    public void Validate_succeeds_for_lww_register_replicated_trees()
-    {
-        var opts = new LatticeReplicationOptions
-        {
-            ClusterId = "site-a",
-            ReplicatedTrees = new Dictionary<string, ReplicationMode>
-            {
-                ["t1"] = ReplicationMode.LwwRegister,
-                ["t2"] = ReplicationMode.LwwRegister,
-            },
+            CausalBufferMaxBytes = 65536,
+            CausalBufferMaxEntries = 1,
         };
 
         Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);

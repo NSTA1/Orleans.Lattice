@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
@@ -8,17 +9,31 @@ namespace Orleans.Lattice.Replication;
 /// <summary>
 /// Default <see cref="IReplicationApplier"/> implementation. Resolves
 /// the per-origin high-water-mark for the entry's
-/// <c>(treeId, originClusterId)</c> pair, filters re-delivery, and
-/// routes the entry through the core library's
-/// <see cref="IReplicationApplyGrain"/> seam so the persisted
-/// <c>LwwValue&lt;byte[]&gt;</c> carries the remote cluster's HLC and
-/// origin id verbatim. The HWM is advanced only after the apply
-/// returns successfully.
+/// <c>(treeId, originClusterId)</c> pair, filters re-delivery, runs
+/// the causal-plus dependency check — parking entries whose
+/// declared <see cref="ReplogEntry.VectorClock"/> is not yet
+/// dominated by the local vector clock — and routes the entry through
+/// the core library's <see cref="IReplicationApplyGrain"/> seam so
+/// the persisted <c>LwwValue&lt;byte[]&gt;</c> carries the remote
+/// cluster's HLC and origin id verbatim. The HWM is advanced only
+/// after the apply returns successfully; every advance triggers a
+/// drain of the per-tree causal-apply buffer so blocked entries
+/// whose deps are now satisfied wake up and apply in FIFO order.
 /// </summary>
 internal sealed class ReplicationApplier(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeReplicationOptions> options) : IReplicationApplier
 {
+    /// <summary>
+    /// Per-tree causal-apply buffers, lazily created on first park.
+    /// Each tree's buffer is independent — there is no cross-tree
+    /// coordination. The map itself is concurrent because Orleans
+    /// grain calls into a singleton applier may interleave across
+    /// trees; per-buffer concurrency is enforced by the buffer's
+    /// internal lock.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, CausalApplyBuffer> _buffers = new(StringComparer.Ordinal);
+
     /// <inheritdoc />
     public async Task<ApplyResult> ApplyAsync(ReplogEntry entry, CancellationToken cancellationToken = default)
     {
@@ -44,19 +59,14 @@ internal sealed class ReplicationApplier(
             // origin filter already prevents this in the steady state, but
             // hand-built apply pipelines and tests can still hand us such
             // an entry — surface it as an explicit no-op rather than
-            // silently merging into the same cluster's state. The HWM is
-            // not consulted here so we report Zero — saves a needless
-            // grain call against a row that should never carry state.
+            // silently merging into the same cluster's state.
             return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
         }
 
         // Range deletes carry HybridLogicalClock.Zero by design (the walk
         // produces many per-leaf HLCs that cannot be faithfully collapsed),
         // so per-origin HWM dedupe does not apply to them. Range applies
-        // are naturally idempotent at the leaf layer — re-running a range
-        // delete on already-tombstoned keys is a no-op. The HWM is not
-        // consulted, so we return Zero rather than incurring a grain call
-        // for an informational value that the caller cannot use.
+        // are naturally idempotent at the leaf layer.
         if (entry.Op == ReplogOp.DeleteRange)
         {
             await ApplyRangeAsync(entry, cancellationToken);
@@ -70,21 +80,134 @@ internal sealed class ReplicationApplier(
             return new ApplyResult { Applied = false, HighWaterMark = hwm };
         }
 
+        // Causal-plus dependency check. Skip the fetch entirely
+        // when the entry carries no declared dependencies — legacy
+        // peers and pre-causal-plus entries decode VectorClock as null
+        // and must continue to apply unconditionally on the existing
+        // HWM-only path so this code is wire-compatible with the
+        // additive vector-clock schema slot.
+        if (HasCausalDependencies(entry))
+        {
+            var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
+            if (!CausalApplyBuffer.DependenciesSatisfied(entry, localVc))
+            {
+                await ParkAsync(entry, resolved, cancellationToken);
+                return new ApplyResult { Applied = false, HighWaterMark = hwm };
+            }
+        }
+
         await ApplyPointAsync(entry);
         RecordApplyLag(entry);
 
-        // Advance the HWM only after the apply commits. TryAdvanceAsync is
-        // monotonic; under steady single-threaded grain semantics this call
-        // returns true and the new HWM equals entry.Timestamp. A concurrent
-        // applier that raced ahead would leave us with the higher HWM and
-        // TryAdvanceAsync returns false — fall back to a fetch only in
-        // that rare case so the steady-state apply costs one fewer grain
-        // call than a naive read-after-write.
+        // Advance the HWM only after the apply commits.
         var advanced = await hwmGrain.TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken);
         var newHwm = advanced
             ? entry.Timestamp
             : await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
+
+        // The advance may have unblocked entries parked by an earlier
+        // delivery whose deps included this origin's diagonal. Drain
+        // FIFO until the buffer reaches a fixed point — each drained
+        // apply may itself advance the local vector clock, so re-fetch
+        // before each pass.
+        if (advanced)
+        {
+            await DrainBufferAsync(entry.TreeId, hwmGrain, resolved, cancellationToken);
+        }
+
         return new ApplyResult { Applied = true, HighWaterMark = newHwm };
+    }
+
+    private static bool HasCausalDependencies(ReplogEntry entry) =>
+        entry.VectorClock is { Entries.Count: > 0 };
+
+    private async Task ParkAsync(
+        ReplogEntry entry,
+        LatticeReplicationOptions resolved,
+        CancellationToken cancellationToken)
+    {
+        var buffer = _buffers.GetOrAdd(entry.TreeId, static _ => new CausalApplyBuffer());
+        var outcome = buffer.TryAdd(
+            entry,
+            resolved.CausalBufferMaxEntries,
+            resolved.CausalBufferMaxBytes,
+            out var evicted);
+
+        if (outcome == AddOutcome.AddedWithEviction && evicted.Count > 0)
+        {
+            var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
+            foreach (var displaced in evicted)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await dlq.EnqueueAsync(
+                    displaced,
+                    failureReason: "Causal-apply buffer full; evicted blocked entry to make room.",
+                    retryCount: 0,
+                    reasonTag: LatticeReplicationMetrics.ReasonHlcSkew,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task DrainBufferAsync(
+        string treeId,
+        IReplicationHighWaterMarkGrain hwmGrain,
+        LatticeReplicationOptions resolved,
+        CancellationToken cancellationToken)
+    {
+        if (!_buffers.TryGetValue(treeId, out var buffer) || buffer.Count == 0)
+        {
+            return;
+        }
+
+        // Iterate to a fixed point: each drained apply may advance the
+        // local vector clock and unblock further entries on the next
+        // pass. Bounded by the buffer's current size + any retried
+        // entries that fail and re-park; in practice convergence is
+        // O(n) where n is the gap between received and applied.
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
+            var ready = buffer.DrainSatisfied(localVc);
+            if (ready.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var ent in ready)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    await ApplyPointAsync(ent);
+                    RecordApplyLag(ent);
+                    await hwmGrain.TryAdvanceAsync(ent.OriginClusterId!, ent.Timestamp, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // A drained apply has no transport-level retry
+                    // path: the original delivery was already ack'd
+                    // when ApplyAsync returned for the entry that
+                    // unblocked this one. Route the failed drained
+                    // entry to the dead-letter queue rather than
+                    // dropping it silently. ArgumentException /
+                    // InvalidOperationException are schema-shaped
+                    // faults; everything else is unknown.
+                    var reasonTag = ex is ArgumentException or InvalidOperationException
+                        ? LatticeReplicationMetrics.ReasonSchema
+                        : LatticeReplicationMetrics.ReasonUnknown;
+                    var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(ent.TreeId);
+                    await dlq.EnqueueAsync(
+                        ent,
+                        failureReason: ex.Message ?? "<no message>",
+                        retryCount: 0,
+                        reasonTag: reasonTag,
+                        cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
     }
 
     private Task ApplyPointAsync(ReplogEntry entry)

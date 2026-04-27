@@ -26,7 +26,7 @@ public readonly record struct DeadLetterEntry
 
     /// <summary>
     /// Human-readable description of the terminal failure, typically the
-    /// <see cref="Exception.Message"/> of the last apply attempt''s
+    /// <see cref="Exception.Message"/> of the last apply attempt's
     /// exception. Carried verbatim into operator tooling for triage.
     /// </summary>
     [Id(2)]

@@ -23,7 +23,7 @@ public interface IReplicationDisconnectGrain : IGrainWithIntegerKey
 
 /// <summary>
 /// Trivial implementation — a single boolean flag, persisted so a silo
-/// restart doesn''t accidentally "heal" the replication pause without an
+/// restart doesn't accidentally "heal" the replication pause without an
 /// operator asking for it.
 /// </summary>
 internal sealed class ReplicationDisconnectGrain(

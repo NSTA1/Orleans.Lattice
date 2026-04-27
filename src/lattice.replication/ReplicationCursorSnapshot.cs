@@ -3,7 +3,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// Point-in-time snapshot of a single consumer''s reported cursor,
+/// Point-in-time snapshot of a single consumer's reported cursor,
 /// returned by <see cref="ILatticeReplicationCursorRegistry.SnapshotAsync"/>.
 /// </summary>
 /// <param name="ConsumerId">Stable identifier for the reporting consumer.</param>

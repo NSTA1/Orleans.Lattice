@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Replication.Grpc;
 public static class LatticeReplicationGrpcServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers <see cref="GrpcPushTransport"/> as the silo''s
+    /// Registers <see cref="GrpcPushTransport"/> as the silo's
     /// <see cref="IReplicationTransport"/>, replacing the no-op
     /// transport <c>AddLatticeReplication</c> registers by default.
     /// Binds the supplied <paramref name="configure"/> delegate to the

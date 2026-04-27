@@ -7,13 +7,13 @@ namespace Orleans.Lattice.Replication.Grpc;
 
 /// <summary>
 /// Reference-typed wrapper around <see cref="ReplicationBatchEnvelope"/>.
-/// gRPC''s <see cref="Method{TRequest, TResponse}"/> imposes a
+/// gRPC's <see cref="Method{TRequest, TResponse}"/> imposes a
 /// <c>class</c> constraint on its type parameters; the public
 /// envelope is a <c>readonly record struct</c> for Orleans-serializer
 /// reasons. The wrapper carries the value across the gRPC
 /// boundary and is the only allocation the marshaller introduces per
 /// call - the encoded payload itself is still written straight into
-/// the gRPC stream''s <see cref="System.Buffers.IBufferWriter{T}"/>.
+/// the gRPC stream's <see cref="System.Buffers.IBufferWriter{T}"/>.
 /// </summary>
 internal sealed class ReplicationBatchEnvelopeBox
 {
@@ -22,7 +22,7 @@ internal sealed class ReplicationBatchEnvelopeBox
 
 /// <summary>
 /// Reference-typed wrapper around <see cref="ReplicationAck"/>.
-/// Mirrors <see cref="ReplicationBatchEnvelopeBox"/>; see that type''s
+/// Mirrors <see cref="ReplicationBatchEnvelopeBox"/>; see that type's
 /// remarks for rationale.
 /// </summary>
 internal sealed class ReplicationAckBox
@@ -41,7 +41,7 @@ internal sealed class ReplicationAckBox
 /// <remarks>
 /// The envelope serializer hands the gRPC
 /// <see cref="SerializationContext.GetBufferWriter"/> straight through
-/// to <see cref="IReplicationBatchEncoder.Encode"/>, so the envelope''s
+/// to <see cref="IReplicationBatchEncoder.Encode"/>, so the envelope's
 /// bytes never round-trip through a per-batch heap allocation - the
 /// zero-allocation hot path the encoder seam was shaped for. The
 /// deserializer prefers the single-segment fast path on

@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Replication;
 /// Captures every locally-originating mutation at commit time, builds a
 /// fully-formed <see cref="ReplogEntry"/> (op + key + value + HLC + origin
 /// + TTL + declared <see cref="ReplicationMode"/>), and forwards it to the
-/// registered <see cref="IReplogSink"/> before the originating grain''s
+/// registered <see cref="IReplogSink"/> before the originating grain's
 /// write returns. Replaces the host-level outgoing-call filter used by the
 /// legacy <c>MultiSiteManufacturing</c> sample - capture is now atomic
 /// with the write.
