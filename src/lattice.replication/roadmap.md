@@ -124,22 +124,44 @@ The phase structure below groups items thematically. This section is the canonic
 26. **R-047 — Typed-envelope `IReplicationTransport` shape** `[deps: R-042 ✓]`
     Eliminates the sender-side decode-then-re-encode round-trip the gRPC push transport currently pays. Today `IReplicationTransport.SendAsync` takes `ReplicationBatch` whose `Payload` is `ReadOnlyMemory<byte>`, so `GrpcPushTransport.BuildEnvelope` calls `IReplicationBatchEncoder.Decode(batch.Payload)` purely to satisfy the gRPC marshaller, which then re-encodes via `Encode(envelope, IBufferWriter<byte>)`. The decode allocates one `ReplogEntry` per WAL row in the batch on every send. Widen the transport seam to carry the typed `ReplicationBatchEnvelope` directly — either by adding a typed overload (`SendAsync(ReplicationBatchEnvelope envelope, string targetClusterId, CancellationToken ct)`) or by reshaping `ReplicationBatch` to carry the envelope alongside (or instead of) the byte[] payload, with a backwards-compat fallback for transports that only support bytes. After this change the gRPC hot path is genuinely zero-allocation beyond the gRPC box wrapper. LoopbackTransport / NoOpTransport are unaffected because they never re-encode.
 
+### WAL hardening (post-critical-path)
+
+These six items close the WAL design doc's deferred acceptance rows from R-070 / R-071, plus the v2-commit-path consumer side. R-074 / R-075 / R-077 are independent and parallelisable; R-076 sequences after R-075; R-078 sequences after R-047 and R-076; R-079 is blocked on the matching core-side flip (Core F-049) and is the v2 forward-compat audit.
+
+27. **R-074 — Multi-batch in-flight flush concurrency** `[deps: R-071 ✓]`
+    Closes WAL design §9.1.4. Lifts the hard-coded single-in-flight flush to `WalMaxPendingBatches` while preserving dense offsets via grain-turn-serialised offset assignment.
+
+28. **R-075 — Exact byte accounting in pending-batch sizing** `[deps: R-071 ✓]`
+    Closes WAL design §9.1.3. Replaces the heuristic batch sizer with an allocation-free `IReplicationBatchEncoder.Measure(...)` so a 4 MB batch never overshoots the Azure Table Storage transactional-batch ceiling.
+
+29. **R-076 — `ArraySegment<byte>` provider contract for zero-copy hand-off** `[deps: R-070 ✓, R-075]`
+    Closes WAL design §9.3.2. Widens `IWalStorageProvider.AppendBatchAsync` with an encoded-bytes overload so backends storing binary blobs skip the per-batch re-encode.
+
+30. **R-077 — Trim-aware `GetEntryCountAsync`** `[deps: R-070 ✓]`
+    Independent. Tracks the `_nextOffset`-vs-actual-count drift R-061's GC will introduce. Adds `IWalStorageProvider.GetLowestOffsetAsync` and reshapes the grain RPC to `GetLiveEntryCountAsync`.
+
+31. **R-078 — Single-encode hot path** `[deps: R-047, R-076, R-072 ✓]`
+    Performance follow-on. Stamps the WAL's encoded payload bytes onto the `IChangeFeed` envelope so the gRPC ship loop ships verbatim — eliminates the third encode per replicated mutation.
+
+32. **R-079 — Replication consumer of WAL-as-commit-point promotion** `[deps: Core F-049 outstanding, R-071 ✓, R-082 ✓]`
+    Forward-compat audit + GC / causal-stable predicate widening so the local materialiser registered by Core F-049 / F-050 is a first-class `IChangeFeed` consumer indistinguishable from a remote peer. Cannot start until Core F-049 lands.
+
 ### Causal+ apply pipeline (after R-080; runs in parallel with snapshot/bootstrap once R-081 is in)
 
-27. **R-081 ✓ shipped — Local vector clock generalises per-origin HWM** `[deps: R-080 ✓]`
+33. **R-081 ✓ shipped — Local vector clock generalises per-origin HWM** `[deps: R-080 ✓]`
     Reframe the existing per-origin HWM table (`{(tree, origin) → HLC}`) as the diagonal of the local vector clock without breaking the wire. No new grain, no new persistence — same `IReplicationHighWaterMarkGrain` interface, same Orleans-storage rows. Adds an internal `GetVectorAsync(treeId)` member returning the full clock for use by R-082's dependency check. `PinSnapshotAsync` widens to `PinSnapshotAsync((HLC asOf, VectorClock frontier))` ahead of R-050 / R-084 consuming it.
 
-28. **R-082 ✓ shipped — Causal dependency check + bounded buffer**
+34. **R-082 ✓ shipped — Causal dependency check + bounded buffer**
     Receiver-side change to `ReplicationApplier.ApplyPointAsync`: HWM check first (O(1) duplicate fast path, unchanged), then `∀ origin in entry.VectorClock: localVc[origin] >= entry.VectorClock[origin]`. Unsatisfied entries park in a per-shard bounded `BlockedQueue` keyed by `(missingOrigin, missingHlc)`; on every successful apply that advances `localVc`, wake any blocked entry whose deps are now satisfied. New `LatticeReplicationOptions.CausalBufferMaxEntries` (default `1024`, validator `>= 1`) and `CausalBufferMaxBytes` (default `16 MB`, validator `>= 64 KB`). Overflow routes the oldest blocked entry through `IReplicationDeadLetterGrain.EnqueueAsync` with reason tag `LatticeReplicationMetrics.ReasonHlcSkew` (reserved by R-064 for exactly this case) — no second dead-letter store. No cross-shard locks; the buffer lives in the applier's shard-local state.
 
-29. **R-083 ✓ shipped — Causal-stable WAL GC frontier**
+35. **R-083 ✓ shipped — Causal-stable WAL GC frontier**
     Replace R-061's `min(cursor)` predicate with `causal_stable = min(peerVectorClock)` across `IChangeFeed` subscribers. `ILatticeReplicationCursorRegistry.ReportAsync` gains a VC-shaped overload (additive — old callers continue to report HLC-only and contribute a degenerate diagonal-only VC). `LatticeReplicationGc` caches `causal_stable` and recomputes only on ack updates. An entry is GC-eligible iff `entry.VectorClock <= causal_stable AND entry.Offset <= minAckedOffset` (R-061's offset predicate AND-ed in for safety). Documented as an extension to [`wal-gc.md`](../../docs/lattice.replication/wal-gc.md).
     *Future-compat:* a future C-050 local materialiser reports its own VC and pins the log identically to a remote peer.
 
-30. **R-084 ✓ shipped — Causal-stable snapshot cut-point**
+36. **R-084 ✓ shipped — Causal-stable snapshot cut-point**
     Pair with R-050 in a single cycle: `ISnapshotProvider.ExportAsync` returns the causal-stable frontier alongside the as-of HLC; the receiver bootstrap state machine (R-051) calls `PinSnapshotAsync((HLC, VectorClock))`; the dependency check (R-082) runs from the pinned VC frontier on the first incremental entry. Snapshot scan algorithm is unchanged — only the cut-point selection. Co-build with R-050 in a single feature cycle to avoid retrofitting the snapshot handoff contract.
 
-31. **R-085 ✓ shipped — Causal+ observability** `[deps: R-082 ✓, R-064 ✓]`
+37. **R-085 ✓ shipped — Causal+ observability** `[deps: R-082 ✓, R-064 ✓]`
     Three new instruments on the `orleans.lattice.replication` meter, following R-064's reason-tag conventions:
     - `apply.buffered_entries` UpDownCounter<long> tagged `tree`, `shard`
     - `apply.buffer_bytes` UpDownCounter<long> tagged `tree`, `shard`
@@ -147,13 +169,13 @@ The phase structure below groups items thematically. This section is the canonic
 
     Plus `apply.causal_violations_blocked` Counter<long> tagged `tree`, incremented on every park (so an alert on `rate > 0` flags causal-skew health). Documented in [`docs/lattice.replication/observability.md`](../../docs/lattice.replication/observability.md) as a new "Causal+ instruments" section. Test coverage: per-instrument unit tests under existing `LatticeReplicationMetricsTests` patterns.
 
-32. **R-086 ✓ shipped — Transport metadata pass-through contract test**
+38. **R-086 ✓ shipped — Transport metadata pass-through contract test**
     Per the perf note in §9, transport stays dumb. Add a contract test in `Orleans.Lattice.Replication.Tests` (and a mirror in `Orleans.Lattice.Replication.Grpc.Tests`) that asserts `IReplicationTransport` implementations preserve `VectorClock` and `DependencySummary` slots verbatim across a round-trip — no reordering, no mutation, no synthesis. Lifts the existing `LoopbackTransport` round-trip fixture and parameterises it over the new fields. No production code change; this is the regression scaffold so a future transport doesn't quietly break causal+ in the way R-021's "thread-local cycle-break" sample-shortcut would have if R-022 hadn't pinned source-HLC preservation as a contract test.
 
-33. **R-087 ✓ shipped — Per-origin FIFO invariant + out-of-order detection**
+39. **R-087 ✓ shipped — Per-origin FIFO invariant + out-of-order detection**
     Receiver-side instrumentation that pins the per-origin FIFO contract R-082's buffer relies on for occupancy bounds. Cheap to land alongside R-085; same instrumentation surface. Closes the gap left by the user-facing R-201 / R-211 design split — sender-side FIFO is implicit in the partitioned change feed (per-shard offset order ⇒ per-(origin, shard) HLC monotonicity), so there is no sender-side enforcement work; the genuine gap is a receiver-side metric that surfaces a transport regression breaking that invariant.
 
-34. **R-088 ✓ shipped — Bootstrap → incremental causal handoff verification** `[deps: R-082 ✓, R-084 ✓]`
+40. **R-088 ✓ shipped — Bootstrap → incremental causal handoff verification** `[deps: R-082 ✓, R-084 ✓]`
     Joins the snapshot/bootstrap stream and the causal+ apply stream — schedule after both R-082 and R-084 land. R-082 + R-084 already provide the mechanism (initial `local_vc` from the pinned `causalStableFrontier`, dep-check from there on the first incremental); R-088 is the explicit acceptance test + DLQ-overflow operator playbook that pins the contract end-to-end.
 
 
@@ -161,31 +183,31 @@ The phase structure below groups items thematically. This section is the canonic
 
 The R-080 → R-088 wave delivers causal+ for the point-write, single-tree, single-shard-per-mutation path. The five items below extend that guarantee to every write path the core library exposes (`SetManyAtomic`, resize, reshard / shadow-forward, snapshot/restore) so a host that enables any one of those features still gets full causal+ semantics. Each pairs with a core-side dependency (F-043–F-046) and the core change + replication consumer must land in a single feature cycle. Cross-tree causality is intentionally out of scope.
 
-35. **R-089 — Atomic multi-key VC capture point** `[deps: R-080 ✓, R-081 ✓, Core F-044 ✓]`
+41. **R-089 — Atomic multi-key VC capture point** `[deps: R-080 ✓, R-081 ✓, Core F-044 ✓]`
     Closes per-key VC drift in `SetManyAtomic`: capture the local VC **once** at the start of the atomic transaction and stamp every emitted `ReplogEntry.VectorClock` in that batch with the identical frontier so a remote peer never sees a partial-set state where the writer's frontier said all N should be visible together. Receiver: no change — entries with identical VCs unblock together when their shared frontier is satisfied.
 
-36. **R-090 — `MutationKind` classification + maintenance skip** `[deps: R-080 ✓, Core F-045 ✓]`
+42. **R-090 — `MutationKind` classification + maintenance skip** `[deps: R-080 ✓, Core F-045 ✓]`
     Resize / rebalance / compaction emits structural rewrites that are not user-authored causal events. Reading them as causal would inflate every replicated tree's VC under maintenance pressure and pollute the dependency graph. R-090 reads the new `MutationKind { User, Maintenance }` slot on `LatticeMutation` and skips the WAL append for `Maintenance` on replicated trees. Independent of `OriginClusterId`.
 
-37. **R-091 — Shadow-forward VC preservation** `[deps: R-080 ✓, R-081 ✓, R-022 ✓, Core F-046 ✓]`
+43. **R-091 — Shadow-forward VC preservation** `[deps: R-080 ✓, R-081 ✓, R-022 ✓, Core F-046 ✓]`
     Shard-split / merge / saga-compensate shadow-forward a user write into a different shard. Today F-036's `LatticeOriginContext` carries `OriginClusterId` through these rewrites; R-091 extends the same end-to-end discipline to `VectorClock`. The replication observer never re-captures a VC for any emit whose ambient context already supplies one. Receiver-side: a small `RecentApplyCache<(origin, hlc, key, op)>` LRU (default `4096`, new `ShadowForwardDedupeCacheSize` option) drops the duplicate emit pair shadow-forward generates so the receiver applies the shadow-forwarded write exactly once.
 
-38. **R-092 — Tree-global producer VC at commit time** `[deps: R-080 ✓, R-081 ✓]`
+44. **R-092 — Tree-global producer VC at commit time** `[deps: R-080 ✓, R-081 ✓]`
     R-080 captures VC at the per-grain commit-time observer site, but a single user write touching multiple shards (range delete, multi-leaf saga) emits from multiple grains in close succession; if each grain reads its own diagonal-only HWM the resulting per-emit VCs disagree on cross-shard origins. R-092 introduces a per-`(silo, tree)` in-memory `LocalVectorClock` cache populated from `IReplicationHighWaterMarkGrain.GetVectorAsync` on cold start, advanced on every WAL append (local origin) and every inbound apply (foreign origin). Producer reads from the cache; cost is one grain call per (silo, tree, restart). The cache is the producer-side counterpart to R-081's receiver-side `LocalVectorClock`.
 
-39. **R-093 — Snapshot/restore VC reconstruction** `[deps: R-080 ✓, R-081 ✓, Core F-043 ✓]`
+45. **R-093 — Snapshot/restore VC reconstruction** `[deps: R-080 ✓, R-081 ✓, Core F-043 ✓]`
     Closes the intra-cluster snapshot-as-a-tool gap: when an operator snapshots a tree and restores it (same cluster, possibly different timestamp) the live HWM table is wiped but the values still carry their commit-time VC slot (Core F-043). R-093 introduces an `IReplicationLocalVcSeeder.SeedFromTreeAsync(treeName)` that walks the restored values' VC slots and seeds `LocalVectorClock` to per-origin pointwise max. Without this, a restore-then-replicate cycle would replay every restored entry against a zeroed VC and either re-park or re-merge them. Cross-cluster bootstrap (R-050 / R-084) is unaffected — that path pins the snapshot's `causalStableFrontier` directly via `PinSnapshotAsync`.
 ### Extended CRDT modes (gated on outstanding core primitives)
 
 These ship as paired (core primitive ↔ replication delta) deliverables — building either side in isolation freezes a contract before its consumer validates it. Order between the three is by user demand, not technical dependency.
 
-40. **R-034 — MV-Register delta + dispatch** `[deps: Core F-039 outstanding]`
+46. **R-034 — MV-Register delta + dispatch** `[deps: Core F-039 outstanding]`
     Pair with F-039 in a single cycle.
 
-41. **R-035 — OR-Map delta + dispatch** `[deps: Core F-040 outstanding]`
+47. **R-035 — OR-Map delta + dispatch** `[deps: Core F-040 outstanding]`
     Pair with F-040. Includes the recursive `InnerMode` wire-envelope extension.
 
-42. **R-036 — RGA sequence delta + dispatch** `[deps: Core F-041 outstanding]`
+48. **R-036 — RGA sequence delta + dispatch** `[deps: Core F-041 outstanding]`
     Pair with F-041. Highest implementation complexity of the three (sequence convergence, back-pressure for high-frequency editors).
 
 ### Suggested concurrency
@@ -430,6 +452,37 @@ These items are gating for **R-041** (binary framing) and **R-042** (gRPC push t
   - **R-023** — HWM continues to key on `(tree, originClusterId) → HLC` regardless (HLC is the dedup key; cursor shape only governs *resume* tokens).
   - **R-041** — the batch envelope's public "resume-from" field is HLC-shaped; the gRPC stream may carry an opaque `WalResumeToken` alongside as a diagnostic fast-path.
   - **R-050** — bootstrap handoff (`PinSnapshotAsync` arg type) takes `HybridLogicalClock`, not an offset.
+
+- [ ] **R-074 — Multi-batch in-flight flush concurrency** *(closes WAL design §9.1.4 acceptance row; covers R-071 deferral)* `[deps: R-071 ✓]`
+  R-071 ships single-in-flight flush hard-coded in `IReplogShardGrain` — `WalMaxPendingBatches` is declared and validated (`>= 1`) but is not consumed today. Under sustained append throughput this caps a shard's commit rate at `1 / max(append_rpc_rtt, storage_flush_latency)`, which on Azure Table Storage is the dominant lower bound. R-074 lifts the cap to `WalMaxPendingBatches` (default `1` for wire-compat — behaviour unchanged unless a host opts in) by replacing the single `_inFlightFlush` field with a bounded `Channel<PendingBatch>` whose capacity is `WalMaxPendingBatches`, and serialising **only the offset-assignment step** under the grain turn (still the single writer per shard, so dense offsets are preserved by construction). Each draining flush proceeds in parallel against `IWalStorageProvider.AppendBatchAsync`. Fail-fast rollback semantics generalise: on a failed flush at offset window `[startOffset, endOffset)`, every TCS in that window *and* every TCS in any later in-flight window plus the currently-accumulating pending batch is faulted with the same exception (the offset windows above the failed one are stale once the counter rolls back), and the channel is drained before re-opening for new appends. Deactivation drain extends to "wait for every channel item to complete" rather than a single field.
+
+  Acceptance: WAL design §9.1.4 row passes (a 1024-entry burst against a `WalMaxPendingBatches = 4` provider achieves a measurable throughput uplift over `= 1` on a fixture-injected provider with simulated 50 ms append latency); fail-fast rollback under the multi-batch path verified by an injected provider that fails the second of three concurrent flushes and asserts every TCS in flushes 2..N + the pending batch is faulted with the same exception; deactivation drain waits for every in-flight flush; `WalMaxPendingBatches = 1` continues to behave identically to today's hard-coded path (regression scaffold).
+
+- [ ] **R-075 — Exact byte accounting in pending-batch sizing** *(closes WAL design §9.1.3 acceptance row; covers R-071 deferral)* `[deps: R-071 ✓]`
+  Today's `IReplogShardGrain` cuts a batch over when `WalMaxBatchBytes` is reached, but the per-entry size is the heuristic `key.Length * 2 + value.Length + 128`. Under realistic Orleans-binary framing of `ReplogEntry` (which carries `LwwValue<byte[]>`, an HLC, an `OriginClusterId` string, the `VectorClock` map from R-080, and per-entry headers) the heuristic underestimates large-VC entries and overestimates small-key/no-VC entries. The 4 MB Azure Table Storage transactional-batch ceiling (the reason `WalMaxBatchBytes` defaults to 4 MB in the first place) has zero tolerance for underestimates — a single batch over the limit fails the entire transaction. R-075 replaces the heuristic with the actual encoded byte count. Approach: extend `IReplicationBatchEncoder` (R-041) with a `int Measure(ReplogEntry)` method that returns the encoded byte length for a single entry without allocating a new buffer (the canonical `OrleansBinaryReplicationBatchEncoder` exposes the codec's measure path), and have the grain accumulate `_pendingBatchSizeBytes` from `Measure(...)` rather than the estimate. Cost: one extra `Measure` per `AppendAsync`, paid against the existing serialiser-internal codec; no extra heap allocation.
+
+  Acceptance: WAL design §9.1.3 row passes (a 100-entry batch where entries vary in `VectorClock` cardinality from 0 to 10 origins is admitted exactly when its real encoded size is `<= WalMaxBatchBytes`); a regression test injects an entry whose heuristic estimate is below the limit but whose real size exceeds it and asserts the batch is cut over correctly; the measurement path is allocation-free per entry (verified by `BenchmarkDotNet` MemoryDiagnoser or equivalent).
+
+- [ ] **R-076 — `ArraySegment<byte>` provider contract for zero-copy hand-off** *(closes WAL design §9.3.2 acceptance row; covers R-071 deferral)* `[deps: R-070 ✓, R-075]`
+  R-070's `IWalStorageProvider.AppendBatchAsync` exchanges `WalEntry` records each carrying an embedded `ReplogEntry`. The provider has to re-serialise every entry to its on-the-wire bytes for storage — even when the caller (the grain) already has the encoded bytes in hand, because R-075's `Measure(...)` walks them. R-076 widens the provider contract with an additional `AppendBatchAsync(treeId, shardIndex, ReadOnlyMemory<ArraySegment<byte>> encodedEntries, ReadOnlyMemory<long> offsets, ct)` overload taking pre-encoded payload bytes; backends that natively store binary blobs (Azure Table Storage, Cosmos DB binary properties, file-backed providers) hand the segments straight through to their underlying `BinaryData` / `ReadOnlyMemory<byte>` field on the storage row. The existing `WalEntry`-shaped overload is kept for backends that prefer to own the codec (e.g. backends that index secondary fields off `entry.Timestamp` or `entry.OriginClusterId`); the in-memory provider implements both for parity. Producers (the grain) call the encoded-bytes overload when they have already paid the encode cost via R-075's `Measure(...)`-driven sizing — the same buffer that informed sizing is the buffer handed to the provider, no second encode.
+
+  Acceptance: WAL design §9.3.2 row passes; a `BenchmarkDotNet` comparison shows the encoded-bytes path eliminates one full-batch re-encode per append vs the `WalEntry` path on a 100-entry / 4 MB batch; the in-memory provider's two overloads are reciprocal (round-trip of either form yields identical `ReadAsync` results); the gRPC push transport (R-042) and the Azure Table Storage backend (R-073) consume the encoded-bytes overload by default.
+
+- [ ] **R-077 — Trim-aware `GetEntryCountAsync`** *(closes accounting bug noted under R-073 companion-fix)* `[deps: R-070 ✓]`
+  `IReplogShardGrain.GetEntryCountAsync` currently returns `_nextOffset`, which equals the live entry count only because no caller invokes `IWalStorageProvider.TrimAsync` today. Once R-061's GC-by-min-acked-cursor runs in production (which already calls `TrimAsync`), the counter diverges from the persisted count by exactly the trimmed prefix length — quietly inflating dashboards, alerts, and the back-pressure `IHealthCheck` (R-065). Fix: add `Task<long> GetLowestOffsetAsync(...)` to `IWalStorageProvider` returning the lowest still-stored offset (`0` for an untrimmed shard, otherwise `firstStoredOffset`); the in-memory provider returns `entries.MinBy(e => e.Offset)?.Offset ?? 0`, the Azure Table Storage backend (R-073) issues a single ascending-`RowKey` `Top(1)` query (constant-time symmetric to `GetHighestOffsetAsync`). `IReplogShardGrain.GetEntryCountAsync` is reshaped to return `nextOffset - lowestOffset` and renamed to `GetLiveEntryCountAsync`; the old name is kept as an `[Obsolete]` forwarder for one minor version. Diagnostic readers that want "next offset to be assigned" call `GetHighestOffsetAsync + 1` directly.
+
+  Acceptance: a fixture that appends 100 entries, trims through offset 50, and asserts `GetLiveEntryCountAsync` returns `50`; the in-memory provider's `GetLowestOffsetAsync` is correct on empty / fully-trimmed / partially-trimmed / untrimmed shards; the Azure Table Storage backend (R-073) test suite gains the same coverage.
+
+- [ ] **R-078 — Single-encode hot path: WAL append + replication ship share one buffer** *(performance follow-on to R-047, R-076)* `[deps: R-047, R-076, R-072 ✓]`
+  Today a replicated entry is encoded **three times** between user write and peer apply: (1) on commit by the publish helper into a `LatticeMutation`; (2) on WAL append into `_pendingBatch` accounting bytes; (3) on ship by `OrleansBinaryReplicationBatchEncoder` into the gRPC stream. R-047 eliminates ship-side decode-then-re-encode; R-076 lets the WAL append consume already-encoded bytes; R-078 ties the two together by stamping the encoded `ReplogEntry` payload bytes onto the in-flight `IChangeFeed` envelope so the gRPC push transport (R-042) ships the WAL's exact stored bytes verbatim. Implementation: the grain's pending-batch buffer becomes the source of truth for both persistence and replication. After R-076 lands, `_pendingBatch` already holds `ArraySegment<byte>` encoded payloads; R-078 plumbs those segments through to `IChangeFeed.Subscribe`'s yielded entries (a new `internal readonly struct EncodedReplogEntry` carrying offset + segment + `ReplogEntry` view) so consumers that already consume bytes (the gRPC transport) skip the re-encode entirely. Consumers that consume objects (loopback transport, in-process projections under v2 C-050) use the `ReplogEntry` view at zero cost. Net effect: the ship hot path becomes one Orleans-binary encode at commit time and zero further encodes anywhere downstream.
+
+  Acceptance: a `BenchmarkDotNet` end-to-end measurement of "user `SetAsync` → peer apply" shows the encode cost drops from `3 × encode(ReplogEntry)` to `1 × encode(ReplogEntry)`; allocation count on the ship path is zero beyond the gRPC box wrapper; loopback transport regression tests pass unchanged because the object view is preserved; an injected encoder mismatch (provider stored bytes A, ship encodes B from a different encoder) surfaces as an explicit error rather than silent drift (the encoded segment is the only artefact in flight, so a mismatch is impossible by construction).
+
+- [ ] **R-079 — Replication consumer of WAL-as-commit-point promotion** *(forward dep on Core F-049)* `[deps: Core F-049, R-071 ✓, R-082 ✓]`
+  When core F-049 promotes the WAL to the sole commit point (leaf state becomes a materialised projection rebuilt from the WAL on activation; see `docs/future.md` §C-020 / C-030 / C-040), the replication package switches from "WAL is a side-car of the leaf write" to "WAL **is** the commit". For the replication package the change is mostly observational — `IChangeFeed`, `IReplicationApplier`, the per-origin HWM, and the bootstrap state machine all consume the WAL today and continue to consume it under v2. The genuine work in R-079 is the local-apply seam: the leaf-projection materialiser (Core F-050) is *another* `IChangeFeed` subscriber, indistinguishable from a remote peer except that its target is the local leaf grain rather than a wire transport. R-079 (a) audits every `IChangeFeed` / `IReplicationApplier` / HWM API surface for assumptions that the consumer is remote (per the §"Future compatibility" note up top, none should remain — this item enforces it); (b) widens R-061's GC predicate to consume the new local materialiser cursor as a first-class subscriber (the existing `ILatticeReplicationCursorRegistry` shape generalises directly: a local materialiser publishes its acked offset under a reserved `consumerId`); (c) widens R-083's causal-stable frontier predicate to include the local materialiser's vector clock (same shape, same generalisation).
+
+  Acceptance: a fixture replaces the configured `IReplicationApplier` with a fake "local materialiser" that drains the change feed into an in-memory dictionary and reports its progress via `ILatticeReplicationCursorRegistry`; R-061's GC pins the WAL on the slowest of {remote peers, local materialiser}; R-083's causal-stable frontier consumes the local materialiser's VC; the replication wire format (R-041 / R-042) is unchanged; a regression test asserts that disabling the local materialiser (i.e. removing it from the registry) does not change observed replication behaviour vs today's "remote-peers-only" world.
+
 
 ---
 
