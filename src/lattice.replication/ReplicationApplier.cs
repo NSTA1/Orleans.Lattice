@@ -126,7 +126,7 @@ internal sealed class ReplicationApplier(
         LatticeReplicationOptions resolved,
         CancellationToken cancellationToken)
     {
-        var buffer = _buffers.GetOrAdd(entry.TreeId, static _ => new CausalApplyBuffer());
+        var buffer = _buffers.GetOrAdd(entry.TreeId, static treeId => new CausalApplyBuffer(treeId));
         var outcome = buffer.TryAdd(
             entry,
             resolved.CausalBufferMaxEntries,

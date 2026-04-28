@@ -250,4 +250,144 @@ public class CausalApplyBufferTests
             Assert.That(buffer.TotalBytes, Is.EqualTo(0));
         });
     }
+
+    [Test]
+    public void TryAdd_records_park_increments_violations_buffered_entries_and_buffer_bytes()
+    {
+        var buffer = new CausalApplyBuffer(Tree);
+
+        using var blocked = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyCausalViolationsBlockedName);
+        using var bufferedEntries = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyBufferedEntriesName);
+        using var bufferBytes = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyBufferBytesName);
+
+        buffer.TryAdd(Entry("k", Hlc(1), valueSize: 10), 16, 1 << 20, out _);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(blocked.Measurements.Sum(m => m.Value), Is.EqualTo(1L));
+            Assert.That(bufferedEntries.Measurements.Sum(m => m.Value), Is.EqualTo(1L));
+            Assert.That(bufferBytes.Measurements.Sum(m => m.Value), Is.GreaterThan(0L));
+            Assert.That(blocked.Measurements.Single().Tags,
+                Has.Some.Matches<KeyValuePair<string, object?>>(t => t.Key == "tree" && (string?)t.Value == Tree));
+            Assert.That(bufferedEntries.Measurements.Single().Tags,
+                Has.Some.Matches<KeyValuePair<string, object?>>(t => t.Key == "shard" && (string?)t.Value == "0"));
+        });
+    }
+
+    [Test]
+    public void TryAdd_eviction_decrements_buffered_entries_and_buffer_bytes()
+    {
+        var buffer = new CausalApplyBuffer(Tree);
+        buffer.TryAdd(Entry("a", Hlc(1)), 2, 1 << 20, out _);
+        buffer.TryAdd(Entry("b", Hlc(2)), 2, 1 << 20, out _);
+
+        using var bufferedEntries = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyBufferedEntriesName);
+        using var bufferBytes = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyBufferBytesName);
+
+        // Adding a third entry forces FIFO eviction of the first.
+        buffer.TryAdd(Entry("c", Hlc(3)), 2, 1 << 20, out var evicted);
+
+        // Net effect: +1 admit, -1 evict on entries → 0 net.
+        Assert.Multiple(() =>
+        {
+            Assert.That(evicted, Has.Count.EqualTo(1));
+            Assert.That(bufferedEntries.Measurements.Sum(m => m.Value), Is.EqualTo(0L));
+            // Bytes net is non-zero (a's size != c's size in general but here both are similar).
+            // We assert that *both* an admit increment and an evict decrement were emitted.
+            Assert.That(bufferedEntries.Measurements.Any(m => m.Value > 0), Is.True);
+            Assert.That(bufferedEntries.Measurements.Any(m => m.Value < 0), Is.True);
+            Assert.That(bufferBytes.Measurements.Any(m => m.Value > 0), Is.True);
+            Assert.That(bufferBytes.Measurements.Any(m => m.Value < 0), Is.True);
+        });
+    }
+
+    [Test]
+    public void TryAdd_duplicate_does_not_emit_violations_or_buffer_metrics()
+    {
+        var buffer = new CausalApplyBuffer(Tree);
+        var entry = Entry("k", Hlc(1));
+        buffer.TryAdd(entry, 16, 1 << 20, out _);
+
+        using var blocked = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyCausalViolationsBlockedName);
+        using var bufferedEntries = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyBufferedEntriesName);
+
+        var outcome = buffer.TryAdd(entry, 16, 1 << 20, out _);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome, Is.EqualTo(AddOutcome.Duplicate));
+            Assert.That(blocked.Measurements, Is.Empty);
+            Assert.That(bufferedEntries.Measurements, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void DrainSatisfied_records_dependency_wait_ms_and_decrements_gauges()
+    {
+        var buffer = new CausalApplyBuffer(Tree);
+        buffer.TryAdd(Entry("first", Hlc(10), vc: Vc((OriginA, Hlc(5)))), 16, 1 << 20, out _);
+        buffer.TryAdd(Entry("second", Hlc(11), vc: Vc((OriginA, Hlc(5)))), 16, 1 << 20, out _);
+
+        using var bufferedEntries = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyBufferedEntriesName);
+        using var bufferBytes = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyBufferBytesName);
+        using var waits = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDependencyWaitMsName);
+
+        var ready = buffer.DrainSatisfied(Vc((OriginA, Hlc(5))));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ready, Has.Count.EqualTo(2));
+            // One aggregate decrement for both drained entries: -2.
+            Assert.That(bufferedEntries.Measurements.Sum(m => m.Value), Is.EqualTo(-2L));
+            Assert.That(bufferBytes.Measurements.Sum(m => m.Value), Is.LessThan(0L));
+            // Two wait samples (one per drained entry).
+            Assert.That(waits.Measurements, Has.Count.EqualTo(2));
+            Assert.That(waits.Measurements.All(m => m.Value >= 0.0), Is.True);
+            Assert.That(waits.Measurements.First().Tags,
+                Has.Some.Matches<KeyValuePair<string, object?>>(t => t.Key == "tree" && (string?)t.Value == Tree));
+        });
+    }
+
+    [Test]
+    public void DrainSatisfied_with_no_satisfied_entries_emits_no_metrics()
+    {
+        var buffer = new CausalApplyBuffer(Tree);
+        buffer.TryAdd(Entry("blocked", Hlc(10), vc: Vc((OriginA, Hlc(50)))), 16, 1 << 20, out _);
+
+        using var bufferedEntries = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyBufferedEntriesName);
+        using var waits = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDependencyWaitMsName);
+
+        var ready = buffer.DrainSatisfied(Vc((OriginA, Hlc(5))));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ready, Is.Empty);
+            Assert.That(bufferedEntries.Measurements, Is.Empty);
+            Assert.That(waits.Measurements, Is.Empty);
+        });
+    }
 }

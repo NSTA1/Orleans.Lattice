@@ -60,6 +60,15 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string TagReason = "reason";
 
+    /// <summary>
+    /// Tag key for the per-tree shard component of the causal-apply buffer
+    /// (<see cref="ApplyBufferedEntries"/> / <see cref="ApplyBufferBytes"/>).
+    /// The current causal-apply buffer is one-per-tree, so the canonical
+    /// tag value is <c>"0"</c>; the dimension is reserved up front so a
+    /// future per-shard buffer can populate it without a wire-format break.
+    /// </summary>
+    public const string TagShard = "shard";
+
     /// <summary>Reason tag value: entry removed by an explicit operator <c>Discard</c> call.</summary>
     public const string ReasonDiscarded = "discarded";
 
@@ -277,4 +286,77 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="WalEntriesShipped"/> counter.
     /// </summary>
     public const string WalEntriesShippedName = "orleans.lattice.replication.wal.entries_shipped";
+
+    // --- Causal+ apply-buffer instruments ---------------------------------------
+
+    /// <summary>
+    /// UpDownCounter of <see cref="ReplogEntry"/> records currently parked
+    /// in the receiver-side causal-apply buffer pending dependency
+    /// satisfaction. Incremented on park, decremented on drain or
+    /// overflow eviction. Tagged by <see cref="TagTree"/> and
+    /// <see cref="TagShard"/>.
+    /// </summary>
+    public static readonly UpDownCounter<long> ApplyBufferedEntries =
+        Meter.CreateUpDownCounter<long>("orleans.lattice.replication.apply.buffered_entries", unit: "{entry}",
+            description: "Replog entries currently parked in the causal-apply buffer, tagged by tree and shard.");
+
+    /// <summary>
+    /// UpDownCounter of cumulative serialised payload bytes parked in the
+    /// receiver-side causal-apply buffer. Tracks the same lifecycle as
+    /// <see cref="ApplyBufferedEntries"/>; together they bound the buffer
+    /// against <see cref="LatticeReplicationOptions.CausalBufferMaxEntries"/>
+    /// and <see cref="LatticeReplicationOptions.CausalBufferMaxBytes"/>.
+    /// Tagged by <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// </summary>
+    public static readonly UpDownCounter<long> ApplyBufferBytes =
+        Meter.CreateUpDownCounter<long>("orleans.lattice.replication.apply.buffer_bytes", unit: "By",
+            description: "Cumulative serialised payload size parked in the causal-apply buffer, tagged by tree and shard.");
+
+    /// <summary>
+    /// Histogram of the wall-clock interval, in milliseconds, between an
+    /// entry parking on the causal-apply buffer and its subsequent
+    /// successful drain. Recorded once per drained entry; clamped to a
+    /// non-negative value. Tagged by <see cref="TagTree"/>. An entry that
+    /// is evicted (overflow) instead of drained does not contribute to
+    /// this histogram — only successful waits are observed.
+    /// </summary>
+    public static readonly Histogram<double> ApplyDependencyWaitMs =
+        Meter.CreateHistogram<double>("orleans.lattice.replication.apply.dependency_wait_ms", unit: "ms",
+            description: "Wait time between park and drain for a buffered causal-apply entry, tagged by tree.");
+
+    /// <summary>
+    /// Counter of <see cref="ReplogEntry"/> records that the receiver
+    /// could not apply immediately because their declared causal
+    /// dependencies were not yet satisfied by the local vector clock.
+    /// Incremented once per park (including overflow-evicted parks);
+    /// duplicates are not counted. An alert on
+    /// <c>rate &gt; 0</c> flags causal-skew health regardless of
+    /// whether buffered entries eventually drain or evict.
+    /// Tagged by <see cref="TagTree"/>.
+    /// </summary>
+    public static readonly Counter<long> ApplyCausalViolationsBlocked =
+        Meter.CreateCounter<long>("orleans.lattice.replication.apply.causal_violations_blocked", unit: "{entry}",
+            description: "Replog entries blocked by an unsatisfied causal dependency at apply time, tagged by tree.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="ApplyBufferedEntries"/>
+    /// up/down counter.
+    /// </summary>
+    public const string ApplyBufferedEntriesName = "orleans.lattice.replication.apply.buffered_entries";
+
+    /// <summary>
+    /// Canonical name of the <see cref="ApplyBufferBytes"/> up/down counter.
+    /// </summary>
+    public const string ApplyBufferBytesName = "orleans.lattice.replication.apply.buffer_bytes";
+
+    /// <summary>
+    /// Canonical name of the <see cref="ApplyDependencyWaitMs"/> histogram.
+    /// </summary>
+    public const string ApplyDependencyWaitMsName = "orleans.lattice.replication.apply.dependency_wait_ms";
+
+    /// <summary>
+    /// Canonical name of the <see cref="ApplyCausalViolationsBlocked"/>
+    /// counter.
+    /// </summary>
+    public const string ApplyCausalViolationsBlockedName = "orleans.lattice.replication.apply.causal_violations_blocked";
 }

@@ -278,4 +278,104 @@ public class LatticeReplicationMetricsTests
         Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
             t.Key == "peer" && (string?)t.Value == "p"));
     }
+
+    [Test]
+    public void Causal_apply_instruments_have_expected_names_and_units()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ApplyBufferedEntries.Name,
+                Is.EqualTo("orleans.lattice.replication.apply.buffered_entries"));
+            Assert.That(LatticeReplicationMetrics.ApplyBufferedEntriesName,
+                Is.EqualTo(LatticeReplicationMetrics.ApplyBufferedEntries.Name));
+
+            Assert.That(LatticeReplicationMetrics.ApplyBufferBytes.Name,
+                Is.EqualTo("orleans.lattice.replication.apply.buffer_bytes"));
+            Assert.That(LatticeReplicationMetrics.ApplyBufferBytes.Unit, Is.EqualTo("By"));
+            Assert.That(LatticeReplicationMetrics.ApplyBufferBytesName,
+                Is.EqualTo(LatticeReplicationMetrics.ApplyBufferBytes.Name));
+
+            Assert.That(LatticeReplicationMetrics.ApplyDependencyWaitMs.Name,
+                Is.EqualTo("orleans.lattice.replication.apply.dependency_wait_ms"));
+            Assert.That(LatticeReplicationMetrics.ApplyDependencyWaitMs.Unit, Is.EqualTo("ms"));
+            Assert.That(LatticeReplicationMetrics.ApplyDependencyWaitMsName,
+                Is.EqualTo(LatticeReplicationMetrics.ApplyDependencyWaitMs.Name));
+
+            Assert.That(LatticeReplicationMetrics.ApplyCausalViolationsBlocked.Name,
+                Is.EqualTo("orleans.lattice.replication.apply.causal_violations_blocked"));
+            Assert.That(LatticeReplicationMetrics.ApplyCausalViolationsBlockedName,
+                Is.EqualTo(LatticeReplicationMetrics.ApplyCausalViolationsBlocked.Name));
+
+            Assert.That(LatticeReplicationMetrics.TagShard, Is.EqualTo("shard"));
+        });
+    }
+
+    [Test]
+    public void Apply_buffered_entries_records_with_tree_and_shard_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyBufferedEntriesName);
+
+        LatticeReplicationMetrics.ApplyBufferedEntries.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagShard, "0"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(1L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "t"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "shard" && (string?)t.Value == "0"));
+    }
+
+    [Test]
+    public void Apply_buffer_bytes_records_with_tree_and_shard_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyBufferBytesName);
+
+        LatticeReplicationMetrics.ApplyBufferBytes.Add(256,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagShard, "0"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        Assert.That(collector.Measurements.Single().Value, Is.EqualTo(256L));
+    }
+
+    [Test]
+    public void Apply_dependency_wait_ms_records_with_tree_tag()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDependencyWaitMsName);
+
+        LatticeReplicationMetrics.ApplyDependencyWaitMs.Record(12.5,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-z"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(12.5));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "tree-z"));
+    }
+
+    [Test]
+    public void Apply_causal_violations_blocked_records_with_tree_tag()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyCausalViolationsBlockedName);
+
+        LatticeReplicationMetrics.ApplyCausalViolationsBlocked.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(1L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "t"));
+    }
 }
