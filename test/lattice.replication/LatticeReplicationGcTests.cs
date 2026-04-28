@@ -317,4 +317,192 @@ public class LatticeReplicationGcTests
             async () => await sut.RunOnceAsync(Tree, cts.Token),
             Throws.InstanceOf<OperationCanceledException>());
     }
+
+    // ---- Causal-stable frontier predicate ----------------------------
+
+    private static VersionVector Vc(params (string origin, long ticks)[] entries)
+    {
+        var vc = new VersionVector();
+        foreach (var (origin, ticks) in entries)
+        {
+            vc.Entries[origin] = Hlc(ticks);
+        }
+        return vc;
+    }
+
+    private static ReplogEntry SetEntryWithVc(string key, HybridLogicalClock ts, VersionVector? vc) => new()
+    {
+        TreeId = Tree,
+        Op = ReplogOp.Set,
+        Key = key,
+        Value = new byte[] { 1 },
+        Timestamp = ts,
+        OriginClusterId = "site-a",
+        VectorClock = vc,
+    };
+
+    [Test]
+    public async Task RunOnceAsync_blocks_trim_when_entry_vc_exceeds_causal_stable_frontier()
+    {
+        var provider = new InMemoryWalStorageProvider();
+        // Entry has site-b at 50 but the slowest VC consumer has only
+        // observed site-b up to 20, so the entry must remain even though
+        // its HLC is below the cursor.
+        await SeedAsync(provider, 0,
+            SetEntryWithVc("a", Hlc(10), Vc(("site-a", 10), ("site-b", 50))));
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100), Vc(("site-a", 100), ("site-b", 100)));
+        await registry.ReportCursorAsync(Tree, "peer-B", Hlc(100), Vc(("site-a", 100), ("site-b", 20)));
+
+        var sut = new LatticeReplicationGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(0));
+        Assert.That(report.CausalStable, Is.Not.Null);
+        Assert.That(report.CausalStable!.Entries["site-b"], Is.EqualTo(Hlc(20)));
+    }
+
+    [Test]
+    public async Task RunOnceAsync_trims_entry_when_vc_dominated_by_causal_stable_and_hlc_below_cursor()
+    {
+        var provider = new InMemoryWalStorageProvider();
+        await SeedAsync(provider, 0,
+            SetEntryWithVc("a", Hlc(10), Vc(("site-a", 10), ("site-b", 5))));
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100), Vc(("site-a", 100), ("site-b", 100)));
+        await registry.ReportCursorAsync(Tree, "peer-B", Hlc(100), Vc(("site-a", 50), ("site-b", 50)));
+
+        var sut = new LatticeReplicationGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task RunOnceAsync_treats_entry_with_null_vc_as_dominated_by_any_frontier()
+    {
+        var provider = new InMemoryWalStorageProvider();
+        // Legacy entry: VectorClock is null (pre-causal+ peer).
+        // It should still trim under HLC alone even when a frontier
+        // exists, because a null entry VC has no demands on the
+        // frontier.
+        await SeedAsync(provider, 0, SetEntryWithVc("legacy", Hlc(10), vc: null));
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100), Vc(("site-a", 1)));
+
+        var sut = new LatticeReplicationGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task RunOnceAsync_degrades_to_hlc_only_predicate_when_no_consumer_reports_vc()
+    {
+        var provider = new InMemoryWalStorageProvider();
+        await SeedAsync(provider, 0,
+            SetEntryWithVc("a", Hlc(10), Vc(("site-a", 999))));
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100));
+
+        var sut = new LatticeReplicationGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        // Causal-stable is null because no consumer reported a VC, so
+        // the predicate degrades to the existing R-061 HLC behaviour.
+        Assert.That(report.CausalStable, Is.Null);
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task RunOnceAsync_blocks_trim_when_entry_vc_carries_origin_missing_from_frontier()
+    {
+        var provider = new InMemoryWalStorageProvider();
+        // Entry names site-z but no consumer has reported site-z, so
+        // the frontier excludes it. Entry's VC has site-z=10; frontier
+        // treats site-z as unknown (clock 0) and the entry is NOT
+        // dominated -> not trimmed.
+        await SeedAsync(provider, 0,
+            SetEntryWithVc("a", Hlc(5), Vc(("site-a", 5), ("site-z", 10))));
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100), Vc(("site-a", 100)));
+
+        var sut = new LatticeReplicationGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(0));
+        Assert.That(report.CausalStable!.Entries.ContainsKey("site-z"), Is.False);
+    }
+
+    [Test]
+    public async Task RunOnceAsync_reports_causal_stable_in_diagnostic_even_when_no_trim_happens()
+    {
+        var provider = new InMemoryWalStorageProvider();
+        await SeedAsync(provider, 0,
+            SetEntryWithVc("a", Hlc(50), Vc(("site-a", 50))));
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        // Consumer's HLC cursor (10) is below the entry's HLC (50),
+        // so nothing is trim-eligible by cursor. The frontier is
+        // still surfaced in the diagnostic.
+        await registry.ReportCursorAsync(Tree, "peer-A", Hlc(10), Vc(("site-a", 5)));
+
+        var sut = new LatticeReplicationGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(0));
+        Assert.That(report.CausalStable, Is.Not.Null);
+        Assert.That(report.CausalStable!.Entries["site-a"], Is.EqualTo(Hlc(5)));
+    }
+
+    [Test]
+    public async Task RunOnceAsync_stops_at_first_vc_blocked_entry_even_when_later_entries_would_dominate()
+    {
+        var provider = new InMemoryWalStorageProvider();
+        await SeedAsync(provider, 0,
+            SetEntryWithVc("a", Hlc(10), Vc(("site-a", 10))),
+            SetEntryWithVc("b", Hlc(20), Vc(("site-a", 999))), // blocked by frontier
+            SetEntryWithVc("c", Hlc(30), Vc(("site-a", 5))));   // would pass but unreachable
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100), Vc(("site-a", 100)));
+
+        var sut = new LatticeReplicationGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(1));
+    }
 }

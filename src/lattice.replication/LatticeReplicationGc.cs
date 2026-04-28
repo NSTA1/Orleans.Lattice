@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Replication;
 /// and asks the configured <see cref="IWalStorageProvider"/> to trim
 /// through that offset.
 /// <para>
-/// The predicate combines two conditions, joined as a logical OR:
+/// The predicate combines three conditions:
 /// <list type="bullet">
 ///   <item>
 ///     <b>Cursor</b> - <c>entry.Timestamp &lt;= minCursor</c> when the
@@ -28,7 +28,27 @@ namespace Orleans.Lattice.Replication;
 ///     so disk usage stays bounded; that consumer will detect the gap
 ///     on its next read and re-bootstrap (later phase).
 ///   </item>
+///   <item>
+///     <b>Causal-stable frontier</b> - when at least one consumer has
+///     reported a per-origin <see cref="VersionVector"/> through the
+///     causal+ overload of
+///     <see cref="ILatticeReplicationCursorRegistry.ReportCursorAsync(string, string, HybridLogicalClock, VersionVector, CancellationToken)"/>,
+///     the GC AND-s
+///     <c>causalStable.DominatesOrEquals(entry.VectorClock)</c> into
+///     the predicate. The cursor / TTL branches above remain for
+///     safety: an entry must satisfy the HLC-shaped clauses AND the
+///     causal-stable clause before it is trimmed. When no consumer has
+///     reported a vector the GC degrades cleanly to the legacy
+///     HLC-only predicate.
+///   </item>
 /// </list>
+/// </para>
+/// <para>
+/// Legacy / range-delete entries with a <see langword="null"/>
+/// <see cref="ReplogEntry.VectorClock"/> are treated as the empty VC,
+/// which is dominated by every non-<see langword="null"/> causal-stable
+/// frontier and therefore passes the causal-stable clause without
+/// blocking the existing HLC-shaped trim path.
 /// </para>
 /// <para>
 /// The scan stops at the first non-eligible entry: WAL offsets are
@@ -66,6 +86,7 @@ public sealed class LatticeReplicationGc(
             ?? services.GetRequiredService<IWalStorageProvider>();
 
         var minCursor = await cursors.GetMinCursorAsync(treeName, cancellationToken).ConfigureAwait(false);
+        var causalStable = await cursors.GetCausalStableAsync(treeName, cancellationToken).ConfigureAwait(false);
         HybridLogicalClock? ttlCeiling = null;
         if (resolved.WalRetention is { } retention)
         {
@@ -95,14 +116,18 @@ public sealed class LatticeReplicationGc(
             // Nothing to do: no consumer has reported a cursor and no
             // TTL is configured. Return early so the run is observably
             // a no-op (counter is zero, ShipDuration is unaffected).
-            return new ReplicationGcReport(treeName, minCursor, ttlCeiling, partitions, 0);
+            // The causal-stable frontier alone never trims an entry
+            // because it is AND-ed with the HLC-shaped clauses, so a
+            // present-but-unused frontier is still reported in the
+            // diagnostic for transparency.
+            return new ReplicationGcReport(treeName, minCursor, ttlCeiling, causalStable, partitions, 0);
         }
 
         long totalTrimmed = 0;
         for (var partition = 0; partition < partitions; partition++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            totalTrimmed += await TrimShardAsync(provider, treeName, partition, minCursor, ttlCeiling, cancellationToken).ConfigureAwait(false);
+            totalTrimmed += await TrimShardAsync(provider, treeName, partition, minCursor, ttlCeiling, causalStable, cancellationToken).ConfigureAwait(false);
         }
 
         if (totalTrimmed > 0)
@@ -112,7 +137,7 @@ public sealed class LatticeReplicationGc(
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName));
         }
 
-        return new ReplicationGcReport(treeName, minCursor, ttlCeiling, partitions, totalTrimmed);
+        return new ReplicationGcReport(treeName, minCursor, ttlCeiling, causalStable, partitions, totalTrimmed);
     }
 
     private static async Task<long> TrimShardAsync(
@@ -121,6 +146,7 @@ public sealed class LatticeReplicationGc(
         int shardIndex,
         HybridLogicalClock? minCursor,
         HybridLogicalClock? ttlCeiling,
+        VersionVector? causalStable,
         CancellationToken cancellationToken)
     {
         long lastEligibleOffset = -1;
@@ -141,7 +167,7 @@ public sealed class LatticeReplicationGc(
                 pageEntries++;
                 lastSeenOffset = walEntry.Offset;
 
-                if (IsEligible(walEntry.Entry.Timestamp, minCursor, ttlCeiling))
+                if (IsEligible(walEntry.Entry, minCursor, ttlCeiling, causalStable))
                 {
                     lastEligibleOffset = walEntry.Offset;
                     eligibleCount++;
@@ -184,19 +210,46 @@ public sealed class LatticeReplicationGc(
     }
 
     private static bool IsEligible(
-        HybridLogicalClock entryTimestamp,
+        ReplogEntry entry,
         HybridLogicalClock? minCursor,
-        HybridLogicalClock? ttlCeiling)
+        HybridLogicalClock? ttlCeiling,
+        VersionVector? causalStable)
     {
-        if (minCursor is { } mc && mc > HybridLogicalClock.Zero && entryTimestamp <= mc)
+        // HLC-shaped clause: cursor OR TTL must accept the entry
+        // (existing legacy HLC-only behaviour).
+        var hlcAccepted = false;
+        if (minCursor is { } mc && mc > HybridLogicalClock.Zero && entry.Timestamp <= mc)
         {
-            return true;
+            hlcAccepted = true;
         }
-        if (ttlCeiling is { } ceiling && entryTimestamp <= ceiling)
+        else if (ttlCeiling is { } ceiling && entry.Timestamp <= ceiling)
         {
-            return true;
+            hlcAccepted = true;
         }
-        return false;
+
+        if (!hlcAccepted)
+        {
+            return false;
+        }
+
+        // Causal-stable clause: when at least one consumer has reported
+        // a per-origin frontier, the entry's VectorClock must be
+        // dominated by it. A null entry.VectorClock means the entry
+        // pre-dates causal+ stamping (legacy peer or hand-constructed
+        // test entry) or carries the empty frontier by design (range
+        // delete) - both are dominated by every non-null frontier.
+        // When causalStable itself is null, no consumer has reported a
+        // vector and the GC degrades cleanly to the HLC-only predicate.
+        if (causalStable is not null)
+        {
+            var entryVc = entry.VectorClock;
+            if (entryVc is not null && !causalStable.DominatesOrEquals(entryVc))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
 
