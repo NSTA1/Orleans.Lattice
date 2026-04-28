@@ -52,6 +52,46 @@ public interface ILatticeReplicationCursorRegistry
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Causal+ overload of <see cref="ReportCursorAsync(string, string, HybridLogicalClock, CancellationToken)"/>.
+    /// In addition to the highest HLC the consumer has fully consumed,
+    /// the consumer reports the per-origin <see cref="VersionVector"/>
+    /// frontier it has fully applied. The garbage collector uses the
+    /// pointwise minimum of every reported vector — the
+    /// <em>causal-stable frontier</em> — as the dominating-clock half
+    /// of its trim predicate, AND-ed with the existing HLC cursor
+    /// predicate for safety.
+    /// <para>
+    /// The HLC <paramref name="cursor"/> contract is identical to the
+    /// HLC-only overload (monotonic non-decreasing, strictly greater
+    /// than <see cref="HybridLogicalClock.Zero"/>). The
+    /// <paramref name="vector"/> is treated as advisory: a stale or
+    /// concurrent VC report is coalesced into the existing entry by
+    /// taking the pointwise maximum (per-origin
+    /// <see cref="HybridLogicalClock"/> max) so the registry is
+    /// monotonically non-decreasing across both axes.
+    /// </para>
+    /// <para>
+    /// Consumers that only report through the HLC-only overload
+    /// continue to pin the HLC half of the predicate but are excluded
+    /// from the causal-stable frontier computation — when no consumer
+    /// has reported a vector, <see cref="GetCausalStableAsync"/>
+    /// returns <see langword="null"/> and the GC degrades to the
+    /// HLC-only predicate.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">Logical tree id whose cursor is being reported. Must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="consumerId">Stable identifier for the reporting consumer. Must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="cursor">Highest HLC the consumer has fully consumed.</param>
+    /// <param name="vector">Per-origin <see cref="VersionVector"/> frontier the consumer has fully applied. The registry stores a defensive clone so subsequent caller-side mutation cannot poison cached state.</param>
+    /// <param name="cancellationToken">Cancellation token observed before any state mutation.</param>
+    Task ReportCursorAsync(
+        string treeName,
+        string consumerId,
+        HybridLogicalClock cursor,
+        VersionVector vector,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Removes <paramref name="consumerId"/>'s registration from the
     /// per-tree map. Called when a consumer goes away (peer removed
     /// from topology, materialiser stopped) so it no longer pins the
@@ -72,6 +112,35 @@ public interface ILatticeReplicationCursorRegistry
     /// an optional hard ceiling.
     /// </summary>
     Task<HybridLogicalClock?> GetMinCursorAsync(
+        string treeName,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the causal-stable frontier for <paramref name="treeName"/>:
+    /// the pointwise minimum <see cref="VersionVector"/> across every
+    /// consumer that has reported a vector through the causal+ overload
+    /// of <see cref="ReportCursorAsync(string, string, HybridLogicalClock, VersionVector, CancellationToken)"/>.
+    /// An origin is included in the meet only when every reporting
+    /// consumer has named that origin; origins missing from any
+    /// consumer are excluded so the frontier is a strict lower bound.
+    /// <para>
+    /// Returns <see langword="null"/> when no consumer has reported a
+    /// vector yet (the registry is empty for the tree, or every
+    /// consumer reported HLC-only). When the result is
+    /// <see langword="null"/> the GC skips the causal-stable half of
+    /// its predicate and degrades to the HLC cursor /
+    /// <see cref="LatticeReplicationOptions.WalRetention"/> branches.
+    /// </para>
+    /// <para>
+    /// Implementations are expected to cache the computed frontier and
+    /// recompute it only on consumer mutation (a new report or an
+    /// unregister), so a high-frequency GC pass that observes a stable
+    /// registry is O(1) per call.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">Logical tree id whose causal-stable frontier is being read. Must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="cancellationToken">Cancellation token observed before any state mutation.</param>
+    Task<VersionVector?> GetCausalStableAsync(
         string treeName,
         CancellationToken cancellationToken = default);
 
