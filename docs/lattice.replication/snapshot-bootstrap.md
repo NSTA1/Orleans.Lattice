@@ -86,3 +86,70 @@ receiver pins the snapshot's `CausalStableFrontier` on its per-tree
 `IReplicationHighWaterMarkGrain` via `PinSnapshotAsync` before
 draining the entry stream so the causal dependency check on the first
 incremental entry runs from a non-empty frontier.
+
+## Receiver-side bootstrap state machine
+
+The bootstrap state machine that drains an `ISnapshotProvider` export
+on the receiver, applies every entry through the local apply seam
+preserving the source HLC, and pins the snapshot's causal-stable
+frontier on the per-tree high-water-mark grain ships as the public
+`ILatticeBootstrapCoordinator` seam. Triggered by the auto-bootstrap
+detector (when the inbound apply path observes the sender's cursor
+has fallen off the WAL) and by operator-driven re-seed flows.
+
+| Type | Shape | Purpose |
+|------|-------|---------|
+| `LatticeBootstrapState` | `enum` with members `Idle`, `RequestingSnapshot`, `ApplyingSnapshot`, `IncrementalHandoff`, `LiveIncremental`, `Failed` | The state machine's observable position for a single tree. |
+| `ILatticeBootstrapCoordinator` | `LatticeBootstrapState GetState(string treeName)` + `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Drives the state machine. Registered as a singleton by `AddLatticeReplication`. |
+
+### State transitions
+
+```text
+Idle
+  └─► RequestingSnapshot     (BootstrapAsync invoked; ExportAsync issued)
+        └─► ApplyingSnapshot (snapshot stream open; draining Entries)
+              └─► IncrementalHandoff (entries drained; pinning AsOfHlc + CausalStableFrontier)
+                    └─► LiveIncremental (terminal — incremental replication is live)
+
+Any state ──► Failed         (any thrown exception; restart is a fresh BootstrapAsync call)
+```
+
+### Semantics
+
+- **One bootstrap per tree at a time.** A concurrent invocation
+  against the same tree throws `InvalidOperationException`
+  immediately rather than queueing — the coordinator uses a
+  per-tree non-blocking gate. Concurrent bootstraps of different
+  trees run in parallel.
+- **`Failed` is restartable.** On any thrown exception the state
+  transitions to `Failed` and the exception propagates to the
+  caller. A subsequent `BootstrapAsync` call restarts the cycle from
+  `RequestingSnapshot`.
+- **Source HLC + origin preservation.** Every snapshot entry is
+  applied through `IReplicationApplyGrain.ApplySetAsync` carrying the
+  entry's commit-time `Timestamp` and the supplied
+  `sourceClusterId`. Transitive replication paths (A → B → C) preserve
+  the originating HLC.
+- **Snapshot/incremental handoff is exactly-once.** The coordinator
+  pins `(AsOfHlc, CausalStableFrontier)` on
+  `IReplicationHighWaterMarkGrain.PinSnapshotAsync` *after* every
+  snapshot entry has been applied. The per-origin HWM dedupe in
+  `IReplicationApplier` then makes any incremental entry whose
+  timestamp is at or below the pinned frontier a no-op, so the
+  snapshot/incremental boundary is exactly-once regardless of
+  overlap.
+- **Tombstones in custom providers are skipped.** Snapshot entries
+  whose `Value` is `null` (not emitted by the default provider, but
+  permissible from a host-supplied `ISnapshotProvider`) are skipped
+  rather than applied as deletes.
+
+### Sample usage
+
+```csharp
+ILatticeBootstrapCoordinator coordinator = client.ServiceProvider
+    .GetRequiredService<ILatticeBootstrapCoordinator>();
+
+await coordinator.BootstrapAsync("orders", sourceClusterId: "site-a", cancellationToken);
+
+LatticeBootstrapState state = coordinator.GetState("orders");
+_ = state; // LatticeBootstrapState.LiveIncremental once the bootstrap completes
