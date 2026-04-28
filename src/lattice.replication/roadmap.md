@@ -89,37 +89,37 @@ The phase structure below groups items thematically. This section is the canonic
     Land *before* R-050 so the snapshot handoff pins a causal-stable frontier from day one rather than retrofitting the bootstrap contract later. Adds two purely additive `[Id]` slots on `ReplogEntry` (`VectorClock`, `DependencySummary`) plus a diagnostic minor-version bump on `ReplicationBatchEnvelope`. Backwards-compat: legacy peers decode missing slots to empty maps and behave identically to today's per-origin-only HWM check. Producer-side capture happens at the existing commit-time observer site; no commit-path change. Delta-encoded per shard with **absolute** VC anchors on every batch boundary and on any entry whose predecessor was trimmed by GC, preserving the trim-from-the-head invariant. Internal `VectorClockCodec` (`EncodeDelta` / `DecodeDelta` / `EncodeAbsolute`). Documented in [`docs/lattice.replication/wal-causal-plus.md`](../../docs/lattice.replication/wal-causal-plus.md).
     *Future-compat:* the schema is the canonical mutation record for both today's replication consumer and tomorrow's local materialiser; the VC slot is what a v2 local apply path needs to dispatch causal-aware merges without a wire-format break.
 
-13. **R-050 — `ISnapshotProvider` abstraction** `[deps: R-080 — co-build with Core F-025]`
+13. **R-050 ✓ shipped — `ISnapshotProvider` abstraction**
     F-025's `GetEntriesNewerThanAsync(HLC threshold)` leaf scan is the same primitive R-050 needs. Whichever lands first, the other consumes it verbatim — do not introduce a second scan API. Recommend pairing them in a single feature cycle. R-080 lands first so `ISnapshotProvider.ExportAsync` returns `(asOfHlc, causalStableFrontier)` rather than HLC-only.
 
-14. **R-051 — Receiver-side bootstrap state machine** `[deps: R-050]`
+14. **R-051 — Receiver-side bootstrap state machine** `[deps: R-050 ✓]`
 
-15. **R-052 — Auto-bootstrap trigger** `[deps: R-051, R-061]`
+15. **R-052 — Auto-bootstrap trigger** `[deps: R-051, R-061 ✓]`
     The "fall-off-the-log" detector reads against R-061's GC predicate.
 
 16. **R-053 — Operator-driven re-seed** `[deps: R-051]`
 
-17. **R-084 — Causal-stable snapshot cut-point** `[deps: R-080, R-050]`
+17. **R-084 — Causal-stable snapshot cut-point** `[deps: R-080 ✓, R-050 ✓]`
     Pair with R-050 in a single cycle: `ISnapshotProvider.ExportAsync` returns the causal-stable frontier alongside the as-of HLC; the receiver bootstrap state machine (R-051) calls `PinSnapshotAsync((HLC, VectorClock))`; the dependency check (R-082) runs from the pinned VC frontier on the first incremental entry. Snapshot scan algorithm is unchanged — only the cut-point selection. See [`wal-causal-plus.md`](../../docs/lattice.replication/wal-causal-plus.md) §8.
 
 ### Operational polish (after critical-path is in)
 
-18. **R-062 — Receiver-side flow control** `[deps: R-042]`
+18. **R-062 — Receiver-side flow control** `[deps: R-042 ✓]`
 
 19. **R-063 — Partitioned replog** `[deps: none]`
     Performance under fan-in; opt-in via `ReplogPartitions`. Does not gate anything.
 
-20. **R-065 — Back-pressure `IHealthCheck`** `[deps: R-064]`
+20. **R-065 — Back-pressure `IHealthCheck`** `[deps: R-064 ✓]`
 
 21. **R-066 — Observable topology** `[deps: none]`
 
-22. **R-043 — Batch-boundary compression** `[deps: R-041]`
+22. **R-043 — Batch-boundary compression** `[deps: R-041 ✓]`
 
-23. **R-044 — Content-hash dedup** `[deps: R-042]`
+23. **R-044 — Content-hash dedup** `[deps: R-042 ✓]`
 
-24. **R-045 — Coalesced per-peer cursor checkpointing** `[deps: R-042]`
+24. **R-045 — Coalesced per-peer cursor checkpointing** `[deps: R-042 ✓]`
 
-25. **R-046 — Standard transport security** `[deps: R-042]`
+25. **R-046 — Standard transport security** `[deps: R-042 ✓]`
     mTLS / token rotation. Required before any production multi-tenant deployment but not before single-tenant pilot.
 
 26. **R-047 — Typed-envelope `IReplicationTransport` shape** `[deps: R-042 ✓]`
@@ -137,10 +137,10 @@ The phase structure below groups items thematically. This section is the canonic
     Replace R-061's `min(cursor)` predicate with `causal_stable = min(peerVectorClock)` across `IChangeFeed` subscribers. `ILatticeReplicationCursorRegistry.ReportAsync` gains a VC-shaped overload (additive — old callers continue to report HLC-only and contribute a degenerate diagonal-only VC). `LatticeReplicationGc` caches `causal_stable` and recomputes only on ack updates. An entry is GC-eligible iff `entry.VectorClock <= causal_stable AND entry.Offset <= minAckedOffset` (R-061's offset predicate AND-ed in for safety). Documented as an extension to [`wal-gc.md`](../../docs/lattice.replication/wal-gc.md).
     *Future-compat:* a future C-050 local materialiser reports its own VC and pins the log identically to a remote peer.
 
-30. **R-084 — Causal-stable snapshot cut-point** `[deps: R-080, R-050]`
+30. **R-084 — Causal-stable snapshot cut-point** `[deps: R-080 ✓, R-050 ✓]`
     Pair with R-050 in a single cycle: `ISnapshotProvider.ExportAsync` returns the causal-stable frontier alongside the as-of HLC; the receiver bootstrap state machine (R-051) calls `PinSnapshotAsync((HLC, VectorClock))`; the dependency check (R-082) runs from the pinned VC frontier on the first incremental entry. Snapshot scan algorithm is unchanged — only the cut-point selection. Co-build with R-050 in a single feature cycle to avoid retrofitting the snapshot handoff contract.
 
-31. **R-085 — Causal+ observability** `[deps: R-082, R-064 ✓]`
+31. **R-085 — Causal+ observability** `[deps: R-082 ✓, R-064 ✓]`
     Three new instruments on the `orleans.lattice.replication` meter, following R-064's reason-tag conventions:
     - `apply.buffered_entries` UpDownCounter<long> tagged `tree`, `shard`
     - `apply.buffer_bytes` UpDownCounter<long> tagged `tree`, `shard`
@@ -148,13 +148,13 @@ The phase structure below groups items thematically. This section is the canonic
 
     Plus `apply.causal_violations_blocked` Counter<long> tagged `tree`, incremented on every park (so an alert on `rate > 0` flags causal-skew health). Documented in [`docs/lattice.replication/observability.md`](../../docs/lattice.replication/observability.md) as a new "Causal+ instruments" section. Test coverage: per-instrument unit tests under existing `LatticeReplicationMetricsTests` patterns.
 
-32. **R-086 — Transport metadata pass-through contract test** `[deps: R-080]`
+32. **R-086 — Transport metadata pass-through contract test** `[deps: R-080 ✓]`
     Per the perf note in §9, transport stays dumb. Add a contract test in `Orleans.Lattice.Replication.Tests` (and a mirror in `Orleans.Lattice.Replication.Grpc.Tests`) that asserts `IReplicationTransport` implementations preserve `VectorClock` and `DependencySummary` slots verbatim across a round-trip — no reordering, no mutation, no synthesis. Lifts the existing `LoopbackTransport` round-trip fixture and parameterises it over the new fields. No production code change; this is the regression scaffold so a future transport doesn't quietly break causal+ in the way R-021's "thread-local cycle-break" sample-shortcut would have if R-022 hadn't pinned source-HLC preservation as a contract test.
 
-33. **R-087 — Per-origin FIFO invariant + out-of-order detection** `[deps: R-080, R-082]`
+33. **R-087 — Per-origin FIFO invariant + out-of-order detection** `[deps: R-080 ✓, R-082 ✓]`
     Receiver-side instrumentation that pins the per-origin FIFO contract R-082's buffer relies on for occupancy bounds. Cheap to land alongside R-085; same instrumentation surface. Closes the gap left by the user-facing R-201 / R-211 design split — sender-side FIFO is implicit in the partitioned change feed (per-shard offset order ⇒ per-(origin, shard) HLC monotonicity), so there is no sender-side enforcement work; the genuine gap is a receiver-side metric that surfaces a transport regression breaking that invariant.
 
-34. **R-088 — Bootstrap → incremental causal handoff verification** `[deps: R-082, R-084]`
+34. **R-088 — Bootstrap → incremental causal handoff verification** `[deps: R-082 ✓, R-084]`
     Joins the snapshot/bootstrap stream and the causal+ apply stream — schedule after both R-082 and R-084 land. R-082 + R-084 already provide the mechanism (initial `local_vc` from the pinned `causalStableFrontier`, dep-check from there on the first incremental); R-088 is the explicit acceptance test + DLQ-overflow operator playbook that pins the contract end-to-end.
 
 
@@ -162,19 +162,19 @@ The phase structure below groups items thematically. This section is the canonic
 
 The R-080 → R-088 wave delivers causal+ for the point-write, single-tree, single-shard-per-mutation path. The five items below extend that guarantee to every write path the core library exposes (`SetManyAtomic`, resize, reshard / shadow-forward, snapshot/restore) so a host that enables any one of those features still gets full causal+ semantics. Each pairs with a core-side dependency (F-043–F-046) and the core change + replication consumer must land in a single feature cycle. Cross-tree causality is intentionally out of scope.
 
-35. **R-089 — Atomic multi-key VC capture point** `[deps: R-080, R-081, Core F-044]`
+35. **R-089 — Atomic multi-key VC capture point** `[deps: R-080 ✓, R-081 ✓, Core F-044 ✓]`
     Closes per-key VC drift in `SetManyAtomic`: capture the local VC **once** at the start of the atomic transaction and stamp every emitted `ReplogEntry.VectorClock` in that batch with the identical frontier so a remote peer never sees a partial-set state where the writer's frontier said all N should be visible together. Receiver: no change — entries with identical VCs unblock together when their shared frontier is satisfied.
 
-36. **R-090 — `MutationKind` classification + maintenance skip** `[deps: R-080, Core F-045]`
+36. **R-090 — `MutationKind` classification + maintenance skip** `[deps: R-080 ✓, Core F-045 ✓]`
     Resize / rebalance / compaction emits structural rewrites that are not user-authored causal events. Reading them as causal would inflate every replicated tree's VC under maintenance pressure and pollute the dependency graph. R-090 reads the new `MutationKind { User, Maintenance }` slot on `LatticeMutation` and skips the WAL append for `Maintenance` on replicated trees. Independent of `OriginClusterId`.
 
-37. **R-091 — Shadow-forward VC preservation** `[deps: R-080, R-081, R-022 ✓, Core F-046]`
+37. **R-091 — Shadow-forward VC preservation** `[deps: R-080 ✓, R-081 ✓, R-022 ✓, Core F-046 ✓]`
     Shard-split / merge / saga-compensate shadow-forward a user write into a different shard. Today F-036's `LatticeOriginContext` carries `OriginClusterId` through these rewrites; R-091 extends the same end-to-end discipline to `VectorClock`. The replication observer never re-captures a VC for any emit whose ambient context already supplies one. Receiver-side: a small `RecentApplyCache<(origin, hlc, key, op)>` LRU (default `4096`, new `ShadowForwardDedupeCacheSize` option) drops the duplicate emit pair shadow-forward generates so the receiver applies the shadow-forwarded write exactly once.
 
-38. **R-092 — Tree-global producer VC at commit time** `[deps: R-080, R-081]`
+38. **R-092 — Tree-global producer VC at commit time** `[deps: R-080 ✓, R-081 ✓]`
     R-080 captures VC at the per-grain commit-time observer site, but a single user write touching multiple shards (range delete, multi-leaf saga) emits from multiple grains in close succession; if each grain reads its own diagonal-only HWM the resulting per-emit VCs disagree on cross-shard origins. R-092 introduces a per-`(silo, tree)` in-memory `LocalVectorClock` cache populated from `IReplicationHighWaterMarkGrain.GetVectorAsync` on cold start, advanced on every WAL append (local origin) and every inbound apply (foreign origin). Producer reads from the cache; cost is one grain call per (silo, tree, restart). The cache is the producer-side counterpart to R-081's receiver-side `LocalVectorClock`.
 
-39. **R-093 — Snapshot/restore VC reconstruction** `[deps: R-080, R-081, Core F-043]`
+39. **R-093 — Snapshot/restore VC reconstruction** `[deps: R-080 ✓, R-081 ✓, Core F-043 ✓]`
     Closes the intra-cluster snapshot-as-a-tool gap: when an operator snapshots a tree and restores it (same cluster, possibly different timestamp) the live HWM table is wiped but the values still carry their commit-time VC slot (Core F-043). R-093 introduces an `IReplicationLocalVcSeeder.SeedFromTreeAsync(treeName)` that walks the restored values' VC slots and seeds `LocalVectorClock` to per-origin pointwise max. Without this, a restore-then-replicate cycle would replay every restored entry against a zeroed VC and either re-park or re-merge them. Cross-cluster bootstrap (R-050 / R-084) is unaffected — that path pins the snapshot's `causalStableFrontier` directly via `PinSnapshotAsync`.
 ### Extended CRDT modes (gated on outstanding core primitives)
 
@@ -330,7 +330,7 @@ Latency drops from reminder-cadence (~60 s) to sub-second; bandwidth improves ~2
 - [x] **R-042 — gRPC streaming push transport** *(required R-041 ✓)*
   Canonical sender + receiver pair shipped in the new `Orleans.Lattice.Replication.Grpc` sub-package. Sender-side `GrpcPushTransport` replaces the default `NoOpReplicationTransport` via `AddLatticeReplicationGrpcPushTransport(options => options.PeerEndpoints[...] = ...)`; one long-lived `GrpcChannel` per `TargetClusterId` with HTTP/2 multiplexing, a cached `CallInvoker` per peer (via an internal `PeerChannel` record struct so `SendAsync` does not allocate a fresh invoker per call), and an optional per-peer `ConfigureChannel(name, GrpcChannelOptions)` callback for mTLS / custom `HttpHandler` / retry policy attachment. Receiver-side wired via `AddLatticeReplicationGrpcServer()` + `MapLatticeReplicationGrpcService()` on an ASP.NET Core endpoint route builder. Wire format is the `ReplicationBatchEnvelope` (alias `olr.be`, wire version 1) defined by R-041; the gRPC marshaller hands the stream's `IBufferWriter<byte>` straight through to `IReplicationBatchEncoder.Encode(envelope, writer)` so the envelope's bytes are written directly into the network buffer with no intermediate managed allocation on the encode path. No `.proto` file and no `Grpc.Tools` dependency: custom `Marshaller<T>` instances, internal sealed `ReplicationBatchEnvelopeBox` / `ReplicationAckBox` reference wrappers (gRPC's `Method<TRequest, TResponse>` has a `class` constraint), and a codegen-style `[BindServiceMethod]` topology (abstract `LatticeReplicationGrpcServiceBase` carries the attribute + null-tolerant static `BindService`; sealed `LatticeReplicationGrpcService` is the DI-resolved per-request handler). A static `LatticeReplicationGrpcMethodHolder.Current` bridges the DI-resolved `Method<,>` into the static binding hook because gRPC's static `BindService` callback cannot accept DI dependencies. Each `SendAsync` records `LatticeReplicationMetrics.ShipDuration` tagged `tree` / `peer` / `outcome` (allocation-free via `ValueStopwatch`). Documented in `docs/lattice.replication/grpc-push-transport.md`. Covered by 42 tests across 6 fixtures (options defaults, DI-extension wiring, transport ctor + send-validation + idempotent dispose, service Push validation + HWM accumulation + cancellation + RpcException-on-failure, `[BindServiceMethod]` null-tolerance + holder-not-initialised guard, marshaller Orleans-serializer round-trip on both wrappers, and 2 in-process Kestrel integration tests via `Microsoft.AspNetCore.TestHost` exercising the full wire round-trip end-to-end). mTLS / token-rotation defaults are deferred to R-046; runtime peer-set updates (currently host-restart-required) are deferred to R-066; sender-side decode-then-re-encode round-trip elimination is deferred to R-047.
 
-- [ ] **R-047 — Typed-envelope `IReplicationTransport` shape** `[deps: R-042]`
+- [ ] **R-047 — Typed-envelope `IReplicationTransport` shape** `[deps: R-042 ✓]`
   Eliminates the sender-side decode-then-re-encode round-trip the gRPC push transport currently pays. Today `IReplicationTransport.SendAsync` takes `ReplicationBatch` whose `Payload` is `ReadOnlyMemory<byte>`, so `GrpcPushTransport.BuildEnvelope` calls `IReplicationBatchEncoder.Decode(batch.Payload)` purely to satisfy the gRPC marshaller, which then re-encodes via `Encode(envelope, IBufferWriter<byte>)`. The decode allocates one `ReplogEntry` per WAL row in the batch on every send. Widen the transport seam to carry the typed `ReplicationBatchEnvelope` directly — either by adding a typed overload (`SendAsync(ReplicationBatchEnvelope envelope, string targetClusterId, CancellationToken ct)`) or by reshaping `ReplicationBatch` to carry the envelope alongside (or instead of) the byte[] payload, with a backwards-compat fallback for transports that only support bytes. After this change the gRPC hot path is genuinely zero-allocation beyond the gRPC box wrapper. LoopbackTransport / NoOpTransport are unaffected because they never re-encode.
 
 - [ ] **R-043 — Batch-boundary compression**
@@ -351,7 +351,7 @@ Latency drops from reminder-cadence (~60 s) to sub-second; bandwidth improves ~2
 
 Required before any production deployment. Without it, a peer whose cursor falls behind the oldest replog entry can never catch up.
 
-- [ ] **R-050 — `ISnapshotProvider` abstraction**
+- [x] **R-050 — `ISnapshotProvider` abstraction**
   Sender-side: streaming `as-of` HLC range scan over the primary tree (not the replog). Backed by the core library's stateful cursor grain (`F-033` from the core roadmap) so snapshots are resumable on silo failover. Chunked by key range so snapshot streams don't monopolise a single shard.
   *Future-compat:* the same interface satisfies v2 C-060 (snapshot + WAL-tail restore for fast local recovery). Today it scans the primary tree and is consumed by the bootstrap protocol; in v2 it scans the materialised projection and is consumed by both bootstrap and crash recovery. Avoid hard-coding "remote peer" in the API surface — keep it `ISnapshotProvider.ExportAsync(treeName, asOfHlc, ct)` and let the consumer decide what to do with the stream.
 

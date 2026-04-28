@@ -501,5 +501,51 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         var provider = services.BuildServiceProvider();
         Assert.That(provider.GetRequiredService<ILatticeReplicationGc>(), Is.SameAs(custom));
     }
+
+    [Test]
+    public void AddLatticeReplication_registers_lattice_snapshot_provider_by_default()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var snapshot = provider.GetRequiredService<ISnapshotProvider>();
+        Assert.That(snapshot, Is.InstanceOf<LatticeSnapshotProvider>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_snapshot_provider_is_registered_as_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<ISnapshotProvider>();
+        var second = provider.GetRequiredService<ISnapshotProvider>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_snapshot_provider()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<ISnapshotProvider>();
+        services.AddSingleton<ISnapshotProvider>(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<ISnapshotProvider>(), Is.SameAs(custom));
+    }
 }
 

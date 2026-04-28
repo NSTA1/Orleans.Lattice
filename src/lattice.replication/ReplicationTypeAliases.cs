@@ -83,4 +83,9 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for the per-tree dead-letter queue grain interface.</summary>
     internal const string IReplicationDeadLetterGrain = "olr.gd";
+
+    // Snapshot / bootstrap protocol
+
+    /// <summary>Alias for <see cref="Replication.SnapshotEntry"/>.</summary>
+    internal const string SnapshotEntry = "olr.se";
 }
