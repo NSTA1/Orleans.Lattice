@@ -36,6 +36,8 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<IReplogSink, ShardedReplogSink>();
         builder.Services.TryAddSingleton<IChangeFeed, ChangeFeed>();
 
+        builder.Services.TryAddSingleton<ISnapshotProvider, LatticeSnapshotProvider>();
+
         // Register the canonical applier as a concrete singleton so the
         // dead-letter tracking decorator and the inspection seam can
         // both share the exact same activation. The IReplicationApplier
