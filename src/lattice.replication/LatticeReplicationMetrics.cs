@@ -69,6 +69,16 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string TagShard = "shard";
 
+    /// <summary>
+    /// Tag key for the authoring cluster id of an inbound replication
+    /// entry. Used by per-origin diagnostic instruments such as
+    /// <see cref="ApplyFifoViolations"/>. Distinct from
+    /// <see cref="TagPeer"/>, which identifies the immediate transport
+    /// hop: under transitive replication (A &#8594; B &#8594; C) the
+    /// origin and peer can differ.
+    /// </summary>
+    public const string TagOrigin = "origin";
+
     /// <summary>Reason tag value: entry removed by an explicit operator <c>Discard</c> call.</summary>
     public const string ReasonDiscarded = "discarded";
 
@@ -359,4 +369,40 @@ public static class LatticeReplicationMetrics
     /// counter.
     /// </summary>
     public const string ApplyCausalViolationsBlockedName = "orleans.lattice.replication.apply.causal_violations_blocked";
+
+    // --- Per-origin FIFO invariant ----------------------------------------------
+
+    /// <summary>
+    /// Counter of successful point applies whose source HLC was strictly
+    /// less than the most recently applied source HLC for the same
+    /// <c>(treeId, originClusterId)</c> pair. Pins the per-origin FIFO
+    /// contract the causal-apply buffer (<see cref="CausalApplyBuffer"/>)
+    /// relies on for occupancy bounds: under correct sender + transport
+    /// behaviour the producer's partitioned change feed yields per-shard
+    /// in WAL-offset order and each shard's WAL is HLC-monotonic per
+    /// origin, so per-(origin, shard) FIFO is preserved end-to-end with
+    /// no cross-shard sender serialisation. A sustained nonzero rate
+    /// flags a transport-side regression that broke that invariant.
+    /// <para>
+    /// The counter is recorded after a successful apply (direct or drained)
+    /// — never on park — so the underlying invariant tracks "what has
+    /// been merged" rather than "what has been observed". A violation
+    /// does not change apply behaviour: the entry is still applied, the
+    /// HWM is still advanced. This is purely an observability surface.
+    /// </para>
+    /// <para>
+    /// Tagged by <see cref="TagTree"/> and <see cref="TagOrigin"/>; the
+    /// origin tag carries the entry's <see cref="ReplogEntry.OriginClusterId"/>
+    /// so operators can attribute a regression to the authoring cluster
+    /// rather than the immediate transport peer.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ApplyFifoViolations =
+        Meter.CreateCounter<long>("orleans.lattice.replication.apply.fifo_violations", unit: "{entry}",
+            description: "Successful applies whose source HLC was strictly less than the previous apply for the same (tree, origin), tagged by tree and origin.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="ApplyFifoViolations"/> counter.
+    /// </summary>
+    public const string ApplyFifoViolationsName = "orleans.lattice.replication.apply.fifo_violations";
 }

@@ -86,3 +86,22 @@ Operators monitor the four together:
 - A persistent rise in `buffered_entries` or `buffer_bytes` paired with a low or zero `causal_violations_blocked` rate is the classic "bounded buffer absorbing transient skew, then draining" pattern — healthy.
 - A sustained nonzero `causal_violations_blocked` rate paired with `apply.dependency_wait_ms` distributions in the seconds-to-minutes range indicates structural causal skew the bounded buffer is masking; pair with the DLQ enqueue rate (`dead_letter.enqueued{reason="hlc_skew"}`) to detect overflow.
 - A sudden buffer drain that does not advance the local high-water-mark (visible as a spike in `dependency_wait_ms` with no matching `apply.lag` improvement) suggests a CRDT-merge regression rather than a transport-side issue.
+
+## Per-origin FIFO invariant (`apply.fifo_violations`)
+
+The receiver-side apply pipeline relies on a per-origin FIFO contract for its causal-apply buffer's occupancy bounds: under correct sender + transport behaviour, the producer's partitioned change feed yields per-shard in WAL-offset order and each shard's WAL is HLC-monotonic per origin, so per-`(origin, shard)` FIFO is preserved end-to-end with **no cross-shard sender serialisation** (which would defeat the whole point of partitioned replog scaling).
+
+| Property | Value |
+|---|---|
+| Name | `orleans.lattice.replication.apply.fifo_violations` |
+| Unit | `{entry}` |
+| Tags | `tree`, `origin` |
+
+The canonical `ReplicationApplier` records the most recently applied source HLC per `(treeId, originClusterId)` in process-local memory and increments `apply.fifo_violations` when a successfully applied entry's HLC is **strictly less** than the prior recorded value for the same pair. The counter is recorded:
+
+- **After a successful apply** (direct or drained from the causal-apply buffer) — never on park. The invariant tracks "what has been merged" rather than "what has been observed", so a transient park of a higher-HLC entry that drains after a lower-HLC arrival does not falsely register a violation.
+- **For point operations only** (`Set` / `Delete`). `DeleteRange` carries `HybridLogicalClock.Zero` by design and is excluded — it neither records a violation nor overwrites the recorded HLC.
+
+A violation **does not change apply behaviour**: the entry is still applied, the HWM is still advanced. This is purely an observability surface — an alert on `rate > 0` flags a transport-side regression that broke the per-origin order, not a correctness defect on the receiver. Operators triage by joining the `tree` and `origin` tags against the producer-side topology to identify which sender path regressed.
+
+Cross-shard interleaving for the same origin is permitted by design and is **not** a FIFO violation under this contract: entries that have a genuine cross-shard causal dependency carry it in their `VectorClock` and route through the causal-apply buffer's dependency-check path instead. The current implementation tracks one entry per `(tree, origin)` because the canonical applier is one-instance-per-tree; a future per-shard applier partitioning will key the tracker by `(tree, shard, origin)` without changing the metric's tag dimensionality.

@@ -34,6 +34,25 @@ internal sealed class ReplicationApplier(
     /// </summary>
     private readonly ConcurrentDictionary<string, CausalApplyBuffer> _buffers = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Per-<c>(treeId, originClusterId)</c> last-applied source HLC. Used
+    /// to surface a transport-side regression that breaks the per-origin
+    /// FIFO invariant the causal-apply pipeline relies on for occupancy
+    /// bounds: under correct sender + transport behaviour every
+    /// successful apply for a given origin has an HLC strictly greater
+    /// than the previous successful apply for that origin (the producer's
+    /// partitioned change feed yields per-shard in WAL-offset order and
+    /// each shard's WAL is HLC-monotonic per origin). A violation does
+    /// not change apply behaviour — the entry is still applied and the
+    /// HWM is still advanced — it only increments the
+    /// <see cref="LatticeReplicationMetrics.ApplyFifoViolations"/>
+    /// counter so an alert on <c>rate &gt; 0</c> flags the regression.
+    /// Updated on successful apply (not on park) so the invariant tracks
+    /// "what has been merged" rather than "what has been observed".
+    /// </summary>
+    private readonly ConcurrentDictionary<(string TreeId, string Origin), HybridLogicalClock> _lastAppliedSourceHlc =
+        new();
+
     /// <inheritdoc />
     public async Task<ApplyResult> ApplyAsync(ReplogEntry entry, CancellationToken cancellationToken = default)
     {
@@ -98,6 +117,7 @@ internal sealed class ReplicationApplier(
 
         await ApplyPointAsync(entry);
         RecordApplyLag(entry);
+        RecordFifoState(entry);
 
         // Advance the HWM only after the apply commits.
         var advanced = await hwmGrain.TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken);
@@ -182,6 +202,7 @@ internal sealed class ReplicationApplier(
                 {
                     await ApplyPointAsync(ent);
                     RecordApplyLag(ent);
+                    RecordFifoState(ent);
                     await hwmGrain.TryAdvanceAsync(ent.OriginClusterId!, ent.Timestamp, cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -361,5 +382,64 @@ internal sealed class ReplicationApplier(
         LatticeReplicationMetrics.ApplyLag.Record(
             ms,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, entry.TreeId));
+    }
+
+    /// <summary>
+    /// Updates the per-<c>(treeId, originClusterId)</c> last-applied
+    /// source-HLC tracker for a successfully applied point operation
+    /// and increments
+    /// <see cref="LatticeReplicationMetrics.ApplyFifoViolations"/> when
+    /// the entry's HLC is strictly less than the previously recorded
+    /// value — surfacing a transport-side regression that broke the
+    /// per-origin FIFO invariant. The recorded value is the pointwise
+    /// max so a benign re-delivery (which the HWM check already filters
+    /// upstream) does not silently downgrade the tracker on the rare
+    /// path where it slipped through.
+    /// </summary>
+    private void RecordFifoState(ReplogEntry entry)
+    {
+        // Skip range deletes (carry HLC.Zero) and entries with a missing
+        // origin (defensive — the caller-side guard rejects empty origins
+        // before we get here).
+        if (entry.Op == ReplogOp.DeleteRange || string.IsNullOrEmpty(entry.OriginClusterId))
+        {
+            return;
+        }
+
+        var key = (entry.TreeId, entry.OriginClusterId!);
+        var ts = entry.Timestamp;
+
+        // Allocation-free CAS loop: avoids the closure that an
+        // AddOrUpdate factory would capture per call. Under steady-state
+        // monotonic delivery the loop runs exactly once.
+        while (true)
+        {
+            if (!_lastAppliedSourceHlc.TryGetValue(key, out var existing))
+            {
+                if (_lastAppliedSourceHlc.TryAdd(key, ts))
+                {
+                    return;
+                }
+                continue;
+            }
+
+            if (ts < existing)
+            {
+                // Strictly out-of-order: surface the regression and
+                // keep the existing (higher) recorded HLC so a future
+                // monotonic delivery is compared against the true
+                // pointwise max.
+                LatticeReplicationMetrics.ApplyFifoViolations.Add(
+                    1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, entry.TreeId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, entry.OriginClusterId!));
+                return;
+            }
+
+            if (ts == existing || _lastAppliedSourceHlc.TryUpdate(key, ts, existing))
+            {
+                return;
+            }
+        }
     }
 }
