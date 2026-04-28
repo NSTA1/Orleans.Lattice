@@ -148,7 +148,7 @@ The phase structure below groups items thematically. This section is the canonic
 
     Plus `apply.causal_violations_blocked` Counter<long> tagged `tree`, incremented on every park (so an alert on `rate > 0` flags causal-skew health). Documented in [`docs/lattice.replication/observability.md`](../../docs/lattice.replication/observability.md) as a new "Causal+ instruments" section. Test coverage: per-instrument unit tests under existing `LatticeReplicationMetricsTests` patterns.
 
-32. **R-086 — Transport metadata pass-through contract test** `[deps: R-080 ✓]`
+32. **R-086 ✓ shipped — Transport metadata pass-through contract test**
     Per the perf note in §9, transport stays dumb. Add a contract test in `Orleans.Lattice.Replication.Tests` (and a mirror in `Orleans.Lattice.Replication.Grpc.Tests`) that asserts `IReplicationTransport` implementations preserve `VectorClock` and `DependencySummary` slots verbatim across a round-trip — no reordering, no mutation, no synthesis. Lifts the existing `LoopbackTransport` round-trip fixture and parameterises it over the new fields. No production code change; this is the regression scaffold so a future transport doesn't quietly break causal+ in the way R-021's "thread-local cycle-break" sample-shortcut would have if R-022 hadn't pinned source-HLC preservation as a contract test.
 
 33. **R-087 — Per-origin FIFO invariant + out-of-order detection** `[deps: R-080 ✓, R-082 ✓]`
@@ -462,7 +462,7 @@ Extends today's per-origin LWW + HWM convergence to causal+ consistency: writers
 
     Plus `apply.causal_violations_blocked` Counter<long> tagged `tree`, incremented on every park (so an alert on `rate > 0` flags causal-skew health). Documented in [`docs/lattice.replication/observability.md`](../../docs/lattice.replication/observability.md) as a new "Causal+ instruments" section. Test coverage: per-instrument unit tests under existing `LatticeReplicationMetricsTests` patterns.
 
-- [ ] **R-086 — Transport metadata pass-through contract test** *(depends on R-080)*
+- [x] **R-086 — Transport metadata pass-through contract test** *(depends on R-080)*
     Per the perf note in §9, transport stays dumb. Add a contract test in `Orleans.Lattice.Replication.Tests` (and a mirror in `Orleans.Lattice.Replication.Grpc.Tests`) that asserts `IReplicationTransport` implementations preserve `VectorClock` and `DependencySummary` slots verbatim across a round-trip — no reordering, no mutation, no synthesis. Lifts the existing `LoopbackTransport` round-trip fixture and parameterises it over the new fields. No production code change; this is the regression scaffold so a future transport doesn't quietly break causal+ in the way R-021's "thread-local cycle-break" sample-shortcut would have if R-022 hadn't pinned source-HLC preservation as a contract test.
 
 - [ ] **R-087 — Per-origin FIFO invariant + out-of-order detection** *(depends on R-080, R-082)*

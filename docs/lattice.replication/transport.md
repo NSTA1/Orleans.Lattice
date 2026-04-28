@@ -99,3 +99,14 @@ The canonical sender + receiver pair ships in the `Orleans.Lattice.Replication.G
 
 - **Transports do not interpret the payload.** A transport that needs to make a routing decision based on payload contents (e.g. shed-load on oversize batches) must do so via batch metadata that the framing seam exposes on the call site, not by parsing `Payload` itself. Cross-cutting concerns belong on the call envelope; the wire bytes stay opaque.
 - **The ack envelope is not extensible at this seam.** A future item that needs to surface receiver-side flow-control hints (e.g. "throttle to N batches/sec") will do so by extending `ReplicationAck` with new `[Id(n)]` slots backed by stable defaults so legacy receivers decode safely. The single-method `SendAsync` contract does not change.
+
+## Metadata pass-through contract
+
+The transport stays dumb about the entries it carries. Specifically, every `IReplicationTransport` implementation must preserve the causal-plus metadata slots on every `ReplogEntry` verbatim across a round-trip:
+
+- `ReplogEntry.VectorClock` — the sparse `{originClusterId → HybridLogicalClock}` frontier captured at commit time.
+- `ReplogEntry.DependencySummary` — initially aliased one-to-one with `VectorClock`; reserved as a distinct slot so a future Bloom-filter-shaped summary can ship without re-numbering the wire format.
+
+The transport must not reorder entries, mutate either slot, synthesise an empty frontier when the producer left the slot `null` (legacy peers and pre-causal-plus entries decode `null` and the receiver treats that as the empty frontier), or merge the two slots together. Any normalisation, summary derivation, or merge belongs in the producer / receiver, never in the wire layer.
+
+The contract is pinned by `TransportMetadataPassthroughContractTests` in both `Orleans.Lattice.Replication.Tests` (LoopbackTransport) and `Orleans.Lattice.Replication.Grpc.Tests` (GrpcPushTransport). A new transport implementation should ship a mirror of that fixture parameterised over its own seam.
