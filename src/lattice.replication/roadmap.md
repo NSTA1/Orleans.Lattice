@@ -99,7 +99,7 @@ The phase structure below groups items thematically. This section is the canonic
 
 16. **R-053 — Operator-driven re-seed** `[deps: R-051]`
 
-17. **R-084 — Causal-stable snapshot cut-point** `[deps: R-080 ✓, R-050 ✓]`
+17. **R-084 ✓ shipped — Causal-stable snapshot cut-point**
     Pair with R-050 in a single cycle: `ISnapshotProvider.ExportAsync` returns the causal-stable frontier alongside the as-of HLC; the receiver bootstrap state machine (R-051) calls `PinSnapshotAsync((HLC, VectorClock))`; the dependency check (R-082) runs from the pinned VC frontier on the first incremental entry. Snapshot scan algorithm is unchanged — only the cut-point selection. See [`wal-causal-plus.md`](../../docs/lattice.replication/wal-causal-plus.md) §8.
 
 ### Operational polish (after critical-path is in)
@@ -137,7 +137,7 @@ The phase structure below groups items thematically. This section is the canonic
     Replace R-061's `min(cursor)` predicate with `causal_stable = min(peerVectorClock)` across `IChangeFeed` subscribers. `ILatticeReplicationCursorRegistry.ReportAsync` gains a VC-shaped overload (additive — old callers continue to report HLC-only and contribute a degenerate diagonal-only VC). `LatticeReplicationGc` caches `causal_stable` and recomputes only on ack updates. An entry is GC-eligible iff `entry.VectorClock <= causal_stable AND entry.Offset <= minAckedOffset` (R-061's offset predicate AND-ed in for safety). Documented as an extension to [`wal-gc.md`](../../docs/lattice.replication/wal-gc.md).
     *Future-compat:* a future C-050 local materialiser reports its own VC and pins the log identically to a remote peer.
 
-30. **R-084 — Causal-stable snapshot cut-point** `[deps: R-080 ✓, R-050 ✓]`
+30. **R-084 ✓ shipped — Causal-stable snapshot cut-point**
     Pair with R-050 in a single cycle: `ISnapshotProvider.ExportAsync` returns the causal-stable frontier alongside the as-of HLC; the receiver bootstrap state machine (R-051) calls `PinSnapshotAsync((HLC, VectorClock))`; the dependency check (R-082) runs from the pinned VC frontier on the first incremental entry. Snapshot scan algorithm is unchanged — only the cut-point selection. Co-build with R-050 in a single feature cycle to avoid retrofitting the snapshot handoff contract.
 
 31. **R-085 — Causal+ observability** `[deps: R-082 ✓, R-064 ✓]`
@@ -451,7 +451,7 @@ Extends today's per-origin LWW + HWM convergence to causal+ consistency: writers
   Augments R-061's HLC `min(cursor)` predicate with a causal-stable VC frontier across registered consumers. `ILatticeReplicationCursorRegistry` gains a VC-shaped `ReportCursorAsync(treeName, consumerId, cursor, vector, ct)` overload (additive — the legacy HLC-only overload is unchanged) and `GetCausalStableAsync(treeName, ct)` returning the pointwise minimum `VersionVector` across consumers that reported a vector, or `null` when none has. The in-memory registry caches the meet behind a per-tree generation counter that bumps on every accepted mutation, so high-frequency GC reads against a stable registry are O(1). `LatticeReplicationGc` AND-s `causalStable.DominatesOrEquals(entry.VectorClock)` into the trim predicate; the existing R-061 cursor / TTL clauses are kept for safety so a stale frontier cannot cause over-trim. Entries with a `null` `VectorClock` (legacy peers, pre-causal+ entries, range deletes) are treated as the empty frontier and pass the new clause unconditionally; consumers that report HLC-only continue to pin the HLC half but are excluded from the meet. `ReplicationGcReport` exposes `CausalStable` for diagnostics. Documented as a new "Causal-stable frontier" section in [`docs/lattice.replication/wal-gc.md`](../../docs/lattice.replication/wal-gc.md). Test coverage: 16 new tests across `InMemoryReplicationCursorRegistryTests` and `LatticeReplicationGcTests` covering pointwise-min semantics, mixed HLC-only / VC-shaped registries, defensive cloning, cache invalidation on unregister, AND-clause blocking when entry VC exceeds frontier, AND-clause permitting when frontier dominates, null-VC entry pass-through, missing-origin handling, and stop-at-first-blocked-entry behaviour.
   *Future-compat:* a future C-050 local materialiser reports its own VC and pins the log identically to a remote peer.
 
-- [ ] **R-084 — Causal-stable snapshot cut-point** *(depends on R-080, R-050)*
+- [x] **R-084 ✓ shipped — Causal-stable snapshot cut-point**
   Pair with R-050: `ISnapshotProvider.ExportAsync` returns `(asOfHlc, causalStableFrontier)`; the receiver's bootstrap state machine (R-051) calls `PinSnapshotAsync` with both values; R-082's dependency check runs from the pinned VC frontier on the first incremental entry. Snapshot scan algorithm is unchanged per the perf note in §8 — only the cut-point selection changes. Co-build with R-050 in a single feature cycle to avoid retrofitting the snapshot handoff contract.
 
 - [ ] **R-085 — Causal+ observability** *(depends on R-082, R-064 ✓)*

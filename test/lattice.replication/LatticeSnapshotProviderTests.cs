@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using NSubstitute;
 using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
@@ -30,7 +29,7 @@ public class LatticeSnapshotProviderTests
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
         await _cluster.DeployAsync();
-        _provider = new LatticeSnapshotProvider(_cluster.Client);
+        _provider = new LatticeSnapshotProvider(_cluster.Client, new InMemoryReplicationCursorRegistry());
     }
 
     [OneTimeTearDown]
@@ -59,6 +58,7 @@ public class LatticeSnapshotProviderTests
         Assert.That(
             async () => await _provider.ExportAsync(null!, HybridLogicalClock.Zero),
             Throws.InstanceOf<ArgumentException>());
+        await Task.CompletedTask;
     }
 
     [Test]
@@ -67,6 +67,7 @@ public class LatticeSnapshotProviderTests
         Assert.That(
             async () => await _provider.ExportAsync("   ", HybridLogicalClock.Zero),
             Throws.InstanceOf<ArgumentException>());
+        await Task.CompletedTask;
     }
 
     [Test]
@@ -160,6 +161,7 @@ public class LatticeSnapshotProviderTests
         Assert.That(
             async () => await _provider.ExportAsync(tree, HybridLogicalClock.Zero, cts.Token),
             Throws.InstanceOf<OperationCanceledException>());
+        await Task.CompletedTask;
     }
 
     private sealed class SiloConfigurator : ISiloConfigurator

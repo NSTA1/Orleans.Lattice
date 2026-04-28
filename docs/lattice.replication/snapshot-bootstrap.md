@@ -31,10 +31,16 @@ before calling `AddLatticeReplication`.
   incremental replication from `asOfHlc`, and the per-origin
   high-water-mark dedupe in `IReplicationApplier` makes the handoff
   exactly-once across the snapshot/incremental boundary.
-- **`CausalStableFrontier`** is the producer's per-tree local vector
-  clock at snapshot time, read once up-front from the per-tree
-  `IReplicationHighWaterMarkGrain`. Receivers pin this on
-  `IReplicationHighWaterMarkGrain.PinSnapshotAsync(asOfHlc, frontier)`
+- **`CausalStableFrontier`** is the producer's causal-stable frontier
+  at snapshot time — the pointwise minimum `VersionVector` across
+  every consumer that has reported a vector through
+  `ILatticeReplicationCursorRegistry.GetCausalStableAsync`. When no
+  consumer has reported a VC-shaped cursor (single-peer cluster, fresh
+  deployment, host using the legacy HLC-only overload), the provider
+  falls back to the producer's per-tree local vector clock from
+  `IReplicationHighWaterMarkGrain.GetVectorAsync` — a strict superset
+  of the meet that is safe as a snapshot cut-point. Receivers pin
+  this on `IReplicationHighWaterMarkGrain.PinSnapshotAsync(asOfHlc, frontier)`
   before draining the entry stream so the causal dependency check on
   the first incremental entry runs from a non-empty frontier.
 - **Tombstoned and expired keys are not emitted.** Only live entries

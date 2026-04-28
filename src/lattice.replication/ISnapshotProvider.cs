@@ -25,9 +25,13 @@ public interface ISnapshotProvider
     /// Produces a streaming export of <paramref name="treeName"/>'s
     /// primary state as of <paramref name="asOfHlc"/>. The returned
     /// <see cref="SnapshotStream"/> carries the as-of HLC, the
-    /// producer's causal-stable frontier (the per-tree local vector
-    /// clock at snapshot time), and an async stream of every live
-    /// entry whose
+    /// producer's causal-stable frontier (the pointwise minimum
+    /// <see cref="Primitives.VersionVector"/> across every consumer
+    /// that has reported a vector through the
+    /// <see cref="ILatticeReplicationCursorRegistry"/>, with a
+    /// fallback to the producer's per-tree local vector clock when no
+    /// consumer has reported a vector yet), and an async stream of
+    /// every live entry whose
     /// <see cref="SnapshotEntry.Timestamp"/> is less than or equal to
     /// <paramref name="asOfHlc"/>.
     /// <para>

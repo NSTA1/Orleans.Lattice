@@ -32,13 +32,23 @@ public sealed class SnapshotStream
     public HybridLogicalClock AsOfHlc { get; }
 
     /// <summary>
-    /// The producer's per-tree local vector clock at the moment the
-    /// snapshot was produced. Receivers pin this on
+    /// The producer's causal-stable frontier at the moment the
+    /// snapshot was produced — the pointwise minimum
+    /// <see cref="VersionVector"/> across every consumer that has
+    /// reported a vector through
+    /// <see cref="ILatticeReplicationCursorRegistry.GetCausalStableAsync"/>.
+    /// Receivers pin this on
     /// <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
     /// before draining <see cref="Entries"/>, so the causal dependency
-    /// check in the apply path starts from a non-empty frontier.
-    /// Always non-null; the snapshot of an unreplicated tree returns
-    /// the empty <see cref="VersionVector"/>.
+    /// check in the apply path starts from a non-empty frontier and
+    /// the first incremental entry is guaranteed to satisfy its
+    /// declared dependencies. When no consumer has reported a
+    /// VC-shaped cursor, the provider falls back to the producer's
+    /// per-tree local vector clock — a strict superset of the meet
+    /// that is safe as a snapshot cut-point because no entry can have
+    /// a VC component above the producer's own local VC at capture
+    /// time. Always non-null; the snapshot of an unreplicated tree
+    /// returns the empty <see cref="VersionVector"/>.
     /// </summary>
     public VersionVector CausalStableFrontier { get; }
 

@@ -9,11 +9,24 @@ namespace Orleans.Lattice.Replication;
 /// every live entry in the source tree via the public
 /// <see cref="ILattice.EntriesAsync"/> surface and stamps each with its
 /// commit-time <see cref="HybridLogicalClock"/> via
-/// <see cref="ILattice.GetWithVersionAsync"/>. The producer's
-/// causal-stable frontier is read once up-front from the per-tree
-/// <see cref="IReplicationHighWaterMarkGrain"/> so the consumer pins
-/// the receiver's local vector clock to a stable value before
-/// draining the entry stream.
+/// <see cref="ILattice.GetWithVersionAsync"/>. The snapshot's
+/// <see cref="SnapshotStream.CausalStableFrontier"/> is read once
+/// up-front from the
+/// <see cref="ILatticeReplicationCursorRegistry"/> via
+/// <see cref="ILatticeReplicationCursorRegistry.GetCausalStableAsync"/>:
+/// the snapshot is cut at the producer's causal-stable frontier
+/// (<c>min(consumer VC)</c>), so a receiver pinning that frontier on
+/// <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/> can
+/// safely accept the first incremental entry under the dependency
+/// check without parking it. When no consumer has reported a vector
+/// yet (the common case for a single-peer cluster, a fresh deployment
+/// before the first ack-with-VC, or a host that has not wired up the
+/// causal+ overload), the provider falls back to the producer's
+/// per-tree local vector clock from
+/// <see cref="IReplicationHighWaterMarkGrain.GetVectorAsync"/>; this
+/// is a strict superset of the causal-stable meet and is safe as a
+/// snapshot cut-point because there are no entries above the
+/// producer's local VC at snapshot time.
 /// <para>
 /// <b>Performance note.</b> The default implementation pays one
 /// per-key <see cref="ILattice.GetWithVersionAsync"/> round-trip on
@@ -26,9 +39,12 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>.
 /// </para>
 /// </summary>
-internal sealed class LatticeSnapshotProvider(IGrainFactory grainFactory) : ISnapshotProvider
+internal sealed class LatticeSnapshotProvider(
+    IGrainFactory grainFactory,
+    ILatticeReplicationCursorRegistry cursors) : ISnapshotProvider
 {
     private readonly IGrainFactory _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
+    private readonly ILatticeReplicationCursorRegistry _cursors = cursors ?? throw new ArgumentNullException(nameof(cursors));
 
     /// <inheritdoc />
     public async Task<SnapshotStream> ExportAsync(
@@ -39,12 +55,25 @@ internal sealed class LatticeSnapshotProvider(IGrainFactory grainFactory) : ISna
         ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Read the producer's per-tree local vector clock up-front so
-        // the receiver can pin it before draining the entry stream.
-        // GetVectorAsync returns a defensive copy; SnapshotStream takes
-        // ownership of the reference.
-        var hwm = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName);
-        var frontier = await hwm.GetVectorAsync(cancellationToken).ConfigureAwait(false);
+        // Read the producer's causal-stable frontier once up-front.
+        // The cursor registry's GetCausalStableAsync is the canonical
+        // snapshot cut-point per the causal+ design (snapshot_frontier
+        // = causal_stable). When the registry has not yet observed a
+        // VC-shaped report from any consumer (new deployment, single-
+        // peer cluster, host using the legacy HLC-only overload), fall
+        // back to the producer's per-tree local vector clock - a strict
+        // superset of the meet that is safe as a snapshot cut because
+        // no entry can have a VC component above the producer's own
+        // local VC at the moment of capture.
+        var frontier = await _cursors
+            .GetCausalStableAsync(treeName, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (frontier is null)
+        {
+            var hwm = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName);
+            frontier = await hwm.GetVectorAsync(cancellationToken).ConfigureAwait(false);
+        }
 
         var entries = EnumerateAsync(treeName, asOfHlc, cancellationToken);
         return new SnapshotStream(treeName, asOfHlc, frontier, entries);
