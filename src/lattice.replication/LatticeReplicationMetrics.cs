@@ -405,4 +405,28 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="ApplyFifoViolations"/> counter.
     /// </summary>
     public const string ApplyFifoViolationsName = "orleans.lattice.replication.apply.fifo_violations";
+
+    // --- Auto-bootstrap detector ------------------------------------------------
+
+    /// <summary>
+    /// Counter incremented once per call to
+    /// <see cref="ILatticeFallOffLogDetector.CheckAndTriggerAsync"/>
+    /// that detected a fall-off-the-log condition for a
+    /// <c>(treeName, sourceClusterId)</c> pair — i.e. the receiver's
+    /// per-origin high-water-mark was strictly less than the sender's
+    /// oldest available WAL entry HLC. Increments fire regardless of
+    /// whether
+    /// <see cref="LatticeReplicationOptions.AutoBootstrapOnFallOffLog"/>
+    /// is enabled, so operators can alert on the detection event
+    /// even when auto-recovery is disabled. Tagged by
+    /// <see cref="TagTree"/> and <see cref="TagOrigin"/>.
+    /// </summary>
+    public static readonly Counter<long> PeerFellOffLog =
+        Meter.CreateCounter<long>("orleans.lattice.replication.peer.fell_off_log", unit: "{event}",
+            description: "Receiver fall-off-the-log detection events, tagged by tree and origin.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="PeerFellOffLog"/> counter.
+    /// </summary>
+    public const string PeerFellOffLogName = "orleans.lattice.replication.peer.fell_off_log";
 }

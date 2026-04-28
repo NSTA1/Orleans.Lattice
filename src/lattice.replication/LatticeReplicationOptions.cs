@@ -199,6 +199,28 @@ public class LatticeReplicationOptions
     public TimeSpan? WalRetention { get; set; }
 
     /// <summary>
+    /// Whether the receiver-side fall-off-the-log detector
+    /// (<see cref="ILatticeFallOffLogDetector"/>) automatically calls
+    /// <see cref="ILatticeBootstrapCoordinator.BootstrapAsync"/> when
+    /// it observes that the receiver's per-origin high-water-mark is
+    /// strictly less than the sender's oldest still-available WAL
+    /// entry. Defaults to <see langword="true"/>; set to
+    /// <see langword="false"/> to surface the detection through the
+    /// <see cref="LatticeReplicationMetrics.PeerFellOffLog"/> metric
+    /// only, leaving the bootstrap kickoff to operator-driven flows
+    /// (<see cref="ILatticeBootstrapCoordinator.BootstrapAsync"/>
+    /// invoked explicitly).
+    /// <para>
+    /// The detector emits the metric regardless of this setting, so
+    /// disabling auto-bootstrap does not silence the alert path; it
+    /// simply decouples detection from the recovery action so a host
+    /// can gate re-seeds on additional policy (rate limits,
+    /// maintenance windows, manual approval).
+    /// </para>
+    /// </summary>
+    public bool AutoBootstrapOnFallOffLog { get; set; } = DefaultAutoBootstrapOnFallOffLog;
+
+    /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
     /// represents "unset". This default is rejected by
     /// <c>LatticeReplicationOptionsValidator</c> so a host that calls
@@ -263,4 +285,12 @@ public class LatticeReplicationOptions
     /// magnitude below typical silo heap sizes.
     /// </summary>
     public const long DefaultCausalBufferMaxBytes = 16L * 1024L * 1024L;
+
+    /// <summary>
+    /// Default value for <see cref="AutoBootstrapOnFallOffLog"/>:
+    /// automatically kick off a snapshot bootstrap when the
+    /// fall-off-the-log detector observes that the receiver has
+    /// fallen off the sender's WAL.
+    /// </summary>
+    public const bool DefaultAutoBootstrapOnFallOffLog = true;
 }
