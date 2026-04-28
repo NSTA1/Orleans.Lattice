@@ -161,7 +161,16 @@ Only when the user explicitly asks:
 3. **Create a PR** using `gh pr create` with:
    - A title matching the commit convention: `feat: <description> (F-XXX)`
    - At least one label: `enhancement`, `bug`, `documentation`, `ci`, `dependencies`, or `breaking`
-   - A body written to a temp file and passed via `--body-file` (never inline backtick-heavy markdown in shell arguments). Delete the temp file after PR creation.
+   - A body written to a tracked scratch file (`.scratch/pr-body.md` — `.scratch/` is gitignored) and passed via `--body-file`. **Never** use `New-TemporaryFile` or inline heredocs piped into `gh`. See "PR body file write path" below.
+4. **Verify the PR body actually applied.** `gh pr create` and `gh pr edit` both **silently no-op** when the body file is malformed (BOM, wrong encoding, empty, or zero-byte). The CLI prints the PR URL and exits 0 in both the success and the silent-failure case. Immediately after creating or editing a PR, run:
+
+   ```powershell
+   gh pr view <num> --json body --jq .body | Select-Object -First 5
+   gh pr view <num> --json body --jq .body | Select-Object -Last 5
+   (gh pr view <num> --json body | Out-String).Length
+   ```
+
+   The first/last lines must match the file you wrote, and the body length must be non-trivial. If the body is empty or stale, **fix the file and re-run `gh pr edit --body-file`**, then re-verify. A claim of "I created the PR" without this verification is a protocol violation — the agent has shipped stale PR descriptions to GitHub before, and metadata-only checks (`--json url,state,title,labels`) do not catch it.
 
 #### PR body format
 
@@ -199,12 +208,23 @@ One-paragraph description of what the feature does and why.
 - Any cleanup, warning fixes, or refactoring done alongside the feature.
 ```
 
+#### PR body file write path
+
+The combination of `New-TemporaryFile` + `[System.IO.File]::WriteAllText` + non-ASCII characters (em-dashes `—`, checkmarks `✓`, arrows `→`, less-than-or-equal `≤`) has produced files that `gh` ingests as empty/identical-to-current with no error surfaced. Use this path instead:
+
+1. **Write to a tracked scratch path**, not `New-TemporaryFile`. The repo's `.gitignore` covers `.scratch/`; the file stays inspectable and survives across terminal calls if a step fails.
+2. **Restrict body content to ASCII** where practical: `-` instead of `—`, `to` instead of `→`, `[x]` text instead of `✓`, `<=` instead of `≤`. Markdown tables, code spans, and bullets are fine.
+3. **Build the file via `edit_file` after seeding it with a one-line `New-Item`**, not via a single PowerShell heredoc. Heredocs of more than ~15 lines containing backticks, pipes, and quotes have triggered silent parser failures where `Add-Content` returns nothing and the file is unchanged. `edit_file` operates outside the shell and is reliable. **Use `replace_string_in_file` with verbatim anchors — not `edit_file` with similarity-matched `// ...existing code...` placeholders — when modifying a long instructions/markdown file, because similarity matching has clobbered adjacent sections in this repo before.**
+4. **Confirm file size before invoking `gh`**: `(Get-Item .scratch/pr-body.md).Length` must match what you intended (e.g. 5kB+ for a typical feature PR).
+5. **Leaving the scratch file in place is fine** — it's gitignored, so it doesn't pollute the working tree. Keeping it aids debugging if the next PR-edit silently fails.
+
 ## Important rules
 
 - **Never commit, push, or create a PR unless the user explicitly asks.**
 - **Never skip the review phase.** Bugs caught in review are cheaper than bugs caught in CI.
 - **The Phase 6b hygiene gates are unskippable and run *before* the unit-test suite.** Each gate must be invoked verbatim and its output transcript pasted into the chat reply. "I checked and it's clean" without the transcript is a protocol violation. The feature-tracker leak scan in particular has caught real CI failures during this agent's own past PRs — running it locally costs ~3 seconds; discovering it in CI costs a force-push and a wasted CI run.
 - **The Phase 7 memory-allocation pass is mandatory and must produce a written classification.** "I checked and it looks fine" is not a memory-allocation review. Enumerate the hot-path allocations, classify each (✅ / ⚠️ / 📝), and apply every ⚠️ fix before declaring work complete. The user has had to ask for this retrospectively in the past — never assume it can be folded into the correctness pass.
-- **Always use `--body-file` for PR descriptions** to avoid shell escaping issues with backticks and special characters.
+- **Always use `--body-file` with a tracked `.scratch/` file for PR descriptions** to avoid shell escaping issues with backticks and special characters. **Never** use `New-TemporaryFile` for the body — it has produced silent failures with non-ASCII content.
+- **`gh pr create` and `gh pr edit` silently no-op on malformed body files.** Always verify the live body via `gh pr view <num> --json body` immediately after the call. The PR URL printed by `gh` is not proof the body applied — it is printed in the failure case too.
 - **Build must be clean** — zero errors, zero warnings — before declaring work complete.
 - **One feature per branch.** Branch name: `feature/fXXX-short-description`.
