@@ -140,7 +140,7 @@ The phase structure below groups items thematically. This section is the canonic
 30. **R-084 ✓ shipped — Causal-stable snapshot cut-point**
     Pair with R-050 in a single cycle: `ISnapshotProvider.ExportAsync` returns the causal-stable frontier alongside the as-of HLC; the receiver bootstrap state machine (R-051) calls `PinSnapshotAsync((HLC, VectorClock))`; the dependency check (R-082) runs from the pinned VC frontier on the first incremental entry. Snapshot scan algorithm is unchanged — only the cut-point selection. Co-build with R-050 in a single feature cycle to avoid retrofitting the snapshot handoff contract.
 
-31. **R-085 — Causal+ observability** `[deps: R-082 ✓, R-064 ✓]`
+31. **R-085 ✓ shipped — Causal+ observability** `[deps: R-082 ✓, R-064 ✓]`
     Three new instruments on the `orleans.lattice.replication` meter, following R-064's reason-tag conventions:
     - `apply.buffered_entries` UpDownCounter<long> tagged `tree`, `shard`
     - `apply.buffer_bytes` UpDownCounter<long> tagged `tree`, `shard`
@@ -454,7 +454,7 @@ Extends today's per-origin LWW + HWM convergence to causal+ consistency: writers
 - [x] **R-084 ✓ shipped — Causal-stable snapshot cut-point**
   Pair with R-050: `ISnapshotProvider.ExportAsync` returns `(asOfHlc, causalStableFrontier)`; the receiver's bootstrap state machine (R-051) calls `PinSnapshotAsync` with both values; R-082's dependency check runs from the pinned VC frontier on the first incremental entry. Snapshot scan algorithm is unchanged per the perf note in §8 — only the cut-point selection changes. Co-build with R-050 in a single feature cycle to avoid retrofitting the snapshot handoff contract.
 
-- [ ] **R-085 — Causal+ observability** *(depends on R-082, R-064 ✓)*
+- [x] **R-085 ✓ shipped — Causal+ observability** *(depends on R-082 ✓, R-064 ✓)*
     Three new instruments on the `orleans.lattice.replication` meter, following R-064's reason-tag conventions:
     - `apply.buffered_entries` UpDownCounter<long> tagged `tree`, `shard`
     - `apply.buffer_bytes` UpDownCounter<long> tagged `tree`, `shard`
