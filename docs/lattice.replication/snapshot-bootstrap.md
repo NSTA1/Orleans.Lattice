@@ -180,3 +180,46 @@ await coordinator.BootstrapAsync("orders", sourceClusterId: "site-a", cancellati
 
 LatticeBootstrapState state = await coordinator.GetStateAsync("orders", cancellationToken);
 _ = state; // LatticeBootstrapState.LiveIncremental once the bootstrap completes
+
+## Operator-driven re-seed
+
+Beyond the receiver-driven auto-bootstrap path (`ILatticeFallOffLogDetector`), the package exposes an explicit operator-facing entry point for scheduled bootstraps - a new peer joining, a bandwidth-constrained initial sync, or a post-disaster re-bootstrap. The seam is `ILatticeReplicationAdmin.RequestSnapshotAsync`; honoured requests delegate to the same `ILatticeBootstrapCoordinator.BootstrapAsync` driving the auto-bootstrap path, so every re-seed - operator-driven or detector-driven - flows through one state machine.
+
+| Type | Shape | Purpose |
+|------|-------|---------|
+| `ILatticeReplicationAdmin` | `Task<OperatorReseedDecision> RequestSnapshotAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public façade that gates the request behind a per-`(tree, sourceClusterId)` rate limit before delegating to the bootstrap coordinator. |
+| `OperatorReseedDecision` | `readonly record struct` with `Triggered`, `LastRequestedAt`, `RetryAfter` | Diagnostic return value indicating whether the call invoked the coordinator and, when denied, how long the operator should wait before retrying. |
+
+### Semantics
+
+- **Per-`(tree, sourceClusterId)` rate limit.** `LatticeReplicationOptions.OperatorReseedMinInterval` (default `1 minute`) bounds the minimum gap between honoured requests for the same pair. A second request inside the window returns `Triggered = false` with `RetryAfter` set to the remaining time; the coordinator is not invoked and no exception is thrown. `TimeSpan.Zero` disables the rate limit entirely (every request reaches the coordinator).
+- **Process-local rate-limit table.** The default implementation tracks honoured requests in process memory only; a silo restart resets the rate-limit window for every pair. Cross-silo coordination is not required because `ILatticeBootstrapCoordinator` is itself idempotent under concurrent invocations against the same tree from the same source cluster (the per-tree internal grain absorbs the second call as a no-op) and rejects mismatched-source concurrent kickoffs as `InvalidOperationException`. The rate limit is therefore a fairness mechanism, not a correctness one.
+- **Timestamp updates only on success.** The dictionary timestamp is stamped only after the coordinator call returns successfully, so a thrown coordinator exception (transport failure, conflicting in-flight bootstrap from a different source) does not consume the rate-limit budget against the operator.
+- **Per-tree options resolution.** The minimum interval is resolved per-tree via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)`, so different replicated trees can run different re-seed cadences without separate seam instances.
+- **Argument validation.** `treeName` and `sourceClusterId` must be non-null and non-empty (`ArgumentException` otherwise); the cancellation token is observed before the rate-limit check and propagated to the underlying coordinator.
+
+### Sample usage
+
+```csharp
+ILatticeReplicationAdmin admin = client.ServiceProvider
+    .GetRequiredService<ILatticeReplicationAdmin>();
+
+OperatorReseedDecision decision = await admin.RequestSnapshotAsync(
+    "orders", sourceClusterId: "site-a", cancellationToken);
+
+if (!decision.Triggered)
+{
+    // Rate-limited: the operator should wait `decision.RetryAfter` before
+    // retrying. The previously honoured request is still driving the
+    // bootstrap coordinator if one was kicked off recently.
+    _ = decision.RetryAfter;
+    _ = decision.LastRequestedAt;
+    return;
+}
+
+// Triggered: poll the coordinator for state-machine progress.
+LatticeBootstrapState state = await client.ServiceProvider
+    .GetRequiredService<ILatticeBootstrapCoordinator>()
+    .GetStateAsync("orders", cancellationToken);
+_ = state;
+```

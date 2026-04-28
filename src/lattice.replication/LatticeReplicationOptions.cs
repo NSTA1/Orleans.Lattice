@@ -221,6 +221,26 @@ public class LatticeReplicationOptions
     public bool AutoBootstrapOnFallOffLog { get; set; } = DefaultAutoBootstrapOnFallOffLog;
 
     /// <summary>
+    /// Minimum interval between honoured operator-driven re-seed
+    /// requests for the same <c>(treeName, sourceClusterId)</c>
+    /// pair, enforced by
+    /// <see cref="ILatticeReplicationAdmin.RequestSnapshotAsync"/>.
+    /// A request that arrives before this interval has elapsed
+    /// since the last honoured request is rejected with
+    /// <see cref="OperatorReseedDecision.Triggered"/> set to
+    /// <see langword="false"/>; the underlying bootstrap
+    /// coordinator is not invoked and no exception is thrown.
+    /// Defaults to <see cref="DefaultOperatorReseedMinInterval"/>.
+    /// Set to <see cref="TimeSpan.Zero"/> to disable rate limiting
+    /// entirely (every request reaches the coordinator, whose own
+    /// idempotency contract still absorbs concurrent kickoffs from
+    /// the same source cluster as no-ops). Must not be negative; the
+    /// registered options validator rejects negative values at
+    /// first-resolve time.
+    /// </summary>
+    public TimeSpan OperatorReseedMinInterval { get; set; } = DefaultOperatorReseedMinInterval;
+
+    /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
     /// represents "unset". This default is rejected by
     /// <c>LatticeReplicationOptionsValidator</c> so a host that calls
@@ -293,4 +313,14 @@ public class LatticeReplicationOptions
     /// fallen off the sender's WAL.
     /// </summary>
     public const bool DefaultAutoBootstrapOnFallOffLog = true;
+
+    /// <summary>
+    /// Default value for <see cref="OperatorReseedMinInterval"/>:
+    /// one minute between honoured operator re-seed requests for
+    /// the same <c>(tree, sourceClusterId)</c> pair. Sized to
+    /// absorb double-clicks and rapid retries while still allowing
+    /// a deliberate operator command to land within an interactive
+    /// session.
+    /// </summary>
+    public static readonly TimeSpan DefaultOperatorReseedMinInterval = TimeSpan.FromMinutes(1);
 }

@@ -105,6 +105,15 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "leave the property unset to disable the wall-clock ceiling entirely.");
         }
 
+        if (options.OperatorReseedMinInterval < TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.OperatorReseedMinInterval)} "
+                + $"must be greater than or equal to {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "A negative interval has no meaningful interpretation; set the value to "
+                + $"{nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} to disable operator re-seed rate limiting entirely.");
+        }
+
         if (options.ReplicatedTrees is { } trees)
         {
             foreach (var kvp in trees)
