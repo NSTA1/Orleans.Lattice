@@ -40,6 +40,7 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeBootstrapCoordinator, LatticeBootstrapCoordinator>();
         builder.Services.TryAddSingleton<ILatticeWalIntrospection, LatticeWalIntrospection>();
         builder.Services.TryAddSingleton<ILatticeFallOffLogDetector, LatticeFallOffLogDetector>();
+        builder.Services.TryAddSingleton<ILatticeReplicationAdmin, LatticeReplicationAdmin>();
 
         // Register the canonical applier as a concrete singleton so the
         // dead-letter tracking decorator and the inspection seam can

@@ -332,5 +332,51 @@ public class LatticeReplicationOptionsValidatorTests
 
         Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
     }
+
+    // ------------------------------------------------------------------
+    // OperatorReseedMinInterval
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Validate_fails_for_negative_operator_reseed_min_interval()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            OperatorReseedMinInterval = TimeSpan.FromSeconds(-1),
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.OperatorReseedMinInterval)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_when_operator_reseed_min_interval_is_zero()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            OperatorReseedMinInterval = TimeSpan.Zero,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_for_positive_operator_reseed_min_interval()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            OperatorReseedMinInterval = TimeSpan.FromMinutes(5),
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
 }
 

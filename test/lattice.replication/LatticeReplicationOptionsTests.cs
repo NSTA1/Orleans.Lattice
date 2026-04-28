@@ -237,4 +237,26 @@ public class LatticeReplicationOptionsTests
         var opts = new LatticeReplicationOptions { AutoBootstrapOnFallOffLog = false };
         Assert.That(opts.AutoBootstrapOnFallOffLog, Is.False);
     }
+
+    // ------------------------------------------------------------------
+    // Operator re-seed minimum interval
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void New_instance_has_operator_reseed_min_interval_default_of_one_minute()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.Multiple(() =>
+        {
+            Assert.That(opts.OperatorReseedMinInterval, Is.EqualTo(TimeSpan.FromMinutes(1)));
+            Assert.That(LatticeReplicationOptions.DefaultOperatorReseedMinInterval, Is.EqualTo(TimeSpan.FromMinutes(1)));
+        });
+    }
+
+    [Test]
+    public void OperatorReseedMinInterval_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { OperatorReseedMinInterval = TimeSpan.FromSeconds(30) };
+        Assert.That(opts.OperatorReseedMinInterval, Is.EqualTo(TimeSpan.FromSeconds(30)));
+    }
 }

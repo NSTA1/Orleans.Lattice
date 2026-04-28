@@ -687,5 +687,53 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         var provider = services.BuildServiceProvider();
         Assert.That(provider.GetRequiredService<ILatticeWalIntrospection>(), Is.SameAs(custom));
     }
+
+    [Test]
+    public void AddLatticeReplication_registers_replication_admin_by_default()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var admin = provider.GetRequiredService<ILatticeReplicationAdmin>();
+        Assert.That(admin, Is.InstanceOf<LatticeReplicationAdmin>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_replication_admin_is_registered_as_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<ILatticeReplicationAdmin>();
+        var second = provider.GetRequiredService<ILatticeReplicationAdmin>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_replication_admin()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<ILatticeReplicationAdmin>();
+        services.AddSingleton<ILatticeReplicationAdmin>(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<ILatticeReplicationAdmin>(), Is.SameAs(custom));
+    }
 }
 
