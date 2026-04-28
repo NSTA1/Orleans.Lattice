@@ -37,6 +37,7 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<IChangeFeed, ChangeFeed>();
 
         builder.Services.TryAddSingleton<ISnapshotProvider, LatticeSnapshotProvider>();
+        builder.Services.TryAddSingleton<ILatticeBootstrapCoordinator, LatticeBootstrapCoordinator>();
 
         // Register the canonical applier as a concrete singleton so the
         // dead-letter tracking decorator and the inspection seam can

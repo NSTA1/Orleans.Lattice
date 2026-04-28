@@ -547,5 +547,51 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         var provider = services.BuildServiceProvider();
         Assert.That(provider.GetRequiredService<ISnapshotProvider>(), Is.SameAs(custom));
     }
+
+    [Test]
+    public void AddLatticeReplication_registers_lattice_bootstrap_coordinator_by_default()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var coordinator = provider.GetRequiredService<ILatticeBootstrapCoordinator>();
+        Assert.That(coordinator, Is.InstanceOf<LatticeBootstrapCoordinator>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_bootstrap_coordinator_is_registered_as_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<ILatticeBootstrapCoordinator>();
+        var second = provider.GetRequiredService<ILatticeBootstrapCoordinator>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_bootstrap_coordinator()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<ILatticeBootstrapCoordinator>();
+        services.AddSingleton<ILatticeBootstrapCoordinator>(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<ILatticeBootstrapCoordinator>(), Is.SameAs(custom));
+    }
 }
 

@@ -15,6 +15,14 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
     public int WriteCount { get; private set; }
 
     /// <summary>
+    /// Optional callback invoked after every successful
+    /// <see cref="WriteStateAsync"/>. Tests use this to capture the
+    /// per-write state value (e.g. to assert intermediate transitions
+    /// before a later write overwrites them).
+    /// </summary>
+    public Action<T>? OnAfterWrite { get; set; }
+
+    /// <summary>
     /// When set, the next call to <see cref="WriteStateAsync"/> throws this
     /// exception instead of incrementing <see cref="WriteCount"/>. Cleared
     /// after it fires.
@@ -37,6 +45,7 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
             throw ex;
         }
         WriteCount++;
+        OnAfterWrite?.Invoke(State);
         return Task.CompletedTask;
     }
 }

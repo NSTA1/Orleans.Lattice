@@ -374,3 +374,6 @@ benchmark/results-*.json
 !.vscode/*.code-snippets
 *.code-workspace
 .history/
+
+# PR bodies
+.scratch/
