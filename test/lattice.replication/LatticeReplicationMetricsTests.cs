@@ -378,4 +378,38 @@ public class LatticeReplicationMetricsTests
         Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
             t.Key == "tree" && (string?)t.Value == "t"));
     }
+
+    [Test]
+    public void Apply_fifo_violations_counter_has_expected_name_and_unit()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ApplyFifoViolations.Name,
+                Is.EqualTo("orleans.lattice.replication.apply.fifo_violations"));
+            Assert.That(LatticeReplicationMetrics.ApplyFifoViolations.Unit, Is.EqualTo("{entry}"));
+            Assert.That(LatticeReplicationMetrics.ApplyFifoViolationsName,
+                Is.EqualTo(LatticeReplicationMetrics.ApplyFifoViolations.Name));
+            Assert.That(LatticeReplicationMetrics.TagOrigin, Is.EqualTo("origin"));
+        });
+    }
+
+    [Test]
+    public void Apply_fifo_violations_records_with_tree_and_origin_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyFifoViolationsName);
+
+        LatticeReplicationMetrics.ApplyFifoViolations.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, "site-b"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(1L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "t"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "origin" && (string?)t.Value == "site-b"));
+    }
 }
