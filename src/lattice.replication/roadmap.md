@@ -153,7 +153,7 @@ The phase structure below groups items thematically. This section is the canonic
 33. **R-087 ✓ shipped — Per-origin FIFO invariant + out-of-order detection**
     Receiver-side instrumentation that pins the per-origin FIFO contract R-082's buffer relies on for occupancy bounds. Cheap to land alongside R-085; same instrumentation surface. Closes the gap left by the user-facing R-201 / R-211 design split — sender-side FIFO is implicit in the partitioned change feed (per-shard offset order ⇒ per-(origin, shard) HLC monotonicity), so there is no sender-side enforcement work; the genuine gap is a receiver-side metric that surfaces a transport regression breaking that invariant.
 
-34. **R-088 — Bootstrap → incremental causal handoff verification** `[deps: R-082 ✓, R-084]`
+34. **R-088 ✓ shipped — Bootstrap → incremental causal handoff verification** `[deps: R-082 ✓, R-084 ✓]`
     Joins the snapshot/bootstrap stream and the causal+ apply stream — schedule after both R-082 and R-084 land. R-082 + R-084 already provide the mechanism (initial `local_vc` from the pinned `causalStableFrontier`, dep-check from there on the first incremental); R-088 is the explicit acceptance test + DLQ-overflow operator playbook that pins the contract end-to-end.
 
 
@@ -202,8 +202,8 @@ Streams converge before R-080 (causal+ schema) → R-050 (snapshot/bootstrap), w
 
 | Stream | Items |
 |---|---|
-| Causal+ schema + snapshot | R-080 ✓ → R-050 ✓ → R-051 ✓ → R-052 ✓ / R-053 ✓ → R-084 ✓ → R-088 |
-| Causal+ apply | R-081 ✓ → R-082 ✓ → (R-083 ✓, R-085 ✓, R-086 ✓, R-087 ✓ parallel) → R-088 |
+| Causal+ schema + snapshot | R-080 ✓ → R-050 ✓ → R-051 ✓ → R-052 ✓ / R-053 ✓ → R-084 ✓ → R-088 ✓ |
+| Causal+ apply | R-081 ✓ → R-082 ✓ → (R-083 ✓, R-085 ✓, R-086 ✓, R-087 ✓ parallel) → R-088 ✓ |
 | Causal+ completeness | (R-089, R-090, R-091, R-092, R-093 parallel; each gated on its Core F-04x dep) |
 
 ---
@@ -473,7 +473,7 @@ Extends today's per-origin LWW + HWM convergence to causal+ consistency: writers
 
     Test coverage: in-order delivery records zero violations; a deterministic out-of-order test transport increments the counter and the violating entry still applies correctly (or parks via R-082 if its VC isn't satisfied); per-tree + per-origin tag dimensionality verified. Documented in [`docs/lattice.replication/observability.md`](../../docs/lattice.replication/observability.md) under the "Causal+ instruments" section established by R-085.
 
-- [ ] **R-088 — Bootstrap → incremental causal handoff verification** *(depends on R-082 ✓, R-084 ✓)*
+- [x] **R-088 ✓ shipped — Bootstrap → incremental causal handoff verification** *(depends on R-082 ✓, R-084 ✓)*
   Acceptance test + documentation item pinning the snapshot/incremental causal handoff. R-082 + R-084 already provide the mechanism — the snapshot's `causalStableFrontier` is pinned via `PinSnapshotAsync((HLC, VectorClock))` (R-081) and the first incremental entry runs through R-082's dep-check from that pinned frontier — but the interaction is currently implicit. R-088 makes it explicit and adds the regression scaffold so a future change to either side cannot silently break it.
 
   Specified behaviour:
