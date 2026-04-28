@@ -100,7 +100,7 @@ has fallen off the WAL) and by operator-driven re-seed flows.
 | Type | Shape | Purpose |
 |------|-------|---------|
 | `LatticeBootstrapState` | `enum` with members `Idle`, `RequestingSnapshot`, `ApplyingSnapshot`, `IncrementalHandoff`, `LiveIncremental`, `Failed` | The state machine's observable position for a single tree. |
-| `ILatticeBootstrapCoordinator` | `LatticeBootstrapState GetState(string treeName)` + `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Drives the state machine. Registered as a singleton by `AddLatticeReplication`. |
+| `ILatticeBootstrapCoordinator` | `Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken ct)` + `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public façade over the per-tree bootstrap coordinator grain. Registered as a singleton by `AddLatticeReplication`; the state machine itself lives in a per-tree internal grain whose cluster-wide single activation provides cross-silo mutual exclusion. |
 
 ### State transitions
 
@@ -116,15 +116,42 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
 
 ### Semantics
 
-- **One bootstrap per tree at a time.** A concurrent invocation
-  against the same tree throws `InvalidOperationException`
-  immediately rather than queueing — the coordinator uses a
-  per-tree non-blocking gate. Concurrent bootstraps of different
-  trees run in parallel.
-- **`Failed` is restartable.** On any thrown exception the state
-  transitions to `Failed` and the exception propagates to the
-  caller. A subsequent `BootstrapAsync` call restarts the cycle from
-  `RequestingSnapshot`.
+- **Kickoff-and-poll API.** `BootstrapAsync` is an idempotent
+  kickoff: it persists the bootstrap intent, schedules the
+  background phase pump on a 2-second grain timer plus a 1-minute
+  keepalive reminder, and returns. Callers poll `GetStateAsync`
+  for progress. This avoids the 30-second Orleans RPC timeout for
+  long-running snapshot drains and decouples caller liveness from
+  the bootstrap workflow.
+- **One bootstrap per tree at a time, cluster-wide.** The state
+  machine is hosted in an internal per-tree Orleans grain
+  (`ILatticeBootstrapCoordinatorGrain`), so every silo's
+  `BootstrapAsync` call for a given tree id routes to the same
+  activation. The grain reads the persisted `InProgress` flag on
+  entry: a concurrent call from the same source cluster is a no-op
+  (idempotent retry); a concurrent call from a different source
+  cluster throws `InvalidOperationException`. No distributed lock
+  or external coordination is required — Orleans' single-activation
+  invariant plus the durable in-progress flag is the synchronisation
+  primitive. Concurrent bootstraps of different trees route to
+  different activations and run in parallel.
+- **Durable, crash-resumable state.** The grain inherits the same
+  `CoordinatorGrain<TSelf>` reminder + phase-timer pattern used
+  by the core tree-resize coordinator. Phase, source cluster id,
+  and a `LastAppliedHlc` cursor are persisted to the
+  `LatticeOptions.StorageProviderName` storage provider. After a
+  silo crash, Orleans reactivates the grain on a surviving silo
+  within the keepalive reminder period and the phase pump resumes
+  from the persisted phase. During `ApplyingSnapshot` the cursor
+  is persisted every 100 entries; on resume, the snapshot stream
+  is re-opened at `LastAppliedHlc` (not `Zero`), so the cost
+  of a crash is bounded re-application of at most ~100 entries —
+  and the per-origin HWM dedupe makes that re-application a
+  correctness no-op.
+- **`Failed` is restartable.** On any thrown exception inside the
+  phase pump the state transitions to `Failed` (persisted) and
+  the pump tears down. A subsequent `BootstrapAsync` call
+  restarts the cycle from `RequestingSnapshot`.
 - **Source HLC + origin preservation.** Every snapshot entry is
   applied through `IReplicationApplyGrain.ApplySetAsync` carrying the
   entry's commit-time `Timestamp` and the supplied
@@ -151,5 +178,5 @@ ILatticeBootstrapCoordinator coordinator = client.ServiceProvider
 
 await coordinator.BootstrapAsync("orders", sourceClusterId: "site-a", cancellationToken);
 
-LatticeBootstrapState state = coordinator.GetState("orders");
+LatticeBootstrapState state = await coordinator.GetStateAsync("orders", cancellationToken);
 _ = state; // LatticeBootstrapState.LiveIncremental once the bootstrap completes

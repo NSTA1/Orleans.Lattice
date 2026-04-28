@@ -18,6 +18,17 @@ namespace Orleans.Lattice.Replication;
 /// front it with a transport-aware fetcher without changing this
 /// surface.
 /// </para>
+/// <para>
+/// The default implementation is a thin façade over a per-tree
+/// internal grain whose cluster-wide single activation makes the
+/// bootstrap mutually exclusive across every silo in the receiver
+/// cluster. Two silos that concurrently call
+/// <see cref="BootstrapAsync"/> for the same tree will both route to
+/// one grain activation; the first wins and the second receives an
+/// <see cref="InvalidOperationException"/> indicating an in-progress
+/// bootstrap. Different trees bootstrap on different activations and
+/// proceed in parallel.
+/// </para>
 /// </summary>
 public interface ILatticeBootstrapCoordinator
 {
@@ -25,11 +36,14 @@ public interface ILatticeBootstrapCoordinator
     /// Returns the current <see cref="LatticeBootstrapState"/> for
     /// <paramref name="treeName"/>, or
     /// <see cref="LatticeBootstrapState.Idle"/> when no bootstrap has
-    /// been started on this receiver. The read is lock-free and may
+    /// been started for that tree on the receiver cluster (or when
+    /// the silo hosting the activation restarted, which resets the
+    /// in-memory state). The read is a single grain RPC and may
     /// observe a transient state while a bootstrap is in progress.
     /// </summary>
     /// <param name="treeName">The logical tree id. Must be non-null and non-empty.</param>
-    LatticeBootstrapState GetState(string treeName);
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Bootstraps <paramref name="treeName"/> from the snapshot
@@ -44,10 +58,12 @@ public interface ILatticeBootstrapCoordinator
     /// propagates to the caller; a subsequent call restarts the
     /// cycle.
     /// <para>
-    /// Only one bootstrap may run per tree at a time. A concurrent
+    /// Only one bootstrap may run per tree at a time, enforced
+    /// cluster-wide by the underlying grain activation. A concurrent
     /// invocation against the same tree throws
     /// <see cref="InvalidOperationException"/> immediately rather
-    /// than queueing.
+    /// than queueing — including when the second invocation
+    /// originates on a different silo from the first.
     /// </para>
     /// </summary>
     /// <param name="treeName">The logical tree id to bootstrap. Must be non-null and non-empty.</param>
