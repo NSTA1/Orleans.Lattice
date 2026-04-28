@@ -218,4 +218,23 @@ public class LatticeReplicationOptionsTests
         var opts = new LatticeReplicationOptions { WalRetention = TimeSpan.FromHours(12) };
         Assert.That(opts.WalRetention, Is.EqualTo(TimeSpan.FromHours(12)));
     }
+
+    // ------------------------------------------------------------------
+    // Auto-bootstrap on fall-off-log (R-052)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void New_instance_has_auto_bootstrap_on_fall_off_log_enabled_by_default()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.AutoBootstrapOnFallOffLog, Is.True);
+        Assert.That(LatticeReplicationOptions.DefaultAutoBootstrapOnFallOffLog, Is.True);
+    }
+
+    [Test]
+    public void AutoBootstrapOnFallOffLog_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { AutoBootstrapOnFallOffLog = false };
+        Assert.That(opts.AutoBootstrapOnFallOffLog, Is.False);
+    }
 }

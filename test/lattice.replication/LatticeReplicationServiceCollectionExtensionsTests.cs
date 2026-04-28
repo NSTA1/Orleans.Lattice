@@ -593,5 +593,99 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         var provider = services.BuildServiceProvider();
         Assert.That(provider.GetRequiredService<ILatticeBootstrapCoordinator>(), Is.SameAs(custom));
     }
+
+    [Test]
+    public void AddLatticeReplication_registers_fall_off_log_detector_by_default()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var detector = provider.GetRequiredService<ILatticeFallOffLogDetector>();
+        Assert.That(detector, Is.InstanceOf<LatticeFallOffLogDetector>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_fall_off_log_detector_is_registered_as_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<ILatticeFallOffLogDetector>();
+        var second = provider.GetRequiredService<ILatticeFallOffLogDetector>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_fall_off_log_detector()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<ILatticeFallOffLogDetector>();
+        services.AddSingleton<ILatticeFallOffLogDetector>(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<ILatticeFallOffLogDetector>(), Is.SameAs(custom));
+    }
+
+    [Test]
+    public void AddLatticeReplication_registers_wal_introspection_by_default()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var introspection = provider.GetRequiredService<ILatticeWalIntrospection>();
+        Assert.That(introspection, Is.InstanceOf<LatticeWalIntrospection>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_wal_introspection_is_registered_as_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<ILatticeWalIntrospection>();
+        var second = provider.GetRequiredService<ILatticeWalIntrospection>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_wal_introspection()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<ILatticeWalIntrospection>();
+        services.AddSingleton<ILatticeWalIntrospection>(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<ILatticeWalIntrospection>(), Is.SameAs(custom));
+    }
 }
 

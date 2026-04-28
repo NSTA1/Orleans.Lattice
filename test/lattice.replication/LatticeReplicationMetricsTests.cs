@@ -412,4 +412,37 @@ public class LatticeReplicationMetricsTests
         Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
             t.Key == "origin" && (string?)t.Value == "site-b"));
     }
+
+    [Test]
+    public void Peer_fell_off_log_counter_has_expected_name_and_unit()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.PeerFellOffLog.Name,
+                Is.EqualTo("orleans.lattice.replication.peer.fell_off_log"));
+            Assert.That(LatticeReplicationMetrics.PeerFellOffLog.Unit, Is.EqualTo("{event}"));
+            Assert.That(LatticeReplicationMetrics.PeerFellOffLogName,
+                Is.EqualTo("orleans.lattice.replication.peer.fell_off_log"));
+        });
+    }
+
+    [Test]
+    public void Peer_fell_off_log_counter_records_with_tree_and_origin_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.peer.fell_off_log");
+
+        LatticeReplicationMetrics.PeerFellOffLog.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, "site-a"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(1L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "t"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "origin" && (string?)t.Value == "site-a"));
+    }
 }
