@@ -136,4 +136,35 @@ public readonly record struct LatticeMutation
     /// observers persisted before this field existed.
     /// </summary>
     [Id(11)] public MutationCategory Category { get; init; }
+
+    /// <summary>
+    /// Stable identifier for the encoding of <see cref="DeltaPayload"/>,
+
+    /// or <see langword="null"/> when the producer did not supply an
+    /// author's delta. Typically the fully-qualified type name or a short
+    /// alias of a typed delta record from the replication package
+    /// (<c>LwwRegisterDelta</c>, <c>OrSetDelta</c>, <c>PnCounterDelta</c>,
+    /// <c>VersionVectorDelta</c>, <c>MvRegisterDelta</c>). The lattice
+    /// library itself never opens the payload — consumers (the
+    /// replication observer in particular) decode based on this slot.
+    /// Defaults to <see langword="null"/> for wire compatibility with
+    /// observers persisted before this field existed.
+    /// </summary>
+    [Id(12)] public string? DeltaKind { get; init; }
+
+    /// <summary>
+    /// Pre-merge author's delta in opaque-bytes form, or
+    /// <see langword="null"/> when the producer did not supply one. The
+    /// minimal record the producer would replay against an in-memory
+    /// projection to reach the same converged state — distinct from
+    /// <see cref="Value"/>, which always carries the post-merge committed
+    /// bytes. Carrying the author's delta lets a deterministic replay path
+    /// (e.g. a future leaf-projection rebuild from the WAL) reach the
+    /// same convergence the originating writer reached, which the
+    /// post-merge bytes alone cannot guarantee for non-LWW CRDTs. The
+    /// lattice library itself never opens the payload. Defaults to
+    /// <see langword="null"/> for wire compatibility with observers
+    /// persisted before this field existed.
+    /// </summary>
+    [Id(13)] public byte[]? DeltaPayload { get; init; }
 }

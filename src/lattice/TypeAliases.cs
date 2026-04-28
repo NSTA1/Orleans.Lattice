@@ -99,6 +99,7 @@ internal static class TypeAliases
     internal const string LatticeMutation = "ol.mut";
     internal const string MutationKind = "ol.muk";
     internal const string MutationCategory = "ol.muc";
+    internal const string LatticeDeltaCarry = "ol.dlc";
 
     // Grain interfaces — each must be applied via [Alias(...)] on the
     // interface declaration so the Orleans manifest carries a stable,

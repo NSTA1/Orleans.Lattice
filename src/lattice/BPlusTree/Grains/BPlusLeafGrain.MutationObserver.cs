@@ -19,6 +19,7 @@ internal sealed partial class BPlusLeafGrain
     private Task PublishSetAsync(string key, LwwValue<byte[]> committed)
     {
         if (!mutationObservers.HasObservers) return Task.CompletedTask;
+        var delta = LatticeDeltaContext.Current;
         var mutation = new LatticeMutation
         {
             TreeId = state.State.TreeId ?? string.Empty,
@@ -32,6 +33,8 @@ internal sealed partial class BPlusLeafGrain
             VectorClock = committed.VectorClock,
             TransactionId = LatticeTransactionContext.Current,
             Category = LatticeMaintenanceContext.Current,
+            DeltaKind = delta?.Kind,
+            DeltaPayload = delta?.Payload,
         };
         return mutationObservers.PublishAsync(mutation);
     }
@@ -43,6 +46,7 @@ internal sealed partial class BPlusLeafGrain
     private Task PublishDeleteAsync(string key, LwwValue<byte[]> tombstone)
     {
         if (!mutationObservers.HasObservers) return Task.CompletedTask;
+        var delta = LatticeDeltaContext.Current;
         var mutation = new LatticeMutation
         {
             TreeId = state.State.TreeId ?? string.Empty,
@@ -54,6 +58,8 @@ internal sealed partial class BPlusLeafGrain
             VectorClock = tombstone.VectorClock,
             TransactionId = LatticeTransactionContext.Current,
             Category = LatticeMaintenanceContext.Current,
+            DeltaKind = delta?.Kind,
+            DeltaPayload = delta?.Payload,
         };
         return mutationObservers.PublishAsync(mutation);
     }

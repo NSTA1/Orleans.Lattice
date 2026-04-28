@@ -27,6 +27,7 @@ internal sealed partial class ShardRootGrain
     private Task PublishDeleteRangeAsync(string startInclusive, string endExclusive)
     {
         if (!mutationObservers.HasObservers) return Task.CompletedTask;
+        var delta = LatticeDeltaContext.Current;
         var mutation = new LatticeMutation
         {
             TreeId = TreeId,
@@ -55,6 +56,14 @@ internal sealed partial class ShardRootGrain
             // rewrite that fan-outs a range delete inside a maintenance
             // scope produces Maintenance emits, otherwise User.
             Category = LatticeMaintenanceContext.Current,
+            // Author's pre-merge delta — opaque bytes the producer
+            // attached via LatticeDeltaContext, propagated verbatim to
+            // observers. Range deletes have a natural typed-delta shape
+            // (start + end + HLC + origin) that consumers may choose to
+            // encode here; the lattice library itself never opens the
+            // payload.
+            DeltaKind = delta?.Kind,
+            DeltaPayload = delta?.Payload,
         };
         return mutationObservers.PublishAsync(mutation);
     }
