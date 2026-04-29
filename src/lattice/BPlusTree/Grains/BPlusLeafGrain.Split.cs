@@ -64,7 +64,7 @@ internal sealed partial class BPlusLeafGrain
 
         foreach (var key in rightEntries.Keys)
         {
-            state.State.Entries.Remove(key);
+            RemoveEntry(key);
         }
 
         state.State.OldNextSibling = null;

@@ -309,6 +309,40 @@ Entry-count threshold above which a pending materialiser checkpoint is force-flu
 
 This option can be changed freely at any time.
 
+### `MaxLeafReplayEntries`
+
+Maximum number of WAL entries a cold leaf is permitted to replay against its projection at activation time before the leaf falls back to the snapshot-then-WAL recovery path indicated by `ProjectionRebuildPolicy` (default: 10 000). Bounds activation latency for a leaf whose persisted checkpoint has fallen far behind the WAL head; see [Projection Rebuild](projection-rebuild.md) for the full trigger set.
+
+```csharp verify
+siloBuilder.ConfigureLattice(o => o.MaxLeafReplayEntries = 100_000);
+```
+
+This option can be changed freely at any time. The new value takes effect on the next leaf activation.
+
+### `LeafProjectionRetention`
+
+Maximum age beyond which a cold leaf's persisted projection is treated as stale, forcing the snapshot-then-WAL recovery path on activation (default: 7 days). Defends against a leaf that has been silent long enough for the WAL to be trimmed past its persisted checkpoint without explicit detection. Set to `Timeout.InfiniteTimeSpan` to disable the age-based trigger; the offset-gap trigger (`MaxLeafReplayEntries`) and the WAL-trim trigger continue to apply.
+
+This option can be changed freely at any time.
+
+### `ProjectionRebuildPolicy`
+
+Selects the recovery strategy a leaf grain takes when one of the fall-off-log triggers fires (default: `SnapshotThenWal`):
+
+| Value | Behaviour |
+|---|---|
+| `SnapshotThenWal` | Drains the per-leaf snapshot, persists the snapshot offset as the new checkpoint, then tail-replays the remaining WAL slice. Reliable: works even when the WAL has been trimmed below the leaf's previous checkpoint. |
+| `FullRebuildFromWal` | Replays from the absolute tail of the WAL. Fails fast with `LeafProjectionStaleException` if the WAL has been trimmed and a complete history is unavailable. Diagnostic. |
+| `Fail` | Surfaces `LeafProjectionStaleException` at activation and waits for an operator-driven rebuild. |
+
+This option can be changed freely at any time.
+
+### `LeafShadowWrites`
+
+When `true` (default) every committed leaf mutation is durably persisted **both** through the per-shard write-ahead log **and** through the leaf's legacy `WriteStateAsync` state row. The dual write keeps the pre-WAL commit path available as a rollback target during the transition to WAL-as-sole-commit-point. Flipping to `false` (in a future minor release) reduces commit cost to one durable write at the cost of removing that escape hatch.
+
+This option can be changed freely at any time.
+
 ## Storage Provider Name
 
 Lattice grains use the storage provider named `"lattice"` (exposed as `LatticeOptions.StorageProviderName`). The `AddLattice` extension method passes this name to your storage registration delegate. In advanced scenarios where you register storage directly, use this constant to ensure the provider name matches:

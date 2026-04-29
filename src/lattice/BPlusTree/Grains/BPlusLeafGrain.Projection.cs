@@ -232,14 +232,7 @@ internal sealed partial class BPlusLeafGrain
 
     private void MergeIntoProjection(string key, LwwValue<byte[]> incoming)
     {
-        if (state.State.Entries.TryGetValue(key, out var existing))
-        {
-            state.State.Entries[key] = LwwValue<byte[]>.Merge(existing, incoming);
-        }
-        else
-        {
-            state.State.Entries[key] = incoming;
-        }
+        StoreEntry(key, incoming);
     }
 
     private void AdvanceProjectionClock(HybridLogicalClock incoming)

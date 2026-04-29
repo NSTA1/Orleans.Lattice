@@ -443,6 +443,35 @@ public class LatticeOptions
     public const bool DefaultLeafShadowWrites = true;
 
     /// <summary>
+    /// Maximum age beyond which a leaf grain's persisted projection
+    /// checkpoint is considered stale and triggers a fall-off-log
+    /// recovery on the next activation. Compared against the wall-clock
+    /// age of the persisted checkpoint at activation time. Long enough
+    /// that even a healthy WAL has likely been trimmed past the
+    /// checkpoint, so a tail replay would fail to converge - the leaf
+    /// must take the rebuild path indicated by
+    /// <see cref="ProjectionRebuildPolicy"/>.
+    /// <para>
+    /// Set to <see cref="Timeout.InfiniteTimeSpan"/> to disable the
+    /// age-based trigger; the offset-gap trigger
+    /// (<see cref="MaxLeafReplayEntries"/>) and the WAL-trim trigger
+    /// continue to apply.
+    /// </para>
+    /// </summary>
+    public TimeSpan LeafProjectionRetention { get; set; } = DefaultLeafProjectionRetention;
+
+    /// <summary>Default value for <see cref="LeafProjectionRetention"/> (7 days).</summary>
+    public static readonly TimeSpan DefaultLeafProjectionRetention = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// Selects the recovery strategy a leaf grain takes when one of
+    /// the fall-off-log triggers fires at activation time
+    /// (WAL trimmed past checkpoint, replay budget exceeded, projection
+    /// older than <see cref="LeafProjectionRetention"/>).
+    /// </summary>
+    public ProjectionRebuildPolicy ProjectionRebuildPolicy { get; set; } = ProjectionRebuildPolicy.SnapshotThenWal;
+
+    /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.
     /// Used internally by <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
     /// and exposed for advanced scenarios where callers register storage directly.

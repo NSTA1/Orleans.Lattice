@@ -27,6 +27,8 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.AddSingleton<IValidateOptions<LatticeOptions>, LatticeOptionsValidator>();
         builder.Services.AddSingleton<LatticeOptionsResolver>();
         builder.Services.AddSingleton<MutationObserverDispatcher>();
+        builder.Services.AddSingleton<Orleans.Lattice.BPlusTree.Grains.ILatticeFallOffLogDetector,
+                                      Orleans.Lattice.BPlusTree.Grains.LatticeFallOffLogDetector>();
         return builder;
     }
 

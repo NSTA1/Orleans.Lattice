@@ -415,6 +415,25 @@ public interface ILattice : IGrainWithStringKey
     /// <param name="cancellationToken">Cancels the diagnostics fan-out before it begins.</param>
     Task<TreeDiagnosticReport> DiagnoseAsync(bool deep = false, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns a deterministic XxHash128 <see cref="LeafProjectionDigest"/>
+    /// for the physical shard at <paramref name="shardIndex"/>. Used by
+    /// operators and chaos tests to detect cross-silo divergence the
+    /// moment the per-shard write-ahead log (WAL) becomes the rebuild
+    /// source of truth - two silos that have applied the same
+    /// prefix of the same WAL produce byte-identical digests.
+    /// <para>
+    /// The shard's leaf chain is walked once and every leaf's digest is
+    /// chained through XxHash128 so divergence at any leaf surfaces in the
+    /// shard total. Reports the summed entry count and the summed
+    /// projection-checkpoint offset across every leaf so a digest
+    /// mismatch can be triaged quickly.
+    /// </para>
+    /// </summary>
+    /// <param name="shardIndex">The physical shard index resolved from the per-tree <c>ShardMap</c>.</param>
+    /// <param name="cancellationToken">Cancels the leaf-chain walk before the next leaf.</param>
+    Task<LeafProjectionDigest> GetLeafProjectionDigestAsync(int shardIndex, CancellationToken cancellationToken = default);
+
     // ── Stateful cursors ────────────────────────────────
 
     /// <summary>

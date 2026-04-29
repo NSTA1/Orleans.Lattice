@@ -461,6 +461,18 @@ before reaching the public `ILattice` surface, and the leaf grain reads the cont
 
 The CRDT value-surface accessors (`OrSet`, `PnCounter`, `VersionVector`) and the atomic-write saga set the context on the caller's behalf — observers downstream of those producers see typed delta payloads automatically. The saga additionally **persists** the captured carry on `AtomicWriteState` so a crash mid-execute and a reminder-driven reactivation re-stamps the original delta on every resumed per-key write.
 
+## Leaf-projection digest
+
+`ILattice.GetLeafProjectionDigestAsync(int shardIndex, CancellationToken)` returns a deterministic XxHash128 fingerprint of a single physical shard's leaf-chain projection. The shard hash chains every leaf's per-leaf hash through XxHash128 (`XxHash128(leaf_1.Hash || leaf_2.Hash || ...)`); the per-leaf hash folds in `(key, hlc.WallClockTicks, hlc.Counter, isTombstone, expiresAtTicks, originClusterId, vector-clock-fingerprint, length-prefixed-value)` for every entry plus the leaf's entry count and persisted projection-checkpoint offset. Operators running multiple silos can poll the digest on each silo and compare bytes — equality is the strongest cross-silo state-equivalence check the library provides. Returned as `LeafProjectionDigest { byte[] Hash; long EntryCount; long CheckpointOffset; }` (alias `ol.lpd`).
+
+```csharp verify
+LeafProjectionDigest digest = await tree.GetLeafProjectionDigestAsync(
+    shardIndex: 0,
+    cancellationToken);
+```
+
+Throws `ArgumentOutOfRangeException` when `shardIndex` is not a physical shard of the per-tree map, `InvalidOperationException` for activations on reserved system-tree prefixes, and `OperationCanceledException` if the token was already cancelled. See [Projection Rebuild](projection-rebuild.md) for the full determinism contract, the cost model, and the related `ProjectionRebuildPolicy` recovery options.
+
 ## Metrics
 
 Orleans.Lattice publishes `System.Diagnostics.Metrics` instruments on a single static meter named `orleans.lattice`, exposed via `Orleans.Lattice.LatticeMetrics`. Instruments are grouped into five tiers: shard-level ops (`shard.reads`, `shard.writes`, `shard.splits_committed`), leaf-level latencies and counters (`leaf.write.duration`, `leaf.scan.duration`, `leaf.compaction.duration`, `leaf.tombstones.created`, `leaf.tombstones.reaped`, `leaf.tombstones.expired`, `leaf.splits`), the read cache (`cache.hits`, `cache.misses`), saga / coordinator / lifecycle outcomes (`atomic_write.completed`, `coordinator.completed`, `tree.lifecycle`), and events / configuration (`events.published`, `events.dropped`, `config.changed`). Every measurement is tagged with `tree` (logical tree id); shard instruments additionally carry `shard` (physical shard index), scan histograms carry `operation` (`keys` or `entries`), saga / coordinator / lifecycle / event counters carry `outcome`, `kind`, or `reason`, and `config.changed` carries `config` (e.g. `publish_events`). Subscribe once with `.AddMeter("orleans.lattice")` on your OpenTelemetry `MeterProviderBuilder`; see [Metrics](metrics.md) for the full instrument catalog, tag conventions, and registration example.
@@ -606,21 +618,11 @@ Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Nev
 | `ShardMap` | `ol.sm` | public (hidden) | Per-tree mapping from virtual shard slots to physical shard indices. Persisted on `TreeRegistryEntry`. |
 | `RoutingInfo` | `ol.ri` | public (hidden) | Per-activation routing snapshot returned by `ILattice.GetRoutingAsync()`: physical tree id plus the resolved `ShardMap`. Used by infrastructure (e.g. streaming bulk load) that must route to the same physical shards as `LatticeGrain`. |
 | `ShardCountResult` | `ol.scr` | internal | Per-shard count plus the set of virtual slots the shard observed in its `MovedAwaySlots` table during the count. Used by `IShardRootGrain.CountWithMovedAwayAsync` to coordinate strongly-consistent scans during shard splits. |
+| `LeafProjectionDigest` | `ol.lpd` | public | `readonly record struct` returned by `ILattice.GetLeafProjectionDigestAsync`. Carries the XxHash128 hash bytes (16 bytes), entry count (live + tombstoned), and summed projection-checkpoint offset of a shard's leaf chain. See [Projection Rebuild](projection-rebuild.md). |
+| `ProjectionRebuildPolicy` | — | public | Enum: `SnapshotThenWal` (default), `FullRebuildFromWal`, `Fail`. Selects the activation-time recovery strategy when a leaf falls off the WAL. See [Configuration](configuration.md#projectionrebuildpolicy). |
 
 ## Internal Grain Access Control
 
 Lattice exposes a single public entry-point — `ILattice`. All other grain interfaces (`IShardRootGrain`, `IBPlusLeafGrain`, `IBPlusInternalGrain`, `ILeafCacheGrain`, `ILatticeRegistry`, `ITombstoneCompactionGrain`, `ITreeDeletionGrain`, `ITreeResizeGrain`, `ITreeSnapshotGrain`, `ITreeMergeGrain`, `ITreeShardSplitGrain`, `IHotShardMonitorGrain`, `IAtomicWriteGrain`, `ILatticeCursorGrain`, `ITreeReshardGrain`, `ILatticeStats`) are declared `internal` and are not visible to consumer assemblies. The C# type system enforces the boundary at compile time — external code cannot name, reference, or invoke these interfaces. Internal DTOs associated with these interfaces (e.g. `SplitResult`, `KeysPage`, `EntriesPage`, `LatticeConstants`) are also `internal`.
 
 A small number of types remain `public` because they appear directly on the `ILattice` surface or its typed extensions: `HybridLogicalClock`, `VersionedValue`, `Versioned<T>`, `RoutingInfo`, and `ShardMap` (transitively via `RoutingInfo`).
-
-## Reserved Tree Prefixes
-
-Lattice reserves tree-name prefixes for internal use. User code must never address a tree whose id starts with `_lattice_` — including (but not limited to) `_lattice_trees` (the registry) and `_lattice_replog_` (reserved for the forthcoming replication package's write-ahead-log trees).
-
-The reservation is enforced as an **unbypassable** three-layer guarantee:
-
-1. **Registry guard.** `ILatticeRegistry.RegisterAsync` / `UpdateAsync` throw `ArgumentException` for any `treeId` starting with the reserved prefix.
-2. **Public-surface guard.** Every method on `ILattice` — reads, writes, scans, cursors, counts, diagnostics, and tree-lifecycle operations — throws `InvalidOperationException` with an actionable remediation message when the activation's primary key starts with the reserved prefix. Reads are as guarded as writes because namespace enumeration is as sensitive as mutation for a reserved tree.
-3. **No internal bypass is visible.** The library's own code that legitimately bootstraps system trees resolves an internal grain interface that is not visible to external assemblies. The C# type system therefore makes the public guard unbypassable from user code.
-
-The guard rejects only leading matches. A tree id such as `"my_lattice_table"` (reserved prefix appears in the middle, not at the start) is valid.

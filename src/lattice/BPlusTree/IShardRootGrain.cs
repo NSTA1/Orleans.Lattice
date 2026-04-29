@@ -222,6 +222,16 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<ShardDiagnosticReport> GetDiagnosticsAsync(bool deep);
 
     /// <summary>
+    /// Returns a deterministic XxHash128 <see cref="LeafProjectionDigest"/>
+    /// for this entire shard — chains every leaf's digest through XxHash128
+    /// in leaf-chain order so two silos with the same applied WAL prefix
+    /// produce byte-identical digests. Used by chaos tests and operator
+    /// tooling to detect cross-silo divergence.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the leaf-chain walk between leaves.</param>
+    Task<LeafProjectionDigest> GetShardProjectionDigestAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Marks this shard as the source of an in-progress adaptive split.
     /// While the returned task is incomplete or the split has not been completed,
     /// every write to a key whose virtual slot is in <paramref name="movedSlots"/>

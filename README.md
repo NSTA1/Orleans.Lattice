@@ -69,6 +69,8 @@ both live consistency and eventual convergence.
 | **Fast reads** | A `[StatelessWorker]` cache grain per silo serves reads via delta replication from the primary leaf. Cache misses cost a single version-vector comparison. |
 | **Fault-tolerant** | Validated end-to-end by a parametrized fault-injection chaos test: random storage-write failures during concurrent reads, writes, scans, and splits converge to the correct state once faults stop. |
 | **Online Reshard** | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
+| **Projection Rebuild** | `GetLeafProjectionDigestAsync` cross-silo divergence detection, `ProjectionRebuildPolicy` recovery strategies, fall-off-log triggers, dual-durability transition |
+| **Read Caching** | Delta-based `[StatelessWorker]` cache, split-aware pruning |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on an existing tree. Takes an offline snapshot to a new physical tree, swaps the alias, and soft-deletes the old data. The tree is unavailable during the snapshot phase but immediately accessible after the swap. Undoable within the retention window. |
 | **Scalable writes** | Keys are hash-sharded across a configurable number of independent sub-trees (default 64). No single-root bottleneck. Shards split further at runtime as load grows. |
 | **Strongly-consistent scans** | `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` return the exact live key set even during concurrent adaptive shard splits, via per-slot reconciliation against a monotonic `ShardMap.Version` and bounded optimistic retry. See [Consistency](docs/lattice/consistency.md). |
@@ -103,6 +105,7 @@ Detailed design documentation is split by concept:
 | [Events](docs/lattice/events.md) | Per-tree `LatticeTreeEvent` Orleans stream: event kinds, `OperationId` correlation for atomic writes, delivery semantics, setup |
 | [Metrics](docs/lattice/metrics.md) | `System.Diagnostics.Metrics` instruments published on the `orleans.lattice` meter: shard counters, leaf latency histograms, cache hit/miss, OpenTelemetry registration |
 | [Online Reshard](docs/lattice/online-reshard.md) | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
+| [Projection Rebuild](docs/lattice/projection-rebuild.md) | `GetLeafProjectionDigestAsync` cross-silo divergence detection, `ProjectionRebuildPolicy` recovery strategies, fall-off-log triggers, dual-durability transition |
 | [Read Caching](docs/lattice/caching.md) | Delta-based `[StatelessWorker]` cache, split-aware pruning |
 | [Shard Splitting](docs/lattice/shard-splitting.md) | Adaptive online splits, shadow-write design, autonomic monitor, suppression rules, scan semantics during splits, tunables |
 | [Snapshots](docs/lattice/snapshots.md) | Offline and online snapshot modes, crash safety, sizing overrides |

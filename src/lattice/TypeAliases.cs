@@ -123,4 +123,11 @@ internal static class TypeAliases
     internal const string ITreeReshardGrain = "ol.gtx";
     internal const string ILatticeStats = "ol.gls";
     internal const string IReplicationApplyGrain = "ol.gra";
+    internal const string ILeafReplayCoordinatorGrain = "ol.grc";
+
+    // Leaf-projection replay coordinator slice DTO
+    internal const string CommitLogSliceEntry = "ol.cls";
+
+    // Leaf projection digest (cross-silo determinism check)
+    internal const string LeafProjectionDigest = "ol.lpd";
 }

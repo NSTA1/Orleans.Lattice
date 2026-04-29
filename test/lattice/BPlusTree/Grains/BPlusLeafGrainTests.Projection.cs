@@ -1,4 +1,6 @@
 using System.Text;
+using NSubstitute;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
@@ -630,5 +632,78 @@ public partial class BPlusLeafGrainTests
                 liveCount++;
         }
         Assert.That(liveCount, Is.EqualTo(88));
+    }
+
+    [Test]
+    public async Task IncrementalHash_matches_walk_state_hash()
+    {
+        // Oracle test for the incremental projection-hash invariant:
+        // after every mutation (Set / Delete / DeleteRange / Set-with-TTL /
+        // MergeEntriesAsync / CompactTombstonesAsync), the persisted
+        // XOR-fold field must equal a fresh walk-the-state recomputation.
+        // A drift here would mean a mutation path bypassed the
+        // StoreEntry / RemoveEntry funnel and stale entries are
+        // accumulating into the running hash invisibly.
+        var grain = CreateGrain();
+        var rng = new Random(17);
+        var keys = new[] { "a", "b", "c", "d", "e", "f", "g", "h" };
+
+        for (var i = 0; i < 200; i++)
+        {
+            var op = rng.Next(6);
+            var key = keys[rng.Next(keys.Length)];
+            switch (op)
+            {
+                case 0:
+                    await grain.SetAsync(key, Encoding.UTF8.GetBytes($"v-{i}"));
+                    break;
+                case 1:
+                    await grain.DeleteAsync(key);
+                    break;
+                case 2:
+                    var startIdx = rng.Next(keys.Length - 1);
+                    var endIdx = rng.Next(startIdx + 1, keys.Length);
+                    await grain.DeleteRangeAsync(keys[startIdx], keys[endIdx]);
+                    break;
+                case 3:
+                    // Set-with-TTL: the absolute-ticks overload preserves
+                    // ExpiresAtTicks through the StoreEntry funnel.
+                    var ttlTicks = DateTimeOffset.UtcNow.AddMinutes(5).UtcTicks;
+                    await grain.SetAsync(key, Encoding.UTF8.GetBytes($"ttl-{i}"), ttlTicks);
+                    break;
+                case 4:
+                    // MergeEntriesAsync: replication merge / convergence path.
+                    // Build a synthetic LWW dictionary with a fresh HLC and
+                    // confirm the merge funnels every key through StoreEntry.
+                    var hlc = new HybridLogicalClock { WallClockTicks = 1_000_000 + i, Counter = 0 };
+                    var batch = new Dictionary<string, LwwValue<byte[]>>
+                    {
+                        [key] = new LwwValue<byte[]>
+                        {
+                            Value = Encoding.UTF8.GetBytes($"merge-{i}"),
+                            Timestamp = hlc,
+                            IsTombstone = false,
+                        },
+                    };
+                    await grain.MergeEntriesAsync(batch);
+                    break;
+                case 5:
+                    // CompactTombstonesAsync: tombstone-GC path. TimeSpan.Zero
+                    // makes any already-tombstoned entries reap immediately,
+                    // exercising RemoveEntry on the GC path.
+                    await grain.CompactTombstonesAsync(TimeSpan.Zero);
+                    break;
+            }
+
+            var walked = grain.ComputeFullProjectionHashFromState();
+            // The persisted slot is null until the first mutation that
+            // actually touches the dictionary (no-op deletes leave it
+            // untouched). When null, it is logically equivalent to the
+            // walk-state hash of an empty dictionary, which is 32 zero
+            // bytes — exactly what a fresh walk also produces.
+            var live = grain.PersistedProjectionHash ?? new byte[32];
+            Assert.That(live, Is.EqualTo(walked),
+                $"incremental hash diverged from walk-state hash after op {i} (kind {op}, key {key})");
+        }
     }
 }

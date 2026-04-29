@@ -18,6 +18,17 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
             return ValidateOptionsResult.Fail(
                 $"{nameof(LatticeOptions.MaterialiserCheckpointInterval)} must be non-negative or {nameof(Timeout.InfiniteTimeSpan)}.");
         }
+        if (options.LeafProjectionRetention <= TimeSpan.Zero
+            && options.LeafProjectionRetention != Timeout.InfiniteTimeSpan)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.LeafProjectionRetention)} must be positive or {nameof(Timeout.InfiniteTimeSpan)}.");
+        }
+        if (!Enum.IsDefined(options.ProjectionRebuildPolicy))
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.ProjectionRebuildPolicy)} must be a defined {nameof(ProjectionRebuildPolicy)} value.");
+        }
         return ValidateOptionsResult.Success;
     }
 }
