@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
@@ -66,7 +67,8 @@ public readonly record struct OrSetAccessor
         {
             var counter = NextCounter(set, replicaId);
             set.Add(element, replicaId, counter);
-        }, cancellationToken, maxAttempts);
+            return new CrdtDeltaPayloads.OrSetAddDelta(element, replicaId, counter);
+        }, CrdtDeltaKinds.OrSetAdd, cancellationToken, maxAttempts);
     }
 
     /// <summary>
@@ -78,7 +80,15 @@ public readonly record struct OrSetAccessor
     {
         ArgumentNullException.ThrowIfNull(element);
         EnsureInitialised();
-        return MutateAsync(set => set.Remove(element), cancellationToken, maxAttempts);
+        return MutateAsync(set =>
+        {
+            var key = Convert.ToBase64String(element);
+            var observed = set.Adds.TryGetValue(key, out var dots) && dots.Count > 0
+                ? dots.Select(d => new CrdtDeltaPayloads.OrSetDotPayload(d.ReplicaId, d.Counter)).ToArray()
+                : Array.Empty<CrdtDeltaPayloads.OrSetDotPayload>();
+            set.Remove(element);
+            return new CrdtDeltaPayloads.OrSetRemoveDelta(element, observed);
+        }, CrdtDeltaKinds.OrSetRemove, cancellationToken, maxAttempts);
     }
 
     /// <summary>Returns <c>true</c> when <paramref name="element"/> is currently a member of the set.</summary>
@@ -100,7 +110,17 @@ public readonly record struct OrSetAccessor
     {
         ArgumentNullException.ThrowIfNull(other);
         EnsureInitialised();
-        return MutateAsync(set => set.MergeFrom(other), cancellationToken, maxAttempts);
+        return MutateAsync(set =>
+        {
+            set.MergeFrom(other);
+            return new CrdtDeltaPayloads.OrSetMergeDelta(
+                other.Adds.ToDictionary(
+                    kv => kv.Key,
+                    kv => kv.Value.Select(d => new CrdtDeltaPayloads.OrSetDotPayload(d.ReplicaId, d.Counter)).ToArray()),
+                other.Tombstones.ToDictionary(
+                    kv => kv.Key,
+                    kv => kv.Value.Select(d => new CrdtDeltaPayloads.OrSetDotPayload(d.ReplicaId, d.Counter)).ToArray()));
+        }, CrdtDeltaKinds.OrSetMerge, cancellationToken, maxAttempts);
     }
 
     private static long NextCounter(OrSet set, string replicaId)
@@ -123,7 +143,11 @@ public readonly record struct OrSetAccessor
         return max + 1;
     }
 
-    private async Task MutateAsync(Action<OrSet> mutate, CancellationToken cancellationToken, int maxAttempts)
+    private async Task MutateAsync<TDelta>(
+        Func<OrSet, TDelta> mutate,
+        string deltaKind,
+        CancellationToken cancellationToken,
+        int maxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
         for (var attempt = 0; attempt < maxAttempts; attempt++)
@@ -131,10 +155,14 @@ public readonly record struct OrSetAccessor
             cancellationToken.ThrowIfCancellationRequested();
             var versioned = await _lattice.GetWithVersionAsync(_key, cancellationToken).ConfigureAwait(false);
             var current = Decode(versioned.Value);
-            mutate(current);
+            var delta = mutate(current);
             var bytes = JsonLatticeSerializer<OrSet>.Default.Serialize(current);
-            var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
-            if (ok) return;
+            var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
+            using (LatticeDeltaContext.With(deltaKind, deltaBytes))
+            {
+                var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
+                if (ok) return;
+            }
         }
         throw new InvalidOperationException(
             $"OrSet CAS budget exhausted after {maxAttempts} attempts for key '{_key}'. " +
