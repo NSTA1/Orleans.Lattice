@@ -224,4 +224,14 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Used during tree purge to permanently remove leaf data.
     /// </summary>
     Task ClearGrainStateAsync();
+
+    /// <summary>
+    /// Returns a deterministic XxHash128 <see cref="LeafProjectionDigest"/>
+    /// of this leaf's materialised projection. Two leaves that have
+    /// applied the same prefix of the same per-shard WAL produce
+    /// byte-identical digests; used by chaos tests and operator tooling
+    /// to detect cross-silo divergence the moment the WAL becomes the
+    /// rebuild source of truth.
+    /// </summary>
+    Task<LeafProjectionDigest> GetProjectionDigestAsync();
 }

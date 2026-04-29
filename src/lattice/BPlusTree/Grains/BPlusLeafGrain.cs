@@ -38,6 +38,10 @@ internal sealed partial class BPlusLeafGrain(
             // the persisted offset still bounds replay cost on the next
             // activation.
         }
+        finally
+        {
+            DisposeProjectionHasher();
+        }
     }
 
     private static readonly Dictionary<string, LwwValue<byte[]>> EmptyEntries = new();
@@ -267,14 +271,7 @@ internal sealed partial class BPlusLeafGrain(
 
         // step 2 (apply) - LWW-merge into the in-memory projection.
         var applyStartTicks = Stopwatch.GetTimestamp();
-        if (state.State.Entries.TryGetValue(key, out var existing))
-        {
-            state.State.Entries[key] = LwwValue<byte[]>.Merge(existing, newEntry);
-        }
-        else
-        {
-            state.State.Entries[key] = newEntry;
-        }
+        StoreEntry(key, newEntry);
 
         SplitResult? splitResult = null;
         if (state.State.Entries.Count > options.MaxLeafKeys)
@@ -382,7 +379,7 @@ internal sealed partial class BPlusLeafGrain(
 
         // step 2 (apply)
         var applyStartTicks = Stopwatch.GetTimestamp();
-        state.State.Entries[key] = tombstone;
+        StoreEntry(key, tombstone);
         RecordCommitStep("apply", applyStartTicks);
 
         // step 3 (shadow)
@@ -497,7 +494,7 @@ internal sealed partial class BPlusLeafGrain(
         var applyStartTicks = Stopwatch.GetTimestamp();
         foreach (var key in keysToDelete)
         {
-            state.State.Entries[key] = tombstone;
+            StoreEntry(key, tombstone);
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -639,7 +636,7 @@ internal sealed partial class BPlusLeafGrain(
         {
             foreach (var key in toRemove)
             {
-                state.State.Entries.Remove(key);
+                RemoveEntry(key);
             }
         }
 
@@ -747,14 +744,7 @@ internal sealed partial class BPlusLeafGrain(
             if (incoming.Timestamp > maxIncoming)
                 maxIncoming = incoming.Timestamp;
 
-            if (state.State.Entries.TryGetValue(key, out var existing))
-            {
-                state.State.Entries[key] = LwwValue<byte[]>.Merge(existing, incoming);
-            }
-            else
-            {
-                state.State.Entries[key] = incoming;
-            }
+            StoreEntry(key, incoming);
         }
 
         // Tick the version so that LeafCacheGrain delta checks detect the new
@@ -955,14 +945,7 @@ internal sealed partial class BPlusLeafGrain(
             if (incoming.Timestamp > maxIncoming)
                 maxIncoming = incoming.Timestamp;
 
-            if (state.State.Entries.TryGetValue(key, out var existing))
-            {
-                state.State.Entries[key] = LwwValue<byte[]>.Merge(existing, incoming);
-            }
-            else
-            {
-                state.State.Entries[key] = incoming;
-            }
+            StoreEntry(key, incoming);
         }
 
         if (entries.Count > 0)

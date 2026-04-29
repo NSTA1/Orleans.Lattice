@@ -52,4 +52,29 @@ internal interface ICommitLogReader
         string treeId,
         int shardIndex,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the offset of the oldest still-readable entry on the
+    /// per-shard WAL — the entry with the smallest offset that
+    /// <see cref="ReadAsync"/> would yield if invoked with
+    /// <c>fromOffsetExclusive = -1</c>. When the WAL has been trimmed,
+    /// this is strictly greater than zero. When the WAL is empty
+    /// (no appends or every entry has been trimmed), the value equals
+    /// the result of <see cref="GetHeadOffsetAsync"/>.
+    /// <para>
+    /// Used by the leaf-grain replay path to detect a fall-off-log
+    /// condition: if the persisted projection checkpoint is strictly
+    /// less than the tail offset, the WAL no longer contains the
+    /// entries needed to bring the projection forward by tail-replay
+    /// and the leaf must take the recovery path indicated by
+    /// <see cref="ProjectionRebuildPolicy"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The logical tree id. Must not be null or empty.</param>
+    /// <param name="shardIndex">The WAL shard (partition) index. Must be non-negative.</param>
+    /// <param name="cancellationToken">Cancellation token propagated to the underlying WAL grain call.</param>
+    Task<long> GetTailOffsetAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken = default);
 }

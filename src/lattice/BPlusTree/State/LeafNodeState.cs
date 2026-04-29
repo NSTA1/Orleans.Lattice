@@ -68,6 +68,31 @@ internal sealed class LeafNodeState
     /// </summary>
     [Id(11)] public long ProjectionCheckpointOffset { get; set; }
 
+    /// <summary>
+    /// Incremental XOR-fold projection fingerprint: a 16-byte buffer that holds
+    /// the running XxHash128 XOR over per-key contributions of every entry in
+    /// <see cref="Entries"/>. Each entry contributes a deterministic 16-byte
+    /// XxHash128 hash (over key, HLC, tombstone flag, expiry, origin, vector
+    /// clock, and value); insertions XOR the contribution in, deletions XOR it
+    /// out, and updates XOR out the old contribution and XOR in the new. The
+    /// XOR fold is commutative and self-inverse, so the field is mathematically
+    /// identical to a fresh walk over <see cref="Entries"/> at every commit
+    /// boundary, regardless of the order writes arrived in.
+    /// <para>
+    /// The public <c>GetProjectionDigestAsync</c> surface chains this field
+    /// with the entry count and <see cref="ProjectionCheckpointOffset"/> into a
+    /// final XxHash128 block, preserving the published hash shape.
+    /// </para>
+    /// <para>
+    /// <c>null</c> on grain state persisted before this slot was introduced
+    /// (or carrying a buffer whose width does not match the current algorithm);
+    /// the leaf lazily backfills it (one full walk) on the first mutation or
+    /// the first digest read after activation, then maintains it incrementally
+    /// thereafter.
+    /// </para>
+    /// </summary>
+    [Id(12)] public byte[]? ProjectionHash { get; set; }
+
     /// <summary>Returns the number of live (non-tombstoned) entries.</summary>
     public int LiveCount
     {

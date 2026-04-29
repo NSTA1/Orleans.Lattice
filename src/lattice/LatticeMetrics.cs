@@ -264,5 +264,34 @@ public static class LatticeMetrics
     public static readonly Counter<long> ConfigChanged =
         Meter.CreateCounter<long>("orleans.lattice.config.changed", unit: "{change}",
             description: "Per-tree configuration changes applied at runtime via ILattice overrides.");
+
+    // --- Leaf-projection replay instruments ----------------------------------
+
+    /// <summary>
+    /// Histogram of activation-time leaf-projection replay durations,
+    /// emitted by <c>BPlusLeafGrain.OnActivateAsync</c> when the
+    /// activation path consults the persisted projection checkpoint
+    /// and drives <c>ILeafProjection.Apply</c> over the WAL slice.
+    /// Tagged with <see cref="TagOutcome"/> = <c>tail</c> (caught up by
+    /// replaying the slice <c>(checkpoint, head]</c>),
+    /// <c>snapshot_then_wal</c> (a fall-off-log trigger fired and the
+    /// snapshot-then-WAL recovery path was taken), or
+    /// <c>full_rebuild</c> (a full WAL rebuild was forced via
+    /// <see cref="ProjectionRebuildPolicy.FullRebuildFromWal"/>).
+    /// </summary>
+    public static readonly Histogram<double> LeafReplayDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.leaf.replay.duration", unit: "ms",
+            description: "Activation-time leaf-projection replay duration, tagged by recovery outcome.");
+
+    /// <summary>
+    /// Counter of mutations encountered during activation-time leaf
+    /// projection replay. Tagged with <see cref="TagOutcome"/> =
+    /// <c>applied</c> (fed to <c>ILeafProjection.Apply</c>) or
+    /// <c>skipped</c> (filtered by the leaf's key-range responsibility
+    /// before reaching <c>Apply</c>).
+    /// </summary>
+    public static readonly Counter<long> LeafReplayEntries =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.replay.entries", unit: "{entry}",
+            description: "Mutations seen by activation-time leaf-projection replay, tagged by outcome.");
 }
 
