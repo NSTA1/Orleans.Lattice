@@ -580,6 +580,37 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeReplication_registers_leaf_cursor_reporter_by_default()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var reporter = provider.GetRequiredService<Orleans.Lattice.BPlusTree.Grains.ILeafCursorReporter>();
+        Assert.That(reporter, Is.InstanceOf<ReplicationLeafCursorReporter>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_leaf_cursor_reporter()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<Orleans.Lattice.BPlusTree.Grains.ILeafCursorReporter>();
+        services.AddSingleton(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(
+            provider.GetRequiredService<Orleans.Lattice.BPlusTree.Grains.ILeafCursorReporter>(),
+            Is.SameAs(custom));
+    }
+
+    [Test]
     public void AddLatticeReplication_does_not_overwrite_pre_registered_bootstrap_coordinator()
     {
         var services = new ServiceCollection();
