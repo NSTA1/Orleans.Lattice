@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.Replication.Adapters;
 
 namespace Orleans.Lattice.Replication;
 
@@ -70,6 +71,15 @@ public static class LatticeReplicationServiceCollectionExtensions
             ServiceDescriptor.Singleton<IMutationObserver, ReplicationMutationObserver>());
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<LatticeReplicationOptions>, LatticeReplicationOptionsValidator>());
+
+        // Commit-log adapter seams (dormant). The core library resolves
+        // these as nullable services; registering them here lets a future
+        // foreground caller drive WAL append / read without taking a hard
+        // reference on this package.
+        builder.Services.TryAddSingleton<Orleans.Lattice.BPlusTree.Grains.ICommitLogWriter, ReplicationCommitLogWriter>();
+        builder.Services.TryAddSingleton<Orleans.Lattice.BPlusTree.Grains.ICommitLogReader, ReplicationCommitLogReader>();
+        builder.Services.TryAddSingleton<Orleans.Lattice.BPlusTree.Grains.ILeafSnapshotProvider, ReplicationLeafSnapshotProvider>();
+
         return builder;
     }
 
