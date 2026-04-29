@@ -24,6 +24,8 @@ public class ReplogEntryTests
             Assert.That(entry.Mode, Is.EqualTo(ReplicationMode.LwwRegister));
             Assert.That(entry.VectorClock, Is.Null);
             Assert.That(entry.DependencySummary, Is.Null);
+            Assert.That(entry.DeltaKind, Is.Null);
+            Assert.That(entry.DeltaPayload, Is.Null);
         });
     }
 
@@ -138,6 +140,40 @@ public class ReplogOpTests
             Assert.That((int)ReplogOp.Set, Is.EqualTo(0));
             Assert.That((int)ReplogOp.Delete, Is.EqualTo(1));
             Assert.That((int)ReplogOp.DeleteRange, Is.EqualTo(2));
+        });
+    }
+}
+
+[TestFixture]
+public class ReplogEntryDeltaSlotTests
+{
+    [Test]
+    public void Delta_kind_and_payload_are_settable_via_object_initialiser()
+    {
+        var payload = new byte[] { 9, 8, 7 };
+        var entry = new ReplogEntry
+        {
+            TreeId = "t",
+            Key = "k",
+            DeltaKind = "ol.crdt.ors.add",
+            DeltaPayload = payload,
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.DeltaKind, Is.EqualTo("ol.crdt.ors.add"));
+            Assert.That(entry.DeltaPayload, Is.SameAs(payload));
+        });
+    }
+
+    [Test]
+    public void Delta_slots_default_to_null_when_unset()
+    {
+        var entry = new ReplogEntry { TreeId = "t", Key = "k" };
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.DeltaKind, Is.Null);
+            Assert.That(entry.DeltaPayload, Is.Null);
         });
     }
 }

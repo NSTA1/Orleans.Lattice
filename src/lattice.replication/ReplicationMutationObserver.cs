@@ -151,6 +151,16 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             // consulting either slot sees the same value.
             VectorClock = capturedFrontier,
             DependencySummary = capturedFrontier,
+            // Pre-merge typed delta passthrough: the producer-side
+            // accessors (OR-Set / PN-Counter / version-vector) and any
+            // caller that opted in via LatticeDeltaContext stamped these
+            // slots on the originating LatticeMutation. Forwarding them
+            // verbatim lets receivers replay the author's intent rather
+            // than the post-merge state. Both fields decode as null on
+            // legacy peers and on plain Set/Delete writes that did not
+            // author a delta.
+            DeltaKind = mutation.DeltaKind,
+            DeltaPayload = mutation.DeltaPayload,
         };
 
         return _sink.WriteAsync(entry, cancellationToken);
