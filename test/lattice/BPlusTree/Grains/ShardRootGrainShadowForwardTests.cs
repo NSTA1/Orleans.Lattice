@@ -661,4 +661,66 @@ public class ShardRootGrainShadowForwardTests
             async () => await h.Grain.DeleteRangeAsync("a", "z"),
             Throws.InstanceOf<StaleTreeRoutingException>());
     }
+
+    // ============================================================================
+    // Rejecting + IsDeleted precedence
+    //
+    // After an online resize commits, the OLD physical tree's shards transition
+    // Reject (sets ShadowForward.Phase = Rejecting) -> Cleanup (calls
+    // ITreeDeletionGrain.DeleteTreeAsync, which sets IsDeleted = true). A stale
+    // in-flight read iterator routed to the old physical tree must surface as
+    // StaleTreeRoutingException so LatticeGrain refreshes its alias and retries
+    // -- not as the terminal "tree has been deleted" InvalidOperationException.
+    //
+    // A user-initiated DeleteTreeAsync never touches ShadowForward, so for that
+    // case ThrowIfTreeRejecting is a no-op and ThrowIfDeleted still fires.
+    // ============================================================================
+
+    [Test]
+    public void Get_throws_StaleTreeRoutingException_when_rejecting_and_deleted()
+    {
+        // Simulate post-resize-cleanup state on the old physical tree's shard.
+        var h = CreateHarness();
+        SetShadowPhase(h.State, ShadowForwardPhase.Rejecting);
+        h.State.State.IsDeleted = true;
+
+        Assert.That(async () => await h.Grain.GetAsync("k"),
+            Throws.InstanceOf<StaleTreeRoutingException>(),
+            "Rejecting must take precedence over IsDeleted so the caller refreshes its alias and retries against the new physical tree.");
+    }
+
+    [Test]
+    public void Set_throws_StaleTreeRoutingException_when_rejecting_and_deleted()
+    {
+        var h = CreateHarness();
+        SetShadowPhase(h.State, ShadowForwardPhase.Rejecting);
+        h.State.State.IsDeleted = true;
+
+        Assert.That(async () => await h.Grain.SetAsync("k", [1]),
+            Throws.InstanceOf<StaleTreeRoutingException>());
+    }
+
+    [Test]
+    public void Get_throws_InvalidOperationException_when_deleted_without_rejecting()
+    {
+        // User-initiated DeleteTreeAsync — ShadowForward is null, so the
+        // Rejecting check is a no-op and the deleted check correctly fires.
+        var h = CreateHarness();
+        h.State.State.IsDeleted = true;
+
+        Assert.That(async () => await h.Grain.GetAsync("k"),
+            Throws.InstanceOf<InvalidOperationException>()
+                .With.Message.Contains("deleted"));
+    }
+
+    [Test]
+    public void Set_throws_InvalidOperationException_when_deleted_without_rejecting()
+    {
+        var h = CreateHarness();
+        h.State.State.IsDeleted = true;
+
+        Assert.That(async () => await h.Grain.SetAsync("k", [1]),
+            Throws.InstanceOf<InvalidOperationException>()
+                .With.Message.Contains("deleted"));
+    }
 }
