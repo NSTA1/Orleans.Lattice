@@ -77,6 +77,14 @@ public static class LatticeMetrics
     public const string TagConfig = "config";
 
     /// <summary>
+    /// Tag key for a per-step dimension on the dual-durability commit
+    /// path (e.g. <c>wal</c>, <c>apply</c>, <c>shadow</c>, <c>observer</c>
+    /// on <see cref="LeafCommitDuration"/>) so operators can attribute
+    /// total commit latency to its constituent stages.
+    /// </summary>
+    public const string TagStep = "step";
+
+    /// <summary>
     /// The meter that owns every Lattice instrument. Exposed publicly so integration
     /// tests and custom OpenTelemetry exporters can subscribe by reference rather
     /// than by name.
@@ -157,6 +165,31 @@ public static class LatticeMetrics
     public static readonly Counter<long> LeafSplits =
         Meter.CreateCounter<long>("orleans.lattice.leaf.splits", unit: "{split}",
             description: "Leaf-node splits triggered by MaxLeafKeys overflow.");
+
+    /// <summary>
+    /// Histogram of <c>IPersistentState.WriteStateAsync</c> durations
+    /// observed specifically on the dual-durability commit path's
+    /// shadow-persist step (gated by
+    /// <c>LatticeOptions.LeafShadowWrites</c>). Distinct from
+    /// <see cref="LeafWriteDuration"/> — which captures every leaf
+    /// persist regardless of source — so operators can isolate the
+    /// shadow-persist contribution and observe its disappearance once
+    /// the option flips off.
+    /// </summary>
+    public static readonly Histogram<double> LeafShadowWriteDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.leaf.shadow_write.duration", unit: "ms",
+            description: "Duration of the shadow IPersistentState.WriteStateAsync persist on the dual-durability commit path.");
+
+    /// <summary>
+    /// Histogram of per-step latency on the dual-durability commit path
+    /// (build-and-WAL-append, in-memory Apply, shadow-persist,
+    /// observer-publish). Tagged with <see cref="TagStep"/> = <c>wal</c>,
+    /// <c>apply</c>, <c>shadow</c>, or <c>observer</c> so operators can
+    /// attribute total commit latency to its constituent stages.
+    /// </summary>
+    public static readonly Histogram<double> LeafCommitDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.leaf.commit.duration", unit: "ms",
+            description: "Per-step latency on the BPlusLeafGrain dual-durability commit path.");
 
     // --- Cache instruments (LeafCacheGrain) --------------------------------------
 

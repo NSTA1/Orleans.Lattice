@@ -319,7 +319,6 @@ public class LatticeOptions
     /// snapshots, resizes, reshards, and tree-lifecycle transitions. Consumers
     /// cost on the write path. Enabling publication requires that an Orleans
     /// stream provider named <see cref="EventStreamProviderName"/> is
-    /// registered on every silo that hosts Lattice grains — otherwise
     /// publishes are logged-and-swallowed and subscribers never receive
     /// events.
     /// </summary>
@@ -407,6 +406,41 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="MaterialiserCheckpointEntries"/> (1 000).</summary>
     public const int DefaultMaterialiserCheckpointEntries = 1_000;
+
+    /// <summary>
+    /// When <see langword="true"/> (the default), every durably-committed
+    /// leaf data write is also persisted through the leaf grain's
+    /// <c>IPersistentState</c> storage row in addition to being appended
+    /// to the per-shard write-ahead log. The dual-durability arrangement
+    /// is a temporary safety net during the WAL-as-sole-commit-point
+    /// promotion of the leaf data path: if the WAL adapter is absent
+    /// (no replication package registered) or the host needs to roll
+    /// back to the legacy commit path during the deprecation window,
+    /// the persisted state row is still authoritative and reads continue
+    /// to serve from it.
+    /// <para>
+    /// A future minor release flips this default to <see langword="false"/>
+    /// so new deployments commit exactly once (WAL append), and one minor
+    /// version after that the option and the legacy persist call site are
+    /// removed entirely.
+    /// </para>
+    /// <para>
+    /// Setting <see langword="false"/> on a host where the WAL adapter
+    /// is absent yields a non-durable foreground commit — the in-memory
+    /// projection updates and the call returns success, but a silo
+    /// crash before the next checkpoint flush loses the write. Hosts
+    /// that have not yet wired up the WAL must keep this at the default.
+    /// </para>
+    /// <para>
+    /// Structural ops (leaf splits, compaction) keep their persists
+    /// unconditionally regardless of this flag — only the per-mutation
+    /// data write is gated.
+    /// </para>
+    /// </summary>
+    public bool LeafShadowWrites { get; set; } = DefaultLeafShadowWrites;
+
+    /// <summary>Default value for <see cref="LeafShadowWrites"/> (<see langword="true"/>).</summary>
+    public const bool DefaultLeafShadowWrites = true;
 
     /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.
