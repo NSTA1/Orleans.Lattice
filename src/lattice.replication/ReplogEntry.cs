@@ -124,5 +124,33 @@ public readonly record struct ReplogEntry
     /// entries.
     /// </summary>
     [Id(11)] public Primitives.VersionVector? DependencySummary { get; init; }
+
+    /// <summary>
+    /// Stable identifier of the typed pre-merge delta authored at the
+    /// originating call site, mirrored verbatim from the producing
+    /// <see cref="LatticeMutation.DeltaKind"/>. Populated by the typed
+    /// CRDT accessors (OR-Set, PN-Counter, version-vector tick / merge,
+    /// etc.) and by callers that opt in via
+    /// <see cref="LatticeDeltaContext"/>; <see langword="null"/> for
+    /// plain <c>Set</c> / <c>Delete</c> writes that did not author a
+    /// delta. Strictly additive on the wire: legacy peers and entries
+    /// authored before this slot existed decode as <see langword="null"/>,
+    /// which receivers treat as "no typed delta available, fall back to
+    /// the post-merge state". Receivers that recognise the kind dispatch
+    /// to the matching delta decoder; unknown kinds are forwarded as
+    /// opaque bytes for forward compatibility.
+    /// </summary>
+    [Id(12)] public string? DeltaKind { get; init; }
+
+    /// <summary>
+    /// Opaque payload carrying the typed pre-merge delta identified by
+    /// <see cref="DeltaKind"/>. Mirrored verbatim from the producing
+    /// <see cref="LatticeMutation.DeltaPayload"/>. The payload is
+    /// authored once at the originating call site so every replica that
+    /// applies it converges by replaying the author's intent rather than
+    /// the post-merge state. <see langword="null"/> when no delta was
+    /// authored. Strictly additive on the wire.
+    /// </summary>
+    [Id(13)] public byte[]? DeltaPayload { get; init; }
 }
 

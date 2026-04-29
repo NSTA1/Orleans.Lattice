@@ -129,4 +129,28 @@ internal sealed class AtomicWriteState
     /// sagas continue to share an id.
     /// </summary>
     [Id(8)] public Guid TransactionId { get; set; }
+
+    /// <summary>
+    /// Author-delta kind captured from
+    /// <see cref="LatticeDeltaContext.Current"/> when the saga was first
+    /// started, or <see langword="null"/> when the caller did not wrap
+    /// the <c>SetManyAtomicAsync</c> call in a
+    /// <see cref="LatticeDeltaContext.With"/> scope. Re-stamped onto
+    /// Orleans <see cref="Runtime.RequestContext"/> on every per-key
+    /// <c>SetAsync</c> / <c>DeleteAsync</c> the saga issues — including
+    /// compensation rewrites — so every emitted
+    /// <see cref="LatticeMutation"/> carries the same author-delta as
+    /// the original batch. Wire-compatible: missing field on legacy
+    /// persisted state decodes to <see langword="null"/>.
+    /// </summary>
+    [Id(9)] public string? DeltaKind { get; set; }
+
+    /// <summary>
+    /// Author-delta payload captured alongside <see cref="DeltaKind"/>.
+    /// Opaque bytes (typically Orleans-serialized typed delta record);
+    /// the lattice library never opens the payload. Wire-compatible:
+    /// missing field on legacy persisted state decodes to
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(10)] public byte[]? DeltaPayload { get; set; }
 }

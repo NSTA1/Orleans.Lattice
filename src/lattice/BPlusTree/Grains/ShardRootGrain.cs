@@ -629,8 +629,19 @@ internal sealed partial class ShardRootGrain(
 
     private async Task PrepareForOperationAsync()
     {
-        ThrowIfDeleted();
+        // Order matters: a shard that participated as the *source* of an
+        // online resize transitions Reject -> Cleanup, which sets BOTH
+        // ShadowForward.Phase = Rejecting AND IsDeleted = true on the old
+        // physical tree's shards. A stale in-flight read iterator that was
+        // routed against the old physical tree before the alias swap must
+        // surface as the recoverable StaleTreeRoutingException so the
+        // calling LatticeGrain refreshes its alias and retries against the
+        // new physical tree -- not as the terminal "tree has been deleted"
+        // InvalidOperationException. A user-initiated DeleteTreeAsync never
+        // touches ShadowForward state, so for that case ThrowIfTreeRejecting
+        // is a no-op and ThrowIfDeleted still fires correctly.
         ThrowIfTreeRejecting();
+        ThrowIfDeleted();
         await EnsureRootAsync();
         await ResumePendingPromotionAsync();
         await ResumePendingBulkGraftAsync();

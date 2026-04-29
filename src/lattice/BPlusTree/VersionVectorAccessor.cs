@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
@@ -47,7 +48,11 @@ public readonly record struct VersionVectorAccessor
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         EnsureInitialised();
-        return MutateAsync(v => v.Tick(replicaId), cancellationToken, maxAttempts);
+        return MutateAsync(v =>
+        {
+            var clock = v.Tick(replicaId);
+            return new CrdtDeltaPayloads.VersionVectorTickDelta(replicaId, clock.WallClockTicks, clock.Counter);
+        }, CrdtDeltaKinds.VersionVectorTick, cancellationToken, maxAttempts);
     }
 
     /// <summary>Merges <paramref name="other"/> into the stored state under CAS.</summary>
@@ -55,10 +60,23 @@ public readonly record struct VersionVectorAccessor
     {
         ArgumentNullException.ThrowIfNull(other);
         EnsureInitialised();
-        return MutateAsync(v => v.MergeFrom(other), cancellationToken, maxAttempts);
+        return MutateAsync(v =>
+        {
+            v.MergeFrom(other);
+            var entries = new Dictionary<string, CrdtDeltaPayloads.HlcPayload>(other.Entries.Count);
+            foreach (var (id, clock) in other.Entries)
+            {
+                entries[id] = new CrdtDeltaPayloads.HlcPayload(clock.WallClockTicks, clock.Counter);
+            }
+            return new CrdtDeltaPayloads.VersionVectorMergeDelta(entries);
+        }, CrdtDeltaKinds.VersionVectorMerge, cancellationToken, maxAttempts);
     }
 
-    private async Task MutateAsync(Action<VersionVector> mutate, CancellationToken cancellationToken, int maxAttempts)
+    private async Task MutateAsync<TDelta>(
+        Func<VersionVector, TDelta> mutate,
+        string deltaKind,
+        CancellationToken cancellationToken,
+        int maxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
         for (var attempt = 0; attempt < maxAttempts; attempt++)
@@ -66,10 +84,14 @@ public readonly record struct VersionVectorAccessor
             cancellationToken.ThrowIfCancellationRequested();
             var versioned = await _lattice.GetWithVersionAsync(_key, cancellationToken).ConfigureAwait(false);
             var current = Decode(versioned.Value);
-            mutate(current);
+            var delta = mutate(current);
             var bytes = JsonLatticeSerializer<VersionVector>.Default.Serialize(current);
-            var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
-            if (ok) return;
+            var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
+            using (LatticeDeltaContext.With(deltaKind, deltaBytes))
+            {
+                var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
+                if (ok) return;
+            }
         }
         throw new InvalidOperationException(
             $"VersionVector CAS budget exhausted after {maxAttempts} attempts for key '{_key}'. " +

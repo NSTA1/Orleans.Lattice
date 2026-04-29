@@ -67,4 +67,18 @@ public static class LatticeEventConstants
     /// <see cref="LatticeMaintenanceContext"/>.
     /// </summary>
     internal const string MaintenanceRequestContextKey = "ol.maint";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry the
+    /// <em>author's delta</em> — the pre-merge mutation the caller actually
+    /// authored, encoded as a <c>(Kind, Payload)</c> opaque-bytes pair —
+    /// from a public <see cref="ILattice"/> entry-point or a CRDT
+    /// accessor down into the leaf / shard mutation publish helpers, so
+    /// the emitted <see cref="LatticeMutation"/> records the producer's
+    /// intent rather than only the post-merge <c>LwwValue</c> bytes. The
+    /// opaque-bytes carry deliberately keeps the public extensibility
+    /// contract independent of any replication-side typed delta DTO.
+    /// Internal — set through <see cref="LatticeDeltaContext"/>.
+    /// </summary>
+    internal const string DeltaRequestContextKey = "ol.delta";
 }

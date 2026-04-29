@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
@@ -56,7 +57,11 @@ public readonly record struct PnCounterAccessor
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentOutOfRangeException.ThrowIfNegative(amount);
         EnsureInitialised();
-        return MutateAsync(c => c.Increment(replicaId, amount), cancellationToken, maxAttempts);
+        return MutateAsync(c =>
+        {
+            c.Increment(replicaId, amount);
+            return new CrdtDeltaPayloads.PnCounterIncrementDelta(replicaId, amount);
+        }, CrdtDeltaKinds.PnCounterIncrement, cancellationToken, maxAttempts);
     }
 
     /// <summary>
@@ -68,7 +73,11 @@ public readonly record struct PnCounterAccessor
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentOutOfRangeException.ThrowIfNegative(amount);
         EnsureInitialised();
-        return MutateAsync(c => c.Decrement(replicaId, amount), cancellationToken, maxAttempts);
+        return MutateAsync(c =>
+        {
+            c.Decrement(replicaId, amount);
+            return new CrdtDeltaPayloads.PnCounterDecrementDelta(replicaId, amount);
+        }, CrdtDeltaKinds.PnCounterDecrement, cancellationToken, maxAttempts);
     }
 
     /// <summary>Merges <paramref name="other"/> into the stored state under CAS.</summary>
@@ -76,10 +85,20 @@ public readonly record struct PnCounterAccessor
     {
         ArgumentNullException.ThrowIfNull(other);
         EnsureInitialised();
-        return MutateAsync(c => c.MergeFrom(other), cancellationToken, maxAttempts);
+        return MutateAsync(c =>
+        {
+            c.MergeFrom(other);
+            return new CrdtDeltaPayloads.PnCounterMergeDelta(
+                new Dictionary<string, long>(other.Increments),
+                new Dictionary<string, long>(other.Decrements));
+        }, CrdtDeltaKinds.PnCounterMerge, cancellationToken, maxAttempts);
     }
 
-    private async Task MutateAsync(Action<PnCounter> mutate, CancellationToken cancellationToken, int maxAttempts)
+    private async Task MutateAsync<TDelta>(
+        Func<PnCounter, TDelta> mutate,
+        string deltaKind,
+        CancellationToken cancellationToken,
+        int maxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
         for (var attempt = 0; attempt < maxAttempts; attempt++)
@@ -87,10 +106,14 @@ public readonly record struct PnCounterAccessor
             cancellationToken.ThrowIfCancellationRequested();
             var versioned = await _lattice.GetWithVersionAsync(_key, cancellationToken).ConfigureAwait(false);
             var current = Decode(versioned.Value);
-            mutate(current);
+            var delta = mutate(current);
             var bytes = JsonLatticeSerializer<PnCounter>.Default.Serialize(current);
-            var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
-            if (ok) return;
+            var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
+            using (LatticeDeltaContext.With(deltaKind, deltaBytes))
+            {
+                var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
+                if (ok) return;
+            }
         }
         throw new InvalidOperationException(
             $"PnCounter CAS budget exhausted after {maxAttempts} attempts for key '{_key}'. " +

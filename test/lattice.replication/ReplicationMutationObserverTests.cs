@@ -870,5 +870,106 @@ public class ReplicationMutationObserverTests
                 "each emit gets its own defensive clone");
         });
     }
+
+    // ------------------------------------------------------------------
+    // Pre-merge typed delta passthrough
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task Delta_kind_and_payload_are_forwarded_verbatim_on_set()
+    {
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+        var payload = new byte[] { 4, 5, 6 };
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "t",
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            DeltaKind = "ol.crdt.ors.add",
+            DeltaPayload = payload,
+        }, CancellationToken.None);
+
+        var entry = sink.Entries.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.DeltaKind, Is.EqualTo("ol.crdt.ors.add"));
+            Assert.That(entry.DeltaPayload, Is.SameAs(payload));
+        });
+    }
+
+    [Test]
+    public async Task Delta_slots_are_null_on_emit_when_mutation_did_not_author_a_delta()
+    {
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "t",
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+        }, CancellationToken.None);
+
+        var entry = sink.Entries.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.DeltaKind, Is.Null);
+            Assert.That(entry.DeltaPayload, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task Delete_mutation_forwards_delta_kind_and_payload()
+    {
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+        var payload = new byte[] { 1 };
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "t",
+            Kind = MutationKind.Delete,
+            Key = "k",
+            IsTombstone = true,
+            DeltaKind = "ol.crdt.ors.rm",
+            DeltaPayload = payload,
+        }, CancellationToken.None);
+
+        var entry = sink.Entries.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.DeltaKind, Is.EqualTo("ol.crdt.ors.rm"));
+            Assert.That(entry.DeltaPayload, Is.SameAs(payload));
+        });
+    }
+
+    [Test]
+    public async Task Delta_payload_is_forwarded_by_reference_not_cloned()
+    {
+        // Bytes are treated as opaque (matching the observer's
+        // existing handling of mutation.Value): the producer authored
+        // the payload once at the call site and the observer forwards
+        // the reference verbatim. Pinned to keep the hot path
+        // allocation-free for typed CRDT emits.
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+        var payload = new byte[] { 7 };
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "t",
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            DeltaKind = "ol.crdt.pnc.inc",
+            DeltaPayload = payload,
+        }, CancellationToken.None);
+
+        Assert.That(sink.Entries.Single().DeltaPayload, Is.SameAs(payload));
+    }
 }
 
