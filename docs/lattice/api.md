@@ -444,14 +444,22 @@ Every emit carries a `Guid TransactionId` that lets observers detect when severa
 
 The id is computed at the public `ILattice` surface and propagated downstream via the ambient Orleans `RequestContext`. Observers that batch by transaction can group on `TransactionId`; observers that do not care can simply ignore the field.
 
-#### User vs. maintenance classification (`Category`)
+#### Pre-merge author's delta (`DeltaKind` / `DeltaPayload`)
 
-Every emit also carries a `MutationCategory Category` slot that classifies the mutation as either a user-driven write or a library-internal maintenance write:
+Every emit also carries an optional pair of slots — `string? DeltaKind` and `byte[]? DeltaPayload` — that lets a producer attach the **author's pre-merge delta** alongside the post-merge committed value. The lattice library never opens the payload itself; consumers (the replication observer in particular) decode it based on `DeltaKind`. Carrying the author's delta lets a deterministic replay path (e.g. a future leaf-projection rebuild from the WAL) reach the same convergence the originating writer reached, which the post-merge `Value` bytes alone cannot guarantee for non-LWW CRDTs.
 
-- **`MutationCategory.User`** (default, value `0`) — produced by every public `ILattice` write entry-point: `SetAsync` (all overloads), `DeleteAsync`, `DeleteRangeAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyAtomicAsync` (every per-key emit, including saga compensation rolls), and `BulkLoadAsync`. This is the value observers see for application-driven traffic.
-- **`MutationCategory.Maintenance`** (value `1`) — reserved for library-internal structural rewrites (resize, rebalance, compaction, internal rewrite). Convergence paths (merge / shadow-forward / snapshot restore) are deliberately silent on the observer hook today, so production observers currently see only `User`. The slot exists so replication-aware observers can skip the WAL append for maintenance traffic on replicated trees once those sites begin emitting; structural maintenance is run independently on every cluster and must not cross cluster boundaries.
+The delta is stamped via the `LatticeDeltaContext` ambient helper — a public static class exposing `Current { get; set; }` and a scoped `With(string kind, byte[] payload)` disposable that mirrors the `LatticeOriginContext` / `LatticeVectorClockContext` pattern. A forwarding caller wraps the call in:
 
-The classification is **independent of `OriginClusterId`** — a remote-origin maintenance mutation would still be `Maintenance` and would still be skipped by a replication observer. Wire-compatible default: legacy persisted payloads decode to `Category = User` (the zero default), so observers that ignore the field continue to work unchanged.
+```csharp verify
+using (LatticeDeltaContext.With("my.delta.kind", new byte[] { 1, 2, 3 }))
+{
+    await tree.SetAsync("k", new byte[] { 4, 5, 6 }, cancellationToken);
+}
+```
+
+before reaching the public `ILattice` surface, and the leaf grain reads the context at the HLC-tick site and stamps it onto the freshly-constructed `LatticeMutation`. Local writes that leave the context unset produce `DeltaKind = null` and `DeltaPayload = null`, the documented default for observers persisted before this field existed.
+
+The CRDT value-surface accessors (`OrSet`, `PnCounter`, `VersionVector`) and the atomic-write saga set the context on the caller's behalf — observers downstream of those producers see typed delta payloads automatically. The saga additionally **persists** the captured carry on `AtomicWriteState` so a crash mid-execute and a reminder-driven reactivation re-stamps the original delta on every resumed per-key write.
 
 ## Metrics
 

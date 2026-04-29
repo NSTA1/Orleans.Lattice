@@ -139,7 +139,6 @@ public readonly record struct LatticeMutation
 
     /// <summary>
     /// Stable identifier for the encoding of <see cref="DeltaPayload"/>,
-
     /// or <see langword="null"/> when the producer did not supply an
     /// author's delta. Typically the fully-qualified type name or a short
     /// alias of a typed delta record from the replication package
