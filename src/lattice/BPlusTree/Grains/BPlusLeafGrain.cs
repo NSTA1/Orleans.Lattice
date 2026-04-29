@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
@@ -188,29 +189,44 @@ internal sealed partial class BPlusLeafGrain(
             }
             else
             {
-                // The key belongs to this leaf — write it here.
-                state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
-                state.State.Version.Tick(ReplicaId);
-                var entry = LwwValue<byte[]>.CreateWithExpiry(value, state.State.Clock, expiresAtTicks)
-                    with
-                    {
-                        OriginClusterId = LatticeOriginContext.Current,
-                        VectorClock = LatticeVectorClockContext.Current,
-                    };
-                if (state.State.Entries.TryGetValue(key, out var prev))
-                    state.State.Entries[key] = LwwValue<byte[]>.Merge(prev, entry);
-                else
-                    state.State.Entries[key] = entry;
-                await PersistAsync();
-                if (mutationObservers.HasObservers)
-                {
-                    await PublishSetAsync(key, state.State.Entries[key]);
-                }
+                // The key belongs to this leaf — write it via the
+                // dual-durability commit path so the WAL append, the
+                // in-memory projection update, and the shadow persist
+                // remain consistent with the main path below.
+                await CommitSetAsync(key, value, expiresAtTicks);
             }
 
             return recovered;
         }
 
+        return await CommitSetAsync(key, value, expiresAtTicks);
+    }
+
+    /// <summary>
+    /// Dual-durability commit path for <see cref="MutationKind.Set"/>.
+    /// Steps in order:
+    /// <list type="number">
+    ///   <item><b>build</b> — tick HLC + version vector and construct
+    ///   the LWW value plus its observer-bound mutation envelope;</item>
+    ///   <item><b>wal</b> — append the mutation to the per-shard WAL via
+    ///   the resolved <see cref="ICommitLogWriter"/> (no-op when the
+    ///   adapter is absent);</item>
+    ///   <item><b>apply</b> — merge the LWW value into the in-memory
+    ///   projection and check the leaf-split predicate;</item>
+    ///   <item><b>shadow</b> — persist the legacy state row when
+    ///   <c>LeafShadowWrites</c> is enabled. Failures here are logged
+    ///   and swallowed because the WAL is the durable boundary;</item>
+    ///   <item><b>observer</b> — publish the post-commit mutation to
+    ///   any registered <see cref="IMutationObserver"/> inside a
+    ///   <see cref="LatticeCommitLogContext"/> scope so a downstream
+    ///   replication-aware observer can detect the commit-log source
+    ///   and short-circuit its loop-prevention.</item>
+    /// </list>
+    /// </summary>
+    private async Task<SplitResult?> CommitSetAsync(string key, byte[] value, long expiresAtTicks)
+    {
+        // step 0 (build) - HLC tick, build LwwValue. Version vector is
+        // foreground-only; ILeafProjection.Apply does not advance it.
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
         state.State.Version.Tick(ReplicaId);
         var newEntry = LwwValue<byte[]>.CreateWithExpiry(value, state.State.Clock, expiresAtTicks)
@@ -219,7 +235,38 @@ internal sealed partial class BPlusLeafGrain(
                 OriginClusterId = LatticeOriginContext.Current,
                 VectorClock = LatticeVectorClockContext.Current,
             };
+        var delta = LatticeDeltaContext.Current;
+        var mutation = new LatticeMutation
+        {
+            TreeId = state.State.TreeId ?? string.Empty,
+            Kind = MutationKind.Set,
+            Key = key,
+            Value = newEntry.IsTombstone ? null : newEntry.Value,
+            Timestamp = newEntry.Timestamp,
+            IsTombstone = newEntry.IsTombstone,
+            ExpiresAtTicks = newEntry.ExpiresAtTicks,
+            OriginClusterId = newEntry.OriginClusterId,
+            VectorClock = newEntry.VectorClock,
+            TransactionId = LatticeTransactionContext.Current,
+            Category = LatticeMaintenanceContext.Current,
+            DeltaKind = delta?.Kind,
+            DeltaPayload = delta?.Payload,
+        };
 
+        var options = await GetOptionsAsync();
+
+        // step 1 (wal) - propagate exceptions: pre-Apply failure leaves
+        // state untouched and the foreground caller observes the WAL error.
+        var walStartTicks = Stopwatch.GetTimestamp();
+        var writer = ResolveCommitLogWriter();
+        if (writer is not null)
+        {
+            await writer.AppendAsync(mutation);
+        }
+        RecordCommitStep("wal", walStartTicks);
+
+        // step 2 (apply) - LWW-merge into the in-memory projection.
+        var applyStartTicks = Stopwatch.GetTimestamp();
         if (state.State.Entries.TryGetValue(key, out var existing))
         {
             state.State.Entries[key] = LwwValue<byte[]>.Merge(existing, newEntry);
@@ -230,20 +277,51 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         SplitResult? splitResult = null;
-        if (state.State.Entries.Count > (await GetOptionsAsync()).MaxLeafKeys)
+        if (state.State.Entries.Count > options.MaxLeafKeys)
         {
             splitResult = await SplitAsync();
         }
+        RecordCommitStep("apply", applyStartTicks);
 
-        await PersistAsync();
+        // step 3 (shadow) - gated legacy persist. Swallow failures: the
+        // WAL is the durable record, replay closes any gap on next
+        // activation, and the in-memory projection is already correct.
+        // Structural splits persist unconditionally inside SplitAsync.
+        if (options.LeafShadowWrites)
+        {
+            var shadowStartTicks = Stopwatch.GetTimestamp();
+            try
+            {
+                await ShadowPersistAsync();
+            }
+            catch (Exception ex)
+            {
+                ResolveLogger()?.LogWarning(
+                    ex,
+                    "Shadow persist failed for tree {TreeId} key {Key}; the WAL is the durable record so foreground call returns success.",
+                    state.State.TreeId ?? string.Empty,
+                    key);
+            }
+            RecordCommitStep("shadow", shadowStartTicks);
+        }
+
+        // step 4 (observer) - publish under a commit-log scope so a
+        // replication-aware observer can detect the source and avoid
+        // re-appending its own input back into the WAL.
+        var observerStartTicks = Stopwatch.GetTimestamp();
         if (mutationObservers.HasObservers)
         {
-            // After a split, the key may have migrated to the new sibling —
+            // After a split, the key may have migrated to the new sibling -
             // fall back to newEntry, which is guaranteed by strict-HLC-tick
             // monotonicity to be the committed LWW winner.
             var published = state.State.Entries.TryGetValue(key, out var committed) ? committed : newEntry;
-            await PublishSetAsync(key, published);
+            using (LatticeCommitLogContext.BeginScope())
+            {
+                await PublishSetAsync(key, published);
+            }
         }
+        RecordCommitStep("observer", observerStartTicks);
+
         return splitResult;
     }
 
@@ -266,6 +344,7 @@ internal sealed partial class BPlusLeafGrain(
             return false;
         }
 
+        // step 0 (build) - HLC tick, build tombstone, build mutation envelope.
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
         state.State.Version.Tick(ReplicaId);
         var tombstone = LwwValue<byte[]>.Tombstone(state.State.Clock)
@@ -274,10 +353,70 @@ internal sealed partial class BPlusLeafGrain(
                 OriginClusterId = LatticeOriginContext.Current,
                 VectorClock = LatticeVectorClockContext.Current,
             };
+        var delta = LatticeDeltaContext.Current;
+        var mutation = new LatticeMutation
+        {
+            TreeId = state.State.TreeId ?? string.Empty,
+            Kind = MutationKind.Delete,
+            Key = key,
+            Timestamp = tombstone.Timestamp,
+            IsTombstone = true,
+            OriginClusterId = tombstone.OriginClusterId,
+            VectorClock = tombstone.VectorClock,
+            TransactionId = LatticeTransactionContext.Current,
+            Category = LatticeMaintenanceContext.Current,
+            DeltaKind = delta?.Kind,
+            DeltaPayload = delta?.Payload,
+        };
+
+        var options = await GetOptionsAsync();
+
+        // step 1 (wal)
+        var walStartTicks = Stopwatch.GetTimestamp();
+        var writer = ResolveCommitLogWriter();
+        if (writer is not null)
+        {
+            await writer.AppendAsync(mutation);
+        }
+        RecordCommitStep("wal", walStartTicks);
+
+        // step 2 (apply)
+        var applyStartTicks = Stopwatch.GetTimestamp();
         state.State.Entries[key] = tombstone;
-        await PersistAsync();
+        RecordCommitStep("apply", applyStartTicks);
+
+        // step 3 (shadow)
+        if (options.LeafShadowWrites)
+        {
+            var shadowStartTicks = Stopwatch.GetTimestamp();
+            try
+            {
+                await ShadowPersistAsync();
+            }
+            catch (Exception ex)
+            {
+                ResolveLogger()?.LogWarning(
+                    ex,
+                    "Shadow persist failed for tree {TreeId} key {Key} on delete; the WAL is the durable record so foreground call returns success.",
+                    state.State.TreeId ?? string.Empty,
+                    key);
+            }
+            RecordCommitStep("shadow", shadowStartTicks);
+        }
+
         LatticeMetrics.LeafTombstonesCreated.Add(1, LeafTreeTag());
-        await PublishDeleteAsync(key, tombstone);
+
+        // step 4 (observer) - inside a commit-log scope.
+        var observerStartTicks = Stopwatch.GetTimestamp();
+        if (mutationObservers.HasObservers)
+        {
+            using (LatticeCommitLogContext.BeginScope())
+            {
+                await PublishDeleteAsync(key, tombstone);
+            }
+        }
+        RecordCommitStep("observer", observerStartTicks);
+
         return true;
     }
 
@@ -304,8 +443,20 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         if (keysToDelete is null)
+        {
+            // Nothing to delete on this leaf - skip the WAL append, the
+            // HLC tick, and every other step. The shard-level publish
+            // helper still emits a per-shard DeleteRange mutation with
+            // HybridLogicalClock.Zero so replication consumers propagate
+            // the range unconditionally.
             return new RangeDeleteResult { Deleted = 0, PastRange = pastRange };
+        }
 
+        // step 0 (build) - HLC tick, build tombstone, build mutation envelope
+        // covering the whole range. The leaf does not publish the per-range
+        // mutation - that's a shard-level concern - but it still appends
+        // the range tombstone to the WAL so a future replay applies the
+        // same set-of-keys closure rather than each individual key.
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
         state.State.Version.Tick(ReplicaId);
         var tombstone = LwwValue<byte[]>.Tombstone(state.State.Clock)
@@ -314,14 +465,71 @@ internal sealed partial class BPlusLeafGrain(
                 OriginClusterId = LatticeOriginContext.Current,
                 VectorClock = LatticeVectorClockContext.Current,
             };
+        var delta = LatticeDeltaContext.Current;
+        var mutation = new LatticeMutation
+        {
+            TreeId = state.State.TreeId ?? string.Empty,
+            Kind = MutationKind.DeleteRange,
+            Key = startInclusive,
+            EndExclusiveKey = endExclusive,
+            Timestamp = tombstone.Timestamp,
+            IsTombstone = true,
+            OriginClusterId = tombstone.OriginClusterId,
+            VectorClock = tombstone.VectorClock,
+            TransactionId = LatticeTransactionContext.Current,
+            Category = LatticeMaintenanceContext.Current,
+            DeltaKind = delta?.Kind,
+            DeltaPayload = delta?.Payload,
+        };
 
+        var options = await GetOptionsAsync();
+
+        // step 1 (wal)
+        var walStartTicks = Stopwatch.GetTimestamp();
+        var writer = ResolveCommitLogWriter();
+        if (writer is not null)
+        {
+            await writer.AppendAsync(mutation);
+        }
+        RecordCommitStep("wal", walStartTicks);
+
+        // step 2 (apply) - tombstone every matched key with the same HLC.
+        var applyStartTicks = Stopwatch.GetTimestamp();
         foreach (var key in keysToDelete)
         {
             state.State.Entries[key] = tombstone;
         }
+        RecordCommitStep("apply", applyStartTicks);
 
-        await PersistAsync();
+        // step 3 (shadow)
+        if (options.LeafShadowWrites)
+        {
+            var shadowStartTicks = Stopwatch.GetTimestamp();
+            try
+            {
+                await ShadowPersistAsync();
+            }
+            catch (Exception ex)
+            {
+                ResolveLogger()?.LogWarning(
+                    ex,
+                    "Shadow persist failed for tree {TreeId} on range delete [{Start}, {End}); the WAL is the durable record so foreground call returns success.",
+                    state.State.TreeId ?? string.Empty,
+                    startInclusive,
+                    endExclusive);
+            }
+            RecordCommitStep("shadow", shadowStartTicks);
+        }
+
         LatticeMetrics.LeafTombstonesCreated.Add(keysToDelete.Count, LeafTreeTag());
+
+        // No leaf-level observer publish for DeleteRange - the shard
+        // coordinator publishes one per-shard mutation after the
+        // chain walk completes. RecordCommitStep("observer", ...) is
+        // skipped to avoid recording a zero-duration measurement that
+        // would skew the histogram for the legitimate per-key emit
+        // step on Set / Delete.
+
         return new RangeDeleteResult { Deleted = keysToDelete.Count, PastRange = pastRange };
     }
 
