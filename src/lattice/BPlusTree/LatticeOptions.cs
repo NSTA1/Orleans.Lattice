@@ -316,7 +316,6 @@ public class LatticeOptions
     /// <summary>
     /// When <c>true</c>, Lattice publishes <see cref="LatticeTreeEvent"/> notifications
     /// on an Orleans stream (namespace <see cref="LatticeEventConstants.StreamNamespace"/>,
-    /// stream id = tree id) for writes, deletes, compaction passes, splits,
     /// snapshots, resizes, reshards, and tree-lifecycle transitions. Consumers
     /// subscribe via <see cref="LatticeExtensions.SubscribeToEventsAsync"/>.
     /// cost on the write path. Enabling publication requires that an Orleans
@@ -341,6 +340,26 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="EventStreamProviderName"/> (<c>"Default"</c>).</summary>
     public const string DefaultEventStreamProviderName = "Default";
+
+    /// <summary>
+    /// Maximum number of entries a leaf grain will replay through its
+    /// projection rebuild seam (<c>ILeafProjection.Apply</c>) at activation
+    /// time before falling back to a full projection rebuild from the
+    /// authoritative source. Bounds the worst-case replay cost when a leaf
+    /// reactivates after an extended outage and the gap between its
+    /// persisted projection checkpoint and the current write-ahead-log
+    /// head exceeds this budget.
+    /// <para>
+    /// The seam itself ships dormant — the leaf grain still writes through
+    /// its existing storage provider on every commit. This budget becomes
+    /// observable when the WAL-as-sole-commit-point promotion lands and
+    /// the activation path begins consulting the persisted checkpoint.
+    /// </para>
+    /// </summary>
+    public int MaxLeafReplayEntries { get; set; } = DefaultMaxLeafReplayEntries;
+
+    /// <summary>Default value for <see cref="MaxLeafReplayEntries"/> (10 000).</summary>
+    public const int DefaultMaxLeafReplayEntries = 10_000;
 
     /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.
