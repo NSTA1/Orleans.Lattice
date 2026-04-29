@@ -10,6 +10,14 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
             return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.KeysPageSize)} must be greater than 0.");
         if (options.MaxLeafReplayEntries < 1)
             return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.MaxLeafReplayEntries)} must be greater than or equal to 1.");
+        if (options.MaterialiserCheckpointEntries < 1)
+            return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.MaterialiserCheckpointEntries)} must be greater than or equal to 1.");
+        if (options.MaterialiserCheckpointInterval < TimeSpan.Zero
+            && options.MaterialiserCheckpointInterval != Timeout.InfiniteTimeSpan)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaterialiserCheckpointInterval)} must be non-negative or {nameof(Timeout.InfiniteTimeSpan)}.");
+        }
         return ValidateOptionsResult.Success;
     }
 }

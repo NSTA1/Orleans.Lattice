@@ -309,7 +309,11 @@ public partial class BPlusLeafGrainTests
     public async Task SetCheckpointOffset_persists_offset_and_writes_state()
     {
         var state = new FakePersistentState<LeafNodeState>();
-        var grain = CreateGrain(state);
+        // Every-entry mode forces an immediate durable persist on every
+        // advance, restoring the immediate-persist contract for callers
+        // that opt in.
+        var options = new LatticeOptions { MaterialiserCheckpointInterval = TimeSpan.Zero };
+        var grain = CreateGrain(state, options: options);
         var projection = AsProjection(grain);
 
         await projection.SetCheckpointOffsetAsync(42);
@@ -338,7 +342,12 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain();
         var projection = AsProjection(grain);
 
+        // Advance via every-entry mode so the persisted offset is 50;
+        // the backwards-rejection invariant must still hold whether the
+        // current view is durable or pending.
+        await ((ILeafProjection)grain).FlushCheckpointAsync();
         await projection.SetCheckpointOffsetAsync(50);
+        await ((ILeafProjection)grain).FlushCheckpointAsync();
 
         Assert.That(
             async () => await projection.SetCheckpointOffsetAsync(49),
@@ -350,7 +359,8 @@ public partial class BPlusLeafGrainTests
     public async Task SetCheckpointOffset_idempotent_advance_persists_in_memory_apply_changes()
     {
         var state = new FakePersistentState<LeafNodeState>();
-        var grain = CreateGrain(state);
+        var options = new LatticeOptions { MaterialiserCheckpointInterval = TimeSpan.Zero };
+        var grain = CreateGrain(state, options: options);
         var projection = AsProjection(grain);
 
         await projection.SetCheckpointOffsetAsync(10);
@@ -364,6 +374,148 @@ public partial class BPlusLeafGrainTests
         await projection.SetCheckpointOffsetAsync(10);
         Assert.That(state.WriteCount, Is.EqualTo(firstWriteCount + 1));
         Assert.That(state.State.Entries.ContainsKey("k1"), Is.True);
+    }
+
+    // --- Materialiser checkpoint coalescing predicate ---
+
+    [Test]
+    public async Task SetCheckpointOffset_coalesces_under_default_options_and_does_not_persist_immediately()
+    {
+        // Default MaterialiserCheckpointEntries=1000, Interval=1s.
+        // A single small advance hits neither threshold and must not
+        // touch durable storage on the hot path.
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        var projection = AsProjection(grain);
+
+        await projection.SetCheckpointOffsetAsync(42);
+
+        Assert.That(state.WriteCount, Is.Zero);
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.Zero);
+        // GetCheckpointOffsetAsync reflects the most-recent advance.
+        Assert.That(await projection.GetCheckpointOffsetAsync(), Is.EqualTo(42));
+    }
+
+    [Test]
+    public async Task SetCheckpointOffset_persists_when_entries_threshold_met()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var options = new LatticeOptions
+        {
+            MaterialiserCheckpointEntries = 5,
+            MaterialiserCheckpointInterval = Timeout.InfiniteTimeSpan,
+        };
+        var grain = CreateGrain(state, options: options);
+        var projection = AsProjection(grain);
+
+        // Advances under the threshold accumulate in memory.
+        await projection.SetCheckpointOffsetAsync(1);
+        await projection.SetCheckpointOffsetAsync(2);
+        await projection.SetCheckpointOffsetAsync(4);
+        Assert.That(state.WriteCount, Is.Zero);
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.Zero);
+
+        // Crossing the threshold (5 entries pending) flushes durably.
+        await projection.SetCheckpointOffsetAsync(5);
+        Assert.That(state.WriteCount, Is.EqualTo(1));
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(5));
+    }
+
+    [Test]
+    public async Task SetCheckpointOffset_persists_immediately_when_interval_is_zero()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var options = new LatticeOptions { MaterialiserCheckpointInterval = TimeSpan.Zero };
+        var grain = CreateGrain(state, options: options);
+        var projection = AsProjection(grain);
+
+        await projection.SetCheckpointOffsetAsync(1);
+        await projection.SetCheckpointOffsetAsync(2);
+        await projection.SetCheckpointOffsetAsync(3);
+
+        Assert.That(state.WriteCount, Is.EqualTo(3));
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(3));
+    }
+
+    [Test]
+    public async Task SetCheckpointOffset_rejects_backwards_against_pending_offset()
+    {
+        // Backwards-rejection must compare against the pending in-memory
+        // offset, not just the persisted one. With default coalescing,
+        // a fresh advance to 100 stays in-memory; an attempt to roll
+        // back to 50 must still throw even though the persisted offset
+        // is 0.
+        var grain = CreateGrain();
+        var projection = AsProjection(grain);
+
+        await projection.SetCheckpointOffsetAsync(100);
+
+        Assert.That(
+            async () => await projection.SetCheckpointOffsetAsync(50),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task FlushCheckpoint_persists_pending_offset()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        var projection = AsProjection(grain);
+
+        await projection.SetCheckpointOffsetAsync(42);
+        Assert.That(state.WriteCount, Is.Zero);
+
+        await projection.FlushCheckpointAsync();
+
+        Assert.That(state.WriteCount, Is.EqualTo(1));
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(42));
+    }
+
+    [Test]
+    public async Task FlushCheckpoint_is_noop_when_no_advance_pending()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        var projection = AsProjection(grain);
+
+        await projection.FlushCheckpointAsync();
+        await projection.FlushCheckpointAsync();
+
+        Assert.That(state.WriteCount, Is.Zero);
+    }
+
+    [Test]
+    public void FlushCheckpoint_throws_on_pre_cancelled_token()
+    {
+        var grain = CreateGrain();
+        var projection = AsProjection(grain);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.That(
+            async () => await projection.FlushCheckpointAsync(cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    public async Task OnDeactivateAsync_flushes_pending_checkpoint()
+    {
+        // Graceful deactivation must persist any unflushed advance so a
+        // clean shutdown does not lose progress the materialiser has
+        // already issued.
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        var projection = AsProjection(grain);
+
+        await projection.SetCheckpointOffsetAsync(99);
+        Assert.That(state.WriteCount, Is.Zero);
+
+        await ((IGrainBase)grain).OnDeactivateAsync(
+            new DeactivationReason(DeactivationReasonCode.ShuttingDown, "test"),
+            CancellationToken.None);
+
+        Assert.That(state.WriteCount, Is.EqualTo(1));
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(99));
     }
 
     [Test]
