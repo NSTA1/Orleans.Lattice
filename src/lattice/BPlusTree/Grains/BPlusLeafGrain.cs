@@ -14,7 +14,7 @@ internal sealed partial class BPlusLeafGrain(
     [PersistentState("leaf", LatticeOptions.StorageProviderName)] IPersistentState<LeafNodeState> state,
     IGrainFactory grainFactory,
     LatticeOptionsResolver optionsResolver,
-    MutationObserverDispatcher mutationObservers) : IBPlusLeafGrain
+    MutationObserverDispatcher mutationObservers) : IBPlusLeafGrain, ILeafProjection
 {
     private static readonly Dictionary<string, LwwValue<byte[]>> EmptyEntries = new();
 

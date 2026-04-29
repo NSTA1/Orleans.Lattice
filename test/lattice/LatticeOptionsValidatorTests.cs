@@ -38,4 +38,20 @@ public class LatticeOptionsValidatorTests
         });
         Assert.That(result.Succeeded, Is.True);
     }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void MaxLeafReplayEntries_must_be_at_least_one(int value)
+    {
+        var result = Validate(o => o.MaxLeafReplayEntries = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.MaxLeafReplayEntries)));
+    }
+
+    [Test]
+    public void MaxLeafReplayEntries_at_one_passes()
+    {
+        var result = Validate(o => o.MaxLeafReplayEntries = 1);
+        Assert.That(result.Succeeded, Is.True);
+    }
 }

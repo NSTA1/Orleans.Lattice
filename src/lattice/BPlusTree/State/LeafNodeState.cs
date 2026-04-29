@@ -56,6 +56,18 @@ internal sealed class LeafNodeState
     /// </summary>
     [Id(9)] public GrainId? OldNextSibling { get; set; }
 
+    /// <summary>
+    /// Highest write-ahead-log offset whose mutation has been durably
+    /// applied to this leaf's projection via the
+    /// <c>ILeafProjection.Apply</c> seam. Persisted alongside the
+    /// projection so a re-activation can resume replay from
+    /// <c>ProjectionCheckpointOffset + 1</c> rather than scanning the
+    /// full leaf state. Defaults to <c>0</c>; the seam ships dormant
+    /// until the WAL-as-sole-commit-point promotion lands and the
+    /// activation path begins consulting this slot.
+    /// </summary>
+    [Id(11)] public long ProjectionCheckpointOffset { get; set; }
+
     /// <summary>Returns the number of live (non-tombstoned) entries.</summary>
     public int LiveCount
     {

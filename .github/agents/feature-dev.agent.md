@@ -119,15 +119,28 @@ The agent **must invoke each command below verbatim** and **paste the tail of it
 
 If any 6b gate is red, **do not run 6c**. Fix the leak, re-run all of 6b from the top, and only proceed once every gate is green. The hygiene gates are non-negotiable: a green CI run is not a substitute for them, because CI catches them after the PR is open and a force-push is more expensive than fixing them locally.
 
-#### 6c — Test suite (full non-chaos)
+#### 6c — Test suite (changed project, non-chaos)
 
-Only after 6a and 6b are green, run the full deterministic suite:
+Only after 6a and 6b are green, run the **non-chaos suite scoped to the test project(s) that cover the source project you changed**, not the whole solution. CI runs the full cross-solution suite on every PR — re-running every unrelated test on every iteration of the inner dev loop wastes wall-clock time without buying additional signal.
+
+Map source project to test project:
+
+| Source project changed | Test project(s) to run |
+|---|---|
+| `src/lattice/` (core library) | `test/lattice/Orleans.Lattice.Tests.csproj` |
+| `src/lattice.replication/` | `test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj` |
+| `src/lattice.replication.grpc/` | `test/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.Tests.csproj` |
+
+If the change touches the core library, run the core test project. If it touches a downstream package, run that package's test project. If it genuinely touches both (e.g. a public-API rename in the core that ripples through replication), run both — but that is the rare case, not the default.
 
 ```powershell
-dotnet test --filter "TestCategory!=Chaos"
+# Example: a change scoped to src/lattice/
+dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory!=Chaos" --nologo
 ```
 
 Chaos tests (`[Category("Chaos")]`) are reserved for CI and pre-PR runs. Report the `Failed:` / `Passed:` / `Total:` summary line in the chat reply.
+
+A full cross-solution `dotnet test --filter "TestCategory!=Chaos"` (no project arg) is reserved for the **final** verify pass right before Phase 8 deliver — once the user has explicitly asked for commit/push/PR — so the local agent confirms the cross-solution surface is green before pushing. During iterative development inside Phase 6, scope to the changed project.
 
 ### Phase 7 — Review
 
@@ -150,19 +163,28 @@ Before telling the user the work is done, self-review. Each numbered item must b
 
 6. **No feature references**: This was already enforced as a hard gate in Phase 6b. Re-confirm in the chat reply that **`Phase 6b.1` was run and passed**, with the test transcript pasted (or referenced by line in an earlier reply). Do not perform a fresh manual grep here — the test is the authority.
 
-7. **Apply fixes**: If any of the above turned up issues, fix them and re-run **the relevant sub-phase of Phase 6** (build, hygiene, or tests) before declaring the work complete. A fix in `.github/copilot-instructions.md` or any docs file means re-running 6b.1 specifically.
+7. **Dependency cross-reference flip**: If the feature being shipped is referenced as a dependency by any other roadmap entry, every such cross-reference must carry a trailing `✓` marker on the just-shipped id, in the same commit as the ship-flip. The rule is documented in `.github/copilot-instructions.md` ("When a roadmap item ships, update every cross-reference's dependency annotation to mark it satisfied"). Execute and **paste the transcript of**:
+
+   ```powershell
+   Get-ChildItem -Recurse -Filter "roadmap.md" | ForEach-Object { Select-String -Path $_.FullName -Pattern "F-XXX|R-XXX|FX-XXX|G-XXX" -CaseSensitive }
+   ```
+
+   substituting the just-shipped id(s). For every hit, classify it: (a) the entry's own body / heading - informational, no action; (b) a narrative prose paragraph that mentions the id in passing - informational, no action; (c) a dep annotation in italics-parens (e.g. `*(depends on F-XXX, F-YYY)*` or `*(required F-XXX)*`) - **must** be flipped to carry `✓` on the just-shipped id. Apply each flip via byte-level `String.Replace` with a count-assertion of exactly 1 (per the markdown-edit protocol in `.github/copilot-instructions.md`), then `git diff` the file and confirm only the targeted line changed. The classification table and the per-edit `git diff` summaries must appear in the chat reply - a silent "I checked and there are no cross-references" is a protocol violation, because the user has had to request this audit retrospectively in the past. The audit must include **every** roadmap file in the repo (core `src/lattice/roadmap.md` and every package roadmap such as `src/lattice.replication/roadmap.md`), not just the file the just-shipped entry lives in.
+
+8. **Apply fixes**: If any of the above turned up issues, fix them and re-run **the relevant sub-phase of Phase 6** (build, hygiene, or tests) before declaring the work complete. A fix in `.github/copilot-instructions.md` or any docs file means re-running 6b.1 specifically. A dep-flip in step 7 also means re-running 6b.1 specifically because every roadmap edit is in scope of the feature-tracker hygiene gate.
 
 ### Phase 8 — Deliver
 
 Only when the user explicitly asks:
 
-1. **Commit** with a conventional commit message: `feat: <description> (F-XXX)` for features, `fix: <description>` for fixes, `docs: <description>` for doc-only changes.
-2. **Push** the branch.
-3. **Create a PR** using `gh pr create` with:
+1. **Final cross-solution verify.** Before the commit, run `dotnet test --filter "TestCategory!=Chaos"` once at the solution root and confirm `Failed: 0` across every test project. This is the only place in the workflow where the full cross-solution suite is mandatory; Phase 6c is deliberately scoped to the changed project to keep the inner dev loop fast.
+2. **Commit** with a conventional commit message: `feat: <description> (F-XXX)` for features, `fix: <description>` for fixes, `docs: <description>` for doc-only changes.
+3. **Push** the branch.
+4. **Create a PR** using `gh pr create` with:
    - A title matching the commit convention: `feat: <description> (F-XXX)`
    - At least one label: `enhancement`, `bug`, `documentation`, `ci`, `dependencies`, or `breaking`
    - A body written to a tracked scratch file (`.scratch/pr-body.md` — `.scratch/` is gitignored) and passed via `--body-file`. **Never** use `New-TemporaryFile` or inline heredocs piped into `gh`. See "PR body file write path" below.
-4. **Verify the PR body actually applied.** `gh pr create` and `gh pr edit` both **silently no-op** when the body file is malformed (BOM, wrong encoding, empty, or zero-byte). The CLI prints the PR URL and exits 0 in both the success and the silent-failure case. Immediately after creating or editing a PR, run:
+5. **Verify the PR body actually applied.** `gh pr create` and `gh pr edit` both **silently no-op** when the body file is malformed (BOM, wrong encoding, empty, or zero-byte). The CLI prints the PR URL and exits 0 in both the success and the silent-failure case. Immediately after creating or editing a PR, run:
 
    ```powershell
    gh pr view <num> --json body --jq .body | Select-Object -First 5
@@ -224,7 +246,9 @@ The combination of `New-TemporaryFile` + `[System.IO.File]::WriteAllText` + non-
 - **Never skip the review phase.** Bugs caught in review are cheaper than bugs caught in CI.
 - **The Phase 6b hygiene gates are unskippable and run *before* the unit-test suite.** Each gate must be invoked verbatim and its output transcript pasted into the chat reply. "I checked and it's clean" without the transcript is a protocol violation. The feature-tracker leak scan in particular has caught real CI failures during this agent's own past PRs — running it locally costs ~3 seconds; discovering it in CI costs a force-push and a wasted CI run.
 - **The Phase 7 memory-allocation pass is mandatory and must produce a written classification.** "I checked and it looks fine" is not a memory-allocation review. Enumerate the hot-path allocations, classify each (✅ / ⚠️ / 📝), and apply every ⚠️ fix before declaring work complete. The user has had to ask for this retrospectively in the past — never assume it can be folded into the correctness pass.
+- **The Phase 7 dependency cross-reference flip is mandatory and must produce a written classification.** Run the recursive `Select-String` across every `roadmap.md` in the repo, classify each hit (entry body / narrative prose / dep annotation), and apply a `✓` flip on every dep-annotation hit via byte-level `String.Replace` with a count-assertion of exactly 1. Paste the grep transcript and the per-edit `git diff` summaries into the chat reply. A silent "I checked and it's clean" is a protocol violation — the user has had to request this audit retrospectively, and a stale dep annotation silently misroutes future planning because the agent uses the `✓` markers as the primary signal for picking the next unblocked item.
 - **Always use `--body-file` with a tracked `.scratch/` file for PR descriptions** to avoid shell escaping issues with backticks and special characters. **Never** use `New-TemporaryFile` for the body — it has produced silent failures with non-ASCII content.
 - **`gh pr create` and `gh pr edit` silently no-op on malformed body files.** Always verify the live body via `gh pr view <num> --json body` immediately after the call. The PR URL printed by `gh` is not proof the body applied — it is printed in the failure case too.
+- **Phase 6c is project-scoped, not solution-wide.** Run `dotnet test` against the test project(s) covering the source project you changed, with `--filter "TestCategory!=Chaos"`. The full cross-solution sweep is reserved for the Phase 8 final verify (immediately before commit/push) — running it on every iteration of the inner dev loop wastes wall-clock time without buying additional signal, because CI runs the full suite on every PR.
 - **Build must be clean** — zero errors, zero warnings — before declaring work complete.
 - **One feature per branch.** Branch name: `feature/fXXX-short-description`.

@@ -8,6 +8,8 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
     {
         if (options.KeysPageSize <= 0)
             return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.KeysPageSize)} must be greater than 0.");
+        if (options.MaxLeafReplayEntries < 1)
+            return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.MaxLeafReplayEntries)} must be greater than or equal to 1.");
         return ValidateOptionsResult.Success;
     }
 }
