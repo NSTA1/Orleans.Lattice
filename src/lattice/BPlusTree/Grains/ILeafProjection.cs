@@ -65,6 +65,28 @@ internal interface ILeafProjection
     /// monotonically non-decreasing - the implementation rejects an
     /// attempt to roll the checkpoint backwards with
     /// <see cref="ArgumentOutOfRangeException"/>.
+    /// <para>
+    /// Checkpoint advances are coalesced according to
+    /// <c>LatticeOptions.MaterialiserCheckpointInterval</c> and
+    /// <c>LatticeOptions.MaterialiserCheckpointEntries</c>: a call may
+    /// update only the in-memory pending offset and defer the durable
+    /// write until either threshold is reached, the caller invokes
+    /// <see cref="FlushCheckpointAsync"/>, the grain re-asserts the
+    /// same offset (force-flush), or the grain gracefully deactivates.
+    /// Callers that require an immediate durable advance should set
+    /// <c>MaterialiserCheckpointInterval = TimeSpan.Zero</c> or call
+    /// <see cref="FlushCheckpointAsync"/> after each advance.
+    /// </para>
     /// </summary>
     Task SetCheckpointOffsetAsync(long offset, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Forces an immediate durable persist of any pending checkpoint
+    /// advance accumulated by <see cref="SetCheckpointOffsetAsync"/>.
+    /// Callers invoke this on graceful deactivation, before a crash-
+    /// sensitive operation, or whenever the caller must observe its
+    /// own most-recent advance as durable. A no-op when no advance is
+    /// pending.
+    /// </summary>
+    Task FlushCheckpointAsync(CancellationToken cancellationToken = default);
 }

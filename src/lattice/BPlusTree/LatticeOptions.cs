@@ -317,7 +317,6 @@ public class LatticeOptions
     /// When <c>true</c>, Lattice publishes <see cref="LatticeTreeEvent"/> notifications
     /// on an Orleans stream (namespace <see cref="LatticeEventConstants.StreamNamespace"/>,
     /// snapshots, resizes, reshards, and tree-lifecycle transitions. Consumers
-    /// subscribe via <see cref="LatticeExtensions.SubscribeToEventsAsync"/>.
     /// cost on the write path. Enabling publication requires that an Orleans
     /// stream provider named <see cref="EventStreamProviderName"/> is
     /// registered on every silo that hosts Lattice grains — otherwise
@@ -360,6 +359,54 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="MaxLeafReplayEntries"/> (10 000).</summary>
     public const int DefaultMaxLeafReplayEntries = 10_000;
+
+    /// <summary>
+    /// Maximum interval between durable persistences of a leaf grain's
+    /// projection-checkpoint offset (the
+    /// <c>ILeafProjection.SetCheckpointOffsetAsync</c> seam introduced
+    /// for the WAL-as-sole-commit-point promotion). Checkpoint advances
+    /// are coalesced in memory and durably written when whichever of
+    /// this interval or <see cref="MaterialiserCheckpointEntries"/>
+    /// elapses first; a graceful deactivation flushes any pending
+    /// advance synchronously.
+    /// <para>
+    /// Set to <see cref="TimeSpan.Zero"/> for an every-entry checkpoint
+    /// (one extra storage write per applied mutation, but zero replay
+    /// on restart) when strict RTO budgets warrant the cost.
+    /// <see cref="Timeout.InfiniteTimeSpan"/> disables the time-driven
+    /// flush so checkpoints persist only when
+    /// <see cref="MaterialiserCheckpointEntries"/> is reached or the
+    /// grain deactivates.
+    /// </para>
+    /// <para>
+    /// Crash-recovery cost on a worst-case unflushed checkpoint is
+    /// bounded by this interval times the steady-state apply rate.
+    /// The seam itself ships dormant - the leaf grain still writes
+    /// through its existing storage provider on every commit. This
+    /// option becomes observable when the WAL-as-sole-commit-point
+    /// promotion lands and the activation path begins consulting the
+    /// persisted checkpoint.
+    /// </para>
+    /// </summary>
+    public TimeSpan MaterialiserCheckpointInterval { get; set; } = DefaultMaterialiserCheckpointInterval;
+
+    /// <summary>Default value for <see cref="MaterialiserCheckpointInterval"/> (1 second).</summary>
+    public static readonly TimeSpan DefaultMaterialiserCheckpointInterval = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Maximum number of pending checkpoint advances (measured as the
+    /// difference between the last requested offset and the last
+    /// durably-persisted offset) before the leaf grain forces a
+    /// durable persist of the projection checkpoint, even if
+    /// <see cref="MaterialiserCheckpointInterval"/> has not yet
+    /// elapsed. Bounds the worst-case replay cost on crash recovery
+    /// when the steady-state apply rate is high enough that the
+    /// time-driven flush has not fired.
+    /// </summary>
+    public int MaterialiserCheckpointEntries { get; set; } = DefaultMaterialiserCheckpointEntries;
+
+    /// <summary>Default value for <see cref="MaterialiserCheckpointEntries"/> (1 000).</summary>
+    public const int DefaultMaterialiserCheckpointEntries = 1_000;
 
     /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.

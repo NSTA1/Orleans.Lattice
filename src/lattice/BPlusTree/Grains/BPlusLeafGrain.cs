@@ -14,8 +14,31 @@ internal sealed partial class BPlusLeafGrain(
     [PersistentState("leaf", LatticeOptions.StorageProviderName)] IPersistentState<LeafNodeState> state,
     IGrainFactory grainFactory,
     LatticeOptionsResolver optionsResolver,
-    MutationObserverDispatcher mutationObservers) : IBPlusLeafGrain, ILeafProjection
+    MutationObserverDispatcher mutationObservers) : IBPlusLeafGrain, ILeafProjection, IGrainBase
 {
+    IGrainContext IGrainBase.GrainContext => context;
+
+    /// <summary>
+    /// Synchronously flushes any pending projection-checkpoint advance
+    /// to durable storage on graceful deactivation so a clean shutdown
+    /// does not lose an unflushed checkpoint that the materialiser has
+    /// already issued. Crash deactivations bypass this hook by design -
+    /// the persisted offset bounds replay cost in that case.
+    /// </summary>
+    async Task IGrainBase.OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ((ILeafProjection)this).FlushCheckpointAsync(cancellationToken);
+        }
+        catch
+        {
+            // A storage failure on shutdown must not block deactivation;
+            // the persisted offset still bounds replay cost on the next
+            // activation.
+        }
+    }
+
     private static readonly Dictionary<string, LwwValue<byte[]>> EmptyEntries = new();
 
     private string ReplicaId => context.GrainId.ToString();

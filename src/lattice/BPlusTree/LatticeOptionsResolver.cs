@@ -79,6 +79,8 @@ internal sealed class LatticeOptionsResolver(
             AtomicWriteRetention = baseOptions.AtomicWriteRetention,
             VersionVectorRetention = baseOptions.VersionVectorRetention,
             DiagnosticsCacheTtl = baseOptions.DiagnosticsCacheTtl,
+            MaterialiserCheckpointInterval = baseOptions.MaterialiserCheckpointInterval,
+            MaterialiserCheckpointEntries = baseOptions.MaterialiserCheckpointEntries,
         };
     }
 }

@@ -73,6 +73,8 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | `AtomicWriteRetention` | `TimeSpan` | 48 hours | Yes |
 | `VersionVectorRetention` | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
 | `DiagnosticsCacheTtl` | `TimeSpan` | 5 seconds | Yes |
+| `MaterialiserCheckpointInterval` | `TimeSpan` | 1 second | Yes |
+| `MaterialiserCheckpointEntries` | `int` | 1000 | Yes |
 
 ### Structural sizing (registry-pinned)
 
@@ -288,20 +290,22 @@ siloBuilder.ConfigureLattice("debug-tree", o => o.DiagnosticsCacheTtl = TimeSpan
 
 This option can be changed freely at any time. The new TTL takes effect on the next `DiagnoseAsync` call.
 
-### `PublishEvents`
+### `MaterialiserCheckpointInterval`
 
-Silo-wide default for tree-event publication (default: `false`). When the effective setting resolves to `true`, the silo fires metadata-only `LatticeTreeEvent` notifications on a per-tree Orleans stream as writes, splits, compactions, snapshots, resizes, reshards, and tree-lifecycle transitions occur. Subscribers consume the stream via `LatticeExtensions.SubscribeToEventsAsync` on the cluster client. See [Events](events.md) for the event contract, delivery semantics, and provider requirements.
+How long the leaf-projection materialiser may defer persisting an advancing checkpoint offset before flushing it to durable storage (default: 1 second). Combined with `MaterialiserCheckpointEntries`, this controls coalescing of materialiser-side high-water-mark writes: the checkpoint is persisted as soon as **either** threshold is met. Set to `TimeSpan.Zero` to persist on every advance (every-entry mode — strict RTO at the cost of one extra storage write per commit). Set to `Timeout.InfiniteTimeSpan` to disable time-based flushing and rely solely on the entry-count threshold.
 
-The effective setting is resolved per tree as follows:
+A graceful deactivation always force-flushes a pending checkpoint, so a clean silo shutdown loses no progress regardless of interval. A worst-case crash loses up to `MaterialiserCheckpointInterval` × steady-state apply rate of replay work on restart.
 
-1. If the tree's registry entry has a per-tree override (set via `ILattice.SetPublishEventsEnabledAsync(bool?)`), that value wins.
-2. Otherwise the silo-wide `LatticeOptions.PublishEvents` is used.
+```csharp verify
+// Strict RTO: checkpoint on every advance.
+siloBuilder.ConfigureLattice("strict-tree", o => o.MaterialiserCheckpointInterval = TimeSpan.Zero);
+```
 
-This means `PublishEvents` acts as the **global default**: it applies to every tree — user trees *and* system-internal trees (those prefixed with `_lattice_`, e.g. the registry tree itself) — that has not set an override. System trees never consult the registry for their own override (that would deadlock the registry activation), so for them the silo option is always authoritative. In practice system trees produce very low event volume and are rarely of interest to subscribers; leave this at `false` unless you specifically want to observe them.
+This option can be changed freely at any time.
 
-Propagation of a per-tree override is best-effort across silos: the activation that handled `SetPublishEventsEnabledAsync` observes the change immediately, while other activations refresh their cached value within a few seconds. Writes in flight at the moment of the change may emit events under the previous setting.
+### `MaterialiserCheckpointEntries`
 
-Publication itself is fire-and-forget: a missing stream provider, a serialization failure, or a downstream queue error is logged at `Warning` and swallowed — write-path latency and availability are unaffected by subscriber health.
+Entry-count threshold above which a pending materialiser checkpoint is force-flushed to durable storage even if `MaterialiserCheckpointInterval` has not elapsed (default: 1 000). Together with `MaterialiserCheckpointInterval` this bounds replay cost on a worst-case crash: at most `MaterialiserCheckpointEntries` mutations have to be replayed against the projection on activation.
 
 This option can be changed freely at any time.
 

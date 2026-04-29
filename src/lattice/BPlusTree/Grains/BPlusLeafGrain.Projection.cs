@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -16,6 +17,23 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class BPlusLeafGrain
 {
+    /// <summary>
+    /// Pending in-memory checkpoint offset that has been requested via
+    /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> but not
+    /// yet durably persisted. <c>null</c> when no advance is pending
+    /// (the persisted offset on <see cref="LeafNodeState"/> is the
+    /// source of truth).
+    /// </summary>
+    private long? _pendingCheckpointOffset;
+
+    /// <summary>
+    /// <see cref="Stopwatch.GetTimestamp"/> reading at the last durable
+    /// checkpoint persist. Compared against
+    /// <c>MaterialiserCheckpointInterval</c> on each advance to decide
+    /// whether the time-driven flush should fire.
+    /// </summary>
+    private long _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
+
     void ILeafProjection.Apply(in LatticeMutation mutation)
     {
         switch (mutation.Kind)
@@ -40,31 +58,99 @@ internal sealed partial class BPlusLeafGrain
     Task<long> ILeafProjection.GetCheckpointOffsetAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(state.State.ProjectionCheckpointOffset);
+        // Return the most recent offset the caller has communicated
+        // (pending or persisted, whichever is higher). The "durably
+        // committed" notion is preserved via FlushCheckpointAsync; this
+        // accessor reports the materialiser's current view so a
+        // read-modify-write caller observes its own most-recent advance.
+        var persisted = state.State.ProjectionCheckpointOffset;
+        var pending = _pendingCheckpointOffset;
+        return Task.FromResult(pending is null ? persisted : Math.Max(persisted, pending.Value));
     }
 
     async Task ILeafProjection.SetCheckpointOffsetAsync(long offset, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (offset < state.State.ProjectionCheckpointOffset)
+        var persisted = state.State.ProjectionCheckpointOffset;
+        var current = _pendingCheckpointOffset is { } p ? Math.Max(persisted, p) : persisted;
+
+        if (offset < current)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(offset),
                 offset,
-                $"Projection checkpoint must be monotonically non-decreasing; current offset is {state.State.ProjectionCheckpointOffset}.");
+                $"Projection checkpoint must be monotonically non-decreasing; current offset is {current}.");
         }
 
-        if (offset == state.State.ProjectionCheckpointOffset)
+        if (offset == current)
         {
-            // No-op idempotent advance: still flush so any in-memory
-            // projection mutations issued via Apply since the previous
-            // checkpoint are committed durably.
-            await PersistAsync();
+            // Idempotent re-assert is a force-flush signal: durably
+            // commit any in-memory Apply work issued since the previous
+            // persist, even if the offset itself has not advanced.
+            await FlushPendingCheckpointAsync(persistEvenWithoutPendingAdvance: true);
             return;
         }
 
-        state.State.ProjectionCheckpointOffset = offset;
-        await PersistAsync();
+        _pendingCheckpointOffset = offset;
+
+        // Coalescing predicate: persist if either threshold has been
+        // exceeded. Zero interval means every-entry mode.
+        var options = await GetOptionsAsync();
+        var pendingEntries = offset - persisted;
+
+        if (options.MaterialiserCheckpointInterval == TimeSpan.Zero
+            || pendingEntries >= options.MaterialiserCheckpointEntries
+            || HasIntervalElapsed(options.MaterialiserCheckpointInterval))
+        {
+            await FlushPendingCheckpointAsync(persistEvenWithoutPendingAdvance: false);
+        }
+    }
+
+    async Task ILeafProjection.FlushCheckpointAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await FlushPendingCheckpointAsync(persistEvenWithoutPendingAdvance: false);
+    }
+
+    /// <summary>
+    /// Synchronously flushes any pending checkpoint advance to durable
+    /// storage. Called from <see cref="ILeafProjection.FlushCheckpointAsync"/>,
+    /// from idempotent re-assert in <see cref="ILeafProjection.SetCheckpointOffsetAsync"/>, 
+    /// from the coalescing fast-path when a threshold is met, and from
+    /// the grain's graceful-deactivation hook so an unflushed advance
+    /// is not lost on a clean shutdown.
+    /// </summary>
+    /// <param name="persistEvenWithoutPendingAdvance">
+    /// When <c>true</c>, persist the leaf state even if no checkpoint
+    /// advance is pending. Used by idempotent re-assert to commit
+    /// in-memory Apply work that has accumulated since the previous
+    /// persist.
+    /// </param>
+    private async Task FlushPendingCheckpointAsync(bool persistEvenWithoutPendingAdvance)
+    {
+        if (_pendingCheckpointOffset is { } pending)
+        {
+            state.State.ProjectionCheckpointOffset = pending;
+            _pendingCheckpointOffset = null;
+            await PersistAsync();
+            _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
+            return;
+        }
+
+        if (persistEvenWithoutPendingAdvance)
+        {
+            await PersistAsync();
+            _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
+        }
+    }
+
+    private bool HasIntervalElapsed(TimeSpan interval)
+    {
+        if (interval == Timeout.InfiniteTimeSpan)
+            return false;
+        var elapsedTicks = Stopwatch.GetTimestamp() - _lastCheckpointPersistTimestamp;
+        var elapsedMs = elapsedTicks * 1000.0 / Stopwatch.Frequency;
+        return elapsedMs >= interval.TotalMilliseconds;
     }
 
     private void ApplySet(in LatticeMutation mutation)
