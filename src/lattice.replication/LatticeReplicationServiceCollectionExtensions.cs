@@ -63,6 +63,7 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<IWalStorageProvider, InMemoryWalStorageProvider>();
         builder.Services.TryAddSingleton<IReplicationBatchEncoder, OrleansBinaryReplicationBatchEncoder>();
         builder.Services.TryAddSingleton<ILatticeReplicationCursorRegistry, InMemoryReplicationCursorRegistry>();
+        builder.Services.TryAddSingleton<Orleans.Lattice.BPlusTree.Grains.ILeafCursorReporter, ReplicationLeafCursorReporter>();
         builder.Services.TryAddSingleton<ILatticeReplicationGc, LatticeReplicationGc>();
         builder.Services.TryAddSingleton<ReplicationPeerStats>();
         builder.Services.TryAddEnumerable(

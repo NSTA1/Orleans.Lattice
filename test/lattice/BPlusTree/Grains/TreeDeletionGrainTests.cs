@@ -11,7 +11,7 @@ using Orleans.Timers;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
-public class TreeDeletionGrainTests
+public partial class TreeDeletionGrainTests
 {
     private const string TreeId = "test-tree";
     private const int ShardCount = 2;

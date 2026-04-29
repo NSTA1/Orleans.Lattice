@@ -134,6 +134,7 @@ internal sealed partial class BPlusLeafGrain
             _pendingCheckpointOffset = null;
             await PersistAsync();
             _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
+            await ReportCursorIfActiveAsync();
             return;
         }
 
@@ -141,6 +142,7 @@ internal sealed partial class BPlusLeafGrain
         {
             await PersistAsync();
             _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
+            await ReportCursorIfActiveAsync();
         }
     }
 

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
@@ -130,6 +131,7 @@ internal sealed class TreeDeletionGrain(
         state.State.ShardRetries = 0;
         await state.WriteStateAsync();
 
+        await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
         this.DeactivateOnIdle();
@@ -252,6 +254,7 @@ internal sealed class TreeDeletionGrain(
             await registry.UnregisterAsync(TreeId);
         }
 
+        await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
         this.DeactivateOnIdle();
@@ -286,6 +289,37 @@ internal sealed class TreeDeletionGrain(
         var shardRoot = grainFactory.GetGrain<IShardRootGrain>(shardKey);
 
         await shardRoot.PurgeAsync();
+    }
+
+    /// <summary>
+    /// Bulk-removes every leaf-as-materialiser cursor registered against
+    /// the deleted tree from the silo-scoped
+    /// <see cref="ILeafCursorReporter"/> (when present). Resolved
+    /// optionally - hosts that have not added the replication package
+    /// have no reporter registered and this is a silent no-op.
+    /// Failures are logged-and-swallowed: the tree's data is already
+    /// gone, so a residual cursor is harmless under the in-memory
+    /// registry and recoverable under a future durable registry via
+    /// the next bulk-clear cycle.
+    /// </summary>
+    private async Task DeregisterLeafCursorsAsync()
+    {
+        var reporter = context.ActivationServices?.GetService<ILeafCursorReporter>();
+        if (reporter is null)
+            return;
+
+        try
+        {
+            await reporter.UnregisterTreeAsync(TreeId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to deregister leaf-materialiser cursors for purged tree {TreeId}; "
+                + "the WAL GC will fall back to its time-based retention until the registry is reconciled.",
+                TreeId);
+        }
     }
 
     private async Task UnregisterAllRemindersAsync()
