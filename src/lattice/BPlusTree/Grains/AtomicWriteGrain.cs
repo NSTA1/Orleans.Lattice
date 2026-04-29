@@ -237,6 +237,20 @@ internal sealed class AtomicWriteGrain(
             state.State.TransactionId = Guid.NewGuid();
         }
 
+        // Capture caller's ambient author-delta carry once, on the first
+        // Prepare. On a reminder-driven replay (no caller context) the
+        // persisted fields are reused verbatim, mirroring the
+        // KeyFingerprint / TransactionId capture-once pattern.
+        if (state.State.DeltaKind is null && state.State.DeltaPayload is null)
+        {
+            var deltaCarry = LatticeDeltaContext.Current;
+            if (deltaCarry is { } carry)
+            {
+                state.State.DeltaKind = carry.Kind;
+                state.State.DeltaPayload = carry.Payload;
+            }
+        }
+
         var lattice = grainFactory.GetGrain<ILattice>(treeId);
         var routing = await lattice.GetRoutingAsync();
         var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
@@ -298,6 +312,7 @@ internal sealed class AtomicWriteGrain(
     {
         StampOperationIdContext();
         StampTransactionIdContext();
+        StampDeltaContext();
 
         if (state.State.Phase == AtomicWritePhase.Prepare)
         {
@@ -538,6 +553,22 @@ internal sealed class AtomicWriteGrain(
             state.State.TransactionId = Guid.NewGuid();
         }
         LatticeTransactionContext.Set(state.State.TransactionId);
+    }
+
+    /// <summary>
+    /// Re-establishes the saga's persisted author-delta carry on Orleans
+    /// <see cref="RequestContext"/> so every per-key <c>SetAsync</c> /
+    /// <c>DeleteAsync</c> the saga issues — including compensation
+    /// rewrites — surfaces with the same
+    /// <see cref="LatticeMutation.DeltaKind"/> /
+    /// <see cref="LatticeMutation.DeltaPayload"/> as the original batch.
+    /// No-op when the caller did not supply a delta context on the first
+    /// <see cref="ExecuteAsync"/> call.
+    /// </summary>
+    private void StampDeltaContext()
+    {
+        if (state.State.DeltaKind is null || state.State.DeltaPayload is null) return;
+        LatticeDeltaContext.Current = (state.State.DeltaKind, state.State.DeltaPayload);
     }
 
     private async Task PublishCompletedEventAsync()
