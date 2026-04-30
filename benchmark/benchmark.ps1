@@ -576,6 +576,81 @@ function Push-HistoryResults {
     }
 }
 
+# ── Microbench (B-02) ──────────────────────────────────────────────────────────
+
+function Invoke-Microbench {
+    <#
+    .SYNOPSIS
+        Runs the BenchmarkDotNet-driven ILattice micro-benchmark in lieu of the
+        docker-compose flow. Writes a harness-shaped results.json to
+        .run/<scenario>/<run_id>/results.json and opportunistically pushes to the
+        history VM, exactly like the docker-driven scenarios.
+    .NOTES
+        The microbench project lives at benchmark/host/Bench.Microbench/. It uses
+        Orleans.TestingHost for an in-process single-silo cluster and BDN's
+        InProcessEmitToolchain so the cluster comes up once and serves all
+        [Benchmark] methods (vs. paying the ~5s cluster startup per child .exe
+        with the default forking toolchain).
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string] $ScenarioId,
+        [Parameter(Mandatory = $true)] [System.Collections.IDictionary] $EnvMap,
+        [Parameter(Mandatory = $true)] [string] $RunId
+    )
+
+    # Flow this exactly like the docker scenarios so the downstream artefacts (Compare,
+    # history push) work without special-casing the microbench.
+    $scenarioDir   = Join-Path $runDir $ScenarioId
+    $thisRunDir    = Join-Path $scenarioDir $RunId
+    $resultsPath   = Join-Path $thisRunDir 'results.json'
+    New-Item -ItemType Directory -Path $thisRunDir -Force | Out-Null
+
+    # Stamp the env vars the BDN exporter consumes when it builds the JSON payload.
+    # BENCH_GIT_SHA mirrors what the docker pipeline already captures.
+    $started   = (Get-Date).ToUniversalTime().ToString('o')
+    $startEpoch = [int][double]::Parse((Get-Date -UFormat '%s'))
+    $gitSha = try { (& git -C $repoRoot rev-parse --short=10 HEAD 2>$null).Trim() } catch { $null }
+    Set-ProcessEnv -Map $EnvMap
+    $env:BENCH_SCENARIO  = $ScenarioId
+    $env:BENCH_RUN_ID    = $RunId
+    $env:BENCH_GIT_SHA   = $gitSha
+    $env:BENCH_STARTED   = $started
+    $env:BENCH_RESULTS_PATH = $resultsPath
+
+    # 1. Build the microbench project once (`--no-build` on run).
+    $projectPath = Join-Path $benchmarkRoot 'host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj'
+    Write-Host ""
+    Write-Host "[microbench] building $projectPath ..." -ForegroundColor Cyan
+    & dotnet build $projectPath -c Release --nologo /clp:ErrorsOnly | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "microbench build failed (exit $LASTEXITCODE)" }
+
+    # 2. Run BDN. The exporter writes results.json to BENCH_RESULTS_PATH on completion.
+    $filterArgs = @()
+    if (-not [string]::IsNullOrWhiteSpace($EnvMap['BENCH_MICROBENCH_WORKLOADS'])) {
+        $filterArgs = @('--filter', $EnvMap['BENCH_MICROBENCH_WORKLOADS'])
+    }
+    Write-Host "[microbench] running BenchmarkDotNet (fidelity=$($EnvMap['BENCH_MICROBENCH_FIDELITY']))" -ForegroundColor Cyan
+    & dotnet run --project $projectPath -c Release --no-build -- --results $resultsPath @filterArgs
+    if ($LASTEXITCODE -ne 0) { throw "microbench run failed (exit $LASTEXITCODE)" }
+
+    # 3. Stamp the wall-clock duration onto the JSON the exporter wrote.
+    $endEpoch = [int][double]::Parse((Get-Date -UFormat '%s'))
+    $duration = $endEpoch - $startEpoch
+    if (Test-Path $resultsPath) {
+        $payload = Get-Content $resultsPath -Raw | ConvertFrom-Json -AsHashtable
+        $payload.duration_s = $duration
+        $payload | ConvertTo-Json -Depth 10 | Set-Content -Path $resultsPath -Encoding utf8
+    } else {
+        throw "microbench did not produce $resultsPath"
+    }
+
+    Write-Host ""
+    Write-Host ("[microbench] results: {0}" -f $resultsPath) -ForegroundColor Green
+
+    # 4. Opportunistic history push (same path as the docker scenarios).
+    [void] (Push-HistoryResults -ResultsPath $resultsPath)
+}
+
 # ── Comparison ──────────────────────────────────────────────────────────────────
 
 function Get-AllResults {
@@ -792,12 +867,21 @@ foreach ($k in $envMap.Keys) {
     Write-Host (" {0,-30}= {1}" -f $k, $envMap[$k]) -ForegroundColor DarkGray
 }
 
-# B-02 is a pointer to the harness-level micro-benchmark — there is no docker-compose
-# topology to stand up.
+# Ensure the .run scratch root exists for both flow branches (microbench writes
+# results directly into a per-scenario subdir, the docker flow uses Sync-Dashboards
+# and the `vfs-prometheus` scrape window).
+New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+
+# Pre-compute the run id used for results.json placement and the history `run_id` label.
+# Use UTC ISO8601 with `:` → `-` so it survives Windows path constraints.
+$runId = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH-mm-ssZ')
+
+# B-02 (BENCH_KIND=microbench) bypasses the docker-compose flow and instead drives
+# the BenchmarkDotNet harness in benchmark/host/Bench.Microbench/. The harness writes
+# its own results.json, then we opportunistically push to the history VM — same as
+# the docker scenarios.
 if ($envMap['BENCH_KIND'] -eq 'microbench') {
-    Write-Host ""
-    Write-Host ("Scenario {0} runs at the harness layer, not in docker-compose." -f $Scenario) -ForegroundColor Yellow
-    Write-Host ("  hint: {0}" -f $envMap['BENCH_HARNESS_HINT']) -ForegroundColor Yellow
+    Invoke-Microbench -ScenarioId $Scenario -EnvMap $envMap -RunId $runId
     return
 }
 
@@ -811,13 +895,7 @@ if ($envMap['BENCH_REPLICATION_OVERLAY'] -eq 'true') {
     $composeFiles += 'docker-compose.replication.yml'
 }
 
-# Ensure scratch dirs exist.
-New-Item -ItemType Directory -Path $runDir -Force | Out-Null
 Sync-Dashboards
-
-# Pre-compute the run id used for results.json placement and the history `run_id` label.
-# Use UTC ISO8601 with `:` → `-` so it survives Windows path constraints.
-$runId = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH-mm-ssZ')
 
 # Bring up the stack.
 Write-Host ""

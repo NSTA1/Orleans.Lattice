@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Benchmark.Microbench</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Benchmark.Microbench</AssemblyName>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredCompilation>true</TieredCompilation>
+    <!-- BenchmarkDotNet 0.15.x pins Microsoft.CodeAnalysis.Common to 4.14.0 for its
+         in-process Roslyn emit toolchain, while the surrounding solution uses 5.0.0.
+         The two versions co-exist at runtime in this project's bin/ because nothing
+         else here pulls 5.0.0; the warning is a transitive-resolution false positive. -->
+    <NoWarn>$(NoWarn);NU1608</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Targets the leaf-grain primitive directly via InternalsVisibleTo. No
+         Orleans silo, no shard routing, no grain dispatch — pure algorithmic
+         cost. Orleans-native end-to-end cost is measured by B-03+ instead. -->
+    <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.4" />
+    <!-- BenchmarkDotNet pins Microsoft.CodeAnalysis.* to 4.14.0; Orleans 10.1
+         transitively requires >= 5.0.0. A direct reference to 5.0.0 satisfies
+         the Orleans floor without changing what BDN's in-process emit toolchain
+         actually loads at run time. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.Common" Version="5.0.0" />
+    <!-- NSubstitute drives IGrainContext / IGrainFactory / IOptionsMonitor mocks
+         in the same shape as the unit-test fakes under test/lattice/Fakes/. -->
+    <PackageReference Include="NSubstitute" Version="5.3.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.3" />
+  </ItemGroup>
+
+</Project>

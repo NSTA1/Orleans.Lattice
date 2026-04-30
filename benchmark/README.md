@@ -219,10 +219,11 @@ History (cockpit)** dashboard. The cockpit layout has four bands:
 1. **KPI header** — four fixed stat tiles (commit p99, commits/s, sink
    publishes/s, sink drops) bound to whichever scenario the templating var
    selects.
-2. **Category rows** — five collapsible rows (commit, cache, sink, replication,
-   process) where every metric matching the row's regex auto-renders as a
-   sparkline-stat tile. New metrics show up here on the next run with no
-   dashboard edit.
+2. **Category rows** — six collapsible rows (commit, cache, sink, replication,
+   process, microbench) where every metric matching the row's regex auto-renders
+   as a sparkline-stat tile. New metrics show up here on the next run with no
+   dashboard edit. The microbench row binds to `bench_microbench_.*` populated
+   by the BenchmarkDotNet harness in B-02.
 3. **Trend explorer** — collapsed by default; multi-select any subset of the
    discovered metrics and overlay them as a single timeseries.
 4. **Coverage matrix** — collapsed by default; one stat tile per metric
@@ -252,13 +253,55 @@ Prometheus is at <http://localhost:9090> for raw query access.
 ## B-02 — micro-benchmark path
 
 `B-02` does not stand up the docker stack. It targets `ILattice` directly through
-the Orleans.TestingHost-embedded harness so the comparison surfaces the lattice
-write-path cost without any simulator or HTTP overhead.
+an in-process [BenchmarkDotNet](https://benchmarkdotnet.org/) harness backed by
+`Orleans.TestingHost`, so the measurement isolates the lattice write/read path
+from any simulator or HTTP overhead.
 
 ```powershell
-./benchmark.ps1 B-02   # prints the harness invocation hint
+./benchmark.ps1 B-02
 ```
 
-Run the harness command shown in `scenarios/B-02.env` (the project lives under
-`test/lattice/` and exposes a benchmark filter — see the test project's README
-for the exact category to filter to).
+The runner builds and invokes `benchmark/host/Bench.Microbench/`, which spins up
+a single in-proc Orleans silo via `TestCluster`, registers `AddLattice(...)`, and
+exercises five workloads against `ILattice`:
+
+| Workload         | Method                              | What it measures                       |
+|------------------|-------------------------------------|----------------------------------------|
+| `point_write`    | `SetAsync` (one key per op)         | single-key write latency               |
+| `point_read`     | `GetAsync` (one key per op)         | single-key read latency (cache-warm)   |
+| `bulk_load`      | `BulkLoadAsync(batchSize)`          | batched-write throughput               |
+| `range_scan`     | `OpenEntryCursorAsync` + drain      | iteration cost per N keys              |
+| `mixed_70r_30w`  | weighted mix of `Get`/`Set`         | realistic read-heavy hot path          |
+
+Results land in `.run/B-02/<run_id>/results.json` with keys shaped
+`microbench_<workload>_<stat>_<unit>` (e.g. `microbench_point_write_p99_ns`,
+`microbench_bulk_load_per_second`, `microbench_range_scan_alloc_b`). The
+opportunistic history-stack push uses the same path as the docker scenarios, so
+the cockpit's **Microbench (B-02)** category row populates automatically.
+
+### Fidelity knob
+
+Two toolchains are available, picked via `BENCH_MICROBENCH_FIDELITY` in
+`scenarios/B-02.env`:
+
+| Value             | Toolchain                      | Wall clock | Use it for                          |
+|-------------------|--------------------------------|------------|-------------------------------------|
+| `quick` (default) | In-process emit (Job.ShortRun) | ~2-3 min   | iterative dev, trend tracking       |
+| `full`            | Forked process (Job.Default)   | ~10-15 min | release-gating, regression hunts    |
+
+`quick` keeps every workload in the parent process so the Orleans cluster
+bootstraps once across all five `[Benchmark]` methods. `full` forks a fresh
+process per workload at the cost of paying `[GlobalSetup]` once per workload.
+
+### Tuning the keyspace
+
+The remaining `BENCH_*` knobs in `scenarios/B-02.env` shape what's measured:
+
+| Variable                    | Default | Effect                                                       |
+|-----------------------------|---------|--------------------------------------------------------------|
+| `BENCH_MICROBENCH_WORKLOADS`  | (all)   | Comma-separated whitelist (e.g. `PointWrite,Mixed_70R_30W`). |
+| `BENCH_MICROBENCH_KEY_COUNT`  | `10000` | Pre-seeded keyspace size.                                    |
+| `BENCH_MICROBENCH_VALUE_BYTES`| `128`   | Payload size per key.                                        |
+| `BENCH_MICROBENCH_BULK_BATCH` | `1000`  | Batch size used by `bulk_load`.                              |
+| `BENCH_MICROBENCH_SCAN_PAGE`  | `256`   | Page size requested from the cursor.                         |
+| `BENCH_MICROBENCH_SCAN_KEYS`  | `1000`  | Keys drained per `range_scan` iteration.                     |

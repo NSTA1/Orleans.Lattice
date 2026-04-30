@@ -21,6 +21,7 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Replication" />
     <InternalsVisibleTo Include="Orleans.Lattice.Replication.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.Microbench" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 

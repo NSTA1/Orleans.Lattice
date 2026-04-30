@@ -395,8 +395,52 @@
     },
     {
       "type": "row",
-      "title": "Trend explorer (multi-metric overlay)",
+      "title": "Microbench (B-02)",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 },
+      "id": 650,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "$microbenchMetric",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "id": 651,
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 43 },
+      "repeat": "microbenchMetric",
+      "repeatDirection": "h",
+      "maxPerRow": 4,
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "purple", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "refId": "A",
+          "expr": "$microbenchMetric{scenario=~\"$scenario\"}[$__range]",
+          "legendFormat": "{{scenario}}",
+          "format": "time_series",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Trend explorer (multi-metric overlay)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 },
       "id": 700,
       "collapsed": true,
       "panels": [
@@ -443,7 +487,7 @@
     {
       "type": "row",
       "title": "Coverage matrix — which scenarios populate each metric",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 50 },
       "id": 800,
       "collapsed": true,
       "panels": [
@@ -579,6 +623,21 @@
         "datasource": { "type": "prometheus", "uid": "victoriametrics" },
         "definition": "label_values({__name__=~\"bench_dotnet_.*\"}, __name__)",
         "query": "label_values({__name__=~\"bench_dotnet_.*\"}, __name__)",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "sort": 1,
+        "refresh": 1
+      },
+      {
+        "type": "query",
+        "name": "microbenchMetric",
+        "label": "Microbench (B-02) metrics",
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "definition": "label_values({__name__=~\"bench_microbench_.*\"}, __name__)",
+        "query": "label_values({__name__=~\"bench_microbench_.*\"}, __name__)",
         "current": { "selected": true, "text": "All", "value": "$__all" },
         "hide": 0,
         "includeAll": true,
