@@ -32,6 +32,12 @@
     Leave the per-run stack up after the measurement window so Grafana stays
     accessible at http://localhost:3000.
 
+.PARAMETER NoBuild
+    Skip the `--build` step when standing up the docker-compose stack. Use this
+    when the images have already been built by an earlier run in the same
+    session (e.g. when benchmark-all.ps1 sweeps every scenario back-to-back) to
+    avoid rebuilding on every iteration.
+
 .PARAMETER Compare
     Aggregate previously-recorded results (no scenario run).
 
@@ -67,6 +73,9 @@ param(
 
     [Parameter(ParameterSetName = 'Run')]
     [switch] $KeepRunning,
+
+    [Parameter(ParameterSetName = 'Run')]
+    [switch] $NoBuild,
 
     [Parameter(ParameterSetName = 'Compare', Mandatory = $true)]
     [switch] $Compare,
@@ -902,8 +911,15 @@ Sync-Dashboards
 
 # Bring up the stack.
 Write-Host ""
-Write-Host "[compose] up --build -d ($($composeFiles -join ', '))" -ForegroundColor Cyan
-Invoke-Compose -ComposeFiles $composeFiles -Args @('up', '--build', '-d')
+$composeUpArgs = @('up', '-d')
+if (-not $NoBuild.IsPresent) {
+    $composeUpArgs = @('up', '--build', '-d')
+    Write-Host "[compose] up --build -d ($($composeFiles -join ', '))" -ForegroundColor Cyan
+}
+else {
+    Write-Host "[compose] up -d ($($composeFiles -join ', ')) (build skipped: -NoBuild)" -ForegroundColor Cyan
+}
+Invoke-Compose -ComposeFiles $composeFiles -Args $composeUpArgs
 
 $runStart = Get-Date
 $runEnd   = $runStart   # placeholder; updated after measurement window
@@ -1015,7 +1031,7 @@ try {
     # ── Persist results.json (always, even if the run failed mid-window). ──
     if ($capturedMetrics) {
         $resultsPath = Save-RunResults `
-            -ScenarioId $Scenario.ToUpperInvariant() `
+            -ScenarioId $Scenario `
             -RunId      $runId `
             -Config     $envMap `
             -Started    $runStart `
