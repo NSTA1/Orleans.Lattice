@@ -21,34 +21,38 @@
   "panels": [
     {
       "type": "row",
-      "title": "Trend over runs",
+      "title": "KPI — at a glance",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
       "id": 100,
       "collapsed": false,
       "panels": []
     },
     {
-      "type": "timeseries",
-      "title": "$metric — value per run",
+      "type": "stat",
+      "title": "Commit p99 (ms)",
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "id": 1,
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 1 },
+      "id": 101,
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 1 },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "min", "max", "mean"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
       },
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "stepBefore",
-            "showPoints": "always",
-            "pointSize": 6,
-            "spanNulls": true,
-            "lineWidth": 2,
-            "fillOpacity": 5
-          },
-          "unit": "short"
+          "unit": "ms",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 25   },
+              { "color": "red",    "value": 100  }
+            ]
+          }
         },
         "overrides": []
       },
@@ -56,37 +60,30 @@
         {
           "datasource": { "type": "prometheus", "uid": "victoriametrics" },
           "refId": "A",
-          "expr": "bench_$metric{scenario=~\"$scenario\"}[$__range]",
-          "legendFormat": "{{scenario}} ({{git_sha}})",
+          "expr": "bench_lattice_commit_p99_ms{scenario=~\"$scenario\"}[$__range]",
+          "legendFormat": "{{scenario}}",
           "format": "time_series",
           "instant": true
         }
       ]
     },
     {
-      "type": "row",
-      "title": "Latest vs. previous (regression view)",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
-      "id": 200,
-      "collapsed": false,
-      "panels": []
-    },
-    {
       "type": "stat",
-      "title": "$metric — latest by scenario",
+      "title": "Commits / sec",
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "id": 2,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "id": 102,
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 1 },
       "options": {
         "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
         "orientation": "auto",
-        "textMode": "auto",
+        "textMode": "value_and_name",
         "colorMode": "value",
         "graphMode": "area",
-        "justifyMode": "auto"
+        "justifyMode": "center"
       },
       "fieldConfig": {
         "defaults": {
+          "unit": "ops",
           "color": { "mode": "thresholds" },
           "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
         },
@@ -96,7 +93,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "victoriametrics" },
           "refId": "A",
-          "expr": "bench_$metric{scenario=~\"$scenario\"}",
+          "expr": "bench_lattice_commits_per_second{scenario=~\"$scenario\"}[$__range]",
           "legendFormat": "{{scenario}}",
           "format": "time_series",
           "instant": true
@@ -104,19 +101,24 @@
       ]
     },
     {
-      "type": "table",
-      "title": "$metric — last 5 runs per scenario",
+      "type": "stat",
+      "title": "Sink published / sec",
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "id": 3,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "id": 103,
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 1 },
       "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" }
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
       },
       "fieldConfig": {
         "defaults": {
-          "custom": { "align": "auto", "displayMode": "auto" }
+          "unit": "ops",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
         },
         "overrides": []
       },
@@ -124,51 +126,39 @@
         {
           "datasource": { "type": "prometheus", "uid": "victoriametrics" },
           "refId": "A",
-          "expr": "bench_$metric{scenario=~\"$scenario\"}",
-          "format": "table",
+          "expr": "bench_sink_published_per_second{scenario=~\"$scenario\"}[$__range]",
+          "legendFormat": "{{scenario}}",
+          "format": "time_series",
           "instant": true
         }
-      ],
-      "transformations": [
-        { "id": "organize", "options": { "excludeByName": {}, "indexByName": {}, "renameByName": {} } }
       ]
     },
     {
-      "type": "row",
-      "title": "Delta vs. baseline",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
-      "id": 300,
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "type": "bargauge",
-      "title": "$metric — latest run minus latest $baseline (delta over baseline)",
+      "type": "stat",
+      "title": "Sink dropped (combined)",
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "id": 4,
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 23 },
+      "id": 104,
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 1 },
       "options": {
-        "displayMode": "gradient",
-        "minVizWidth": 0,
-        "minVizHeight": 16,
-        "namePlacement": "auto",
-        "orientation": "horizontal",
         "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
-        "showUnfilled": true,
-        "valueMode": "color"
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
       },
       "fieldConfig": {
         "defaults": {
+          "unit": "short",
           "color": { "mode": "thresholds" },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               { "color": "green",  "value": null },
-              { "color": "yellow", "value": 0    },
-              { "color": "red",    "value": 0.25 }
+              { "color": "yellow", "value": 1    },
+              { "color": "red",    "value": 100  }
             ]
-          },
-          "unit": "short"
+          }
         },
         "overrides": []
       },
@@ -176,69 +166,462 @@
         {
           "datasource": { "type": "prometheus", "uid": "victoriametrics" },
           "refId": "A",
-          "expr": "(\n  last_over_time(bench_$metric{scenario=~\"$scenario\"}[$__range])\n)\n-\n  scalar(last_over_time(bench_$metric{scenario=\"$baseline\"}[$__range]))\n",
+          "expr": "bench_sink_dropped_combined_increase{scenario=~\"$scenario\"}[$__range]",
           "legendFormat": "{{scenario}}",
           "format": "time_series",
           "instant": true
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Lattice — commit path / shards / leaves / sagas",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 },
+      "id": 200,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "$commitMetric",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "id": 201,
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 8 },
+      "repeat": "commitMetric",
+      "repeatDirection": "h",
+      "maxPerRow": 4,
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "refId": "A",
+          "expr": "$commitMetric{scenario=~\"$scenario\"}[$__range]",
+          "legendFormat": "{{scenario}}",
+          "format": "time_series",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Lattice — cache, events, lifecycle",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 300,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "$cacheMetric",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "id": 301,
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 15 },
+      "repeat": "cacheMetric",
+      "repeatDirection": "h",
+      "maxPerRow": 4,
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "purple", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "refId": "A",
+          "expr": "$cacheMetric{scenario=~\"$scenario\"}[$__range]",
+          "legendFormat": "{{scenario}}",
+          "format": "time_series",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Sink (Bench.Sink)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "id": 400,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "$sinkMetric",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "id": 401,
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 22 },
+      "repeat": "sinkMetric",
+      "repeatDirection": "h",
+      "maxPerRow": 4,
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "orange", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "refId": "A",
+          "expr": "$sinkMetric{scenario=~\"$scenario\"}[$__range]",
+          "legendFormat": "{{scenario}}",
+          "format": "time_series",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Replication",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 },
+      "id": 500,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "$replicationMetric",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "id": 501,
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 29 },
+      "repeat": "replicationMetric",
+      "repeatDirection": "h",
+      "maxPerRow": 4,
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "refId": "A",
+          "expr": "$replicationMetric{scenario=~\"$scenario\"}[$__range]",
+          "legendFormat": "{{scenario}}",
+          "format": "time_series",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Process / runtime",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
+      "id": 600,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "$processMetric",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "id": 601,
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 36 },
+      "repeat": "processMetric",
+      "repeatDirection": "h",
+      "maxPerRow": 4,
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "yellow", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "refId": "A",
+          "expr": "$processMetric{scenario=~\"$scenario\"}[$__range]",
+          "legendFormat": "{{scenario}}",
+          "format": "time_series",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Trend explorer (multi-metric overlay)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 },
+      "id": 700,
+      "collapsed": true,
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "$overlayMetric — value per run",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "id": 701,
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 43 },
+          "repeat": "overlayMetric",
+          "repeatDirection": "v",
+          "options": {
+            "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "min", "max", "mean"] },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "stepBefore",
+                "showPoints": "always",
+                "pointSize": 6,
+                "spanNulls": true,
+                "lineWidth": 2,
+                "fillOpacity": 5
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+              "refId": "A",
+              "expr": "$overlayMetric{scenario=~\"$scenario\"}[$__range]",
+              "legendFormat": "{{scenario}} ({{git_sha}})",
+              "format": "time_series",
+              "instant": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Coverage matrix — which scenarios populate each metric",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
+      "id": 800,
+      "collapsed": true,
+      "panels": [
+        {
+          "type": "stat",
+          "title": "$coverageMetric",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "id": 801,
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 44 },
+          "repeat": "coverageMetric",
+          "repeatDirection": "h",
+          "maxPerRow": 6,
+          "options": {
+            "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+            "orientation": "auto",
+            "textMode": "value_and_name",
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "center"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red",   "value": null },
+                  { "color": "green", "value": 1    }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+              "refId": "A",
+              "expr": "count(count by (scenario) ($coverageMetric))",
+              "legendFormat": "scenarios",
+              "format": "time_series",
+              "instant": true
+            }
+          ]
         }
       ]
     }
   ],
   "refresh": "",
   "schemaVersion": 39,
-  "tags": ["orleans-lattice", "benchmark", "history"],
+  "tags": ["orleans-lattice", "benchmark", "history", "cockpit"],
   "templating": {
     "list": [
-      {
-        "type": "query",
-        "name": "metric",
-        "label": "Metric",
-        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-        "definition": "label_values({__name__=~\"bench_.+\"}, __name__)",
-        "query": "label_values({__name__=~\"bench_.+\"}, __name__)",
-        "current": { "selected": false, "text": "lattice_commit_p99_ms", "value": "lattice_commit_p99_ms" },
-        "hide": 0,
-        "includeAll": false,
-        "multi": false,
-        "regex": "/^bench_(.*)$/",
-        "sort": 1,
-        "refresh": 1
-      },
       {
         "type": "query",
         "name": "scenario",
         "label": "Scenario",
         "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-        "definition": "label_values(bench_$metric, scenario)",
-        "query": "label_values(bench_$metric, scenario)",
+        "definition": "label_values({__name__=~\"bench_.+\"}, scenario)",
+        "query": "label_values({__name__=~\"bench_.+\"}, scenario)",
         "current": { "selected": true, "text": "All", "value": "$__all" },
         "hide": 0,
         "includeAll": true,
         "multi": true,
         "allValue": ".*",
         "sort": 1,
-        "refresh": 2
+        "refresh": 1
       },
       {
         "type": "query",
-        "name": "baseline",
-        "label": "Baseline",
+        "name": "commitMetric",
+        "label": "Commit / shard / leaf metrics",
         "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-        "definition": "label_values(bench_$metric, scenario)",
-        "query": "label_values(bench_$metric, scenario)",
-        "current": { "selected": true, "text": "B-01", "value": "B-01" },
+        "definition": "label_values({__name__=~\"bench_(orleans_lattice_(leaf|shard|atomic_write|coordinator|tree)_.*|lattice_commit_.*|lattice_commits_.*)\"}, __name__)",
+        "query": "label_values({__name__=~\"bench_(orleans_lattice_(leaf|shard|atomic_write|coordinator|tree)_.*|lattice_commit_.*|lattice_commits_.*)\"}, __name__)",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "sort": 1,
+        "refresh": 1
+      },
+      {
+        "type": "query",
+        "name": "cacheMetric",
+        "label": "Cache / events / config metrics",
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "definition": "label_values({__name__=~\"bench_(orleans_lattice_(cache|events|config)_.*|lattice_cache_.*)\"}, __name__)",
+        "query": "label_values({__name__=~\"bench_(orleans_lattice_(cache|events|config)_.*|lattice_cache_.*)\"}, __name__)",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "sort": 1,
+        "refresh": 1
+      },
+      {
+        "type": "query",
+        "name": "sinkMetric",
+        "label": "Sink metrics",
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "definition": "label_values({__name__=~\"bench_(vehicle_fleet_simulator_sink_.*|sink_.*)\"}, __name__)",
+        "query": "label_values({__name__=~\"bench_(vehicle_fleet_simulator_sink_.*|sink_.*)\"}, __name__)",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "sort": 1,
+        "refresh": 1
+      },
+      {
+        "type": "query",
+        "name": "replicationMetric",
+        "label": "Replication metrics",
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "definition": "label_values({__name__=~\"bench_orleans_lattice_replication_.*\"}, __name__)",
+        "query": "label_values({__name__=~\"bench_orleans_lattice_replication_.*\"}, __name__)",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "sort": 1,
+        "refresh": 1
+      },
+      {
+        "type": "query",
+        "name": "processMetric",
+        "label": "Process / runtime metrics",
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "definition": "label_values({__name__=~\"bench_dotnet_.*\"}, __name__)",
+        "query": "label_values({__name__=~\"bench_dotnet_.*\"}, __name__)",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "sort": 1,
+        "refresh": 1
+      },
+      {
+        "type": "query",
+        "name": "overlayMetric",
+        "label": "Trend explorer metric(s)",
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "definition": "label_values({__name__=~\"bench_.+\"}, __name__)",
+        "query": "label_values({__name__=~\"bench_.+\"}, __name__)",
+        "current": { "selected": false, "text": "bench_lattice_commit_p99_ms", "value": "bench_lattice_commit_p99_ms" },
         "hide": 0,
         "includeAll": false,
-        "multi": false,
+        "multi": true,
         "sort": 1,
-        "refresh": 2
+        "refresh": 1
+      },
+      {
+        "type": "query",
+        "name": "coverageMetric",
+        "label": "Coverage matrix metric(s)",
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "definition": "label_values({__name__=~\"bench_.+\"}, __name__)",
+        "query": "label_values({__name__=~\"bench_.+\"}, __name__)",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "sort": 1,
+        "refresh": 1
       }
     ]
   },
   "time": { "from": "now-30d", "to": "now" },
   "timepicker": {},
   "timezone": "",
-  "title": "Orleans.Lattice — Benchmark History",
+  "title": "Orleans.Lattice — Benchmark History (cockpit)",
   "uid": "orleans-lattice-history",
   "version": 1,
   "weekStart": ""

@@ -117,10 +117,13 @@ The script:
    window, applies any chaos (`pause` / `kill`) at `BENCH_CHAOS_AFTER_SECONDS` in
    parallel, then `stop-all`s the fleet.
 8. Prints fleet stats and (unless `-KeepRunning`) tears the stack down.
-9. **Captures a fixed panel of summary scalars** (p50/p95/p99 commit latency,
-   throughput, drops, queue depth, replication lag, process CPU/memory) from
-   Prometheus over the measurement window and writes them to
-   `.run/<scenario>/<run_id>/results.json`.
+9. **Captures an auto-discovered panel of summary scalars** by listing every
+   meter under the configured prefixes (`orleans.lattice`,
+   `orleans.lattice.replication`, `vehicle_fleet_simulator.sink`, plus a curated
+   `dotnet.*` allow-list) and synthesising p50/p95/p99 / per-second / max+avg
+   keys per instrument type. A short `$ScalarPanelExtra` block in
+   `benchmark.ps1` overlays a handful of hand-curated headline metrics that win
+   on key collisions. The result lands in `.run/<scenario>/<run_id>/results.json`.
 10. **Opportunistically pushes** those scalars into the long-lived
     [history stack](./history/README.md) if it's reachable on `:8428`. If the
     history stack is down, the run completes normally and the local JSON is the
@@ -140,12 +143,15 @@ Each run produces a `.run/<scenario>/<run_id>/results.json` like:
   "duration_s": 330,
   "config":  { "BENCH_TELEMETRY_SINK": "lattice", "BENCH_FLEET_SIZE": "2000", "...": "..." },
   "metrics": {
-    "lattice_commit_p99_ms":         12.3,
-    "lattice_commits_per_second": 19847,
-    "sink_dropped_total":             0,
-    "replication_apply_lag_p99_ms":  null,
-    "process_working_set_bytes_p95": 612000000,
-    "...": "..."
+    "lattice_commit_p99_ms":                                   12.3,
+    "lattice_commits_per_second":                          19847,
+    "sink_published_per_second":                            2034,
+    "sink_dropped_combined_increase":                          0,
+    "lattice_cache_hit_ratio":                              0.94,
+    "dotnet_gc_gen2_collections_increase":                     0,
+    "dotnet_process_memory_working_set_bytes_p95":      612000000,
+    "orleans_lattice_replication_apply_duration_milliseconds_p99": null,
+    "...": "~52 auto-discovered keys + the curated extras"
   },
   "fleetStats": { "total": 2000, "driving": 2000, "...": "..." }
 }
@@ -168,6 +174,32 @@ Outputs:
 | `.run/comparison.md`       | Markdown table per metric, ready to paste into a PR |
 | `.run/comparison.csv`      | Same data flat for spreadsheet use                  |
 
+## Auto-discovery of metrics
+
+The scalar panel that ends up in `results.json` is **derived from Prometheus's
+`/api/v1/metadata` endpoint at capture time**, not hard-coded in the script.
+Four configuration blocks at the top of `benchmark.ps1` drive it:
+
+| Variable                    | Purpose                                                                                                |
+|-----------------------------|--------------------------------------------------------------------------------------------------------|
+| `$AutoDiscoverPrefixes`     | Meter-name prefixes to walk (default: `orleans.lattice`, `orleans.lattice.replication`, `vehicle_fleet_simulator.sink`). |
+| `$AutoDiscoverDotnetAllow`  | Allow-list of `dotnet.*` instruments to include (the runtime meter is noisy, so we curate).            |
+| `$ScalarPanelExclude`       | Names to drop after discovery (e.g. duplicates of curated extras).                                     |
+| `$ScalarPanelExtra`         | Hand-curated headline metrics. Keys here **win on collision** with auto-discovered ones.               |
+
+Per instrument type, the script synthesises this fixed shape:
+
+| Prometheus type                 | Synthesised keys                                              |
+|---------------------------------|---------------------------------------------------------------|
+| `counter`                       | `<name>_per_second`, `<name>_increase`                        |
+| `gauge` (incl. UpDownCounter)   | `<name>_max`, `<name>_avg`                                    |
+| `histogram`                     | `<name>_p50`, `<name>_p95`, `<name>_p99`, `<name>_per_second` |
+| `summary`                       | `<name>_p99`                                                  |
+
+The upshot: **adding a new instrument to the lattice source automatically
+flows into the next benchmark run** without touching `benchmark.ps1`. The
+console preview prints `panel: N keys (M extra overrides)` so you can see how
+many keys came from auto-discovery vs. the curated overlay.
 ## Trend dashboard (history stack)
 
 For run-over-run trend visualisation (e.g. *"how has B-03's p99 evolved across
@@ -181,9 +213,24 @@ the per-run flow and accumulates summary scalars across every scenario invocatio
 ./benchmark.ps1 -CloseHistory    # stop (named volumes preserved)
 ```
 
-Then visit <http://localhost:3001> for the **Orleans.Lattice — Benchmark History**
-dashboard. See [`history/README.md`](./history/README.md) for the full data
-model, label schema, and ad-hoc query path.
+Then visit <http://localhost:3001> for the **Orleans.Lattice — Benchmark
+History (cockpit)** dashboard. The cockpit layout has four bands:
+
+1. **KPI header** — four fixed stat tiles (commit p99, commits/s, sink
+   publishes/s, sink drops) bound to whichever scenario the templating var
+   selects.
+2. **Category rows** — five collapsible rows (commit, cache, sink, replication,
+   process) where every metric matching the row's regex auto-renders as a
+   sparkline-stat tile. New metrics show up here on the next run with no
+   dashboard edit.
+3. **Trend explorer** — collapsed by default; multi-select any subset of the
+   discovered metrics and overlay them as a single timeseries.
+4. **Coverage matrix** — collapsed by default; one stat tile per metric
+   counting how many distinct scenarios have reported a value, useful for
+   spotting coverage gaps after adding a new scenario.
+
+See [`history/README.md`](./history/README.md) for the full data model, label
+schema, and ad-hoc query path.
 
 ## Dashboards
 

@@ -100,66 +100,86 @@ $apiUrl        = $env:BENCH_API_URL        ?? 'http://localhost:8080'
 $historyVmUrl  = $env:BENCH_HISTORY_VM_URL ?? 'http://localhost:8428'
 $historyGrafanaUrl = $env:BENCH_HISTORY_GRAFANA_URL ?? 'http://localhost:3001'
 
-# ── Fixed scalar metric panel (the contract for results.json) ───────────────────
+# ── Hybrid auto-discovery configuration (the contract for results.json) ────────
 #
-# Each entry is (key, promql). The script substitutes {Ws} with the duration in
-# seconds. Missing series resolve to $null in the JSON so panels that don't apply
-# to a given scenario (e.g. replication metrics under a non-replication run) are
-# absent rather than zero — zero would lie about "0 ms apply lag".
-$ScalarPanel = [ordered]@{
-    # ── Lattice commit path ─────────────────────────────────────────────────────
-    'lattice_commit_p50_ms' =
-        'histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_leaf_commit_duration_milliseconds_bucket[{Ws}s])))'
-    'lattice_commit_p95_ms' =
-        'histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_leaf_commit_duration_milliseconds_bucket[{Ws}s])))'
+# Capture-time strategy: at the end of the measurement window we hit Prometheus
+# /api/v1/metadata, enumerate every instrument whose name matches one of the
+# allow-listed prefixes (or sits in the explicit dotnet allow-list), and
+# synthesise PromQL deterministically by instrument type. That means a NEW
+# meter-instrument added to Orleans.Lattice (or Bench.Sink, or replication)
+# auto-populates the next benchmark run''s results.json + history dashboard with
+# zero benchmark-side maintenance.
+#
+# Three escape hatches keep the auto-defaults sensible:
+#
+#  • $AutoDiscoverPrefixes   – instrument-name prefixes considered "ours".
+#  • $AutoDiscoverDotnetAllow – explicit allow-list for runtime metrics
+#                               (dotnet emits ~90 instruments; we only want
+#                               the operationally interesting handful).
+#  • $ScalarPanelExclude     – synthesised keys to drop (for noisy or
+#                               redundant defaults).
+#  • $ScalarPanelExtra       – hand-crafted PromQL the synthesiser cannot
+#                               express (ratios, label-filtered counters,
+#                               derived gauges, KPI aliases).
+#
+# Synthesis rules — driven by the metadata `type` field, NOT the name suffix,
+# because dotnet counters like dotnet_process_cpu_time_seconds and
+# dotnet_gc_collections do not end in `_total`:
+#
+#   counter   → <name>_per_second  = sum(rate(<name>_total[{Ws}s]))
+#               <name>_increase    = sum(increase(<name>_total[{Ws}s]))
+#   gauge     → <name>_max         = max(max_over_time(<name>[{Ws}s]))
+#               <name>_avg         = avg(avg_over_time(<name>[{Ws}s]))
+#   histogram → <name>_p50/p95/p99 = histogram_quantile(q, sum by (le) (rate(<name>_bucket[{Ws}s])))
+#               <name>_per_second  = sum(rate(<name>_count[{Ws}s]))
+#   summary   → <name>_p99         = max(<name>{quantile="0.99"})
+
+$AutoDiscoverPrefixes = @(
+    'orleans_lattice_',
+    'vehicle_fleet_simulator_'
+)
+
+$AutoDiscoverDotnetAllow = @(
+    'dotnet_process_cpu_time_seconds',
+    'dotnet_process_memory_working_set_bytes',
+    'dotnet_process_cpu_count',
+    'dotnet_gc_collections',
+    'dotnet_gc_pause_time_seconds',
+    'dotnet_gc_heap_total_allocated_bytes',
+    'dotnet_gc_last_collection_heap_size_bytes',
+    'dotnet_gc_last_collection_memory_committed_size_bytes'
+)
+
+# Synthesised keys to drop after auto-discovery. Add entries here when a
+# default form is misleading or redundant.
+$ScalarPanelExclude = @()
+
+# Hand-crafted overrides + derived metrics. Win on key collision with
+# auto-discovery, so an entry here can pretty-name an auto-key (e.g. give the
+# ungainly orleans_lattice_leaf_commit_duration_milliseconds_p99 a short
+# `lattice_commit_p99_ms` alias for the KPI tiles to bind to).
+$ScalarPanelExtra = [ordered]@{
+    # ── KPI aliases (short, stable names the cockpit dashboard''s header binds to) ──
     'lattice_commit_p99_ms' =
         'histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_leaf_commit_duration_milliseconds_bucket[{Ws}s])))'
     'lattice_commits_per_second' =
         'sum(rate(orleans_lattice_leaf_commit_duration_milliseconds_count[{Ws}s]))'
-    'lattice_shard_writes_per_second' =
-        'sum(rate(orleans_lattice_shard_writes_total[{Ws}s]))'
-    'lattice_shard_reads_per_second' =
-        'sum(rate(orleans_lattice_shard_reads_total[{Ws}s]))'
-
-    # ── Lattice events / cache ──────────────────────────────────────────────────
-    'lattice_events_published_per_second' =
-        'sum(rate(orleans_lattice_events_published_total[{Ws}s]))'
-    'lattice_events_dropped_total' =
-        'sum(increase(orleans_lattice_events_dropped_total[{Ws}s]))'
-    'lattice_cache_hit_ratio' =
-        'sum(rate(orleans_lattice_cache_hits_total[{Ws}s])) / clamp_min(sum(rate(orleans_lattice_cache_hits_total[{Ws}s]) + rate(orleans_lattice_cache_misses_total[{Ws}s])), 1)'
-    'lattice_cache_hits_total' =
-        'sum(increase(orleans_lattice_cache_hits_total[{Ws}s]))'
-    'lattice_cache_misses_total' =
-        'sum(increase(orleans_lattice_cache_misses_total[{Ws}s]))'
-
-    # ── LatticeSink (Bench.Sink) ────────────────────────────────────────────────
     'sink_published_per_second' =
         'sum(rate(vehicle_fleet_simulator_sink_published_total[{Ws}s]))'
-    'sink_dropped_total' =
+    'sink_dropped_combined_increase' =
         'sum(increase(vehicle_fleet_simulator_sink_dropped_total[{Ws}s])) + sum(increase(vehicle_fleet_simulator_sink_dropped_on_shutdown_total[{Ws}s]))'
-    'sink_queue_depth_max' =
-        'max_over_time(vehicle_fleet_simulator_sink_queue_depth[{Ws}s])'
-    'sink_flush_p99_ms' =
-        'histogram_quantile(0.99, sum by (le) (rate(vehicle_fleet_simulator_sink_flush_duration_ms_milliseconds_bucket[{Ws}s])))'
 
-    # ── Replication ─────────────────────────────────────────────────────────────
-    'replication_wal_appends_per_second' =
-        'sum(rate(orleans_lattice_replication_wal_entries_appended_total[{Ws}s]))'
-    'replication_apply_lag_p99_ms' =
-        'histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_replication_apply_lag_milliseconds_bucket[{Ws}s])))'
-    'replication_entries_behind_max' =
-        'max(max_over_time(orleans_lattice_replication_peer_entries_behind[{Ws}s]))'
-    'replication_peer_fell_off_log_total' =
-        'sum(increase(orleans_lattice_replication_peer_fell_off_log_total[{Ws}s]))'
+    # ── Derived metrics (auto-discovery cannot synthesise ratios) ──
+    'lattice_cache_hit_ratio' =
+        'sum(rate(orleans_lattice_cache_hits_total[{Ws}s])) / clamp_min(sum(rate(orleans_lattice_cache_hits_total[{Ws}s]) + rate(orleans_lattice_cache_misses_total[{Ws}s])), 1)'
 
-    # ── Process / runtime ───────────────────────────────────────────────────────
-    'process_cpu_seconds_total' =
-        'sum(increase(dotnet_process_cpu_time_seconds_total[{Ws}s]))'
-    'process_working_set_bytes_p95' =
-        'quantile_over_time(0.95, sum(dotnet_process_memory_working_set_bytes)[{Ws}s:5s])'
-    'dotnet_gc_gen2_collections' =
+    # ── Label-filtered counter (auto-discovery treats the whole metric as one series) ──
+    'dotnet_gc_gen2_collections_increase' =
         'sum(increase(dotnet_gc_collections_total{gc_heap_generation="gen2"}[{Ws}s]))'
+
+    # ── Working-set p95 (auto-discovery only emits max/avg for gauges) ──
+    'dotnet_process_memory_working_set_bytes_p95' =
+        'quantile_over_time(0.95, sum(dotnet_process_memory_working_set_bytes)[{Ws}s:5s])'
 }
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -297,6 +317,138 @@ function Invoke-PromInstantQuery {
     } catch {
         return $null
     }
+}
+
+function Get-AutoScalarPanel {
+    <#
+    .SYNOPSIS
+        Discovers Prometheus instruments and synthesises PromQL by type.
+
+    .DESCRIPTION
+        Hits /api/v1/metadata, filters to instruments matching $Prefixes (or
+        sitting in $DotnetAllow), then synthesises an [ordered] dictionary of
+        (key → PromQL template) entries deterministically by instrument type.
+        Returns an empty ordered hashtable on any error so the caller can fall
+        back to $ScalarPanelExtra alone.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]   $PrometheusUrl,
+        [string[]] $Prefixes,
+        [string[]] $DotnetAllow,
+        [string[]] $Exclude
+    )
+    $panel = [ordered]@{}
+    try {
+        $resp = Invoke-RestMethod -Uri "$PrometheusUrl/api/v1/metadata" -TimeoutSec 15 -ErrorAction Stop
+    } catch {
+        Write-Warning "[auto-discover] /api/v1/metadata unreachable: $_"
+        return $panel
+    }
+    if ($resp.status -ne 'success' -or -not $resp.data) { return $panel }
+
+    foreach ($prop in ($resp.data.PSObject.Properties | Sort-Object Name)) {
+        $name = $prop.Name
+        $info = $prop.Value | Select-Object -First 1
+        if (-not $info) { continue }
+        $type = "$($info.type)".ToLowerInvariant()
+
+        $included = $false
+        foreach ($p in $Prefixes) {
+            if ($name.StartsWith($p, [StringComparison]::Ordinal)) { $included = $true; break }
+        }
+        if (-not $included -and ($DotnetAllow -contains $name)) { $included = $true }
+        if (-not $included) { continue }
+
+        switch ($type) {
+            'counter' {
+                # OTel→Prom appends `_total` to counter exposition names.
+                $series = "${name}_total"
+                $key1 = "${name}_per_second"
+                $key2 = "${name}_increase"
+                if ($Exclude -notcontains $key1) {
+                    $panel[$key1] = "sum(rate(${series}[{Ws}s]))"
+                }
+                if ($Exclude -notcontains $key2) {
+                    $panel[$key2] = "sum(increase(${series}[{Ws}s]))"
+                }
+            }
+            'gauge' {
+                $key1 = "${name}_max"
+                $key2 = "${name}_avg"
+                if ($Exclude -notcontains $key1) {
+                    $panel[$key1] = "max(max_over_time(${name}[{Ws}s]))"
+                }
+                if ($Exclude -notcontains $key2) {
+                    $panel[$key2] = "avg(avg_over_time(${name}[{Ws}s]))"
+                }
+            }
+            'histogram' {
+                # OTel→Prom emits <name>_bucket / <name>_count / <name>_sum.
+                $bucket = "${name}_bucket"
+                $count  = "${name}_count"
+                foreach ($q in @(0.50, 0.95, 0.99)) {
+                    $suffix = ('p{0:D2}' -f [int]([Math]::Round($q * 100)))
+                    $key = "${name}_${suffix}"
+                    if ($Exclude -contains $key) { continue }
+                    $panel[$key] = "histogram_quantile($q, sum by (le) (rate(${bucket}[{Ws}s])))"
+                }
+                $rateKey = "${name}_per_second"
+                if ($Exclude -notcontains $rateKey) {
+                    $panel[$rateKey] = "sum(rate(${count}[{Ws}s]))"
+                }
+            }
+            'summary' {
+                $key = "${name}_p99"
+                if ($Exclude -notcontains $key) {
+                    $panel[$key] = "max(${name}{quantile=`"0.99`"})"
+                }
+            }
+            default {
+                # UpDownCounter / unknown — treat as gauge.
+                $key1 = "${name}_max"
+                $key2 = "${name}_avg"
+                if ($Exclude -notcontains $key1) {
+                    $panel[$key1] = "max(max_over_time(${name}[{Ws}s]))"
+                }
+                if ($Exclude -notcontains $key2) {
+                    $panel[$key2] = "avg(avg_over_time(${name}[{Ws}s]))"
+                }
+            }
+        }
+    }
+    return $panel
+}
+
+function Resolve-ScalarPanel {
+    <#
+    .SYNOPSIS
+        Merges auto-discovered metrics with hand-crafted overrides.
+
+    .DESCRIPTION
+        Returns an [ordered] dictionary whose keys are the union of the
+        auto-discovered panel and $Extra. On collision, $Extra wins — that''s
+        the documented contract for pretty-naming auto-keys (e.g. an
+        ungainly orleans_lattice_leaf_commit_duration_milliseconds_p99 can
+        be aliased to the short lattice_commit_p99_ms).
+    #>
+    [CmdletBinding()]
+    param(
+        [string]                          $PrometheusUrl,
+        [string[]]                        $Prefixes,
+        [string[]]                        $DotnetAllow,
+        [string[]]                        $Exclude,
+        [System.Collections.IDictionary]  $Extra
+    )
+    $auto = Get-AutoScalarPanel `
+        -PrometheusUrl $PrometheusUrl `
+        -Prefixes      $Prefixes `
+        -DotnetAllow   $DotnetAllow `
+        -Exclude       $Exclude
+    if ($Extra) {
+        foreach ($k in $Extra.Keys) { $auto[$k] = $Extra[$k] }
+    }
+    return $auto
 }
 
 function Get-ScalarMetrics {
@@ -479,7 +631,17 @@ function Invoke-Compare {
         }
     }
 
-    $metricKeys = $ScalarPanel.Keys
+    # Take the column union across every recorded run so old runs don't lose
+    # newly-discovered metrics (results.json schemas evolve as new instruments
+    # ship). Sort alphabetically for stable output. Pretty-name aliases from
+    # $ScalarPanelExtra naturally bubble up too because they're recorded under
+    # their alias key.
+    $keySet = [System.Collections.Generic.HashSet[string]]::new([string[]] @())
+    foreach ($r in $results) {
+        if ($null -eq $r.metrics) { continue }
+        foreach ($p in $r.metrics.PSObject.Properties) { [void]$keySet.Add($p.Name) }
+    }
+    $metricKeys = $keySet | Sort-Object
     $hasDelta   = $null -ne $baselineRun
 
     # Markdown ─────────────────────────────────────────────────────────────────
@@ -532,7 +694,10 @@ function Invoke-Compare {
     # Console preview ──────────────────────────────────────────────────────────
     Write-Host ""
     Write-Host "Latest results (one row per scenario):" -ForegroundColor Cyan
-    $csvRows | Format-Table -Property scenario, run_id, lattice_commit_p99_ms, sink_published_per_second, sink_dropped_total, replication_apply_lag_p99_ms -AutoSize
+    # Console preview pulls from the curated KPI-alias keys (defined in
+    # $ScalarPanelExtra) so the summary stays stable even as auto-discovery
+    # widens the underlying schema.
+    $csvRows | Format-Table -Property scenario, run_id, lattice_commit_p99_ms, lattice_commits_per_second, sink_published_per_second, sink_dropped_combined_increase -AutoSize
 }
 
 function Invoke-ImportHistory {
@@ -730,8 +895,16 @@ try {
     $runEnd = Get-Date
 
     # ── Capture summary scalars from Prometheus while the stack is still up. ──
+    Write-Host "[capture] resolving auto-discovered + curated metric panel ..." -ForegroundColor Cyan
+    $resolvedPanel = Resolve-ScalarPanel `
+        -PrometheusUrl $prometheusUrl `
+        -Prefixes      $AutoDiscoverPrefixes `
+        -DotnetAllow   $AutoDiscoverDotnetAllow `
+        -Exclude       $ScalarPanelExclude `
+        -Extra         $ScalarPanelExtra
+    Write-Host ("[capture] panel: {0} keys ({1} extra overrides)" -f $resolvedPanel.Count, $ScalarPanelExtra.Count) -ForegroundColor DarkGray
     Write-Host "[capture] querying Prometheus over the ${duration}s measurement window ..." -ForegroundColor Cyan
-    $capturedMetrics = Get-ScalarMetrics -WindowSeconds $duration -Panel $ScalarPanel
+    $capturedMetrics = Get-ScalarMetrics -WindowSeconds $duration -Panel $resolvedPanel
     $nonNull = ($capturedMetrics.Values | Where-Object { $null -ne $_ }).Count
     Write-Host ("[capture] {0}/{1} metrics populated" -f $nonNull, $capturedMetrics.Count) -ForegroundColor Green
 
