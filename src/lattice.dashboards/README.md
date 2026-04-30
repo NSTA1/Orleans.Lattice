@@ -1,6 +1,6 @@
 # Orleans.Lattice.Dashboards
 
-Pre-built Grafana dashboards and provisioning templates for `Orleans.Lattice` and `Orleans.Lattice.Replication` telemetry. Optional sibling package — install only when you want operator dashboards bundled with the library version.
+Pre-built Grafana dashboards and provisioning templates for `Orleans.Lattice` and `Orleans.Lattice.Replication` telemetry. Sibling package — install when you want operator dashboards bundled with the library version.
 
 ## What's in the box
 
@@ -23,8 +23,9 @@ The companion test project `Orleans.Lattice.Dashboards.Tests` parses every embed
 
 ## Why a separate package
 
-- The replication meter is optional for local-only deployments; the Replication dashboard is gated on importing it from the package, but the Overview / Commit Path dashboards work with `Orleans.Lattice` alone.
 - Dashboards have a different release cadence from the library and may be updated independently.
 - Asymmetric coupling: the dashboards consume the meter; the meter does not depend on the dashboards.
+
+> **Note:** v0.1.0 takes a direct project reference on `Orleans.Lattice.Replication` so the Replication dashboard always resolves. Splitting that into an optional reference (so local-only deployments can skip the replication meter entirely) is planned for a future minor version once both packages are published to NuGet.
 
 See the [Orleans.Lattice repository](https://github.com/NSTA1/Orleans.Lattice) and the documentation under `docs/lattice.dashboards/`.

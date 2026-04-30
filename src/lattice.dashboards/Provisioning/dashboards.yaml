@@ -8,10 +8,10 @@ providers:
     orgId: 1
     folder: Orleans.Lattice
     type: file
-    disableDeletion: false
-    editable: true
+    disableDeletion: true
+    editable: false
     updateIntervalSeconds: 30
-    allowUiUpdates: true
+    allowUiUpdates: false
     options:
       path: /var/lib/grafana/dashboards/orleans-lattice
       foldersFromFilesStructure: false
