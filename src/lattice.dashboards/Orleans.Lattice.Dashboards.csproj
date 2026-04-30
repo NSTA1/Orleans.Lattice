@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Dashboards</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Pre-built Grafana dashboards and provisioning templates for Orleans.Lattice and Orleans.Lattice.Replication telemetry. Bundles ready-to-import JSON dashboards covering every instrument on the orleans.lattice and orleans.lattice.replication meters.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+    <PackageTags>orleans;lattice;observability;grafana;opentelemetry;prometheus;dashboards</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Grafana\*.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Provisioning\*.yaml" Pack="true" PackagePath="contentFiles\any\any\Provisioning\;content\Provisioning\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Dashboards.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\lattice.replication\Orleans.Lattice.Replication.csproj" />
+  </ItemGroup>
+
+</Project>

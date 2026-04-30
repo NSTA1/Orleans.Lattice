@@ -1,0 +1,41 @@
+namespace Orleans.Lattice.Dashboards;
+
+/// <summary>
+/// Identifies a built-in Grafana dashboard bundled with
+/// <see cref="LatticeDashboards"/>. Each value resolves to a single
+/// embedded JSON resource and a focused operator workflow.
+/// </summary>
+public enum LatticeDashboardKind
+{
+    /// <summary>
+    /// Per-tree throughput, leaf-write percentiles, cache hit-rate,
+    /// tombstone churn, splits committed, atomic-write outcomes,
+    /// coordinator completions, tree-lifecycle, event publish / drop,
+    /// and runtime configuration changes. Sources the
+    /// <c>orleans.lattice</c> meter only and does not require the
+    /// replication package.
+    /// </summary>
+    Overview = 0,
+
+    /// <summary>
+    /// Targets the dual-durability commit-path promotion:
+    /// <c>leaf.commit.duration</c> broken out by step
+    /// (<c>wal</c> / <c>apply</c> / <c>shadow</c> / <c>observer</c>),
+    /// <c>leaf.shadow_write.duration</c> percentiles for shadow-tail
+    /// regression checks, and activation-time
+    /// <c>leaf.replay.duration</c> / <c>leaf.replay.entries</c> tagged
+    /// by recovery outcome. Sources the <c>orleans.lattice</c>
+    /// meter only.
+    /// </summary>
+    CommitPath = 1,
+
+    /// <summary>
+    /// Cross-cluster replication operator view: ship / apply / lag
+    /// durations, WAL append vs trim throughput, dead-letter queue
+    /// churn, apply FIFO violations, causal-wait histograms,
+    /// fall-off-log events, and per-peer cursor lag. Sources the
+    /// <c>orleans.lattice.replication</c> meter; useful only when the
+    /// replication package is registered on the silo.
+    /// </summary>
+    Replication = 2,
+}

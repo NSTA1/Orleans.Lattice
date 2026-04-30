@@ -1,0 +1,557 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus data source scraping the orleans.lattice (and optionally orleans.lattice.replication) meter.",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "11.3.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "orleans",
+    "lattice",
+    "replication"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "tree",
+        "label": "Tree",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(orleans_lattice_replication_wal_entries_appended_total, tree)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "allValue": ".+",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] }
+      },
+      {
+        "name": "peer",
+        "label": "Peer",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(orleans_lattice_replication_peer_entries_behind, peer)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "allValue": ".+",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] }
+      },
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(orleans_lattice_replication_wal_entries_appended_total, cluster)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] }
+      },
+      {
+        "name": "silo",
+        "label": "Silo",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(orleans_lattice_replication_wal_entries_appended_total, instance)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "allValue": ".+",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] }
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "title": "Orleans.Lattice — Replication",
+  "uid": "orleans-lattice-replication",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Ship duration p50/p95/p99 (ms)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "P50",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_replication_ship_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "P95",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_ship_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "P99",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_replication_ship_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Apply duration p50/p95/p99 (ms)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "P50",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_replication_apply_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "P95",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "P99",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_replication_apply_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Apply lag p50/p95/p99 (ms)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "P50",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_replication_apply_lag_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "P95",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_lag_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "P99",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_replication_apply_lag_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Dependency wait p95 (ms) — causal-consistency staging",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_dependency_wait_ms_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "WAL throughput (ops/s)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(orleans_lattice_replication_wal_entries_appended_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "appended"
+        },
+        {
+          "refId": "S",
+          "expr": "sum(rate(orleans_lattice_replication_wal_entries_shipped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "shipped"
+        },
+        {
+          "refId": "T",
+          "expr": "sum(rate(orleans_lattice_replication_wal_entries_trimmed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "trimmed"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Dead-letter queue churn (ops/s)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "E",
+          "expr": "sum(rate(orleans_lattice_replication_dead_letter_enqueued_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "enqueued"
+        },
+        {
+          "refId": "R",
+          "expr": "sum by (reason) (rate(orleans_lattice_replication_dead_letter_removed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "removed {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Apply correctness violations (rate)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.001
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "F",
+          "expr": "sum(rate(orleans_lattice_replication_apply_fifo_violations_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "fifo violations"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(orleans_lattice_replication_apply_causal_violations_blocked_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "causal violations blocked"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Peer fell-off-log events (count over range)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (peer) (increase(orleans_lattice_replication_peer_fell_off_log_total{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range]))",
+          "legendFormat": "{{peer}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Apply buffer (entries / bytes)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "E",
+          "expr": "sum by (tree) (orleans_lattice_replication_apply_buffered_entries{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "entries {{tree}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (tree) (orleans_lattice_replication_apply_buffer_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "bytes {{tree}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Per-peer entries / bytes behind",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "E",
+          "expr": "sum by (peer) (orleans_lattice_replication_peer_entries_behind{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "entries {{peer}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (peer) (orleans_lattice_replication_peer_bytes_behind{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "bytes {{peer}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Per-peer last contact (seconds ago)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (peer) (orleans_lattice_replication_peer_last_contact_seconds{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{peer}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Per-peer consecutive errors",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (peer) (orleans_lattice_replication_peer_consecutive_errors{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{peer}}"
+        }
+      ]
+    }
+  ]
+}

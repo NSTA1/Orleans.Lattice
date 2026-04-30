@@ -1,8 +1,10 @@
 <Solution>
   <Project Path="src/lattice/Orleans.Lattice.csproj" />
+  <Project Path="src/lattice.dashboards/Orleans.Lattice.Dashboards.csproj" />
   <Project Path="src/lattice.replication/Orleans.Lattice.Replication.csproj" />
   <Project Path="src/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.csproj" />
   <Project Path="test/lattice/Orleans.Lattice.Tests.csproj" />
+  <Project Path="test/lattice.dashboards/Orleans.Lattice.Dashboards.Tests.csproj" />
   <Project Path="test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj" />
   <Project Path="test/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.Tests.csproj" />
 </Solution>
