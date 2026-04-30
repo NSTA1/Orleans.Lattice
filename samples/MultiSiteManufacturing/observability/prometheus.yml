@@ -1,0 +1,26 @@
+# Prometheus scrape config for the MultiSiteManufacturing sample.
+#
+# Multi-homed onto us-net and eu-net (see docker-compose.yml) so it
+# can scrape every silo in both clusters. Each silo exposes the
+# orleans.lattice and orleans.lattice.replication meters at
+# http://<silo>:8080/metrics via the OpenTelemetry Prometheus exporter
+# wired in MultiSiteManufacturing.Host/Program.cs.
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: msmfg-silos
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - silo-us-a:8080
+          - silo-us-b:8080
+        labels:
+          cluster: us
+      - targets:
+          - silo-eu-a:8080
+          - silo-eu-b:8080
+        labels:
+          cluster: eu

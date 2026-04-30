@@ -27,6 +27,11 @@
     <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.1.0" />
     <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.1.0" />
     <PackageReference Include="Microsoft.Orleans.Streaming.AzureStorage" Version="10.1.0" />
+    <!-- Observability: expose orleans.lattice + orleans.lattice.replication
+         meters via Prometheus on /metrics so the docker-compose Grafana
+         container can render the dashboards shipped by Orleans.Lattice.Dashboards. -->
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.15.3-beta.1" />
   </ItemGroup>
 
   <ItemGroup>
