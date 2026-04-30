@@ -124,23 +124,75 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
           restore-keys: nuget-${{ runner.os }}-
 
-      # Samples-only fast path: build every project under samples/ and stop.
+      # Samples-only fast path: build (and test) each sample under samples/.
       # The samples reference the library as a ProjectReference, so this
       # transitively compiles Orleans.Lattice too — enough to catch breaks
-      # introduced by sample-side edits without paying for the full test suite.
-      - name: Build samples (samples-only change)
+      # introduced by sample-side edits without paying for the full library
+      # test matrix.
+      #
+      # Per-sample dispatch:
+      #   1. If `samples/<name>/*.slnx` exists, build that solution. This is
+      #      the right path for multi-project samples (e.g. MultiSiteManufacturing,
+      #      VehicleFleetSimulator) where the sample owns its own slnx.
+      #   2. Otherwise, build every `*.csproj` found anywhere under the sample
+      #      directory. This handles single-project samples (e.g. HelloWorld).
+      #
+      # Test execution: after each sample is built, every `*.Tests.csproj`
+      # discovered under the sample directory is run with `--no-build` and
+      # the deterministic-only filter (chaos category excluded — samples are
+      # not the place to gate CI on flake-prone surface). Trx files are
+      # namespaced by sample so the upload artifact is browsable.
+      #
+      # NOTE: bash's `**` does not recurse without `shopt -s globstar`, so
+      # the previous `samples/**/*.csproj` glob silently missed nested csprojs.
+      # The slnx-first / `find`-fallback dispatch below avoids that footgun.
+      - name: Build and test samples (samples-only change)
         if: steps.filter.outputs.code == 'true' && steps.filter.outputs.nonSample != 'true'
         run: |
+          set -euo pipefail
           shopt -s nullglob
-          projects=(samples/**/*.csproj)
-          if [ ${#projects[@]} -eq 0 ]; then
-            echo "No sample projects found under samples/."
+
+          samples=(samples/*/)
+          if [ ${#samples[@]} -eq 0 ]; then
+            echo "No samples found under samples/."
             exit 1
           fi
-          for proj in "${projects[@]}"; do
-            echo "::group::Build $proj"
-            dotnet build "$proj" --configuration Release
+
+          for sampleDir in "${samples[@]}"; do
+            sampleName=$(basename "$sampleDir")
+
+            echo "::group::Build sample: $sampleName"
+            slnxFiles=("${sampleDir}"*.slnx)
+            if [ ${#slnxFiles[@]} -gt 0 ]; then
+              echo "Building solution: ${slnxFiles[0]}"
+              dotnet build "${slnxFiles[0]}" --configuration Release
+            else
+              mapfile -t csprojs < <(find "$sampleDir" -type f -name '*.csproj')
+              if [ ${#csprojs[@]} -eq 0 ]; then
+                echo "::notice::Sample $sampleName has no slnx and no csproj — skipping."
+                echo "::endgroup::"
+                continue
+              fi
+              for proj in "${csprojs[@]}"; do
+                echo "Building project: $proj"
+                dotnet build "$proj" --configuration Release
+              done
+            fi
             echo "::endgroup::"
+
+            mapfile -t testProjs < <(find "$sampleDir" -type f -name '*.Tests.csproj')
+            if [ ${#testProjs[@]} -eq 0 ]; then
+              echo "::notice::No test projects under $sampleDir — skipping tests."
+              continue
+            fi
+            for testProj in "${testProjs[@]}"; do
+              testName=$(basename "$testProj" .csproj)
+              echo "::group::Test sample: $sampleName / $testName"
+              dotnet test "$testProj" --no-build --configuration Release \
+                --filter "TestCategory!=Chaos" \
+                --logger "trx;LogFileName=samples-${sampleName}-${testName}.trx"
+              echo "::endgroup::"
+            done
           done
 
       - name: Restore
@@ -194,9 +246,11 @@ jobs:
             echo "::endgroup::"
           done
 
-      # Upload test results even if the Test step fails.
+      # Upload test results even if the Test step fails. Gated on `code` rather
+      # than `nonSample` so trx files produced by the samples-only path are
+      # also captured.
       - name: Upload test results
-        if: always() && steps.filter.outputs.nonSample == 'true'
+        if: always() && steps.filter.outputs.code == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: test-results
