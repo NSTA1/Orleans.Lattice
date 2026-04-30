@@ -36,7 +36,7 @@ resultsPath ??= Environment.GetEnvironmentVariable("BENCH_RESULTS_PATH");
 if (string.IsNullOrWhiteSpace(resultsPath))
 {
     var runId = DateTime.UtcNow.ToString("yyyy-MM-ddTHH-mm-ssZ");
-    resultsPath = Path.Combine(".run", "B-02", runId, "results.json");
+    resultsPath = Path.Combine(".run", "microbench", runId, "results.json");
 }
 resultsPath = Path.GetFullPath(resultsPath);
 

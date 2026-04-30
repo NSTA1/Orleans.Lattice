@@ -1,4 +1,4 @@
-# Prometheus scrape config — replication topology (B-04, B-06, B-07, B-08).
+# Prometheus scrape config — replication topology (current-state-single-peer, replication-backpressure, receiver-crash, bidirectional-replication).
 # Adds a second scrape job for the replica silo. The `cluster` label matches the
 # Orleans ClusterId used by each silo so the Grafana dashboards' $cluster
 # template variable splits the panels by cluster cleanly.

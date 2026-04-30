@@ -20,7 +20,7 @@
   <ItemGroup>
     <!-- Targets the leaf-grain primitive directly via InternalsVisibleTo. No
          Orleans silo, no shard routing, no grain dispatch — pure algorithmic
-         cost. Orleans-native end-to-end cost is measured by B-03+ instead. -->
+         cost. Orleans-native end-to-end cost is measured by current-state-no-replication+ instead. -->
     <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
   </ItemGroup>
 

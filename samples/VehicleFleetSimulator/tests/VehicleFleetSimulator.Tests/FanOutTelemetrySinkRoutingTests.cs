@@ -15,7 +15,7 @@ namespace VehicleFleetSimulator.Tests;
 ///     backed-up events queue can't block control-plane Subscribe / Unsubscribe on a telemetry
 ///     shard that's also serving live publishes.</description></item>
 /// </list>
-/// Together these guarantee that benchmark scenarios driven through this sink (B-01, B-03, B-04
+/// Together these guarantee that benchmark scenarios driven through this sink (simulator-baseline, current-state-no-replication, current-state-single-peer
 /// when not yet swapped) observe the same shard distribution the load harness was designed against.
 /// </summary>
 [Collection(ClusterCollection.Name)]

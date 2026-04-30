@@ -20,12 +20,13 @@
     -OpenHistory:     stand up the history docker-compose stack and print URLs.
     -CloseHistory:    tear the history stack down (volumes preserved).
 
-    Each scenario id (B-01..B-12) maps to a scenarios/<id>.env file whose
-    contents parameterise the silo (Telemetry:Sink, LatticeSink:*, Replication:*)
-    and the runner itself (BENCH_FLEET_SIZE, BENCH_DURATION_SECONDS, BENCH_CHAOS_*).
+    Each scenario id maps to a scenarios/<slug>.env file whose contents
+    parameterise the silo (Telemetry:Sink, LatticeSink:*, Replication:*) and the
+    runner itself (BENCH_FLEET_SIZE, BENCH_DURATION_SECONDS, BENCH_CHAOS_*).
 
 .PARAMETER Scenario
-    The scenario id to run, e.g. "B-03". Case-insensitive.
+    The scenario id to run, e.g. "current-state-no-replication". Slug must match
+    a scenarios/<slug>.env filename (case-sensitive, kebab-case).
 
 .PARAMETER KeepRunning
     Leave the per-run stack up after the measurement window so Grafana stays
@@ -35,7 +36,8 @@
     Aggregate previously-recorded results (no scenario run).
 
 .PARAMETER CompareAgainst
-    When -Compare is set, baseline scenario id (e.g. B-01) for delta columns.
+    When -Compare is set, baseline scenario id (e.g. simulator-baseline) for
+    delta columns.
 
 .PARAMETER ImportHistory
     Backfill every .run/**/results.json into the history VictoriaMetrics.
@@ -47,16 +49,16 @@
     Stop the history stack (named volumes preserved across stops).
 
 .EXAMPLE
-    ./benchmark.ps1 B-03
+    ./benchmark.ps1 current-state-no-replication
 
 .EXAMPLE
-    ./benchmark.ps1 -Scenario B-06 -KeepRunning
+    ./benchmark.ps1 -Scenario replication-backpressure -KeepRunning
 
 .EXAMPLE
-    ./benchmark.ps1 -Compare -CompareAgainst B-01
+    ./benchmark.ps1 -Compare -CompareAgainst simulator-baseline
 
 .EXAMPLE
-    ./benchmark.ps1 -OpenHistory; ./benchmark.ps1 B-03; ./benchmark.ps1 B-04
+    ./benchmark.ps1 -OpenHistory; ./benchmark.ps1 current-state-no-replication; ./benchmark.ps1 current-state-single-peer
 #>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
@@ -456,7 +458,8 @@ function Get-ScalarMetrics {
         [int] $WindowSeconds,
         [System.Collections.IDictionary] $Panel
     )
-    $out = [ordered]@{}
+    $out = [ordered]@{
+    }
     foreach ($key in $Panel.Keys) {
         $promQl = $Panel[$key].Replace('{Ws}', $WindowSeconds.ToString([Globalization.CultureInfo]::InvariantCulture))
         $val = Invoke-PromInstantQuery -Query $promQl
@@ -576,7 +579,7 @@ function Push-HistoryResults {
     }
 }
 
-# ── Microbench (B-02) ──────────────────────────────────────────────────────────
+# ── Microbench (microbench scenario) ───────────────────────────────────────────
 
 function Invoke-Microbench {
     <#
@@ -853,7 +856,7 @@ switch ($PSCmdlet.ParameterSetName) {
 }
 
 # Default: run a scenario.
-$scenarioFile = Join-Path $benchmarkRoot ("scenarios/{0}.env" -f $Scenario.ToUpperInvariant())
+$scenarioFile = Join-Path $benchmarkRoot ("scenarios/{0}.env" -f $Scenario)
 if (-not (Test-Path $scenarioFile)) {
     throw "Unknown scenario '$Scenario'. Expected $scenarioFile."
 }
@@ -876,10 +879,10 @@ New-Item -ItemType Directory -Path $runDir -Force | Out-Null
 # Use UTC ISO8601 with `:` → `-` so it survives Windows path constraints.
 $runId = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH-mm-ssZ')
 
-# B-02 (BENCH_KIND=microbench) bypasses the docker-compose flow and instead drives
-# the BenchmarkDotNet harness in benchmark/host/Bench.Microbench/. The harness writes
-# its own results.json, then we opportunistically push to the history VM — same as
-# the docker scenarios.
+# The microbench scenario (BENCH_KIND=microbench) bypasses the docker-compose flow
+# and instead drives the BenchmarkDotNet harness in benchmark/host/Bench.Microbench/.
+# The harness writes its own results.json, then we opportunistically push to the
+# history VM — same as the docker scenarios.
 if ($envMap['BENCH_KIND'] -eq 'microbench') {
     Invoke-Microbench -ScenarioId $Scenario -EnvMap $envMap -RunId $runId
     return

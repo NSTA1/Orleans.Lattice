@@ -5,7 +5,7 @@ namespace VehicleFleetSimulator.Tests;
 
 /// <summary>
 /// Locks in the contract that <see cref="NullTelemetrySink"/> is a true no-op. Benchmark
-/// scenarios B-01 (producer baseline) and B-12 (observer-off control) both rely on the sink
+/// scenarios simulator-baseline (producer baseline) and observer-no-peer (observer-off control) both rely on the sink
 /// completing synchronously, never throwing, and never producing observable side effects, so the
 /// numbers measured against it can be attributed entirely to producer-side cost.
 /// </summary>
@@ -50,7 +50,7 @@ public sealed class NullTelemetrySinkTests
     [Fact]
     public async Task High_volume_publishes_never_throw()
     {
-        // Burst test: scenario B-01 sustains the simulator's full offered load through this sink.
+        // Burst test: scenario simulator-baseline sustains the simulator's full offered load through this sink.
         // A throw on any sample would corrupt the producer-cost measurement, so verify the sink
         // tolerates a representative burst without any exception escaping.
         var rng = new Random(42);

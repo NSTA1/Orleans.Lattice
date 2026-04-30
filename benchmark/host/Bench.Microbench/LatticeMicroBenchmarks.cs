@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// lattice algorithm from Orleans' message envelope and scheduler.
 /// <para>
 /// Orleans-native end-to-end cost (dispatcher, serialization, scheduler) is
-/// captured by the docker-compose scenarios B-03 and onwards. B-02 is
+/// captured by the docker-compose scenarios current-state-no-replication and onwards. microbench is
 /// intentionally micro: it answers <em>what does the lattice algorithm
 /// cost?</em>, not <em>what does a real consumer pay?</em>. As a side-effect,
 /// any contention that would arise from Orleans' single-threaded grain

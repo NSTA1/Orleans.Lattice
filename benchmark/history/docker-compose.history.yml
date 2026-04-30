@@ -6,7 +6,7 @@
 #
 # Independent lifecycle:
 #   ./benchmark.ps1 -OpenHistory   # bring this stack up
-#   ./benchmark.ps1 B-03           # per-run scenario; pushes scalars here if reachable
+#   ./benchmark.ps1 current-state-no-replication           # per-run scenario; pushes scalars here if reachable
 #   ./benchmark.ps1 -ImportHistory # backfill any .run/**/results.json the VM hasn't seen
 #   ./benchmark.ps1 -CloseHistory  # stop, but preserve named volumes
 #

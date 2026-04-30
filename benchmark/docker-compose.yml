@@ -7,8 +7,8 @@
 #   * The simulator API (`api`) builds from `samples/VehicleFleetSimulator/` using its own
 #     unmodified Dockerfile. The benchmark stack treats it as a black-box load surface.
 #
-# This file stands the single-cluster topology used by B-01, B-03, B-05, B-09, B-10, B-12.
-# Replication scenarios (B-04, B-06, B-07, B-08) overlay docker-compose.replication.yml on top
+# This file stands the single-cluster topology used by simulator-baseline, current-state-no-replication, skewed-key-shard-splits, replication-key-filter, event-log-with-ttl, observer-no-peer.
+# Replication scenarios (current-state-single-peer, replication-backpressure, receiver-crash, bidirectional-replication) overlay docker-compose.replication.yml on top
 # to bring up a second silo cluster acting as the replica peer.
 
 services:
@@ -48,7 +48,7 @@ services:
       Orleans__ClusterId: ${BENCH_CLUSTER_ID:-vfs-bench}
       Orleans__ServiceId: ${BENCH_SERVICE_ID:-VehicleFleetSimulator}
       Persistence__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;"
-      # Producer pipeline switch — fanout (default), null (B-01/B-12 control), lattice.
+      # Producer pipeline switch — fanout (default), null (simulator-baseline/observer-no-peer control), lattice.
       Telemetry__Sink: ${BENCH_TELEMETRY_SINK:-fanout}
       Telemetry__Prometheus__Endpoint: "http://0.0.0.0:9090/metrics/"
       # LatticeSink bindings (only consumed when Telemetry__Sink=lattice).

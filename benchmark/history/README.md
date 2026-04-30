@@ -22,9 +22,9 @@ stack has been torn down. Independent of, and orthogonal to, the per-run flow.
 
 # Run scenarios as normal — they push their results.json scalars into VM
 # automatically if the history stack is reachable.
-./benchmark.ps1 B-01
-./benchmark.ps1 B-03
-./benchmark.ps1 B-04
+./benchmark.ps1 simulator-baseline
+./benchmark.ps1 current-state-no-replication
+./benchmark.ps1 current-state-single-peer
 
 # Backfill any prior runs that ran with the history stack offline.
 ./benchmark.ps1 -ImportHistory
@@ -43,13 +43,13 @@ VM. Every sample is tagged:
 
 | Label      | Example                | Source                                         |
 |------------|------------------------|------------------------------------------------|
-| `scenario` | `B-03`                 | scenario id (the script argument)              |
+| `scenario` | `current-state-no-replication`                 | scenario id (the script argument)              |
 | `run_id`   | `2026-04-30T14-08-41Z` | UTC ISO8601 timestamp of run end (script-generated) |
 | `git_sha`  | `abc1234`              | `git rev-parse --short HEAD` at run time       |
 
 Sample timestamps are the run's `ended` time, so the trend chart's x-axis is
 **wall-clock when the benchmark ran**, not the artificial within-run time
-window. This makes the dashboard's natural reading "how has B-03's p99 evolved
+window. This makes the dashboard's natural reading "how has current-state-no-replication's p99 evolved
 across commits, week-over-week", which is the regression-detection question the
 benchmark plan calls for.
 
@@ -71,7 +71,7 @@ so newly-pushed metrics appear in the `Metric` dropdown without a dashboard edit
 VictoriaMetrics speaks PromQL. From the host:
 
 ```powershell
-Invoke-RestMethod 'http://localhost:8428/api/v1/query?query=bench_lattice_commit_p99_ms{scenario="B-03"}'
+Invoke-RestMethod 'http://localhost:8428/api/v1/query?query=bench_lattice_commit_p99_ms{scenario="current-state-no-replication"}'
 ```
 
 Or via the VM UI at <http://localhost:8428/vmui> for ad-hoc exploration.

@@ -20,7 +20,7 @@ public sealed class LatticeSinkOptions
     /// <summary>Default flush interval — caps end-to-end producer→Lattice latency.</summary>
     public static readonly TimeSpan DefaultFlushInterval = TimeSpan.FromMilliseconds(50);
 
-    /// <summary>Default TTL for the event-log key shape (B-10).</summary>
+    /// <summary>Default TTL for the event-log key shape (event-log-with-ttl).</summary>
     public static readonly TimeSpan DefaultEventLogTtl = TimeSpan.FromHours(1);
 
     /// <summary>The Lattice tree to write into.</summary>

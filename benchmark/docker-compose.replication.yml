@@ -1,6 +1,6 @@
 # Replication overlay — adds a second silo cluster (vfs-replica) acting as the
-# downstream peer for B-04 (single replica), B-06 (silo crash chaos), B-07
-# (network partition chaos), B-08 (bidirectional). The base stack already runs
+# downstream peer for current-state-single-peer (single replica), replication-backpressure (silo crash chaos), receiver-crash
+# (network partition chaos), bidirectional-replication (bidirectional). The base stack already runs
 # the origin silo with Replication:Enabled=true; this overlay brings up the
 # matching peer plus a second Azurite for cluster isolation.
 #
@@ -47,8 +47,8 @@ services:
       Orleans__ClusterId: ${BENCH_REPLICA_CLUSTER_ID:-vfs-bench-replica}
       Orleans__ServiceId: ${BENCH_SERVICE_ID:-VehicleFleetSimulator}
       Persistence__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-replica:10000/devstoreaccount1;QueueEndpoint=http://azurite-replica:10001/devstoreaccount1;TableEndpoint=http://azurite-replica:10002/devstoreaccount1;"
-      # Replica cluster runs the same lattice sink so B-08 (bidirectional) can produce
-      # writes here too. For B-04/B-06/B-07 the replica's sink is null — it only consumes
+      # Replica cluster runs the same lattice sink so bidirectional-replication (bidirectional) can produce
+      # writes here too. For current-state-single-peer/replication-backpressure/receiver-crash the replica's sink is null — it only consumes
       # replicated writes from the origin.
       Telemetry__Sink: ${BENCH_REPLICA_TELEMETRY_SINK:-null}
       Telemetry__Prometheus__Endpoint: "http://0.0.0.0:9090/metrics/"

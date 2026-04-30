@@ -15,69 +15,69 @@ Lattice.
 
 ## Benchmarks
 
-- [ ] **B-01: Simulator baseline (no Lattice).**
+- [ ] **simulator-baseline: Simulator baseline (no Lattice).**
   Run the simulator end-to-end against the existing Orleans stream sink with replication and
   Lattice fully out of the picture. Captures host CPU, ThreadPool, GC, per-tick grain latency, and
   tick-skew (how far behind 1 Hz each `VehicleGrain` actually runs). Establishes the upper bound
   the producer side can sustain on the test hardware, so later runs can distinguish "Lattice is
   slow" from "the simulator is saturated."
 
-- [ ] **B-02: `ILattice` micro-benchmark from `LoadHarness`.**
+- [ ] **microbench: `ILattice` micro-benchmark from `LoadHarness`.**
   Bypass the simulator entirely. Sweep concurrency × key cardinality × value size against
   `SetAsync`, `GetAsync`, and `EntriesAsync` directly. Compare results to
   `docs/lattice/benchmarks.md`. Characterizes the primitive in isolation and gives a reference
   curve for interpreting later end-to-end runs.
 
-- [ ] **B-03: Current-state tree, replication off.**
+- [ ] **current-state-no-replication: Current-state tree, replication off.**
   Wire a `LatticeSink` that maps `key = vehicleId.ToString()` and
   `value = serialize(VehicleSnapshot)` against a single tree, single cluster, replication
   disabled. Each tick is one `SetAsync`. Measures Lattice's steady-state write throughput and
   latency under uniform key distribution (Guid hashing) at the simulator's offered load.
 
-- [ ] **B-04: Current-state tree, replication on, single peer.**
-  Same wiring as B-03 with `Orleans.Lattice.Replication` enabled and one downstream cluster. Track
-  `IMutationObserver` overhead (compare write-path p99 vs. B-03), WAL append rate, ship-loop
+- [ ] **current-state-single-peer: Current-state tree, replication on, single peer.**
+  Same wiring as current-state-no-replication with `Orleans.Lattice.Replication` enabled and one downstream cluster. Track
+  `IMutationObserver` overhead (compare write-path p99 vs. current-state-no-replication), WAL append rate, ship-loop
   throughput, ack RTT, and per-peer HLC cursor lag (`hlc.now − cursor`). Validates the roadmap's
   sub-second flush-latency claim and the F-035 "zero-cost when no observer registered" guarantee.
 
-- [ ] **B-05: Skewed-key variant to force adaptive shard splits.**
-  Re-run B-03 with keys prefixed by a deliberately oversubscribed bucket
+- [ ] **skewed-key-shard-splits: Skewed-key variant to force adaptive shard splits.**
+  Re-run current-state-no-replication with keys prefixed by a deliberately oversubscribed bucket
   (e.g. `region/vehicleId` with one region holding the majority of the fleet) so a single shard
   goes hot. Watch for F-011 autonomic splits firing online, and confirm reads/writes/scans remain
   consistent across the split (the property the chaos suite asserts). Without skew, default
   `ShardCount = 64` plus Guid hashing keeps load uniform and the split monitor never engages.
 
-- [ ] **B-06: Replication backpressure and catch-up.**
-  Building on B-04, pause the receiving cluster for a controlled interval while the simulator
+- [ ] **replication-backpressure: Replication backpressure and catch-up.**
+  Building on current-state-single-peer, pause the receiving cluster for a controlled interval while the simulator
   keeps writing, then resume. Measure WAL growth during the pause, time-to-converge after resume,
   and that the per-peer cursor advances strictly on ack. Exercises cursor durability and the
   janitor's GC predicate (R-061).
 
-- [ ] **B-07: Receiver crash mid-stream.**
-  Building on B-04, hard-kill the receiver silo during steady-state replication. Verifies
+- [ ] **receiver-crash: Receiver crash mid-stream.**
+  Building on current-state-single-peer, hard-kill the receiver silo during steady-state replication. Verifies
   idempotent replay from the durable HLC cursor and that no replog entries are lost or
   double-applied.
 
-- [ ] **B-08: Two-cluster bidirectional replication.**
+- [ ] **bidirectional-replication: Two-cluster bidirectional replication.**
   Split the fleet across two clusters, each replicating to the other. Probes `OriginClusterId`
   cycle-break (F-036) — the design item the upstream sample explicitly got wrong — by confirming
   writes do not echo back to their origin and HLC cursors stabilize on both sides.
 
-- [ ] **B-09: Per-key replication filter cost.**
-  Re-run B-04 with a non-trivial per-key filter (R-012) on the producer side. Measures the
+- [ ] **replication-key-filter: Per-key replication filter cost.**
+  Re-run current-state-single-peer with a non-trivial per-key filter (R-012) on the producer side. Measures the
   inline filter's contribution to write-path latency. If the core observer-latency histogram
   (G-013) is shipped, capture it; if not, this run motivates landing it.
 
-- [ ] **B-10: Event-log tree with TTL (separate run).**
+- [ ] **event-log-with-ttl: Event-log tree with TTL (separate run).**
   Alternative key shape: `key = vehicleId/yyyyMMddTHHmmss.fff`, `value = VehicleTelemetryEvent`,
   with a TTL of e.g. 1 hour via the F-016 `SetAsync(ttl)` overload. Stresses ordered scans
   (`ScanKeysAsync` / `EntriesAsync`), continuous tombstone compaction, and the read-path
   expiry filter. Run independently of throughput experiments — compaction will distort the
-  latency tail and conflate signals if mixed with B-03/B-04.
+  latency tail and conflate signals if mixed with current-state-no-replication/current-state-single-peer.
 
-- [ ] **B-12: Observer-off vs. observer-on delta.**
+- [ ] **observer-no-peer: Observer-off vs. observer-on delta.**
   Controlled A/B of identical simulator load with `IMutationObserver` unregistered vs. registered
-  (no-op). Isolates observer-dispatch cost on the hot write path. Pairs with B-04 / B-09 to
+  (no-op). Isolates observer-dispatch cost on the hot write path. Pairs with current-state-single-peer / replication-key-filter to
   attribute latency between dispatch overhead, filter cost, and downstream replication work.
 
 ## Cross-cutting requirements
@@ -92,7 +92,7 @@ These apply to every benchmark above and should be verified before kicking off a
   attributable to the simulator and not to Lattice.
 - `FleetGrain.GetFleetStats` continues to use the in-grain aggregator — never back it with a
   Lattice scatter-gather scan, which would dominate the measurement.
-- For any cross-cluster scenario (B-04, B-06, B-07, B-08, B-09), use at least two physical hosts;
+- For any cross-cluster scenario (current-state-single-peer, replication-backpressure, receiver-crash, bidirectional-replication, replication-key-filter), use at least two physical hosts;
   single-box replication runs are smoke tests only.
 
 ## Simulator Integration
@@ -130,10 +130,10 @@ registration appropriate to the scenario.
 
 | Scenario | Registration |
 |---|---|
-| B-01 producer baseline | `services.AddSingleton<ITelemetrySink, NullTelemetrySink>(_ => NullTelemetrySink.Instance);` |
-| Default app run, B-02 (n/a — harness path) | `services.AddSingleton<ITelemetrySink, FanOutTelemetrySink>();` |
-| B-03 onward (Lattice) | `services.AddSingleton<ITelemetrySink, LatticeSink>();` |
-| B-12 observer-off control | `NullTelemetrySink` for the off run; `LatticeSink` for the on run |
+| simulator-baseline producer baseline | `services.AddSingleton<ITelemetrySink, NullTelemetrySink>(_ => NullTelemetrySink.Instance);` |
+| Default app run, microbench (n/a — harness path) | `services.AddSingleton<ITelemetrySink, FanOutTelemetrySink>();` |
+| current-state-no-replication onward (Lattice) | `services.AddSingleton<ITelemetrySink, LatticeSink>();` |
+| observer-no-peer observer-off control | `NullTelemetrySink` for the off run; `LatticeSink` for the on run |
 
 `Program.cs` in `VehicleFleetSimulator.Silo` is the single registration point. The replacement
 must be exclusive — registering a second `ITelemetrySink` does not chain (verified by
@@ -169,9 +169,9 @@ Key shape is the central knob and maps directly to the benchmark scenarios:
 
 | `KeyShape` | Key | Scenarios |
 |---|---|---|
-| `CurrentStateByVehicleId` | `vehicleId.ToString("N")` | B-03, B-04, B-06, B-07, B-08, B-09, B-12 |
-| `RegionPrefixedVehicleId` | `region/vehicleId` (skewed region distribution) | B-05 |
-| `EventLogTimestamped` | `vehicleId/{Timestamp:O}` with TTL | B-10 |
+| `CurrentStateByVehicleId` | `vehicleId.ToString("N")` | current-state-no-replication, current-state-single-peer, replication-backpressure, receiver-crash, bidirectional-replication, replication-key-filter, observer-no-peer |
+| `RegionPrefixedVehicleId` | `region/vehicleId` (skewed region distribution) | skewed-key-shard-splits |
+| `EventLogTimestamped` | `vehicleId/{Timestamp:O}` with TTL | event-log-with-ttl |
 
 The sink encapsulates the key-shape choice so `VehicleGrain` remains key-agnostic.
 
@@ -190,7 +190,7 @@ Implementations MUST:
 - Handle `IClusterClient` / Lattice-side faults entirely inside the drain loop. The producer
   side never observes them.
 
-### 5. Replication wiring (B-04 onward)
+### 5. Replication wiring (current-state-single-peer onward)
 
 `Orleans.Lattice.Replication` is configured at the silo level, independently of the sink. Per
 the package's roadmap:
@@ -200,8 +200,8 @@ the package's roadmap:
 - The `OriginClusterId` MUST be unique per cluster in the deployment topology — the
   `IConfiguration` value `Orleans:ClusterId` already used by `Program.cs` is a natural source.
 - Per-key replication filters (R-012) are configured against the replicator, not the sink.
-  Scenario B-09 enables a non-trivial filter; sink code is unchanged.
-- Scenario B-08 (bidirectional) requires both clusters to register the replicator with each
+  Scenario replication-key-filter enables a non-trivial filter; sink code is unchanged.
+- Scenario bidirectional-replication (bidirectional) requires both clusters to register the replicator with each
   other as peers and to advertise distinct `OriginClusterId`s, otherwise echo cycles will form.
 
 ### 6. Lifecycle and graceful shutdown
@@ -245,5 +245,5 @@ to the simulator integration:
 - `TelemetrySinkSwappabilityTests.A_custom_sink_registered_in_DI_receives_every_vehicle_tick` —
   guarantees the swap mechanism works end-to-end through `VehicleGrain`.
 - `TelemetrySinkSwappabilityTests.The_default_FanOutTelemetrySink_is_overridden_not_chained` —
-  guarantees a custom sink replaces, not augments, the fan-out path. Without this, B-03/B-04
+  guarantees a custom sink replaces, not augments, the fan-out path. Without this, current-state-no-replication/current-state-single-peer
   would silently double-write and produce misleading numbers.

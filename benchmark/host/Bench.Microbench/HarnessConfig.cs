@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// default forking toolchain when methodology rigour outranks wall-clock budget.
 /// </para>
 /// <para>
-/// <b>Job.</b> <see cref="Job.ShortRun"/> by default to keep B-02 in the same
+/// <b>Job.</b> <see cref="Job.ShortRun"/> by default to keep microbench in the same
 /// 2-3 minute envelope as the other scenarios. <c>BENCH_MICROBENCH_FIDELITY=full</c>
 /// also widens to <see cref="Job.Default"/> for higher-confidence statistics.
 /// </para>

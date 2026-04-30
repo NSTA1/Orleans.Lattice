@@ -1,27 +1,27 @@
 # Orleans.Lattice — Benchmark Stack
 
-End-to-end benchmark suite covering the 12 scenarios in [`benchmark-plan.md`](./benchmark-plan.md).
+End-to-end benchmark suite covering the 11 scenarios in [`benchmark-plan.md`](./benchmark-plan.md).
 
 The stack is brought up via `docker compose` and driven through the Vehicle Fleet
 Simulator's HTTP API (`samples/VehicleFleetSimulator/`). A single PowerShell script
 selects the scenario and runs end-to-end:
 
 ```powershell
-./benchmark.ps1 B-03
+./benchmark.ps1 current-state-no-replication
 ```
 
 ## Layout
 
 ```
 benchmark/
-├── benchmark.ps1                    # Single-parameter runner (B-01 .. B-12).
+├── benchmark.ps1                    # Single-parameter runner (scenario slug).
 ├── benchmark-plan.md                # Authoritative scenario plan.
 ├── docker-compose.yml               # Base topology (single cluster).
-├── docker-compose.replication.yml   # Replication overlay (B-04, B-06, B-07, B-08, B-09).
+├── docker-compose.replication.yml   # Replication overlay (current-state-single-peer, replication-backpressure, receiver-crash, bidirectional-replication, replication-key-filter).
 ├── host/
 │   ├── Bench.Sink/                  # LatticeSink — bounded-channel ITelemetrySink.
 │   └── Bench.Silo/                  # Benchmark silo: env-driven sink switch + Lattice/Replication.
-├── scenarios/B-XX.env               # Per-scenario configuration knobs.
+├── scenarios/<slug>.env             # Per-scenario configuration knobs.
 ├── prometheus/prometheus.yml        # Scrape config (single cluster).
 ├── prometheus/prometheus-replication.yml
 └── grafana/
@@ -49,27 +49,28 @@ simulator-local context.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-For replication scenarios (`B-04`, `B-06`, `B-07`, `B-08`, `B-09`),
+For replication scenarios (`current-state-single-peer`, `replication-backpressure`,
+`receiver-crash`, `bidirectional-replication`, `replication-key-filter`),
 `docker-compose.replication.yml` adds a second silo cluster
 (`vfs-silo-replica` + `vfs-azurite-replica`).
 
 ## Scenarios
 
-| Id    | Description                                    | Replication | Chaos      |
-|-------|------------------------------------------------|-------------|------------|
-| B-01  | Simulator baseline (NullTelemetrySink)         | n/a         | none       |
-| B-02  | `ILattice` micro-benchmark (harness-only)      | n/a         | n/a        |
-| B-03  | Current-state tree, replication off            | off         | none       |
-| B-04  | Current-state tree, single-peer replication    | on          | none       |
-| B-05  | Skewed-key variant (adaptive shard splits)     | off         | none       |
-| B-06  | Replication backpressure / catch-up            | on          | pause      |
-| B-07  | Receiver crash mid-stream                      | on          | kill       |
-| B-08  | Two-cluster bidirectional replication          | on (both)   | none       |
-| B-09  | Per-key replication filter cost                | on          | none       |
-| B-10  | Event-log tree with TTL                        | off         | none       |
-| B-12  | Observer-off control (paired with B-04)        | off         | none       |
+| Id                              | Description                                    | Replication | Chaos      |
+|---------------------------------|------------------------------------------------|-------------|------------|
+| `simulator-baseline`            | Simulator baseline (NullTelemetrySink)         | n/a         | none       |
+| `microbench`                    | `ILattice` micro-benchmark (harness-only)      | n/a         | n/a        |
+| `current-state-no-replication`  | Current-state tree, replication off            | off         | none       |
+| `current-state-single-peer`     | Current-state tree, single-peer replication    | on          | none       |
+| `skewed-key-shard-splits`       | Skewed-key variant (adaptive shard splits)     | off         | none       |
+| `replication-backpressure`      | Replication backpressure / catch-up            | on          | pause      |
+| `receiver-crash`                | Receiver crash mid-stream                      | on          | kill       |
+| `bidirectional-replication`     | Two-cluster bidirectional replication          | on (both)   | none       |
+| `replication-key-filter`        | Per-key replication filter cost                | on          | none       |
+| `event-log-with-ttl`            | Event-log tree with TTL                        | off         | none       |
+| `observer-no-peer`              | Observer-off control (paired with `current-state-single-peer`) | off | none |
 
-Per-scenario knobs live in `scenarios/B-XX.env`. Each file sets:
+Per-scenario knobs live in `scenarios/<slug>.env`. Each file sets:
 
 | Variable                       | Purpose                                                  |
 |--------------------------------|----------------------------------------------------------|
@@ -78,11 +79,11 @@ Per-scenario knobs live in `scenarios/B-XX.env`. Each file sets:
 | `BENCH_EVENT_LOG_TTL`          | TTL applied via `SetAsync(ttl)` for the event-log shape  |
 | `BENCH_REPLICATION_ENABLED`    | `true` to call `AddLatticeReplication` on the silo       |
 | `BENCH_REPLICATION_OVERLAY`    | `true` to bring up the replica cluster                    |
-| `BENCH_REPLICATION_KEY_PREFIXES`| Comma-separated prefix filter (B-09)                     |
+| `BENCH_REPLICATION_KEY_PREFIXES`| Comma-separated prefix filter (`replication-key-filter`) |
 | `BENCH_FLEET_SIZE`             | Number of vehicles to seed                                |
 | `BENCH_WARMUP_SECONDS`         | Settle time before measurement                            |
 | `BENCH_DURATION_SECONDS`       | Measurement window                                        |
-| `BENCH_CHAOS`                  | `none` \| `pause` \| `kill` (B-06, B-07)                  |
+| `BENCH_CHAOS`                  | `none` \| `pause` \| `kill` (`replication-backpressure`, `receiver-crash`) |
 | `BENCH_CHAOS_TARGET`           | Compose service name to apply chaos to                    |
 | `BENCH_CHAOS_AFTER_SECONDS`    | Delay before chaos action                                 |
 | `BENCH_CHAOS_DURATION_SECONDS` | How long the disruption lasts                             |
@@ -93,10 +94,10 @@ Prerequisites: Docker Desktop (or any Compose v2-compatible daemon) and PowerShe
 
 ```powershell
 # Default — bring stack up, run, tear down.
-./benchmark.ps1 B-03
+./benchmark.ps1 current-state-no-replication
 
 # Keep the stack running so Grafana stays accessible afterwards.
-./benchmark.ps1 -Scenario B-04 -KeepRunning
+./benchmark.ps1 -Scenario current-state-single-peer -KeepRunning
 
 # Tear down a -KeepRunning stack manually.
 docker compose -f docker-compose.yml -f docker-compose.replication.yml down -v
@@ -104,7 +105,7 @@ docker compose -f docker-compose.yml -f docker-compose.replication.yml down -v
 
 The script:
 
-1. Reads `scenarios/<id>.env`, exporting every key as a process env var.
+1. Reads `scenarios/<slug>.env`, exporting every key as a process env var.
 2. Picks the right compose-file overlay (replication or single-cluster).
 3. Syncs the Orleans.Lattice dashboards from `src/lattice.dashboards/Grafana/`
    into `benchmark/grafana/dashboards/` (substituting `${DS_PROMETHEUS}` → `prometheus`).
@@ -133,7 +134,7 @@ Each run produces a `.run/<scenario>/<run_id>/results.json` like:
 
 ```json
 {
-  "scenario": "B-03",
+  "scenario": "current-state-no-replication",
   "run_id":   "2026-04-30T14-08-41Z",
   "git_sha":  "abc1234",
   "started":  "2026-04-30T14:03:11Z",
@@ -159,7 +160,7 @@ Aggregate across runs:
 
 ```powershell
 # Latest run per scenario, side-by-side, with delta vs. the simulator baseline.
-./benchmark.ps1 -Compare -CompareAgainst B-01
+./benchmark.ps1 -Compare -CompareAgainst simulator-baseline
 
 # Without the delta column.
 ./benchmark.ps1 -Compare
@@ -200,9 +201,10 @@ console preview prints `panel: N keys (M extra overrides)` so you can see how
 many keys came from auto-discovery vs. the curated overlay.
 ## Trend dashboard (history stack)
 
-For run-over-run trend visualisation (e.g. *"how has B-03's p99 evolved across
-commits?"*) bring up the long-lived **history stack**. It runs in parallel with
-the per-run flow and accumulates summary scalars across every scenario invocation.
+For run-over-run trend visualisation (e.g. *"how has `current-state-no-replication`'s
+p99 evolved across commits?"*) bring up the long-lived **history stack**. It runs in
+parallel with the per-run flow and accumulates summary scalars across every scenario
+invocation.
 
 ```powershell
 ./benchmark.ps1 -OpenHistory     # one-shot; stays up across many scenario runs
@@ -221,7 +223,7 @@ History (cockpit)** dashboard. The cockpit layout has four bands:
    process, microbench) where every metric matching the row's regex auto-renders
    as a sparkline-stat tile. New metrics show up here on the next run with no
    dashboard edit. The microbench row binds to `bench_microbench_.*` populated
-   by the BenchmarkDotNet harness in B-02.
+   by the BenchmarkDotNet harness in the `microbench` scenario.
 3. **Trend explorer** — collapsed by default; multi-select any subset of the
    discovered metrics and overlay them as a single timeseries.
 4. **Coverage matrix** — collapsed by default; one stat tile per metric
@@ -248,17 +250,18 @@ The dashboards bind against the meters:
 
 Prometheus is at <http://localhost:9090> for raw query access.
 
-## B-02 — micro-benchmark path
+## `microbench` — micro-benchmark path
 
-`B-02` does not stand up the docker stack and does not boot an Orleans silo. It targets
-`ILattice` directly through a [BenchmarkDotNet](https://benchmarkdotnet.org/) harness that
-hand-instantiates the `LatticeGrain → ShardRootGrain → BPlusLeafGrain` vertical and routes
-the `IGrainFactory` calls through NSubstitute mocks. The measurement isolates the lattice
-algorithm cost from Orleans dispatch, serialization, and the simulator pipeline; the
-Orleans-native end-to-end cost is captured by B-03 onwards.
+`microbench` does not stand up the docker stack and does not boot an Orleans silo. It
+targets `ILattice` directly through a [BenchmarkDotNet](https://benchmarkdotnet.org/)
+harness that hand-instantiates the `LatticeGrain → ShardRootGrain → BPlusLeafGrain`
+vertical and routes the `IGrainFactory` calls through NSubstitute mocks. The
+measurement isolates the lattice algorithm cost from Orleans dispatch, serialization,
+and the simulator pipeline; the Orleans-native end-to-end cost is captured by
+`current-state-no-replication` onwards.
 
 ```powershell
-./benchmark.ps1 B-02
+./benchmark.ps1 microbench
 ```
 
 The runner builds and invokes `benchmark/host/Bench.Microbench/`, which exercises four
@@ -271,16 +274,16 @@ workloads against `ILattice`:
 | `bulk_load`      | `SetManyAsync(batchSize)`           | batched-write throughput               |
 | `mixed_70r_30w`  | weighted mix of `Get`/`Set`         | realistic read-heavy hot path          |
 
-Results land in `.run/B-02/<run_id>/results.json` with keys shaped
+Results land in `.run/microbench/<run_id>/results.json` with keys shaped
 `microbench_<workload>_<stat>_<unit>` (e.g. `microbench_point_write_p99_ns`,
 `microbench_bulk_load_per_second`, `microbench_point_read_alloc_b`). The
 opportunistic history-stack push uses the same path as the docker scenarios, so
-the cockpit's **Microbench (B-02)** category row populates automatically.
+the cockpit's **Microbench** category row populates automatically.
 
 ### Fidelity knob
 
 Two toolchains are available, picked via `BENCH_MICROBENCH_FIDELITY` in
-`scenarios/B-02.env`:
+`scenarios/microbench.env`:
 
 | Value             | Toolchain                      | Wall clock | Use it for                          |
 |-------------------|--------------------------------|------------|-------------------------------------|
@@ -293,7 +296,7 @@ paying `[GlobalSetup]` once per workload.
 
 ### Tuning the keyspace
 
-The remaining `BENCH_*` knobs in `scenarios/B-02.env` shape what's measured:
+The remaining `BENCH_*` knobs in `scenarios/microbench.env` shape what's measured:
 
 | Variable                    | Default | Effect                                                       |
 |-----------------------------|---------|--------------------------------------------------------------|

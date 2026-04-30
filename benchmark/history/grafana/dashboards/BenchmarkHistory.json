@@ -395,7 +395,7 @@
     },
     {
       "type": "row",
-      "title": "Microbench (B-02)",
+      "title": "Microbench",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 },
       "id": 650,
       "collapsed": false,
@@ -634,7 +634,7 @@
       {
         "type": "query",
         "name": "microbenchMetric",
-        "label": "Microbench (B-02) metrics",
+        "label": "Microbench metrics",
         "datasource": { "type": "prometheus", "uid": "victoriametrics" },
         "definition": "label_values({__name__=~\"bench_microbench_.*\"}, __name__)",
         "query": "label_values({__name__=~\"bench_microbench_.*\"}, __name__)",

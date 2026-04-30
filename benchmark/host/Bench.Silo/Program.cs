@@ -44,8 +44,8 @@ var serviceId = builder.Configuration["Orleans:ServiceId"] ?? "VehicleFleetSimul
 // ─── Telemetry sink switch (Telemetry:Sink) ────────────────────────────────────
 //
 //   "fanout"  → simulator default; cross-grain dispatch to IFleetFanOutGrain.
-//   "null"    → B-01 producer baseline / B-12 observer-off control.
-//   "lattice" → B-03 onward; AddLatticeSink registers the bounded-channel drain loop.
+//   "null"    → simulator-baseline producer baseline / observer-no-peer observer-off control.
+//   "lattice" → current-state-no-replication onward; AddLatticeSink registers the bounded-channel drain loop.
 //
 // All three branches register exactly one ITelemetrySink so the consumer (VehicleGrain) hits
 // a single sink — registering a second one would silently double-write and contaminate the
@@ -98,7 +98,7 @@ builder.Host.UseOrleans(silo =>
             {
                 opts.ClusterId = builder.Configuration["Replication:OriginClusterId"] ?? clusterId;
 
-                // B-09 — per-key prefix filter. When Replication:KeyPrefixes is set the observer
+                // replication-key-filter — per-key prefix filter. When Replication:KeyPrefixes is set the observer
                 // evaluates the prefix list inline before recording the WAL append. Empty/missing
                 // means "ship everything".
                 var prefixes = builder.Configuration["Replication:KeyPrefixes"];

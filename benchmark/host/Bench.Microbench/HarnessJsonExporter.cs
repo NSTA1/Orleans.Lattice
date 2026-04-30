@@ -83,7 +83,7 @@ internal sealed class HarnessJsonExporter : IExporter
 
         var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
-            ["scenario"] = Environment.GetEnvironmentVariable("BENCH_SCENARIO") ?? "B-02",
+            ["scenario"] = Environment.GetEnvironmentVariable("BENCH_SCENARIO") ?? "microbench",
             ["run_id"] = Environment.GetEnvironmentVariable("BENCH_RUN_ID") ?? DateTime.UtcNow.ToString("yyyy-MM-ddTHH-mm-ssZ", CultureInfo.InvariantCulture),
             ["git_sha"] = Environment.GetEnvironmentVariable("BENCH_GIT_SHA"),
             ["started"] = Environment.GetEnvironmentVariable("BENCH_STARTED") ?? DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
