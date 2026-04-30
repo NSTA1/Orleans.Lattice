@@ -1,0 +1,98 @@
+/* Project-specific overrides on top of Pico CSS. Keep this file lean. */
+
+main.fleet { max-width: none; padding: 1rem 1.25rem; }
+
+.fleet-header { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.fleet-header h1 { margin: 0; font-size: 1.25rem; font-weight: 600; flex: 0 0 auto; }
+.fleet-header .spacer { flex: 1 1 auto; }
+
+.fleet-status { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; padding: 0.25rem 0.6rem; border-radius: 999px; border: 1px solid var(--pico-muted-border-color); background: var(--pico-card-background-color); }
+.fleet-status .dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--pico-muted-color); }
+.fleet-status.connected .dot { background: #22c55e; }
+.fleet-status.connecting .dot { background: #f59e0b; }
+.fleet-status.error .dot { background: #ef4444; }
+
+.fleet-controls { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.fleet-controls label { font-size: 0.85rem; margin: 0; display: inline-flex; align-items: center; gap: 0.5rem; white-space: nowrap; }
+.fleet-controls input[type="range"] { width: 12rem; margin: 0; }
+.fleet-controls .value { font-variant-numeric: tabular-nums; width: 8rem; flex: 0 0 8rem; text-align: right; font-size: 0.85rem; color: var(--pico-muted-color); }
+
+.fleet-canvas-wrap { position: relative; width: 100%; height: calc(100vh - 9rem); min-height: 24rem; border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); overflow: hidden; background: #000; }
+.fleet-canvas-wrap canvas { width: 100%; height: 100%; display: block; }
+
+.fleet-banner { position: absolute; top: 0.75rem; left: 50%; transform: translateX(-50%); background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.6); color: #fecaca; padding: 0.5rem 0.9rem; border-radius: 0.5rem; font-size: 0.85rem; pointer-events: none; }
+
+/* ─── Control flyout ────────────────────────────────────────────────────── */
+/* margin: 0 cancels Pico's default `margin-bottom` on <button>; without it the button's margin
+   box is taller than its siblings and `align-items: center` pushes the visible button up,
+   so it no longer aligns with the slider rows on either side. */
+.control-toggle { margin: 0; padding: 0.35rem 0.9rem; font-size: 0.85rem; line-height: 1.4; border-radius: 0.4rem; border: 1px solid var(--pico-muted-border-color); background: var(--pico-card-background-color); color: inherit; cursor: pointer; align-self: center; }
+.control-toggle:hover { background: var(--pico-secondary); color: var(--pico-secondary-inverse); }
+
+.control-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 90; }
+
+.control-flyout { position: fixed; top: 0; right: 0; width: min(28rem, 100vw); height: 100vh; background: var(--pico-card-background-color); border-left: 1px solid var(--pico-muted-border-color); box-shadow: -2px 0 18px rgba(0,0,0,0.45); transform: translateX(100%); transition: transform 200ms ease-out; z-index: 100; display: flex; flex-direction: column; overflow: hidden; }
+.control-flyout.open { transform: translateX(0); }
+.control-flyout .control-header { display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; border-bottom: 1px solid var(--pico-muted-border-color); flex: 0 0 auto; }
+.control-flyout .control-header h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+.control-flyout .control-header .close { background: none; border: none; color: inherit; font-size: 1.5rem; line-height: 1; padding: 0 0.4rem; cursor: pointer; }
+.control-flyout .control-header .close:hover { color: var(--pico-primary); }
+
+.control-flyout .control-body { flex: 1 1 auto; overflow-y: auto; padding: 0.5rem 1rem 2rem; display: flex; flex-direction: column; gap: 0.75rem; }
+
+.control-flyout .control-section { border: 1px solid var(--pico-muted-border-color); border-radius: 0.45rem; padding: 0.6rem 0.8rem; background: var(--pico-background-color); }
+.control-flyout .control-section h3 { margin: 0 0 0.5rem; font-size: 0.9rem; font-weight: 600; color: var(--pico-primary); }
+.control-flyout .control-subsection { margin-top: 0.6rem; padding-top: 0.5rem; border-top: 1px dashed var(--pico-muted-border-color); }
+.control-flyout .control-subsection h4 { margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 500; }
+.control-flyout details.control-subsection > summary { cursor: pointer; font-size: 0.85rem; color: var(--pico-muted-color); margin-bottom: 0.4rem; }
+
+.control-flyout .control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 0.75rem; }
+.control-flyout .control-grid label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.8rem; margin: 0; }
+.control-flyout .control-grid input, .control-flyout .control-grid select { width: 100%; margin: 0; padding: 0.3rem 0.5rem; font-size: 0.85rem; }
+.control-flyout .control-grid small { color: var(--pico-muted-color); font-size: 0.75rem; }
+
+.control-flyout .control-actions { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.5rem; }
+.control-flyout .control-actions button { padding: 0.35rem 0.7rem; font-size: 0.82rem; border-radius: 0.35rem; border: 1px solid var(--pico-muted-border-color); background: var(--pico-card-background-color); color: inherit; cursor: pointer; }
+.control-flyout .control-actions button.primary { background: var(--pico-primary); color: var(--pico-primary-inverse); border-color: var(--pico-primary); }
+.control-flyout .control-actions button.inline { padding: 0.2rem 0.5rem; font-size: 0.75rem; }
+.control-flyout .control-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+.control-flyout .control-actions select { padding: 0.2rem 0.4rem; font-size: 0.78rem; margin: 0; width: auto; }
+
+.control-flyout .control-chip { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em; }
+.control-flyout .control-chip.ok { background: rgba(34,197,94,0.18); color: #86efac; }
+.control-flyout .control-chip.warn { background: rgba(245,158,11,0.2); color: #fde68a; }
+
+.control-flyout .scenario-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+.control-flyout .scenario { display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem; padding: 0.4rem 0.5rem; font-size: 0.78rem; text-align: left; border-radius: 0.35rem; border: 1px solid var(--pico-muted-border-color); background: var(--pico-card-background-color); color: inherit; cursor: pointer; }
+.control-flyout .scenario strong { font-size: 0.8rem; }
+.control-flyout .scenario small { color: var(--pico-muted-color); font-size: 0.7rem; }
+.control-flyout .scenario:hover { border-color: var(--pico-primary); }
+.control-flyout .scenario:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.control-flyout .vehicle-list { display: flex; flex-direction: column; gap: 0.25rem; max-height: 16rem; overflow-y: auto; margin-top: 0.5rem; }
+.control-flyout .vehicle-list .muted { color: var(--pico-muted-color); padding: 0 0.25rem; }
+.control-flyout .vehicle-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.5rem; font-size: 0.78rem; border-radius: 0.3rem; border: 1px solid transparent; background: var(--pico-card-background-color); color: inherit; cursor: pointer; text-align: left; }
+.control-flyout .vehicle-item code { font-family: var(--pico-font-family-monospace); font-size: 0.72rem; color: var(--pico-primary); }
+.control-flyout .vehicle-item small { color: var(--pico-muted-color); font-size: 0.7rem; flex: 1 1 auto; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.control-flyout .vehicle-item:hover { border-color: var(--pico-muted-border-color); }
+.control-flyout .vehicle-item.selected { border-color: var(--pico-primary); background: rgba(99,102,241,0.1); }
+
+.control-flyout .inspector dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.15rem 0.6rem; margin: 0.4rem 0; font-size: 0.78rem; }
+.control-flyout .inspector dt { color: var(--pico-muted-color); }
+.control-flyout .inspector dd { margin: 0; word-break: break-all; }
+
+.control-flyout .diag-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr)); gap: 0.4rem; margin-top: 0.5rem; }
+.control-flyout .diag-grid > div { padding: 0.35rem 0.5rem; border: 1px solid var(--pico-muted-border-color); border-radius: 0.3rem; background: var(--pico-card-background-color); display: flex; flex-direction: column; gap: 0.1rem; }
+.control-flyout .diag-grid small { color: var(--pico-muted-color); font-size: 0.7rem; }
+.control-flyout .diag-grid strong { font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+
+.control-flyout .control-toast { padding: 0.4rem 0.6rem; border-radius: 0.35rem; font-size: 0.8rem; margin-bottom: 0.25rem; }
+.control-flyout .control-toast.ok { background: rgba(34,197,94,0.15); color: #86efac; border: 1px solid rgba(34,197,94,0.4); }
+.control-flyout .control-toast.err { background: rgba(239,68,68,0.15); color: #fecaca; border: 1px solid rgba(239,68,68,0.4); }
+
+.control-flyout .footer { color: var(--pico-muted-color); font-size: 0.7rem; text-align: right; }
+
+#blazor-error-ui { color-scheme: light only; background: lightyellow; bottom: 0; box-shadow: 0 -1px 2px rgba(0,0,0,0.2); box-sizing: border-box; display: none; left: 0; padding: 0.6rem 1.25rem 0.7rem 1.25rem; position: fixed; width: 100%; z-index: 1000; color: #000; }
+#blazor-error-ui .dismiss { cursor: pointer; position: absolute; right: 0.75rem; top: 0.5rem; }
+.blazor-error-boundary { background: #b32121; padding: 1rem; color: white; }
+.blazor-error-boundary::after { content: "An error has occurred."; }

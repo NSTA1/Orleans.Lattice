@@ -1,0 +1,90 @@
+# Vehicle Fleet Simulator — full local stack (Azurite + Silo + Api + Ui).
+#
+# Usage:
+#   docker compose up --build
+#   docker compose down -v        # also clears Azurite persisted state
+#
+# The Silo and Api both reach Azurite via the "azurite" service hostname; the
+# UseDevelopmentStorage=true shortcut targets 127.0.0.1, so we set explicit
+# endpoints in the connection-string env vars below. The Ui is a Blazor WASM
+# SPA served by nginx — it talks to the Api from the user's browser at
+# http://localhost:8080 (the host-side mapping), not over the compose network.
+
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    container_name: vfs-azurite
+    command:
+      - "azurite"
+      - "--blobHost=0.0.0.0"
+      - "--queueHost=0.0.0.0"
+      - "--tableHost=0.0.0.0"
+      - "--location=/data"
+      - "--skipApiVersionCheck"
+      - "--silent"
+    ports:
+      - "10000:10000" # blob
+      - "10001:10001" # queue
+      - "10002:10002" # table
+    volumes:
+      - azurite-data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10002"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  silo:
+    build:
+      context: .
+      dockerfile: src/VehicleFleetSimulator.Silo/Dockerfile
+    container_name: vfs-silo
+    depends_on:
+      azurite:
+        condition: service_healthy
+    environment:
+      DOTNET_ENVIRONMENT: Production
+      Orleans__ClusterId: vfs-dev
+      Orleans__ServiceId: VehicleFleetSimulator
+      Persistence__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;"
+      Streams__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;"
+    expose:
+      - "11111"
+      - "30000"
+
+  api:
+    build:
+      context: .
+      dockerfile: src/VehicleFleetSimulator.Api/Dockerfile
+    container_name: vfs-api
+    depends_on:
+      azurite:
+        condition: service_healthy
+      silo:
+        condition: service_started
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Orleans__ClusterId: vfs-dev
+      Orleans__ServiceId: VehicleFleetSimulator
+      Persistence__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;"
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+
+  ui:
+    # Blazor WebAssembly client served by nginx. Pure static hosting — the gRPC-Web
+    # connection is opened from the user's browser straight at the api container's
+    # host-mapped port (8080), so the ui service has no network dependency on the
+    # api beyond depends_on for predictable startup ordering.
+    build:
+      context: .
+      dockerfile: src/VehicleFleetSimulator.Ui/Dockerfile
+    container_name: vfs-ui
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "8090:80"
+
+volumes:
+  azurite-data:

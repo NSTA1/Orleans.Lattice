@@ -1,0 +1,94 @@
+@*
+    Isolated slider for the global TimeScale. Lives in its own component so the parent's
+    high-frequency re-renders (vehicle count ticks, connection state changes) don't rewrite
+    this <input>'s `value` attribute mid-drag and visibly yank the thumb back to a stale value.
+
+    Re-render policy:
+      * Self-initiated (oninput from the user) → render so the label updates.
+      * Parent-initiated with a NEW InitialValue (e.g. server hydration) → render to adopt it.
+      * Parent-initiated with no parameter change → skip; the DOM already shows the truth.
+*@
+<label>
+    Sim speed
+    <input type="range" min="@Min" max="@Max" step="@Step"
+           value="@_value" @oninput="OnInput" />
+    <span class="value">@FormatLabel(_value)</span>
+</label>
+
+@code {
+    [Parameter, EditorRequired] public int Min { get; set; }
+    [Parameter, EditorRequired] public int Max { get; set; }
+    [Parameter] public int Step { get; set; } = 1;
+
+    /// <summary>
+    /// Authoritative starting value. The component snapshots this on first render and again
+    /// any time it changes (e.g. when the server-side value is loaded asynchronously after
+    /// the page first renders). It is *not* a continuous binding — once the user starts
+    /// dragging, the parent must not echo each intermediate value back through this parameter.
+    /// </summary>
+    [Parameter, EditorRequired] public int InitialValue { get; set; }
+
+    [Parameter, EditorRequired] public TimeSpan TickInterval { get; set; }
+
+    /// <summary>Fired on every oninput. The parent typically debounces and PUTs to the server.</summary>
+    [Parameter] public EventCallback<int> ValueChanged { get; set; }
+
+    private int _value;
+    private int _lastInitialValueSeen;
+    private bool _seeded;
+    private bool _renderRequested = true;
+
+    protected override void OnParametersSet()
+    {
+        if (!_seeded || InitialValue != _lastInitialValueSeen)
+        {
+            _value = Math.Clamp(InitialValue, Min, Max);
+            _lastInitialValueSeen = InitialValue;
+            _seeded = true;
+            _renderRequested = true;
+        }
+    }
+
+    protected override bool ShouldRender()
+    {
+        // Default false: parent re-renders that don't carry a new InitialValue must not reach
+        // the <input>, otherwise the bound `value` attribute snaps mid-drag and the thumb
+        // visibly stutters.
+        if (_renderRequested)
+        {
+            _renderRequested = false;
+            return true;
+        }
+        return false;
+    }
+
+    private async Task OnInput(ChangeEventArgs e)
+    {
+        if (e.Value is null) return;
+        if (!int.TryParse(e.Value.ToString(), out var raw)) return;
+        var clamped = Math.Clamp(raw, Min, Max);
+        if (clamped == _value) return;
+
+        _value = clamped;
+        _renderRequested = true; // refresh the label
+        await ValueChanged.InvokeAsync(_value);
+    }
+
+    private string FormatLabel(int timeScale)
+    {
+        var perTick = TimeSpan.FromSeconds(TickInterval.TotalSeconds * timeScale);
+        if (perTick.TotalHours >= 1)
+        {
+            var h = (int)perTick.TotalHours;
+            var m = perTick.Minutes;
+            return m == 0 ? $"{h} h/tick" : $"{h} h {m} min/tick";
+        }
+        if (perTick.TotalMinutes >= 1)
+        {
+            var m = (int)perTick.TotalMinutes;
+            var s = perTick.Seconds;
+            return s == 0 ? $"{m} min/tick" : $"{m} min {s} s/tick";
+        }
+        return $"{(int)perTick.TotalSeconds} s/tick";
+    }
+}

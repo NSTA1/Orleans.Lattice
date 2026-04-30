@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VehicleFleetSimulator.Abstractions/VehicleFleetSimulator.Abstractions.csproj" />
+    <Project Path="src/VehicleFleetSimulator.Api/VehicleFleetSimulator.Api.csproj" />
+    <Project Path="src/VehicleFleetSimulator.Grains/VehicleFleetSimulator.Grains.csproj" />
+    <Project Path="src/VehicleFleetSimulator.Silo/VehicleFleetSimulator.Silo.csproj" />
+    <Project Path="src/VehicleFleetSimulator.Ui/VehicleFleetSimulator.Ui.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/VehicleFleetSimulator.Tests/VehicleFleetSimulator.Tests.csproj" />
+  </Folder>
+</Solution>
