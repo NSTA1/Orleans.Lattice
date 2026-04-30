@@ -1,0 +1,17 @@
+# Grafana provisioning template — file-system dashboard provider for Orleans.Lattice dashboards.
+# Copy to /etc/grafana/provisioning/dashboards/ and write the JSON files emitted by
+# Orleans.Lattice.Dashboards.LatticeDashboards.GetGrafanaDashboardJson(...) to the
+# directory referenced by `path` below.
+apiVersion: 1
+providers:
+  - name: orleans-lattice
+    orgId: 1
+    folder: Orleans.Lattice
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/orleans-lattice
+      foldersFromFilesStructure: false

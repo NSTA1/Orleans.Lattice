@@ -1,0 +1,615 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "name": "Tree lifecycle",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "enable": true,
+        "iconColor": "rgba(255, 96, 96, 1)",
+        "expr": "sum by (kind) (changes(orleans_lattice_tree_lifecycle_total[5m]))",
+        "titleFormat": "tree.lifecycle {{kind}}"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "orleans",
+    "lattice",
+    "overview"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "tree",
+        "label": "Tree",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(orleans_lattice_shard_writes_total, tree)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "regex": "",
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(orleans_lattice_shard_reads_total, cluster)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "silo",
+        "label": "Silo",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(orleans_lattice_shard_reads_total, instance)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Orleans.Lattice — Overview",
+  "uid": "orleans-lattice-overview",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Cluster throughput (ops/s)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "targets": [
+        {
+          "refId": "R",
+          "expr": "sum(rate(orleans_lattice_shard_reads_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[1m]))",
+          "legendFormat": "reads"
+        },
+        {
+          "refId": "W",
+          "expr": "sum(rate(orleans_lattice_shard_writes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[1m]))",
+          "legendFormat": "writes"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Per-tree write throughput",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree) (rate(orleans_lattice_shard_writes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[1m]))",
+          "legendFormat": "{{tree}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Leaf write duration (p50/p95/p99 ms)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "P50",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_leaf_write_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "P95",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_leaf_write_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "P99",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_leaf_write_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Leaf scan duration p95 by operation",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(orleans_lattice_leaf_scan_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "{{operation}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Cache hit ratio",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(orleans_lattice_cache_hits_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum(rate(orleans_lattice_cache_hits_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) + sum(rate(orleans_lattice_cache_misses_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1)",
+          "legendFormat": "hit ratio"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Tombstone churn (ops/s)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "C",
+          "expr": "sum(rate(orleans_lattice_leaf_tombstones_created_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "created"
+        },
+        {
+          "refId": "R",
+          "expr": "sum(rate(orleans_lattice_leaf_tombstones_reaped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "reaped"
+        },
+        {
+          "refId": "X",
+          "expr": "sum(rate(orleans_lattice_leaf_tombstones_expired_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "expired (ttl)"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Compaction duration p95 (ms)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_leaf_compaction_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Splits committed (rate)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "splits/min"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "S",
+          "expr": "sum by (tree) (rate(orleans_lattice_shard_splits_committed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60",
+          "legendFormat": "shard {{tree}}"
+        },
+        {
+          "refId": "L",
+          "expr": "sum by (tree) (rate(orleans_lattice_leaf_splits_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60",
+          "legendFormat": "leaf {{tree}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Atomic write outcomes (rate)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(orleans_lattice_atomic_write_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Coordinator completions (rate)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (rate(orleans_lattice_coordinator_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m]))",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Events published (by kind)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (rate(orleans_lattice_events_published_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Events dropped (by reason)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(orleans_lattice_events_dropped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Tree lifecycle events (count over range)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 0,
+        "y": 42
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (increase(orleans_lattice_tree_lifecycle_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range]))",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Runtime config changes (by config / tree)",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 42
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, config) (increase(orleans_lattice_config_changed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range]))",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Active shards (per tree)",
+      "description": "Distinct shard count per tree over time, derived from observed orleans_lattice_shard_reads_total series. Respects the Tree / Cluster / Silo filters.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count by (tree) (count by (tree, shard) (orleans_lattice_shard_reads_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}))",
+          "legendFormat": "{{tree}}"
+        }
+      ]
+    }
+  ]
+}
