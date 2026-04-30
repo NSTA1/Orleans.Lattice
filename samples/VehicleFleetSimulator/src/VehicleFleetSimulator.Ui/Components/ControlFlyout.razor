@@ -1,0 +1,180 @@
+@*
+    Control flyout — narrow surface that wraps the LoadHarness CLI's spawn / reset workflow,
+    plus a row of named scenario presets. Everything else (per-vehicle inspector, bulk fleet
+    ops, recording, diagnostics, simulation tuning) was deliberately stripped: the existing
+    sliders in Home.razor cover sim controls, and per-operator workflows are better served by
+    the REST endpoints directly than by half-finished UI surfaces.
+
+    The component is self-contained: it owns its toast state and its own scenario list, and
+    only depends on the parent for visibility (Open / OpenChanged).
+*@
+@implements IAsyncDisposable
+@inject FleetAdminClient Admin
+@inject FleetStreamClient Stream
+@inject FleetState Fleet
+
+<aside class="control-flyout @(Open ? "open" : "")" aria-hidden="@(!Open)">
+    <header class="control-header">
+        <h2>Control</h2>
+        <button class="close" type="button" @onclick="() => OpenChanged.InvokeAsync(false)" aria-label="Close">×</button>
+    </header>
+
+    <div class="control-body">
+        <section class="control-section">
+            <h3>Spawn</h3>
+            <div class="control-grid">
+                <label>
+                    Vehicles
+                    <input type="number" min="1" max="5000" step="1" @bind="_spawnCount" />
+                </label>
+                <label>
+                    Start city
+                    <select @bind="_spawnStartCity">
+                        <option value="">(random)</option>
+                        @if (Stream.CityGraph is { } g)
+                        {
+                            @foreach (var c in g.Cities.OrderBy(c => c.Name))
+                            {
+                                <option value="@c.Id">@c.Name</option>
+                            }
+                        }
+                    </select>
+                </label>
+            </div>
+            <div class="control-actions">
+                <button type="button" class="primary" disabled="@_busy" @onclick="SpawnAsync">Spawn vehicles</button>
+                <button type="button" disabled="@_busy" @onclick="ResetAsync">Reset fleet</button>
+            </div>
+
+            @if (_scenarios.Count > 0)
+            {
+                <div class="control-subsection">
+                    <h4>Scenario presets</h4>
+                    <div class="scenario-grid">
+                        @foreach (var sc in _scenarios)
+                        {
+                            <button type="button" class="scenario" disabled="@_busy"
+                                    title="@sc.Description"
+                                    @onclick="() => ApplyScenarioAsync(sc.Name)">
+                                <strong>@sc.DisplayName</strong>
+                                <small>@sc.VehicleCount.ToString("N0") vehicles@(sc.StartCityId is { } s ? $" · {s}" : "")</small>
+                            </button>
+                        }
+                    </div>
+                </div>
+            }
+        </section>
+
+        @if (_lastMessage is { } msg)
+        {
+            <div class="control-toast @_lastMessageClass">@msg</div>
+        }
+    </div>
+</aside>
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+
+    // Spawn form ----------------------------------------------------------------
+    private int _spawnCount = 50;
+    private string _spawnStartCity = "";
+
+    // Scenario list -------------------------------------------------------------
+    private IReadOnlyList<FleetAdminClient.ScenarioPresetDto> _scenarios = Array.Empty<FleetAdminClient.ScenarioPresetDto>();
+
+    // Toast / busy --------------------------------------------------------------
+    private string? _lastMessage;
+    private string _lastMessageClass = "";
+    private CancellationTokenSource? _toastCts;
+    private bool _busy;
+
+    protected override Task OnInitializedAsync()
+    {
+        _ = RefreshScenariosAsync();
+        return Task.CompletedTask;
+    }
+
+    private async Task RefreshScenariosAsync()
+    {
+        _scenarios = await Admin.ListScenariosAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SpawnAsync()
+    {
+        await RunGuardedAsync(async () =>
+        {
+            var n = await Admin.SpawnAsync(_spawnCount, string.IsNullOrEmpty(_spawnStartCity) ? null : _spawnStartCity);
+            Toast($"Spawned {n} vehicle{(n == 1 ? "" : "s")}.", ok: true);
+        });
+    }
+
+    private async Task ResetAsync()
+    {
+        await RunGuardedAsync(async () =>
+        {
+            var s = await Admin.ResetAsync();
+            Toast($"Removed {s.Removed}, stopped {s.Stopped}.", ok: true);
+            // Local mirror of telemetry-derived state. Without this the Home.razor render loop
+            // keeps the last-known dot positions on screen until the next telemetry packet (none
+            // arrive after a reset, so they would otherwise stay frozen forever).
+            Fleet.Clear();
+        });
+    }
+
+    private async Task ApplyScenarioAsync(string name)
+    {
+        await RunGuardedAsync(async () =>
+        {
+            var n = await Admin.ApplyScenarioAsync(name);
+            Toast($"Scenario '{name}' applied; {n} vehicles spawned.", ok: true);
+            // If the preset wipes the fleet server-side, also clear our local telemetry mirror
+            // so the render loop drops the old dots immediately. Without this, the previous
+            // vehicles stay frozen on screen until a fresh packet by chance excludes them --
+            // which never happens, since they no longer emit telemetry.
+            if (_scenarios.FirstOrDefault(s => s.Name == name)?.ResetFleetFirst == true)
+            {
+                Fleet.Clear();
+            }
+        });
+    }
+
+    private async Task RunGuardedAsync(Func<Task> action)
+    {
+        if (_busy) return;
+        _busy = true;
+        await InvokeAsync(StateHasChanged);
+        try { await action(); }
+        catch (Exception ex) { Toast($"Failed: {ex.Message}", ok: false); }
+        finally
+        {
+            _busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void Toast(string message, bool ok)
+    {
+        _lastMessage = message;
+        _lastMessageClass = ok ? "ok" : "err";
+        _toastCts?.Cancel();
+        _toastCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        _toastCts = cts;
+        _ = Task.Run(async () =>
+        {
+            try { await Task.Delay(4000, cts.Token); }
+            catch (OperationCanceledException) { return; }
+            _lastMessage = null;
+            await InvokeAsync(StateHasChanged);
+        });
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _toastCts?.Cancel();
+        _toastCts?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

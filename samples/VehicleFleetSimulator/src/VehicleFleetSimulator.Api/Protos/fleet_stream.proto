@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+option csharp_namespace = "VehicleFleetSimulator.Api.Grpc";
+package vehiclefleet.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Server-streaming consumer surface for fleet telemetry and discrete events.
+service FleetStream {
+  // Server batches up to ~50 ms worth of telemetry per frame so a single-threaded
+  // browser consumer pays per-message protobuf overhead at frame rate, not tick rate.
+  rpc SubscribeTelemetry(TelemetryFilter) returns (stream TelemetryBatch);
+  rpc SubscribeEvents(EventFilter) returns (stream VehicleEventMessage);
+}
+
+// One frame of coalesced telemetry. Always non-empty when written by the server.
+message TelemetryBatch {
+  repeated TelemetryMessage messages = 1;
+}
+
+message TelemetryFilter {
+  // When set, only messages for this vehicle (UUID string) are streamed.
+  optional string vehicle_id = 1;
+  // When set, only vehicles whose route contains this city id are streamed.
+  optional string route_contains = 2;
+}
+
+message EventFilter {
+  optional string vehicle_id = 1;
+  // When non-empty, restricts the stream to the listed event kinds.
+  repeated EventKind event_types = 2;
+}
+
+enum VehicleStatus {
+  VEHICLE_STATUS_UNSPECIFIED = 0;
+  VEHICLE_STATUS_IDLE = 1;
+  VEHICLE_STATUS_DRIVING = 2;
+  VEHICLE_STATUS_REFUELLING = 3;
+  VEHICLE_STATUS_ROUTE_COMPLETED = 4;
+}
+
+message TelemetryMessage {
+  string vehicle_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string from_city_id = 3;
+  string to_city_id = 4;
+  double segment_progress_km = 5;
+  double segment_length_km = 6;
+  double speed_kph = 7;
+  double fuel_litres = 8;
+  VehicleStatus status = 9;
+  // Configured tank capacity for this vehicle, in litres. Stable for the vehicle's lifetime
+  // but shipped on every message so a freshly-attached subscriber can render a correct
+  // fuel-fraction gauge from the very first packet it receives.
+  double tank_capacity_litres = 10;
+}
+
+enum EventKind {
+  EVENT_KIND_UNSPECIFIED = 0;
+  EVENT_KIND_DEPARTED_CITY = 1;
+  EVENT_KIND_ARRIVED_CITY = 2;
+  EVENT_KIND_REFUELLING_STARTED = 3;
+  EVENT_KIND_REFUELLING_COMPLETED = 4;
+  EVENT_KIND_ROUTE_COMPLETED = 5;
+}
+
+message VehicleEventMessage {
+  string vehicle_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  EventKind kind = 3;
+  oneof payload {
+    DepartedCity departed = 10;
+    ArrivedCity arrived = 11;
+    RefuellingStarted refuelling_started = 12;
+    RefuellingCompleted refuelling_completed = 13;
+    RouteCompleted route_completed = 14;
+  }
+}
+
+message DepartedCity {
+  string city_id = 1;
+  string next_city_id = 2;
+}
+
+message ArrivedCity {
+  string city_id = 1;
+}
+
+message RefuellingStarted {
+  string city_id = 1;
+  double fuel_required_litres = 2;
+  double fuel_available_litres = 3;
+}
+
+message RefuellingCompleted {
+  string city_id = 1;
+  double fuel_litres = 2;
+}
+
+message RouteCompleted {
+  repeated string completed_route = 1;
+  repeated string new_route = 2;
+}

@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+**/.idea/
+**/.azurite/
+**/*.user
+.git/
+.github/
+**/TestResults/
+**/coverage*/

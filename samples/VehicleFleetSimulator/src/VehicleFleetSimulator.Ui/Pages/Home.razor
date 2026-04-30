@@ -1,0 +1,423 @@
+@page "/"
+@implements IAsyncDisposable
+@inject FleetStreamClient Client
+@inject FleetState Fleet
+@inject SimulationConfigClient SimConfig
+@inject IJSRuntime Js
+@using System.Buffers.Binary
+
+<PageTitle>Vehicle Fleet Simulator</PageTitle>
+
+<main class="container fleet">
+    <header class="fleet-header">
+        <h1>Vehicle Fleet Simulator</h1>
+        <span class="fleet-status @StatusClass" role="status">
+            <span class="dot"></span>
+            <span>@StatusLabel</span>
+            @if (Client.ConnectionState == FleetConnectionState.Connected)
+            {
+                <small>· @Fleet.Count vehicle@(Fleet.Count == 1 ? "" : "s")</small>
+            }
+        </span>
+        <span class="spacer"></span>
+        <div class="fleet-controls">
+            <label>
+                Sync
+                <input type="range" min="50" max="2000" step="50"
+                       @bind="RedrawIntervalMs" @bind:event="oninput" />
+                <span class="value">@RedrawIntervalMs ms</span>
+            </label>
+            <SimSpeedSlider Min="TimeScaleMin" Max="TimeScaleMax" Step="100"
+                            InitialValue="_initialTimeScale"
+                            TickInterval="TickInterval"
+                            ValueChanged="OnTimeScaleChanged" />
+            <button type="button" class="control-toggle" @onclick="ToggleControl">
+                @(_controlOpen ? "Close Control" : "Control")
+            </button>
+        </div>
+    </header>
+
+    <div class="fleet-canvas-wrap">
+        <canvas id="fleet-canvas"></canvas>
+        @if (Client.ConnectionState is FleetConnectionState.Error or FleetConnectionState.Disconnected)
+        {
+            <div class="fleet-banner">
+                Connection lost — retrying every @((int)FleetStreamClient.ReconnectInterval.TotalSeconds) seconds.
+            </div>
+        }
+        else if (Client.ConnectionState == FleetConnectionState.Connecting && _layout is null)
+        {
+            <div class="fleet-banner" style="background:rgba(245,158,11,0.15);border-color:rgba(245,158,11,0.6);color:#fde68a;">
+                Connecting to simulator…
+            </div>
+        }
+    </div>
+
+    <ControlFlyout Open="_controlOpen" OpenChanged="OnControlOpenChanged" />
+    @if (_controlOpen)
+    {
+        <div class="control-scrim" @onclick="() => OnControlOpenChanged(false)"></div>
+    }
+</main>
+
+@code {
+    private const string CanvasId = "fleet-canvas";
+
+    private int _redrawIntervalMs = 200;
+    private int RedrawIntervalMs
+    {
+        get => _redrawIntervalMs;
+        set
+        {
+            _redrawIntervalMs = Math.Clamp(value, 50, 5000);
+            // The render loop reads this on its next sleep, so no kick is needed.
+        }
+    }
+
+    // Camera tilt for the 2.5D ground-plane view is now driven entirely from the canvas: a
+    // left-click-and-drag on empty space rotates the scene around the X (pitch) and Y (yaw)
+    // axes inside fleet-canvas.js, so the C# side no longer mirrors a tilt value or pushes
+    // pitch updates over JS interop.
+
+    // Sim-speed slider.
+    // grain cadence) with 100× step. The label shows the resulting sim duration per tick rather
+    // than the opaque multiplier.
+    private const int TimeScaleMin = 1000;
+    private const int TimeScaleMax = 10000;
+    private const int TimeScaleDefault = 9000;
+    private static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(200);
+
+    // _initialTimeScale is what we pass to <SimSpeedSlider> as InitialValue. We only rewrite
+    // it from a server hydration (LoadInitialTimeScaleAsync); per-keystroke drag values from
+    // the child are kept in _pendingTimeScale so the slider's owned value isn't fought by
+    // the parent's render churn while the user is dragging.
+    private int _initialTimeScale = TimeScaleDefault;
+    private int _pendingTimeScale = TimeScaleDefault;
+
+    private CancellationTokenSource? _timeScaleDebounce;
+    private bool _timeScaleLoaded;
+
+    // Control flyout open/close. The flyout is its own component (ControlFlyout.razor) and
+    // owns all of its admin-API plumbing -- the only state we keep here is the visibility flag.
+    private bool _controlOpen;
+
+    private void ToggleControl() => _controlOpen = !_controlOpen;
+
+    private void OnControlOpenChanged(bool open)
+    {
+        _controlOpen = open;
+        StateHasChanged();
+    }
+
+    private CityLayout.Result? _layout;
+    // Mutable mirror of the city positions in `_layout.ById`. We keep it separate so the user
+    // can drag cities around without us having to reach into the immutable layout record. Both
+    // C# (vehicle pre-projection) and the JS worker (static map texture) read from this set
+    // of positions; OnCityMoved is the single point that updates it from the canvas drag.
+    private Dictionary<string, (double X, double Y)>? _cityPositions;
+    private CancellationTokenSource? _renderCts;
+    private bool _layoutPushed;
+    private DotNetObjectReference<Home>? _selfRef;
+
+    // Projection parameters pushed back from the JS worker after every layout/resize. We need
+    // these to pre-project vehicle positions into screen pixel space inside C#, so the worker
+    // never has to multiply per dot per frame. Reference assignment is atomic, which is all the
+    // synchronisation we need: a brief stale read on a resize boundary is invisible.
+    private sealed record ViewportProj(double Scale, double OffsetX, double OffsetY, int Width, int Height);
+    private ViewportProj? _viewport;
+
+    [JSInvokable]
+    public void OnViewportChanged(double scale, double offsetX, double offsetY, int width, int height)
+        => _viewport = new ViewportProj(scale, offsetX, offsetY, width, height);
+
+    [JSInvokable]
+    public void OnCityMoved(string id, double x, double y)
+    {
+        // Called from fleet-canvas.js on every pointermove during a city drag. We just record
+        // the latest position; the next BuildVehiclePacket tick picks it up automatically, so
+        // vehicles already en route smoothly bend onto the new line.
+        if (_cityPositions is null) return;
+        _cityPositions[id] = (x, y);
+    }
+
+    protected override void OnInitialized()
+    {
+        Client.StateChanged += HandleStateChanged;
+        Client.CityGraphLoaded += HandleGraphLoaded;
+        Client.Start();
+        _ = LoadInitialTimeScaleAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _selfRef ??= DotNetObjectReference.Create(this);
+            _renderCts = new CancellationTokenSource();
+            _ = RenderLoopAsync(_renderCts.Token);
+            // Push the layout if it arrived before the canvas was in the DOM.
+            if (_layout is not null) await PushLayoutAsync();
+        }
+    }
+
+    private void HandleStateChanged() => InvokeAsync(StateHasChanged);
+
+    private void HandleGraphLoaded()
+    {
+        if (Client.CityGraph is { } g)
+        {
+            _layout = CityLayout.Compute(g);
+            _cityPositions = _layout.Cities.ToDictionary(c => c.Id, c => (c.X, c.Y));
+            _layoutPushed = false;
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task PushLayoutAsync()
+    {
+        if (_layout is null || _layoutPushed) return;
+        var nameById = Client.CityGraph?.Cities.ToDictionary(c => c.Id, c => c.Name)
+            ?? new Dictionary<string, string>();
+        var payload = new
+        {
+            cities = _layout.Cities.Select(c => new
+            {
+                id = c.Id,
+                name = nameById.TryGetValue(c.Id, out var n) ? n : c.Id,
+                x = c.X,
+                y = c.Y
+            }).ToArray(),
+            edges = _layout.Edges.Select(e => new { a = e.A, b = e.B }).ToArray(),
+            bounds = new { minX = _layout.MinX, minY = _layout.MinY, maxX = _layout.MaxX, maxY = _layout.MaxY }
+        };
+        try
+        {
+            _selfRef ??= DotNetObjectReference.Create(this);
+            await Js.InvokeVoidAsync("fleetCanvas.setLayout", CanvasId,
+                System.Text.Json.JsonSerializer.Serialize(payload), _selfRef);
+            _layoutPushed = true;
+        }
+        catch
+        {
+            // Canvas may not be in the DOM yet on the very first tick; the render loop will retry.
+        }
+    }
+
+    private async Task LoadInitialTimeScaleAsync()
+    {
+        var current = await SimConfig.GetTimeScaleAsync();
+        if (current is { } v && double.IsFinite(v) && v > 0)
+        {
+            // Snap server value onto the slider's discrete grid; clamp guards against a hand-set
+            // value (e.g. someone PUT 50000 directly via curl) that would push the thumb off track.
+            _initialTimeScale = Math.Clamp((int)Math.Round(v), TimeScaleMin, TimeScaleMax);
+            _pendingTimeScale = _initialTimeScale;
+        }
+        _timeScaleLoaded = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void OnTimeScaleChanged(int value)
+    {
+        _pendingTimeScale = Math.Clamp(value, TimeScaleMin, TimeScaleMax);
+        ScheduleTimeScalePush();
+    }
+
+    private void ScheduleTimeScalePush()
+    {
+        // Debounce: don't fire a PUT on every oninput tick of the slider drag. The 250 ms window is
+        // long enough to coalesce a continuous drag into a single trailing request, short enough
+        // that a deliberate slider tap feels live. Pushes that happen during the initial load are
+        // ignored so the UI's mid-load rendering doesn't accidentally write back the default value.
+        if (!_timeScaleLoaded) return;
+
+        _timeScaleDebounce?.Cancel();
+        _timeScaleDebounce?.Dispose();
+        var cts = new CancellationTokenSource();
+        _timeScaleDebounce = cts;
+        var value = (double)_pendingTimeScale;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(250, cts.Token);
+                await SimConfig.SetTimeScaleAsync(value, cts.Token);
+            }
+            catch (OperationCanceledException) { }
+            catch
+            {
+                // Swallow: failed updates leave the slider showing the user's intent. The next
+                // movement will retry; the previous server value remains in effect meanwhile.
+            }
+        });
+    }
+
+    private async Task RenderLoopAsync(CancellationToken ct)
+    {
+        var lastRenderedCount = -1;
+        var lastSentVersion = -1L;
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (_layout is not null)
+                {
+                    if (!_layoutPushed) await PushLayoutAsync();
+
+                    // Only build + send a packet when telemetry has actually arrived since the
+                    // last frame. Without this guard the fixed-cadence poll aliases against the
+                    // 200 ms grain tick: depending on phase, some iterations capture the same
+                    // snapshot twice, sending an identical packet to the worker, whose
+                    // exp-smoothing then converges to a halt for that beat -- and a 5 Hz
+                    // stop/start gait emerges across the whole fleet because all 50 vehicles
+                    // share the same scheduler.
+                    var version = Fleet.Version;
+                    if (version != lastSentVersion)
+                    {
+                        var packet = BuildVehiclePacket(_layout);
+                        // packet.Length == 0 means the worker hasn't reported a viewport yet,
+                        // so we have no projection to draw with -- skip the interop. A 4-byte
+                        // packet (header-only, count=0) is a legitimate "fleet is empty" frame
+                        // and MUST be forwarded so the worker drops its cached dots; without
+                        // this, "Reset fleet" leaves the last-known positions frozen on screen.
+                        if (packet.Length >= 4)
+                        {
+                            await Js.InvokeVoidAsync("fleetCanvas.update", CanvasId, packet);
+                            lastSentVersion = version;
+                        }
+                    }
+                }
+
+                // The canvas is updated every tick by the JS side, but the Razor markup that
+                // displays the live vehicle count only re-renders when we ask it to. Without
+                // this, the pill is stuck at "0 vehicles" forever even though the canvas is
+                // happily drawing dots — there is no implicit signal from FleetState to Blazor.
+                var currentCount = Fleet.Count;
+                if (currentCount != lastRenderedCount)
+                {
+                    lastRenderedCount = currentCount;
+                    StateHasChanged();
+                }
+            }
+            catch (TaskCanceledException) { return; }
+            catch (OperationCanceledException) { return; }
+            catch
+            {
+                // Swallow render errors so the loop survives transient JS exceptions
+                // (e.g. during page navigation when the canvas is being torn down).
+            }
+
+            try { await Task.Delay(_redrawIntervalMs, ct); }
+            catch (TaskCanceledException) { return; }
+        }
+    }
+
+    // Packs the latest fleet snapshot into a compact little-endian binary buffer for JS interop.
+    // Layout: [uint32 count][N × {16 B Guid, int16 screenX, int16 screenY, uint8 status, uint8 fuel}]
+    //       = 4 + 22·N bytes.
+    //
+    // We pre-project from layout coordinates into device-pixel screen coordinates here, using
+    // the projection the worker reported via OnViewportChanged. That removes the per-frame
+    // multiply-add the worker would otherwise have to do on every vehicle. We also quantise to
+    // int16 (sub-pixel precision is invisible at the dot radius we draw, and a 4 K canvas at
+    // DPR 2 fits in the 32 767 range with room to spare). Combined with the u8 status field,
+    // the packet shrinks from 28 B/vehicle to 21 B/vehicle (–25 %).
+    //
+    // If the worker hasn't published a projection yet (very first frames after page load) we
+    // return an empty buffer; the render loop skips the JS interop call until the handshake
+    // completes.
+    private byte[] BuildVehiclePacket(CityLayout.Result layout)
+    {
+        var v = _viewport;
+        if (v is null) return Array.Empty<byte>();
+
+        // Prefer the live (drag-updatable) positions over the immutable layout snapshot. Both
+        // sets agree on first load; once the user starts dragging, _cityPositions diverges
+        // and is the source of truth for vehicle interpolation endpoints.
+        IReadOnlyDictionary<string, (double X, double Y)> byId = _cityPositions ?? layout.ById;
+        var snap = Fleet.Snapshot;
+        var buffer = new byte[4 + snap.Count * 22];
+        var span = buffer.AsSpan();
+        var written = 0;
+        foreach (var kv in snap)
+        {
+            var p = kv.Value;
+            if (!byId.TryGetValue(p.FromCityId, out var from)) continue;
+            var to = byId.TryGetValue(p.ToCityId, out var t) ? t : from;
+
+            // Parabolic-bump arc, matching the worker's two-arc-per-edge rendering. The
+            // perpendicular vector (-dy, dx)/len flips sign when the travel direction flips,
+            // so A->B and B->A traffic naturally take opposite arcs without an explicit
+            // direction flag. 4*progress*(1-progress) is the unit-amplitude bump (peaks at
+            // progress=0.5); amplitude = 8% of segment length matches the worker's curves.
+            var dx = to.X - from.X;
+            var dy = to.Y - from.Y;
+            var len = Math.Sqrt(dx * dx + dy * dy);
+            double lx, ly;
+            if (len < 1e-9)
+            {
+                lx = from.X;
+                ly = from.Y;
+            }
+            else
+            {
+                var amp = 0.08 * len;
+                var perpX = -dy / len * amp;
+                var perpY = dx / len * amp;
+                var bump = 4.0 * p.Progress * (1.0 - p.Progress);
+                lx = from.X + dx * p.Progress + perpX * bump;
+                ly = from.Y + dy * p.Progress + perpY * bump;
+            }
+            var sx = (int)Math.Round(v.OffsetX + lx * v.Scale);
+            var sy = (int)Math.Round(v.OffsetY + ly * v.Scale);
+            // Clamp to int16 range. In practice no realistic canvas exceeds it, but a defensive
+            // clamp is one comparison and avoids an undefined cast on pathological inputs.
+            if (sx < short.MinValue) sx = short.MinValue;
+            else if (sx > short.MaxValue) sx = short.MaxValue;
+            if (sy < short.MinValue) sy = short.MinValue;
+            else if (sy > short.MaxValue) sy = short.MaxValue;
+
+            var slice = span.Slice(4 + written * 22, 22);
+            p.VehicleGuid.TryWriteBytes(slice[..16]);
+            BinaryPrimitives.WriteInt16LittleEndian(slice[16..18], (short)sx);
+            BinaryPrimitives.WriteInt16LittleEndian(slice[18..20], (short)sy);
+            slice[20] = (byte)p.Status;
+            // Quantise fuel fraction to a single byte. 256 levels is well below what the eye
+            // can resolve in a green->red gradient at the dot radius we draw.
+            slice[21] = (byte)Math.Clamp((int)Math.Round(p.FuelFraction * 255.0), 0, 255);
+            written++;
+        }
+        BinaryPrimitives.WriteUInt32LittleEndian(span[..4], (uint)written);
+        if (written < snap.Count) Array.Resize(ref buffer, 4 + written * 22);
+        return buffer;
+    }
+
+    private string StatusLabel => Client.ConnectionState switch
+    {
+        FleetConnectionState.Connected => "Connected",
+        FleetConnectionState.Connecting => "Connecting…",
+        FleetConnectionState.Error => "Disconnected",
+        _ => "Idle",
+    };
+
+    private string StatusClass => Client.ConnectionState switch
+    {
+        FleetConnectionState.Connected => "connected",
+        FleetConnectionState.Connecting => "connecting",
+        FleetConnectionState.Error => "error",
+        _ => "",
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        Client.StateChanged -= HandleStateChanged;
+        Client.CityGraphLoaded -= HandleGraphLoaded;
+        _renderCts?.Cancel();
+        _timeScaleDebounce?.Cancel();
+        _timeScaleDebounce?.Dispose();
+        try { await Js.InvokeVoidAsync("fleetCanvas.dispose", CanvasId); } catch { }
+        _renderCts?.Dispose();
+        _selfRef?.Dispose();
+    }
+}
+

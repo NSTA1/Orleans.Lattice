@@ -36,3 +36,17 @@ Run it with:
 ```
 
 The script builds the host image if needed, starts both clusters (four silos plus two Azurites plus two Traefik proxies) under Docker Compose, and prints the per-cluster URLs — `http://localhost:5001` for `us` and `http://localhost:5002` for `eu`. Use `-Down` to tear everything back down, `-Clean` to wipe state between runs, and `-Logs` to tail silo logs.
+
+## VehicleFleetSimulator
+
+[`samples/VehicleFleetSimulator`](../../samples/VehicleFleetSimulator)
+
+A simulated vehicle fleet that streams structured telemetry events over gRPC, imported into this repo to drive forthcoming WAL benchmarks for `Orleans.Lattice` and `Orleans.Lattice.Replication` and as the foundation for a future sample that bridges the simulator's event stream into a Lattice tree. Currently independent of the lattice library — it builds and runs on its own, with its own `VehicleFleetSimulator.slnx`.
+
+The full stack (Azurite + Silo + gRPC API + Blazor WASM UI) runs under Docker Compose:
+
+```shell
+./samples/VehicleFleetSimulator/run.ps1
+```
+
+UI on `http://localhost:8090`, API on `http://localhost:8080`. See [`samples/VehicleFleetSimulator/README.md`](../../samples/VehicleFleetSimulator/README.md) for the full project layout, the on-import test-parallelism fix, and the planned Lattice-bridge sample.
