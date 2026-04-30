@@ -60,6 +60,41 @@ ports `5001` (US) and `5002` (EU).
 See [`architecture.md`](./architecture.md) for the full network and
 port layout and the Tier-5 partition commands.
 
+### Observability
+
+The compose topology also includes a single Prometheus + Grafana pair
+giving cross-cluster visibility into both regions:
+
+| Service | Host port | Purpose |
+|---|---:|---|
+| `prometheus` | — | Scrapes `silo-{us,eu}-{a,b}:8080/metrics` (multi-homed onto both cluster networks). |
+| `grafana` | `3000` | Renders the three dashboards shipped by `Orleans.Lattice.Dashboards`. |
+
+Open <http://localhost:3000> (anonymous Viewer access — admin/admin if
+you want edit rights). Under *Dashboards → Orleans.Lattice* you'll find:
+
+- **Orleans.Lattice — Overview** — throughput, leaf-write percentiles,
+  cache hit-rate, splits, atomic-write outcomes.
+- **Orleans.Lattice — Commit Path** — dual-durability per-step latency,
+  shadow-write tail, activation replay duration.
+- **Orleans.Lattice — Replication** — ship/apply/lag percentiles,
+  dead-letter churn, per-peer entries/bytes behind.
+
+> **Note** — the Replication dashboard will be empty for this sample. It
+> renders the `orleans.lattice.replication` meter shipped by the
+> `Orleans.Lattice.Replication` package, but this sample uses a hand-rolled
+> in-house replication PoC (`ReplicationLogWriter` / `ReplicationTopology`)
+> that does not emit those instruments. The Overview and Commit Path
+> dashboards work as expected.
+
+The JSON for these dashboards is bind-mounted read-only from
+`src/lattice.dashboards/Grafana/` — a CI test in the package keeps
+them in sync with the live meter instruments, and the
+`OpenTelemetry.Exporter.Prometheus.AspNetCore` exporter in
+`src/MultiSiteManufacturing.Host/Program.cs` exposes the
+`orleans.lattice` and `orleans.lattice.replication` meters at
+`/metrics` on each silo.
+
 ## Project layout
 
 ```

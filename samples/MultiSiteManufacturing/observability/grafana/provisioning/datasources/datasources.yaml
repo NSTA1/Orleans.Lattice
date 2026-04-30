@@ -1,0 +1,14 @@
+# Grafana datasource provisioning for the MultiSiteManufacturing sample.
+# Modeled on the template shipped by Orleans.Lattice.Dashboards
+# (src/lattice.dashboards/Provisioning/datasources.yaml). The
+# Prometheus URL matches the docker-compose service name.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

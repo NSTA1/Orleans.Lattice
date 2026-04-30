@@ -1,5 +1,6 @@
 using Azure.Data.Tables;
 using Azure.Storage.Queues;
+using OpenTelemetry.Metrics;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using Orleans.Lattice;
@@ -203,6 +204,17 @@ builder.Host.UseOrleans(silo =>
 
 builder.Services.AddGrpc();
 
+// OpenTelemetry: export the orleans.lattice and orleans.lattice.replication
+// meters via Prometheus. Each silo serves /metrics on its ASP.NET Core port
+// (8080 inside the container); the docker-compose `prometheus` service
+// scrapes all four silos and the `grafana` service renders the dashboards
+// shipped by Orleans.Lattice.Dashboards.
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics => metrics
+        .AddMeter("orleans.lattice")
+        .AddMeter("orleans.lattice.replication")
+        .AddPrometheusExporter());
+
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
@@ -287,6 +299,11 @@ app.MapGrpcService<FactIngressServiceImpl>();
 app.MapGrpcService<SiteControlServiceImpl>();
 app.MapGrpcService<ComplianceServiceImpl>();
 app.MapGrpcService<InventoryServiceImpl>();
+
+// Prometheus scrape endpoint - served at /metrics on the ASP.NET Core
+// HTTP port. Anonymous access is fine because the endpoint is only
+// reachable on the internal cluster network (not published to the host).
+app.MapPrometheusScrapingEndpoint();
 
 // Inbound replication endpoint. Authenticated via
 // X-Replication-Token shared secret (see ReplicationTopology.SharedSecret).

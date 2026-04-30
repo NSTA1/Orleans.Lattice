@@ -76,10 +76,14 @@ networks:
     driver: bridge
   eu-net:
     driver: bridge
+  obs-net:
+    driver: bridge
 
 volumes:
   azurite-us-data:
   azurite-eu-data:
+  prometheus-data:
+  grafana-data:
 
 x-silo-common: &silo-common
   build:
@@ -316,4 +320,62 @@ services:
     command: ["--cluster", "eu", "--silo-id", "b"]
     networks:
       - eu-net
+
+  # ----- Observability ---------------------------------------------------
+  # Single Prometheus + Grafana pair giving cross-cluster visibility into
+  # both regions. Prometheus is multi-homed onto us-net + eu-net so it
+  # can scrape every silo's /metrics endpoint (exposed by the
+  # OpenTelemetry Prometheus exporter wired in Program.cs). Grafana sits
+  # on obs-net + the prometheus-bridging nets so it can query Prometheus.
+  #
+  # The three Grafana dashboards are sourced verbatim from the
+  # Orleans.Lattice.Dashboards package (src/lattice.dashboards/Grafana/)
+  # via a read-only bind mount; the package's drift-guard test ensures
+  # those JSONs stay in sync with the live meter instruments.
+  #
+  # Grafana UI is published on host port 3000 with anonymous Viewer
+  # access enabled - this is a sample, not a production deployment.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: msmfg-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=2h"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      # Multi-homed: scrape silos in both clusters, plus reachable from
+      # Grafana on obs-net.
+      - us-net
+      - eu-net
+      - obs-net
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: msmfg-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Bind-mount the dashboards JSON from the Orleans.Lattice.Dashboards
+      # package source tree directly. The path is relative to the compose
+      # file (samples/MultiSiteManufacturing/) so it walks up to the repo
+      # root and back down into src/lattice.dashboards/Grafana/.
+      - ../../src/lattice.dashboards/Grafana:/var/lib/grafana/dashboards/orleans-lattice:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - obs-net
 
