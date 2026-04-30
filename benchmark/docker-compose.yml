@@ -1,0 +1,127 @@
+# Orleans.Lattice — benchmark stack (base topology).
+#
+# Two build contexts in play:
+#   * The benchmark silo (`silo`) builds from the lattice repo root (`..`) so it can pull in
+#     src/lattice/, src/lattice.replication/, the simulator's Grains/Abstractions, and
+#     benchmark/host/Bench.Sink + Bench.Silo. The simulator itself is untouched.
+#   * The simulator API (`api`) builds from `samples/VehicleFleetSimulator/` using its own
+#     unmodified Dockerfile. The benchmark stack treats it as a black-box load surface.
+#
+# This file stands the single-cluster topology used by B-01, B-03, B-05, B-09, B-10, B-11, B-12.
+# Replication scenarios (B-04, B-06, B-07, B-08) overlay docker-compose.replication.yml on top
+# to bring up a second silo cluster acting as the replica peer.
+
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    container_name: vfs-azurite
+    command:
+      - "azurite"
+      - "--blobHost=0.0.0.0"
+      - "--queueHost=0.0.0.0"
+      - "--tableHost=0.0.0.0"
+      - "--location=/data"
+      - "--skipApiVersionCheck"
+      - "--silent"
+    ports:
+      - "10000:10000"
+      - "10001:10001"
+      - "10002:10002"
+    volumes:
+      - azurite-data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10002"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  silo:
+    build:
+      context: ..
+      dockerfile: benchmark/host/Bench.Silo/Dockerfile
+    container_name: vfs-silo
+    depends_on:
+      azurite:
+        condition: service_healthy
+    environment:
+      DOTNET_ENVIRONMENT: Production
+      Orleans__ClusterId: ${BENCH_CLUSTER_ID:-vfs-bench}
+      Orleans__ServiceId: ${BENCH_SERVICE_ID:-VehicleFleetSimulator}
+      Persistence__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;"
+      # Producer pipeline switch — fanout (default), null (B-01/B-12 control), lattice.
+      Telemetry__Sink: ${BENCH_TELEMETRY_SINK:-fanout}
+      Telemetry__Prometheus__Endpoint: "http://0.0.0.0:9090/metrics/"
+      # LatticeSink bindings (only consumed when Telemetry__Sink=lattice).
+      LatticeSink__TreeId: ${BENCH_TREE_ID:-vehicle-fleet}
+      LatticeSink__KeyShape: ${BENCH_KEY_SHAPE:-CurrentStateByVehicleId}
+      LatticeSink__BatchSize: ${BENCH_BATCH_SIZE:-256}
+      LatticeSink__FlushInterval: ${BENCH_FLUSH_INTERVAL:-00:00:00.050}
+      LatticeSink__ChannelCapacity: ${BENCH_CHANNEL_CAPACITY:-100000}
+      LatticeSink__BulkLoadMode: ${BENCH_BULK_LOAD:-false}
+      LatticeSink__EventLogTtl: ${BENCH_EVENT_LOG_TTL:-01:00:00}
+      LatticeSink__Regions: ${BENCH_REGIONS:-eu-west,eu-east,us-west,us-east}
+      LatticeSink__HotRegionShare: ${BENCH_HOT_SHARE:-0.7}
+      LatticeSink__DropOnFull: ${BENCH_DROP_ON_FULL:-true}
+      # Replication switch (only consumed when Telemetry__Sink=lattice).
+      Replication__Enabled: ${BENCH_REPLICATION_ENABLED:-false}
+      Replication__OriginClusterId: ${BENCH_REPLICATION_CLUSTER_ID:-vfs-bench}
+      Replication__KeyPrefixes: ${BENCH_REPLICATION_KEY_PREFIXES:-}
+    expose:
+      - "11111"
+      - "30000"
+      - "9090"
+
+  api:
+    # Simulator API used unmodified — its existing Dockerfile expects the simulator-local context.
+    build:
+      context: ../samples/VehicleFleetSimulator
+      dockerfile: src/VehicleFleetSimulator.Api/Dockerfile
+    container_name: vfs-api
+    depends_on:
+      azurite:
+        condition: service_healthy
+      silo:
+        condition: service_started
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Orleans__ClusterId: ${BENCH_CLUSTER_ID:-vfs-bench}
+      Orleans__ServiceId: ${BENCH_SERVICE_ID:-VehicleFleetSimulator}
+      Persistence__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;"
+    ports:
+      - "8080:8080"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: vfs-prometheus
+    depends_on:
+      silo:
+        condition: service_started
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=2h"
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: vfs-grafana
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards/orleans-lattice:ro
+    ports:
+      - "3000:3000"
+
+volumes:
+  azurite-data:

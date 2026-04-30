@@ -1,0 +1,72 @@
+# Replication overlay — adds a second silo cluster (vfs-replica) acting as the
+# downstream peer for B-04 (single replica), B-06 (silo crash chaos), B-07
+# (network partition chaos), B-08 (bidirectional). The base stack already runs
+# the origin silo with Replication:Enabled=true; this overlay brings up the
+# matching peer plus a second Azurite for cluster isolation.
+#
+# Compose file selection:
+#   docker compose -f docker-compose.yml -f docker-compose.replication.yml up -d
+#
+# benchmark.ps1 picks this overlay when scenarios/B-XX.env declares
+# REPLICATION_OVERLAY=true.
+
+services:
+  azurite-replica:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    container_name: vfs-azurite-replica
+    command:
+      - "azurite"
+      - "--blobHost=0.0.0.0"
+      - "--queueHost=0.0.0.0"
+      - "--tableHost=0.0.0.0"
+      - "--location=/data"
+      - "--skipApiVersionCheck"
+      - "--silent"
+    ports:
+      - "11000:10000"
+      - "11001:10001"
+      - "11002:10002"
+    volumes:
+      - azurite-replica-data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10002"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  silo-replica:
+    build:
+      context: ..
+      dockerfile: benchmark/host/Bench.Silo/Dockerfile
+    container_name: vfs-silo-replica
+    depends_on:
+      azurite-replica:
+        condition: service_healthy
+    environment:
+      DOTNET_ENVIRONMENT: Production
+      Orleans__ClusterId: ${BENCH_REPLICA_CLUSTER_ID:-vfs-bench-replica}
+      Orleans__ServiceId: ${BENCH_SERVICE_ID:-VehicleFleetSimulator}
+      Persistence__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-replica:10000/devstoreaccount1;QueueEndpoint=http://azurite-replica:10001/devstoreaccount1;TableEndpoint=http://azurite-replica:10002/devstoreaccount1;"
+      # Replica cluster runs the same lattice sink so B-08 (bidirectional) can produce
+      # writes here too. For B-04/B-06/B-07 the replica's sink is null — it only consumes
+      # replicated writes from the origin.
+      Telemetry__Sink: ${BENCH_REPLICA_TELEMETRY_SINK:-null}
+      Telemetry__Prometheus__Endpoint: "http://0.0.0.0:9090/metrics/"
+      LatticeSink__TreeId: ${BENCH_TREE_ID:-vehicle-fleet}
+      LatticeSink__KeyShape: ${BENCH_KEY_SHAPE:-CurrentStateByVehicleId}
+      Replication__Enabled: ${BENCH_REPLICA_REPLICATION_ENABLED:-true}
+      Replication__OriginClusterId: ${BENCH_REPLICA_CLUSTER_ID:-vfs-bench-replica}
+      Replication__KeyPrefixes: ${BENCH_REPLICATION_KEY_PREFIXES:-}
+    expose:
+      - "11111"
+      - "30000"
+      - "9090"
+
+  prometheus:
+    # Replace the base prometheus.yml mount with the replication-aware version that
+    # scrapes both silos.
+    volumes:
+      - ./prometheus/prometheus-replication.yml:/etc/prometheus/prometheus.yml:ro
+
+volumes:
+  azurite-replica-data:

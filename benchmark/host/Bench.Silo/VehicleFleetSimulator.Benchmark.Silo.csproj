@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>VehicleFleetSimulator.Benchmark.Silo</RootNamespace>
+    <AssemblyName>VehicleFleetSimulator.Benchmark.Silo</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Reference the simulator's existing Abstractions + Grains projects unmodified.
+         The benchmark silo embeds the same VehicleGrain / FleetGrain / FanOut etc. so the
+         producer pipeline matches the simulator one-to-one; the only added wiring is the
+         pluggable telemetry sink and the optional Lattice replication peer. -->
+    <ProjectReference Include="..\..\..\samples\VehicleFleetSimulator\src\VehicleFleetSimulator.Abstractions\VehicleFleetSimulator.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\samples\VehicleFleetSimulator\src\VehicleFleetSimulator.Grains\VehicleFleetSimulator.Grains.csproj" />
+
+    <!-- Benchmark-specific projects. -->
+    <ProjectReference Include="..\Bench.Sink\VehicleFleetSimulator.Benchmark.Sink.csproj" />
+    <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.1.0" />
+    <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <!--
+      The AspNetCore-based Prometheus exporter mounts on Kestrel. The HttpListener
+      variant we tried first fails on Linux containers with HttpListenerException 50
+      ("The request is not supported") because the .NET managed HttpListener doesn't
+      support `0.0.0.0`-style prefixes outside Windows. Kestrel works everywhere.
+    -->
+    <PackageReference Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.15.3-beta.1" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.15.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

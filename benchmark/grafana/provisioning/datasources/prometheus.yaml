@@ -1,0 +1,14 @@
+# Grafana datasource provisioning for the benchmark stack. The UID `prometheus`
+# matches the datasource UID encoded in the Orleans.Lattice.Dashboards JSON
+# (src/lattice.dashboards/Provisioning/datasources.yaml + the embedded dashboard
+# templating). Keeping the UID stable lets benchmark.ps1 mount the dashboards
+# unchanged from src/lattice.dashboards/Grafana/.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    uid: prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

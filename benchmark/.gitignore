@@ -1,0 +1,4 @@
+# Per-run artefacts (transient).
+.run/
+grafana/dashboards/*.json
+results-*.json
