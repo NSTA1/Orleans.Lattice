@@ -130,6 +130,20 @@ jobs:
       # introduced by sample-side edits without paying for the full library
       # test matrix.
       #
+      # Per-sample change scoping:
+      #   The loop processes only the `samples/<name>/` directories that have
+      #   at least one non-markdown change between the PR base and head SHAs.
+      #   Markdown-only edits inside a sample (e.g. README.md) do not trigger
+      #   a rebuild — they cannot break the build, and pulling a heavyweight
+      #   sample's integration suite into CI for a docs edit wastes runner
+      #   minutes. This mirrors the per-package discovery convention used
+      #   above for `src/{name}/` ↔ `test/{name}/`.
+      #
+      #   When no per-sample match is found (e.g. a shared file under
+      #   `samples/` that doesn't belong to any specific sample), the loop
+      #   falls back to processing every sample, matching the conservative
+      #   fallback in the per-package discovery step.
+      #
       # Per-sample dispatch:
       #   1. If `samples/<name>/*.slnx` exists, build that solution. This is
       #      the right path for multi-project samples (e.g. MultiSiteManufacturing,
@@ -148,14 +162,45 @@ jobs:
       # The slnx-first / `find`-fallback dispatch below avoids that footgun.
       - name: Build and test samples (samples-only change)
         if: steps.filter.outputs.code == 'true' && steps.filter.outputs.nonSample != 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           shopt -s nullglob
 
-          samples=(samples/*/)
-          if [ ${#samples[@]} -eq 0 ]; then
+          allSamples=(samples/*/)
+          if [ ${#allSamples[@]} -eq 0 ]; then
             echo "No samples found under samples/."
             exit 1
+          fi
+
+          # Per-sample change detection: only act on samples whose tree has at
+          # least one non-markdown change between BASE_SHA and HEAD_SHA. The
+          # diff is computed once and filtered per-sample below.
+          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+
+          samples=()
+          for sampleDir in "${allSamples[@]}"; do
+            sampleName=$(basename "$sampleDir")
+            # Match files under samples/<name>/ whose extension is not .md.
+            # A sample whose only change is a markdown file (README, plan,
+            # etc.) is not pulled into the build matrix — its expensive
+            # build/test sequence would add minutes of CI runtime for a docs
+            # edit.
+            if echo "$changed" \
+                 | grep -E "^samples/${sampleName}/" \
+                 | grep -qvE '\.md$'; then
+              samples+=("$sampleDir")
+            fi
+          done
+
+          if [ ${#samples[@]} -eq 0 ]; then
+            samples=("${allSamples[@]}")
+            echo "No per-sample changes detected; building every sample."
+          else
+            echo "Per-sample changes detected; building only:"
+            printf '  %s\n' "${samples[@]}"
           fi
 
           for sampleDir in "${samples[@]}"; do
