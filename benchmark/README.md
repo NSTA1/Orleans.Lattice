@@ -67,7 +67,6 @@ For replication scenarios (`B-04`, `B-06`, `B-07`, `B-08`, `B-09`),
 | B-08  | Two-cluster bidirectional replication          | on (both)   | none       |
 | B-09  | Per-key replication filter cost                | on          | none       |
 | B-10  | Event-log tree with TTL                        | off         | none       |
-| B-11  | Streaming bulk-load ingest variant             | off         | none       |
 | B-12  | Observer-off control (paired with B-04)        | off         | none       |
 
 Per-scenario knobs live in `scenarios/B-XX.env`. Each file sets:
@@ -76,7 +75,6 @@ Per-scenario knobs live in `scenarios/B-XX.env`. Each file sets:
 |--------------------------------|----------------------------------------------------------|
 | `BENCH_TELEMETRY_SINK`         | `null` \| `fanout` \| `lattice` (silo's `Telemetry:Sink`) |
 | `BENCH_KEY_SHAPE`              | `CurrentStateByVehicleId` \| `RegionPrefixedVehicleId` \| `EventLogTimestamped` |
-| `BENCH_BULK_LOAD`              | `true` (B-11) — drain via `BulkLoadAsync`                 |
 | `BENCH_EVENT_LOG_TTL`          | TTL applied via `SetAsync(ttl)` for the event-log shape  |
 | `BENCH_REPLICATION_ENABLED`    | `true` to call `AddLatticeReplication` on the silo       |
 | `BENCH_REPLICATION_OVERLAY`    | `true` to bring up the replica cluster                    |
@@ -252,30 +250,30 @@ Prometheus is at <http://localhost:9090> for raw query access.
 
 ## B-02 — micro-benchmark path
 
-`B-02` does not stand up the docker stack. It targets `ILattice` directly through
-an in-process [BenchmarkDotNet](https://benchmarkdotnet.org/) harness backed by
-`Orleans.TestingHost`, so the measurement isolates the lattice write/read path
-from any simulator or HTTP overhead.
+`B-02` does not stand up the docker stack and does not boot an Orleans silo. It targets
+`ILattice` directly through a [BenchmarkDotNet](https://benchmarkdotnet.org/) harness that
+hand-instantiates the `LatticeGrain → ShardRootGrain → BPlusLeafGrain` vertical and routes
+the `IGrainFactory` calls through NSubstitute mocks. The measurement isolates the lattice
+algorithm cost from Orleans dispatch, serialization, and the simulator pipeline; the
+Orleans-native end-to-end cost is captured by B-03 onwards.
 
 ```powershell
 ./benchmark.ps1 B-02
 ```
 
-The runner builds and invokes `benchmark/host/Bench.Microbench/`, which spins up
-a single in-proc Orleans silo via `TestCluster`, registers `AddLattice(...)`, and
-exercises five workloads against `ILattice`:
+The runner builds and invokes `benchmark/host/Bench.Microbench/`, which exercises four
+workloads against `ILattice`:
 
 | Workload         | Method                              | What it measures                       |
 |------------------|-------------------------------------|----------------------------------------|
 | `point_write`    | `SetAsync` (one key per op)         | single-key write latency               |
 | `point_read`     | `GetAsync` (one key per op)         | single-key read latency (cache-warm)   |
-| `bulk_load`      | `BulkLoadAsync(batchSize)`          | batched-write throughput               |
-| `range_scan`     | `OpenEntryCursorAsync` + drain      | iteration cost per N keys              |
+| `bulk_load`      | `SetManyAsync(batchSize)`           | batched-write throughput               |
 | `mixed_70r_30w`  | weighted mix of `Get`/`Set`         | realistic read-heavy hot path          |
 
 Results land in `.run/B-02/<run_id>/results.json` with keys shaped
 `microbench_<workload>_<stat>_<unit>` (e.g. `microbench_point_write_p99_ns`,
-`microbench_bulk_load_per_second`, `microbench_range_scan_alloc_b`). The
+`microbench_bulk_load_per_second`, `microbench_point_read_alloc_b`). The
 opportunistic history-stack push uses the same path as the docker scenarios, so
 the cockpit's **Microbench (B-02)** category row populates automatically.
 
@@ -289,9 +287,9 @@ Two toolchains are available, picked via `BENCH_MICROBENCH_FIDELITY` in
 | `quick` (default) | In-process emit (Job.ShortRun) | ~2-3 min   | iterative dev, trend tracking       |
 | `full`            | Forked process (Job.Default)   | ~10-15 min | release-gating, regression hunts    |
 
-`quick` keeps every workload in the parent process so the Orleans cluster
-bootstraps once across all five `[Benchmark]` methods. `full` forks a fresh
-process per workload at the cost of paying `[GlobalSetup]` once per workload.
+`quick` keeps every workload in the parent process so the harness bootstraps once across
+all four `[Benchmark]` methods. `full` forks a fresh process per workload at the cost of
+paying `[GlobalSetup]` once per workload.
 
 ### Tuning the keyspace
 
@@ -303,5 +301,3 @@ The remaining `BENCH_*` knobs in `scenarios/B-02.env` shape what's measured:
 | `BENCH_MICROBENCH_KEY_COUNT`  | `10000` | Pre-seeded keyspace size.                                    |
 | `BENCH_MICROBENCH_VALUE_BYTES`| `128`   | Payload size per key.                                        |
 | `BENCH_MICROBENCH_BULK_BATCH` | `1000`  | Batch size used by `bulk_load`.                              |
-| `BENCH_MICROBENCH_SCAN_PAGE`  | `256`   | Page size requested from the cursor.                         |
-| `BENCH_MICROBENCH_SCAN_KEYS`  | `1000`  | Keys drained per `range_scan` iteration.                     |

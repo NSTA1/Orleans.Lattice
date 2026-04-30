@@ -15,18 +15,13 @@ namespace VehicleFleetSimulator.Benchmark.Sink;
 /// <c>Orleans.Lattice</c> tree. Implements the §3 contract in <c>benchmark/benchmark-plan.md</c>:
 /// the producer's <c>PublishTelemetryAsync</c> path is a non-blocking channel write; a
 /// long-running drain task (started as an <see cref="IHostedService"/>) batches drained samples
-/// into <c>SetAsync</c> or <c>BulkLoadAsync</c> calls off the <c>VehicleGrain</c> turn.
+/// into <c>SetAsync</c> calls off the <c>VehicleGrain</c> turn.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Discrete events (<see cref="VehicleEvent"/>) are deliberately discarded. The benchmark plan
 /// keeps the events feed off the hot path — it's lower-volume, lower-value for the sustained
 /// write benchmark, and the design seam (<see cref="ITelemetrySink"/>) intentionally allows it.
-/// </para>
-/// <para>
-/// Bulk-load mode (<see cref="LatticeSinkOptions.BulkLoadMode"/>) is meaningful only for the
-/// event-log key shape: current-state writes need the per-key path so concurrent writes to the
-/// same vehicle settle by last-write-wins.
 /// </para>
 /// </remarks>
 public sealed class LatticeSink : ITelemetrySink, IHostedService, IAsyncDisposable
@@ -122,8 +117,8 @@ public sealed class LatticeSink : ITelemetrySink, IHostedService, IAsyncDisposab
     {
         _drainTask ??= Task.Run(() => DrainLoopAsync(_shutdown.Token), CancellationToken.None);
         _logger.LogInformation(
-            "LatticeSink started: tree={TreeId}, keyShape={KeyShape}, batchSize={BatchSize}, flushInterval={FlushInterval}, bulkLoadMode={BulkLoadMode}",
-            _options.TreeId, _options.KeyShape, _options.BatchSize, _options.FlushInterval, _options.BulkLoadMode);
+            "LatticeSink started: tree={TreeId}, keyShape={KeyShape}, batchSize={BatchSize}, flushInterval={FlushInterval}",
+            _options.TreeId, _options.KeyShape, _options.BatchSize, _options.FlushInterval);
         return Task.CompletedTask;
     }
 
@@ -223,11 +218,7 @@ public sealed class LatticeSink : ITelemetrySink, IHostedService, IAsyncDisposab
         var start = Stopwatch.GetTimestamp();
         try
         {
-            if (_options.BulkLoadMode && _options.KeyShape == KeyShape.EventLogTimestamped)
-            {
-                await lattice.BulkLoadAsync(batch, cancellationToken).ConfigureAwait(false);
-            }
-            else if (_options.KeyShape == KeyShape.EventLogTimestamped && _options.EventLogTtl is { } ttl)
+            if (_options.KeyShape == KeyShape.EventLogTimestamped && _options.EventLogTtl is { } ttl)
             {
                 foreach (var entry in batch)
                     await lattice.SetAsync(entry.Key, entry.Value, ttl, cancellationToken).ConfigureAwait(false);

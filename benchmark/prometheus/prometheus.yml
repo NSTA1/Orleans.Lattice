@@ -1,4 +1,4 @@
-# Prometheus scrape config — single-cluster topology (B-01, B-03, B-05, B-09, B-10, B-11, B-12).
+# Prometheus scrape config — single-cluster topology (B-01, B-03, B-05, B-09, B-10, B-12).
 # The silo container exposes the OpenTelemetry Prometheus AspNetCore exporter on :9090
 # under the /metrics path, binding meters orleans.lattice, orleans.lattice.replication,
 # and vehicle_fleet_simulator.sink.

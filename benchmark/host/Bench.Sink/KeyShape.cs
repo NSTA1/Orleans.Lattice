@@ -21,8 +21,7 @@ public enum KeyShape
     /// <summary>
     /// <c>vehicleId/{Timestamp:O}</c> with a TTL applied via the Lattice <c>SetAsync(ttl)</c>
     /// overload. Each tick produces a new key; TTL drives steady-state tombstone compaction.
-    /// Drives B-10 (event-log tree with TTL) and B-11 (streaming bulk-load ingest variant — same
-    /// key shape, but the sink batches into <c>BulkLoadAsync</c> instead of point writes).
+    /// Drives B-10 (event-log tree with TTL).
     /// </summary>
     EventLogTimestamped = 2,
 }

@@ -7,7 +7,7 @@
 #   * The simulator API (`api`) builds from `samples/VehicleFleetSimulator/` using its own
 #     unmodified Dockerfile. The benchmark stack treats it as a black-box load surface.
 #
-# This file stands the single-cluster topology used by B-01, B-03, B-05, B-09, B-10, B-11, B-12.
+# This file stands the single-cluster topology used by B-01, B-03, B-05, B-09, B-10, B-12.
 # Replication scenarios (B-04, B-06, B-07, B-08) overlay docker-compose.replication.yml on top
 # to bring up a second silo cluster acting as the replica peer.
 
@@ -57,7 +57,6 @@ services:
       LatticeSink__BatchSize: ${BENCH_BATCH_SIZE:-256}
       LatticeSink__FlushInterval: ${BENCH_FLUSH_INTERVAL:-00:00:00.050}
       LatticeSink__ChannelCapacity: ${BENCH_CHANNEL_CAPACITY:-100000}
-      LatticeSink__BulkLoadMode: ${BENCH_BULK_LOAD:-false}
       LatticeSink__EventLogTtl: ${BENCH_EVENT_LOG_TTL:-01:00:00}
       LatticeSink__Regions: ${BENCH_REGIONS:-eu-west,eu-east,us-west,us-east}
       LatticeSink__HotRegionShare: ${BENCH_HOT_SHARE:-0.7}

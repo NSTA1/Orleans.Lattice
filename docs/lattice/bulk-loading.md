@@ -4,7 +4,7 @@ Orleans.Lattice supports two bulk-loading modes for efficiently populating a tre
 
 ## One-Shot Bulk Load (`ILattice.BulkLoadAsync`)
 
-Builds the tree bottom-up from a pre-sorted list of key-value pairs. Designed for initial population of an empty tree:
+Builds the tree bottom-up from a list of key-value pairs (sorted internally). This is a **one-shot initial-import primitive**: every shard must be empty when called, so the second and subsequent calls always throw `InvalidOperationException` unless the operation id matches a previously-completed call (in which case the call is an idempotent no-op). For continuous append-style ingestion, use `SetAsync` or the [streaming extension](#streaming-bulk-load-extension-method) below — which routes to `ShardRootGrain.BulkAppendAsync` and is the intended path for any pipeline that re-flushes batches over time.
 
 ```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");

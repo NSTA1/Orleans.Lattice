@@ -75,11 +75,6 @@ Lattice.
   expiry filter. Run independently of throughput experiments — compaction will distort the
   latency tail and conflate signals if mixed with B-03/B-04.
 
-- [ ] **B-11: Streaming bulk-load ingest variant.**
-  For the event-log shape (B-10), feed the simulator's output through `BulkLoadAsync` streaming
-  mode instead of per-event `SetAsync`. Measures per-shard parallel flushing and gives a second
-  data point for high-cardinality append workloads versus the point-write path.
-
 - [ ] **B-12: Observer-off vs. observer-on delta.**
   Controlled A/B of identical simulator load with `IMutationObserver` unregistered vs. registered
   (no-op). Isolates observer-dispatch cost on the hot write path. Pairs with B-04 / B-09 to
@@ -176,7 +171,7 @@ Key shape is the central knob and maps directly to the benchmark scenarios:
 |---|---|---|
 | `CurrentStateByVehicleId` | `vehicleId.ToString("N")` | B-03, B-04, B-06, B-07, B-08, B-09, B-12 |
 | `RegionPrefixedVehicleId` | `region/vehicleId` (skewed region distribution) | B-05 |
-| `EventLogTimestamped` | `vehicleId/{Timestamp:O}` with TTL | B-10, B-11 |
+| `EventLogTimestamped` | `vehicleId/{Timestamp:O}` with TTL | B-10 |
 
 The sink encapsulates the key-shape choice so `VehicleGrain` remains key-agnostic.
 

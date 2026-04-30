@@ -53,7 +53,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 if (!string.IsNullOrWhiteSpace(filterRaw))
 {
     // Map a comma-separated list of method names to a BDN GlobFilter so we can
-    // run a subset (e.g. "PointRead,RangeScan").
+    // run a subset (e.g. "PointRead,Mixed_70R_30W").
     var globs = filterRaw
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
         .Select(name => $"*{name}*")

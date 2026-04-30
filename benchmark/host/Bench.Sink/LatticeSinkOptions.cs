@@ -20,7 +20,7 @@ public sealed class LatticeSinkOptions
     /// <summary>Default flush interval — caps end-to-end producer→Lattice latency.</summary>
     public static readonly TimeSpan DefaultFlushInterval = TimeSpan.FromMilliseconds(50);
 
-    /// <summary>Default TTL for the event-log key shape (B-10 / B-11).</summary>
+    /// <summary>Default TTL for the event-log key shape (B-10).</summary>
     public static readonly TimeSpan DefaultEventLogTtl = TimeSpan.FromHours(1);
 
     /// <summary>The Lattice tree to write into.</summary>
@@ -56,12 +56,6 @@ public sealed class LatticeSinkOptions
     /// <summary>When true, drop oldest queued samples when the channel is full instead of blocking
     /// the producer. Drops are surfaced via <c>vehicle_fleet_simulator.sink.dropped</c>.</summary>
     public bool DropOnFull { get; set; } = true;
-
-    /// <summary>When true, the drain loop calls <c>BulkLoadAsync</c> instead of per-key
-    /// <c>SetAsync</c>. Targets B-11 (streaming bulk-load ingest variant). Only meaningful for
-    /// the event-log key shape — current-state writes need the per-key path so concurrent writes
-    /// to the same vehicle settle by last-write-wins.</summary>
-    public bool BulkLoadMode { get; set; }
 
     /// <summary>Optional shutdown drain timeout. Pending samples that don't drain within this
     /// window are recorded as <c>dropped_on_shutdown</c> and the drain task is allowed to exit.
