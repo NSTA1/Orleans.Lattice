@@ -117,6 +117,73 @@ The script:
    window, applies any chaos (`pause` / `kill`) at `BENCH_CHAOS_AFTER_SECONDS` in
    parallel, then `stop-all`s the fleet.
 8. Prints fleet stats and (unless `-KeepRunning`) tears the stack down.
+9. **Captures a fixed panel of summary scalars** (p50/p95/p99 commit latency,
+   throughput, drops, queue depth, replication lag, process CPU/memory) from
+   Prometheus over the measurement window and writes them to
+   `.run/<scenario>/<run_id>/results.json`.
+10. **Opportunistically pushes** those scalars into the long-lived
+    [history stack](./history/README.md) if it's reachable on `:8428`. If the
+    history stack is down, the run completes normally and the local JSON is the
+    durable record.
+
+## Cross-run comparison
+
+Each run produces a `.run/<scenario>/<run_id>/results.json` like:
+
+```json
+{
+  "scenario": "B-03",
+  "run_id":   "2026-04-30T14-08-41Z",
+  "git_sha":  "abc1234",
+  "started":  "2026-04-30T14:03:11Z",
+  "ended":    "2026-04-30T14:08:41Z",
+  "duration_s": 330,
+  "config":  { "BENCH_TELEMETRY_SINK": "lattice", "BENCH_FLEET_SIZE": "2000", "...": "..." },
+  "metrics": {
+    "lattice_commit_p99_ms":         12.3,
+    "lattice_commits_per_second": 19847,
+    "sink_dropped_total":             0,
+    "replication_apply_lag_p99_ms":  null,
+    "process_working_set_bytes_p95": 612000000,
+    "...": "..."
+  },
+  "fleetStats": { "total": 2000, "driving": 2000, "...": "..." }
+}
+```
+
+Aggregate across runs:
+
+```powershell
+# Latest run per scenario, side-by-side, with delta vs. the simulator baseline.
+./benchmark.ps1 -Compare -CompareAgainst B-01
+
+# Without the delta column.
+./benchmark.ps1 -Compare
+```
+
+Outputs:
+
+| File                       | Contents                                            |
+|----------------------------|-----------------------------------------------------|
+| `.run/comparison.md`       | Markdown table per metric, ready to paste into a PR |
+| `.run/comparison.csv`      | Same data flat for spreadsheet use                  |
+
+## Trend dashboard (history stack)
+
+For run-over-run trend visualisation (e.g. *"how has B-03's p99 evolved across
+commits?"*) bring up the long-lived **history stack**. It runs in parallel with
+the per-run flow and accumulates summary scalars across every scenario invocation.
+
+```powershell
+./benchmark.ps1 -OpenHistory     # one-shot; stays up across many scenario runs
+# ... run scenarios as normal, they auto-push when this is up ...
+./benchmark.ps1 -ImportHistory   # backfill any prior runs the VM hasn't seen
+./benchmark.ps1 -CloseHistory    # stop (named volumes preserved)
+```
+
+Then visit <http://localhost:3001> for the **Orleans.Lattice — Benchmark History**
+dashboard. See [`history/README.md`](./history/README.md) for the full data
+model, label schema, and ad-hoc query path.
 
 ## Dashboards
 

@@ -1,0 +1,245 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "datasource", "uid": "grafana" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Trend over runs",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "$metric — value per run",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "id": 1,
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 1 },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "min", "max", "mean"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepBefore",
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "refId": "A",
+          "expr": "bench_$metric{scenario=~\"$scenario\"}[$__range]",
+          "legendFormat": "{{scenario}} ({{git_sha}})",
+          "format": "time_series",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Latest vs. previous (regression view)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+      "id": 200,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "$metric — latest by scenario",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "id": 2,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "refId": "A",
+          "expr": "bench_$metric{scenario=~\"$scenario\"}",
+          "legendFormat": "{{scenario}}",
+          "format": "time_series",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "$metric — last 5 runs per scenario",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "id": 3,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "displayMode": "auto" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "refId": "A",
+          "expr": "bench_$metric{scenario=~\"$scenario\"}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": {}, "indexByName": {}, "renameByName": {} } }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Delta vs. baseline",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "id": 300,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "bargauge",
+      "title": "$metric — latest run minus latest $baseline (delta over baseline)",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "id": 4,
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 23 },
+      "options": {
+        "displayMode": "gradient",
+        "minVizWidth": 0,
+        "minVizHeight": 16,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "showUnfilled": true,
+        "valueMode": "color"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 0    },
+              { "color": "red",    "value": 0.25 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "refId": "A",
+          "expr": "(\n  last_over_time(bench_$metric{scenario=~\"$scenario\"}[$__range])\n)\n-\n  scalar(last_over_time(bench_$metric{scenario=\"$baseline\"}[$__range]))\n",
+          "legendFormat": "{{scenario}}",
+          "format": "time_series",
+          "instant": true
+        }
+      ]
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": ["orleans-lattice", "benchmark", "history"],
+  "templating": {
+    "list": [
+      {
+        "type": "query",
+        "name": "metric",
+        "label": "Metric",
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "definition": "label_values({__name__=~\"bench_.+\"}, __name__)",
+        "query": "label_values({__name__=~\"bench_.+\"}, __name__)",
+        "current": { "selected": false, "text": "lattice_commit_p99_ms", "value": "lattice_commit_p99_ms" },
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "regex": "/^bench_(.*)$/",
+        "sort": 1,
+        "refresh": 1
+      },
+      {
+        "type": "query",
+        "name": "scenario",
+        "label": "Scenario",
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "definition": "label_values(bench_$metric, scenario)",
+        "query": "label_values(bench_$metric, scenario)",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "sort": 1,
+        "refresh": 2
+      },
+      {
+        "type": "query",
+        "name": "baseline",
+        "label": "Baseline",
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "definition": "label_values(bench_$metric, scenario)",
+        "query": "label_values(bench_$metric, scenario)",
+        "current": { "selected": true, "text": "B-01", "value": "B-01" },
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "sort": 1,
+        "refresh": 2
+      }
+    ]
+  },
+  "time": { "from": "now-30d", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Orleans.Lattice — Benchmark History",
+  "uid": "orleans-lattice-history",
+  "version": 1,
+  "weekStart": ""
+}
