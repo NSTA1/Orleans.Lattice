@@ -683,7 +683,9 @@ function Invoke-Microbench {
     # BENCH_GIT_SHA mirrors what the docker pipeline already captures.
     $started   = (Get-Date).ToUniversalTime().ToString('o')
     $startEpoch = [int][double]::Parse((Get-Date -UFormat '%s'))
-    $gitSha = try { (& git -C $repoRoot rev-parse --short=10 HEAD 2>$null).Trim() } catch { $null }
+    # Use the shared Get-GitSha helper so docker and microbench produce identical sha shapes.
+    # Mismatched lengths (7 vs 10 chars) silently break trend continuity in the history dashboard.
+    $gitSha = Get-GitSha
     Set-ProcessEnv -Map $EnvMap
     $env:BENCH_SCENARIO  = $ScenarioId
     $env:BENCH_RUN_ID    = $RunId

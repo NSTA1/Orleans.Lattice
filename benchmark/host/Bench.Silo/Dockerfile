@@ -10,6 +10,7 @@ WORKDIR /src
 # Lattice core + replication.
 COPY src/lattice/ src/lattice/
 COPY src/lattice.replication/ src/lattice.replication/
+COPY src/lattice.replication.grpc/ src/lattice.replication.grpc/
 
 # Simulator's reused projects (unmodified).
 COPY samples/VehicleFleetSimulator/src/VehicleFleetSimulator.Abstractions/ samples/VehicleFleetSimulator/src/VehicleFleetSimulator.Abstractions/
@@ -31,6 +32,8 @@ COPY --from=build /app ./
 EXPOSE 11111 30000
 # Prometheus exporter.
 EXPOSE 9090
+# Replication gRPC receiver (HTTP/2). Only listened on when Replication:GrpcServerEnabled=true.
+EXPOSE 5001
 
 ENV DOTNET_RUNNING_IN_CONTAINER=true
 

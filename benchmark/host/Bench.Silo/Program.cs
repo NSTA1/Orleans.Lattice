@@ -1,5 +1,6 @@
 using Azure.Data.Tables;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -9,6 +10,7 @@ using OpenTelemetry.Metrics;
 using Orleans.Configuration;
 using Orleans.Lattice;
 using Orleans.Lattice.Replication;
+using Orleans.Lattice.Replication.Grpc;
 using VehicleFleetSimulator.Abstractions;
 using VehicleFleetSimulator.Benchmark.Sink;
 using VehicleFleetSimulator.Grains;
@@ -40,6 +42,68 @@ builder.Services.AddSingleton<SimulationRuntimeState>();
 var azuriteConnection = builder.Configuration["Persistence:ConnectionString"] ?? "UseDevelopmentStorage=true";
 var clusterId = builder.Configuration["Orleans:ClusterId"] ?? "vfs-bench";
 var serviceId = builder.Configuration["Orleans:ServiceId"] ?? "VehicleFleetSimulator";
+
+// ─── Replication gRPC wiring (off unless explicitly enabled) ───────────────────
+//
+// The library default registered by `AddLatticeReplication` is `NoOpReplicationTransport`
+// — the WAL appends, observers fire, but nothing is ever shipped to a peer. That's the
+// correct default for libraries (no surprise network egress) but it's wrong for the
+// replication-enabled benchmark scenarios (current-state-single-peer, replication-backpressure,
+// receiver-crash, bidirectional-replication, replication-key-filter), which are supposed
+// to measure ship/apply latency.
+//
+// What this block wires up:
+//   • Sender side: `AddLatticeReplicationGrpcPushTransport` swaps the no-op
+//     `IReplicationTransport` for the gRPC push transport when peers are configured.
+//   • Receiver side: `AddLatticeReplicationGrpcServer` + `MapLatticeReplicationGrpcService`
+//     register the receiver-side gRPC method so peer pushes land in `IReplicationApplier`.
+//   • Tree opt-in: `LatticeReplicationOptions.ReplicatedTrees[treeId] = LwwRegister` so
+//     the producer-side observer accepts mutations and records WAL entries (without this
+//     the WAL is permanently empty on a replicated tree).
+//
+// Status note (do not delete without verifying first): the canonical outbound pump that
+// drives WAL → `IReplicationTransport.SendAsync` is not yet shipped in
+// `Orleans.Lattice.Replication`. The library exposes all the seams (`IChangeFeed`,
+// `IReplicationTransport`, `ILatticeReplicationCursorRegistry`, `IReplicationBatchEncoder`)
+// but no in-process consumer that wires them together — see the docs talking about an
+// "outbound shipper" / "canonical shipper" in `docs/lattice.replication/transport.md` and
+// the test-only `ChaosDeliveryPump` under `test/lattice.replication/Chaos`. Until the
+// library ships that pump:
+//   • `orleans_lattice_replication_wal_entries_appended_total` populates (producer side
+//     records every committed mutation against a replicated tree).
+//   • `orleans_lattice_replication_ship_duration_*` and
+//     `orleans_lattice_replication_apply_*` histograms stay empty (no
+//     `IReplicationTransport.SendAsync` is ever called from production code).
+// The benchmark deliberately does NOT implement its own pump here — that would be a
+// duplicate surface destined to be ripped out the moment the library lands the canonical
+// loop. The wiring below is intentionally forward-compatible: when the library's pump
+// ships, every replication histogram comes online without changing this file.
+//
+// Configuration knobs (read from env via the ASP.NET Core configuration binder):
+//   • Replication:GrpcServerEnabled  — register the receiver service and map the gRPC
+//                                      Push route on Kestrel. The receiver listens on
+//                                      Replication:GrpcPort with HTTP/2.
+//   • Replication:GrpcPort           — port the receiver binds (default 5001 inside the
+//                                      container; the compose overlay maps host ports if
+//                                      external access is needed).
+//   • Replication:GrpcPeers:<id>     — peer endpoint map keyed by TargetClusterId. When
+//                                      non-empty, replaces the no-op transport with the
+//                                      gRPC push transport so the outbound shipper actually
+//                                      delivers batches to the peers.
+//
+// Both halves are independent: a silo can be a sender-only (peers set, server off), a
+// receiver-only (server on, no peers), or both (bidirectional-replication). The benchmark
+// scenarios drive the matrix via env vars on the silo / silo-replica services in the
+// docker-compose overlay.
+var grpcServerEnabled = string.Equals(
+    builder.Configuration["Replication:GrpcServerEnabled"],
+    "true",
+    StringComparison.OrdinalIgnoreCase);
+var grpcPort = int.Parse(builder.Configuration["Replication:GrpcPort"] ?? "5001");
+var grpcPeers = builder.Configuration.GetSection("Replication:GrpcPeers")
+    .GetChildren()
+    .Where(c => !string.IsNullOrWhiteSpace(c.Value))
+    .ToDictionary(c => c.Key, c => new Uri(c.Value!));
 
 // ─── Telemetry sink switch (Telemetry:Sink) ────────────────────────────────────
 //
@@ -98,27 +162,71 @@ builder.Host.UseOrleans(silo =>
         options.TableServiceClient = new TableServiceClient(azuriteConnection);
     });
 
-    // ─── Lattice (in-memory grain storage; benchmark scenarios stay ephemeral) ──
-    if (telemetrySink == "lattice")
+    // ─── Lattice + replication (in-memory grain storage; benchmark scenarios stay ephemeral) ──
+    //
+    // Important: AddLattice/AddLatticeReplication run when EITHER the silo is producing
+    // lattice telemetry (origin) OR is acting as a replication receiver (replica with
+    // Telemetry:Sink=null but Replication:Enabled=true). Earlier this gating sat under
+    // `telemetrySink == "lattice"` alone, which silently disabled the receiver — the
+    // replica accepted incoming gRPC pushes but had no IReplicationApplier registered,
+    // so every push deserialised the envelope and then dropped on the floor. Symptom:
+    // results.json showed 0 replication metrics on every replication-overlay scenario.
+    if (telemetrySink == "lattice" || replicationEnabled)
     {
         silo.AddLattice((s, name) => s.AddMemoryGrainStorage(name));
+    }
 
-        if (replicationEnabled)
+    if (replicationEnabled)
+    {
+        silo.AddLatticeReplication(opts =>
         {
-            silo.AddLatticeReplication(opts =>
-            {
-                opts.ClusterId = builder.Configuration["Replication:OriginClusterId"] ?? clusterId;
+            opts.ClusterId = builder.Configuration["Replication:OriginClusterId"] ?? clusterId;
 
-                // replication-key-filter — per-key prefix filter. When Replication:KeyPrefixes is set the observer
-                // evaluates the prefix list inline before recording the WAL append. Empty/missing
-                // means "ship everything".
-                var prefixes = builder.Configuration["Replication:KeyPrefixes"];
-                if (!string.IsNullOrWhiteSpace(prefixes))
+            // Opt the benchmark tree into replication. ReplicatedTrees is null by default
+            // ("no trees replicate"); without this the producer-side observer rejects every
+            // mutation at commit time and the WAL stays empty, so no `replication_*`
+            // metric ever fires. The benchmark sink writes to a single tree (LatticeSink:TreeId,
+            // default "vehicle-fleet"); LwwRegister is the right mode for current-state-by-vehicle-id
+            // (each key holds the last reported telemetry, last-writer-wins is the natural merge).
+            var treeId = builder.Configuration["LatticeSink:TreeId"] ?? "vehicle-fleet";
+            opts.ReplicatedTrees = new Dictionary<string, ReplicationMode>
+            {
+                [treeId] = ReplicationMode.LwwRegister,
+            };
+
+            // replication-key-filter — per-key prefix filter. When Replication:KeyPrefixes is set the observer
+            // evaluates the prefix list inline before recording the WAL append. Empty/missing
+            // means "ship everything".
+            var prefixes = builder.Configuration["Replication:KeyPrefixes"];
+            if (!string.IsNullOrWhiteSpace(prefixes))
+            {
+                opts.KeyPrefixes = prefixes
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            }
+        });
+
+        // Receiver-side: register the gRPC Push handler so a peer that ships to this
+        // cluster lands its batches in the IReplicationApplier. Idempotent across
+        // multiple AddLatticeReplicationGrpcServer calls (uses TryAdd internally).
+        if (grpcServerEnabled)
+        {
+            silo.ConfigureServices(services => services.AddLatticeReplicationGrpcServer());
+        }
+
+        // Sender-side: when peers are configured, swap the no-op transport for the
+        // gRPC push transport so outbound batches actually hit the wire. The
+        // dictionary is read once per peer on first dispatch (per the package
+        // contract) — adding peers at runtime is not supported, but since the
+        // benchmark stack is brought up once per scenario this is fine.
+        if (grpcPeers.Count > 0)
+        {
+            silo.ConfigureServices(services => services.AddLatticeReplicationGrpcPushTransport(opts =>
+            {
+                foreach (var (target, endpoint) in grpcPeers)
                 {
-                    opts.KeyPrefixes = prefixes
-                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    opts.PeerEndpoints[target] = endpoint;
                 }
-            });
+            }));
         }
     }
 });
@@ -184,7 +292,23 @@ builder.Services.AddHealthChecks()
 var prometheusPort = int.Parse(builder.Configuration["Telemetry:Prometheus:Port"] ?? "9090");
 builder.WebHost.ConfigureKestrel(opts =>
 {
+    // Default HTTP/1.1+HTTP/2 listener for the Prometheus scrape endpoint and /healthz.
     opts.ListenAnyIP(prometheusPort);
+
+    // Dedicated HTTP/2-only listener for the replication gRPC receiver. We bind the
+    // gRPC route on a separate port (rather than co-mounting on the prom port) because
+    // (a) gRPC requires HTTP/2 prior knowledge for plaintext (h2c) and the OTel
+    // Prometheus exporter expects HTTP/1.1 GETs, and (b) keeping them on different
+    // ports lets us limit external surface (e.g. expose only 9090 if the receiver isn't
+    // wanted). Only bind when the server is enabled — binding an unused HTTP/2 port
+    // wastes a socket and complicates the docker port maps.
+    if (grpcServerEnabled)
+    {
+        opts.ListenAnyIP(grpcPort, listenOptions =>
+        {
+            listenOptions.Protocols = HttpProtocols.Http2;
+        });
+    }
 });
 
 var app = builder.Build();
@@ -192,6 +316,14 @@ app.UseOpenTelemetryPrometheusScrapingEndpoint();
 // /metrics is the AspNetCore exporter's default scrape endpoint; map a /healthz too so docker
 // healthchecks can probe Kestrel cheaply.
 app.MapHealthChecks("/healthz");
+
+// Replication gRPC route — only when the server is enabled. The mapping is idempotent
+// against repeat host startups within the same process (only relevant in tests; the
+// benchmark binary always starts fresh).
+if (grpcServerEnabled)
+{
+    app.MapLatticeReplicationGrpcService();
+}
 
 await app.RunAsync();
 

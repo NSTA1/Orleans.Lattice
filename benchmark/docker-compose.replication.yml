@@ -57,10 +57,25 @@ services:
       Replication__Enabled: ${BENCH_REPLICA_REPLICATION_ENABLED:-true}
       Replication__OriginClusterId: ${BENCH_REPLICA_CLUSTER_ID:-vfs-bench-replica}
       Replication__KeyPrefixes: ${BENCH_REPLICATION_KEY_PREFIXES:-}
+      # Receiver-side gRPC service so the origin's GrpcPushTransport actually has somewhere
+      # to deliver batches. The replica is *always* a receiver in this overlay (every
+      # replication scenario ships at least one direction at it). Listens on :5001 (HTTP/2)
+      # inside the container; not host-exposed because origin→replica traffic stays on the
+      # docker network.
+      Replication__GrpcServerEnabled: "true"
+      Replication__GrpcPort: "5001"
+      # Bidirectional scenarios (bidirectional-replication) set BENCH_REPLICA_PEER_ENDPOINT=http://silo:5001
+      # so the replica also ships back to the origin under the well-known origin cluster id
+      # vfs-bench. For single-direction scenarios (current-state-single-peer / replication-backpressure /
+      # receiver-crash / replication-key-filter) the var is unset and the value resolves to an
+      # empty string, which Bench.Silo's `GetSection("Replication:GrpcPeers").GetChildren()`
+      # filter discards — leaving the no-op transport in place on the back-channel.
+      Replication__GrpcPeers__vfs-bench: ${BENCH_REPLICA_PEER_ENDPOINT:-}
     expose:
       - "11111"
       - "30000"
       - "9090"
+      - "5001"
 
   prometheus:
     # Replace the base prometheus.yml mount with the replication-aware version that

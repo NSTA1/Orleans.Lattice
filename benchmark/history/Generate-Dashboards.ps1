@@ -281,7 +281,7 @@ function New-RowPanel {
         type     = 'row'
         title    = $Title
         collapsed= $false
-        gridPos  = @{ h = 1; w = 24; x = 0; y = $Y }
+        gridPos  = [ordered]@{ x = 0; y = $Y; w = 24; h = 1 }
         id       = Next-PanelId
         panels   = @()
     }
@@ -303,17 +303,17 @@ function New-StatPanel {
     # Threshold direction: lower-is-better metrics turn red when high; higher-is-better turn red when low.
     if ($Kpi.LowerIsBetter) {
         $thresholds = @(
-            @{ color = 'green';  value = $null },
-            @{ color = 'yellow'; value = $Kpi.WarnAt },
-            @{ color = 'red';    value = $Kpi.CritAt }
+            [ordered]@{ color = 'green';  value = $null },
+            [ordered]@{ color = 'yellow'; value = $Kpi.WarnAt },
+            [ordered]@{ color = 'red';    value = $Kpi.CritAt }
         )
     } else {
         # Inverted: green-yellow-red descending. Grafana evaluates step-by-step ascending,
         # so we encode the ranges as ascending values, with crit being lowest.
         $thresholds = @(
-            @{ color = 'red';    value = $null },
-            @{ color = 'yellow'; value = $Kpi.CritAt },
-            @{ color = 'green';  value = $Kpi.WarnAt }
+            [ordered]@{ color = 'red';    value = $null },
+            [ordered]@{ color = 'yellow'; value = $Kpi.CritAt },
+            [ordered]@{ color = 'green';  value = $Kpi.WarnAt }
         )
     }
     return [ordered]@{
@@ -321,15 +321,15 @@ function New-StatPanel {
         type        = 'stat'
         title       = $Kpi.Title
         datasource  = $DataSource
-        gridPos     = @{ h = $H; w = $W; x = $X; y = $Y }
-        fieldConfig = @{
+        gridPos     = [ordered]@{ x = $X; y = $Y; w = $W; h = $H }
+        fieldConfig = [ordered]@{
+            overrides = @()
             defaults  = [ordered]@{
                 unit       = $Kpi.Unit
                 decimals   = 2
-                color      = @{ mode = 'thresholds' }
-                thresholds = @{ mode = 'absolute'; steps = $thresholds }
+                color      = [ordered]@{ mode = 'thresholds' }
+                thresholds = [ordered]@{ steps = $thresholds; mode = 'absolute' }
             }
-            overrides = @()
         }
         options     = [ordered]@{
             graphMode     = 'area'
@@ -364,8 +364,9 @@ function New-TrendPanel {
         type        = 'timeseries'
         title       = $fam.Title
         datasource  = $DataSource
-        gridPos     = @{ h = $H; w = $W; x = $X; y = $Y }
-        fieldConfig = @{
+        gridPos     = [ordered]@{ x = $X; y = $Y; w = $W; h = $H }
+        fieldConfig = [ordered]@{
+            overrides = @()
             defaults  = [ordered]@{
                 custom = [ordered]@{
                     drawStyle       = 'points'
@@ -375,7 +376,6 @@ function New-TrendPanel {
                     spanNulls       = $true
                 }
             }
-            overrides = @()
         }
         options     = [ordered]@{
             legend  = [ordered]@{ displayMode = 'list'; placement = 'bottom'; showLegend = $true }
@@ -404,14 +404,14 @@ function New-BarchartPanel {
         type        = 'barchart'
         title       = $Kpi.Title + ' - per-run history'
         datasource  = $DataSource
-        gridPos     = @{ h = $H; w = $W; x = $X; y = $Y }
-        fieldConfig = @{
+        gridPos     = [ordered]@{ x = $X; y = $Y; w = $W; h = $H }
+        fieldConfig = [ordered]@{
+            overrides = @()
             defaults  = [ordered]@{
                 unit     = $Kpi.Unit
                 decimals = 2
-                color    = @{ mode = 'palette-classic' }
+                color    = [ordered]@{ mode = 'palette-classic' }
             }
-            overrides = @()
         }
         options     = [ordered]@{
             orientation       = 'vertical'

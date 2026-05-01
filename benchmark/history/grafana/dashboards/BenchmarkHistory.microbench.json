@@ -12,10 +12,10 @@
       "title": "Headline KPIs",
       "collapsed": false,
       "gridPos": {
-        "y": 0,
-        "h": 1,
         "x": 0,
-        "w": 24
+        "y": 0,
+        "w": 24,
+        "h": 1
       },
       "id": 1,
       "panels": []
@@ -29,10 +29,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 1,
-        "h": 5,
         "x": 0,
-        "w": 6
+        "y": 1,
+        "w": 6,
+        "h": 5
       },
       "fieldConfig": {
         "overrides": [],
@@ -45,16 +45,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 50000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 50000
               },
               {
-                "value": 200000,
-                "color": "red"
+                "color": "red",
+                "value": 200000
               }
             ],
             "mode": "absolute"
@@ -96,10 +96,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 1,
-        "h": 5,
         "x": 6,
-        "w": 6
+        "y": 1,
+        "w": 6,
+        "h": 5
       },
       "fieldConfig": {
         "overrides": [],
@@ -112,16 +112,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 20000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 20000
               },
               {
-                "value": 100000,
-                "color": "red"
+                "color": "red",
+                "value": 100000
               }
             ],
             "mode": "absolute"
@@ -163,10 +163,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 1,
-        "h": 5,
         "x": 12,
-        "w": 6
+        "y": 1,
+        "w": 6,
+        "h": 5
       },
       "fieldConfig": {
         "overrides": [],
@@ -179,16 +179,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 10000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10000
               },
               {
-                "value": 50000,
-                "color": "green"
+                "color": "green",
+                "value": 50000
               }
             ],
             "mode": "absolute"
@@ -230,10 +230,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 1,
-        "h": 5,
         "x": 18,
-        "w": 6
+        "y": 1,
+        "w": 6,
+        "h": 5
       },
       "fieldConfig": {
         "overrides": [],
@@ -246,16 +246,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 30000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 30000
               },
               {
-                "value": 150000,
-                "color": "red"
+                "color": "red",
+                "value": 150000
               }
             ],
             "mode": "absolute"
@@ -293,10 +293,10 @@
       "title": "Trends across runs",
       "collapsed": false,
       "gridPos": {
-        "y": 6,
-        "h": 1,
         "x": 0,
-        "w": 24
+        "y": 6,
+        "w": 24,
+        "h": 1
       },
       "id": 6,
       "panels": []
@@ -310,10 +310,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 7,
-        "h": 8,
         "x": 0,
-        "w": 12
+        "y": 7,
+        "w": 12,
+        "h": 8
       },
       "fieldConfig": {
         "overrides": [],
@@ -355,10 +355,10 @@
       "title": "Per-run history (hover bars for run_id and git_sha)",
       "collapsed": false,
       "gridPos": {
-        "y": 15,
-        "h": 1,
         "x": 0,
-        "w": 24
+        "y": 15,
+        "w": 24,
+        "h": 1
       },
       "id": 8,
       "panels": []
@@ -372,10 +372,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 16,
-        "h": 7,
         "x": 0,
-        "w": 12
+        "y": 16,
+        "w": 12,
+        "h": 7
       },
       "fieldConfig": {
         "overrides": [],
@@ -425,10 +425,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 16,
-        "h": 7,
         "x": 12,
-        "w": 12
+        "y": 16,
+        "w": 12,
+        "h": 7
       },
       "fieldConfig": {
         "overrides": [],
@@ -478,10 +478,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 23,
-        "h": 7,
         "x": 0,
-        "w": 12
+        "y": 23,
+        "w": 12,
+        "h": 7
       },
       "fieldConfig": {
         "overrides": [],
@@ -531,10 +531,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 23,
-        "h": 7,
         "x": 12,
-        "w": 12
+        "y": 23,
+        "w": 12,
+        "h": 7
       },
       "fieldConfig": {
         "overrides": [],

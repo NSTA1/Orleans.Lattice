@@ -12,10 +12,10 @@
       "title": "Replication  -  current-state-single-peer, bidirectional-replication, observer-no-peer, replication-key-filter, replication-backpressure, receiver-crash",
       "collapsed": false,
       "gridPos": {
-        "y": 0,
-        "h": 1,
         "x": 0,
-        "w": 24
+        "y": 0,
+        "w": 24,
+        "h": 1
       },
       "id": 1,
       "panels": []
@@ -29,10 +29,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 1,
-        "h": 4,
         "x": 0,
-        "w": 6
+        "y": 1,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -45,16 +45,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 50,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 50
               },
               {
-                "value": 200,
-                "color": "red"
+                "color": "red",
+                "value": 200
               }
             ],
             "mode": "absolute"
@@ -96,10 +96,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 1,
-        "h": 4,
         "x": 6,
-        "w": 6
+        "y": 1,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -112,16 +112,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 100,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 100
               },
               {
-                "value": 500,
-                "color": "red"
+                "color": "red",
+                "value": 500
               }
             ],
             "mode": "absolute"
@@ -163,10 +163,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 1,
-        "h": 4,
         "x": 12,
-        "w": 6
+        "y": 1,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -179,16 +179,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ],
             "mode": "absolute"
@@ -230,10 +230,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 1,
-        "h": 4,
         "x": 18,
-        "w": 6
+        "y": 1,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -246,16 +246,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 100,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 100
               },
               {
-                "value": 500,
-                "color": "green"
+                "color": "green",
+                "value": 500
               }
             ],
             "mode": "absolute"
@@ -293,10 +293,10 @@
       "title": "Write-heavy (random keys)  -  current-state-no-replication, skewed-key-shard-splits",
       "collapsed": false,
       "gridPos": {
-        "y": 5,
-        "h": 1,
         "x": 0,
-        "w": 24
+        "y": 5,
+        "w": 24,
+        "h": 1
       },
       "id": 6,
       "panels": []
@@ -310,10 +310,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 6,
-        "h": 4,
         "x": 0,
-        "w": 6
+        "y": 6,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -326,16 +326,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ],
             "mode": "absolute"
@@ -377,10 +377,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 6,
-        "h": 4,
         "x": 6,
-        "w": 6
+        "y": 6,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -393,16 +393,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 100,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 100
               },
               {
-                "value": 500,
-                "color": "green"
+                "color": "green",
+                "value": 500
               }
             ],
             "mode": "absolute"
@@ -444,10 +444,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 6,
-        "h": 4,
         "x": 12,
-        "w": 6
+        "y": 6,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -460,16 +460,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ],
             "mode": "absolute"
@@ -511,10 +511,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 6,
-        "h": 4,
         "x": 18,
-        "w": 6
+        "y": 6,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -527,16 +527,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 0.4,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 0.4
               },
               {
-                "value": 0.7,
-                "color": "green"
+                "color": "green",
+                "value": 0.7
               }
             ],
             "mode": "absolute"
@@ -574,10 +574,10 @@
       "title": "Write-heavy (ordered / append-only)  -  event-log-with-ttl",
       "collapsed": false,
       "gridPos": {
-        "y": 10,
-        "h": 1,
         "x": 0,
-        "w": 24
+        "y": 10,
+        "w": 24,
+        "h": 1
       },
       "id": 11,
       "panels": []
@@ -591,10 +591,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 11,
-        "h": 4,
         "x": 0,
-        "w": 8
+        "y": 11,
+        "w": 8,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -607,16 +607,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ],
             "mode": "absolute"
@@ -658,10 +658,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 11,
-        "h": 4,
         "x": 8,
-        "w": 8
+        "y": 11,
+        "w": 8,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -674,16 +674,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 100,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 100
               },
               {
-                "value": 500,
-                "color": "green"
+                "color": "green",
+                "value": 500
               }
             ],
             "mode": "absolute"
@@ -725,10 +725,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 11,
-        "h": 4,
         "x": 16,
-        "w": 8
+        "y": 11,
+        "w": 8,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -741,16 +741,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 100,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 100
               },
               {
-                "value": 500,
-                "color": "green"
+                "color": "green",
+                "value": 500
               }
             ],
             "mode": "absolute"
@@ -788,10 +788,10 @@
       "title": "Read-heavy  -  read-heavy-random, read-heavy-ordered",
       "collapsed": false,
       "gridPos": {
-        "y": 15,
-        "h": 1,
         "x": 0,
-        "w": 24
+        "y": 15,
+        "w": 24,
+        "h": 1
       },
       "id": 15,
       "panels": []
@@ -805,10 +805,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 16,
-        "h": 4,
         "x": 0,
-        "w": 6
+        "y": 16,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -821,16 +821,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 5,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 5
               },
               {
-                "value": 25,
-                "color": "red"
+                "color": "red",
+                "value": 25
               }
             ],
             "mode": "absolute"
@@ -872,10 +872,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 16,
-        "h": 4,
         "x": 6,
-        "w": 6
+        "y": 16,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -888,16 +888,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 5000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 5000
               },
               {
-                "value": 20000,
-                "color": "green"
+                "color": "green",
+                "value": 20000
               }
             ],
             "mode": "absolute"
@@ -939,10 +939,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 16,
-        "h": 4,
         "x": 12,
-        "w": 6
+        "y": 16,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -955,16 +955,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 0.4,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 0.4
               },
               {
-                "value": 0.7,
-                "color": "green"
+                "color": "green",
+                "value": 0.7
               }
             ],
             "mode": "absolute"
@@ -1006,10 +1006,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 16,
-        "h": 4,
         "x": 18,
-        "w": 6
+        "y": 16,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -1022,16 +1022,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ],
             "mode": "absolute"
@@ -1069,10 +1069,10 @@
       "title": "Read/write mix  -  read-write-mix-random, read-write-mix-ordered",
       "collapsed": false,
       "gridPos": {
-        "y": 20,
-        "h": 1,
         "x": 0,
-        "w": 24
+        "y": 20,
+        "w": 24,
+        "h": 1
       },
       "id": 20,
       "panels": []
@@ -1086,10 +1086,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 21,
-        "h": 4,
         "x": 0,
-        "w": 6
+        "y": 21,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -1102,16 +1102,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 5,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 5
               },
               {
-                "value": 25,
-                "color": "red"
+                "color": "red",
+                "value": 25
               }
             ],
             "mode": "absolute"
@@ -1153,10 +1153,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 21,
-        "h": 4,
         "x": 6,
-        "w": 6
+        "y": 21,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -1169,16 +1169,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ],
             "mode": "absolute"
@@ -1220,10 +1220,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 21,
-        "h": 4,
         "x": 12,
-        "w": 6
+        "y": 21,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -1236,16 +1236,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 500,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 500
               },
               {
-                "value": 1500,
-                "color": "green"
+                "color": "green",
+                "value": 1500
               }
             ],
             "mode": "absolute"
@@ -1287,10 +1287,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 21,
-        "h": 4,
         "x": 18,
-        "w": 6
+        "y": 21,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -1303,16 +1303,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 500,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 500
               },
               {
-                "value": 1500,
-                "color": "green"
+                "color": "green",
+                "value": 1500
               }
             ],
             "mode": "absolute"
@@ -1350,10 +1350,10 @@
       "title": "Performance: Microbench  -  microbench",
       "collapsed": false,
       "gridPos": {
-        "y": 25,
-        "h": 1,
         "x": 0,
-        "w": 24
+        "y": 25,
+        "w": 24,
+        "h": 1
       },
       "id": 25,
       "panels": []
@@ -1367,10 +1367,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 26,
-        "h": 4,
         "x": 0,
-        "w": 6
+        "y": 26,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -1383,16 +1383,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 50000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 50000
               },
               {
-                "value": 200000,
-                "color": "red"
+                "color": "red",
+                "value": 200000
               }
             ],
             "mode": "absolute"
@@ -1434,10 +1434,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 26,
-        "h": 4,
         "x": 6,
-        "w": 6
+        "y": 26,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -1450,16 +1450,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 20000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 20000
               },
               {
-                "value": 100000,
-                "color": "red"
+                "color": "red",
+                "value": 100000
               }
             ],
             "mode": "absolute"
@@ -1501,10 +1501,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 26,
-        "h": 4,
         "x": 12,
-        "w": 6
+        "y": 26,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -1517,16 +1517,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 10000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10000
               },
               {
-                "value": 50000,
-                "color": "green"
+                "color": "green",
+                "value": 50000
               }
             ],
             "mode": "absolute"
@@ -1568,10 +1568,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 26,
-        "h": 4,
         "x": 18,
-        "w": 6
+        "y": 26,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -1584,16 +1584,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 30000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 30000
               },
               {
-                "value": 150000,
-                "color": "red"
+                "color": "red",
+                "value": 150000
               }
             ],
             "mode": "absolute"
@@ -1631,10 +1631,10 @@
       "title": "WAL Performance  -  current-state-single-peer, replication-backpressure, receiver-crash, bidirectional-replication, replication-key-filter",
       "collapsed": false,
       "gridPos": {
-        "y": 30,
-        "h": 1,
         "x": 0,
-        "w": 24
+        "y": 30,
+        "w": 24,
+        "h": 1
       },
       "id": 30,
       "panels": []
@@ -1648,10 +1648,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 31,
-        "h": 4,
         "x": 0,
-        "w": 6
+        "y": 31,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -1664,16 +1664,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ],
             "mode": "absolute"
@@ -1715,10 +1715,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 31,
-        "h": 4,
         "x": 6,
-        "w": 6
+        "y": 31,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -1731,16 +1731,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ],
             "mode": "absolute"
@@ -1782,10 +1782,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 31,
-        "h": 4,
         "x": 12,
-        "w": 6
+        "y": 31,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -1798,16 +1798,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ],
             "mode": "absolute"
@@ -1849,10 +1849,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 31,
-        "h": 4,
         "x": 18,
-        "w": 6
+        "y": 31,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "overrides": [],
@@ -1865,16 +1865,16 @@
           "thresholds": {
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 100,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 100
               },
               {
-                "value": 500,
-                "color": "green"
+                "color": "green",
+                "value": 500
               }
             ],
             "mode": "absolute"

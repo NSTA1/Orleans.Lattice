@@ -65,6 +65,19 @@ services:
       Replication__Enabled: ${BENCH_REPLICATION_ENABLED:-false}
       Replication__OriginClusterId: ${BENCH_REPLICATION_CLUSTER_ID:-vfs-bench}
       Replication__KeyPrefixes: ${BENCH_REPLICATION_KEY_PREFIXES:-}
+      # Replication gRPC wiring. The origin is a sender to the replica (vfs-bench-replica)
+      # for every replication-enabled scenario; the replica also acts as a sender back to
+      # the origin only in bidirectional-replication. The server side listens whenever
+      # replication is enabled so the origin can ALSO be a receiver in the bidirectional
+      # case. Port 5001 (HTTP/2) inside the container; origin→replica traffic stays on the
+      # docker network so we don't host-publish it.
+      Replication__GrpcServerEnabled: ${BENCH_REPLICATION_ENABLED:-false}
+      Replication__GrpcPort: "5001"
+      # The well-known target for the origin silo is the replica cluster id
+      # vfs-bench-replica. The endpoint is empty/unset for non-replication scenarios; the
+      # configuration binder + the .Where(...) filter in Bench.Silo's GrpcPeers reader
+      # discard empty values, leaving the no-op transport in place.
+      Replication__GrpcPeers__vfs-bench-replica: ${BENCH_ORIGIN_PEER_ENDPOINT:-}
       # Read-driver bindings (only consumed when Telemetry__Sink=lattice). Drives the read-heavy-*
       # and read-write-mix-* scenarios.
       ReadDriver__Enabled: ${BENCH_READ_DRIVER_ENABLED:-false}
@@ -79,6 +92,7 @@ services:
       - "11111"
       - "30000"
       - "9090"
+      - "5001"
 
   api:
     # Simulator API used unmodified — its existing Dockerfile expects the simulator-local context.

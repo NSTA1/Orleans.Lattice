@@ -21,6 +21,7 @@
     <ProjectReference Include="..\Bench.Sink\VehicleFleetSimulator.Benchmark.Sink.csproj" />
     <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
     <ProjectReference Include="..\..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
+    <ProjectReference Include="..\..\..\src\lattice.replication.grpc\Orleans.Lattice.Replication.Grpc.csproj" />
   </ItemGroup>
 
   <ItemGroup>
