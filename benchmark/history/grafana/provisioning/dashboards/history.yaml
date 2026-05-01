@@ -1,9 +1,9 @@
 apiVersion: 1
 
 providers:
-  - name: 'Orleans.Lattice — History'
+  - name: 'Orleans.Lattice'
     orgId: 1
-    folder: 'Orleans.Lattice — History'
+    folder: 'Orleans.Lattice'
     type: file
     disableDeletion: false
     updateIntervalSeconds: 30

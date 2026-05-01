@@ -9,13 +9,13 @@
   "panels": [
     {
       "type": "row",
-      "title": "Lattice History - Replication  -  current-state-single-peer, bidirectional-replication, observer-no-peer, replication-key-filter, replication-backpressure, receiver-crash",
+      "title": "Replication  -  current-state-single-peer, bidirectional-replication, observer-no-peer, replication-key-filter, replication-backpressure, receiver-crash",
       "collapsed": false,
       "gridPos": {
         "y": 0,
-        "w": 24,
+        "h": 1,
         "x": 0,
-        "h": 1
+        "w": 24
       },
       "id": 1,
       "panels": []
@@ -30,9 +30,9 @@
       },
       "gridPos": {
         "y": 1,
-        "w": 6,
+        "h": 4,
         "x": 0,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -43,21 +43,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 50
+                "value": 50,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 200
+                "value": 200,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -97,9 +97,9 @@
       },
       "gridPos": {
         "y": 1,
-        "w": 6,
+        "h": 4,
         "x": 6,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -110,21 +110,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 100
+                "value": 100,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 500
+                "value": 500,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -164,9 +164,9 @@
       },
       "gridPos": {
         "y": 1,
-        "w": 6,
+        "h": 4,
         "x": 12,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -177,21 +177,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 10
+                "value": 10,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 50
+                "value": 50,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -231,9 +231,9 @@
       },
       "gridPos": {
         "y": 1,
-        "w": 6,
+        "h": 4,
         "x": 18,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -244,21 +244,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "value": null,
+                "color": "red"
               },
               {
-                "color": "yellow",
-                "value": 100
+                "value": 100,
+                "color": "yellow"
               },
               {
-                "color": "green",
-                "value": 500
+                "value": 500,
+                "color": "green"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -290,13 +290,13 @@
     },
     {
       "type": "row",
-      "title": "Lattice History - Write-heavy (random keys)  -  current-state-no-replication, skewed-key-shard-splits",
+      "title": "Write-heavy (random keys)  -  current-state-no-replication, skewed-key-shard-splits",
       "collapsed": false,
       "gridPos": {
         "y": 5,
-        "w": 24,
+        "h": 1,
         "x": 0,
-        "h": 1
+        "w": 24
       },
       "id": 6,
       "panels": []
@@ -311,9 +311,9 @@
       },
       "gridPos": {
         "y": 6,
-        "w": 6,
+        "h": 4,
         "x": 0,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -324,21 +324,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 10
+                "value": 10,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 50
+                "value": 50,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -378,9 +378,9 @@
       },
       "gridPos": {
         "y": 6,
-        "w": 6,
+        "h": 4,
         "x": 6,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -391,21 +391,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "value": null,
+                "color": "red"
               },
               {
-                "color": "yellow",
-                "value": 100
+                "value": 100,
+                "color": "yellow"
               },
               {
-                "color": "green",
-                "value": 500
+                "value": 500,
+                "color": "green"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -445,9 +445,9 @@
       },
       "gridPos": {
         "y": 6,
-        "w": 6,
+        "h": 4,
         "x": 12,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -458,21 +458,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 10
+                "value": 10,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 50
+                "value": 50,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -512,9 +512,9 @@
       },
       "gridPos": {
         "y": 6,
-        "w": 6,
+        "h": 4,
         "x": 18,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -525,21 +525,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "value": null,
+                "color": "red"
               },
               {
-                "color": "yellow",
-                "value": 0.4
+                "value": 0.4,
+                "color": "yellow"
               },
               {
-                "color": "green",
-                "value": 0.7
+                "value": 0.7,
+                "color": "green"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -571,13 +571,13 @@
     },
     {
       "type": "row",
-      "title": "Lattice History - Write-heavy (ordered / append-only)  -  event-log-with-ttl",
+      "title": "Write-heavy (ordered / append-only)  -  event-log-with-ttl",
       "collapsed": false,
       "gridPos": {
         "y": 10,
-        "w": 24,
+        "h": 1,
         "x": 0,
-        "h": 1
+        "w": 24
       },
       "id": 11,
       "panels": []
@@ -592,9 +592,9 @@
       },
       "gridPos": {
         "y": 11,
-        "w": 8,
+        "h": 4,
         "x": 0,
-        "h": 4
+        "w": 8
       },
       "fieldConfig": {
         "overrides": [],
@@ -605,21 +605,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 10
+                "value": 10,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 50
+                "value": 50,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -659,9 +659,9 @@
       },
       "gridPos": {
         "y": 11,
-        "w": 8,
+        "h": 4,
         "x": 8,
-        "h": 4
+        "w": 8
       },
       "fieldConfig": {
         "overrides": [],
@@ -672,21 +672,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "value": null,
+                "color": "red"
               },
               {
-                "color": "yellow",
-                "value": 100
+                "value": 100,
+                "color": "yellow"
               },
               {
-                "color": "green",
-                "value": 500
+                "value": 500,
+                "color": "green"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -726,9 +726,9 @@
       },
       "gridPos": {
         "y": 11,
-        "w": 8,
+        "h": 4,
         "x": 16,
-        "h": 4
+        "w": 8
       },
       "fieldConfig": {
         "overrides": [],
@@ -739,21 +739,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "value": null,
+                "color": "red"
               },
               {
-                "color": "yellow",
-                "value": 100
+                "value": 100,
+                "color": "yellow"
               },
               {
-                "color": "green",
-                "value": 500
+                "value": 500,
+                "color": "green"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -785,13 +785,13 @@
     },
     {
       "type": "row",
-      "title": "Lattice History - Read-heavy  -  read-heavy-random, read-heavy-ordered",
+      "title": "Read-heavy  -  read-heavy-random, read-heavy-ordered",
       "collapsed": false,
       "gridPos": {
         "y": 15,
-        "w": 24,
+        "h": 1,
         "x": 0,
-        "h": 1
+        "w": 24
       },
       "id": 15,
       "panels": []
@@ -806,9 +806,9 @@
       },
       "gridPos": {
         "y": 16,
-        "w": 6,
+        "h": 4,
         "x": 0,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -819,21 +819,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 5
+                "value": 5,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 25
+                "value": 25,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -873,9 +873,9 @@
       },
       "gridPos": {
         "y": 16,
-        "w": 6,
+        "h": 4,
         "x": 6,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -886,21 +886,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "value": null,
+                "color": "red"
               },
               {
-                "color": "yellow",
-                "value": 5000
+                "value": 5000,
+                "color": "yellow"
               },
               {
-                "color": "green",
-                "value": 20000
+                "value": 20000,
+                "color": "green"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -940,9 +940,9 @@
       },
       "gridPos": {
         "y": 16,
-        "w": 6,
+        "h": 4,
         "x": 12,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -953,21 +953,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "value": null,
+                "color": "red"
               },
               {
-                "color": "yellow",
-                "value": 0.4
+                "value": 0.4,
+                "color": "yellow"
               },
               {
-                "color": "green",
-                "value": 0.7
+                "value": 0.7,
+                "color": "green"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1007,9 +1007,9 @@
       },
       "gridPos": {
         "y": 16,
-        "w": 6,
+        "h": 4,
         "x": 18,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -1020,21 +1020,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 10
+                "value": 10,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 50
+                "value": 50,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1066,13 +1066,13 @@
     },
     {
       "type": "row",
-      "title": "Lattice History - Read/write mix  -  read-write-mix-random, read-write-mix-ordered",
+      "title": "Read/write mix  -  read-write-mix-random, read-write-mix-ordered",
       "collapsed": false,
       "gridPos": {
         "y": 20,
-        "w": 24,
+        "h": 1,
         "x": 0,
-        "h": 1
+        "w": 24
       },
       "id": 20,
       "panels": []
@@ -1087,9 +1087,9 @@
       },
       "gridPos": {
         "y": 21,
-        "w": 6,
+        "h": 4,
         "x": 0,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -1100,21 +1100,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 5
+                "value": 5,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 25
+                "value": 25,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1154,9 +1154,9 @@
       },
       "gridPos": {
         "y": 21,
-        "w": 6,
+        "h": 4,
         "x": 6,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -1167,21 +1167,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 10
+                "value": 10,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 50
+                "value": 50,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1221,9 +1221,9 @@
       },
       "gridPos": {
         "y": 21,
-        "w": 6,
+        "h": 4,
         "x": 12,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -1234,21 +1234,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "value": null,
+                "color": "red"
               },
               {
-                "color": "yellow",
-                "value": 500
+                "value": 500,
+                "color": "yellow"
               },
               {
-                "color": "green",
-                "value": 1500
+                "value": 1500,
+                "color": "green"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1288,9 +1288,9 @@
       },
       "gridPos": {
         "y": 21,
-        "w": 6,
+        "h": 4,
         "x": 18,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -1301,21 +1301,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "value": null,
+                "color": "red"
               },
               {
-                "color": "yellow",
-                "value": 500
+                "value": 500,
+                "color": "yellow"
               },
               {
-                "color": "green",
-                "value": 1500
+                "value": 1500,
+                "color": "green"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1347,13 +1347,13 @@
     },
     {
       "type": "row",
-      "title": "Lattice History - Microbench  -  microbench",
+      "title": "Performance: Microbench  -  microbench",
       "collapsed": false,
       "gridPos": {
         "y": 25,
-        "w": 24,
+        "h": 1,
         "x": 0,
-        "h": 1
+        "w": 24
       },
       "id": 25,
       "panels": []
@@ -1368,9 +1368,9 @@
       },
       "gridPos": {
         "y": 26,
-        "w": 6,
+        "h": 4,
         "x": 0,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -1381,21 +1381,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 50000
+                "value": 50000,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 200000
+                "value": 200000,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1435,9 +1435,9 @@
       },
       "gridPos": {
         "y": 26,
-        "w": 6,
+        "h": 4,
         "x": 6,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -1448,21 +1448,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 20000
+                "value": 20000,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 100000
+                "value": 100000,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1502,9 +1502,9 @@
       },
       "gridPos": {
         "y": 26,
-        "w": 6,
+        "h": 4,
         "x": 12,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -1515,21 +1515,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "value": null,
+                "color": "red"
               },
               {
-                "color": "yellow",
-                "value": 10000
+                "value": 10000,
+                "color": "yellow"
               },
               {
-                "color": "green",
-                "value": 50000
+                "value": 50000,
+                "color": "green"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1569,9 +1569,9 @@
       },
       "gridPos": {
         "y": 26,
-        "w": 6,
+        "h": 4,
         "x": 18,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -1582,21 +1582,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 30000
+                "value": 30000,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 150000
+                "value": 150000,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1628,13 +1628,13 @@
     },
     {
       "type": "row",
-      "title": "Lattice History - WAL Performance  -  current-state-single-peer, replication-backpressure, receiver-crash, bidirectional-replication, replication-key-filter",
+      "title": "WAL Performance  -  current-state-single-peer, replication-backpressure, receiver-crash, bidirectional-replication, replication-key-filter",
       "collapsed": false,
       "gridPos": {
         "y": 30,
-        "w": 24,
+        "h": 1,
         "x": 0,
-        "h": 1
+        "w": 24
       },
       "id": 30,
       "panels": []
@@ -1649,9 +1649,9 @@
       },
       "gridPos": {
         "y": 31,
-        "w": 6,
+        "h": 4,
         "x": 0,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -1662,21 +1662,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 10
+                "value": 10,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 50
+                "value": 50,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1716,9 +1716,9 @@
       },
       "gridPos": {
         "y": 31,
-        "w": 6,
+        "h": 4,
         "x": 6,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -1729,21 +1729,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 10
+                "value": 10,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 50
+                "value": 50,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1783,9 +1783,9 @@
       },
       "gridPos": {
         "y": 31,
-        "w": 6,
+        "h": 4,
         "x": 12,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -1796,21 +1796,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 10
+                "value": 10,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 50
+                "value": 50,
+                "color": "red"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1850,9 +1850,9 @@
       },
       "gridPos": {
         "y": 31,
-        "w": 6,
+        "h": 4,
         "x": 18,
-        "h": 4
+        "w": 6
       },
       "fieldConfig": {
         "overrides": [],
@@ -1863,21 +1863,21 @@
             "mode": "thresholds"
           },
           "thresholds": {
-            "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "value": null,
+                "color": "red"
               },
               {
-                "color": "yellow",
-                "value": 100
+                "value": 100,
+                "color": "yellow"
               },
               {
-                "color": "green",
-                "value": 500
+                "value": 500,
+                "color": "green"
               }
-            ]
+            ],
+            "mode": "absolute"
           }
         }
       },
@@ -1925,7 +1925,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Lattice History - Overview",
+  "title": "Overview",
   "uid": "lat-hist-overview",
   "version": 1,
   "weekStart": "",

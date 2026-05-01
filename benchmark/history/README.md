@@ -71,7 +71,7 @@ feed it:
 
 ## Dashboards
 
-The history Grafana hosts an **Overview dashboard** plus **six persona
+The history Grafana hosts an **Overview dashboard** plus **seven persona
 dashboards**. The Overview is a single-page roll-up showing every persona's
 headline KPIs in one view (one row per persona, scoped to that persona's
 scenarios) — use it as the landing page to spot the workload class that has
@@ -91,7 +91,7 @@ and per-run barcharts.
 
 ### Per-persona-dashboard layout (3 bands, top-to-bottom)
 
-The six persona dashboards share this 3-band layout. The Overview dashboard
+The seven persona dashboards share this 3-band layout. The Overview dashboard
 is single-band (one row of stat tiles per persona, KPIs scoped to the
 persona's scenarios).
 

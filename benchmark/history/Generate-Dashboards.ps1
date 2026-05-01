@@ -152,49 +152,49 @@ $KpiCatalog = [ordered]@{
 
 $Personas = [ordered]@{
     'replication' = [ordered]@{
-        Title     = 'Lattice History - Replication'
+        Title     = 'Replication'
         Subtitle  = 'Replication ship/apply latency and underlying commit path under replication load'
         Scenarios = @('current-state-single-peer','bidirectional-replication','observer-no-peer','replication-key-filter','replication-backpressure','receiver-crash')
         Kpis      = @('replication_ship_p95','replication_apply_lag_p95','commit_p99','commits_per_sec')
         Families  = @('replication','commit','cache','process')
     }
     'write-heavy-random' = [ordered]@{
-        Title     = 'Lattice History - Write-heavy (random keys)'
+        Title     = 'Write-heavy (random keys)'
         Subtitle  = 'Per-vehicle current-state overwrites: steady-state and hot-key variants'
         Scenarios = @('current-state-no-replication','skewed-key-shard-splits')
         Kpis      = @('commit_p99','commits_per_sec','leaf_write_p99','cache_hit_ratio')
         Families  = @('commit','cache','sink','process')
     }
     'write-heavy-ordered' = [ordered]@{
-        Title     = 'Lattice History - Write-heavy (ordered / append-only)'
+        Title     = 'Write-heavy (ordered / append-only)'
         Subtitle  = 'Event-log keyspace with TTL: each tick produces a new key; TTL drives compaction'
         Scenarios = @('event-log-with-ttl')
         Kpis      = @('commit_p99','commits_per_sec','sink_published_per_sec')
         Families  = @('commit','sink','process')
     }
     'read-heavy' = [ordered]@{
-        Title     = 'Lattice History - Read-heavy'
+        Title     = 'Read-heavy'
         Subtitle  = 'GetAsync-dominant load (95:5 read:write) - random and ordered keyspace variants overlaid'
         Scenarios = @('read-heavy-random','read-heavy-ordered')
         Kpis      = @('read_p99','reads_per_sec','cache_hit_ratio','commit_p99')
         Families  = @('read','cache','commit','process')
     }
     'read-write-mix' = [ordered]@{
-        Title     = 'Lattice History - Read/write mix'
+        Title     = 'Read/write mix'
         Subtitle  = 'Balanced 50:50 read/write - random and ordered keyspace variants overlaid'
         Scenarios = @('read-write-mix-random','read-write-mix-ordered')
         Kpis      = @('read_p99','commit_p99','reads_per_sec_mixed','commits_per_sec_mixed')
         Families  = @('read','commit','cache','sink','process')
     }
     'microbench' = [ordered]@{
-        Title     = 'Lattice History - Microbench'
+        Title     = 'Performance: Microbench'
         Subtitle  = 'BenchmarkDotNet ILattice micro-suite (in-process, no Orleans cluster)'
         Scenarios = @('microbench')
         Kpis      = @('microbench_point_write_p99','microbench_point_read_p99','microbench_bulk_load_per_sec','microbench_mixed_p99')
         Families  = @('microbench')
     }
     'wal-performance' = [ordered]@{
-        Title     = 'Lattice History - WAL Performance'
+        Title     = 'WAL Performance'
         Subtitle  = 'Dual-durability commit path: WAL append, in-memory Apply, legacy shadow-write tail. Shadow tile is the dashboard the shadow-write removal flip is read against - it must collapse to zero post-flip while WAL append remains the load-bearing step.'
         Scenarios = @('current-state-single-peer','replication-backpressure','receiver-crash','bidirectional-replication','replication-key-filter')
         Kpis      = @('wal_append_p99','wal_apply_p99','wal_shadow_write_p99','wal_appends_per_sec')
@@ -550,7 +550,7 @@ function New-OverviewDashboard {
         time           = [ordered]@{ from = 'now-90d'; to = 'now' }
         timepicker     = @{}
         timezone       = ''
-        title          = 'Lattice History - Overview'
+        title          = 'Overview'
         uid            = 'lat-hist-overview'
         version        = 1
         weekStart      = ''

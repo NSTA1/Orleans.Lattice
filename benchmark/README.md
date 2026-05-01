@@ -26,19 +26,38 @@ selects the scenario and runs end-to-end:
 
 ```
 benchmark/
-├── benchmark.ps1                    # Single-parameter runner (scenario slug).
-├── benchmark-scenarios.md                # Authoritative scenario plan.
+├── benchmark.ps1                    # Single-parameter runner (scenario slug). Captures
+│                                    # results.json + opportunistically pushes to history.
+├── benchmark-all.ps1                # Sweep runner: invokes benchmark.ps1 for every scenario.
+├── start-history.ps1                # Bring up / tear down the long-lived history stack only.
+├── benchmark-scenarios.md           # Authoritative scenario plan (14 scenarios).
 ├── docker-compose.yml               # Base topology (single cluster).
-├── docker-compose.replication.yml   # Replication overlay (current-state-single-peer, replication-backpressure, receiver-crash, bidirectional-replication, replication-key-filter).
+├── docker-compose.replication.yml   # Replication overlay (current-state-single-peer,
+│                                    # replication-backpressure, receiver-crash,
+│                                    # bidirectional-replication, replication-key-filter).
 ├── host/
-│   ├── Bench.Sink/                  # LatticeSink — bounded-channel ITelemetrySink.
-│   └── Bench.Silo/                  # Benchmark silo: env-driven sink switch + Lattice/Replication.
-├── scenarios/<slug>.env             # Per-scenario configuration knobs.
-├── prometheus/prometheus.yml        # Scrape config (single cluster).
-├── prometheus/prometheus-replication.yml
-└── grafana/
-    ├── provisioning/                # Datasource + dashboards provider yaml.
-    └── dashboards/                  # Dashboards copied from src/lattice.dashboards/Grafana/.
+│   ├── Bench.Microbench/            # BenchmarkDotNet harness for the `microbench` scenario
+│   │                                # (in-process; bypasses the Orleans cluster entirely).
+│   ├── Bench.Sink/                  # LatticeSink (bounded-channel ITelemetrySink) +
+│   │                                # LatticeReadDriver hosted service for read-* scenarios.
+│   └── Bench.Silo/                  # Benchmark silo: env-driven sink switch + Lattice /
+│                                    # Replication wiring.
+├── scenarios/                       # Per-scenario knobs — one .env per scenario slug.
+├── prometheus/
+│   ├── prometheus.yml               # Scrape config (single cluster).
+│   └── prometheus-replication.yml   # Scrape config (both clusters under the overlay).
+├── grafana/
+│   ├── provisioning/                # Datasource + dashboards provider yaml.
+│   └── dashboards/                  # Embedded Orleans.Lattice dashboards (overview, commit
+│                                    # path, replication), synced at run-time from
+│                                    # src/lattice.dashboards/Grafana/.
+├── history/                         # Long-lived run-over-run history stack.
+│   ├── docker-compose.history.yml   # VictoriaMetrics + Grafana on :3001 / :8428.
+│   ├── Generate-Dashboards.ps1      # Regenerates the eight persona-trend dashboards.
+│   ├── README.md                    # Data model, label schema, ad-hoc query path.
+│   └── grafana/                     # Provisioning + generated BenchmarkHistory.*.json.
+└── .run/                            # Per-run output: <scenario>/<run_id>/results.json
+                                     # plus comparison.{md,csv} when `-Compare` is used.
 ```
 
 The benchmark stack does **not** modify the simulator. `host/Bench.Silo/` is a separate
@@ -50,21 +69,36 @@ simulator-local context.
 
 ## Topology
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  vfs-azurite        →  Orleans clustering / reminders        │
-│  vfs-silo           →  Bench.Silo + LatticeSink + :9090      │
-│  vfs-api            →  ASP.NET Core HTTP load surface :8080  │
-│                        (simulator's existing API, unchanged) │
-│  vfs-prometheus     →  scrapes silo:9090/metrics             │
-│  vfs-grafana        →  Orleans.Lattice dashboards on :3000   │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Bench["Benchmark cluster (always)"]
+        api["vfs-api<br/>:8080 (host)<br/>simulator HTTP API"]
+        silo["vfs-silo<br/>:9090 (in-network metrics)<br/>Bench.Silo + LatticeSink"]
+        azurite["vfs-azurite<br/>Orleans clustering<br/>+ reminders"]
+    end
+    subgraph Replica["Replication overlay (replication scenarios only)"]
+        siloReplica["vfs-silo-replica<br/>:9090 (in-network metrics)<br/>Bench.Silo (peer cluster)"]
+        azuriteReplica["vfs-azurite-replica<br/>peer Orleans clustering"]
+    end
+    subgraph Obs["Observability"]
+        prom["vfs-prometheus<br/>:9090 (host)<br/>scrapes silos"]
+        graf["vfs-grafana<br/>:3000 (host)<br/>Orleans.Lattice dashboards"]
+    end
+
+    api -->|drives fleet| silo
+    silo -->|clusters via| azurite
+    siloReplica -->|clusters via| azuriteReplica
+    silo <-. cross-cluster<br/>replication .-> siloReplica
+    prom -->|scrape /metrics| silo
+    prom -.->|scrape /metrics<br/>overlay only| siloReplica
+    graf --> prom
 ```
 
-For replication scenarios (`current-state-single-peer`, `replication-backpressure`,
-`receiver-crash`, `bidirectional-replication`, `replication-key-filter`),
-`docker-compose.replication.yml` adds a second silo cluster
-(`vfs-silo-replica` + `vfs-azurite-replica`).
+The replication overlay (`docker-compose.replication.yml`) is layered on top of the
+base `docker-compose.yml` for the five scenarios that need a second cluster:
+`current-state-single-peer`, `replication-backpressure`, `receiver-crash`,
+`bidirectional-replication`, and `replication-key-filter`. Every other scenario
+runs against the base topology only.
 
 ## Scenarios
 
@@ -236,7 +270,7 @@ invocation.
 ```
 
 Then visit <http://localhost:3001>. The history Grafana hosts an
-**Overview dashboard** plus **six persona dashboards** — one per
+**Overview dashboard** plus **seven persona dashboards** — one per
 lattice-usage profile — so each dashboard answers a single regression
 question without templating-var juggling:
 
