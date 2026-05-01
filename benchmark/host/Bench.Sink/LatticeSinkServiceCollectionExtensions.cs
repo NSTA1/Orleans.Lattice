@@ -38,4 +38,24 @@ public static class LatticeSinkServiceCollectionExtensions
         services.AddHostedService(sp => sp.GetRequiredService<LatticeSink>());
         return services;
     }
+
+    /// <summary>
+    /// Registers <see cref="LatticeReadDriver"/> as an <see cref="IHostedService"/> bound to the
+    /// supplied <paramref name="configurationSection"/>. Safe to call unconditionally - the
+    /// driver short-circuits its <c>ExecuteAsync</c> when <c>ReadDriver:Enabled</c> is
+    /// <c>false</c>, so scenarios that don't generate read load incur only the cost of an
+    /// empty hosted-service slot.
+    /// </summary>
+    public static IServiceCollection AddLatticeReadDriver(
+        this IServiceCollection services,
+        IConfiguration configurationSection)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configurationSection);
+
+        services.AddOptions<LatticeReadDriverOptions>().Bind(configurationSection);
+        services.TryAddSingleton<LatticeReadDriverMetrics>();
+        services.AddHostedService<LatticeReadDriver>();
+        return services;
+    }
 }

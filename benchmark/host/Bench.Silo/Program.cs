@@ -67,6 +67,17 @@ switch (telemetrySink)
         break;
 }
 
+// ─── Read-driver (optional) ────────────────────────────────────────────────────
+//
+// When ReadDriver:Enabled=true and the lattice sink is active, registers a hosted service
+// that issues GetAsync calls against the same tree the sink writes into. Drives the
+// read-heavy-* and read-write-mix-* scenarios. No-op when the lattice sink isn't active
+// (no tree to read from) or when the master switch is off.
+if (telemetrySink == "lattice")
+{
+    builder.Services.AddLatticeReadDriver(builder.Configuration.GetSection("ReadDriver"));
+}
+
 builder.Host.UseOrleans(silo =>
 {
     silo.Configure<ClusterOptions>(opts =>
@@ -123,6 +134,7 @@ builder.Services
         .AddMeter("orleans.lattice")
         .AddMeter("orleans.lattice.replication")
         .AddMeter(LatticeSinkMetrics.MeterName)
+        .AddMeter(LatticeReadDriverMetrics.MeterName)
         .AddPrometheusExporter());
 
 builder.Services.AddHealthChecks()

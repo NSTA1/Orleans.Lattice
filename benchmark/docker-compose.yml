@@ -65,6 +65,16 @@ services:
       Replication__Enabled: ${BENCH_REPLICATION_ENABLED:-false}
       Replication__OriginClusterId: ${BENCH_REPLICATION_CLUSTER_ID:-vfs-bench}
       Replication__KeyPrefixes: ${BENCH_REPLICATION_KEY_PREFIXES:-}
+      # Read-driver bindings (only consumed when Telemetry__Sink=lattice). Drives the read-heavy-*
+      # and read-write-mix-* scenarios.
+      ReadDriver__Enabled: ${BENCH_READ_DRIVER_ENABLED:-false}
+      ReadDriver__TreeId: ${BENCH_TREE_ID:-vehicle-fleet}
+      ReadDriver__RatePerSecond: ${BENCH_READ_RATE_PER_SECOND:-0}
+      ReadDriver__Pattern: ${BENCH_READ_PATTERN:-Random}
+      ReadDriver__Concurrency: ${BENCH_READ_CONCURRENCY:-16}
+      ReadDriver__WarmupDelay: ${BENCH_READ_WARMUP:-00:00:15}
+      ReadDriver__KeyspaceRefreshInterval: ${BENCH_READ_KEYSPACE_REFRESH:-00:00:10}
+      ReadDriver__KeyspaceSampleSize: ${BENCH_READ_KEYSPACE_SAMPLE:-4096}
     expose:
       - "11111"
       - "30000"

@@ -39,7 +39,7 @@ public static class LatticeSinkMetrics
 
     /// <summary>Distribution of drain-flush durations.</summary>
     public static readonly Histogram<double> FlushDurationMs =
-        Meter.CreateHistogram<double>("vehicle_fleet_simulator.sink.flush_duration_ms", unit: "ms");
+        Meter.CreateHistogram<double>("vehicle_fleet_simulator.sink.flush_duration_ms");
 
     /// <summary>Distribution of the number of samples in each drain flush.</summary>
     public static readonly Histogram<long> FlushBatchSize =
@@ -49,7 +49,7 @@ public static class LatticeSinkMetrics
     /// <c>PublishTelemetryAsync</c>. Should be bimodal at ~0 (fast-path channel write) and
     /// ~channel-write cost.</summary>
     public static readonly Histogram<double> InlinePublishDurationMs =
-        Meter.CreateHistogram<double>("vehicle_fleet_simulator.sink.inline_publish_duration_ms", unit: "ms");
+        Meter.CreateHistogram<double>("vehicle_fleet_simulator.sink.inline_publish_duration_ms");
 
     /// <summary>Live queue depth as observed at the most recent flush.</summary>
     public static readonly UpDownCounter<long> QueueDepth =

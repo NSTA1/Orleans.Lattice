@@ -1,0 +1,95 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Trends across runs",
+      "collapsed": false,
+      "gridPos": {
+        "w": 24,
+        "h": 1,
+        "y": 0,
+        "x": 0
+      },
+      "id": 1,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "BenchmarkDotNet",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "y": 1,
+        "x": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "points",
+            "pointSize": 7,
+            "showPoints": "always",
+            "lineInterpolation": "linear",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "{__name__=~\"bench_microbench_.*\",scenario=\"microbench\"}",
+          "legendFormat": "{{__name__}} | {{scenario}} | {{git_sha}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "orleans-lattice",
+    "benchmark-history",
+    "microbench"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Lattice History - Microbench",
+  "uid": "lat-hist-microbench",
+  "version": 1,
+  "weekStart": "",
+  "description": "BenchmarkDotNet ILattice micro-suite (in-process, no Orleans cluster)"
+}
