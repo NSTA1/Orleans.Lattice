@@ -94,4 +94,18 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="Grains.BootstrapCoordinatorState"/>.</summary>
     internal const string BootstrapCoordinatorState = "olr.bs";
+
+    // Production replication drivers
+
+    /// <summary>Alias for the per-(tree, peer) outbound shipper grain interface.</summary>
+    internal const string IReplicationShipperGrain = "olr.gs";
+
+    /// <summary>Alias for the per-(tree, peer) shipper grain persistent state class.</summary>
+    internal const string ReplicationShipperState = "olr.ss";
+
+    /// <summary>Alias for the per-tree maintenance grain interface.</summary>
+    internal const string IReplicationMaintenanceGrain = "olr.gm";
+
+    /// <summary>Alias for the per-tree maintenance grain persistent state class.</summary>
+    internal const string ReplicationMaintenanceState = "olr.ms";
 }

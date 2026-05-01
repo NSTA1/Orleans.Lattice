@@ -378,5 +378,221 @@ public class LatticeReplicationOptionsValidatorTests
 
         Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
     }
+
+    // ------------------------------------------------------------------
+    // Production replication driver options (per-(tree, peer) shipper +
+    // per-tree maintenance grain)
+    // ------------------------------------------------------------------
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_ship_batch_size_is_non_positive(int size)
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", ShipBatchSize = size };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ShipBatchSize)));
+        });
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_ship_max_in_flight_is_non_positive(int value)
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", ShipMaxInFlight = value };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ShipMaxInFlight)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_ship_backoff_initial_is_zero()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", ShipBackoffInitial = TimeSpan.Zero };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ShipBackoffInitial)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_ship_backoff_initial_is_negative()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ShipBackoffInitial = TimeSpan.FromMilliseconds(-1),
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ShipBackoffInitial)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_ship_backoff_max_is_below_initial()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ShipBackoffInitial = TimeSpan.FromSeconds(5),
+            ShipBackoffMax = TimeSpan.FromSeconds(1),
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ShipBackoffMax)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_when_ship_backoff_max_equals_initial()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ShipBackoffInitial = TimeSpan.FromSeconds(5),
+            ShipBackoffMax = TimeSpan.FromSeconds(5),
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [TestCase(-0.01)]
+    [TestCase(-1.0)]
+    [TestCase(1.01)]
+    [TestCase(2.0)]
+    public void Validate_fails_when_ship_backoff_jitter_is_outside_unit_interval(double jitter)
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", ShipBackoffJitter = jitter };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ShipBackoffJitter)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_ship_backoff_jitter_is_nan()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", ShipBackoffJitter = double.NaN };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ShipBackoffJitter)));
+        });
+    }
+
+    [TestCase(0.0)]
+    [TestCase(0.5)]
+    [TestCase(1.0)]
+    public void Validate_succeeds_for_ship_backoff_jitter_inside_unit_interval(double jitter)
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", ShipBackoffJitter = jitter };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_fails_when_maintenance_gc_interval_is_zero()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", MaintenanceGcInterval = TimeSpan.Zero };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.MaintenanceGcInterval)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_maintenance_gc_interval_is_negative()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            MaintenanceGcInterval = TimeSpan.FromSeconds(-1),
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.MaintenanceGcInterval)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_maintenance_fall_off_check_interval_is_zero()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            MaintenanceFallOffCheckInterval = TimeSpan.Zero,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.MaintenanceFallOffCheckInterval)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_maintenance_fall_off_check_interval_is_negative()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            MaintenanceFallOffCheckInterval = TimeSpan.FromSeconds(-1),
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.MaintenanceFallOffCheckInterval)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_default_production_driver_options()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
 }
 

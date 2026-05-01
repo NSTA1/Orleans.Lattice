@@ -241,6 +241,127 @@ public class LatticeReplicationOptions
     public TimeSpan OperatorReseedMinInterval { get; set; } = DefaultOperatorReseedMinInterval;
 
     /// <summary>
+    /// Stable identifiers of the remote clusters this silo ships
+    /// captured WAL entries to for the configured replicated trees.
+    /// The transport-agnostic counterpart to per-transport endpoint
+    /// maps (e.g. <c>GrpcPushTransportOptions.PeerEndpoints</c>): the
+    /// production replication drivers (the per-<c>(tree, peer)</c>
+    /// shipper grain and the per-tree maintenance grain) iterate
+    /// this collection to know which peers to ship to and probe for
+    /// fall-off-the-log conditions, while the transport implementation
+    /// owns the resolution of cluster id to wire-level endpoint.
+    /// <para>
+    /// <see langword="null"/> (the default) and an empty collection
+    /// both mean "no peers configured" - the shipper grain stays
+    /// dormant and the maintenance grain skips the fall-off-log
+    /// probe (the WAL garbage collector still runs because it is
+    /// peer-set independent). Hosts that ship to N peers populate
+    /// this collection with the N peer cluster ids; the
+    /// <see cref="ShardedReplogSink"/> writer-side doorbell then
+    /// fires one no-op grain call per active peer per WAL append.
+    /// </para>
+    /// </summary>
+    public IReadOnlyCollection<string>? ReplicationPeers { get; set; }
+
+    /// <summary>
+    /// Maximum number of <see cref="ReplogEntry"/> records the
+    /// per-<c>(tree, peer)</c> shipper grain drains from
+    /// <see cref="IChangeFeed.Subscribe"/> and submits to
+    /// <see cref="IReplicationTransport.SendAsync"/> in a single
+    /// batch. Larger values amortise the per-batch RPC overhead;
+    /// smaller values bound memory and reduce the cursor advance
+    /// granularity. Defaults to <see cref="DefaultShipBatchSize"/>.
+    /// Must be at least <c>1</c>.
+    /// </summary>
+    public int ShipBatchSize { get; set; } = DefaultShipBatchSize;
+
+    /// <summary>
+    /// Maximum number of in-flight <see cref="IReplicationTransport.SendAsync"/>
+    /// calls per <c>(tree, peer)</c> shipper. The v1 implementation
+    /// hard-codes a strict serial-send protocol so per-peer cursor
+    /// advance stays simple; this option is reserved for a future
+    /// relaxation that can pipeline multiple batches once the typed
+    /// envelope shape lands. Defaults to
+    /// <see cref="DefaultShipMaxInFlight"/>. Must be at least <c>1</c>.
+    /// </summary>
+    /// <remarks>
+    /// <strong>v1-inert.</strong> The validator accepts any value
+    /// <c>&gt;= 1</c>, but the shipper grain ignores values
+    /// <c>&gt; 1</c> in this release; sends remain strictly serial
+    /// per <c>(tree, peer)</c>. The relaxation is gated on the
+    /// typed-envelope transport seam (eliminating the sender-side
+    /// decode round-trip) and on multi-batch in-flight WAL flush
+    /// landing first.
+    /// </remarks>
+    public int ShipMaxInFlight { get; set; } = DefaultShipMaxInFlight;
+
+    /// <summary>
+    /// Initial backoff delay applied to the per-peer shipper after a
+    /// transient transport failure. The next ship attempt is skipped
+    /// until this much wall-clock time has elapsed; subsequent
+    /// failures double the delay (capped by
+    /// <see cref="ShipBackoffMax"/>) and jitter the result by
+    /// <see cref="ShipBackoffJitter"/>. Defaults to
+    /// <see cref="DefaultShipBackoffInitial"/>. Must be strictly
+    /// greater than <see cref="TimeSpan.Zero"/>.
+    /// </summary>
+    public TimeSpan ShipBackoffInitial { get; set; } = DefaultShipBackoffInitial;
+
+    /// <summary>
+    /// Maximum backoff delay between failed ship attempts, capping
+    /// the doubling sequence seeded by <see cref="ShipBackoffInitial"/>.
+    /// Defaults to <see cref="DefaultShipBackoffMax"/>. Must be
+    /// greater than or equal to <see cref="ShipBackoffInitial"/>.
+    /// </summary>
+    public TimeSpan ShipBackoffMax { get; set; } = DefaultShipBackoffMax;
+
+    /// <summary>
+    /// Multiplicative jitter applied to each backoff delay so a
+    /// thundering herd of failed shippers re-attempts at slightly
+    /// different times. Each delay is scaled by a random factor in
+    /// <c>[1.0 - jitter, 1.0 + jitter]</c>. Defaults to
+    /// <see cref="DefaultShipBackoffJitter"/> (20% spread). Must be
+    /// in <c>[0.0, 1.0]</c>; <c>0.0</c> disables jitter entirely.
+    /// </summary>
+    public double ShipBackoffJitter { get; set; } = DefaultShipBackoffJitter;
+
+    /// <summary>
+    /// Cadence at which the per-tree maintenance grain calls
+    /// <see cref="ILatticeReplicationGc.RunOnceAsync"/> to trim the
+    /// WAL by min-acked cursor. Defaults to
+    /// <see cref="DefaultMaintenanceGcInterval"/>. Must be strictly
+    /// greater than <see cref="TimeSpan.Zero"/>.
+    /// </summary>
+    public TimeSpan MaintenanceGcInterval { get; set; } = DefaultMaintenanceGcInterval;
+
+    /// <summary>
+    /// Cadence at which the per-tree maintenance grain iterates the
+    /// configured <see cref="ReplicationPeers"/> and invokes
+    /// <see cref="ILatticeFallOffLogDetector.CheckAndTriggerAsync"/>
+    /// on each peer. Defaults to
+    /// <see cref="DefaultMaintenanceFallOffCheckInterval"/>. Must
+    /// be strictly greater than <see cref="TimeSpan.Zero"/>.
+    /// </summary>
+    public TimeSpan MaintenanceFallOffCheckInterval { get; set; } = DefaultMaintenanceFallOffCheckInterval;
+
+    /// <summary>
+    /// Whether <see cref="ShardedReplogSink"/> rings the per-peer
+    /// shipper grain after a successful WAL append, signalling that
+    /// new entries are available. Disabling the doorbell falls back
+    /// to the shipper's <see cref="DefaultShipDoorbellEnabled"/>
+    /// timer-driven cadence (~200 ms). Defaults to
+    /// <see langword="true"/>.
+    /// <para>
+    /// The doorbell is best-effort: a failure to reach a shipper
+    /// activation (silo loss, transient network fault) is logged
+    /// at <c>Trace</c> level and swallowed so the producer-side
+    /// commit path never fails on a doorbell ring failure. A missed
+    /// doorbell only delays the affected peer by one timer tick.
+    /// </para>
+    /// </summary>
+    public bool ShipDoorbellEnabled { get; set; } = DefaultShipDoorbellEnabled;
+
+    /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
     /// represents "unset". This default is rejected by
     /// <c>LatticeReplicationOptionsValidator</c> so a host that calls
@@ -323,4 +444,53 @@ public class LatticeReplicationOptions
     /// session.
     /// </summary>
     public static readonly TimeSpan DefaultOperatorReseedMinInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Default value for <see cref="ShipBatchSize"/>: 256 entries per
+    /// outbound batch. Sized to amortise per-batch RPC overhead at a
+    /// few-millisecond per-batch latency budget while keeping cursor
+    /// advance granularity fine enough that a transport failure
+    /// re-ships at most a few hundred entries.
+    /// </summary>
+    public const int DefaultShipBatchSize = 256;
+
+    /// <summary>
+    /// Default value for <see cref="ShipMaxInFlight"/>: strict serial
+    /// sends per <c>(tree, peer)</c>. Multi-batch pipelining lifts
+    /// this once the typed-envelope transport shape lands.
+    /// </summary>
+    public const int DefaultShipMaxInFlight = 1;
+
+    /// <summary>
+    /// Default value for <see cref="ShipBackoffInitial"/>: 100 ms.
+    /// </summary>
+    public static readonly TimeSpan DefaultShipBackoffInitial = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// Default value for <see cref="ShipBackoffMax"/>: 30 seconds.
+    /// </summary>
+    public static readonly TimeSpan DefaultShipBackoffMax = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Default value for <see cref="ShipBackoffJitter"/>: 20 % spread
+    /// each side of the nominal delay.
+    /// </summary>
+    public const double DefaultShipBackoffJitter = 0.2;
+
+    /// <summary>
+    /// Default value for <see cref="MaintenanceGcInterval"/>: 5 seconds.
+    /// </summary>
+    public static readonly TimeSpan DefaultMaintenanceGcInterval = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Default value for <see cref="MaintenanceFallOffCheckInterval"/>:
+    /// 30 seconds.
+    /// </summary>
+    public static readonly TimeSpan DefaultMaintenanceFallOffCheckInterval = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Default value for <see cref="ShipDoorbellEnabled"/>: doorbell
+    /// signalling enabled.
+    /// </summary>
+    public const bool DefaultShipDoorbellEnabled = true;
 }

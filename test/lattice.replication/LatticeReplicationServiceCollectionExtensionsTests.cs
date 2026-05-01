@@ -76,6 +76,7 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<IGrainFactory>());
+        services.AddLogging();
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
@@ -248,6 +249,7 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<IGrainFactory>());
+        services.AddLogging();
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
@@ -307,6 +309,7 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<IGrainFactory>());
+        services.AddLogging();
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
@@ -765,6 +768,47 @@ public class LatticeReplicationServiceCollectionExtensionsTests
 
         var provider = services.BuildServiceProvider();
         Assert.That(provider.GetRequiredService<ILatticeReplicationAdmin>(), Is.SameAs(custom));
+    }
+
+    // ------------------------------------------------------------------
+    // Production-driver activation hosted service
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void AddLatticeReplication_registers_replication_driver_activation_hosted_service()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IGrainFactory>(Substitute.For<IGrainFactory>());
+        services.AddLogging();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var hostedServices = provider.GetServices<Microsoft.Extensions.Hosting.IHostedService>().ToArray();
+        Assert.That(hostedServices, Has.Some
+            .InstanceOf<ReplicationDriverActivationService>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_duplicate_replication_driver_activation_hosted_service()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IGrainFactory>(Substitute.For<IGrainFactory>());
+        services.AddLogging();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var hostedServices = provider
+            .GetServices<Microsoft.Extensions.Hosting.IHostedService>()
+            .OfType<ReplicationDriverActivationService>()
+            .ToArray();
+        Assert.That(hostedServices, Has.Length.EqualTo(1));
     }
 }
 
