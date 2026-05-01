@@ -12,10 +12,10 @@
       "title": "Headline KPIs",
       "collapsed": false,
       "gridPos": {
-        "w": 24,
-        "h": 1,
         "y": 0,
-        "x": 0
+        "x": 0,
+        "w": 24,
+        "h": 1
       },
       "id": 1,
       "panels": []
@@ -29,10 +29,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "w": 6,
-        "h": 5,
         "y": 1,
-        "x": 0
+        "x": 0,
+        "w": 6,
+        "h": 5
       },
       "fieldConfig": {
         "defaults": {
@@ -45,16 +45,16 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 5
+                "value": 5,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 25
+                "value": 25,
+                "color": "red"
               }
             ]
           }
@@ -81,7 +81,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_vehicle_fleet_simulator_read_driver_duration_ms_p99{scenario=\"read-write-mix-ordered\"}",
+          "expr": "bench_vehicle_fleet_simulator_read_driver_duration_ms_p99{scenario=~\"(read-write-mix-random|read-write-mix-ordered)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
           "refId": "A"
         }
@@ -96,10 +96,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "w": 6,
-        "h": 5,
         "y": 1,
-        "x": 6
+        "x": 6,
+        "w": 6,
+        "h": 5
       },
       "fieldConfig": {
         "defaults": {
@@ -112,16 +112,16 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "value": null,
+                "color": "green"
               },
               {
-                "color": "yellow",
-                "value": 10
+                "value": 10,
+                "color": "yellow"
               },
               {
-                "color": "red",
-                "value": 50
+                "value": 50,
+                "color": "red"
               }
             ]
           }
@@ -148,7 +148,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_lattice_commit_p99_ms{scenario=\"read-write-mix-ordered\"}",
+          "expr": "bench_lattice_commit_p99_ms{scenario=~\"(read-write-mix-random|read-write-mix-ordered)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
           "refId": "A"
         }
@@ -163,10 +163,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "w": 6,
-        "h": 5,
         "y": 1,
-        "x": 12
+        "x": 12,
+        "w": 6,
+        "h": 5
       },
       "fieldConfig": {
         "defaults": {
@@ -179,16 +179,16 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "value": null,
+                "color": "red"
               },
               {
-                "color": "yellow",
-                "value": 500
+                "value": 500,
+                "color": "yellow"
               },
               {
-                "color": "green",
-                "value": 1500
+                "value": 1500,
+                "color": "green"
               }
             ]
           }
@@ -215,7 +215,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_vehicle_fleet_simulator_read_driver_reads_per_second{scenario=\"read-write-mix-ordered\"}",
+          "expr": "bench_vehicle_fleet_simulator_read_driver_reads_per_second{scenario=~\"(read-write-mix-random|read-write-mix-ordered)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
           "refId": "A"
         }
@@ -230,10 +230,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "w": 6,
-        "h": 5,
         "y": 1,
-        "x": 18
+        "x": 18,
+        "w": 6,
+        "h": 5
       },
       "fieldConfig": {
         "defaults": {
@@ -246,16 +246,16 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "value": null,
+                "color": "red"
               },
               {
-                "color": "yellow",
-                "value": 500
+                "value": 500,
+                "color": "yellow"
               },
               {
-                "color": "green",
-                "value": 1500
+                "value": 1500,
+                "color": "green"
               }
             ]
           }
@@ -282,7 +282,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_lattice_commits_per_second{scenario=\"read-write-mix-ordered\"}",
+          "expr": "bench_lattice_commits_per_second{scenario=~\"(read-write-mix-random|read-write-mix-ordered)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
           "refId": "A"
         }
@@ -293,10 +293,10 @@
       "title": "Trends across runs",
       "collapsed": false,
       "gridPos": {
-        "w": 24,
-        "h": 1,
         "y": 6,
-        "x": 0
+        "x": 0,
+        "w": 24,
+        "h": 1
       },
       "id": 6,
       "panels": []
@@ -310,10 +310,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "w": 12,
-        "h": 8,
         "y": 7,
-        "x": 0
+        "x": 0,
+        "w": 12,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -344,7 +344,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "{__name__=~\"bench_vehicle_fleet_simulator_read_driver_.*\",scenario=\"read-write-mix-ordered\"}",
+          "expr": "{__name__=~\"bench_vehicle_fleet_simulator_read_driver_.*\",scenario=~\"(read-write-mix-random|read-write-mix-ordered)\"}",
           "legendFormat": "{{__name__}} | {{scenario}} | {{git_sha}}",
           "refId": "A"
         }
@@ -359,10 +359,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "w": 12,
-        "h": 8,
         "y": 7,
-        "x": 12
+        "x": 12,
+        "w": 12,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -393,7 +393,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "{__name__=~\"bench_(orleans_lattice_(leaf|shard|atomic_write|coordinator|tree)_.*|lattice_commit_.*|lattice_commits_.*)\",scenario=\"read-write-mix-ordered\"}",
+          "expr": "{__name__=~\"bench_(orleans_lattice_(leaf|shard|atomic_write|coordinator|tree)_.*|lattice_commit_.*|lattice_commits_.*)\",scenario=~\"(read-write-mix-random|read-write-mix-ordered)\"}",
           "legendFormat": "{{__name__}} | {{scenario}} | {{git_sha}}",
           "refId": "A"
         }
@@ -408,10 +408,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "w": 12,
-        "h": 8,
         "y": 15,
-        "x": 0
+        "x": 0,
+        "w": 12,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -442,7 +442,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "{__name__=~\"bench_(orleans_lattice_(cache|events|config)_.*|lattice_cache_.*)\",scenario=\"read-write-mix-ordered\"}",
+          "expr": "{__name__=~\"bench_(orleans_lattice_(cache|events|config)_.*|lattice_cache_.*)\",scenario=~\"(read-write-mix-random|read-write-mix-ordered)\"}",
           "legendFormat": "{{__name__}} | {{scenario}} | {{git_sha}}",
           "refId": "A"
         }
@@ -457,10 +457,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "w": 12,
-        "h": 8,
         "y": 15,
-        "x": 12
+        "x": 12,
+        "w": 12,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -491,7 +491,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "{__name__=~\"bench_(vehicle_fleet_simulator_sink_.*|sink_.*)\",scenario=\"read-write-mix-ordered\"}",
+          "expr": "{__name__=~\"bench_(vehicle_fleet_simulator_sink_.*|sink_.*)\",scenario=~\"(read-write-mix-random|read-write-mix-ordered)\"}",
           "legendFormat": "{{__name__}} | {{scenario}} | {{git_sha}}",
           "refId": "A"
         }
@@ -506,10 +506,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "w": 12,
-        "h": 8,
         "y": 23,
-        "x": 0
+        "x": 0,
+        "w": 12,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -540,7 +540,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "{__name__=~\"bench_dotnet_.*\",scenario=\"read-write-mix-ordered\"}",
+          "expr": "{__name__=~\"bench_dotnet_.*\",scenario=~\"(read-write-mix-random|read-write-mix-ordered)\"}",
           "legendFormat": "{{__name__}} | {{scenario}} | {{git_sha}}",
           "refId": "A"
         }
@@ -551,10 +551,10 @@
       "title": "Per-run history (hover bars for run_id and git_sha)",
       "collapsed": false,
       "gridPos": {
-        "w": 24,
-        "h": 1,
         "y": 31,
-        "x": 0
+        "x": 0,
+        "w": 24,
+        "h": 1
       },
       "id": 12,
       "panels": []
@@ -568,10 +568,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "w": 12,
-        "h": 7,
         "y": 32,
-        "x": 0
+        "x": 0,
+        "w": 12,
+        "h": 7
       },
       "fieldConfig": {
         "defaults": {
@@ -605,7 +605,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_vehicle_fleet_simulator_read_driver_duration_ms_p99{scenario=\"read-write-mix-ordered\"}",
+          "expr": "bench_vehicle_fleet_simulator_read_driver_duration_ms_p99{scenario=~\"(read-write-mix-random|read-write-mix-ordered)\"}",
           "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
           "format": "time_series",
           "refId": "A"
@@ -621,10 +621,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "w": 12,
-        "h": 7,
         "y": 32,
-        "x": 12
+        "x": 12,
+        "w": 12,
+        "h": 7
       },
       "fieldConfig": {
         "defaults": {
@@ -658,7 +658,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_lattice_commit_p99_ms{scenario=\"read-write-mix-ordered\"}",
+          "expr": "bench_lattice_commit_p99_ms{scenario=~\"(read-write-mix-random|read-write-mix-ordered)\"}",
           "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
           "format": "time_series",
           "refId": "A"
@@ -674,10 +674,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "w": 12,
-        "h": 7,
         "y": 39,
-        "x": 0
+        "x": 0,
+        "w": 12,
+        "h": 7
       },
       "fieldConfig": {
         "defaults": {
@@ -711,7 +711,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_vehicle_fleet_simulator_read_driver_reads_per_second{scenario=\"read-write-mix-ordered\"}",
+          "expr": "bench_vehicle_fleet_simulator_read_driver_reads_per_second{scenario=~\"(read-write-mix-random|read-write-mix-ordered)\"}",
           "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
           "format": "time_series",
           "refId": "A"
@@ -727,10 +727,10 @@
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "w": 12,
-        "h": 7,
         "y": 39,
-        "x": 12
+        "x": 12,
+        "w": 12,
+        "h": 7
       },
       "fieldConfig": {
         "defaults": {
@@ -764,7 +764,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_lattice_commits_per_second{scenario=\"read-write-mix-ordered\"}",
+          "expr": "bench_lattice_commits_per_second{scenario=~\"(read-write-mix-random|read-write-mix-ordered)\"}",
           "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
           "format": "time_series",
           "refId": "A"
@@ -778,20 +778,20 @@
   "tags": [
     "orleans-lattice",
     "benchmark-history",
-    "read-write-mix-ordered"
+    "read-write-mix"
   ],
   "templating": {
     "list": []
   },
   "time": {
-    "from": "now-30d",
+    "from": "now-90d",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Lattice History - Read/write mix (ordered keys)",
-  "uid": "lat-hist-read-write-mix-ordered",
+  "title": "Lattice History - Read/write mix",
+  "uid": "lat-hist-read-write-mix",
   "version": 1,
   "weekStart": "",
-  "description": "Balanced 50:50 read/write load with sequential keyspace walk"
+  "description": "Balanced 50:50 read/write - random and ordered keyspace variants overlaid"
 }

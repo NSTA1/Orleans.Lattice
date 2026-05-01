@@ -4,7 +4,7 @@ namespace VehicleFleetSimulator.Benchmark.Sink;
 
 /// <summary>
 /// Process-wide <see cref="Meter"/> published by <see cref="LatticeSink"/>. Mirrors the contract
-/// in <c>benchmark/benchmark-plan.md §7</c>: every sink exposes <c>published</c>, <c>dropped</c>,
+/// in <c>benchmark/benchmark-scenarios.md §7</c>: every sink exposes <c>published</c>, <c>dropped</c>,
 /// <c>queue_depth</c>, <c>flush_duration_ms</c>, <c>flush_batch_size</c>,
 /// <c>inline_publish_duration_ms</c>, and <c>dropped_on_shutdown</c> instruments under the same
 /// meter name so dashboards can attribute latency between dispatch overhead, filter cost, and

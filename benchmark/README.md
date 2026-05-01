@@ -1,6 +1,18 @@
 # Orleans.Lattice — Benchmark Stack
 
-End-to-end benchmark suite covering the 11 scenarios in [`benchmark-plan.md`](./benchmark-plan.md).
+> **Why this exists.** The benchmark suite is the regression alarm for
+> `Orleans.Lattice`. Every scenario is a fixed, reproducible workload that
+> produces a small set of summary scalars — commit p99, commits/s, sink
+> publish/drop rates, replication ship/apply latency, cache hit ratio, GC
+> pressure, microbench timings. Those scalars are pushed into the
+> [history stack](./history/README.md) and rendered as run-over-run trend
+> lines in Grafana, so a performance regression caused by a refactor, a
+> dependency bump, or a tuning change shows up as a visible step in the line
+> and the offending commit (`git_sha` is part of every sample's labels) is one
+> click away. Treat the suite as a CI-grade tripwire: run the relevant
+> scenarios before merging anything that touches the hot path.
+
+End-to-end benchmark suite covering the 14 scenarios in [`benchmark-scenarios.md`](./benchmark-scenarios.md).
 
 The stack is brought up via `docker compose` and driven through the Vehicle Fleet
 Simulator's HTTP API (`samples/VehicleFleetSimulator/`). A single PowerShell script
@@ -15,7 +27,7 @@ selects the scenario and runs end-to-end:
 ```
 benchmark/
 ├── benchmark.ps1                    # Single-parameter runner (scenario slug).
-├── benchmark-plan.md                # Authoritative scenario plan.
+├── benchmark-scenarios.md                # Authoritative scenario plan.
 ├── docker-compose.yml               # Base topology (single cluster).
 ├── docker-compose.replication.yml   # Replication overlay (current-state-single-peer, replication-backpressure, receiver-crash, bidirectional-replication, replication-key-filter).
 ├── host/
@@ -56,19 +68,25 @@ For replication scenarios (`current-state-single-peer`, `replication-backpressur
 
 ## Scenarios
 
-| Id                              | Description                                    | Replication | Chaos      |
-|---------------------------------|------------------------------------------------|-------------|------------|
-| `simulator-baseline`            | Simulator baseline (NullTelemetrySink)         | n/a         | none       |
-| `microbench`                    | `ILattice` micro-benchmark (harness-only)      | n/a         | n/a        |
-| `current-state-no-replication`  | Current-state tree, replication off            | off         | none       |
-| `current-state-single-peer`     | Current-state tree, single-peer replication    | on          | none       |
-| `skewed-key-shard-splits`       | Skewed-key variant (adaptive shard splits)     | off         | none       |
-| `replication-backpressure`      | Replication backpressure / catch-up            | on          | pause      |
-| `receiver-crash`                | Receiver crash mid-stream                      | on          | kill       |
-| `bidirectional-replication`     | Two-cluster bidirectional replication          | on (both)   | none       |
-| `replication-key-filter`        | Per-key replication filter cost                | on          | none       |
-| `event-log-with-ttl`            | Event-log tree with TTL                        | off         | none       |
-| `observer-no-peer`              | Observer-off control (paired with `current-state-single-peer`) | off | none |
+Fourteen scenarios live under `scenarios/<slug>.env`. They span four
+lattice-usage profiles plus a micro-benchmark control.
+
+| Profile             | Scenario id                       | Description                                              | Replication | Chaos |
+|---------------------|-----------------------------------|----------------------------------------------------------|-------------|-------|
+| micro               | `microbench`                      | `ILattice` micro-benchmark (BenchmarkDotNet, no cluster) | n/a         | n/a   |
+| write-heavy random  | `current-state-no-replication`    | Per-vehicle current-state overwrites, replication off    | off         | none  |
+| write-heavy random  | `skewed-key-shard-splits`         | Skewed-key variant exercising adaptive shard splits      | off         | none  |
+| write-heavy ordered | `event-log-with-ttl`              | Append-only event-log keyspace with TTL-driven eviction  | off         | none  |
+| read-heavy          | `read-heavy-random`               | 95:5 read:write, random key distribution                 | off         | none  |
+| read-heavy          | `read-heavy-ordered`              | 95:5 read:write, sequential keyspace walk                | off         | none  |
+| read-write mix      | `read-write-mix-random`           | 50:50 mix, random keys (YCSB-A shape)                    | off         | none  |
+| read-write mix      | `read-write-mix-ordered`          | 50:50 mix, sequential walks                              | off         | none  |
+| replication         | `current-state-single-peer`       | Current-state tree, single-peer replication              | on          | none  |
+| replication         | `bidirectional-replication`       | Two-cluster bidirectional replication                    | on (both)   | none  |
+| replication         | `replication-key-filter`          | Per-key replication filter cost                          | on          | none  |
+| replication         | `replication-backpressure`        | Backpressure / catch-up under sender pause               | on          | pause |
+| replication         | `receiver-crash`                  | Receiver crash mid-stream, recovery cost                 | on          | kill  |
+| replication control | `observer-no-peer`                | Observer-off control paired with `current-state-single-peer` | off     | none  |
 
 Per-scenario knobs live in `scenarios/<slug>.env`. Each file sets:
 
@@ -117,12 +135,14 @@ The script:
    parallel, then `stop-all`s the fleet.
 8. Prints fleet stats and (unless `-KeepRunning`) tears the stack down.
 9. **Captures an auto-discovered panel of summary scalars** by listing every
-   meter under the configured prefixes (`orleans.lattice`,
-   `orleans.lattice.replication`, `vehicle_fleet_simulator.sink`, plus a curated
-   `dotnet.*` allow-list) and synthesising p50/p95/p99 / per-second / max+avg
-   keys per instrument type. A short `$ScalarPanelExtra` block in
-   `benchmark.ps1` overlays a handful of hand-curated headline metrics that win
-   on key collisions. The result lands in `.run/<scenario>/<run_id>/results.json`.
+   meter under the configured prefixes (`orleans.lattice` — covers both the
+   core meter and `orleans.lattice.replication` — and `vehicle_fleet_simulator`
+   — covers `vehicle_fleet_simulator.sink` and the read-driver meter
+   `vehicle_fleet_simulator.read_driver` — plus a curated `dotnet.*`
+   allow-list) and synthesising p50/p95/p99 / per-second / max+avg keys per
+   instrument type. A short `$ScalarPanelExtra` block in `benchmark.ps1`
+   overlays a handful of hand-curated headline metrics that win on key
+   collisions. The result lands in `.run/<scenario>/<run_id>/results.json`.
 10. **Opportunistically pushes** those scalars into the long-lived
     [history stack](./history/README.md) if it's reachable on `:8428`. If the
     history stack is down, the run completes normally and the local JSON is the
@@ -147,8 +167,9 @@ Each run produces a `.run/<scenario>/<run_id>/results.json` like:
     "sink_published_per_second":                            2034,
     "sink_dropped_combined_increase":                          0,
     "lattice_cache_hit_ratio":                              0.94,
+    "replication_ship_p95_ms":                                 4.7,
+    "replication_apply_lag_p95_ms":                            6.1,
     "dotnet_gc_gen2_collections_increase":                     0,
-    "dotnet_process_memory_working_set_bytes_p95":      612000000,
     "orleans_lattice_replication_apply_duration_milliseconds_p99": null,
     "...": "~52 auto-discovered keys + the curated extras"
   },
@@ -159,8 +180,8 @@ Each run produces a `.run/<scenario>/<run_id>/results.json` like:
 Aggregate across runs:
 
 ```powershell
-# Latest run per scenario, side-by-side, with delta vs. the simulator baseline.
-./benchmark.ps1 -Compare -CompareAgainst simulator-baseline
+# Latest run per scenario, side-by-side, with delta vs. a reference scenario.
+./benchmark.ps1 -Compare -CompareAgainst current-state-no-replication
 
 # Without the delta column.
 ./benchmark.ps1 -Compare
@@ -181,7 +202,7 @@ Four configuration blocks at the top of `benchmark.ps1` drive it:
 
 | Variable                    | Purpose                                                                                                |
 |-----------------------------|--------------------------------------------------------------------------------------------------------|
-| `$AutoDiscoverPrefixes`     | Meter-name prefixes to walk (default: `orleans.lattice`, `orleans.lattice.replication`, `vehicle_fleet_simulator.sink`). |
+| `$AutoDiscoverPrefixes`     | Meter-name prefixes to walk (default: `orleans_lattice_` — covers core + replication — and `vehicle_fleet_simulator_` — covers sink + read-driver). |
 | `$AutoDiscoverDotnetAllow`  | Allow-list of `dotnet.*` instruments to include (the runtime meter is noisy, so we curate).            |
 | `$ScalarPanelExclude`       | Names to drop after discovery (e.g. duplicates of curated extras).                                     |
 | `$ScalarPanelExtra`         | Hand-curated headline metrics. Keys here **win on collision** with auto-discovered ones.               |
@@ -199,6 +220,7 @@ The upshot: **adding a new instrument to the lattice source automatically
 flows into the next benchmark run** without touching `benchmark.ps1`. The
 console preview prints `panel: N keys (M extra overrides)` so you can see how
 many keys came from auto-discovery vs. the curated overlay.
+
 ## Trend dashboard (history stack)
 
 For run-over-run trend visualisation (e.g. *"how has `current-state-no-replication`'s
@@ -213,22 +235,46 @@ invocation.
 ./benchmark.ps1 -CloseHistory    # stop (named volumes preserved)
 ```
 
-Then visit <http://localhost:3001> for the **Orleans.Lattice — Benchmark
-History (cockpit)** dashboard. The cockpit layout has four bands:
+Then visit <http://localhost:3001>. The history Grafana hosts an
+**Overview dashboard** plus **six persona dashboards** — one per
+lattice-usage profile — so each dashboard answers a single regression
+question without templating-var juggling:
 
-1. **KPI header** — four fixed stat tiles (commit p99, commits/s, sink
-   publishes/s, sink drops) bound to whichever scenario the templating var
-   selects.
-2. **Category rows** — six collapsible rows (commit, cache, sink, replication,
-   process, microbench) where every metric matching the row's regex auto-renders
-   as a sparkline-stat tile. New metrics show up here on the next run with no
-   dashboard edit. The microbench row binds to `bench_microbench_.*` populated
-   by the BenchmarkDotNet harness in the `microbench` scenario.
-3. **Trend explorer** — collapsed by default; multi-select any subset of the
-   discovered metrics and overlay them as a single timeseries.
-4. **Coverage matrix** — collapsed by default; one stat tile per metric
-   counting how many distinct scenarios have reported a value, useful for
-   spotting coverage gaps after adding a new scenario.
+| Persona dashboard         | Aggregates                                                          | Asks                                                           |
+|---------------------------|---------------------------------------------------------------------|----------------------------------------------------------------|
+| `lat-hist-overview`       | every persona below, one row each                                   | Is anything red right now? (single-page roll-up of all KPIs.)  |
+| `lat-hist-replication`    | the six replication scenarios                                       | Has ship/apply latency or commit-overhead-under-replication regressed? |
+| `lat-hist-write-heavy-random`  | `current-state-no-replication`, `skewed-key-shard-splits`      | Has the steady-state write hot path regressed?                |
+| `lat-hist-write-heavy-ordered` | `event-log-with-ttl`                                           | Has the append-only + TTL-eviction path regressed?            |
+| `lat-hist-read-heavy`     | `read-heavy-random`, `read-heavy-ordered`                           | Has GetAsync-dominant load (cache/prefetch) regressed?        |
+| `lat-hist-read-write-mix` | `read-write-mix-random`, `read-write-mix-ordered`                   | Has the YCSB-A-shaped balanced workload regressed?            |
+| `lat-hist-microbench`     | `microbench`                                                        | Has the `ILattice` algorithm cost (no Orleans dispatch) regressed? |
+
+The Overview dashboard is the recommended landing page: it shows every
+persona's headline KPIs in a single view (one row per persona, scoped to
+that persona's scenarios) so a regression in any workload class is visible
+without flipping dashboards. Click any KPI tile to drill into the matching
+persona dashboard for trend strips and per-run barcharts.
+
+Each persona dashboard has the same **3-band** layout, top-to-bottom:
+
+1. **Headline KPIs** — three or four stat tiles with threshold-coloured
+   backgrounds binding to short, stable aliases (e.g. `bench_lattice_commit_p99_ms`,
+   `bench_replication_ship_p95_ms`). The stable-alias layer is curated in
+   `benchmark.ps1`'s `$ScalarPanelExtra`; KPI metric-name resolution is
+   validated at dashboard-generation time, so a typo or rename fails fast.
+2. **Trends across runs** — one timeseries per metric family (commit, cache,
+   sink, replication, process, microbench), points-mode with one line per
+   `{__name__, scenario, git_sha}` so a regression appears as a visible step
+   between commits.
+3. **Per-run history** — barchart per KPI, one bar per run, hover shows
+   `{{scenario}} {{run_id}} @ {{git_sha}}` so the offending commit is one
+   click away.
+
+Dashboards regenerate from `benchmark/history/Generate-Dashboards.ps1`. Adding
+a scenario or moving it between personas is a one-line edit to the `$Personas`
+table at the top of that script — re-run, wait ~30 s for Grafana's
+file-provider rescan, done.
 
 See [`history/README.md`](./history/README.md) for the full data model, label
 schema, and ad-hoc query path.
@@ -242,11 +288,12 @@ credentials are `admin/admin`.
 
 The dashboards bind against the meters:
 
-| Meter                              | Source                                       |
-|------------------------------------|----------------------------------------------|
-| `orleans.lattice`                  | core library (shard reads/writes, splits)   |
-| `orleans.lattice.replication`      | replication package (WAL, ship-loop, apply) |
-| `vehicle_fleet_simulator.sink`     | `LatticeSink` (publish/drop/queue depth)    |
+| Meter                                  | Source                                              |
+|----------------------------------------|-----------------------------------------------------|
+| `orleans.lattice`                      | core library (shard reads/writes, splits)          |
+| `orleans.lattice.replication`          | replication package (WAL, ship-loop, apply)        |
+| `vehicle_fleet_simulator.sink`         | `LatticeSink` (publish/drop/queue depth)           |
+| `vehicle_fleet_simulator.read_driver`  | `LatticeReadDriver` (read-heavy / mix scenarios)   |
 
 Prometheus is at <http://localhost:9090> for raw query access.
 
@@ -265,42 +312,4 @@ and the simulator pipeline; the Orleans-native end-to-end cost is captured by
 ```
 
 The runner builds and invokes `benchmark/host/Bench.Microbench/`, which exercises four
-workloads against `ILattice`:
-
-| Workload         | Method                              | What it measures                       |
-|------------------|-------------------------------------|----------------------------------------|
-| `point_write`    | `SetAsync` (one key per op)         | single-key write latency               |
-| `point_read`     | `GetAsync` (one key per op)         | single-key read latency (cache-warm)   |
-| `bulk_load`      | `SetManyAsync(batchSize)`           | batched-write throughput               |
-| `mixed_70r_30w`  | weighted mix of `Get`/`Set`         | realistic read-heavy hot path          |
-
-Results land in `.run/microbench/<run_id>/results.json` with keys shaped
-`microbench_<workload>_<stat>_<unit>` (e.g. `microbench_point_write_p99_ns`,
-`microbench_bulk_load_per_second`, `microbench_point_read_alloc_b`). The
-opportunistic history-stack push uses the same path as the docker scenarios, so
-the cockpit's **Microbench** category row populates automatically.
-
-### Fidelity knob
-
-Two toolchains are available, picked via `BENCH_MICROBENCH_FIDELITY` in
-`scenarios/microbench.env`:
-
-| Value             | Toolchain                      | Wall clock | Use it for                          |
-|-------------------|--------------------------------|------------|-------------------------------------|
-| `quick` (default) | In-process emit (Job.ShortRun) | ~2-3 min   | iterative dev, trend tracking       |
-| `full`            | Forked process (Job.Default)   | ~10-15 min | release-gating, regression hunts    |
-
-`quick` keeps every workload in the parent process so the harness bootstraps once across
-all four `[Benchmark]` methods. `full` forks a fresh process per workload at the cost of
-paying `[GlobalSetup]` once per workload.
-
-### Tuning the keyspace
-
-The remaining `BENCH_*` knobs in `scenarios/microbench.env` shape what's measured:
-
-| Variable                    | Default | Effect                                                       |
-|-----------------------------|---------|--------------------------------------------------------------|
-| `BENCH_MICROBENCH_WORKLOADS`  | (all)   | Comma-separated whitelist (e.g. `PointWrite,Mixed_70R_30W`). |
-| `BENCH_MICROBENCH_KEY_COUNT`  | `10000` | Pre-seeded keyspace size.                                    |
-| `BENCH_MICROBENCH_VALUE_BYTES`| `128`   | Payload size per key.                                        |
-| `BENCH_MICROBENCH_BULK_BATCH` | `1000`  | Batch size used by `bulk_load`.                              |
+workload

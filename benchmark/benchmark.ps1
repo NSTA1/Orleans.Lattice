@@ -151,9 +151,6 @@ $AutoDiscoverPrefixes = @(
 )
 
 $AutoDiscoverDotnetAllow = @(
-    'dotnet_process_cpu_time_seconds',
-    'dotnet_process_memory_working_set_bytes',
-    'dotnet_process_cpu_count',
     'dotnet_gc_collections',
     'dotnet_gc_pause_time_seconds',
     'dotnet_gc_heap_total_allocated_bytes',
@@ -170,7 +167,7 @@ $ScalarPanelExclude = @()
 # ungainly orleans_lattice_leaf_commit_duration_milliseconds_p99 a short
 # `lattice_commit_p99_ms` alias for the KPI tiles to bind to).
 $ScalarPanelExtra = [ordered]@{
-    # ── KPI aliases (short, stable names the cockpit dashboard''s header binds to) ──
+    # ── KPI aliases (short, stable names the cockpit dashboard's header binds to) ──
     'lattice_commit_p99_ms' =
         'histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_leaf_commit_duration_milliseconds_bucket[{Ws}s])))'
     'lattice_commits_per_second' =
@@ -180,6 +177,16 @@ $ScalarPanelExtra = [ordered]@{
     'sink_dropped_combined_increase' =
         'sum(increase(vehicle_fleet_simulator_sink_dropped_total[{Ws}s])) + sum(increase(vehicle_fleet_simulator_sink_dropped_on_shutdown_total[{Ws}s]))'
 
+    # ── Replication KPI aliases (the source histograms are emitted as
+    #    *_duration_milliseconds_bucket / *_apply_lag_milliseconds_bucket because
+    #    the OTel→Prom exporter appends the canonical "milliseconds" suffix when
+    #    the instrument's unit is "ms"; these aliases hide that mangling behind
+    #    short, stable names the persona dashboards bind to). ──
+    'replication_ship_p95_ms' =
+        'histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_ship_duration_milliseconds_bucket[{Ws}s])))'
+    'replication_apply_lag_p95_ms' =
+        'histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_lag_milliseconds_bucket[{Ws}s])))'
+
     # ── Derived metrics (auto-discovery cannot synthesise ratios) ──
     'lattice_cache_hit_ratio' =
         'sum(rate(orleans_lattice_cache_hits_total[{Ws}s])) / clamp_min(sum(rate(orleans_lattice_cache_hits_total[{Ws}s]) + rate(orleans_lattice_cache_misses_total[{Ws}s])), 1)'
@@ -187,10 +194,6 @@ $ScalarPanelExtra = [ordered]@{
     # ── Label-filtered counter (auto-discovery treats the whole metric as one series) ──
     'dotnet_gc_gen2_collections_increase' =
         'sum(increase(dotnet_gc_collections_total{gc_heap_generation="gen2"}[{Ws}s]))'
-
-    # ── Working-set p95 (auto-discovery only emits max/avg for gauges) ──
-    'dotnet_process_memory_working_set_bytes_p95' =
-        'quantile_over_time(0.95, sum(dotnet_process_memory_working_set_bytes)[{Ws}s:5s])'
 }
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────

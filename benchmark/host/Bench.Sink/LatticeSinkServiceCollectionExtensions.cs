@@ -16,7 +16,7 @@ public static class LatticeSinkServiceCollectionExtensions
     /// Replaces any registered <see cref="ITelemetrySink"/> with <see cref="LatticeSink"/>, binds
     /// <see cref="LatticeSinkOptions"/> from the supplied <paramref name="configurationSection"/>,
     /// and registers the drain loop as an <see cref="IHostedService"/>. The replacement (rather
-    /// than chained registration) is required by §2 of <c>benchmark/benchmark-plan.md</c>: a
+    /// than chained registration) is required by §2 of <c>benchmark/benchmark-scenarios.md</c>: a
     /// second <see cref="ITelemetrySink"/> would silently double-write and contaminate the
     /// measurement.
     /// </summary>

@@ -71,22 +71,28 @@ feed it:
 
 ## Dashboards
 
-The history Grafana hosts **eight persona dashboards**, each aggregating one or
-more concrete `scenarios/*.env` runs so the cross-run trend answers a single
-question per dashboard.
+The history Grafana hosts an **Overview dashboard** plus **six persona
+dashboards**. The Overview is a single-page roll-up showing every persona's
+headline KPIs in one view (one row per persona, scoped to that persona's
+scenarios) — use it as the landing page to spot the workload class that has
+regressed, then click into the matching persona dashboard for trend strips
+and per-run barcharts.
 
 | Persona dashboard (`uid`)            | Scenarios it aggregates                                                                                                | What it asks                                                                  |
 |--------------------------------------|------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
+| `lat-hist-overview`                  | every persona below, one row each                                                                                      | Single-page roll-up: is anything red right now?                                |
 | `lat-hist-replication`               | `current-state-single-peer`, `bidirectional-replication`, `observer-no-peer`, `replication-key-filter`, `replication-backpressure`, `receiver-crash` | Replication ship/apply latency and commit-path overhead under replication.    |
 | `lat-hist-write-heavy-random`        | `current-state-no-replication`, `skewed-key-shard-splits`                                                              | Per-vehicle current-state overwrites — steady-state and hot-key variants.     |
 | `lat-hist-write-heavy-ordered`       | `event-log-with-ttl`                                                                                                    | Event-log keyspace with TTL: each tick a new key, TTL drives compaction.      |
-| `lat-hist-read-heavy-random`         | `read-heavy-random`                                                                                                     | GetAsync-dominant load, random keys (95:5 read:write).                        |
-| `lat-hist-read-heavy-ordered`        | `read-heavy-ordered`                                                                                                    | GetAsync-dominant load, sequential keyspace walk (cache/prefetch signal).     |
-| `lat-hist-read-write-mix-random`     | `read-write-mix-random`                                                                                                 | Balanced 50:50 read/write against random keys (YCSB-A shape).                 |
-| `lat-hist-read-write-mix-ordered`    | `read-write-mix-ordered`                                                                                                | Balanced 50:50 read/write with sequential walks.                              |
+| `lat-hist-read-heavy`                | `read-heavy-random`, `read-heavy-ordered`                                                                               | GetAsync-dominant load (95:5 read:write) across random and sequential keys.   |
+| `lat-hist-read-write-mix`            | `read-write-mix-random`, `read-write-mix-ordered`                                                                       | Balanced 50:50 read/write (YCSB-A shape) across random and sequential keys.   |
 | `lat-hist-microbench`                | `microbench`                                                                                                            | BenchmarkDotNet ILattice micro-suite (in-process, no Orleans cluster).        |
 
-### Per-dashboard layout (3 bands, top-to-bottom)
+### Per-persona-dashboard layout (3 bands, top-to-bottom)
+
+The six persona dashboards share this 3-band layout. The Overview dashboard
+is single-band (one row of stat tiles per persona, KPIs scoped to the
+persona's scenarios).
 
 | Band | Purpose                              | Panel type                                    | Reads                                                                                  |
 |------|--------------------------------------|-----------------------------------------------|----------------------------------------------------------------------------------------|

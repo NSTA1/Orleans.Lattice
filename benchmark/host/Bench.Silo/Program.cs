@@ -49,7 +49,7 @@ var serviceId = builder.Configuration["Orleans:ServiceId"] ?? "VehicleFleetSimul
 //
 // All three branches register exactly one ITelemetrySink so the consumer (VehicleGrain) hits
 // a single sink — registering a second one would silently double-write and contaminate the
-// measurement, per §2 of benchmark/benchmark-plan.md.
+// measurement, per §2 of benchmark/benchmark-scenarios.md.
 var telemetrySink = (builder.Configuration["Telemetry:Sink"] ?? "fanout").Trim().ToLowerInvariant();
 var replicationEnabled = string.Equals(builder.Configuration["Replication:Enabled"], "true", StringComparison.OrdinalIgnoreCase);
 

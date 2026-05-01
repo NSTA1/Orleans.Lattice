@@ -2,7 +2,7 @@ namespace VehicleFleetSimulator.Benchmark.Sink;
 
 /// <summary>
 /// Selects how the Lattice sink derives the key for a per-vehicle telemetry sample. Maps directly
-/// to the benchmark scenarios defined in <c>benchmark/benchmark-plan.md</c>.
+/// to the benchmark scenarios defined in <c>benchmark/benchmark-scenarios.md</c>.
 /// </summary>
 public enum KeyShape
 {

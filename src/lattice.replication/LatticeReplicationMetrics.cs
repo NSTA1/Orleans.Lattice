@@ -331,7 +331,7 @@ public static class LatticeReplicationMetrics
     /// this histogram — only successful waits are observed.
     /// </summary>
     public static readonly Histogram<double> ApplyDependencyWaitMs =
-        Meter.CreateHistogram<double>("orleans.lattice.replication.apply.dependency_wait_ms", unit: "ms",
+        Meter.CreateHistogram<double>("orleans.lattice.replication.apply.dependency_wait_ms",
             description: "Wait time between park and drain for a buffered causal-apply entry, tagged by tree.");
 
     /// <summary>
