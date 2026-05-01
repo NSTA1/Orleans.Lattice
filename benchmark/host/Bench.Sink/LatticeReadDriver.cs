@@ -44,50 +44,142 @@ public sealed class LatticeReadDriver(
 
         var lattice = grainFactory.GetGrain<ILattice>(opts.TreeId);
 
-        // Initial keyspace scan. If empty, retry with backoff - the simulator may not have
-        // produced anything yet.
+        // Initial keyspace scan. If empty, the per-worker loop below short-sleeps and retries
+        // until the simulator has populated something.
         await RefreshKeyspaceAsync(lattice, opts, stoppingToken);
-        var lastRefresh = Stopwatch.GetTimestamp();
 
-        // Rate-limit via fixed-period ticker. PeriodicTimer rounds to ms; for rates > 1000/s
-        // we batch issues per tick instead of trying to subdivide a sub-ms period.
-        var ticksPerSecond = Math.Max(1, Math.Min(opts.RatePerSecond, 1000));
-        var perTick = Math.Max(1, opts.RatePerSecond / ticksPerSecond);
-        var tickPeriod = TimeSpan.FromMilliseconds(1000.0 / ticksPerSecond);
-        using var ticker = new PeriodicTimer(tickPeriod);
+        // ─── N-worker deadline-paced rate limiter ───────────────────────────────────────
+        //
+        // The previous implementation used a single PeriodicTimer at sub-ms period plus a
+        // per-tick batch of `perTick` issues, each gated by `await SemaphoreSlim.WaitAsync`.
+        // On Linux containers (incl. Docker-on-Windows via WSL2) `PeriodicTimer` periods of
+        // ~1ms absorb hrtimer slack and per-tick async overhead collapses the effective tick
+        // rate from a nominal 1000 Hz to ~250 Hz. At BENCH_READ_RATE_PER_SECOND=38000 with
+        // perTick=38 that capped observed throughput at ~9.4k reads/s regardless of the
+        // configured rate or concurrency. Bumping concurrency 32→128 produced ~0% gain —
+        // textbook signature of a pacer upstream of the gate, not a saturated downstream.
+        //
+        // The replacement model spawns `Concurrency` persistent worker tasks, each pacing
+        // itself to `RatePerSecond / Concurrency` reads/s using `Stopwatch`-based deadline
+        // arithmetic. A worker can have only one outstanding read at a time, so worker count
+        // IS the inflight cap — the explicit semaphore gate dissolves. Phase-staggering by
+        // `workerId × perWorkerInterval / workerCount` distributes issuance evenly across
+        // each per-worker interval rather than producing N-sized bursts in lockstep. Worker 0
+        // owns keyspace refresh so concurrent refreshers don't stomp on `_keyspace`.
+        //
+        // For the calibrated bench config (38000/s × 128 workers), each worker targets
+        // 297 reads/s = one read every 3.37 ms. Observed p50 GetAsync latency is 0.34 ms,
+        // so a worker spends ~90% of its wall-clock budget in `Task.Delay` — well-clear of
+        // the hrtimer-slack regime that broke the original PeriodicTimer pacer.
+        var workerCount = Math.Max(1, opts.Concurrency);
+        var perWorkerInterval = TimeSpan.FromSeconds(workerCount / (double)opts.RatePerSecond);
 
-        var rng = new Random(unchecked((int)(DateTime.UtcNow.Ticks ^ Environment.CurrentManagedThreadId)));
-        using var concurrencyGate = new SemaphoreSlim(opts.Concurrency, opts.Concurrency);
+        logger.LogInformation(
+            "LatticeReadDriver pacing: {Workers} workers × {PerWorkerHz:F1}/s = {GlobalHz:N0}/s target (interval={IntervalMs:F2} ms/worker)",
+            workerCount,
+            1.0 / perWorkerInterval.TotalSeconds,
+            opts.RatePerSecond,
+            perWorkerInterval.TotalMilliseconds);
 
-        while (await ticker.WaitForNextTickAsync(stoppingToken))
+        // Wrapped in a single-element array so the worker-0 closure can update it without
+        // capturing a `ref` local (forbidden inside async lambdas).
+        var lastRefreshTimestamp = new long[] { Stopwatch.GetTimestamp() };
+
+        var workers = Enumerable.Range(0, workerCount)
+            .Select(workerId => RunWorkerAsync(workerId, workerCount, lattice, opts, perWorkerInterval, lastRefreshTimestamp, stoppingToken));
+
+        try
         {
-            // Periodic keyspace refresh so newly-written vehicle ids get exercised.
-            if (Stopwatch.GetElapsedTime(lastRefresh) >= opts.KeyspaceRefreshInterval)
+            await Task.WhenAll(workers);
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal shutdown — swallow.
+        }
+    }
+
+    private async Task RunWorkerAsync(
+        int workerId,
+        int workerCount,
+        ILattice lattice,
+        LatticeReadDriverOptions opts,
+        TimeSpan perWorkerInterval,
+        long[] lastRefreshTimestamp,
+        CancellationToken stoppingToken)
+    {
+        // Phase-stagger: worker 0 starts at t=0, worker N-1 at t=(N-1)/N × interval. Without
+        // this every worker would issue in lockstep every perWorkerInterval, producing
+        // N-sized bursts followed by silence rather than a smooth global rate.
+        var phaseOffset = TimeSpan.FromTicks(perWorkerInterval.Ticks * workerId / workerCount);
+        try { await Task.Delay(phaseOffset, stoppingToken); }
+        catch (OperationCanceledException) { return; }
+
+        // Per-worker RNG seeded distinctly so workers don't all walk the same key sequence.
+        var rng = new Random(unchecked(workerId * 73 ^ Environment.TickCount));
+        var startTicks = Stopwatch.GetTimestamp();
+        long issued = 0;
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            // Worker 0 owns keyspace refresh. Other workers just observe `_keyspace` via the
+            // race-free volatile read implicit in the field load below.
+            if (workerId == 0)
             {
-                await RefreshKeyspaceAsync(lattice, opts, stoppingToken);
-                lastRefresh = Stopwatch.GetTimestamp();
+                var sinceRefresh = Stopwatch.GetElapsedTime(Volatile.Read(ref lastRefreshTimestamp[0]));
+                if (sinceRefresh >= opts.KeyspaceRefreshInterval)
+                {
+                    await RefreshKeyspaceAsync(lattice, opts, stoppingToken);
+                    Volatile.Write(ref lastRefreshTimestamp[0], Stopwatch.GetTimestamp());
+                }
             }
 
             var keyspace = _keyspace;
-            if (keyspace.Length == 0) continue;
-
-            for (var i = 0; i < perTick; i++)
+            if (keyspace.Length == 0)
             {
-                if (stoppingToken.IsCancellationRequested) break;
+                // Simulator hasn't published anything yet (or the refresh failed). Short-sleep
+                // and retry. Don't advance `issued` — we don't want the deadline arithmetic
+                // to think we're catching up on absent reads.
+                try { await Task.Delay(TimeSpan.FromMilliseconds(100), stoppingToken); }
+                catch (OperationCanceledException) { return; }
+                startTicks = Stopwatch.GetTimestamp();
+                continue;
+            }
 
-                var key = opts.Pattern switch
-                {
-                    ReadDriverPattern.Sequential => keyspace[(int)((uint)Interlocked.Increment(ref _sequentialCursor) % (uint)keyspace.Length)],
-                    _ => keyspace[rng.Next(keyspace.Length)],
-                };
+            var key = opts.Pattern switch
+            {
+                ReadDriverPattern.Sequential =>
+                    keyspace[(int)((uint)Interlocked.Increment(ref _sequentialCursor) % (uint)keyspace.Length)],
+                _ => keyspace[rng.Next(keyspace.Length)],
+            };
 
-                await concurrencyGate.WaitAsync(stoppingToken);
-                _ = IssueReadAsync(lattice, key, concurrencyGate, stoppingToken);
+            // Inline await — no fire-and-forget. workerCount workers each issuing one read at
+            // a time = exactly workerCount inflight at peak, which is the desired cap.
+            await IssueReadInlineAsync(lattice, key, stoppingToken);
+            issued++;
+
+            // perWorkerInterval × issued is monotonic, so a slow read catches up on the next
+            // iteration without bursting beyond perWorkerInterval-ahead. If the worker falls
+            // more than one whole interval behind (e.g. multi-second stall during keyspace
+            // refresh, or downstream latency spike), reset the baseline so we don't run flat
+            // out trying to catch up retroactively.
+            var targetElapsed = TimeSpan.FromTicks(perWorkerInterval.Ticks * issued);
+            var actualElapsed = Stopwatch.GetElapsedTime(startTicks);
+            var remaining = targetElapsed - actualElapsed;
+
+            if (remaining > TimeSpan.Zero)
+            {
+                try { await Task.Delay(remaining, stoppingToken); }
+                catch (OperationCanceledException) { return; }
+            }
+            else if (remaining < -perWorkerInterval)
+            {
+                startTicks = Stopwatch.GetTimestamp();
+                issued = 0;
             }
         }
     }
 
-    private async Task IssueReadAsync(ILattice lattice, string key, SemaphoreSlim gate, CancellationToken cancellationToken)
+    private async Task IssueReadInlineAsync(ILattice lattice, string key, CancellationToken cancellationToken)
     {
         var start = Stopwatch.GetTimestamp();
         try
@@ -108,7 +200,6 @@ public sealed class LatticeReadDriver(
         finally
         {
             metrics.DurationMs.Record(Stopwatch.GetElapsedTime(start).TotalMilliseconds);
-            gate.Release();
         }
     }
 

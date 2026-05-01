@@ -14,8 +14,10 @@ public sealed class LatticeReadDriverOptions
     /// keys the simulator is producing.</summary>
     public string TreeId { get; set; } = LatticeSinkOptions.DefaultTreeId;
 
-    /// <summary>Target read rate in reads per second. The driver rate-limits to this number using
-    /// a fixed-period ticker (no jitter, no burst). Set to 0 to disable issuing reads.</summary>
+    /// <summary>Target read rate in reads per second. The driver paces issuance using N
+    /// persistent worker tasks (where N = <see cref="Concurrency"/>), each on its own
+    /// <c>Stopwatch</c>-based deadline of <c>RatePerSecond / Concurrency</c> reads/s,
+    /// phase-staggered for even temporal distribution. Set to 0 to disable issuing reads.</summary>
     public int RatePerSecond { get; set; }
 
     /// <summary>How the driver picks the next key from the discovered keyspace.</summary>
