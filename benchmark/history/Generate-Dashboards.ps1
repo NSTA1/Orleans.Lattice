@@ -119,6 +119,30 @@ $KpiCatalog = [ordered]@{
         Metric='bench_microbench_mixed_70r_30w_p99_ns'; Title='Mixed 70r/30w p99 (ns)';
         Unit='ns'; LowerIsBetter=$true; WarnAt=30000; CritAt=150000
     }
+    # ── WAL Performance KPIs ──
+    # The leaf.commit.duration histogram is tagged step={wal|apply|shadow|observer}
+    # and the four aliases below (defined in benchmark.ps1's $ScalarPanelExtra)
+    # are label-filtered cuts of it. Pre-flip (LeafShadowWrites=true) the four
+    # steps add up to the full commit tail; post-flip the shadow tile should
+    # collapse to zero while WAL-append remains the durable boundary and Apply
+    # becomes async background work. Watching all three p99s side-by-side is
+    # the visual evidence harness for the LeafShadowWrites default flip.
+    wal_append_p99 = @{
+        Metric='bench_lattice_wal_append_p99_ms'; Title='WAL append p99 (ms)';
+        Unit='ms'; LowerIsBetter=$true;  WarnAt=10;  CritAt=50
+    }
+    wal_apply_p99 = @{
+        Metric='bench_lattice_apply_p99_ms'; Title='Apply step p99 (ms)';
+        Unit='ms'; LowerIsBetter=$true;  WarnAt=10;  CritAt=50
+    }
+    wal_shadow_write_p99 = @{
+        Metric='bench_lattice_shadow_write_p99_ms'; Title='Shadow-write p99 (ms)';
+        Unit='ms'; LowerIsBetter=$true;  WarnAt=10;  CritAt=50
+    }
+    wal_appends_per_sec = @{
+        Metric='bench_lattice_wal_appends_per_second'; Title='WAL appends/sec';
+        Unit='ops'; LowerIsBetter=$false; WarnAt=500; CritAt=100
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -169,6 +193,13 @@ $Personas = [ordered]@{
         Kpis      = @('microbench_point_write_p99','microbench_point_read_p99','microbench_bulk_load_per_sec','microbench_mixed_p99')
         Families  = @('microbench')
     }
+    'wal-performance' = [ordered]@{
+        Title     = 'Lattice History - WAL Performance'
+        Subtitle  = 'Dual-durability commit path: WAL append, in-memory Apply, legacy shadow-write tail. Shadow tile is the dashboard the shadow-write removal flip is read against - it must collapse to zero post-flip while WAL append remains the load-bearing step.'
+        Scenarios = @('current-state-single-peer','replication-backpressure','receiver-crash','bidirectional-replication','replication-key-filter')
+        Kpis      = @('wal_append_p99','wal_apply_p99','wal_shadow_write_p99','wal_appends_per_sec')
+        Families  = @('wal','commit','replication','process')
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -185,6 +216,7 @@ $Families = [ordered]@{
     'read'        = @{ Title='Read driver';       Regex='bench_vehicle_fleet_simulator_read_driver_.*' }
     'process'     = @{ Title='Process / runtime'; Regex='bench_dotnet_.*' }
     'microbench'  = @{ Title='BenchmarkDotNet';   Regex='bench_microbench_.*' }
+    'wal'         = @{ Title='WAL & commit steps'; Regex='bench_(orleans_lattice_(leaf_(commit|shadow_write|replay)_.*|replication_wal_.*)|lattice_(wal|apply|shadow_write)_.*)' }
 }
 
 # ---------------------------------------------------------------------------

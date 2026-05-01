@@ -187,6 +187,25 @@ $ScalarPanelExtra = [ordered]@{
     'replication_apply_lag_p95_ms' =
         'histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_lag_milliseconds_bucket[{Ws}s])))'
 
+    # ── WAL-step aliases (label-filtered cuts of the step-tagged
+    #    orleans.lattice.leaf.commit.duration histogram, exposed by the
+    #    dual-durability commit path on BPlusLeafGrain). The WAL Performance
+    #    dashboard's KPI tiles bind to these so the WAL-append step, the
+    #    in-memory Apply step, and the legacy shadow-write step are visible
+    #    independently — under dual-durability the four steps add up to the
+    #    full commit tail, and after the shadow-write removal flip the
+    #    shadow alias should drop to zero while WAL-append + Apply remain
+    #    the load-bearing path. The WAL-appends-per-second alias is the
+    #    throughput companion (count of WAL-step samples). ──
+    'lattice_wal_append_p99_ms' =
+        'histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_leaf_commit_duration_milliseconds_bucket{step="wal"}[{Ws}s])))'
+    'lattice_apply_p99_ms' =
+        'histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_leaf_commit_duration_milliseconds_bucket{step="apply"}[{Ws}s])))'
+    'lattice_shadow_write_p99_ms' =
+        'histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_leaf_commit_duration_milliseconds_bucket{step="shadow"}[{Ws}s])))'
+    'lattice_wal_appends_per_second' =
+        'sum(rate(orleans_lattice_leaf_commit_duration_milliseconds_count{step="wal"}[{Ws}s]))'
+
     # ── Derived metrics (auto-discovery cannot synthesise ratios) ──
     'lattice_cache_hit_ratio' =
         'sum(rate(orleans_lattice_cache_hits_total[{Ws}s])) / clamp_min(sum(rate(orleans_lattice_cache_hits_total[{Ws}s]) + rate(orleans_lattice_cache_misses_total[{Ws}s])), 1)'

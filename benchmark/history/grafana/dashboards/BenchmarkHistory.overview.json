@@ -13,8 +13,8 @@
       "collapsed": false,
       "gridPos": {
         "y": 0,
-        "x": 0,
         "w": 24,
+        "x": 0,
         "h": 1
       },
       "id": 1,
@@ -30,11 +30,12 @@
       },
       "gridPos": {
         "y": 1,
-        "x": 0,
         "w": 6,
+        "x": 0,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
@@ -45,21 +46,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 50,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 50
               },
               {
-                "value": 200,
-                "color": "red"
+                "color": "red",
+                "value": 200
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -97,11 +97,12 @@
       },
       "gridPos": {
         "y": 1,
-        "x": 6,
         "w": 6,
+        "x": 6,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
@@ -112,21 +113,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 100,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 100
               },
               {
-                "value": 500,
-                "color": "red"
+                "color": "red",
+                "value": 500
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -164,11 +164,12 @@
       },
       "gridPos": {
         "y": 1,
-        "x": 12,
         "w": 6,
+        "x": 12,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
@@ -179,21 +180,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -231,11 +231,12 @@
       },
       "gridPos": {
         "y": 1,
-        "x": 18,
         "w": 6,
+        "x": 18,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ops",
           "decimals": 2,
@@ -246,21 +247,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 100,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 100
               },
               {
-                "value": 500,
-                "color": "green"
+                "color": "green",
+                "value": 500
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -294,8 +294,8 @@
       "collapsed": false,
       "gridPos": {
         "y": 5,
-        "x": 0,
         "w": 24,
+        "x": 0,
         "h": 1
       },
       "id": 6,
@@ -311,11 +311,12 @@
       },
       "gridPos": {
         "y": 6,
-        "x": 0,
         "w": 6,
+        "x": 0,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
@@ -326,21 +327,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -378,11 +378,12 @@
       },
       "gridPos": {
         "y": 6,
-        "x": 6,
         "w": 6,
+        "x": 6,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ops",
           "decimals": 2,
@@ -393,21 +394,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 100,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 100
               },
               {
-                "value": 500,
-                "color": "green"
+                "color": "green",
+                "value": 500
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -445,11 +445,12 @@
       },
       "gridPos": {
         "y": 6,
-        "x": 12,
         "w": 6,
+        "x": 12,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
@@ -460,21 +461,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -512,11 +512,12 @@
       },
       "gridPos": {
         "y": 6,
-        "x": 18,
         "w": 6,
+        "x": 18,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "percentunit",
           "decimals": 2,
@@ -527,21 +528,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 0.4,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 0.4
               },
               {
-                "value": 0.7,
-                "color": "green"
+                "color": "green",
+                "value": 0.7
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -575,8 +575,8 @@
       "collapsed": false,
       "gridPos": {
         "y": 10,
-        "x": 0,
         "w": 24,
+        "x": 0,
         "h": 1
       },
       "id": 11,
@@ -592,11 +592,12 @@
       },
       "gridPos": {
         "y": 11,
-        "x": 0,
         "w": 8,
+        "x": 0,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
@@ -607,21 +608,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -659,11 +659,12 @@
       },
       "gridPos": {
         "y": 11,
-        "x": 8,
         "w": 8,
+        "x": 8,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ops",
           "decimals": 2,
@@ -674,21 +675,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 100,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 100
               },
               {
-                "value": 500,
-                "color": "green"
+                "color": "green",
+                "value": 500
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -726,11 +726,12 @@
       },
       "gridPos": {
         "y": 11,
-        "x": 16,
         "w": 8,
+        "x": 16,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ops",
           "decimals": 2,
@@ -741,21 +742,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 100,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 100
               },
               {
-                "value": 500,
-                "color": "green"
+                "color": "green",
+                "value": 500
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -789,8 +789,8 @@
       "collapsed": false,
       "gridPos": {
         "y": 15,
-        "x": 0,
         "w": 24,
+        "x": 0,
         "h": 1
       },
       "id": 15,
@@ -806,11 +806,12 @@
       },
       "gridPos": {
         "y": 16,
-        "x": 0,
         "w": 6,
+        "x": 0,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
@@ -821,21 +822,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 5,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 5
               },
               {
-                "value": 25,
-                "color": "red"
+                "color": "red",
+                "value": 25
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -873,11 +873,12 @@
       },
       "gridPos": {
         "y": 16,
-        "x": 6,
         "w": 6,
+        "x": 6,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ops",
           "decimals": 2,
@@ -888,21 +889,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 5000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 5000
               },
               {
-                "value": 20000,
-                "color": "green"
+                "color": "green",
+                "value": 20000
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -940,11 +940,12 @@
       },
       "gridPos": {
         "y": 16,
-        "x": 12,
         "w": 6,
+        "x": 12,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "percentunit",
           "decimals": 2,
@@ -955,21 +956,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 0.4,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 0.4
               },
               {
-                "value": 0.7,
-                "color": "green"
+                "color": "green",
+                "value": 0.7
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -1007,11 +1007,12 @@
       },
       "gridPos": {
         "y": 16,
-        "x": 18,
         "w": 6,
+        "x": 18,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
@@ -1022,21 +1023,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -1070,8 +1070,8 @@
       "collapsed": false,
       "gridPos": {
         "y": 20,
-        "x": 0,
         "w": 24,
+        "x": 0,
         "h": 1
       },
       "id": 20,
@@ -1087,11 +1087,12 @@
       },
       "gridPos": {
         "y": 21,
-        "x": 0,
         "w": 6,
+        "x": 0,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
@@ -1102,21 +1103,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 5,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 5
               },
               {
-                "value": 25,
-                "color": "red"
+                "color": "red",
+                "value": 25
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -1154,11 +1154,12 @@
       },
       "gridPos": {
         "y": 21,
-        "x": 6,
         "w": 6,
+        "x": 6,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
@@ -1169,21 +1170,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -1221,11 +1221,12 @@
       },
       "gridPos": {
         "y": 21,
-        "x": 12,
         "w": 6,
+        "x": 12,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ops",
           "decimals": 2,
@@ -1236,21 +1237,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 500,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 500
               },
               {
-                "value": 1500,
-                "color": "green"
+                "color": "green",
+                "value": 1500
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -1288,11 +1288,12 @@
       },
       "gridPos": {
         "y": 21,
-        "x": 18,
         "w": 6,
+        "x": 18,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ops",
           "decimals": 2,
@@ -1303,21 +1304,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 500,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 500
               },
               {
-                "value": 1500,
-                "color": "green"
+                "color": "green",
+                "value": 1500
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -1351,8 +1351,8 @@
       "collapsed": false,
       "gridPos": {
         "y": 25,
-        "x": 0,
         "w": 24,
+        "x": 0,
         "h": 1
       },
       "id": 25,
@@ -1368,11 +1368,12 @@
       },
       "gridPos": {
         "y": 26,
-        "x": 0,
         "w": 6,
+        "x": 0,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ns",
           "decimals": 2,
@@ -1383,21 +1384,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 50000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 50000
               },
               {
-                "value": 200000,
-                "color": "red"
+                "color": "red",
+                "value": 200000
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -1435,11 +1435,12 @@
       },
       "gridPos": {
         "y": 26,
-        "x": 6,
         "w": 6,
+        "x": 6,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ns",
           "decimals": 2,
@@ -1450,21 +1451,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 20000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 20000
               },
               {
-                "value": 100000,
-                "color": "red"
+                "color": "red",
+                "value": 100000
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -1502,11 +1502,12 @@
       },
       "gridPos": {
         "y": 26,
-        "x": 12,
         "w": 6,
+        "x": 12,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ops",
           "decimals": 2,
@@ -1517,21 +1518,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 10000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10000
               },
               {
-                "value": 50000,
-                "color": "green"
+                "color": "green",
+                "value": 50000
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -1569,11 +1569,12 @@
       },
       "gridPos": {
         "y": 26,
-        "x": 18,
         "w": 6,
+        "x": 18,
         "h": 4
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ns",
           "decimals": 2,
@@ -1584,21 +1585,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 30000,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 30000
               },
               {
-                "value": 150000,
-                "color": "red"
+                "color": "red",
+                "value": 150000
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -1621,6 +1621,287 @@
             "uid": "victoriametrics"
           },
           "expr": "bench_microbench_mixed_70r_30w_p99_ns{scenario=\"microbench\"}",
+          "legendFormat": "{{scenario}} @ {{git_sha}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Lattice History - WAL Performance  -  current-state-single-peer, replication-backpressure, receiver-crash, bidirectional-replication, replication-key-filter",
+      "collapsed": false,
+      "gridPos": {
+        "y": 30,
+        "w": 24,
+        "x": 0,
+        "h": 1
+      },
+      "id": 30,
+      "panels": []
+    },
+    {
+      "id": 31,
+      "type": "stat",
+      "title": "WAL append p99 (ms)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "y": 31,
+        "w": 6,
+        "x": 0,
+        "h": 4
+      },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ms",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "background",
+        "justifyMode": "auto",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "bench_lattice_wal_append_p99_ms{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
+          "legendFormat": "{{scenario}} @ {{git_sha}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "type": "stat",
+      "title": "Apply step p99 (ms)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "y": 31,
+        "w": 6,
+        "x": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ms",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "background",
+        "justifyMode": "auto",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "bench_lattice_apply_p99_ms{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
+          "legendFormat": "{{scenario}} @ {{git_sha}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "type": "stat",
+      "title": "Shadow-write p99 (ms)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "y": 31,
+        "w": 6,
+        "x": 12,
+        "h": 4
+      },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ms",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "background",
+        "justifyMode": "auto",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "bench_lattice_shadow_write_p99_ms{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
+          "legendFormat": "{{scenario}} @ {{git_sha}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "type": "stat",
+      "title": "WAL appends/sec",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "y": 31,
+        "w": 6,
+        "x": 18,
+        "h": 4
+      },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ops",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100
+              },
+              {
+                "color": "green",
+                "value": 500
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "background",
+        "justifyMode": "auto",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "bench_lattice_wal_appends_per_second{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
           "refId": "A"
         }

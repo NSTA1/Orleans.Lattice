@@ -23,7 +23,7 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Point-write p99 (ns)",
+      "title": "WAL append p99 (ms)",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
@@ -37,7 +37,7 @@
       "fieldConfig": {
         "overrides": [],
         "defaults": {
-          "unit": "ns",
+          "unit": "ms",
           "decimals": 2,
           "color": {
             "mode": "thresholds"
@@ -51,11 +51,11 @@
               },
               {
                 "color": "yellow",
-                "value": 50000
+                "value": 10
               },
               {
                 "color": "red",
-                "value": 200000
+                "value": 50
               }
             ]
           }
@@ -81,7 +81,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_microbench_point_write_p99_ns{scenario=\"microbench\"}",
+          "expr": "bench_lattice_wal_append_p99_ms{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
           "refId": "A"
         }
@@ -90,7 +90,7 @@
     {
       "id": 3,
       "type": "stat",
-      "title": "Point-read p99 (ns)",
+      "title": "Apply step p99 (ms)",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
@@ -104,7 +104,7 @@
       "fieldConfig": {
         "overrides": [],
         "defaults": {
-          "unit": "ns",
+          "unit": "ms",
           "decimals": 2,
           "color": {
             "mode": "thresholds"
@@ -118,11 +118,11 @@
               },
               {
                 "color": "yellow",
-                "value": 20000
+                "value": 10
               },
               {
                 "color": "red",
-                "value": 100000
+                "value": 50
               }
             ]
           }
@@ -148,7 +148,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_microbench_point_read_p99_ns{scenario=\"microbench\"}",
+          "expr": "bench_lattice_apply_p99_ms{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
           "refId": "A"
         }
@@ -157,7 +157,7 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Bulk-load ops/sec",
+      "title": "Shadow-write p99 (ms)",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
@@ -166,6 +166,73 @@
         "y": 1,
         "w": 6,
         "x": 12,
+        "h": 5
+      },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ms",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "background",
+        "justifyMode": "auto",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "bench_lattice_shadow_write_p99_ms{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
+          "legendFormat": "{{scenario}} @ {{git_sha}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "WAL appends/sec",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "y": 1,
+        "w": 6,
+        "x": 18,
         "h": 5
       },
       "fieldConfig": {
@@ -185,11 +252,11 @@
               },
               {
                 "color": "yellow",
-                "value": 10000
+                "value": 100
               },
               {
                 "color": "green",
-                "value": 50000
+                "value": 500
               }
             ]
           }
@@ -215,74 +282,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_microbench_bulk_load_per_second{scenario=\"microbench\"}",
-          "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 5,
-      "type": "stat",
-      "title": "Mixed 70r/30w p99 (ns)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "victoriametrics"
-      },
-      "gridPos": {
-        "y": 1,
-        "w": 6,
-        "x": 18,
-        "h": 5
-      },
-      "fieldConfig": {
-        "overrides": [],
-        "defaults": {
-          "unit": "ns",
-          "decimals": 2,
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 30000
-              },
-              {
-                "color": "red",
-                "value": 150000
-              }
-            ]
-          }
-        }
-      },
-      "options": {
-        "graphMode": "area",
-        "colorMode": "background",
-        "justifyMode": "auto",
-        "textMode": "value_and_name",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "victoriametrics"
-          },
-          "expr": "bench_microbench_mixed_70r_30w_p99_ns{scenario=\"microbench\"}",
+          "expr": "bench_lattice_wal_appends_per_second{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
           "refId": "A"
         }
@@ -304,7 +304,7 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "BenchmarkDotNet",
+      "title": "WAL & commit steps",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
@@ -344,7 +344,154 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "{__name__=~\"bench_microbench_.*\",scenario=\"microbench\"}",
+          "expr": "{__name__=~\"bench_(orleans_lattice_(leaf_(commit|shadow_write|replay)_.*|replication_wal_.*)|lattice_(wal|apply|shadow_write)_.*)\",scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
+          "legendFormat": "{{__name__}} | {{scenario}} | {{git_sha}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Commit path",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "y": 7,
+        "w": 12,
+        "x": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "custom": {
+            "drawStyle": "points",
+            "pointSize": 7,
+            "showPoints": "always",
+            "lineInterpolation": "linear",
+            "spanNulls": true
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "{__name__=~\"bench_(orleans_lattice_(leaf|shard|atomic_write|coordinator|tree)_.*|lattice_commit_.*|lattice_commits_.*)\",scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
+          "legendFormat": "{{__name__}} | {{scenario}} | {{git_sha}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Replication",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "y": 15,
+        "w": 12,
+        "x": 0,
+        "h": 8
+      },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "custom": {
+            "drawStyle": "points",
+            "pointSize": 7,
+            "showPoints": "always",
+            "lineInterpolation": "linear",
+            "spanNulls": true
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "{__name__=~\"bench_(orleans_lattice_replication_.*|replication_.*)\",scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
+          "legendFormat": "{{__name__}} | {{scenario}} | {{git_sha}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Process / runtime",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "y": 15,
+        "w": 12,
+        "x": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "custom": {
+            "drawStyle": "points",
+            "pointSize": 7,
+            "showPoints": "always",
+            "lineInterpolation": "linear",
+            "spanNulls": true
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "{__name__=~\"bench_dotnet_.*\",scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
           "legendFormat": "{{__name__}} | {{scenario}} | {{git_sha}}",
           "refId": "A"
         }
@@ -355,24 +502,24 @@
       "title": "Per-run history (hover bars for run_id and git_sha)",
       "collapsed": false,
       "gridPos": {
-        "y": 15,
+        "y": 23,
         "w": 24,
         "x": 0,
         "h": 1
       },
-      "id": 8,
+      "id": 11,
       "panels": []
     },
     {
-      "id": 9,
+      "id": 12,
       "type": "barchart",
-      "title": "Point-write p99 (ns) - per-run history",
+      "title": "WAL append p99 (ms) - per-run history",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 16,
+        "y": 24,
         "w": 12,
         "x": 0,
         "h": 7
@@ -380,7 +527,7 @@
       "fieldConfig": {
         "overrides": [],
         "defaults": {
-          "unit": "ns",
+          "unit": "ms",
           "decimals": 2,
           "color": {
             "mode": "palette-classic"
@@ -409,7 +556,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_microbench_point_write_p99_ns{scenario=\"microbench\"}",
+          "expr": "bench_lattice_wal_append_p99_ms{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
           "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
           "format": "time_series",
           "refId": "A"
@@ -417,15 +564,15 @@
       ]
     },
     {
-      "id": 10,
+      "id": 13,
       "type": "barchart",
-      "title": "Point-read p99 (ns) - per-run history",
+      "title": "Apply step p99 (ms) - per-run history",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 16,
+        "y": 24,
         "w": 12,
         "x": 12,
         "h": 7
@@ -433,7 +580,7 @@
       "fieldConfig": {
         "overrides": [],
         "defaults": {
-          "unit": "ns",
+          "unit": "ms",
           "decimals": 2,
           "color": {
             "mode": "palette-classic"
@@ -462,7 +609,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_microbench_point_read_p99_ns{scenario=\"microbench\"}",
+          "expr": "bench_lattice_apply_p99_ms{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
           "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
           "format": "time_series",
           "refId": "A"
@@ -470,17 +617,70 @@
       ]
     },
     {
-      "id": 11,
+      "id": 14,
       "type": "barchart",
-      "title": "Bulk-load ops/sec - per-run history",
+      "title": "Shadow-write p99 (ms) - per-run history",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
       },
       "gridPos": {
-        "y": 23,
+        "y": 31,
         "w": 12,
         "x": 0,
+        "h": 7
+      },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ms",
+          "decimals": 2,
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": -45,
+        "xTickLabelSpacing": 100,
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "hidden",
+          "placement": "bottom",
+          "showLegend": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "bench_lattice_shadow_write_p99_ms{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
+          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "barchart",
+      "title": "WAL appends/sec - per-run history",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "y": 31,
+        "w": 12,
+        "x": 12,
         "h": 7
       },
       "fieldConfig": {
@@ -515,60 +715,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_microbench_bulk_load_per_second{scenario=\"microbench\"}",
-          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
-          "format": "time_series",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 12,
-      "type": "barchart",
-      "title": "Mixed 70r/30w p99 (ns) - per-run history",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "victoriametrics"
-      },
-      "gridPos": {
-        "y": 23,
-        "w": 12,
-        "x": 12,
-        "h": 7
-      },
-      "fieldConfig": {
-        "overrides": [],
-        "defaults": {
-          "unit": "ns",
-          "decimals": 2,
-          "color": {
-            "mode": "palette-classic"
-          }
-        }
-      },
-      "options": {
-        "orientation": "vertical",
-        "xTickLabelRotation": -45,
-        "xTickLabelSpacing": 100,
-        "showValue": "never",
-        "stacking": "none",
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        },
-        "legend": {
-          "displayMode": "hidden",
-          "placement": "bottom",
-          "showLegend": false
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "victoriametrics"
-          },
-          "expr": "bench_microbench_mixed_70r_30w_p99_ns{scenario=\"microbench\"}",
+          "expr": "bench_lattice_wal_appends_per_second{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
           "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
           "format": "time_series",
           "refId": "A"
@@ -582,7 +729,7 @@
   "tags": [
     "orleans-lattice",
     "benchmark-history",
-    "microbench"
+    "wal-performance"
   ],
   "templating": {
     "list": []
@@ -593,9 +740,9 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Lattice History - Microbench",
-  "uid": "lat-hist-microbench",
+  "title": "Lattice History - WAL Performance",
+  "uid": "lat-hist-wal-performance",
   "version": 1,
   "weekStart": "",
-  "description": "BenchmarkDotNet ILattice micro-suite (in-process, no Orleans cluster)"
+  "description": "Dual-durability commit path: WAL append, in-memory Apply, legacy shadow-write tail. Shadow tile is the dashboard the shadow-write removal flip is read against - it must collapse to zero post-flip while WAL append remains the load-bearing step."
 }

@@ -87,6 +87,7 @@ and per-run barcharts.
 | `lat-hist-read-heavy`                | `read-heavy-random`, `read-heavy-ordered`                                                                               | GetAsync-dominant load (95:5 read:write) across random and sequential keys.   |
 | `lat-hist-read-write-mix`            | `read-write-mix-random`, `read-write-mix-ordered`                                                                       | Balanced 50:50 read/write (YCSB-A shape) across random and sequential keys.   |
 | `lat-hist-microbench`                | `microbench`                                                                                                            | BenchmarkDotNet ILattice micro-suite (in-process, no Orleans cluster).        |
+| `lat-hist-wal-performance`          | `current-state-single-peer`, `replication-backpressure`, `receiver-crash`, `bidirectional-replication`, `replication-key-filter` | Dual-durability commit path: WAL-append, Apply, shadow-write tail; shadow tile collapses to zero post shadow-write removal flip. |
 
 ### Per-persona-dashboard layout (3 bands, top-to-bottom)
 

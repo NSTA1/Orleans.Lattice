@@ -249,6 +249,7 @@ question without templating-var juggling:
 | `lat-hist-read-heavy`     | `read-heavy-random`, `read-heavy-ordered`                           | Has GetAsync-dominant load (cache/prefetch) regressed?        |
 | `lat-hist-read-write-mix` | `read-write-mix-random`, `read-write-mix-ordered`                   | Has the YCSB-A-shaped balanced workload regressed?            |
 | `lat-hist-microbench`     | `microbench`                                                        | Has the `ILattice` algorithm cost (no Orleans dispatch) regressed? |
+| `lat-hist-wal-performance` | the five replication-enabled silo scenarios                         | Has WAL-append, in-memory Apply, or shadow-write tail regressed? Watch the shadow tile collapse to zero when the dual-durability shadow-write removal flip ships. |
 
 The Overview dashboard is the recommended landing page: it shows every
 persona's headline KPIs in a single view (one row per persona, scoped to

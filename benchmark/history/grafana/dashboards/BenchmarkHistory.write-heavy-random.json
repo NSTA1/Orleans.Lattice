@@ -13,8 +13,8 @@
       "collapsed": false,
       "gridPos": {
         "y": 0,
-        "x": 0,
         "w": 24,
+        "x": 0,
         "h": 1
       },
       "id": 1,
@@ -30,11 +30,12 @@
       },
       "gridPos": {
         "y": 1,
-        "x": 0,
         "w": 6,
+        "x": 0,
         "h": 5
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
@@ -45,21 +46,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -97,11 +97,12 @@
       },
       "gridPos": {
         "y": 1,
-        "x": 6,
         "w": 6,
+        "x": 6,
         "h": 5
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ops",
           "decimals": 2,
@@ -112,21 +113,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 100,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 100
               },
               {
-                "value": 500,
-                "color": "green"
+                "color": "green",
+                "value": 500
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -164,11 +164,12 @@
       },
       "gridPos": {
         "y": 1,
-        "x": 12,
         "w": 6,
+        "x": 12,
         "h": 5
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
@@ -179,21 +180,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "green"
+                "color": "green",
+                "value": null
               },
               {
-                "value": 10,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 10
               },
               {
-                "value": 50,
-                "color": "red"
+                "color": "red",
+                "value": 50
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -231,11 +231,12 @@
       },
       "gridPos": {
         "y": 1,
-        "x": 18,
         "w": 6,
+        "x": 18,
         "h": 5
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "percentunit",
           "decimals": 2,
@@ -246,21 +247,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "value": null,
-                "color": "red"
+                "color": "red",
+                "value": null
               },
               {
-                "value": 0.4,
-                "color": "yellow"
+                "color": "yellow",
+                "value": 0.4
               },
               {
-                "value": 0.7,
-                "color": "green"
+                "color": "green",
+                "value": 0.7
               }
             ]
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "graphMode": "area",
@@ -294,8 +294,8 @@
       "collapsed": false,
       "gridPos": {
         "y": 6,
-        "x": 0,
         "w": 24,
+        "x": 0,
         "h": 1
       },
       "id": 6,
@@ -311,11 +311,12 @@
       },
       "gridPos": {
         "y": 7,
-        "x": 0,
         "w": 12,
+        "x": 0,
         "h": 8
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "custom": {
             "drawStyle": "points",
@@ -324,8 +325,7 @@
             "lineInterpolation": "linear",
             "spanNulls": true
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "legend": {
@@ -360,11 +360,12 @@
       },
       "gridPos": {
         "y": 7,
-        "x": 12,
         "w": 12,
+        "x": 12,
         "h": 8
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "custom": {
             "drawStyle": "points",
@@ -373,8 +374,7 @@
             "lineInterpolation": "linear",
             "spanNulls": true
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "legend": {
@@ -409,11 +409,12 @@
       },
       "gridPos": {
         "y": 15,
-        "x": 0,
         "w": 12,
+        "x": 0,
         "h": 8
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "custom": {
             "drawStyle": "points",
@@ -422,8 +423,7 @@
             "lineInterpolation": "linear",
             "spanNulls": true
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "legend": {
@@ -458,11 +458,12 @@
       },
       "gridPos": {
         "y": 15,
-        "x": 12,
         "w": 12,
+        "x": 12,
         "h": 8
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "custom": {
             "drawStyle": "points",
@@ -471,8 +472,7 @@
             "lineInterpolation": "linear",
             "spanNulls": true
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "legend": {
@@ -503,8 +503,8 @@
       "collapsed": false,
       "gridPos": {
         "y": 23,
-        "x": 0,
         "w": 24,
+        "x": 0,
         "h": 1
       },
       "id": 11,
@@ -520,19 +520,19 @@
       },
       "gridPos": {
         "y": 24,
-        "x": 0,
         "w": 12,
+        "x": 0,
         "h": 7
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
           "color": {
             "mode": "palette-classic"
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "orientation": "vertical",
@@ -573,19 +573,19 @@
       },
       "gridPos": {
         "y": 24,
-        "x": 12,
         "w": 12,
+        "x": 12,
         "h": 7
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ops",
           "decimals": 2,
           "color": {
             "mode": "palette-classic"
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "orientation": "vertical",
@@ -626,19 +626,19 @@
       },
       "gridPos": {
         "y": 31,
-        "x": 0,
         "w": 12,
+        "x": 0,
         "h": 7
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "ms",
           "decimals": 2,
           "color": {
             "mode": "palette-classic"
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "orientation": "vertical",
@@ -679,19 +679,19 @@
       },
       "gridPos": {
         "y": 31,
-        "x": 12,
         "w": 12,
+        "x": 12,
         "h": 7
       },
       "fieldConfig": {
+        "overrides": [],
         "defaults": {
           "unit": "percentunit",
           "decimals": 2,
           "color": {
             "mode": "palette-classic"
           }
-        },
-        "overrides": []
+        }
       },
       "options": {
         "orientation": "vertical",
