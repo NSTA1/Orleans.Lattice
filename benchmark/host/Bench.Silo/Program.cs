@@ -127,6 +127,31 @@ builder.Host.UseOrleans(silo =>
 //
 // The AspNetCore Prometheus exporter mounts on Kestrel at /metrics. Telemetry:Prometheus:Port
 // (default 9090) is bound below via Kestrel; the Dockerfile / docker-compose.yml expose it.
+//
+// Histogram buckets: the OpenTelemetry .NET SDK's default boundaries for `Histogram<double>`
+// are `[0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]` ms. That's
+// far too coarse for the lattice/sink/read-driver latencies we measure here — at calibrated
+// fleet sizes, leaf-commit, sink inline-publish, and read-driver durations all sit in the
+// `[0, 5)` ms bucket, so every Prometheus `histogram_quantile(p, ...)` query for those
+// histograms reports ~4.95 ms regardless of the actual distribution. That defeats the whole
+// point of tracking p99 as a regression signal: a 2× shift inside `[0, 5)` is invisible.
+//
+// The view below applies a single set of finer boundaries to *every* `Histogram<double>` in
+// the four meters we own. Sub-ms resolution where the action is, plus a long tail up to 10 s
+// to keep the chaos/replication-lag tail visible. The change is purely additive from a
+// dashboards perspective — every panel under `src/lattice.dashboards/Grafana/`,
+// `benchmark/grafana/`, and `benchmark/history/grafana/` uses the canonical
+// `histogram_quantile(p, sum by (le) (rate(name_bucket[5m])))` pattern with no hardcoded
+// `le` literals, so finer boundaries simply produce more accurate quantiles without breaking
+// any existing query. `Histogram<long>` instruments (e.g. `flush_batch_size`, which counts
+// events per flush, not milliseconds) are excluded by the type guard.
+double[] latencyMsBuckets = new[]
+{
+    0.1, 0.25, 0.5, 0.75,
+    1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 7.5,
+    10.0, 15.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0
+};
+
 builder.Services
     .AddOpenTelemetry()
     .WithMetrics(b => b
@@ -135,6 +160,22 @@ builder.Services
         .AddMeter("orleans.lattice.replication")
         .AddMeter(LatticeSinkMetrics.MeterName)
         .AddMeter(LatticeReadDriverMetrics.MeterName)
+        .AddView(instrument =>
+        {
+            // Apply finer latency buckets to every double-valued histogram emitted by the
+            // four meters above. Type guard skips `Histogram<long>` (e.g. flush_batch_size).
+            var meterName = instrument.Meter.Name;
+            var isOurMeter =
+                meterName == "orleans.lattice" ||
+                meterName == "orleans.lattice.replication" ||
+                meterName == LatticeSinkMetrics.MeterName ||
+                meterName == LatticeReadDriverMetrics.MeterName;
+            if (isOurMeter && instrument is System.Diagnostics.Metrics.Histogram<double>)
+            {
+                return new ExplicitBucketHistogramConfiguration { Boundaries = latencyMsBuckets };
+            }
+            return null;
+        })
         .AddPrometheusExporter());
 
 builder.Services.AddHealthChecks()

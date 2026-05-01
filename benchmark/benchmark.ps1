@@ -38,21 +38,40 @@
     session (e.g. when benchmark-all.ps1 sweeps every scenario back-to-back) to
     avoid rebuilding on every iteration.
 
+.PARAMETER FleetSizeOverride
+    Override BENCH_FLEET_SIZE (and the .fleet-size.config calibrated value) for
+    a single run. Used by initialise.ps1 to sweep the saturation ladder, but
+    also handy for one-off probes. Zero (default) means "no override".
+
+.PARAMETER SkipFleetSizeCheck
+    Skip the precondition that .fleet-size.config exists. Used by
+    initialise.ps1 (which is the script that creates the config in the first
+    place) and for ad-hoc runs that intentionally bypass calibration. The
+    microbench scenario always skips this check because it doesn't drive any
+    fleet.
+
+.PARAMETER NoHistoryPush
+    Skip the opportunistic push of results.json into the history VictoriaMetrics.
+    Used by initialise.ps1 so calibration sweep data does not pollute the
+    long-lived regression-trend dashboards.
+
 .PARAMETER Compare
-    Aggregate previously-recorded results (no scenario run).
+    Aggregate every .run/B-*/*/results.json into a Markdown + CSV summary at
+    .run/comparison.{md,csv}.
 
 .PARAMETER CompareAgainst
-    When -Compare is set, baseline scenario id (e.g. simulator-baseline) for
-    delta columns.
+    Add a "Δ vs. <baseline>" column to the comparison output (the
+    simulator-baseline delta the plan calls for). Requires -Compare.
 
 .PARAMETER ImportHistory
-    Backfill every .run/**/results.json into the history VictoriaMetrics.
+    Bulk-import every .run/**/results.json into the history VictoriaMetrics
+    (idempotent; dedupes by run_id label).
 
 .PARAMETER OpenHistory
-    Stand up the history docker-compose stack (VictoriaMetrics + Grafana :3001).
+    Stand up the history docker-compose stack and print URLs.
 
 .PARAMETER CloseHistory
-    Stop the history stack (named volumes preserved across stops).
+    Tear the history stack down (volumes preserved).
 
 .EXAMPLE
     ./benchmark.ps1 current-state-no-replication
@@ -76,6 +95,15 @@ param(
 
     [Parameter(ParameterSetName = 'Run')]
     [switch] $NoBuild,
+
+    [Parameter(ParameterSetName = 'Run')]
+    [int] $FleetSizeOverride = 0,
+
+    [Parameter(ParameterSetName = 'Run')]
+    [switch] $SkipFleetSizeCheck,
+
+    [Parameter(ParameterSetName = 'Run')]
+    [switch] $NoHistoryPush,
 
     [Parameter(ParameterSetName = 'Compare', Mandatory = $true)]
     [switch] $Compare,
@@ -207,8 +235,20 @@ $ScalarPanelExtra = [ordered]@{
         'sum(rate(orleans_lattice_leaf_commit_duration_milliseconds_count{step="wal"}[{Ws}s]))'
 
     # ── Derived metrics (auto-discovery cannot synthesise ratios) ──
+    #
+    # IMPORTANT: aggregate each rate to a scalar BEFORE adding. PromQL's `+`
+    # is vector matching — `rate(A) + rate(B)` only retains series whose
+    # labels line up exactly between A and B. If hits and misses are emitted
+    # with even one differing label (e.g. different service.instance.id, or
+    # one metric carries a label the other doesn't), the addition produces
+    # an empty / heavily-thinned vector, the outer sum collapses, clamp_min
+    # returns 1, and the ratio degenerates to `hits_rate / 1` — i.e. the
+    # absolute hits-per-second instead of a 0..1 ratio. The downstream
+    # `{0:P0}` formatter then multiplies by 100 and produces nonsense like
+    # "9,548%". Aggregating each rate independently with sum(...) collapses
+    # the label dimension first, so the addition is between two scalars.
     'lattice_cache_hit_ratio' =
-        'sum(rate(orleans_lattice_cache_hits_total[{Ws}s])) / clamp_min(sum(rate(orleans_lattice_cache_hits_total[{Ws}s]) + rate(orleans_lattice_cache_misses_total[{Ws}s])), 1)'
+        'sum(rate(orleans_lattice_cache_hits_total[{Ws}s])) / clamp_min(sum(rate(orleans_lattice_cache_hits_total[{Ws}s])) + sum(rate(orleans_lattice_cache_misses_total[{Ws}s])), 1)'
 
     # ── Label-filtered counter (auto-discovery treats the whole metric as one series) ──
     'dotnet_gc_gen2_collections_increase' =
@@ -682,7 +722,9 @@ function Invoke-Microbench {
     Write-Host ("[microbench] results: {0}" -f $resultsPath) -ForegroundColor Green
 
     # 4. Opportunistic history push (same path as the docker scenarios).
-    [void] (Push-HistoryResults -ResultsPath $resultsPath)
+    if (-not $NoHistoryPush.IsPresent) {
+        [void] (Push-HistoryResults -ResultsPath $resultsPath)
+    }
 }
 
 # ── Comparison ──────────────────────────────────────────────────────────────────
@@ -897,6 +939,53 @@ Write-Host " Orleans.Lattice benchmark — $Scenario" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 
 $envMap = Read-EnvFile -Path $scenarioFile
+
+# ── Fleet-size calibration: .fleet-size.config wins over the .env default ──────
+#
+# benchmark/initialise.ps1 runs a saturation ladder against the host and writes
+# the chosen operating fleet size to benchmark/.fleet-size.config (gitignored).
+# That value overrides BENCH_FLEET_SIZE from the scenario .env so every
+# scenario runs at the host-calibrated load. -FleetSizeOverride wins over both
+# (used by initialise.ps1 to sweep the ladder one rung at a time).
+#
+# The microbench scenario doesn't drive a fleet, so the check is bypassed.
+$fleetSizeConfigPath = Join-Path $benchmarkRoot '.fleet-size.config'
+$isMicrobench = ($envMap['BENCH_KIND'] -eq 'microbench')
+if (-not $isMicrobench -and -not $SkipFleetSizeCheck.IsPresent -and $FleetSizeOverride -le 0) {
+    if (-not (Test-Path $fleetSizeConfigPath)) {
+        Write-Host ""
+        Write-Host "============================================================" -ForegroundColor Red
+        Write-Host " Fleet size has not been calibrated for this host." -ForegroundColor Red
+        Write-Host "============================================================" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "The benchmark suite needs to know the fleet size that stresses" -ForegroundColor White
+        Write-Host "this host without saturating it. That number depends on your" -ForegroundColor White
+        Write-Host "CPU, memory, and storage, so it has to be measured per host." -ForegroundColor White
+        Write-Host ""
+        Write-Host "Run the initialisation script first:" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "    ./initialise.ps1" -ForegroundColor White
+        Write-Host ""
+        Write-Host "It runs a load ladder, looks for the saturation knee, and writes" -ForegroundColor DarkGray
+        Write-Host "the calibrated fleet size to benchmark/.fleet-size.config (which" -ForegroundColor DarkGray
+        Write-Host "is gitignored, so each host has its own value)." -ForegroundColor DarkGray
+        Write-Host ""
+        Write-Host "To bypass the check (not recommended; benchmark numbers will not" -ForegroundColor DarkGray
+        Write-Host "be comparable across hosts), pass -SkipFleetSizeCheck." -ForegroundColor DarkGray
+        Write-Host ""
+        exit 1
+    }
+    $configMap = Read-EnvFile -Path $fleetSizeConfigPath
+    if ($configMap.Contains('BENCH_FLEET_SIZE')) {
+        $envMap['BENCH_FLEET_SIZE'] = $configMap['BENCH_FLEET_SIZE']
+    }
+}
+
+# -FleetSizeOverride beats both the .env default and the .fleet-size.config.
+if ($FleetSizeOverride -gt 0) {
+    $envMap['BENCH_FLEET_SIZE'] = "$FleetSizeOverride"
+}
+
 foreach ($k in $envMap.Keys) {
     Write-Host (" {0,-30}= {1}" -f $k, $envMap[$k]) -ForegroundColor DarkGray
 }
@@ -1064,7 +1153,9 @@ try {
         Write-Host "Results: $resultsPath" -ForegroundColor Green
 
         # Opportunistic push to history VM (non-fatal if VM is down).
-        Push-HistoryResults -ResultsPath $resultsPath | Out-Null
+        if (-not $NoHistoryPush.IsPresent) {
+            Push-HistoryResults -ResultsPath $resultsPath | Out-Null
+        }
     } else {
         Write-Warning "No metrics captured (run did not reach measurement window). Skipping results.json."
     }

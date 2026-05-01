@@ -143,6 +143,14 @@ These apply to every benchmark above and should be verified before kicking off a
   `replication-backpressure`, `receiver-crash`,
   `bidirectional-replication`, `replication-key-filter`), use at least two
   physical hosts; single-box replication runs are smoke tests only.
+- The fleet size used by every scenario above is read from
+  `benchmark/.fleet-size.config`, which is produced by
+  `./initialise.ps1` (see [`README.md`](./README.md#calibrating-fleet-size-for-this-host)).
+  Each host has its own calibrated value because the right "stress without
+  saturating" load depends on the host's CPU, memory, and storage. The
+  per-scenario `BENCH_FLEET_SIZE` in `scenarios/<slug>.env` is a documentary
+  default only and is overridden at run time. Don't compare benchmark numbers
+  across hosts without confirming both used the same calibrated fleet size.
 
 ## Simulator Integration
 
@@ -321,6 +329,25 @@ Each benchmark scenario interprets three meter sources side-by-side:
 All three meters are registered with the same OpenTelemetry exporter in
 `benchmark/host/Bench.Silo/Program.cs` so latency attribution is visible
 in a single dashboard.
+
+> **Reading the sink latency split.** The sink emits two latency histograms,
+> `inline_publish_duration_ms` (producer-side cost: enqueueing the event into
+> the bounded channel) and `flush_duration_ms` (background batch-write cost:
+> draining the channel into the lattice). They measure different things and
+> should be read separately:
+>
+> - `inline_publish_duration_ms` is the back-pressure signal a producer feels.
+>   If it widens, every producer is paying the price; sink drops are usually
+>   close behind.
+> - `flush_duration_ms` is the cost of the async drain loop. Under replication
+>   it widens noticeably (typical observation: ~100 ms p99 without replication,
+>   ~200 ms p99 with replication enabled, both at calibrated fleet) because
+>   each commit ripples through `WAL append → in-memory apply → ship to peer`.
+>   This widening is **expected** and does not surface as drops as long as the
+>   bounded channel has spare depth — the queue absorbs it. A flush p99 that
+>   keeps climbing run-over-run _without_ a corresponding drop in the
+>   commit-path tail (commit p99) is the regression signal; a flush p99 that
+>   widens once and then stabilises is the cost of a new replication path.
 
 ### 9. Test coverage that protects this contract
 
