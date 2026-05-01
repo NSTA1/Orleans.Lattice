@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Replication.Adapters;
 
@@ -79,6 +80,14 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<Orleans.Lattice.BPlusTree.Grains.ICommitLogWriter, ReplicationCommitLogWriter>();
         builder.Services.TryAddSingleton<Orleans.Lattice.BPlusTree.Grains.ICommitLogReader, ReplicationCommitLogReader>();
         builder.Services.TryAddSingleton<Orleans.Lattice.BPlusTree.Grains.ILeafSnapshotProvider, ReplicationLeafSnapshotProvider>();
+
+        // Production replication drivers: host-startup
+        // activation of one shipper per (tree, peer) and one
+        // maintenance grain per tree. Registered via
+        // TryAddEnumerable so a host that pre-registers its own
+        // hosted service doesn't lose this one and vice versa.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, ReplicationDriverActivationService>());
 
         return builder;
     }

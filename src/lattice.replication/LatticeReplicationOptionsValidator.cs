@@ -114,6 +114,67 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + $"{nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} to disable operator re-seed rate limiting entirely.");
         }
 
+        if (options.ShipBatchSize < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ShipBatchSize)} "
+                + $"must be at least 1 ({scope}). The per-peer shipper grain refuses to assemble a "
+                + "zero-sized batch; a non-positive value would deadlock the outbound ship loop.");
+        }
+
+        if (options.ShipMaxInFlight < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ShipMaxInFlight)} "
+                + $"must be at least 1 ({scope}). The per-peer shipper grain must permit at least "
+                + "one in-flight send for the outbound ship loop to make progress.");
+        }
+
+        if (options.ShipBackoffInitial <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ShipBackoffInitial)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "A zero or negative initial backoff would tight-loop the shipper through transient "
+                + "transport failures; the doubling sequence needs a non-zero seed value.");
+        }
+
+        if (options.ShipBackoffMax < options.ShipBackoffInitial)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ShipBackoffMax)} "
+                + $"must be greater than or equal to {nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ShipBackoffInitial)} ({scope}). "
+                + "The doubling sequence is capped at this value, so a cap below the seed leaves the "
+                + "shipper unable to apply even the first backoff delay.");
+        }
+
+        if (options.ShipBackoffJitter is < 0.0 or > 1.0 or double.NaN)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ShipBackoffJitter)} "
+                + $"must be in the closed interval [0.0, 1.0] ({scope}); got {options.ShipBackoffJitter}. "
+                + "Jitter is a multiplicative factor applied as a +/- spread on each backoff delay; "
+                + "0.0 disables jitter entirely, 1.0 randomises across the full +/-100 % range.");
+        }
+
+        if (options.MaintenanceGcInterval <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.MaintenanceGcInterval)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "A zero or negative GC cadence would tight-loop the maintenance grain through "
+                + $"{nameof(ILatticeReplicationGc)}.{nameof(ILatticeReplicationGc.RunOnceAsync)} calls.");
+        }
+
+        if (options.MaintenanceFallOffCheckInterval <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.MaintenanceFallOffCheckInterval)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "A zero or negative fall-off cadence would tight-loop the maintenance grain through "
+                + $"{nameof(ILatticeFallOffLogDetector)}.{nameof(ILatticeFallOffLogDetector.CheckAndTriggerAsync)} calls.");
+        }
+
         if (options.ReplicatedTrees is { } trees)
         {
             foreach (var kvp in trees)

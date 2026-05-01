@@ -220,7 +220,8 @@ public class LatticeReplicationOptionsTests
     }
 
     // ------------------------------------------------------------------
-    // Auto-bootstrap on fall-off-log (R-052)
+    // Auto-bootstrap on fall-off-the-log (R-052) and operator re-seed
+    // rate limit (R-053)
     // ------------------------------------------------------------------
 
     [Test]
@@ -238,19 +239,12 @@ public class LatticeReplicationOptionsTests
         Assert.That(opts.AutoBootstrapOnFallOffLog, Is.False);
     }
 
-    // ------------------------------------------------------------------
-    // Operator re-seed minimum interval
-    // ------------------------------------------------------------------
-
     [Test]
     public void New_instance_has_operator_reseed_min_interval_default_of_one_minute()
     {
         var opts = new LatticeReplicationOptions();
-        Assert.Multiple(() =>
-        {
-            Assert.That(opts.OperatorReseedMinInterval, Is.EqualTo(TimeSpan.FromMinutes(1)));
-            Assert.That(LatticeReplicationOptions.DefaultOperatorReseedMinInterval, Is.EqualTo(TimeSpan.FromMinutes(1)));
-        });
+        Assert.That(opts.OperatorReseedMinInterval, Is.EqualTo(TimeSpan.FromMinutes(1)));
+        Assert.That(LatticeReplicationOptions.DefaultOperatorReseedMinInterval, Is.EqualTo(TimeSpan.FromMinutes(1)));
     }
 
     [Test]
@@ -258,5 +252,170 @@ public class LatticeReplicationOptionsTests
     {
         var opts = new LatticeReplicationOptions { OperatorReseedMinInterval = TimeSpan.FromSeconds(30) };
         Assert.That(opts.OperatorReseedMinInterval, Is.EqualTo(TimeSpan.FromSeconds(30)));
+    }
+
+    // ------------------------------------------------------------------
+    // Production replication driver options (per-(tree, peer) shipper +
+    // per-tree maintenance grain — see ReplicationShipperGrain /
+    // ReplicationMaintenanceGrain)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void DefaultShipBatchSize_is_two_hundred_fifty_six() =>
+        Assert.That(LatticeReplicationOptions.DefaultShipBatchSize, Is.EqualTo(256));
+
+    [Test]
+    public void DefaultShipMaxInFlight_is_one() =>
+        Assert.That(LatticeReplicationOptions.DefaultShipMaxInFlight, Is.EqualTo(1));
+
+    [Test]
+    public void DefaultShipBackoffInitial_is_one_hundred_milliseconds() =>
+        Assert.That(LatticeReplicationOptions.DefaultShipBackoffInitial, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
+
+    [Test]
+    public void DefaultShipBackoffMax_is_thirty_seconds() =>
+        Assert.That(LatticeReplicationOptions.DefaultShipBackoffMax, Is.EqualTo(TimeSpan.FromSeconds(30)));
+
+    [Test]
+    public void DefaultShipBackoffJitter_is_twenty_percent() =>
+        Assert.That(LatticeReplicationOptions.DefaultShipBackoffJitter, Is.EqualTo(0.2));
+
+    [Test]
+    public void DefaultMaintenanceGcInterval_is_five_seconds() =>
+        Assert.That(LatticeReplicationOptions.DefaultMaintenanceGcInterval, Is.EqualTo(TimeSpan.FromSeconds(5)));
+
+    [Test]
+    public void DefaultMaintenanceFallOffCheckInterval_is_thirty_seconds() =>
+        Assert.That(LatticeReplicationOptions.DefaultMaintenanceFallOffCheckInterval, Is.EqualTo(TimeSpan.FromSeconds(30)));
+
+    [Test]
+    public void DefaultShipDoorbellEnabled_is_true() =>
+        Assert.That(LatticeReplicationOptions.DefaultShipDoorbellEnabled, Is.True);
+
+    [Test]
+    public void New_instance_has_null_replication_peers()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ReplicationPeers, Is.Null);
+    }
+
+    [Test]
+    public void New_instance_has_default_ship_batch_size()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ShipBatchSize, Is.EqualTo(LatticeReplicationOptions.DefaultShipBatchSize));
+    }
+
+    [Test]
+    public void New_instance_has_default_ship_max_in_flight()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ShipMaxInFlight, Is.EqualTo(LatticeReplicationOptions.DefaultShipMaxInFlight));
+    }
+
+    [Test]
+    public void New_instance_has_default_ship_backoff_initial()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ShipBackoffInitial, Is.EqualTo(LatticeReplicationOptions.DefaultShipBackoffInitial));
+    }
+
+    [Test]
+    public void New_instance_has_default_ship_backoff_max()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ShipBackoffMax, Is.EqualTo(LatticeReplicationOptions.DefaultShipBackoffMax));
+    }
+
+    [Test]
+    public void New_instance_has_default_ship_backoff_jitter()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ShipBackoffJitter, Is.EqualTo(LatticeReplicationOptions.DefaultShipBackoffJitter));
+    }
+
+    [Test]
+    public void New_instance_has_default_maintenance_gc_interval()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.MaintenanceGcInterval, Is.EqualTo(LatticeReplicationOptions.DefaultMaintenanceGcInterval));
+    }
+
+    [Test]
+    public void New_instance_has_default_maintenance_fall_off_check_interval()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.MaintenanceFallOffCheckInterval, Is.EqualTo(LatticeReplicationOptions.DefaultMaintenanceFallOffCheckInterval));
+    }
+
+    [Test]
+    public void New_instance_has_default_ship_doorbell_enabled()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ShipDoorbellEnabled, Is.EqualTo(LatticeReplicationOptions.DefaultShipDoorbellEnabled));
+    }
+
+    [Test]
+    public void ReplicationPeers_is_settable()
+    {
+        var peers = new[] { "site-b", "site-c" };
+        var opts = new LatticeReplicationOptions { ReplicationPeers = peers };
+        Assert.That(opts.ReplicationPeers, Is.EqualTo(peers));
+    }
+
+    [Test]
+    public void ShipBatchSize_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { ShipBatchSize = 64 };
+        Assert.That(opts.ShipBatchSize, Is.EqualTo(64));
+    }
+
+    [Test]
+    public void ShipMaxInFlight_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { ShipMaxInFlight = 4 };
+        Assert.That(opts.ShipMaxInFlight, Is.EqualTo(4));
+    }
+
+    [Test]
+    public void ShipBackoffInitial_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { ShipBackoffInitial = TimeSpan.FromSeconds(1) };
+        Assert.That(opts.ShipBackoffInitial, Is.EqualTo(TimeSpan.FromSeconds(1)));
+    }
+
+    [Test]
+    public void ShipBackoffMax_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { ShipBackoffMax = TimeSpan.FromMinutes(5) };
+        Assert.That(opts.ShipBackoffMax, Is.EqualTo(TimeSpan.FromMinutes(5)));
+    }
+
+    [Test]
+    public void ShipBackoffJitter_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { ShipBackoffJitter = 0.5 };
+        Assert.That(opts.ShipBackoffJitter, Is.EqualTo(0.5));
+    }
+
+    [Test]
+    public void MaintenanceGcInterval_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { MaintenanceGcInterval = TimeSpan.FromSeconds(15) };
+        Assert.That(opts.MaintenanceGcInterval, Is.EqualTo(TimeSpan.FromSeconds(15)));
+    }
+
+    [Test]
+    public void MaintenanceFallOffCheckInterval_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { MaintenanceFallOffCheckInterval = TimeSpan.FromMinutes(2) };
+        Assert.That(opts.MaintenanceFallOffCheckInterval, Is.EqualTo(TimeSpan.FromMinutes(2)));
+    }
+
+    [Test]
+    public void ShipDoorbellEnabled_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { ShipDoorbellEnabled = false };
+        Assert.That(opts.ShipDoorbellEnabled, Is.False);
     }
 }
