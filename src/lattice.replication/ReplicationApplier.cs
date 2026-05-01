@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
@@ -56,86 +57,131 @@ internal sealed class ReplicationApplier(
     /// <inheritdoc />
     public async Task<ApplyResult> ApplyAsync(ReplogEntry entry, CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (string.IsNullOrEmpty(entry.TreeId))
+        // Apply-duration instrumentation: record the wall-clock duration
+        // of every terminal apply outcome (success / dedup / failure /
+        // parked-causal-buffer) into the apply.duration histogram. The
+        // stopwatch is allocation-free (a long timestamp captured via
+        // Stopwatch.GetTimestamp); the outcome local is updated before
+        // each return so the finally records the matching tag value.
+        // A throw out of the body unwinds with the default outcome
+        // (failure), which is correct because every uncaught exception
+        // here represents a failed apply attempt.
+        var startTimestamp = Stopwatch.GetTimestamp();
+        var outcome = LatticeReplicationMetrics.OutcomeFailure;
+        try
         {
-            throw new ArgumentException("ReplogEntry.TreeId must be non-empty.", nameof(entry));
-        }
+            cancellationToken.ThrowIfCancellationRequested();
 
-        if (string.IsNullOrEmpty(entry.OriginClusterId))
-        {
-            throw new ArgumentException(
-                "ReplogEntry.OriginClusterId must be non-empty for replication apply.",
-                nameof(entry));
-        }
-
-        var resolved = options.Get(entry.TreeId);
-        if (string.Equals(entry.OriginClusterId, resolved.ClusterId, StringComparison.Ordinal))
-        {
-            // Defence-in-depth: a local-origin entry must never be applied
-            // back onto its authoring cluster. The outbound ship loop's
-            // origin filter already prevents this in the steady state, but
-            // hand-built apply pipelines and tests can still hand us such
-            // an entry — surface it as an explicit no-op rather than
-            // silently merging into the same cluster's state.
-            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
-        }
-
-        // Range deletes carry HybridLogicalClock.Zero by design (the walk
-        // produces many per-leaf HLCs that cannot be faithfully collapsed),
-        // so per-origin HWM dedupe does not apply to them. Range applies
-        // are naturally idempotent at the leaf layer.
-        if (entry.Op == ReplogOp.DeleteRange)
-        {
-            await ApplyRangeAsync(entry, cancellationToken);
-            return new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero };
-        }
-
-        var hwmGrain = GetHwmGrain(entry.TreeId);
-        var hwm = await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
-        if (entry.Timestamp <= hwm)
-        {
-            return new ApplyResult { Applied = false, HighWaterMark = hwm };
-        }
-
-        // Causal-plus dependency check. Skip the fetch entirely
-        // when the entry carries no declared dependencies — legacy
-        // peers and pre-causal-plus entries decode VectorClock as null
-        // and must continue to apply unconditionally on the existing
-        // HWM-only path so this code is wire-compatible with the
-        // additive vector-clock schema slot.
-        if (HasCausalDependencies(entry))
-        {
-            var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
-            if (!CausalApplyBuffer.DependenciesSatisfied(entry, localVc))
+            if (string.IsNullOrEmpty(entry.TreeId))
             {
-                await ParkAsync(entry, resolved, cancellationToken);
+                throw new ArgumentException("ReplogEntry.TreeId must be non-empty.", nameof(entry));
+            }
+
+            if (string.IsNullOrEmpty(entry.OriginClusterId))
+            {
+                throw new ArgumentException(
+                    "ReplogEntry.OriginClusterId must be non-empty for replication apply.",
+                    nameof(entry));
+            }
+
+            var resolved = options.Get(entry.TreeId);
+            if (string.Equals(entry.OriginClusterId, resolved.ClusterId, StringComparison.Ordinal))
+            {
+                // Defence-in-depth: a local-origin entry must never be applied
+                // back onto its authoring cluster. The outbound ship loop's
+                // origin filter already prevents this in the steady state, but
+                // hand-built apply pipelines and tests can still hand us such
+                // an entry — surface it as an explicit no-op rather than
+                // silently merging into the same cluster's state.
+                outcome = LatticeReplicationMetrics.OutcomeDedup;
+                return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+            }
+
+            // Range deletes carry HybridLogicalClock.Zero by design (the walk
+            // produces many per-leaf HLCs that cannot be faithfully collapsed),
+            // so per-origin HWM dedupe does not apply to them. Range applies
+            // are naturally idempotent at the leaf layer.
+            if (entry.Op == ReplogOp.DeleteRange)
+            {
+                await ApplyRangeAsync(entry, cancellationToken);
+                outcome = LatticeReplicationMetrics.OutcomeSuccess;
+                return new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero };
+            }
+
+            var hwmGrain = GetHwmGrain(entry.TreeId);
+            var hwm = await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
+            if (entry.Timestamp <= hwm)
+            {
+                outcome = LatticeReplicationMetrics.OutcomeDedup;
                 return new ApplyResult { Applied = false, HighWaterMark = hwm };
             }
+
+            // Causal-plus dependency check. Skip the fetch entirely
+            // when the entry carries no declared dependencies — legacy
+            // peers and pre-causal-plus entries decode VectorClock as null
+            // and must continue to apply unconditionally on the existing
+            // HWM-only path so this code is wire-compatible with the
+            // additive vector-clock schema slot.
+            if (HasCausalDependencies(entry))
+            {
+                var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
+                if (!CausalApplyBuffer.DependenciesSatisfied(entry, localVc))
+                {
+                    await ParkAsync(entry, resolved, cancellationToken);
+                    outcome = LatticeReplicationMetrics.OutcomeParkedCausalBuffer;
+                    return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                }
+            }
+
+            await ApplyPointAsync(entry);
+            RecordApplyLag(entry);
+            RecordFifoState(entry);
+
+            // Advance the HWM only after the apply commits.
+            var advanced = await hwmGrain.TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken);
+            var newHwm = advanced
+                ? entry.Timestamp
+                : await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
+
+            // The advance may have unblocked entries parked by an earlier
+            // delivery whose deps included this origin's diagonal. Drain
+            // FIFO until the buffer reaches a fixed point — each drained
+            // apply may itself advance the local vector clock, so re-fetch
+            // before each pass.
+            if (advanced)
+            {
+                await DrainBufferAsync(entry.TreeId, hwmGrain, resolved, cancellationToken);
+            }
+
+            outcome = LatticeReplicationMetrics.OutcomeSuccess;
+            return new ApplyResult { Applied = true, HighWaterMark = newHwm };
         }
-
-        await ApplyPointAsync(entry);
-        RecordApplyLag(entry);
-        RecordFifoState(entry);
-
-        // Advance the HWM only after the apply commits.
-        var advanced = await hwmGrain.TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken);
-        var newHwm = advanced
-            ? entry.Timestamp
-            : await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
-
-        // The advance may have unblocked entries parked by an earlier
-        // delivery whose deps included this origin's diagonal. Drain
-        // FIFO until the buffer reaches a fixed point — each drained
-        // apply may itself advance the local vector clock, so re-fetch
-        // before each pass.
-        if (advanced)
+        finally
         {
-            await DrainBufferAsync(entry.TreeId, hwmGrain, resolved, cancellationToken);
+            RecordApplyDuration(entry.TreeId, startTimestamp, outcome);
+        }
+    }
+
+    /// <summary>
+    /// Records a single sample on the <see cref="LatticeReplicationMetrics.ApplyDuration"/>
+    /// histogram. Skipped when <paramref name="treeId"/> is empty so a
+    /// validation throw on the tree-id guard does not publish a histogram
+    /// sample with an empty <c>tree</c> tag (which would be unusable for
+    /// per-tree alerting). The duration is read via
+    /// <see cref="Stopwatch.GetElapsedTime(long)"/>, which is allocation-free.
+    /// </summary>
+    private static void RecordApplyDuration(string treeId, long startTimestamp, string outcome)
+    {
+        if (string.IsNullOrEmpty(treeId))
+        {
+            return;
         }
 
-        return new ApplyResult { Applied = true, HighWaterMark = newHwm };
+        var elapsedMs = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
+        LatticeReplicationMetrics.ApplyDuration.Record(
+            elapsedMs,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome));
     }
 
     private static bool HasCausalDependencies(ReplogEntry entry) =>

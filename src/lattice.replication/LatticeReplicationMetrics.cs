@@ -54,6 +54,43 @@ public static class LatticeReplicationMetrics
     public const string TagOutcome = "outcome";
 
     /// <summary>
+    /// <see cref="TagOutcome"/> value: the entry was applied successfully
+    /// (point apply or range delete). Recorded by
+    /// <see cref="ApplyDuration"/> for both directly applied entries and
+    /// entries drained from the causal-apply buffer.
+    /// </summary>
+    public const string OutcomeSuccess = "success";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value: the entry was short-circuited by
+    /// the receiver before merge — either the per-origin high-water-mark
+    /// already covers <see cref="ReplogEntry.Timestamp"/>, or a
+    /// defence-in-depth gate detected a local-origin entry that must
+    /// not loop back onto its authoring cluster.
+    /// </summary>
+    public const string OutcomeDedup = "dedup";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value: the apply attempt threw. Recorded
+    /// by <see cref="ApplyDuration"/> in the <c>finally</c> path before
+    /// the exception unwinds. Includes payload-shape faults
+    /// (<see cref="ArgumentException"/>, <see cref="InvalidOperationException"/>),
+    /// transport / IO failures, and any other unhandled exception out
+    /// of the apply pipeline.
+    /// </summary>
+    public const string OutcomeFailure = "failure";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value: the entry parked on the causal-apply
+    /// buffer because its declared <see cref="ReplogEntry.VectorClock"/>
+    /// was not yet dominated by the local vector clock. The original
+    /// delivery is not advanced through the high-water-mark; the entry
+    /// re-enters the apply pipeline through the buffer drain when its
+    /// dependencies arrive.
+    /// </summary>
+    public const string OutcomeParkedCausalBuffer = "parked-causal-buffer";
+
+    /// <summary>
     /// Tag key for the dead-letter enqueue / removal reason. Values are
     /// drawn from <see cref="ReasonDiscarded"/>, <see cref="ReasonReplayed"/>,
     /// <see cref="ReasonEvicted"/>, and <see cref="ReasonUnknown"/>.
@@ -286,6 +323,13 @@ public static class LatticeReplicationMetrics
     /// match against this constant rather than hard-coding the string.
     /// </summary>
     public const string ApplyLagName = "orleans.lattice.replication.apply.lag";
+
+    /// <summary>
+    /// Canonical name of the <see cref="ApplyDuration"/> histogram.
+    /// Subscribers match against this constant rather than hard-coding
+    /// the string.
+    /// </summary>
+    public const string ApplyDurationName = "orleans.lattice.replication.apply.duration";
 
     /// <summary>
     /// Canonical name of the <see cref="WalEntriesAppended"/> counter.

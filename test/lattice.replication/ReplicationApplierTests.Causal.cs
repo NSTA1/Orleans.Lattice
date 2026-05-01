@@ -288,4 +288,86 @@ public partial class ReplicationApplierTests
             LatticeReplicationMetrics.ReasonSchema,
             Arg.Any<CancellationToken>());
     }
+
+    [Test]
+    public async Task ApplyAsync_records_apply_duration_with_parked_causal_buffer_outcome()
+    {
+        // A park on the causal-apply buffer is a terminal apply
+        // outcome and must record into apply.duration with
+        // outcome=parked-causal-buffer.
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDurationName);
+        var h = CreateCausalHarness();
+
+        var entry = SetEntry("k", Hlc(100)) with
+        {
+            VectorClock = Vector((OriginC, Hlc(50))),
+        };
+        var result = await h.Applier.ApplyAsync(entry);
+
+        Assert.That(result.Applied, Is.False);
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.GreaterThanOrEqualTo(0.0));
+            Assert.That(
+                only.Tags.Any(t => t.Key == LatticeReplicationMetrics.TagTree
+                    && (string?)t.Value == Tree),
+                Is.True);
+            Assert.That(
+                only.Tags.Any(t => t.Key == LatticeReplicationMetrics.TagOutcome
+                    && (string?)t.Value == LatticeReplicationMetrics.OutcomeParkedCausalBuffer),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ApplyAsync_records_exactly_one_apply_duration_sample_per_invocation_under_drain_cascade()
+    {
+        // Pins the doc invariant: a drain cascade triggered by an
+        // arriving satisfier rolls the drained-entry work into the
+        // satisfier's single success sample. The originally parked
+        // entries do not generate additional samples on drain because
+        // CausalApplyBuffer.DrainBufferAsync calls ApplyPointAsync
+        // directly, NOT ApplyAsync, so the per-invocation try/finally
+        // in ApplyAsync only fires once per outer call.
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDurationName);
+        var h = CreateCausalHarness();
+
+        // Park an entry that depends on site-c@50.
+        var blocked = SetEntry("k1", Hlc(100)) with
+        {
+            VectorClock = Vector((OriginC, Hlc(50))),
+        };
+        var parkResult = await h.Applier.ApplyAsync(blocked);
+        Assert.That(parkResult.Applied, Is.False);
+
+        // Deliver the satisfier — its successful apply advances the
+        // local VC past site-c@50 and triggers the drain of k1. Both
+        // the satisfier and the drained k1 land within the satisfier's
+        // single ApplyAsync call, so the histogram observes exactly
+        // ONE additional sample (the satisfier's), not two.
+        var satisfier = SetEntry("k0", Hlc(50), origin: OriginC);
+        var drainResult = await h.Applier.ApplyAsync(satisfier);
+        Assert.That(drainResult.Applied, Is.True);
+
+        // Total expected samples: 1 (parked-causal-buffer for the
+        // initial park) + 1 (success for the satisfier+drain) = 2.
+        // A regression that lifted DrainBufferAsync to call ApplyAsync
+        // would produce 3 samples (extra success for the drained k1).
+        Assert.That(collector.Measurements, Has.Count.EqualTo(2));
+        var outcomes = collector.Measurements
+            .Select(m => m.Tags
+                .First(t => t.Key == LatticeReplicationMetrics.TagOutcome).Value)
+            .ToArray();
+        Assert.That(outcomes, Is.EquivalentTo(new object?[]
+        {
+            LatticeReplicationMetrics.OutcomeParkedCausalBuffer,
+            LatticeReplicationMetrics.OutcomeSuccess,
+        }));
+    }
 }
