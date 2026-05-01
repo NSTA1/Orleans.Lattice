@@ -26,6 +26,27 @@ The histogram is intentionally not recorded for:
 
 A receiver that operates entirely under HWM dedupe (i.e. every entry it sees has already been applied locally) reports an empty `apply.lag` distribution. That is the correct signal: there is no replication progress to measure.
 
+## Apply-duration histogram (`apply.duration`)
+
+`orleans.lattice.replication.apply.duration` records the wall-clock time the canonical `ReplicationApplier` spends inside `ApplyAsync`, from entry through every terminal return path. The body is wrapped in a `try { ... } finally { Record(...); }` so an uncaught exception still records a sample tagged with the failure outcome before unwinding. The duration is read via `Stopwatch.GetElapsedTime(long)`, which is allocation-free.
+
+| Property | Value |
+|---|---|
+| Name | `orleans.lattice.replication.apply.duration` |
+| Unit | `ms` |
+| Tags | `tree`, `outcome` |
+
+The `outcome` tag partitions the histogram into four mutually-exclusive buckets:
+
+| Value | Constant | When |
+|---|---|---|
+| `success` | `LatticeReplicationMetrics.OutcomeSuccess` | The entry was applied successfully — both directly applied point operations (`Set` / `Delete`) and range deletes contribute. Each `ApplyAsync` invocation records exactly one `apply.duration` sample regardless of how many entries the call drains from the causal-apply buffer: a drain cascade triggered by an arriving satisfier contributes its drained-entry work to the satisfier's own `success` sample, and the originally parked entries do not generate additional samples on drain. |
+| `dedup` | `LatticeReplicationMetrics.OutcomeDedup` | The entry was short-circuited before merge — either the per-origin high-water-mark already covers `entry.Timestamp`, or the local-origin defence-in-depth gate detected an entry that must not loop back onto its authoring cluster. |
+| `failure` | `LatticeReplicationMetrics.OutcomeFailure` | The apply attempt threw. Recorded in the `finally` path before the exception unwinds. Includes payload-shape faults (`ArgumentException`, `InvalidOperationException`), `OperationCanceledException` from a cancelled `cancellationToken` (graceful shutdown traffic appears here), transport / IO failures, and any other unhandled exception out of the apply pipeline. |
+| `parked-causal-buffer` | `LatticeReplicationMetrics.OutcomeParkedCausalBuffer` | The entry parked on the causal-apply buffer because its declared `VectorClock` was not yet dominated by the local vector clock. The original delivery did not advance the high-water-mark; the entry re-enters the apply pipeline through the buffer drain when its dependencies arrive. |
+
+A receiver with a single overwhelmed subscriber surfaces as a rising `failure` bucket; a receiver with persistent causal skew surfaces as a rising `parked-causal-buffer` bucket. Both are independent of `apply.lag`, which only samples successful merges.
+
 ## Growth-rate vs. ship-rate (`wal.entries_appended` / `wal.entries_shipped`)
 
 The two counters are deliberately a pair:

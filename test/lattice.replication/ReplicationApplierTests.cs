@@ -663,4 +663,205 @@ public partial class ReplicationApplierTests
 
         Assert.That(collector.Measurements, Is.Empty);
     }
+
+    // ------------------------------------------------------------------
+    // R-068 — apply.duration histogram (per-outcome instrumentation)
+    // ------------------------------------------------------------------
+
+    private static bool HasOutcome(IReadOnlyList<KeyValuePair<string, object?>> tags, string outcome) =>
+        tags.Any(t => t.Key == LatticeReplicationMetrics.TagOutcome && (string?)t.Value == outcome);
+
+    private static bool HasTree(IReadOnlyList<KeyValuePair<string, object?>> tags, string tree) =>
+        tags.Any(t => t.Key == LatticeReplicationMetrics.TagTree && (string?)t.Value == tree);
+
+    [Test]
+    public async Task ApplyAsync_records_apply_duration_with_success_outcome_for_set()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDurationName);
+        var (applier, _, _, _) = CreateApplier();
+
+        await applier.ApplyAsync(SetEntry("k", Hlc(10)));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.GreaterThanOrEqualTo(0.0));
+            Assert.That(HasTree(only.Tags, Tree), Is.True);
+            Assert.That(HasOutcome(only.Tags, LatticeReplicationMetrics.OutcomeSuccess), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ApplyAsync_records_apply_duration_with_success_outcome_for_range_delete()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDurationName);
+        var (applier, _, _, _) = CreateApplier();
+
+        await applier.ApplyAsync(RangeDeleteEntry("a", "z"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.GreaterThanOrEqualTo(0.0));
+            Assert.That(HasTree(only.Tags, Tree), Is.True);
+            Assert.That(HasOutcome(only.Tags, LatticeReplicationMetrics.OutcomeSuccess), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ApplyAsync_records_apply_duration_with_dedup_outcome_for_hwm_short_circuit()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDurationName);
+        var (applier, _, _, hwm) = CreateApplier();
+        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
+
+        // Entry timestamp <= HWM so the apply path short-circuits before
+        // merge with outcome=dedup.
+        await applier.ApplyAsync(SetEntry("k", Hlc(50)));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.GreaterThanOrEqualTo(0.0));
+            Assert.That(HasTree(only.Tags, Tree), Is.True);
+            Assert.That(HasOutcome(only.Tags, LatticeReplicationMetrics.OutcomeDedup), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ApplyAsync_records_apply_duration_with_dedup_outcome_for_local_origin()
+    {
+        // A local-origin entry must record outcome=dedup (the
+        // defence-in-depth gate that prevents an entry from looping
+        // back onto its authoring cluster).
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDurationName);
+        var (applier, _, _, _) = CreateApplier();
+
+        await applier.ApplyAsync(SetEntry("k", Hlc(10), origin: LocalCluster));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.GreaterThanOrEqualTo(0.0));
+            Assert.That(HasTree(only.Tags, Tree), Is.True);
+            Assert.That(HasOutcome(only.Tags, LatticeReplicationMetrics.OutcomeDedup), Is.True);
+        });
+    }
+
+    [Test]
+    public void ApplyAsync_records_apply_duration_with_failure_outcome_when_apply_throws()
+    {
+        // An unrecognised replication mode causes ApplyAsync to throw;
+        // the finally block must record the duration with outcome=failure
+        // before the exception unwinds.
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDurationName);
+        var (applier, _, _, _) = CreateTypedCrdtApplier();
+        var entry = SetEntry("k", Hlc(1)) with
+        {
+            Mode = (ReplicationMode)999,
+            Value = new byte[] { 1 },
+        };
+
+        Assert.That(
+            async () => await applier.ApplyAsync(entry),
+            Throws.InstanceOf<InvalidOperationException>());
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.GreaterThanOrEqualTo(0.0));
+            Assert.That(HasTree(only.Tags, Tree), Is.True);
+            Assert.That(HasOutcome(only.Tags, LatticeReplicationMetrics.OutcomeFailure), Is.True);
+        });
+    }
+
+    [Test]
+    public void ApplyAsync_does_not_record_apply_duration_when_tree_id_is_empty()
+    {
+        // RecordApplyDuration skips emission when treeId is empty — a
+        // validation throw on the tree-id guard must not publish a
+        // sample with an empty `tree` tag (which would be unusable for
+        // per-tree alerting). Pins the guard in the helper.
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDurationName);
+        var (applier, _, _, _) = CreateApplier();
+        var entry = SetEntry("k", Hlc(10)) with { TreeId = string.Empty };
+
+        Assert.That(
+            async () => await applier.ApplyAsync(entry),
+            Throws.InstanceOf<ArgumentException>());
+
+        Assert.That(collector.Measurements, Is.Empty);
+    }
+
+    [Test]
+    public void ApplyAsync_records_apply_duration_with_failure_outcome_when_origin_is_empty()
+    {
+        // Entry has a non-empty TreeId so the histogram IS recorded
+        // (the guard skip only fires for empty TreeId). The empty
+        // OriginClusterId throws ArgumentException out of the body
+        // and the finally records outcome=failure.
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDurationName);
+        var (applier, _, _, _) = CreateApplier();
+        var entry = SetEntry("k", Hlc(10)) with { OriginClusterId = string.Empty };
+
+        Assert.That(
+            async () => await applier.ApplyAsync(entry),
+            Throws.InstanceOf<ArgumentException>());
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.GreaterThanOrEqualTo(0.0));
+            Assert.That(HasTree(only.Tags, Tree), Is.True);
+            Assert.That(HasOutcome(only.Tags, LatticeReplicationMetrics.OutcomeFailure), Is.True);
+        });
+    }
+
+    [Test]
+    public void ApplyAsync_records_apply_duration_with_failure_outcome_when_token_is_pre_cancelled()
+    {
+        // ApplyAsync calls ThrowIfCancellationRequested before any
+        // validation; OperationCanceledException unwinds through the
+        // finally and must be classified as outcome=failure (graceful
+        // shutdown traffic appears in the failure bucket per docs).
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDurationName);
+        var (applier, _, _, _) = CreateApplier();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.That(
+            async () => await applier.ApplyAsync(SetEntry("k", Hlc(10)), cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.GreaterThanOrEqualTo(0.0));
+            Assert.That(HasTree(only.Tags, Tree), Is.True);
+            Assert.That(HasOutcome(only.Tags, LatticeReplicationMetrics.OutcomeFailure), Is.True);
+        });
+    }
 }
