@@ -316,7 +316,7 @@ These methods manage tree structure and lifecycle. Several of them **take the tr
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `BulkLoadAsync` | `Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries)` | Bottom-up bulk load into an empty tree. Entries are sorted internally. Throws if any shard already has data. See [Bulk Loading](bulk-loading.md) for streaming ingestion and recovery guarantees. |
+| `BulkLoadAsync` | `Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries)` | One-shot bottom-up bulk load into an **empty** tree. Entries are sorted internally. Throws `InvalidOperationException` on the second and subsequent calls (every shard must still be empty) — not safe to use as a streaming-append primitive. For continuous ingestion, use `SetAsync` or the streaming `BulkLoadAsync` extension on `LatticeExtensions` (which routes to `ShardRootGrain.BulkAppendAsync`). See [Bulk Loading](bulk-loading.md). |
 
 #### Tree Lifecycle
 

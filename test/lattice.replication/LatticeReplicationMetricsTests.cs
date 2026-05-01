@@ -297,7 +297,10 @@ public class LatticeReplicationMetricsTests
 
             Assert.That(LatticeReplicationMetrics.ApplyDependencyWaitMs.Name,
                 Is.EqualTo("orleans.lattice.replication.apply.dependency_wait_ms"));
-            Assert.That(LatticeReplicationMetrics.ApplyDependencyWaitMs.Unit, Is.EqualTo("ms"));
+            // The instrument name already encodes the unit ("dependency_wait_ms").
+            // Leaving `unit:` unset prevents the OTel→Prometheus exporter from
+            // appending a redundant `_milliseconds` suffix to the wire name.
+            Assert.That(LatticeReplicationMetrics.ApplyDependencyWaitMs.Unit, Is.Null);
             Assert.That(LatticeReplicationMetrics.ApplyDependencyWaitMsName,
                 Is.EqualTo(LatticeReplicationMetrics.ApplyDependencyWaitMs.Name));
 

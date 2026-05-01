@@ -1,0 +1,20 @@
+# Prometheus scrape config — single-cluster topology (simulator-baseline, current-state-no-replication, skewed-key-shard-splits, replication-key-filter, event-log-with-ttl, observer-no-peer).
+# The silo container exposes the OpenTelemetry Prometheus AspNetCore exporter on :9090
+# under the /metrics path, binding meters orleans.lattice, orleans.lattice.replication,
+# and vehicle_fleet_simulator.sink.
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+  external_labels:
+    cluster: vfs-bench
+
+scrape_configs:
+  - job_name: silo
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - silo:9090
+        labels:
+          cluster: vfs-bench
+          role: origin

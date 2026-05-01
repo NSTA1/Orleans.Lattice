@@ -1,0 +1,63 @@
+# Orleans.Lattice — benchmark history stack.
+#
+# Long-lived companion to docker-compose.yml. Stores summary scalars from every
+# scenario run (one data point per metric per run) so cross-run trends are
+# visible after the per-run stack has been torn down.
+#
+# Independent lifecycle:
+#   ./benchmark.ps1 -OpenHistory   # bring this stack up
+#   ./benchmark.ps1 current-state-no-replication           # per-run scenario; pushes scalars here if reachable
+#   ./benchmark.ps1 -ImportHistory # backfill any .run/**/results.json the VM hasn't seen
+#   ./benchmark.ps1 -CloseHistory  # stop, but preserve named volumes
+#
+# Ports differ from the per-run stack so both can run side-by-side:
+#   * VictoriaMetrics:    :8428 (HTTP API + ingest)
+#   * History Grafana:    :3001
+
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.103.0
+    container_name: vfs-history-vm
+    command:
+      - "-storageDataPath=/storage"
+      - "-retentionPeriod=12"
+      - "-httpListenAddr=:8428"
+      # Benchmark scalars are sparse (one sample per metric per run, days or
+      # weeks apart). VM's default -search.maxStalenessInterval is 5 minutes,
+      # which makes instant queries (powering Grafana stat/table/bargauge
+      # panels) return empty as soon as the latest run is more than 5 minutes
+      # old. Bump it to a year so historical points remain "current" until
+      # explicitly superseded by a newer run.
+      - "-search.maxStalenessInterval=8760h"
+    volumes:
+      - victoriametrics-data:/storage
+    ports:
+      - "8428:8428"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8428/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: vfs-history-grafana
+    depends_on:
+      victoriametrics:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards/orleans-lattice-history:ro
+      - grafana-history-data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+
+volumes:
+  victoriametrics-data:
+  grafana-history-data:

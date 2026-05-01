@@ -194,10 +194,23 @@ public interface ILattice : IGrainWithStringKey
 
     /// <summary>
     /// Bulk-loads key-value pairs into an empty tree, building leaves and
-    /// internal nodes bottom-up without any splits. Significantly faster than
-    /// individual <see cref="SetAsync"/> calls for initial data seeding.
-    /// Entries do not need to be pre-sorted; the implementation sorts them internally.
-    /// Throws <see cref="InvalidOperationException"/> if any shard already contains data.
+    /// internal nodes bottom-up without any splits. This is a one-shot
+    /// initial-import primitive: it requires every shard to be empty at call
+    /// time and is not safe to call repeatedly against a continuously-fed
+    /// tree. Significantly faster than individual <see cref="SetAsync"/>
+    /// calls for initial data seeding. Entries do not need to be pre-sorted;
+    /// the implementation sorts them internally.
+    /// <para>
+    /// Throws <see cref="InvalidOperationException"/> if any shard already
+    /// contains data, so the second and subsequent calls always fail unless
+    /// the operation id matches a previously-completed call (in which case
+    /// the call is an idempotent no-op). Streaming append-style ingestion
+    /// must use <see cref="SetAsync(string, byte[], CancellationToken)"/>
+    /// or the streaming
+    /// <c>BulkLoadAsync(IAsyncEnumerable&lt;...&gt;, IGrainFactory, int)</c>
+    /// extension on <c>LatticeExtensions</c>, which routes to
+    /// <c>ShardRootGrain.BulkAppendAsync</c> instead.
+    /// </para>
     /// </summary>
     Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
 

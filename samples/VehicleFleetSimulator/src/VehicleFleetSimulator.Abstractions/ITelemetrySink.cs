@@ -9,9 +9,9 @@ namespace VehicleFleetSimulator.Abstractions;
 ///   <item><description><c>FanOutTelemetrySink</c> — current behavior, dispatches to the sharded
 ///     <see cref="IFleetFanOutGrain"/> relay (used by <c>FleetStreamHub</c> + load harness).</description></item>
 ///   <item><description><c>NullTelemetrySink</c> — discards every publish, for isolating producer-side
-///     cost (benchmark scenario B-01 baseline / observer-off control).</description></item>
+///     cost (benchmark scenario simulator-baseline baseline / observer-off control).</description></item>
 ///   <item><description>Future <c>LatticeSink</c> — writes telemetry to an <c>Orleans.Lattice</c> tree
-///     (benchmark scenarios B-03 and onward).</description></item>
+///     (benchmark scenarios current-state-no-replication and onward).</description></item>
 /// </list>
 ///
 /// <para>Implementations must be safe to call from the <see cref="IVehicleGrain"/> turn at the

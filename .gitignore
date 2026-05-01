@@ -364,6 +364,10 @@ FodyWeavers.xsd
 
 # Benchmark results (local run history)
 benchmark/results-*.json
+benchmark/.run/
+benchmark/.fleet-size.config
+benchmark/history/victoriametrics-data/
+benchmark/history/grafana-data/
 
 # Visual Studio Code
 .vscode/*

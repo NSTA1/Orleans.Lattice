@@ -1,0 +1,87 @@
+# Replication overlay — adds a second silo cluster (vfs-replica) acting as the
+# downstream peer for current-state-single-peer (single replica), replication-backpressure (silo crash chaos), receiver-crash
+# (network partition chaos), bidirectional-replication (bidirectional). The base stack already runs
+# the origin silo with Replication:Enabled=true; this overlay brings up the
+# matching peer plus a second Azurite for cluster isolation.
+#
+# Compose file selection:
+#   docker compose -f docker-compose.yml -f docker-compose.replication.yml up -d
+#
+# benchmark.ps1 picks this overlay when scenarios/B-XX.env declares
+# REPLICATION_OVERLAY=true.
+
+services:
+  azurite-replica:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    container_name: vfs-azurite-replica
+    command:
+      - "azurite"
+      - "--blobHost=0.0.0.0"
+      - "--queueHost=0.0.0.0"
+      - "--tableHost=0.0.0.0"
+      - "--location=/data"
+      - "--skipApiVersionCheck"
+      - "--silent"
+    ports:
+      - "11000:10000"
+      - "11001:10001"
+      - "11002:10002"
+    volumes:
+      - azurite-replica-data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10002"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  silo-replica:
+    build:
+      context: ..
+      dockerfile: benchmark/host/Bench.Silo/Dockerfile
+    container_name: vfs-silo-replica
+    depends_on:
+      azurite-replica:
+        condition: service_healthy
+    environment:
+      DOTNET_ENVIRONMENT: Production
+      Orleans__ClusterId: ${BENCH_REPLICA_CLUSTER_ID:-vfs-bench-replica}
+      Orleans__ServiceId: ${BENCH_SERVICE_ID:-VehicleFleetSimulator}
+      Persistence__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-replica:10000/devstoreaccount1;QueueEndpoint=http://azurite-replica:10001/devstoreaccount1;TableEndpoint=http://azurite-replica:10002/devstoreaccount1;"
+      # Replica cluster runs the same lattice sink so bidirectional-replication (bidirectional) can produce
+      # writes here too. For current-state-single-peer/replication-backpressure/receiver-crash the replica's sink is null — it only consumes
+      # replicated writes from the origin.
+      Telemetry__Sink: ${BENCH_REPLICA_TELEMETRY_SINK:-null}
+      Telemetry__Prometheus__Endpoint: "http://0.0.0.0:9090/metrics/"
+      LatticeSink__TreeId: ${BENCH_TREE_ID:-vehicle-fleet}
+      LatticeSink__KeyShape: ${BENCH_KEY_SHAPE:-CurrentStateByVehicleId}
+      Replication__Enabled: ${BENCH_REPLICA_REPLICATION_ENABLED:-true}
+      Replication__OriginClusterId: ${BENCH_REPLICA_CLUSTER_ID:-vfs-bench-replica}
+      Replication__KeyPrefixes: ${BENCH_REPLICATION_KEY_PREFIXES:-}
+      # Receiver-side gRPC service so the origin's GrpcPushTransport actually has somewhere
+      # to deliver batches. The replica is *always* a receiver in this overlay (every
+      # replication scenario ships at least one direction at it). Listens on :5001 (HTTP/2)
+      # inside the container; not host-exposed because origin→replica traffic stays on the
+      # docker network.
+      Replication__GrpcServerEnabled: "true"
+      Replication__GrpcPort: "5001"
+      # Bidirectional scenarios (bidirectional-replication) set BENCH_REPLICA_PEER_ENDPOINT=http://silo:5001
+      # so the replica also ships back to the origin under the well-known origin cluster id
+      # vfs-bench. For single-direction scenarios (current-state-single-peer / replication-backpressure /
+      # receiver-crash / replication-key-filter) the var is unset and the value resolves to an
+      # empty string, which Bench.Silo's `GetSection("Replication:GrpcPeers").GetChildren()`
+      # filter discards — leaving the no-op transport in place on the back-channel.
+      Replication__GrpcPeers__vfs-bench: ${BENCH_REPLICA_PEER_ENDPOINT:-}
+    expose:
+      - "11111"
+      - "30000"
+      - "9090"
+      - "5001"
+
+  prometheus:
+    # Replace the base prometheus.yml mount with the replication-aware version that
+    # scrapes both silos.
+    volumes:
+      - ./prometheus/prometheus-replication.yml:/etc/prometheus/prometheus.yml:ro
+
+volumes:
+  azurite-replica-data:

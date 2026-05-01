@@ -64,7 +64,7 @@ public sealed class TelemetrySinkSwappabilityTests : IAsyncLifetime
     public async Task The_default_FanOutTelemetrySink_is_overridden_not_chained()
     {
         // If both sinks were active, the FleetFanOutGrain would still see telemetry. The
-        // benchmark plan assumes the swap is exclusive (B-03/B-04 measure Lattice cost only),
+        // benchmark plan assumes the swap is exclusive (current-state-no-replication/current-state-single-peer measure Lattice cost only),
         // so verify the fan-out shards see *no* telemetry for our vehicle.
         var fleet = _cluster.GrainFactory.GetGrain<IFleetGrain>(IFleetGrain.Key);
         var vehicleId = Guid.NewGuid();

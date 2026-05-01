@@ -1,0 +1,27 @@
+# Prometheus scrape config — replication topology (current-state-single-peer, replication-backpressure, receiver-crash, bidirectional-replication).
+# Adds a second scrape job for the replica silo. The `cluster` label matches the
+# Orleans ClusterId used by each silo so the Grafana dashboards' $cluster
+# template variable splits the panels by cluster cleanly.
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: silo
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - silo:9090
+        labels:
+          cluster: vfs-bench
+          role: origin
+
+  - job_name: silo-replica
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - silo-replica:9090
+        labels:
+          cluster: vfs-bench-replica
+          role: replica

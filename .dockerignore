@@ -1,0 +1,17 @@
+# Docker build-context exclusions for the benchmark stack (which uses the lattice repo
+# root as build context for the simulator's silo and api images). Exclude bin/obj/test
+# artefacts so docker build doesn't ship gigabytes of compile output into the daemon.
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+**/.idea/
+**/.azurite/
+**/*.user
+.git/
+.github/
+**/TestResults/
+**/coverage*/
+**/results-*.json
+benchmark/grafana/dashboards/
+benchmark/.run/
