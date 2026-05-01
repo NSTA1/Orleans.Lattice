@@ -83,85 +83,91 @@ The phase structure below groups items thematically. This section is the canonic
 11. **R-064 ✓ shipped — Per-peer observability**
     Extended R-001's baseline meter on `orleans.lattice.replication` with three new instruments and a refined DLQ reason classifier. New: `apply.lag` Histogram<double> (ms, tagged `tree`, recorded by `ReplicationApplier` after every successful point apply, clamped non-negative, skipped for range deletes / HWM-deduped re-deliveries / local-origin / `Zero` source HLC); `wal.entries_appended` Counter<long> (tagged `tree`, incremented by `ShardedReplogSink.WriteAsync` on successful append); `wal.entries_shipped` Counter<long> (tagged `tree` + `peer`, incremented by `GrpcPushTransport.SendAsync` by the entry count of each acknowledged outbound envelope). `IReplicationDeadLetterGrain.EnqueueAsync` widened with a fourth `string reasonTag` parameter; `DeadLetterTrackingReplicationApplier.ClassifyFailure` maps `ArgumentException` / `InvalidOperationException` → `ReasonSchema` and everything else → `ReasonUnknown`. Three new reason-tag constants (`ReasonSchema = "schema"`, `ReasonHlcSkew = "hlc_skew"`, `ReasonOversized = "oversized"`) reserved up front so future receiver decorators that surface size / clock-skew faults slot in without a wire-format or alert-cardinality break. Documented in [`docs/lattice.replication/observability.md`](../../docs/lattice.replication/observability.md) (new) plus an updated reason table in [`docs/lattice.replication/dead-letter-queue.md`](../../docs/lattice.replication/dead-letter-queue.md). Test coverage: 8 metrics + 6 applier ApplyLag + 3 decorator classification + 4 grain reason-tag + 2 sink WalEntriesAppended = 23 new tests. Full suite green: 543/543 replication + 42/42 gRPC + 1520/1520 core (non-Chaos).
 
+12. **R-067 — Production replication drivers** `[deps: R-013 ✓, R-021 ✓, R-040 ✓, R-042 ✓, R-052 ✓, R-061 ✓]`
+    Drives the dormant 14-instrument metric surface end-to-end: an Orleans-native `IReplicationShipperGrain` keyed `(tree, peer)` (cluster-singleton; hybrid `IRemindable` + `IGrainTimer` + writer-side doorbell from `ShardedReplogSink.WriteAsync`) drains `IChangeFeed` and calls `IReplicationTransport.SendAsync`, advancing the per-peer cursor on ack; an `IReplicationMaintenanceGrain` keyed `tree` schedules `ILatticeReplicationGc.RunOnceAsync` and `ILatticeFallOffLogDetector.CheckAndTriggerAsync`. Lights up `ship.duration`, `wal.entries_shipped`, `wal.entries_trimmed`, `peer.fell_off_log`, plus the entire `apply.*` family transitively via real inbound traffic on the receiving side. Per-peer back-pressure isolation falls out of "one activation per `(tree, peer)`"; cluster-singleton placement gives auto-migration on silo loss with no leader election. Forward-compat: the shipper grain is the scheduler skeleton a v2 local-apply materialiser reuses verbatim with a different terminal apply seam.
+
+13. **R-068 — Apply-duration instrumentation** `[deps: R-064 ✓]`
+    Wraps `ReplicationApplier.ApplyAsync` in `ValueStopwatch.StartNew()` and records the elapsed ms into `LatticeReplicationMetrics.ApplyDuration` tagged `tree` + `outcome` ∈ `{success, dedup, failure, parked-causal-buffer}`. Closes the only declared-but-never-recorded slot in the metrics surface. Independent of R-067; ships in either order.
+
 ### Snapshot / bootstrap (paired with core F-025)
 
-12. **R-080 ✓ shipped — Causal+ WAL entry schema**
+14. **R-080 ✓ shipped — Causal+ WAL entry schema**
     Land *before* R-050 so the snapshot handoff pins a causal-stable frontier from day one rather than retrofitting the bootstrap contract later. Adds two purely additive `[Id]` slots on `ReplogEntry` (`VectorClock`, `DependencySummary`) plus a diagnostic minor-version bump on `ReplicationBatchEnvelope`. Backwards-compat: legacy peers decode missing slots to empty maps and behave identically to today's per-origin-only HWM check. Producer-side capture happens at the existing commit-time observer site; no commit-path change. Delta-encoded per shard with **absolute** VC anchors on every batch boundary and on any entry whose predecessor was trimmed by GC, preserving the trim-from-the-head invariant. Internal `VectorClockCodec` (`EncodeDelta` / `DecodeDelta` / `EncodeAbsolute`). Documented in [`docs/lattice.replication/wal-causal-plus.md`](../../docs/lattice.replication/wal-causal-plus.md).
     *Future-compat:* the schema is the canonical mutation record for both today's replication consumer and tomorrow's local materialiser; the VC slot is what a v2 local apply path needs to dispatch causal-aware merges without a wire-format break.
 
-13. **R-050 ✓ shipped — `ISnapshotProvider` abstraction**
+15. **R-050 ✓ shipped — `ISnapshotProvider` abstraction**
     F-025's `GetEntriesNewerThanAsync(HLC threshold)` leaf scan is the same primitive R-050 needs. Whichever lands first, the other consumes it verbatim — do not introduce a second scan API. Recommend pairing them in a single feature cycle. R-080 lands first so `ISnapshotProvider.ExportAsync` returns `(asOfHlc, causalStableFrontier)` rather than HLC-only.
 
-14. **R-051 ✓ shipped — Receiver-side bootstrap state machine**
+16. **R-051 ✓ shipped — Receiver-side bootstrap state machine**
 
-15. **R-052 ✓ shipped — Auto-bootstrap trigger**
+17. **R-052 ✓ shipped — Auto-bootstrap trigger**
 
-16. **R-053 ✓ shipped — Operator-driven re-seed**
+18. **R-053 ✓ shipped — Operator-driven re-seed**
 
-17. **R-084 ✓ shipped — Causal-stable snapshot cut-point**
+19. **R-084 ✓ shipped — Causal-stable snapshot cut-point**
     Pair with R-050 in a single cycle: `ISnapshotProvider.ExportAsync` returns the causal-stable frontier alongside the as-of HLC; the receiver bootstrap state machine (R-051) calls `PinSnapshotAsync((HLC, VectorClock))`; the dependency check (R-082) runs from the pinned VC frontier on the first incremental entry. Snapshot scan algorithm is unchanged — only the cut-point selection. See [`wal-causal-plus.md`](../../docs/lattice.replication/wal-causal-plus.md) §8.
 
 ### Operational polish (after critical-path is in)
 
-18. **R-062 — Receiver-side flow control** `[deps: R-042 ✓]`
+20. **R-062 — Receiver-side flow control** `[deps: R-042 ✓]`
 
-19. **R-063 — Partitioned replog** `[deps: none]`
+21. **R-063 — Partitioned replog** `[deps: none]`
     Performance under fan-in; opt-in via `ReplogPartitions`. Does not gate anything.
 
-20. **R-065 — Back-pressure `IHealthCheck`** `[deps: R-064 ✓]`
+22. **R-065 — Back-pressure `IHealthCheck`** `[deps: R-064 ✓]`
 
-21. **R-066 — Observable topology** `[deps: none]`
+23. **R-066 — Observable topology** `[deps: none]`
 
-22. **R-043 — Batch-boundary compression** `[deps: R-041 ✓]`
+24. **R-043 — Batch-boundary compression** `[deps: R-041 ✓]`
 
-23. **R-044 — Content-hash dedup** `[deps: R-042 ✓]`
+25. **R-044 — Content-hash dedup** `[deps: R-042 ✓]`
 
-24. **R-045 — Coalesced per-peer cursor checkpointing** `[deps: R-042 ✓]`
+26. **R-045 — Coalesced per-peer cursor checkpointing** `[deps: R-042 ✓]`
 
-25. **R-046 — Standard transport security** `[deps: R-042 ✓]`
+27. **R-046 — Standard transport security** `[deps: R-042 ✓]`
     mTLS / token rotation. Required before any production multi-tenant deployment but not before single-tenant pilot.
 
-26. **R-047 — Typed-envelope `IReplicationTransport` shape** `[deps: R-042 ✓]`
+28. **R-047 — Typed-envelope `IReplicationTransport` shape** `[deps: R-042 ✓]`
     Eliminates the sender-side decode-then-re-encode round-trip the gRPC push transport currently pays. Today `IReplicationTransport.SendAsync` takes `ReplicationBatch` whose `Payload` is `ReadOnlyMemory<byte>`, so `GrpcPushTransport.BuildEnvelope` calls `IReplicationBatchEncoder.Decode(batch.Payload)` purely to satisfy the gRPC marshaller, which then re-encodes via `Encode(envelope, IBufferWriter<byte>)`. The decode allocates one `ReplogEntry` per WAL row in the batch on every send. Widen the transport seam to carry the typed `ReplicationBatchEnvelope` directly — either by adding a typed overload (`SendAsync(ReplicationBatchEnvelope envelope, string targetClusterId, CancellationToken ct)`) or by reshaping `ReplicationBatch` to carry the envelope alongside (or instead of) the byte[] payload, with a backwards-compat fallback for transports that only support bytes. After this change the gRPC hot path is genuinely zero-allocation beyond the gRPC box wrapper. LoopbackTransport / NoOpTransport are unaffected because they never re-encode.
 
 ### WAL hardening (post-critical-path)
 
 These six items close the WAL design doc's deferred acceptance rows from R-070 / R-071, plus the v2-commit-path consumer side. R-074 / R-075 / R-077 are independent and parallelisable; R-076 sequences after R-075; R-078 sequences after R-047 and R-076; R-079 is blocked on the matching core-side leaf flip (Core F-049a adapter seams + F-049b dual-durability commit) and is the v2 forward-compat audit.
 
-27. **R-074 — Multi-batch in-flight flush concurrency** `[deps: R-071 ✓]`
+29. **R-074 — Multi-batch in-flight flush concurrency** `[deps: R-071 ✓]`
     Closes WAL design §9.1.4. Lifts the hard-coded single-in-flight flush to `WalMaxPendingBatches` while preserving dense offsets via grain-turn-serialised offset assignment.
 
-28. **R-075 — Exact byte accounting in pending-batch sizing** `[deps: R-071 ✓]`
+30. **R-075 — Exact byte accounting in pending-batch sizing** `[deps: R-071 ✓]`
     Closes WAL design §9.1.3. Replaces the heuristic batch sizer with an allocation-free `IReplicationBatchEncoder.Measure(...)` so a 4 MB batch never overshoots the Azure Table Storage transactional-batch ceiling.
 
-29. **R-076 — `ArraySegment<byte>` provider contract for zero-copy hand-off** `[deps: R-070 ✓, R-075]`
+31. **R-076 — `ArraySegment<byte>` provider contract for zero-copy hand-off** `[deps: R-070 ✓, R-075]`
     Closes WAL design §9.3.2. Widens `IWalStorageProvider.AppendBatchAsync` with an encoded-bytes overload so backends storing binary blobs skip the per-batch re-encode.
 
-30. **R-077 — Trim-aware `GetEntryCountAsync`** `[deps: R-070 ✓]`
+32. **R-077 — Trim-aware `GetEntryCountAsync`** `[deps: R-070 ✓]`
     Independent. Tracks the `_nextOffset`-vs-actual-count drift R-061's GC will introduce. Adds `IWalStorageProvider.GetLowestOffsetAsync` and reshapes the grain RPC to `GetLiveEntryCountAsync`.
 
-31. **R-078 — Single-encode hot path** `[deps: R-047, R-076, R-072 ✓]`
+33. **R-078 — Single-encode hot path** `[deps: R-047, R-076, R-072 ✓]`
     Performance follow-on. Stamps the WAL's encoded payload bytes onto the `IChangeFeed` envelope so the gRPC ship loop ships verbatim — eliminates the third encode per replicated mutation.
 
-32. **R-079 — Replication consumer of WAL-as-commit-point promotion** `[deps: Core F-049a ✓, Core F-049b, R-071 ✓, R-082 ✓]`
+34. **R-079 — Replication consumer of WAL-as-commit-point promotion** `[deps: Core F-049a ✓, Core F-049b, R-071 ✓, R-082 ✓]`
     Forward-compat audit + GC / causal-stable predicate widening so the local materialiser registered by Core F-050 is a first-class `IChangeFeed` consumer indistinguishable from a remote peer. Adds concrete adapter implementations for Core F-049a's commit-log seams inside `AddLatticeReplication` and a `SourceIsCommitLog` short-circuit on `ReplicationMutationObserver` to prevent double-WAL-append once F-049b lands. Cannot start until Core F-049a + F-049b land.
 
 ### Causal+ apply pipeline (after R-080; runs in parallel with snapshot/bootstrap once R-081 is in)
 
-33. **R-081 ✓ shipped — Local vector clock generalises per-origin HWM** `[deps: R-080 ✓]`
+35. **R-081 ✓ shipped — Local vector clock generalises per-origin HWM** `[deps: R-080 ✓]`
     Reframe the existing per-origin HWM table (`{(tree, origin) → HLC}`) as the diagonal of the local vector clock without breaking the wire. No new grain, no new persistence — same `IReplicationHighWaterMarkGrain` interface, same Orleans-storage rows. Adds an internal `GetVectorAsync(treeId)` member returning the full clock for use by R-082's dependency check. `PinSnapshotAsync` widens to `PinSnapshotAsync((HLC asOf, VectorClock frontier))` ahead of R-050 / R-084 consuming it.
 
-34. **R-082 ✓ shipped — Causal dependency check + bounded buffer**
+36. **R-082 ✓ shipped — Causal dependency check + bounded buffer**
     Receiver-side change to `ReplicationApplier.ApplyPointAsync`: HWM check first (O(1) duplicate fast path, unchanged), then `∀ origin in entry.VectorClock: localVc[origin] >= entry.VectorClock[origin]`. Unsatisfied entries park in a per-shard bounded `BlockedQueue` keyed by `(missingOrigin, missingHlc)`; on every successful apply that advances `localVc`, wake any blocked entry whose deps are now satisfied. New `LatticeReplicationOptions.CausalBufferMaxEntries` (default `1024`, validator `>= 1`) and `CausalBufferMaxBytes` (default `16 MB`, validator `>= 64 KB`). Overflow routes the oldest blocked entry through `IReplicationDeadLetterGrain.EnqueueAsync` with reason tag `LatticeReplicationMetrics.ReasonHlcSkew` (reserved by R-064 for exactly this case) — no second dead-letter store. No cross-shard locks; the buffer lives in the applier's shard-local state.
 
-35. **R-083 ✓ shipped — Causal-stable WAL GC frontier**
+37. **R-083 ✓ shipped — Causal-stable WAL GC frontier**
     Replace R-061's `min(cursor)` predicate with `causal_stable = min(peerVectorClock)` across `IChangeFeed` subscribers. `ILatticeReplicationCursorRegistry.ReportAsync` gains a VC-shaped overload (additive — old callers continue to report HLC-only and contribute a degenerate diagonal-only VC). `LatticeReplicationGc` caches `causal_stable` and recomputes only on ack updates. An entry is GC-eligible iff `entry.VectorClock <= causal_stable AND entry.Offset <= minAckedOffset` (R-061's offset predicate AND-ed in for safety). Documented as an extension to [`wal-gc.md`](../../docs/lattice.replication/wal-gc.md).
     *Future-compat:* a future C-050 local materialiser reports its own VC and pins the log identically to a remote peer.
 
-36. **R-084 ✓ shipped — Causal-stable snapshot cut-point**
+38. **R-084 ✓ shipped — Causal-stable snapshot cut-point**
     Pair with R-050 in a single cycle: `ISnapshotProvider.ExportAsync` returns the causal-stable frontier alongside the as-of HLC; the receiver bootstrap state machine (R-051) calls `PinSnapshotAsync((HLC, VectorClock))`; the dependency check (R-082) runs from the pinned VC frontier on the first incremental entry. Snapshot scan algorithm is unchanged — only the cut-point selection. Co-build with R-050 in a single feature cycle to avoid retrofitting the snapshot handoff contract.
 
-37. **R-085 ✓ shipped — Causal+ observability** `[deps: R-082 ✓, R-064 ✓]`
+39. **R-085 ✓ shipped — Causal+ observability** `[deps: R-082 ✓, R-064 ✓]`
     Three new instruments on the `orleans.lattice.replication` meter, following R-064's reason-tag conventions:
     - `apply.buffered_entries` UpDownCounter<long> tagged `tree`, `shard`
     - `apply.buffer_bytes` UpDownCounter<long> tagged `tree`, `shard`
@@ -169,13 +175,13 @@ These six items close the WAL design doc's deferred acceptance rows from R-070 /
 
     Plus `apply.causal_violations_blocked` Counter<long> tagged `tree`, incremented on every park (so an alert on `rate > 0` flags causal-skew health). Documented in [`docs/lattice.replication/observability.md`](../../docs/lattice.replication/observability.md) as a new "Causal+ instruments" section. Test coverage: per-instrument unit tests under existing `LatticeReplicationMetricsTests` patterns.
 
-38. **R-086 ✓ shipped — Transport metadata pass-through contract test**
+40. **R-086 ✓ shipped — Transport metadata pass-through contract test**
     Per the perf note in §9, transport stays dumb. Add a contract test in `Orleans.Lattice.Replication.Tests` (and a mirror in `Orleans.Lattice.Replication.Grpc.Tests`) that asserts `IReplicationTransport` implementations preserve `VectorClock` and `DependencySummary` slots verbatim across a round-trip — no reordering, no mutation, no synthesis. Lifts the existing `LoopbackTransport` round-trip fixture and parameterises it over the new fields. No production code change; this is the regression scaffold so a future transport doesn't quietly break causal+ in the way R-021's "thread-local cycle-break" sample-shortcut would have if R-022 hadn't pinned source-HLC preservation as a contract test.
 
-39. **R-087 ✓ shipped — Per-origin FIFO invariant + out-of-order detection**
+41. **R-087 ✓ shipped — Per-origin FIFO invariant + out-of-order detection**
     Receiver-side instrumentation that pins the per-origin FIFO contract R-082's buffer relies on for occupancy bounds. Cheap to land alongside R-085; same instrumentation surface. Closes the gap left by the user-facing R-201 / R-211 design split — sender-side FIFO is implicit in the partitioned change feed (per-shard offset order ⇒ per-(origin, shard) HLC monotonicity), so there is no sender-side enforcement work; the genuine gap is a receiver-side metric that surfaces a transport regression breaking that invariant.
 
-40. **R-088 ✓ shipped — Bootstrap → incremental causal handoff verification** `[deps: R-082 ✓, R-084 ✓]`
+42. **R-088 ✓ shipped — Bootstrap → incremental causal handoff verification** `[deps: R-082 ✓, R-084 ✓]`
     Joins the snapshot/bootstrap stream and the causal+ apply stream — schedule after both R-082 and R-084 land. R-082 + R-084 already provide the mechanism (initial `local_vc` from the pinned `causalStableFrontier`, dep-check from there on the first incremental); R-088 is the explicit acceptance test + DLQ-overflow operator playbook that pins the contract end-to-end.
 
 
@@ -183,31 +189,31 @@ These six items close the WAL design doc's deferred acceptance rows from R-070 /
 
 The R-080 → R-088 wave delivers causal+ for the point-write, single-tree, single-shard-per-mutation path. The five items below extend that guarantee to every write path the core library exposes (`SetManyAtomic`, resize, reshard / shadow-forward, snapshot/restore) so a host that enables any one of those features still gets full causal+ semantics. Each pairs with a core-side dependency (F-043–F-046) and the core change + replication consumer must land in a single feature cycle. Cross-tree causality is intentionally out of scope.
 
-41. **R-089 — Atomic multi-key VC capture point** `[deps: R-080 ✓, R-081 ✓, Core F-044 ✓]`
+43. **R-089 — Atomic multi-key VC capture point** `[deps: R-080 ✓, R-081 ✓, Core F-044 ✓]`
     Closes per-key VC drift in `SetManyAtomic`: capture the local VC **once** at the start of the atomic transaction and stamp every emitted `ReplogEntry.VectorClock` in that batch with the identical frontier so a remote peer never sees a partial-set state where the writer's frontier said all N should be visible together. Receiver: no change — entries with identical VCs unblock together when their shared frontier is satisfied.
 
-42. **R-090 — `MutationKind` classification + maintenance skip** `[deps: R-080 ✓, Core F-045 ✓]`
+44. **R-090 — `MutationKind` classification + maintenance skip** `[deps: R-080 ✓, Core F-045 ✓]`
     Resize / rebalance / compaction emits structural rewrites that are not user-authored causal events. Reading them as causal would inflate every replicated tree's VC under maintenance pressure and pollute the dependency graph. R-090 reads the new `MutationKind { User, Maintenance }` slot on `LatticeMutation` and skips the WAL append for `Maintenance` on replicated trees. Independent of `OriginClusterId`.
 
-43. **R-091 — Shadow-forward VC preservation** `[deps: R-080 ✓, R-081 ✓, R-022 ✓, Core F-046 ✓]`
+45. **R-091 — Shadow-forward VC preservation** `[deps: R-080 ✓, R-081 ✓, R-022 ✓, Core F-046 ✓]`
     Shard-split / merge / saga-compensate shadow-forward a user write into a different shard. Today F-036's `LatticeOriginContext` carries `OriginClusterId` through these rewrites; R-091 extends the same end-to-end discipline to `VectorClock`. The replication observer never re-captures a VC for any emit whose ambient context already supplies one. Receiver-side: a small `RecentApplyCache<(origin, hlc, key, op)>` LRU (default `4096`, new `ShadowForwardDedupeCacheSize` option) drops the duplicate emit pair shadow-forward generates so the receiver applies the shadow-forwarded write exactly once.
 
-44. **R-092 — Tree-global producer VC at commit time** `[deps: R-080 ✓, R-081 ✓]`
+46. **R-092 — Tree-global producer VC at commit time** `[deps: R-080 ✓, R-081 ✓]`
     R-080 captures VC at the per-grain commit-time observer site, but a single user write touching multiple shards (range delete, multi-leaf saga) emits from multiple grains in close succession; if each grain reads its own diagonal-only HWM the resulting per-emit VCs disagree on cross-shard origins. R-092 introduces a per-`(silo, tree)` in-memory `LocalVectorClock` cache populated from `IReplicationHighWaterMarkGrain.GetVectorAsync` on cold start, advanced on every WAL append (local origin) and every inbound apply (foreign origin). Producer reads from the cache; cost is one grain call per (silo, tree, restart). The cache is the producer-side counterpart to R-081's receiver-side `LocalVectorClock`.
 
-45. **R-093 — Snapshot/restore VC reconstruction** `[deps: R-080 ✓, R-081 ✓, Core F-043 ✓]`
+47. **R-093 — Snapshot/restore VC reconstruction** `[deps: R-080 ✓, R-081 ✓, Core F-043 ✓]`
     Closes the intra-cluster snapshot-as-a-tool gap: when an operator snapshots a tree and restores it (same cluster, possibly different timestamp) the live HWM table is wiped but the values still carry their commit-time VC slot (Core F-043). R-093 introduces an `IReplicationLocalVcSeeder.SeedFromTreeAsync(treeName)` that walks the restored values' VC slots and seeds `LocalVectorClock` to per-origin pointwise max. Without this, a restore-then-replicate cycle would replay every restored entry against a zeroed VC and either re-park or re-merge them. Cross-cluster bootstrap (R-050 / R-084) is unaffected — that path pins the snapshot's `causalStableFrontier` directly via `PinSnapshotAsync`.
 ### Extended CRDT modes (gated on outstanding core primitives)
 
 These ship as paired (core primitive ↔ replication delta) deliverables — building either side in isolation freezes a contract before its consumer validates it. Order between the three is by user demand, not technical dependency.
 
-46. **R-034 — MV-Register delta + dispatch** `[deps: Core F-039 outstanding]`
+48. **R-034 — MV-Register delta + dispatch** `[deps: Core F-039 outstanding]`
     Pair with F-039 in a single cycle.
 
-47. **R-035 — OR-Map delta + dispatch** `[deps: Core F-040 outstanding]`
+49. **R-035 — OR-Map delta + dispatch** `[deps: Core F-040 outstanding]`
     Pair with F-040. Includes the recursive `InnerMode` wire-envelope extension.
 
-48. **R-036 — RGA sequence delta + dispatch** `[deps: Core F-041 outstanding]`
+50. **R-036 — RGA sequence delta + dispatch** `[deps: Core F-041 outstanding]`
     Pair with F-041. Highest implementation complexity of the three (sequence convergence, back-pressure for high-frequency editors).
 
 ### Suggested concurrency
@@ -351,6 +357,27 @@ Latency drops from reminder-cadence (~60 s) to sub-second; bandwidth improves ~2
 - [x] **R-042 — gRPC streaming push transport** *(required R-041 ✓)*
   Canonical sender + receiver pair shipped in the new `Orleans.Lattice.Replication.Grpc` sub-package. Sender-side `GrpcPushTransport` replaces the default `NoOpReplicationTransport` via `AddLatticeReplicationGrpcPushTransport(options => options.PeerEndpoints[...] = ...)`; one long-lived `GrpcChannel` per `TargetClusterId` with HTTP/2 multiplexing, a cached `CallInvoker` per peer (via an internal `PeerChannel` record struct so `SendAsync` does not allocate a fresh invoker per call), and an optional per-peer `ConfigureChannel(name, GrpcChannelOptions)` callback for mTLS / custom `HttpHandler` / retry policy attachment. Receiver-side wired via `AddLatticeReplicationGrpcServer()` + `MapLatticeReplicationGrpcService()` on an ASP.NET Core endpoint route builder. Wire format is the `ReplicationBatchEnvelope` (alias `olr.be`, wire version 1) defined by R-041; the gRPC marshaller hands the stream's `IBufferWriter<byte>` straight through to `IReplicationBatchEncoder.Encode(envelope, writer)` so the envelope's bytes are written directly into the network buffer with no intermediate managed allocation on the encode path. No `.proto` file and no `Grpc.Tools` dependency: custom `Marshaller<T>` instances, internal sealed `ReplicationBatchEnvelopeBox` / `ReplicationAckBox` reference wrappers (gRPC's `Method<TRequest, TResponse>` has a `class` constraint), and a codegen-style `[BindServiceMethod]` topology (abstract `LatticeReplicationGrpcServiceBase` carries the attribute + null-tolerant static `BindService`; sealed `LatticeReplicationGrpcService` is the DI-resolved per-request handler). A static `LatticeReplicationGrpcMethodHolder.Current` bridges the DI-resolved `Method<,>` into the static binding hook because gRPC's static `BindService` callback cannot accept DI dependencies. Each `SendAsync` records `LatticeReplicationMetrics.ShipDuration` tagged `tree` / `peer` / `outcome` (allocation-free via `ValueStopwatch`). Documented in `docs/lattice.replication/grpc-push-transport.md`. Covered by 42 tests across 6 fixtures (options defaults, DI-extension wiring, transport ctor + send-validation + idempotent dispose, service Push validation + HWM accumulation + cancellation + RpcException-on-failure, `[BindServiceMethod]` null-tolerance + holder-not-initialised guard, marshaller Orleans-serializer round-trip on both wrappers, and 2 in-process Kestrel integration tests via `Microsoft.AspNetCore.TestHost` exercising the full wire round-trip end-to-end). mTLS / token-rotation defaults are deferred to R-046; runtime peer-set updates (currently host-restart-required) are deferred to R-066; sender-side decode-then-re-encode round-trip elimination is deferred to R-047.
 
+- [ ] **R-067 — Production replication drivers** `[deps: R-013 ✓, R-021 ✓, R-040 ✓, R-042 ✓, R-052 ✓, R-061 ✓]`
+  The 14 replication metrics declared on `LatticeReplicationMetrics` (R-064 / R-085) only fire when something drives the outbound ship loop and the housekeeping passes. Today `IReplicationTransport.SendAsync` is only test-driven (`LoopbackTransport` round-trips), `ILatticeReplicationGc.RunOnceAsync` is host-owned with no default scheduler, and `ILatticeFallOffLogDetector.CheckAndTriggerAsync` is invoked only by `ReplicationApplier` on inbound traffic. R-067 lands the production-grade drivers behind these seams so a bare `AddLatticeReplication(...)` + `AddLatticeReplicationGrpcPushTransport(...)` host emits real `wal.entries_shipped`, `apply.lag`, `ship.duration`, `wal.entries_trimmed`, and `peer.fell_off_log` series end-to-end without operator wiring. This is the dominant blocker preventing the metrics surface from light-up in production.
+
+  **Architecture: two Orleans-native grain types.** Both ship as cluster singletons so silo loss triggers Orleans' standard activation migration; no leader election, no `IHostedService` duplicate-send hazard. The shipper is per-peer because per-peer back-pressure must not couple peers to each other; the maintenance grain is per-tree because GC and fall-off-log probing are tree-scoped, not peer-scoped.
+
+  - **`IReplicationShipperGrain` keyed `(treeName, peerClusterId)`** — drains the per-tree `IChangeFeed` from the per-peer cursor in `ILatticeReplicationCursorRegistry`, applies the configured `KeyFilter` and the R-021 cycle-break (skip entries whose `OriginClusterId` is the peer's own cluster id), calls `IReplicationTransport.SendAsync` (or the typed-envelope shape from R-047 once that lands), and on ack advances the cursor through `ReportAsync(consumerId, treeName, ackedHlc)`. Internal state: per-peer in-flight count, current backoff window, last-doorbell tick. Records `LatticeReplicationMetrics.ShipDuration` (already wired in `GrpcPushTransport.SendAsync`) and `WalEntriesShipped` (likewise) by virtue of being the caller. Permanent failures (validation rejection, irrecoverable transport error) route the offending entry through `IReplicationDeadLetterGrain.EnqueueAsync` with reason tag `LatticeReplicationMetrics.ReasonSchema` or `ReasonUnknown`; transient failures back off and retry.
+
+  - **`IReplicationMaintenanceGrain` keyed `treeName`** — calls `ILatticeReplicationGc.RunOnceAsync(treeName)` on the GC cadence (default 5 s), iterating the configured peer list and invoking `ILatticeFallOffLogDetector.CheckAndTriggerAsync(treeName, peer, oldestHlc)` on the fall-off cadence (default 30 s). The fall-off check uses `ILatticeWalIntrospection.GetOldestAvailableHlcAsync` (R-052's introspection seam) to compute the sender-oldest HLC; on a positive detection the detector itself drives the bootstrap kickoff via `ILatticeBootstrapCoordinator.BootstrapAsync` so this grain stays a pure scheduler.
+
+  **Cadence pattern.** Hybrid `IRemindable` + `IGrainTimer` + writer-side doorbell, mirroring the shape `LatticeBootstrapCoordinatorGrain` (R-051) already uses for crash-resumable workflows. The `IRemindable` (90 s for the shipper, 60 s for maintenance) is the cluster-singleton liveness backstop — Orleans rehydrates the activation on a surviving silo within the keepalive period after a silo crash. The `IGrainTimer` (200 ms shipper pulse, 5 s maintenance pulse) is the steady-state cadence for sub-second ship latency. Critically, `ShardedReplogSink.WriteAsync` rings a per-`(treeName, peerClusterId)` doorbell after a successful append — the shipper's `OnDoorbellAsync` short-circuits the timer wait and pumps immediately when there's actually new data, so empty-WAL polling stays cheap and busy-WAL latency stays low. The doorbell fan-out is bounded (one no-op grain call per active peer per WAL append) and best-effort: a missed doorbell only delays the next ship by one timer tick.
+
+  **Per-peer back-pressure isolation.** New options on `LatticeReplicationOptions`: `ShipBatchSize` (default `256`, validator `>= 1`), `ShipMaxInFlight` (default `1`, validator `>= 1` — start with strict serial sends so cursor advance stays simple; lift later when R-047 + R-074 unblock typed-envelope multi-batch flush), `ShipBackoffInitial` (default `100 ms`, validator `> TimeSpan.Zero`), `ShipBackoffMax` (default `30 s`, validator `>= ShipBackoffInitial`), `ShipBackoffJitter` (default `0.2`, validator `[0.0, 1.0]`), `MaintenanceGcInterval` (default `5 s`), `MaintenanceFallOffCheckInterval` (default `30 s`), `ShipDoorbellEnabled` (default `true`). All resolved via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)`.
+
+  **Why grain-native, not `IHostedService`.** An `IHostedService` runs once per silo, so a 3-silo cluster would issue duplicate sends and require manual leader election; an Orleans grain activation is cluster-wide, so silo loss triggers automatic migration with no extra coordination. Per-peer isolation (a slow peer must not block other peers) falls out of "one activation per `(tree, peer)`" naturally; with `IHostedService` it would require a custom per-peer task pool. And the codebase pattern is already grain-based — `IReplicationDeadLetterGrain`, `LatticeBootstrapCoordinatorGrain`, `IReplicationHighWaterMarkGrain` all use the same shape, so adding a non-grain background pump would be the outlier.
+
+  **Lights up the dormant metrics.** Today `wal.entries_appended` and `dead_letter.*` fire from the existing wire-up; everything else is dormant pending a caller. After R-067: `ship.duration` and `wal.entries_shipped` fire from the shipper's `SendAsync` call; `wal.entries_trimmed` fires from the maintenance grain's GC pass; `peer.fell_off_log` fires from the maintenance grain's fall-off probe; `apply.*` (lag / fifo violations / buffered entries / buffer bytes / dependency wait / causal violations blocked) all fire transitively because the peer end now has real inbound traffic to apply.
+
+  *Future-compat:* the shipper grain is the canonical scheduler shape for the v2 local-apply materialiser (`docs/future.md`). A future materialiser is just another `IChangeFeed` consumer with its own cursor; replacing the `IReplicationTransport.SendAsync` call with an `IReplicationApplier.ApplyAsync` call (or the commit-log apply seam from R-079) reuses the entire scheduling skeleton verbatim. The maintenance grain similarly is the natural home for any future per-tree background pass (compaction, snapshot pruning, projection rebuild) without inventing a third scheduler shape.
+
+  Test coverage outline: per-grain unit tests with `FakePersistentState`, substituted `IReplicationTransport` / `IChangeFeed` / `ILatticeReplicationGc` / `ILatticeFallOffLogDetector`; per-grain reminder + timer + doorbell behavioural tests; cluster-fixture integration tests asserting end-to-end `WalEntriesShipped` and `WalEntriesTrimmed` counter values after a synthetic write workload; chaos-category test asserting silo-loss migration preserves cursor advancement.
+
 - [ ] **R-047 — Typed-envelope `IReplicationTransport` shape** `[deps: R-042 ✓]`
   Eliminates the sender-side decode-then-re-encode round-trip the gRPC push transport currently pays. Today `IReplicationTransport.SendAsync` takes `ReplicationBatch` whose `Payload` is `ReadOnlyMemory<byte>`, so `GrpcPushTransport.BuildEnvelope` calls `IReplicationBatchEncoder.Decode(batch.Payload)` purely to satisfy the gRPC marshaller, which then re-encodes via `Encode(envelope, IBufferWriter<byte>)`. The decode allocates one `ReplogEntry` per WAL row in the batch on every send. Widen the transport seam to carry the typed `ReplicationBatchEnvelope` directly — either by adding a typed overload (`SendAsync(ReplicationBatchEnvelope envelope, string targetClusterId, CancellationToken ct)`) or by reshaping `ReplicationBatch` to carry the envelope alongside (or instead of) the byte[] payload, with a backwards-compat fallback for transports that only support bytes. After this change the gRPC hot path is genuinely zero-allocation beyond the gRPC box wrapper. LoopbackTransport / NoOpTransport are unaffected because they never re-encode.
 
@@ -406,6 +433,9 @@ Ops polish and production-grade reliability. Within this phase, **R-060 (DLQ) is
 
 - [x] **R-064 — Per-peer observability**
   Extended R-001's baseline meter with three new instruments and a refined DLQ reason classifier. **Implemented:** new `apply.lag` Histogram<double> on `orleans.lattice.replication` (unit `ms`, tagged `tree`) recorded inside `ReplicationApplier` after every successful point apply (`Set` / `Delete`); the sample is `now - entry.Timestamp.WallClockTicks` in milliseconds, clamped non-negative so a future-dated source HLC reports as `0` rather than corrupting the histogram. The histogram deliberately skips `ReplogOp.DeleteRange` (carries `HybridLogicalClock.Zero`), HWM-deduped re-deliveries (entry never reaches the merge step), local-origin entries (short-circuit before merge), and `sourceTicks <= 0` (defends against malformed entries). New `wal.entries_appended` Counter<long> tagged `tree`, incremented by `ShardedReplogSink.WriteAsync` only after a successful WAL append — a throwing `IReplogShardGrain.AppendAsync` does not contribute, so the counter reflects committed entries only. New `wal.entries_shipped` Counter<long> tagged `tree` + `peer`, incremented by `GrpcPushTransport.SendAsync` on `outcome="ok"` by the entry count of the acknowledged envelope (heartbeat / zero-entry batches contribute zero). The pair lets operators monitor `rate(wal_entries_appended) / rate(wal_entries_shipped)` per tree-peer for back-pressure detection. `IReplicationDeadLetterGrain.EnqueueAsync` widened with a fourth positional `string reasonTag` parameter (validated via `ArgumentException.ThrowIfNullOrEmpty`); `DeadLetterTrackingReplicationApplier` adds a private static `ClassifyFailure(Exception)` mapping `ArgumentException` / `InvalidOperationException` → `LatticeReplicationMetrics.ReasonSchema` (malformed entries, missing fields, unrecognised `ReplicationMode`, state-merge CAS-budget exhaustion) and everything else (e.g. `TimeoutException`, transport / IO failures) → `LatticeReplicationMetrics.ReasonUnknown`. Three new reason-tag constants (`ReasonSchema = "schema"`, `ReasonHlcSkew = "hlc_skew"`, `ReasonOversized = "oversized"`) reserved up front so future receiver decorators that surface size / clock-skew faults as classified exceptions extend the reason dimension without a wire-format or alert-cardinality break. The classification mapping is intentionally conservative — only failure shapes whose source is under the package's control are matched explicitly; this keeps the `reason` dimension stable across publishers so operators can alert on `unknown` rising without false positives. Documented in [`docs/lattice.replication/observability.md`](../../docs/lattice.replication/observability.md) (new) plus an updated reason table in [`docs/lattice.replication/dead-letter-queue.md`](../../docs/lattice.replication/dead-letter-queue.md). Test coverage: 8 `LatticeReplicationMetricsTests` (instrument names + units + tag recording per new instrument; new reason-constant values), 6 `ReplicationApplierTests` (records-for-set, records-for-delete, clamps-future-source-HLC-to-zero, skips-range-delete, skips-zero-HLC, skips-dedupe-path), 3 `DeadLetterTrackingReplicationApplierTests` (`ArgumentException` → schema, `InvalidOperationException` → schema, `TimeoutException` → unknown), 4 `ReplicationDeadLetterGrainTests` (null-failure-reason, null-reason-tag, empty-reason-tag, supplied-reason-tag-flows-through-to-counter), 2 `ShardedReplogSinkTests` (success increments, throwing append does not contribute) — 23 new tests total. Existing `EnqueueAsync` call sites mass-rewritten to thread the new `reasonTag` argument. Full suite green: 543/543 replication + 42/42 gRPC + 1520/1520 core (non-Chaos).
+
+- [ ] **R-068 — Apply-duration instrumentation** `[deps: R-064 ✓]`
+  The 14th instrument on `LatticeReplicationMetrics`, `ApplyDuration` (`apply.duration` `Histogram<double>`, unit `ms`, tagged `tree` + `outcome`), is declared but never recorded — `ReplicationApplier.ApplyAsync` never wraps its body in a stopwatch. R-064 wired every other observability instrument; this is a residual instrumentation gap. Wrap the body in `ValueStopwatch.StartNew()` and `Record` the elapsed milliseconds tagged with `tree` and `outcome` ∈ `{success, dedup, failure, parked-causal-buffer}`. The stopwatch is allocation-free; the `KeyValuePair[]` for tags follows the same cached-singleton pattern R-064 introduced for `ApplyLag`. No public API change, no wire-format change. Test coverage: extend `ReplicationApplierTests` with one assertion per outcome (success / HWM-deduped / merge-failure / causal-buffer-park) verifying the histogram observed exactly one sample with the expected `outcome` tag. Independent of R-067 — ships either before or after the production drivers without coupling.
 
 - [ ] **R-065 — Back-pressure `IHealthCheck`**
   ASP.NET Core `IHealthCheck` implementation surfaces the "replog growing faster than ship rate" condition as `Degraded`, and `lag > threshold for duration` as `Unhealthy`. Makes replication health a first-class Kubernetes probe target.
