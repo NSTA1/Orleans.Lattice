@@ -122,6 +122,22 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "zero-sized batch; a non-positive value would deadlock the outbound ship loop.");
         }
 
+        if (options.ShipPartitionPageSize < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ShipPartitionPageSize)} "
+                + $"must be at least 1 ({scope}). The per-peer shipper grain reads at least one entry "
+                + "per partition per pump tick; a non-positive value would tight-loop the partition-resume drain.");
+        }
+
+        if (options.ShipCursorWriteInterval < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ShipCursorWriteInterval)} "
+                + $"must be at least 1 ({scope}). Zero or negative values would suppress every durable cursor "
+                + "write, so the WAL GC would never advance and a silo crash would replay the entire log.");
+        }
+
         if (options.ShipMaxInFlight < 1)
         {
             return ValidateOptionsResult.Fail(

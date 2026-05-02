@@ -43,4 +43,42 @@ internal sealed class ReplicationShipperState
     /// </remarks>
     [Id(1)]
     public int ConsecutiveFailures { get; set; }
+
+    /// <summary>
+    /// Per-partition resume cursors keyed by partition index. Each value
+    /// is the next unread WAL sequence number for that partition — i.e.
+    /// the value to pass as <c>fromSequence</c> on the next call to
+    /// <see cref="Grains.IReplogShardGrain.ReadAsync"/>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Sequence-based, not HLC-based, because the WAL partitions are
+    /// dense append-only logs (zero gaps, monotonically increasing) and
+    /// resuming by sequence converts every pump tick from an O(N)
+    /// rescan-from-zero walk into an O(page) read past the last
+    /// successfully shipped offset. The HLC <see cref="Cursor"/> is
+    /// retained alongside because it is the contract surface the
+    /// <see cref="ILatticeReplicationCursorRegistry"/> / WAL GC
+    /// predicate consume; partition cursors are private shipper state.
+    /// </para>
+    /// <para>
+    /// <strong>Wire-compat additive.</strong> Legacy persisted state
+    /// without an <c>[Id(2)]</c> slot decodes to an empty map and
+    /// produces the same cold-start behaviour as a freshly activated
+    /// shipper (every partition reads from sequence <c>0</c>); the
+    /// HLC <see cref="Cursor"/> filters the rescan to entries the
+    /// peer has not seen, so an upgrade is observable as a single
+    /// extra rescan on first pump tick after activation.
+    /// </para>
+    /// <para>
+    /// Persisted on every cursor advance via the same
+    /// <see cref="IPersistentState{TState}.WriteStateAsync"/> call
+    /// that flushes the HLC cursor — one round-trip, atomic across
+    /// the two slots. A failed write rolls back both, preserving the
+    /// pre-existing pump-side guarantee that a transient storage
+    /// failure leaves the shipper at the prior durable resume point.
+    /// </para>
+    /// </remarks>
+    [Id(2)]
+    public Dictionary<int, long> PartitionCursors { get; set; } = new();
 }

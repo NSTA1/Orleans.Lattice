@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 /// the steady-state phase timer would invoke).
 /// </summary>
 [TestFixture]
-public class ReplicationShipperGrainTests
+public partial class ReplicationShipperGrainTests
 {
     private const string Tree = "shipper-tree";
     private const string Peer = "site-b";
@@ -65,57 +65,120 @@ public class ReplicationShipperGrainTests
             OriginClusterId = origin,
         };
 
+    /// <summary>
+    /// Builds an options monitor that always returns <paramref name="options"/>.
+    /// When <paramref name="options"/> is null, defaults to a fresh
+    /// instance with <see cref="LatticeReplicationOptions.ShipCursorWriteInterval"/>=1
+    /// so legacy single-batch tests observe the cursor flush on every
+    /// ack. The deferred-persist semantics are covered by dedicated
+    /// tests in the partial file.
+    /// </summary>
     private static IOptionsMonitor<LatticeReplicationOptions> Monitor(
         LatticeReplicationOptions? options = null)
     {
-        var resolved = options ?? new LatticeReplicationOptions { ClusterId = LocalCluster };
+        var resolved = options ?? new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
+        };
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         monitor.CurrentValue.Returns(resolved);
         monitor.Get(Arg.Any<string>()).Returns(resolved);
         return monitor;
     }
 
-    private sealed class StubChangeFeed : IChangeFeed
+    /// <summary>
+    /// In-memory <see cref="IReplogShardGrain"/> stand-in. Tests
+    /// populate it via <see cref="Append(ReplogEntry)"/> (or the
+    /// equivalent legacy <see cref="Entries"/> list); the stub assigns
+    /// monotonically-increasing sequence numbers starting at <c>0</c>.
+    /// <para>
+    /// <see cref="ThrowOnRead"/> simulates a transient WAL read
+    /// failure on the next <see cref="ReadAsync"/> call.
+    /// <see cref="ReadCalls"/> records how many reads have happened
+    /// — used by partition-resume tests to assert the shipper does not
+    /// rescan from sequence 0 each tick.
+    /// </para>
+    /// </summary>
+    private sealed class StubReplogShardGrain : IReplogShardGrain
     {
         public List<ReplogEntry> Entries { get; } = new();
         public Exception? ThrowOnRead { get; set; }
-        public int SubscribeCalls { get; private set; }
+        public int ReadCalls { get; private set; }
+        public List<long> ReadFromSequences { get; } = new();
 
-        public IAsyncEnumerable<ReplogEntry> Subscribe(
-            string treeName,
-            HybridLogicalClock cursor,
-            bool includeLocalOrigin = true,
-            CancellationToken cancellationToken = default)
+        public void Append(ReplogEntry entry) => Entries.Add(entry);
+
+        public Task<long> AppendAsync(ReplogEntry entry, CancellationToken cancellationToken)
         {
-            SubscribeCalls++;
-            return Iterate(cursor, cancellationToken);
+            Entries.Add(entry);
+            return Task.FromResult((long)(Entries.Count - 1));
         }
 
-        private async IAsyncEnumerable<ReplogEntry> Iterate(
-            HybridLogicalClock cursor,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+        public Task<ReplogShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
         {
-            await Task.Yield();
+            ReadCalls++;
+            ReadFromSequences.Add(fromSequence);
             if (ThrowOnRead is not null)
             {
-                throw ThrowOnRead;
+                var ex = ThrowOnRead;
+                throw ex;
             }
-            foreach (var e in Entries)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (fromSequence >= Entries.Count)
             {
-                if (e.Timestamp.CompareTo(cursor) <= 0)
-                {
-                    continue;
-                }
-                ct.ThrowIfCancellationRequested();
-                yield return e;
+                return Task.FromResult(ReplogShardPage.Empty(fromSequence));
             }
+            var endExclusive = (int)Math.Min(Entries.Count, fromSequence + maxEntries);
+            var capacity = endExclusive - (int)fromSequence;
+            var entries = new ReplogShardEntry[capacity];
+            for (var i = 0; i < capacity; i++)
+            {
+                var seq = fromSequence + i;
+                entries[i] = new ReplogShardEntry
+                {
+                    Sequence = seq,
+                    Entry = Entries[(int)seq],
+                };
+            }
+            return Task.FromResult(new ReplogShardPage
+            {
+                Entries = entries,
+                NextSequence = endExclusive,
+            });
         }
+
+        public Task<long> GetNextSequenceAsync(CancellationToken cancellationToken) =>
+            Task.FromResult((long)Entries.Count);
+
+        public Task<long> GetEntryCountAsync(CancellationToken cancellationToken) =>
+            Task.FromResult((long)Entries.Count);
+    }
+
+    /// <summary>
+    /// Wires the per-partition stubs into a substitute <see cref="IGrainFactory"/>
+    /// so the shipper resolves <see cref="IReplogShardGrain"/> by
+    /// <c>{tree}/{partition}</c> and gets back the right stub for that
+    /// partition. Single-partition tests populate
+    /// <c>partitionedFeeds[0]</c> only.
+    /// </summary>
+    private static IGrainFactory BuildGrainFactory(
+        IGrainFactory? caller,
+        StubReplogShardGrain[] partitionedFeeds,
+        string treeName)
+    {
+        var factory = caller ?? Substitute.For<IGrainFactory>();
+        for (var p = 0; p < partitionedFeeds.Length; p++)
+        {
+            factory.GetGrain<IReplogShardGrain>($"{treeName}/{p}").Returns(partitionedFeeds[p]);
+        }
+        return factory;
     }
 
     private static (
         ReplicationShipperGrain Grain,
         FakePersistentState<ReplicationShipperState> State,
-        StubChangeFeed Feed,
+        StubReplogShardGrain Feed,
         IReplicationTransport Transport,
         TestEncoder Encoder,
         ILatticeReplicationCursorRegistry Registry,
@@ -130,7 +193,7 @@ public class ReplicationShipperGrainTests
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{treeName}/{peerClusterId}"));
         var reminders = Substitute.For<IReminderRegistry>();
         var monitor = Monitor(options);
-        var feed = new StubChangeFeed();
+        var feed = new StubReplogShardGrain();
         var transport = Substitute.For<IReplicationTransport>();
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
@@ -141,10 +204,10 @@ public class ReplicationShipperGrainTests
         {
             fakeState.State = seedState;
         }
-        var factory = grainFactory ?? Substitute.For<IGrainFactory>();
+        var factory = BuildGrainFactory(grainFactory, new[] { feed }, treeName);
         var grain = new ReplicationShipperGrain(
             ctx, reminders, NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, feed, transport, encoder, registry, factory, fakeState);
+            monitor, transport, encoder, registry, factory, fakeState);
         grain.InitializeForTesting(treeName, peerClusterId);
         return (grain, fakeState, feed, transport, encoder, registry, monitor.CurrentValue);
     }
@@ -155,7 +218,6 @@ public class ReplicationShipperGrainTests
         IGrainContext? ctx = null,
         IReminderRegistry? reminders = null,
         IOptionsMonitor<LatticeReplicationOptions>? monitor = null,
-        IChangeFeed? feed = null,
         IReplicationTransport? transport = null,
         IReplicationBatchEncoder? encoder = null,
         ILatticeReplicationCursorRegistry? registry = null,
@@ -166,7 +228,6 @@ public class ReplicationShipperGrainTests
             reminders ?? Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
             monitor ?? Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
-            feed ?? Substitute.For<IChangeFeed>(),
             transport ?? Substitute.For<IReplicationTransport>(),
             encoder ?? Substitute.For<IReplicationBatchEncoder>(),
             registry ?? Substitute.For<ILatticeReplicationCursorRegistry>(),
@@ -189,25 +250,6 @@ public class ReplicationShipperGrainTests
                 Substitute.For<IReminderRegistry>(),
                 NullLogger<ReplicationShipperGrain>.Instance,
                 null!,
-                Substitute.For<IChangeFeed>(),
-                Substitute.For<IReplicationTransport>(),
-                Substitute.For<IReplicationBatchEncoder>(),
-                Substitute.For<ILatticeReplicationCursorRegistry>(),
-                Substitute.For<IGrainFactory>(),
-                new FakePersistentState<ReplicationShipperState>()),
-            Throws.InstanceOf<ArgumentNullException>());
-    }
-
-    [Test]
-    public void Constructor_throws_when_change_feed_is_null()
-    {
-        Assert.That(
-            () => new ReplicationShipperGrain(
-                Substitute.For<IGrainContext>(),
-                Substitute.For<IReminderRegistry>(),
-                NullLogger<ReplicationShipperGrain>.Instance,
-                Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
-                null!,
                 Substitute.For<IReplicationTransport>(),
                 Substitute.For<IReplicationBatchEncoder>(),
                 Substitute.For<ILatticeReplicationCursorRegistry>(),
@@ -225,7 +267,6 @@ public class ReplicationShipperGrainTests
                 Substitute.For<IReminderRegistry>(),
                 NullLogger<ReplicationShipperGrain>.Instance,
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
-                Substitute.For<IChangeFeed>(),
                 null!,
                 Substitute.For<IReplicationBatchEncoder>(),
                 Substitute.For<ILatticeReplicationCursorRegistry>(),
@@ -243,7 +284,6 @@ public class ReplicationShipperGrainTests
                 Substitute.For<IReminderRegistry>(),
                 NullLogger<ReplicationShipperGrain>.Instance,
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
-                Substitute.For<IChangeFeed>(),
                 Substitute.For<IReplicationTransport>(),
                 null!,
                 Substitute.For<ILatticeReplicationCursorRegistry>(),
@@ -261,7 +301,6 @@ public class ReplicationShipperGrainTests
                 Substitute.For<IReminderRegistry>(),
                 NullLogger<ReplicationShipperGrain>.Instance,
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
-                Substitute.For<IChangeFeed>(),
                 Substitute.For<IReplicationTransport>(),
                 Substitute.For<IReplicationBatchEncoder>(),
                 null!,
@@ -279,7 +318,6 @@ public class ReplicationShipperGrainTests
                 Substitute.For<IReminderRegistry>(),
                 NullLogger<ReplicationShipperGrain>.Instance,
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
-                Substitute.For<IChangeFeed>(),
                 Substitute.For<IReplicationTransport>(),
                 Substitute.For<IReplicationBatchEncoder>(),
                 Substitute.For<ILatticeReplicationCursorRegistry>(),
@@ -341,7 +379,7 @@ public class ReplicationShipperGrainTests
     public async Task PumpOnceAsync_skips_entries_originating_from_peer()
     {
         var (grain, state, feed, transport, _, _, _) = Create();
-        feed.Entries.Add(MakeEntry("k1", origin: Peer, ticks: 10));
+        feed.Append(MakeEntry("k1", origin: Peer, ticks: 10));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -360,10 +398,11 @@ public class ReplicationShipperGrainTests
         var opts = new LatticeReplicationOptions
         {
             ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
             KeyFilter = key => key.StartsWith("repl/"),
         };
         var (grain, _, feed, transport, _, _, _) = Create(opts);
-        feed.Entries.Add(MakeEntry("other/x", ticks: 5));
+        feed.Append(MakeEntry("other/x", ticks: 5));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -377,13 +416,14 @@ public class ReplicationShipperGrainTests
         var opts = new LatticeReplicationOptions
         {
             ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
             KeyFilter = key => key.StartsWith("repl/"),
         };
         var (grain, _, feed, transport, _, _, _) = Create(opts);
         var hlc = new HybridLogicalClock { WallClockTicks = 5, Counter = 0 };
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = hlc });
-        feed.Entries.Add(MakeEntry("repl/x", ticks: 5));
+        feed.Append(MakeEntry("repl/x", ticks: 5));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -399,10 +439,11 @@ public class ReplicationShipperGrainTests
         var opts = new LatticeReplicationOptions
         {
             ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
             KeyPrefixes = new[] { "repl/", "ops/" },
         };
         var (grain, _, feed, transport, _, _, _) = Create(opts);
-        feed.Entries.Add(MakeEntry("other/x", ticks: 5));
+        feed.Append(MakeEntry("other/x", ticks: 5));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -416,13 +457,14 @@ public class ReplicationShipperGrainTests
         var opts = new LatticeReplicationOptions
         {
             ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
             KeyPrefixes = new[] { "repl/", "ops/" },
         };
         var (grain, _, feed, transport, _, _, _) = Create(opts);
         var hlc = new HybridLogicalClock { WallClockTicks = 5, Counter = 0 };
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = hlc });
-        feed.Entries.Add(MakeEntry("ops/x", ticks: 5));
+        feed.Append(MakeEntry("ops/x", ticks: 5));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -439,7 +481,7 @@ public class ReplicationShipperGrainTests
         var ackHlc = new HybridLogicalClock { WallClockTicks = 10, Counter = 0 };
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = ackHlc });
-        feed.Entries.Add(MakeEntry("k", ticks: 10));
+        feed.Append(MakeEntry("k", ticks: 10));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -461,7 +503,7 @@ public class ReplicationShipperGrainTests
         var ackHlc = new HybridLogicalClock { WallClockTicks = 5, Counter = 0 };
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = ackHlc });
-        feed.Entries.Add(MakeEntry("k", ticks: 5));
+        feed.Append(MakeEntry("k", ticks: 5));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -477,7 +519,7 @@ public class ReplicationShipperGrainTests
         var (grain, state, feed, transport, _, _, _) = Create();
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
-        feed.Entries.Add(MakeEntry("k", ticks: 7));
+        feed.Append(MakeEntry("k", ticks: 7));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -490,7 +532,7 @@ public class ReplicationShipperGrainTests
         var (grain, state, feed, transport, _, _, _) = Create();
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = false, HighestAppliedHlc = HybridLogicalClock.Zero });
-        feed.Entries.Add(MakeEntry("k", ticks: 7));
+        feed.Append(MakeEntry("k", ticks: 7));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -506,7 +548,7 @@ public class ReplicationShipperGrainTests
         var (grain, state, feed, transport, _, _, _) = Create();
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns<ReplicationAck>(_ => throw new InvalidOperationException("transport-down"));
-        feed.Entries.Add(MakeEntry("k", ticks: 7));
+        feed.Append(MakeEntry("k", ticks: 7));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -520,7 +562,7 @@ public class ReplicationShipperGrainTests
         var (grain, _, feed, transport, _, _, _) = Create();
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns<ReplicationAck>(_ => throw new InvalidOperationException("down"));
-        feed.Entries.Add(MakeEntry("k", ticks: 7));
+        feed.Append(MakeEntry("k", ticks: 7));
 
         // First call applies backoff.
         await grain.OnDoorbellAsync(CancellationToken.None);
@@ -539,7 +581,7 @@ public class ReplicationShipperGrainTests
         var (grain, state, feed, transport, encoder, _, _) = Create();
         encoder.ThrowOnEncode = true;
         encoder.EncodeException = new ArgumentException("malformed");
-        feed.Entries.Add(MakeEntry("k", ticks: 7));
+        feed.Append(MakeEntry("k", ticks: 7));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -556,7 +598,7 @@ public class ReplicationShipperGrainTests
         var (grain, state, feed, _, encoder, _, _) = Create();
         encoder.ThrowOnEncode = true;
         encoder.EncodeException = new InvalidOperationException("schema-broken");
-        feed.Entries.Add(MakeEntry("k", ticks: 9));
+        feed.Append(MakeEntry("k", ticks: 9));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -566,7 +608,7 @@ public class ReplicationShipperGrainTests
     // --- Drain failure ---
 
     [Test]
-    public async Task PumpOnceAsync_applies_backoff_on_change_feed_throw()
+    public async Task PumpOnceAsync_applies_backoff_on_partition_read_throw()
     {
         var (grain, state, feed, transport, _, _, _) = Create();
         feed.ThrowOnRead = new InvalidOperationException("feed-down");
@@ -591,7 +633,7 @@ public class ReplicationShipperGrainTests
             Arg.Any<string>(), Arg.Any<string>(),
             Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns<Task>(_ => Task.FromException(new InvalidOperationException("registry-down")));
-        feed.Entries.Add(MakeEntry("k", ticks: 5));
+        feed.Append(MakeEntry("k", ticks: 5));
 
         // The cursor advance is the durable side-effect; the registry
         // report is best-effort and a failure must be logged but not
@@ -611,12 +653,13 @@ public class ReplicationShipperGrainTests
         var opts = new LatticeReplicationOptions
         {
             ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
             ShipBatchSize = 2,
         };
         var (grain, _, feed, transport, _, _, _) = Create(opts);
         for (var i = 0; i < 10; i++)
         {
-            feed.Entries.Add(MakeEntry($"k{i}", ticks: i + 1));
+            feed.Append(MakeEntry($"k{i}", ticks: i + 1));
         }
         var captured = new List<ReplicationBatch>();
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
@@ -650,7 +693,7 @@ public class ReplicationShipperGrainTests
                 captured = call.Arg<ReplicationBatch>();
                 return new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero };
             });
-        feed.Entries.Add(MakeEntry("k", ticks: 3));
+        feed.Append(MakeEntry("k", ticks: 3));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -675,9 +718,9 @@ public class ReplicationShipperGrainTests
         var (grain, state, feed, _, encoder, _, _) = Create(grainFactory: factory);
         encoder.ThrowOnEncode = true;
         encoder.EncodeException = new ArgumentException("malformed");
-        feed.Entries.Add(MakeEntry("k1", ticks: 5));
-        feed.Entries.Add(MakeEntry("k2", ticks: 6));
-        feed.Entries.Add(MakeEntry("k3", ticks: 7));
+        feed.Append(MakeEntry("k1", ticks: 5));
+        feed.Append(MakeEntry("k2", ticks: 6));
+        feed.Append(MakeEntry("k3", ticks: 7));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -701,7 +744,7 @@ public class ReplicationShipperGrainTests
         var (grain, state, feed, _, encoder, _, _) = Create(grainFactory: factory);
         encoder.ThrowOnEncode = true;
         encoder.EncodeException = new InvalidOperationException("schema-broken");
-        feed.Entries.Add(MakeEntry("k", ticks: 9));
+        feed.Append(MakeEntry("k", ticks: 9));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -730,7 +773,7 @@ public class ReplicationShipperGrainTests
         factory.GetGrain<IReplicationDeadLetterGrain>(Tree).Returns(dlq);
         var (grain, state, feed, _, encoder, _, _) = Create(grainFactory: factory);
         encoder.ThrowOnEncode = true;
-        feed.Entries.Add(MakeEntry("k", ticks: 11));
+        feed.Append(MakeEntry("k", ticks: 11));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
@@ -768,7 +811,7 @@ public class ReplicationShipperGrainTests
     private static (
         ReplicationShipperGrain Grain,
         FakePersistentState<ReplicationShipperState> State,
-        StubChangeFeed Feed,
+        StubReplogShardGrain Feed,
         IReplicationTransport Transport,
         CapturingEncoder Encoder) CreateWithCapturingEncoder(
             LatticeReplicationOptions? options = null)
@@ -776,19 +819,20 @@ public class ReplicationShipperGrainTests
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{Tree}/{Peer}"));
         var monitor = Monitor(options);
-        var feed = new StubChangeFeed();
+        var feed = new StubReplogShardGrain();
         var transport = Substitute.For<IReplicationTransport>();
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
         var encoder = new CapturingEncoder();
         var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
         var fakeState = new FakePersistentState<ReplicationShipperState>();
+        var factory = BuildGrainFactory(null, new[] { feed }, Tree);
         var grain = new ReplicationShipperGrain(
             ctx,
             Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, feed, transport, encoder, registry,
-            Substitute.For<IGrainFactory>(),
+            monitor, transport, encoder, registry,
+            factory,
             fakeState);
         grain.InitializeForTesting(Tree, Peer);
         return (grain, fakeState, feed, transport, encoder);
@@ -798,10 +842,10 @@ public class ReplicationShipperGrainTests
     public async Task PumpOnceAsync_reuses_drain_buffer_across_pump_ticks()
     {
         var (grain, _, feed, _, encoder) = CreateWithCapturingEncoder();
-        feed.Entries.Add(MakeEntry("k1", ticks: 1));
+        feed.Append(MakeEntry("k1", ticks: 1));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
-        feed.Entries.Add(MakeEntry("k2", ticks: 2));
+        feed.Append(MakeEntry("k2", ticks: 2));
         await grain.OnDoorbellAsync(CancellationToken.None);
 
         // Both ticks encoded once; the entries-list reference must be
@@ -817,10 +861,10 @@ public class ReplicationShipperGrainTests
     public async Task PumpOnceAsync_reuses_write_buffer_and_resets_written_count_across_pump_ticks()
     {
         var (grain, _, feed, _, encoder) = CreateWithCapturingEncoder();
-        feed.Entries.Add(MakeEntry("k1", ticks: 1));
+        feed.Append(MakeEntry("k1", ticks: 1));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
-        feed.Entries.Add(MakeEntry("k2", ticks: 2));
+        feed.Append(MakeEntry("k2", ticks: 2));
         await grain.OnDoorbellAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
@@ -844,11 +888,11 @@ public class ReplicationShipperGrainTests
         // shipper recreates the buffer on tick 2 rather than reusing.
         var (grain, _, feed, _, encoder) = CreateWithCapturingEncoder();
         encoder.BytesPerEncode = 4 * 1024 * 1024 + 1; // pushes Capacity past LargeWriteBufferThreshold
-        feed.Entries.Add(MakeEntry("k1", ticks: 1));
+        feed.Append(MakeEntry("k1", ticks: 1));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
         encoder.BytesPerEncode = 4;
-        feed.Entries.Add(MakeEntry("k2", ticks: 2));
+        feed.Append(MakeEntry("k2", ticks: 2));
         await grain.OnDoorbellAsync(CancellationToken.None);
 
         Assert.That(encoder.CapturedWriters, Has.Count.EqualTo(2));

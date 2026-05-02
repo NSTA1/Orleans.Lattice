@@ -45,6 +45,23 @@ internal abstract class CoordinatorGrain<TSelf>(
 
     IGrainContext IGrainBase.GrainContext => context;
 
+    /// <summary>
+    /// Hook invoked on graceful deactivation. Default is a no-op;
+    /// derived classes override to flush deferred state, release
+    /// pooled resources, etc. Crash deactivations bypass this hook
+    /// by design — derived classes must remain crash-safe without
+    /// it firing. A storage failure inside the hook must not block
+    /// deactivation; derived classes are responsible for catching
+    /// and logging their own exceptions.
+    /// </summary>
+    /// <param name="reason">Why Orleans is deactivating the grain.</param>
+    /// <param name="cancellationToken">Soft deadline for the deactivation hook.</param>
+    protected virtual Task OnDeactivateCoreAsync(DeactivationReason reason, CancellationToken cancellationToken)
+        => Task.CompletedTask;
+
+    Task IGrainBase.OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
+        => OnDeactivateCoreAsync(reason, cancellationToken);
+
     /// <summary>Reminder-registry handle used by derived classes.</summary>
     protected IReminderRegistry ReminderRegistry => reminderRegistry;
 

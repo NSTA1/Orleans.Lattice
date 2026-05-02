@@ -14,13 +14,24 @@ namespace Orleans.Lattice.Replication.Grains;
 /// Hosts the per-<c>(tree, peer)</c> outbound ship loop using the
 /// shared <see cref="CoordinatorGrain{TSelf}"/> reminder + phase-timer
 /// scaffold.
+/// <para>
+/// Steady-state drain is a partition-resume hot path: each pump tick
+/// reads one bounded page per WAL partition starting from a durable
+/// per-partition sequence cursor (<see cref="ReplicationShipperState.PartitionCursors"/>),
+/// merges the pages by <see cref="HybridLogicalClock"/> ascending via
+/// a heap-free linear scan-for-min over partition heads (O(P), and
+/// O(1) for the canonical single-partition case), and emits up to
+/// <see cref="LatticeReplicationOptions.ShipBatchSize"/> entries per
+/// outbound batch. <see cref="IChangeFeed"/> is reserved for bootstrap
+/// / test / future-materialiser consumers that have no notion of
+/// partition routing.
+/// </para>
 /// </summary>
 internal sealed class ReplicationShipperGrain(
     IGrainContext context,
     IReminderRegistry reminderRegistry,
     ILogger<ReplicationShipperGrain> logger,
     IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
-    IChangeFeed changeFeed,
     IReplicationTransport transport,
     IReplicationBatchEncoder encoder,
     ILatticeReplicationCursorRegistry cursorRegistry,
@@ -32,8 +43,6 @@ internal sealed class ReplicationShipperGrain(
 {
     private readonly IOptionsMonitor<LatticeReplicationOptions> _optionsMonitor =
         optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
-    private readonly IChangeFeed _changeFeed =
-        changeFeed ?? throw new ArgumentNullException(nameof(changeFeed));
     private readonly IReplicationTransport _transport =
         transport ?? throw new ArgumentNullException(nameof(transport));
     private readonly IReplicationBatchEncoder _encoder =
@@ -91,6 +100,64 @@ internal sealed class ReplicationShipperGrain(
     /// </summary>
     private const int LargeWriteBufferThreshold = 4 * 1024 * 1024;
 
+    // ── Activation-scoped scratch arrays for the k-way HLC merge ──
+    //
+    // Sized lazily on first pump tick (and resized on partition-count
+    // change via Array.Resize). Reused across every subsequent tick;
+    // steady-state pump allocates nothing beyond the per-page DTOs the
+    // shard grain returns.
+    //
+    // Index range: [0, _partitionCount).
+    //
+    //   _partitionPages[p]    — current page entries from partition p,
+    //                           or null when that partition is "drained
+    //                           for this tick" (no more entries past
+    //                           the saved cursor right now).
+    //   _partitionPageIndex[p]— next entry index inside the page;
+    //                           equals _partitionPages[p].Count when
+    //                           the page is exhausted and a refill is
+    //                           required to advance further.
+    //   _partitionNextSeq[p]  — fromSequence to pass on the next
+    //                           ReadAsync call; mirrors
+    //                           state.PartitionCursors[p] but kept as a
+    //                           primitive long to avoid dictionary
+    //                           lookups inside the merge loop.
+    //   _partitionMaxReadSeq[p] — highest sequence we have *consumed*
+    //                           (shipped or filtered) from partition p
+    //                           this tick. -1 means "none consumed yet";
+    //                           on positive ack the partition cursor
+    //                           advances to this value + 1.
+    //   _partitionAdvanced[p] — whether the current tick consumed at
+    //                           least one entry from partition p (used
+    //                           to bound the cursor write to changed
+    //                           partitions on ack).
+    private IReadOnlyList<ReplogShardEntry>?[] _partitionPages = Array.Empty<IReadOnlyList<ReplogShardEntry>?>();
+    private int[] _partitionPageIndex = Array.Empty<int>();
+    private long[] _partitionNextSeq = Array.Empty<long>();
+    private long[] _partitionMaxReadSeq = Array.Empty<long>();
+    private bool[] _partitionAdvanced = Array.Empty<bool>();
+    private IReplogShardGrain?[] _partitionGrainCache = Array.Empty<IReplogShardGrain?>();
+    private int _partitionCount;
+
+    /// <summary>
+    /// Number of successful cursor advances since the last durable
+    /// <see cref="IPersistentState{TState}.WriteStateAsync"/>. Reset
+    /// to <c>0</c> on every flush. Counter rather than wall-clock
+    /// because the relevant cost is per-batch persistence I/O, and
+    /// the per-batch rate is what the operator tunes via
+    /// <see cref="LatticeReplicationOptions.ShipCursorWriteInterval"/>.
+    /// </summary>
+    private int _pendingCursorWrites;
+
+    /// <summary>
+    /// Highest HLC reported to the registry (i.e. successfully
+    /// persisted in a previous flush). Used to suppress redundant
+    /// <see cref="ILatticeReplicationCursorRegistry.ReportCursorAsync"/>
+    /// calls when a flush did not actually advance the durable cursor
+    /// (e.g. only partition cursors changed since the last flush).
+    /// </summary>
+    private HybridLogicalClock _lastReportedCursor = HybridLogicalClock.Zero;
+
     /// <inheritdoc />
     protected override string KeepaliveReminderName => "shipper-keepalive";
 
@@ -114,7 +181,38 @@ internal sealed class ReplicationShipperGrain(
         // RegisterOrUpdateReminder is idempotent; StartPhaseTimer's
         // _phaseTimer ??= guard makes the second call a no-op. Safe
         // for repeated invocation.
-        await StartCoordinatorAsync().ConfigureAwait(true);
+        await StartCoordinatorAsync();
+    }
+
+    /// <summary>
+    /// Flushes any pending deferred-persist cursor on graceful
+    /// deactivation. Crash deactivations bypass this hook by design —
+    /// the receiver's HLC dedupe bounds the replay cost in that case
+    /// (at most <see cref="LatticeReplicationOptions.ShipCursorWriteInterval"/>
+    /// &#xD7; <see cref="LatticeReplicationOptions.ShipBatchSize"/>
+    /// entries get re-shipped and no-op'd at the receiver). A storage
+    /// failure during the flush must not block deactivation; the
+    /// pending advance is recovered on the next activation by
+    /// re-shipping from the last durable cursor.
+    /// </summary>
+    protected override async Task OnDeactivateCoreAsync(DeactivationReason reason, CancellationToken cancellationToken)
+    {
+        if (_pendingCursorWrites == 0)
+        {
+            return;
+        }
+        try
+        {
+            await FlushCursorAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Pending cursor flush failed during deactivation of {Context}; "
+                + "recovery will re-ship at most {Pending} batches' worth of entries (receiver dedupes).",
+                LogContext, _pendingCursorWrites);
+        }
+        _ = reason;
     }
 
     /// <inheritdoc />
@@ -149,7 +247,7 @@ internal sealed class ReplicationShipperGrain(
         _pumpInFlight = true;
         try
         {
-            await PumpOnceAsync(CancellationToken.None).ConfigureAwait(true);
+            await PumpOnceAsync(CancellationToken.None);
         }
         finally
         {
@@ -172,30 +270,17 @@ internal sealed class ReplicationShipperGrain(
     {
         var options = _optionsMonitor.Get(_treeName);
 
-        // Drain a batch up to ShipBatchSize entries past the cursor,
-        // applying KeyFilter / KeyPrefixes / cycle-break inline. The
-        // drain buffer is activation-scoped and reused across pump
-        // ticks; Orleans serialises grain turns and the _pumpInFlight
-        // guard prevents re-entry, so clearing in place is safe.
+        // Drain a batch up to ShipBatchSize entries past each
+        // partition's resume cursor, k-way merging by HLC and applying
+        // KeyFilter / KeyPrefixes / cycle-break inline. The drain
+        // buffer is activation-scoped and reused across pump ticks;
+        // Orleans serialises grain turns and the _pumpInFlight guard
+        // prevents re-entry, so clearing in place is safe.
         _drainBuffer.Clear();
         var maxPerBatch = Math.Max(1, options.ShipBatchSize);
         try
         {
-            await foreach (var entry in _changeFeed
-                .Subscribe(_treeName, state.State.Cursor, includeLocalOrigin: true, cancellationToken)
-                .ConfigureAwait(true))
-            {
-                if (!ShouldShip(entry, options))
-                {
-                    continue;
-                }
-
-                _drainBuffer.Add(entry);
-                if (_drainBuffer.Count >= maxPerBatch)
-                {
-                    break;
-                }
-            }
+            await DrainBatchAsync(options, maxPerBatch, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -257,8 +342,8 @@ internal sealed class ReplicationShipperGrain(
             Logger.LogWarning(ex,
                 "Encode failed for {EntryCount}-entry batch on {Context}; routing to DLQ and advancing cursor to {Hlc}",
                 _drainBuffer.Count, LogContext, sourceHlc);
-            await RouteBatchToDeadLetterAsync(ex, cancellationToken).ConfigureAwait(true);
-            await AdvanceCursorAsync(sourceHlc, options, cancellationToken).ConfigureAwait(true);
+            await RouteBatchToDeadLetterAsync(ex, cancellationToken);
+            await AdvanceCursorAsync(sourceHlc, options, cancellationToken);
             return;
         }
 
@@ -272,7 +357,7 @@ internal sealed class ReplicationShipperGrain(
                 OriginClusterId = options.ClusterId,
                 Payload = _writeBuffer.WrittenMemory,
             };
-            ack = await _transport.SendAsync(batch, cancellationToken).ConfigureAwait(true);
+            ack = await _transport.SendAsync(batch, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -288,19 +373,12 @@ internal sealed class ReplicationShipperGrain(
             return;
         }
 
-        // Pick the higher of (last entry HLC, ack HighestAppliedHlc).
-        // A receiver that fully applied the batch returns the highest
-        // entry HLC; a receiver that partially applied returns the
-        // partial frontier. Either way we trust the ack.
+        // Trust the receiver's ack frontier. A receiver that fully
+        // applied the batch returns the highest entry HLC; a receiver
+        // that partially applied returns the partial frontier; a
+        // receiver that fully deduped returns a frontier at or below
+        // ours and we fall back to sourceHlc below to make progress.
         var advancedTo = ack.HighestAppliedHlc;
-        if (sourceHlc.CompareTo(advancedTo) > 0)
-        {
-            // Receiver returned a lower frontier than the batch's
-            // last entry — partial apply or HWM dedupe. Use the
-            // ack's frontier so we don't claim more progress than
-            // the receiver acknowledged.
-            advancedTo = ack.HighestAppliedHlc;
-        }
         if (advancedTo <= state.State.Cursor)
         {
             // Receiver acknowledged a frontier at or below ours
@@ -311,7 +389,7 @@ internal sealed class ReplicationShipperGrain(
             advancedTo = sourceHlc;
         }
 
-        await AdvanceCursorAsync(advancedTo, options, cancellationToken).ConfigureAwait(true);
+        await AdvanceCursorAsync(advancedTo, options, cancellationToken);
         // Successful round-trip resets the backoff counter.
         state.State.ConsecutiveFailures = 0;
         _nextRetryAtUtc = DateTime.MinValue;
@@ -370,30 +448,308 @@ internal sealed class ReplicationShipperGrain(
         LatticeReplicationOptions options,
         CancellationToken cancellationToken)
     {
-        if (newCursor.CompareTo(state.State.Cursor) <= 0)
+        // Mutate in-memory state up front so the next pump tick within
+        // this activation resumes from the latest known-good cursor
+        // even if the durable write is deferred.
+        var hlcAdvanced = newCursor.CompareTo(state.State.Cursor) > 0;
+        var partitionsAdvanced = AdvancePartitionCursorsInState();
+
+        if (!hlcAdvanced && !partitionsAdvanced)
         {
             return;
         }
 
-        state.State.Cursor = newCursor;
-        await state.WriteStateAsync().ConfigureAwait(true);
+        if (hlcAdvanced)
+        {
+            state.State.Cursor = newCursor;
+        }
 
-        // Best-effort registry report: the GC consumes this to
-        // compute the trim frontier. A registry-side failure does
-        // not unwind the durable cursor advance.
+        _pendingCursorWrites++;
+        var interval = Math.Max(1, options.ShipCursorWriteInterval);
+        if (_pendingCursorWrites < interval)
+        {
+            // Defer the durable write. Receiver-side apply is
+            // HLC-monotonic and dedupes on (originClusterId, originHlc),
+            // so a silo crash inside this window replays at most
+            // (interval × ShipBatchSize) entries — the receiver no-ops
+            // the duplicates. The WAL GC's view of this peer is
+            // pinned at the last reported cursor (_lastReportedCursor)
+            // until the flush completes, so the trim frontier never
+            // exceeds the durably-recoverable point.
+            return;
+        }
+
+        await FlushCursorAsync(cancellationToken);
+        _ = options; // Reserved for future per-tree report flavours.
+    }
+
+    /// <summary>
+    /// Persists <see cref="state"/> via
+    /// <see cref="IPersistentState{TState}.WriteStateAsync"/> and then
+    /// (only on success) reports the durable HLC cursor to the
+    /// registry. Idempotent — safe to call when no in-memory advance
+    /// is pending. The persistence-then-report ordering is
+    /// load-bearing: the WAL GC consumes the reported cursor to
+    /// compute the trim frontier, so reporting before persistence
+    /// would risk trimming entries we cannot recover after a crash.
+    /// </summary>
+    private async Task FlushCursorAsync(CancellationToken cancellationToken)
+    {
+        if (_pendingCursorWrites == 0)
+        {
+            return;
+        }
+
+        await state.WriteStateAsync();
+        _pendingCursorWrites = 0;
+
+        var durableCursor = state.State.Cursor;
+        if (durableCursor.CompareTo(_lastReportedCursor) <= 0)
+        {
+            // Only partition cursors changed since the last flush —
+            // nothing new for the GC.
+            return;
+        }
+
+        // Best-effort registry report: a registry-side failure does
+        // not unwind the durable cursor advance. We still update
+        // _lastReportedCursor so a transient registry outage does not
+        // wedge the report indefinitely; the next flush re-reports
+        // through the same suppression check on the next advance.
         try
         {
             await _cursorRegistry
-                .ReportCursorAsync(_treeName, _peerClusterId, newCursor, cancellationToken)
-                .ConfigureAwait(true);
+                .ReportCursorAsync(_treeName, _peerClusterId, durableCursor, cancellationToken)
+                ;
+            _lastReportedCursor = durableCursor;
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex,
                 "Cursor registry report failed for {Context}; persisted cursor remains {Cursor}",
-                LogContext, newCursor);
+                LogContext, durableCursor);
+            _lastReportedCursor = durableCursor;
         }
-        _ = options; // Reserved for future per-tree report flavours.
+    }
+
+    /// <summary>
+    /// Folds the per-tick <see cref="_partitionMaxReadSeq"/> /
+    /// <see cref="_partitionAdvanced"/> scratch arrays into the
+    /// durable <see cref="ReplicationShipperState.PartitionCursors"/>
+    /// dictionary. Returns <see langword="true"/> when at least one
+    /// partition cursor actually moved forward (so the caller knows
+    /// whether a <c>WriteStateAsync</c> is required).
+    /// <para>
+    /// Resets the scratch arrays' "advanced" flag once consumed —
+    /// the next pump tick starts from a clean slate.
+    /// </para>
+    /// </summary>
+    private bool AdvancePartitionCursorsInState()
+    {
+        var changed = false;
+        for (var p = 0; p < _partitionCount; p++)
+        {
+            if (!_partitionAdvanced[p])
+            {
+                continue;
+            }
+            // _partitionMaxReadSeq[p] is the highest sequence we
+            // *consumed* this tick (shipped or filtered). Resume on
+            // the next tick from the entry just past it.
+            var nextSeq = _partitionMaxReadSeq[p] + 1;
+            // Idempotent: only advance the durable cursor when the
+            // computed next-seq is strictly greater than what's
+            // already there. (Guards against a degenerate case where
+            // _partitionAdvanced[p] flips true but no entry was
+            // actually consumed past the prior cursor — should not
+            // happen given the merge-loop semantics, but the guard
+            // is cheap and removes a sharp edge.)
+            if (state.State.PartitionCursors.TryGetValue(p, out var existing) && existing >= nextSeq)
+            {
+                continue;
+            }
+            state.State.PartitionCursors[p] = nextSeq;
+            changed = true;
+            // Reset the per-tick flag; _partitionMaxReadSeq stays as
+            // the last value (fine — it gets overwritten on the next
+            // consume from this partition).
+            _partitionAdvanced[p] = false;
+        }
+        return changed;
+    }
+
+    /// <summary>
+    /// Drains up to <paramref name="maxPerBatch"/> entries past each
+    /// partition's saved resume cursor, k-way merging by HLC ascending
+    /// via a heap-free linear scan-for-min over partition heads. Applies
+    /// <see cref="ShouldShip"/> inline so filtered entries are
+    /// consumed-but-not-shipped (their sequence still advances the
+    /// partition cursor on ack so the next tick does not re-read them).
+    /// <para>
+    /// O(P) per emitted entry — collapses to O(1) for the canonical
+    /// single-partition case. Allocates nothing on the hot path beyond
+    /// the per-page DTOs the shard grain returns; the scratch arrays
+    /// and the drain buffer are activation-scoped.
+    /// </para>
+    /// </summary>
+    private async Task DrainBatchAsync(
+        LatticeReplicationOptions options,
+        int maxPerBatch,
+        CancellationToken cancellationToken)
+    {
+        var partitions = Math.Max(1, options.ReplogPartitions);
+        var pageSize = Math.Max(1, options.ShipPartitionPageSize);
+
+        EnsureScratchSized(partitions);
+
+        // Initialise per-partition state for this tick. _partitionPages
+        // and _partitionPageIndex always reset (they're tick-scoped);
+        // _partitionNextSeq seeds from the durable cursor;
+        // _partitionMaxReadSeq is initialised from the cursor minus 1
+        // so a partition that contributes nothing this tick reports
+        // "no advance" in AdvancePartitionCursorsInState.
+        for (var p = 0; p < partitions; p++)
+        {
+            _partitionPages[p] = null;
+            _partitionPageIndex[p] = 0;
+            _partitionAdvanced[p] = false;
+            var seeded = state.State.PartitionCursors.TryGetValue(p, out var saved) ? saved : 0L;
+            _partitionNextSeq[p] = seeded;
+            _partitionMaxReadSeq[p] = seeded - 1;
+        }
+
+        // Prime each partition's page from its saved cursor. Done up
+        // front so the merge loop below is allocation-free apart from
+        // page refills triggered when a partition exhausts its page
+        // mid-batch.
+        for (var p = 0; p < partitions; p++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await TryRefillPartitionAsync(p, pageSize, cancellationToken);
+        }
+
+        // K-way merge: at every step pick the partition whose head
+        // entry has the smallest HLC, consume one entry from it, and
+        // advance. When a partition's page is exhausted, refill from
+        // the saved next-sequence; if the refill returns empty the
+        // partition is "drained for this tick" and excluded from the
+        // candidate set.
+        while (_drainBuffer.Count < maxPerBatch)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var minPartition = -1;
+            HybridLogicalClock minHlc = default;
+
+            for (var p = 0; p < partitions; p++)
+            {
+                var page = _partitionPages[p];
+                if (page is null)
+                {
+                    continue; // drained this tick
+                }
+                if (_partitionPageIndex[p] >= page.Count)
+                {
+                    // Page exhausted — try to refill. We already advanced
+                    // _partitionNextSeq on the prior consume so the
+                    // refill picks up where we left off.
+                    await TryRefillPartitionAsync(p, pageSize, cancellationToken);
+                    page = _partitionPages[p];
+                    if (page is null)
+                    {
+                        continue;
+                    }
+                }
+
+                var head = page[_partitionPageIndex[p]].Entry.Timestamp;
+                if (minPartition < 0 || head.CompareTo(minHlc) < 0)
+                {
+                    minPartition = p;
+                    minHlc = head;
+                }
+            }
+
+            if (minPartition < 0)
+            {
+                // Every partition drained for this tick.
+                break;
+            }
+
+            var winningPage = _partitionPages[minPartition]!;
+            var winningEntry = winningPage[_partitionPageIndex[minPartition]];
+            _partitionPageIndex[minPartition]++;
+            _partitionMaxReadSeq[minPartition] = winningEntry.Sequence;
+            _partitionAdvanced[minPartition] = true;
+
+            // Defensive HLC filter: a legacy state with a non-zero
+            // state.Cursor but an empty PartitionCursors dictionary
+            // resumes from sequence 0, which would re-ship every
+            // entry the peer has already seen on the very first tick
+            // after upgrade. The HLC predicate filters them out at
+            // negligible cost (one comparison per entry); steady
+            // state never matches because the partition cursor moves
+            // strictly forward on ack.
+            if (winningEntry.Entry.Timestamp.CompareTo(state.State.Cursor) <= 0)
+            {
+                continue;
+            }
+
+            if (!ShouldShip(winningEntry.Entry, options))
+            {
+                continue;
+            }
+
+            _drainBuffer.Add(winningEntry.Entry);
+        }
+    }
+
+    /// <summary>
+    /// Issues a <see cref="IReplogShardGrain.ReadAsync"/> against the
+    /// requested partition starting at <see cref="_partitionNextSeq"/>,
+    /// stores the page in the scratch arrays, and updates
+    /// <see cref="_partitionNextSeq"/> to the page's
+    /// <see cref="ReplogShardPage.NextSequence"/>. An empty result
+    /// leaves <see cref="_partitionPages"/> at <see langword="null"/>
+    /// for that partition — the caller treats that as "drained this
+    /// tick" and stops considering the partition for the rest of the
+    /// merge loop.
+    /// </summary>
+    private async Task TryRefillPartitionAsync(int partition, int pageSize, CancellationToken cancellationToken)
+    {
+        var grain = _partitionGrainCache[partition] ??=
+            _grainFactory.GetGrain<IReplogShardGrain>($"{_treeName}/{partition}");
+        var page = await grain
+            .ReadAsync(_partitionNextSeq[partition], pageSize, cancellationToken)
+            ;
+        if (page.Entries.Count == 0)
+        {
+            _partitionPages[partition] = null;
+            return;
+        }
+        _partitionPages[partition] = page.Entries;
+        _partitionPageIndex[partition] = 0;
+        _partitionNextSeq[partition] = page.NextSequence;
+    }
+
+    /// <summary>
+    /// Grows the activation-scoped scratch arrays in lockstep when the
+    /// configured <see cref="LatticeReplicationOptions.ReplogPartitions"/>
+    /// changes (or on first activation). Idempotent — a no-op when the
+    /// arrays are already at the requested size.
+    /// </summary>
+    private void EnsureScratchSized(int partitions)
+    {
+        _partitionCount = partitions;
+        if (_partitionPages.Length >= partitions)
+        {
+            return;
+        }
+        Array.Resize(ref _partitionPages, partitions);
+        Array.Resize(ref _partitionPageIndex, partitions);
+        Array.Resize(ref _partitionNextSeq, partitions);
+        Array.Resize(ref _partitionMaxReadSeq, partitions);
+        Array.Resize(ref _partitionAdvanced, partitions);
+        Array.Resize(ref _partitionGrainCache, partitions);
     }
 
     private void ApplyBackoff(LatticeReplicationOptions options, Exception? exception, string reason)
@@ -453,7 +809,7 @@ internal sealed class ReplicationShipperGrain(
                     failureReason,
                     retryCount: 0,
                     LatticeReplicationMetrics.ReasonSchema,
-                    cancellationToken).ConfigureAwait(true);
+                    cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
