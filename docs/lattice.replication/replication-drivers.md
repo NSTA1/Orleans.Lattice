@@ -154,6 +154,86 @@ ticks:
 Net effect: zero per-tick heap allocation on the steady-state path,
 modulo Orleans-internal serializer wrappers.
 
+### Partition resume cursor
+
+The steady-state ship loop bypasses `IChangeFeed` and reads each WAL
+partition directly via `IReplogShardGrain.ReadAsync(fromSequence, …)`
+starting at a durable per-partition resume cursor stored on
+`ReplicationShipperState.PartitionCursors`. Per pump tick the shipper
+fetches up to `ShipPartitionPageSize` (default 256) entries from each
+partition and merges them by HLC ascending via a heap-free O(P) linear
+scan-for-min over partition heads. The merge collapses to O(1) for the
+canonical single-partition case.
+
+Sequence-based (not HLC-based) resume converts every pump tick from an
+O(N) rescan-from-zero walk over the WAL into an O(page) read past the
+last successfully shipped offset. `IChangeFeed` is retained verbatim
+for bootstrap, test, and future-materialiser consumers that have no
+notion of partition routing.
+
+A defensive HLC predicate at the top of the merge loop drops any entry
+whose timestamp is at-or-below the durable HLC `Cursor`. This is the
+single insurance line that handles the legacy-state-decode case (an
+upgraded shipper resuming with a populated HLC cursor but an empty
+`PartitionCursors` dictionary), the bootstrap case (the receiver
+applies a snapshot that pushes the HLC cursor past pending WAL
+entries), and the cross-shipper-HWM case (another peer advanced the
+receiver's frontier past ours and the next ack reflects that). Steady
+state never matches the predicate because partition cursors move
+strictly forward on every positive ack.
+
+Wire-compat is additive: the new `[Id(2)] PartitionCursors` slot on
+`ReplicationShipperState` decodes as the empty dictionary for legacy
+persisted state, which the cold-start path treats identically to a
+fresh activation. Setting `ReplogPartitions=1` (the default) reduces
+the merge to a single read per tick.
+
+### Deferred cursor persistence
+
+Cursor advances are amortised across `ShipCursorWriteInterval`
+(default 16) successful acks rather than persisted per-ack. The
+`_pendingCursorWrites` counter increments on every advance and the
+durable `WriteStateAsync` only fires when the counter reaches the
+configured interval (or on graceful deactivation). Receiver-side apply
+is HLC-monotonic and dedupes on `(originClusterId, originHlc)`, so a
+silo crash inside the deferred-persist window costs at most
+`ShipCursorWriteInterval × ShipBatchSize` entries of wasteful
+re-shipping — the receiver no-ops the duplicates and no data is lost.
+
+Setting `ShipCursorWriteInterval=1` recovers the persist-every-ack
+behaviour for hosts that prefer the smaller replay window over the
+amortised storage cost.
+
+### Persist-then-report ordering (load-bearing)
+
+`ILatticeReplicationCursorRegistry.ReportCursorAsync` is called
+strictly **after** `WriteStateAsync` completes. The WAL GC consumes
+the reported cursor to compute the trim frontier, so reporting before
+persistence would risk trimming entries the shipper cannot recover
+after a crash. This ordering is preserved across the deferred-persist
+change: only flushes that durably advance the HLC cursor produce a new
+registry report.
+
+A registry-side failure during the report does not unwind the durable
+cursor advance and does not retry — the shipper updates
+`_lastReportedCursor` to the durable value regardless. The
+suppression check inside `FlushCursorAsync` then skips the next
+report attempt until the durable cursor moves further forward, at
+which point the next flush re-reports the new frontier through the
+recovered registry. Operators monitoring the WAL GC trim frontier
+should expect this lag to clear on the next post-outage ack rather
+than immediately when the registry recovers.
+
+### Graceful deactivation
+
+`OnDeactivateCoreAsync` flushes any pending cursor advance before the
+activation tears down so a clean shutdown (e.g. operator silo drain)
+eliminates the deferred-persist replay window entirely. A storage
+failure during the flush is logged and swallowed — deactivation must
+not block — and the next activation recovers by re-shipping at most
+`ShipCursorWriteInterval × ShipBatchSize` entries the receiver
+dedupes.
+
 ### `ShipMaxInFlight` is v1-inert
 
 The validator accepts any value `>= 1`, but the shipper grain hard-codes

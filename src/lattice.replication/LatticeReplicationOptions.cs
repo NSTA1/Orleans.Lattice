@@ -276,6 +276,65 @@ public class LatticeReplicationOptions
     public int ShipBatchSize { get; set; } = DefaultShipBatchSize;
 
     /// <summary>
+    /// Maximum number of <see cref="ReplogEntry"/> records the
+    /// per-<c>(tree, peer)</c> shipper grain reads per partition per
+    /// pump tick when draining the WAL via the partition-resume
+    /// hot path. The pump issues one
+    /// <see cref="Grains.IReplogShardGrain.ReadAsync"/> call per
+    /// partition starting from each partition's saved resume cursor,
+    /// merges the pages by <see cref="Primitives.HybridLogicalClock"/>
+    /// ascending, and emits up to <see cref="ShipBatchSize"/> entries
+    /// per outbound batch.
+    /// <para>
+    /// Distinct from <see cref="ShipBatchSize"/>: this value caps the
+    /// per-partition page read; <see cref="ShipBatchSize"/> caps the
+    /// merged output batch. With <c>P</c> partitions the worst-case
+    /// in-memory drain footprint is <c>P × ShipPartitionPageSize</c>
+    /// entries — <c>ShipBatchSize</c> bounds the wire batch but not
+    /// the post-drain working set, so size <c>ShipPartitionPageSize</c>
+    /// for one comfortable batch's worth of page-read work
+    /// (default <see cref="DefaultShipPartitionPageSize"/>).
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultShipPartitionPageSize"/>. Must be
+    /// at least <c>1</c>.
+    /// </para>
+    /// </summary>
+    public int ShipPartitionPageSize { get; set; } = DefaultShipPartitionPageSize;
+
+    /// <summary>
+    /// Number of successful acks the per-<c>(tree, peer)</c> shipper
+    /// grain coalesces between calls to
+    /// <see cref="IPersistentState{TState}.WriteStateAsync"/>. Setting
+    /// this to <c>1</c> persists on every ack (the original behaviour
+    /// before this option was introduced); higher values amortize the
+    /// storage round-trip across multiple shipped batches at the cost
+    /// of a bounded re-ship window after a silo crash.
+    /// <para>
+    /// <strong>Crash safety.</strong> Receiver-side apply is
+    /// HLC-monotonic and dedupes on <c>(originClusterId, originHlc)</c>,
+    /// so a crash inside the deferred-persist window replays at most
+    /// <see cref="ShipCursorWriteInterval"/> &#xD7; <see cref="ShipBatchSize"/>
+    /// entries on recovery — the receiver no-ops the duplicates. No
+    /// data is lost.
+    /// </para>
+    /// <para>
+    /// <strong>GC interaction.</strong> The WAL GC consumes the cursor
+    /// reported via
+    /// <see cref="ILatticeReplicationCursorRegistry.ReportCursorAsync"/>;
+    /// the shipper calls that strictly <em>after</em> the durable
+    /// <c>WriteStateAsync</c> completes, so the trim frontier never
+    /// exceeds the durably-recoverable cursor regardless of this
+    /// interval.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultShipCursorWriteInterval"/>. Must
+    /// be at least <c>1</c>.
+    /// </para>
+    /// </summary>
+    public int ShipCursorWriteInterval { get; set; } = DefaultShipCursorWriteInterval;
+
+    /// <summary>
     /// Maximum number of in-flight <see cref="IReplicationTransport.SendAsync"/>
     /// calls per <c>(tree, peer)</c> shipper. The v1 implementation
     /// hard-codes a strict serial-send protocol so per-peer cursor
@@ -453,6 +512,33 @@ public class LatticeReplicationOptions
     /// re-ships at most a few hundred entries.
     /// </summary>
     public const int DefaultShipBatchSize = 256;
+
+    /// <summary>
+    /// Default value for <see cref="ShipPartitionPageSize"/>: 256
+    /// entries per partition per pump tick. Sized to match
+    /// <see cref="DefaultShipBatchSize"/> for the canonical
+    /// <c>ReplogPartitions=1</c> case so the per-tick page-read
+    /// fits exactly one outbound batch with no carry-over; raise
+    /// for trees with many partitions where one partition can
+    /// supply the whole batch on its own.
+    /// </summary>
+    public const int DefaultShipPartitionPageSize = 256;
+
+    /// <summary>
+    /// Default value for <see cref="ShipCursorWriteInterval"/>: 16
+    /// successful acks between durable cursor writes. At canonical
+    /// configuration (<see cref="DefaultShipBatchSize"/>=256, ~10 ms
+    /// ack RTT, ~10 ms persist RTT) this lifts the per-batch persist
+    /// round-trip out of the steady-state hot path (one persist per
+    /// 16 batches instead of one per batch — ~94% reduction in
+    /// storage write amplification) while keeping the
+    /// crash-recovery re-ship window to ~4 096 entries (under 1 MB
+    /// at typical entry sizes; on the order of a few seconds of
+    /// re-ship work at benchmark throughput rates). Doubling to 32
+    /// trims another ~3% off write amplification but doubles the
+    /// recovery window, so 16 sits at the knee of the curve.
+    /// </summary>
+    public const int DefaultShipCursorWriteInterval = 16;
 
     /// <summary>
     /// Default value for <see cref="ShipMaxInFlight"/>: strict serial
