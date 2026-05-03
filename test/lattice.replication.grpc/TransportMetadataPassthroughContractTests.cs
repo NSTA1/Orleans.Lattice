@@ -45,6 +45,32 @@ public class TransportMetadataPassthroughContractTests
                 return Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = entry.Timestamp });
             });
 
+        // The receiver-side service collapses per-entry HWM grain RPCs
+        // into a single ApplyBatchAsync call per inbound push. NSubstitute
+        // does not route through the default-interface-method body, so we
+        // set ApplyBatchAsync up explicitly to walk every entry through
+        // the same capture closure as the per-entry path. This keeps the
+        // metadata-pass-through assertions pointed at the captured queue
+        // regardless of whether the service decides to dispatch per-entry
+        // or per-batch in the future.
+        _applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var batch = callInfo.Arg<IReadOnlyList<ReplogEntry>>();
+                var max = HybridLogicalClock.Zero;
+                var applied = false;
+                foreach (var entry in batch)
+                {
+                    _capturedEntries.Enqueue(entry);
+                    applied = true;
+                    if (entry.Timestamp.CompareTo(max) > 0)
+                    {
+                        max = entry.Timestamp;
+                    }
+                }
+                return Task.FromResult(new ApplyResult { Applied = applied, HighWaterMark = max });
+            });
+
         var hostBuilder = new HostBuilder()
             .ConfigureWebHost(web =>
             {

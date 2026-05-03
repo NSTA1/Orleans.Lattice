@@ -182,11 +182,14 @@ public class LatticeReplicationGrpcServiceTests
         var hlcHigh = new HybridLogicalClock { WallClockTicks = 200, Counter = 0 };
         var hlcMid = new HybridLogicalClock { WallClockTicks = 150, Counter = 0 };
 
-        applier.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = hlcLow }),
-                Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = hlcHigh }),
-                Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = hlcMid }));
+        // The receiver-side service collapses per-entry HWM round-trips by
+        // calling ApplyBatchAsync once per inbound push instead of looping
+        // over ApplyAsync. The substitute does not route through the
+        // default-interface-method body, so we set ApplyBatchAsync up
+        // explicitly with the aggregate result the optimised batch path
+        // would have computed (max HWM across the three entries).
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = hlcHigh }));
 
         var svc = CreateService(applier, out _);
         var box = new ReplicationBatchEnvelopeBox
@@ -211,14 +214,16 @@ public class LatticeReplicationGrpcServiceTests
             Assert.That(ack.Value.Accepted, Is.True);
             Assert.That(ack.Value.HighestAppliedHlc, Is.EqualTo(hlcHigh));
         });
-        await applier.Received(3).ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>());
+        await applier.Received(1).ApplyBatchAsync(
+            Arg.Is<IReadOnlyList<ReplogEntry>>(list => list.Count == 3),
+            Arg.Any<CancellationToken>());
     }
 
     [Test]
     public void Push_throws_rpc_exception_on_apply_failure()
     {
         var applier = Substitute.For<IReplicationApplier>();
-        applier.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException<ApplyResult>(new InvalidOperationException("bang")));
 
         var svc = CreateService(applier, out _);
@@ -241,6 +246,16 @@ public class LatticeReplicationGrpcServiceTests
     public void Push_propagates_cancellation()
     {
         var applier = Substitute.For<IReplicationApplier>();
+        // Honour the inbound cancellation token from the batch path so the
+        // service's `catch (OperationCanceledException) when (...)` filter
+        // re-throws the OCE instead of wrapping it as an RpcException.
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                callInfo.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                return Task.FromResult(new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero });
+            });
+
         var svc = CreateService(applier, out _);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
@@ -312,6 +327,8 @@ public class LatticeReplicationGrpcServiceTests
             Throws.Nothing);
     }
 }
+
+
 
 
 

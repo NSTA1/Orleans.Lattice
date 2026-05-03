@@ -87,6 +87,28 @@ public class GrpcPushTransportIntegrationTests
                 var entry = callInfo.Arg<ReplogEntry>();
                 return Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = entry.Timestamp });
             });
+
+        // The receiver service drives the applier through ApplyBatchAsync
+        // to collapse per-entry HWM round-trips. NSubstitute does not
+        // call through the default-interface-method body, so we set up
+        // ApplyBatchAsync to mirror the per-entry semantics: walk each
+        // entry, return the pointwise-maximum HighWaterMark.
+        _applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var batch = callInfo.Arg<IReadOnlyList<ReplogEntry>>();
+                var max = HybridLogicalClock.Zero;
+                var applied = false;
+                foreach (var e in batch)
+                {
+                    applied = true;
+                    if (e.Timestamp.CompareTo(max) > 0)
+                    {
+                        max = e.Timestamp;
+                    }
+                }
+                return Task.FromResult(new ApplyResult { Applied = applied, HighWaterMark = max });
+            });
     }
 
     private sealed class TestEncoder : IReplicationBatchEncoder
@@ -144,7 +166,10 @@ public class GrpcPushTransportIntegrationTests
             Assert.That(ackBox.Value.Accepted, Is.True);
             Assert.That(ackBox.Value.HighestAppliedHlc, Is.EqualTo(hlcB));
         });
-        await _applier.Received(2).ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>());
+        // Service collapses per-entry calls into a single ApplyBatchAsync.
+        await _applier.Received(1).ApplyBatchAsync(
+            Arg.Is<IReadOnlyList<ReplogEntry>>(list => list.Count == 2),
+            Arg.Any<CancellationToken>());
     }
 
     [Test]
