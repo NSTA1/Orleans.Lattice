@@ -255,4 +255,465 @@ public class LatticeGrainReplicationApplyTests
         Assert.That(entry.HasValue, Is.True);
         Assert.That(entry!.Value.VectorClock, Is.Null);
     }
+
+    // ------------------------------------------------------------------
+    // Batched apply path — IReplicationApplyGrain.ApplyMergeManyAsync.
+    // Mirrors the per-entry test surface above so the bit-identical
+    // contract claimed by BuildApplyMergeLww is exercised end-to-end on
+    // a real cluster: validation guards, persisted shape, VC / origin /
+    // expiry preservation, LWW dominance, single-shard fast path,
+    // multi-shard fan-out, mixed Set+Delete in one call, and the
+    // single-item fast path that deflects to ApplyMergeOneAsync.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task ApplyMergeManyAsync_with_empty_list_is_noop()
+    {
+        const string tree = "rapply-merge-empty";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        await lattice.SetAsync("k", new byte[] { 9 });
+
+        await apply.ApplyMergeManyAsync(Array.Empty<ApplyMergeItem>());
+
+        Assert.That(await lattice.GetAsync("k"), Is.EqualTo(new byte[] { 9 }));
+    }
+
+    [Test]
+    public void ApplyMergeManyAsync_throws_for_null_items()
+    {
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>("rapply-merge-null");
+        Assert.That(
+            async () => await apply.ApplyMergeManyAsync(null!),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public async Task ApplyMergeManyAsync_single_set_persists_value_and_source_hlc()
+    {
+        const string tree = "rapply-merge-single-set";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        var sourceHlc = Hlc(12_345, 7);
+
+        await apply.ApplyMergeManyAsync(new[]
+        {
+            new ApplyMergeItem
+            {
+                Key = "k",
+                Value = new byte[] { 42 },
+                SourceHlc = sourceHlc,
+                OriginClusterId = "site-x",
+                SourceVectorClock = null,
+                ExpiresAtTicks = 0,
+                IsTombstone = false,
+            },
+        });
+
+        var versioned = await lattice.GetWithVersionAsync("k");
+        Assert.Multiple(() =>
+        {
+            Assert.That(versioned.Value, Is.EqualTo(new byte[] { 42 }));
+            Assert.That(versioned.Version, Is.EqualTo(sourceHlc));
+        });
+    }
+
+    [Test]
+    public async Task ApplyMergeManyAsync_single_tombstone_removes_key()
+    {
+        const string tree = "rapply-merge-single-del";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        await lattice.SetAsync("k", new byte[] { 1 });
+        var local = await lattice.GetWithVersionAsync("k");
+        var deleteHlc = local.Version with { WallClockTicks = local.Version.WallClockTicks + 1_000 };
+
+        await apply.ApplyMergeManyAsync(new[]
+        {
+            new ApplyMergeItem
+            {
+                Key = "k",
+                Value = null,
+                SourceHlc = deleteHlc,
+                OriginClusterId = "site-x",
+                SourceVectorClock = null,
+                ExpiresAtTicks = 0,
+                IsTombstone = true,
+            },
+        });
+
+        Assert.That(await lattice.GetAsync("k"), Is.Null);
+    }
+
+    [Test]
+    public void ApplyMergeManyAsync_single_item_throws_for_null_key()
+    {
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>("rapply-merge-null-k1");
+        Assert.That(
+            async () => await apply.ApplyMergeManyAsync(new[]
+            {
+                new ApplyMergeItem
+                {
+                    Key = null!,
+                    Value = new byte[] { 1 },
+                    SourceHlc = Hlc(1),
+                    OriginClusterId = "site-x",
+                    IsTombstone = false,
+                },
+            }),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void ApplyMergeManyAsync_single_item_throws_for_empty_origin()
+    {
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>("rapply-merge-empty-o1");
+        Assert.That(
+            async () => await apply.ApplyMergeManyAsync(new[]
+            {
+                new ApplyMergeItem
+                {
+                    Key = "k",
+                    Value = new byte[] { 1 },
+                    SourceHlc = Hlc(1),
+                    OriginClusterId = "",
+                    IsTombstone = false,
+                },
+            }),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void ApplyMergeManyAsync_multi_item_throws_for_null_key()
+    {
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>("rapply-merge-null-kN");
+        Assert.That(
+            async () => await apply.ApplyMergeManyAsync(new[]
+            {
+                new ApplyMergeItem
+                {
+                    Key = "ok",
+                    Value = new byte[] { 1 },
+                    SourceHlc = Hlc(1),
+                    OriginClusterId = "site-x",
+                    IsTombstone = false,
+                },
+                new ApplyMergeItem
+                {
+                    Key = null!,
+                    Value = new byte[] { 2 },
+                    SourceHlc = Hlc(2),
+                    OriginClusterId = "site-x",
+                    IsTombstone = false,
+                },
+            }),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void ApplyMergeManyAsync_multi_item_throws_for_empty_origin()
+    {
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>("rapply-merge-empty-oN");
+        Assert.That(
+            async () => await apply.ApplyMergeManyAsync(new[]
+            {
+                new ApplyMergeItem
+                {
+                    Key = "k1",
+                    Value = new byte[] { 1 },
+                    SourceHlc = Hlc(1),
+                    OriginClusterId = "site-x",
+                    IsTombstone = false,
+                },
+                new ApplyMergeItem
+                {
+                    Key = "k2",
+                    Value = new byte[] { 2 },
+                    SourceHlc = Hlc(2),
+                    OriginClusterId = "",
+                    IsTombstone = false,
+                },
+            }),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task ApplyMergeManyAsync_persists_expires_at_ticks()
+    {
+        const string tree = "rapply-merge-ttl";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var future = DateTime.UtcNow.AddHours(1).Ticks;
+
+        await apply.ApplyMergeManyAsync(new[]
+        {
+            new ApplyMergeItem
+            {
+                Key = "k",
+                Value = new byte[] { 1 },
+                SourceHlc = Hlc(100),
+                OriginClusterId = "site-x",
+                ExpiresAtTicks = future,
+                IsTombstone = false,
+            },
+        });
+
+        var entry = await ReadRawEntryAsync(tree, "k");
+        Assert.That(entry.HasValue, Is.True);
+        Assert.That(entry!.Value.ExpiresAtTicks, Is.EqualTo(future));
+    }
+
+    [Test]
+    public async Task ApplyMergeManyAsync_persists_source_vector_clock_and_origin_on_raw_entry()
+    {
+        const string tree = "rapply-merge-vc";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var vc = new VersionVector();
+        vc.Tick("site-x");
+        vc.Tick("site-y");
+        vc.Tick("site-y");
+
+        await apply.ApplyMergeManyAsync(new[]
+        {
+            new ApplyMergeItem
+            {
+                Key = "k",
+                Value = new byte[] { 7 },
+                SourceHlc = Hlc(42_000, 3),
+                OriginClusterId = "site-x",
+                SourceVectorClock = vc,
+                ExpiresAtTicks = 0,
+                IsTombstone = false,
+            },
+        });
+
+        var entry = await ReadRawEntryAsync(tree, "k");
+        Assert.That(entry.HasValue, Is.True);
+        var e = entry!.Value;
+        Assert.Multiple(() =>
+        {
+            Assert.That(e.OriginClusterId, Is.EqualTo("site-x"));
+            Assert.That(e.VectorClock, Is.Not.Null);
+            Assert.That(e.VectorClock!.GetClock("site-x"), Is.EqualTo(vc.GetClock("site-x")));
+            Assert.That(e.VectorClock!.GetClock("site-y"), Is.EqualTo(vc.GetClock("site-y")));
+        });
+    }
+
+    [Test]
+    public async Task ApplyMergeManyAsync_older_hlc_does_not_overwrite_newer_local_value()
+    {
+        const string tree = "rapply-merge-stale";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        await lattice.SetAsync("k", new byte[] { 1 });
+        var local = await lattice.GetWithVersionAsync("k");
+        var olderHlc = local.Version with { WallClockTicks = local.Version.WallClockTicks - 1 };
+
+        await apply.ApplyMergeManyAsync(new[]
+        {
+            new ApplyMergeItem
+            {
+                Key = "k",
+                Value = new byte[] { 99 },
+                SourceHlc = olderHlc,
+                OriginClusterId = "site-x",
+                IsTombstone = false,
+            },
+        });
+
+        Assert.That(await lattice.GetAsync("k"), Is.EqualTo(new byte[] { 1 }));
+    }
+
+    [Test]
+    public async Task ApplyMergeManyAsync_multi_item_single_shard_persists_all_keys()
+    {
+        const string tree = "rapply-merge-multi-1shard";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+
+        // Pick three keys that resolve to the same shard so the
+        // single-shard fast path (firstBatch !== null, byShard === null)
+        // is exercised. Default ClusterFixture options use a hash-based
+        // shard map, so we filter by routing.Map.Resolve until we find
+        // three colliding keys.
+        var routing = await lattice.GetRoutingAsync();
+        var anchor = routing.Map.Resolve("a");
+        var keys = new List<string> { "a" };
+        for (var i = 0; keys.Count < 3 && i < 1_000; i++)
+        {
+            var candidate = $"k{i}";
+            if (routing.Map.Resolve(candidate) == anchor)
+            {
+                keys.Add(candidate);
+            }
+        }
+        Assert.That(keys, Has.Count.EqualTo(3), "expected to find three same-shard keys within 1000 candidates");
+
+        var items = new List<ApplyMergeItem>();
+        for (var i = 0; i < keys.Count; i++)
+        {
+            items.Add(new ApplyMergeItem
+            {
+                Key = keys[i],
+                Value = new byte[] { (byte)(10 + i) },
+                SourceHlc = Hlc(1_000 + i),
+                OriginClusterId = "site-x",
+                IsTombstone = false,
+            });
+        }
+
+        await apply.ApplyMergeManyAsync(items);
+
+        Assert.Multiple(() =>
+        {
+            for (var i = 0; i < keys.Count; i++)
+            {
+                Assert.That(lattice.GetAsync(keys[i]).Result, Is.EqualTo(new byte[] { (byte)(10 + i) }), $"key {keys[i]}");
+            }
+        });
+    }
+
+    [Test]
+    public async Task ApplyMergeManyAsync_multi_item_multi_shard_persists_all_keys()
+    {
+        const string tree = "rapply-merge-multi-Nshard";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+
+        // Find two keys that resolve to different shards so the
+        // multi-shard fan-out path (byShard promoted, parallel
+        // Task.WhenAll) is exercised.
+        var routing = await lattice.GetRoutingAsync();
+        var anchor = routing.Map.Resolve("a");
+        string? otherKey = null;
+        for (var i = 0; i < 1_000; i++)
+        {
+            var candidate = $"x{i}";
+            if (routing.Map.Resolve(candidate) != anchor)
+            {
+                otherKey = candidate;
+                break;
+            }
+        }
+        Assume.That(otherKey, Is.Not.Null,
+            "ClusterFixture's default shard count is 1 — multi-shard fan-out cannot be exercised here");
+
+        var items = new[]
+        {
+            new ApplyMergeItem
+            {
+                Key = "a",
+                Value = new byte[] { 1 },
+                SourceHlc = Hlc(1_000),
+                OriginClusterId = "site-x",
+                IsTombstone = false,
+            },
+            new ApplyMergeItem
+            {
+                Key = otherKey!,
+                Value = new byte[] { 2 },
+                SourceHlc = Hlc(1_001),
+                OriginClusterId = "site-x",
+                IsTombstone = false,
+            },
+        };
+
+        await apply.ApplyMergeManyAsync(items);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lattice.GetAsync("a").Result, Is.EqualTo(new byte[] { 1 }));
+            Assert.That(lattice.GetAsync(otherKey!).Result, Is.EqualTo(new byte[] { 2 }));
+        });
+    }
+
+    [Test]
+    public async Task ApplyMergeManyAsync_mixed_set_and_delete_persist_in_one_call()
+    {
+        const string tree = "rapply-merge-mixed";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+
+        // Seed an existing value that the delete will tombstone.
+        await lattice.SetAsync("del", new byte[] { 0 });
+        var seed = await lattice.GetWithVersionAsync("del");
+        var delHlc = seed.Version with { WallClockTicks = seed.Version.WallClockTicks + 1_000 };
+
+        await apply.ApplyMergeManyAsync(new[]
+        {
+            new ApplyMergeItem
+            {
+                Key = "set",
+                Value = new byte[] { 7 },
+                SourceHlc = Hlc(2_000),
+                OriginClusterId = "site-x",
+                IsTombstone = false,
+            },
+            new ApplyMergeItem
+            {
+                Key = "del",
+                Value = null,
+                SourceHlc = delHlc,
+                OriginClusterId = "site-x",
+                IsTombstone = true,
+            },
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lattice.GetAsync("set").Result, Is.EqualTo(new byte[] { 7 }));
+            Assert.That(lattice.GetAsync("del").Result, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task ApplyMergeManyAsync_same_key_twice_with_increasing_hlc_keeps_last()
+    {
+        const string tree = "rapply-merge-same-key";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+
+        // Same-key collision within a batch: producer guarantees per-origin
+        // monotonic HLC order, so the dictionary's last-wins assignment
+        // must keep the entry with the higher HLC. Add a third item on a
+        // distinct key so we go through the multi-item path
+        // (single-item fast path would not exercise the per-shard
+        // dictionary-write).
+        var hlc1 = Hlc(3_000);
+        var hlc2 = Hlc(3_001);
+        await apply.ApplyMergeManyAsync(new[]
+        {
+            new ApplyMergeItem
+            {
+                Key = "k",
+                Value = new byte[] { 1 },
+                SourceHlc = hlc1,
+                OriginClusterId = "site-x",
+                IsTombstone = false,
+            },
+            new ApplyMergeItem
+            {
+                Key = "k",
+                Value = new byte[] { 2 },
+                SourceHlc = hlc2,
+                OriginClusterId = "site-x",
+                IsTombstone = false,
+            },
+            new ApplyMergeItem
+            {
+                Key = "other",
+                Value = new byte[] { 3 },
+                SourceHlc = Hlc(3_002),
+                OriginClusterId = "site-x",
+                IsTombstone = false,
+            },
+        });
+
+        var versioned = await lattice.GetWithVersionAsync("k");
+        Assert.Multiple(() =>
+        {
+            Assert.That(versioned.Value, Is.EqualTo(new byte[] { 2 }));
+            Assert.That(versioned.Version, Is.EqualTo(hlc2));
+            Assert.That(lattice.GetAsync("other").Result, Is.EqualTo(new byte[] { 3 }));
+        });
+    }
 }

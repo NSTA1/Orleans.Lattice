@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
 
@@ -161,11 +162,85 @@ internal sealed partial class ReplicationApplier
 
         // Lazy local vector clock: only the first causal-dep entry
         // pays the GetVectorAsync round trip; later entries reuse it
-        // until an apply has occurred (which may have moved the local
+        // until an apply mutates it (which may have moved the local
         // VC), at which point we mark it dirty and re-fetch on the
         // next causal-dep check.
         VersionVector? cachedLocalVc = null;
         var localVcDirty = false;
+
+        // Pending batched LWW Set/Delete items. Items pass classification
+        // (not range delete, not dedup'd, not causally parked) and are
+        // deferred into a single ApplyMergeManyAsync at end of run rather
+        // than issuing one shard RPC per item. State changes
+        // (runningHwm, highestApplied, anyApplied, advancedAtAll,
+        // localVcDirty) and per-entry instrumentation
+        // (ApplyDuration, ApplyLag, FifoState) are deferred until the
+        // flush succeeds, mirroring the per-entry path's semantics under
+        // partial-batch failure.
+        List<ApplyMergeItem>? pendingItems = null;
+        List<(int EntryIndex, long StartTs)>? pendingApplies = null;
+        IReplicationApplyGrain? applyGrain = null;
+
+        async Task FlushPendingAsync()
+        {
+            if (pendingItems is null || pendingItems.Count == 0)
+            {
+                return;
+            }
+
+            applyGrain ??= grainFactory.GetGrain<IReplicationApplyGrain>(treeId);
+
+            // Hand the list off to the apply call by reference and
+            // immediately null the locals — NSubstitute and other mocks
+            // capture the reference for late argument matching, so a
+            // subsequent .Clear() would mutate the captured snapshot
+            // out from under the assertion. Production code paths read
+            // the list synchronously inside ApplyMergeManyAsync, so
+            // ownership transfer is safe.
+            var dispatchItems = pendingItems;
+            var dispatchApplies = pendingApplies!;
+            pendingItems = null;
+            pendingApplies = null;
+
+            try
+            {
+                await applyGrain.ApplyMergeManyAsync(dispatchItems).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Mirror the per-entry path: a throw records OutcomeFailure
+                // for each deferred entry and propagates.
+                foreach (var (_, deferredStartTs) in dispatchApplies)
+                {
+                    RecordApplyDuration(treeId, deferredStartTs, LatticeReplicationMetrics.OutcomeFailure);
+                }
+                throw;
+            }
+
+            // Flush succeeded: advance state and emit per-entry
+            // observability.
+            for (var p = 0; p < dispatchApplies.Count; p++)
+            {
+                var (deferredIdx, deferredStartTs) = dispatchApplies[p];
+                var deferredEntry = entries[deferredIdx];
+                RecordApplyLag(deferredEntry);
+                RecordFifoState(deferredEntry);
+                RecordApplyDuration(treeId, deferredStartTs, LatticeReplicationMetrics.OutcomeSuccess);
+
+                if (deferredEntry.Timestamp.CompareTo(runningHwm) > 0)
+                {
+                    runningHwm = deferredEntry.Timestamp;
+                }
+                if (deferredEntry.Timestamp.CompareTo(highestApplied) > 0)
+                {
+                    highestApplied = deferredEntry.Timestamp;
+                }
+            }
+
+            anyApplied = true;
+            advancedAtAll = true;
+            localVcDirty = true;
+        }
 
         for (var k = startInclusive; k < endExclusive; k++)
         {
@@ -173,10 +248,17 @@ internal sealed partial class ReplicationApplier
             var entry = entries[k];
             var startTs = Stopwatch.GetTimestamp();
             var outcome = LatticeReplicationMetrics.OutcomeFailure;
+            var deferred = false;
             try
             {
                 if (entry.Op == ReplogOp.DeleteRange)
                 {
+                    // Range delete forces the pending LWW batch to flush
+                    // first — the producer ordered the WAL such that
+                    // entries before the range delete must observe their
+                    // effect after, and any deferred LWW work must be
+                    // visible before the range walk starts.
+                    await FlushPendingAsync().ConfigureAwait(false);
                     await ApplyRangeAsync(entry, cancellationToken).ConfigureAwait(false);
                     anyApplied = true;
                     outcome = LatticeReplicationMetrics.OutcomeSuccess;
@@ -204,28 +286,93 @@ internal sealed partial class ReplicationApplier
                     }
                 }
 
-                await ApplyPointAsync(entry).ConfigureAwait(false);
-                RecordApplyLag(entry);
-                RecordFifoState(entry);
+                // Classify: only LWW-register Set/Delete entries are
+                // batchable. Typed-CRDT modes (OrSet, PnCounter,
+                // VersionVector) need per-entry CAS loops on the
+                // shard-root and stay on the per-entry path.
+                var batchable = entry.Mode == ReplicationMode.LwwRegister
+                    && (entry.Op == ReplogOp.Set || entry.Op == ReplogOp.Delete);
 
-                if (entry.Timestamp.CompareTo(runningHwm) > 0)
+                if (!batchable)
                 {
-                    runningHwm = entry.Timestamp;
+                    await FlushPendingAsync().ConfigureAwait(false);
+                    await ApplyPointAsync(entry).ConfigureAwait(false);
+                    RecordApplyLag(entry);
+                    RecordFifoState(entry);
+
+                    if (entry.Timestamp.CompareTo(runningHwm) > 0)
+                    {
+                        runningHwm = entry.Timestamp;
+                    }
+                    if (entry.Timestamp.CompareTo(highestApplied) > 0)
+                    {
+                        highestApplied = entry.Timestamp;
+                    }
+                    anyApplied = true;
+                    advancedAtAll = true;
+                    localVcDirty = true;
+                    outcome = LatticeReplicationMetrics.OutcomeSuccess;
+                    continue;
                 }
-                if (entry.Timestamp.CompareTo(highestApplied) > 0)
+
+                // Batched path. Validate Set's value-non-null contract
+                // here so the ArgumentException surface matches the
+                // per-entry path (ApplyPointAsync raises the same).
+                if (entry.Op == ReplogOp.Set && entry.Value is null)
                 {
-                    highestApplied = entry.Timestamp;
+                    throw new ArgumentException(
+                        "ReplogEntry.Value must be non-null for ReplogOp.Set.",
+                        nameof(entries));
                 }
-                anyApplied = true;
-                advancedAtAll = true;
-                localVcDirty = true;
-                outcome = LatticeReplicationMetrics.OutcomeSuccess;
+
+                pendingItems ??= new List<ApplyMergeItem>();
+                pendingApplies ??= new List<(int, long)>();
+                pendingItems.Add(new ApplyMergeItem
+                {
+                    Key = entry.Key,
+                    Value = entry.Op == ReplogOp.Set ? entry.Value : null,
+                    SourceHlc = entry.Timestamp,
+                    OriginClusterId = entry.OriginClusterId!,
+                    SourceVectorClock = null,
+                    ExpiresAtTicks = entry.Op == ReplogOp.Set ? entry.ExpiresAtTicks : 0,
+                    IsTombstone = entry.Op == ReplogOp.Delete,
+                });
+                pendingApplies.Add((k, startTs));
+                deferred = true;
+            }
+            catch
+            {
+                // An exception escaping the loop body would otherwise
+                // leave any previously-deferred entries with a captured
+                // start timestamp but no recorded outcome, producing
+                // phantom started-never-completed samples in the apply
+                // duration histogram. Record OutcomeFailure for every
+                // deferred entry now (the throwing entry's own failure
+                // is recorded by the finally below). Cold path only —
+                // hit by contract violations (Set with null Value) and
+                // mid-loop cancellation.
+                if (pendingApplies is { Count: > 0 })
+                {
+                    foreach (var (_, deferredStartTs) in pendingApplies)
+                    {
+                        RecordApplyDuration(treeId, deferredStartTs, LatticeReplicationMetrics.OutcomeFailure);
+                    }
+                    pendingItems = null;
+                    pendingApplies = null;
+                }
+                throw;
             }
             finally
             {
-                RecordApplyDuration(treeId, startTs, outcome);
+                if (!deferred)
+                {
+                    RecordApplyDuration(treeId, startTs, outcome);
+                }
             }
         }
+
+        // End-of-run flush of any remaining deferred items.
+        await FlushPendingAsync().ConfigureAwait(false);
 
         if (advancedAtAll)
         {

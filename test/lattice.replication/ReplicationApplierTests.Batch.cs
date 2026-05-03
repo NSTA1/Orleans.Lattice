@@ -1,4 +1,5 @@
 using NSubstitute;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grains;
@@ -29,6 +30,7 @@ public partial class ReplicationApplierTests
         await hwm.DidNotReceiveWithAnyArgs().GetAsync(default!, default);
         await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
         await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplyMergeManyAsync(default!);
     }
 
     [Test]
@@ -76,10 +78,18 @@ public partial class ReplicationApplierTests
             Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(40)));
         });
 
-        // Every entry routed through the apply grain for its leaf write.
-        await apply.Received(4).ApplySetAsync(
-            Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(),
-            RemoteCluster, Arg.Any<VersionVector?>(), Arg.Any<long>());
+        // The 4 LWW entries collapse to a single batched apply call —
+        // one ApplyMergeManyAsync per (treeId, origin) run instead of
+        // four ApplySetAsync per-entry RPCs.
+        await apply.Received(1).ApplyMergeManyAsync(
+            Arg.Is<IReadOnlyList<ApplyMergeItem>>(items =>
+                items.Count == 4
+                && items[0].Key == "a" && !items[0].IsTombstone
+                && items[1].Key == "b"
+                && items[2].Key == "c"
+                && items[3].Key == "d"));
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(
+            default!, default!, default, default!, default, default);
 
         // The batch collapse claim: exactly one GetAsync and one
         // TryAdvanceAsync per distinct origin in the batch.
@@ -111,10 +121,22 @@ public partial class ReplicationApplierTests
             Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(50)));
         });
 
-        // 5 entries dispatched to the leaf.
-        await apply.Received(5).ApplySetAsync(
-            Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(),
-            Arg.Any<string>(), Arg.Any<VersionVector?>(), Arg.Any<long>());
+        // 3 (treeId, origin) runs → 3 ApplyMergeManyAsync calls,
+        // one per run. Run 1 + Run 2 carry 2 items each; Run 3
+        // carries 1 item (still flushed via ApplyMergeManyAsync
+        // because the run is processed by the batched path even
+        // when the run length is 1; the single-batch-entry early
+        // return at the top of ApplyBatchAsync only fires for an
+        // inbound batch of length 1).
+        await apply.Received(3).ApplyMergeManyAsync(
+            Arg.Any<IReadOnlyList<ApplyMergeItem>>());
+        await apply.Received(2).ApplyMergeManyAsync(
+            Arg.Is<IReadOnlyList<ApplyMergeItem>>(items => items.Count == 2));
+        await apply.Received(1).ApplyMergeManyAsync(
+            Arg.Is<IReadOnlyList<ApplyMergeItem>>(items =>
+                items.Count == 1 && items[0].Key == "e"));
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(
+            default!, default!, default, default!, default, default);
 
         // Per-run HWM round-trip: 2 calls for RemoteCluster (runs 1 + 3),
         // 1 call for site-c (run 2). NOT 5.
@@ -152,10 +174,15 @@ public partial class ReplicationApplierTests
             Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(40)));
         });
 
-        // Only the two apply-eligible entries hit the leaf.
-        await apply.Received(2).ApplySetAsync(
-            Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(),
-            RemoteCluster, Arg.Any<VersionVector?>(), Arg.Any<long>());
+        // Only the two apply-eligible entries hit the batched apply call;
+        // the deduped entries never reach pendingItems.
+        await apply.Received(1).ApplyMergeManyAsync(
+            Arg.Is<IReadOnlyList<ApplyMergeItem>>(items =>
+                items.Count == 2
+                && items[0].Key == "c"
+                && items[1].Key == "d"));
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(
+            default!, default!, default, default!, default, default);
 
         // The collapse claim survives in-batch dedup: still one
         // GetAsync + one TryAdvanceAsync for the whole run.
@@ -185,6 +212,7 @@ public partial class ReplicationApplierTests
         });
         await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(
             default!, default!, default, default!, default, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplyMergeManyAsync(default!);
         await hwm.Received(1).GetAsync(RemoteCluster, Arg.Any<CancellationToken>());
         // No advance because no entry was applied.
         await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
@@ -214,9 +242,15 @@ public partial class ReplicationApplierTests
 
         // Range-delete always applied unconditionally.
         await apply.Received(1).ApplyDeleteRangeAsync("a", "m", RemoteCluster, null);
-        // One leaf set (the apply-eligible "z").
-        await apply.Received(1).ApplySetAsync(
-            "z", Arg.Any<byte[]>(), Hlc(200), RemoteCluster, Arg.Any<VersionVector?>(), Arg.Any<long>());
+        // The single apply-eligible LWW entry "z" is flushed via the
+        // batched path with a 1-item list.
+        await apply.Received(1).ApplyMergeManyAsync(
+            Arg.Is<IReadOnlyList<ApplyMergeItem>>(items =>
+                items.Count == 1
+                && items[0].Key == "z"
+                && items[0].SourceHlc.Equals(Hlc(200))));
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(
+            default!, default!, default, default!, default, default);
         // Single TryAdvance to highest applied point timestamp (not Zero from range-delete).
         await hwm.Received(1).TryAdvanceAsync(RemoteCluster, Hlc(200), Arg.Any<CancellationToken>());
     }
@@ -259,5 +293,48 @@ public partial class ReplicationApplierTests
         Assert.That(
             async () => await applier.ApplyBatchAsync(new[] { SetEntry("a", Hlc(10)) }, cts.Token),
             Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    public void ApplyBatchAsync_records_failure_outcome_for_deferred_entries_when_loop_throws()
+    {
+        // A Set with null Value violates the per-entry contract and the
+        // batched path raises ArgumentException for it. Any prior entries
+        // in the same run that had been deferred to pendingItems must
+        // also surface as OutcomeFailure samples in the apply duration
+        // histogram so the metric does not show phantom started-never-
+        // completed samples.
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyDurationName);
+        var (applier, _, _, hwm) = CreateApplier();
+        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(HybridLogicalClock.Zero);
+
+        var entries = new[]
+        {
+            SetEntry("a", Hlc(10)),                  // deferred to pending
+            SetEntry("b", Hlc(20)),                  // deferred to pending
+            SetEntry("c", Hlc(30)) with { Value = null }, // throws inside loop
+            SetEntry("d", Hlc(40)),                  // never reached
+        };
+
+        Assert.That(
+            async () => await applier.ApplyBatchAsync(entries),
+            Throws.InstanceOf<ArgumentException>());
+
+        // Three samples: the two previously-deferred entries (recorded by
+        // the new catch block), plus the throwing entry itself (recorded
+        // by the finally because deferred is still false on it). The
+        // never-reached entry contributes nothing.
+        Assert.That(collector.Measurements, Has.Count.EqualTo(3));
+        Assert.That(
+            collector.Measurements.All(m => HasOutcome(m.Tags, LatticeReplicationMetrics.OutcomeFailure)),
+            Is.True,
+            "every recorded sample should be tagged outcome=failure");
+        Assert.That(
+            collector.Measurements.All(m => HasTree(m.Tags, Tree)),
+            Is.True,
+            "every recorded sample should carry the tree tag");
     }
 }

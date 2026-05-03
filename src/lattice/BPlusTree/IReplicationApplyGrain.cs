@@ -117,4 +117,27 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
         string endExclusive,
         string originClusterId,
         VersionVector? sourceVectorClock);
+
+    /// <summary>
+    /// Installs a batch of LWW Set/Delete mutations authored on remote
+    /// clusters in a single grain RPC, collapsing what would otherwise be
+    /// one <see cref="ApplySetAsync"/> / <see cref="ApplyDeleteAsync"/>
+    /// call per item into a single round-trip per affected shard. Each
+    /// item carries its own authoring metadata (<see cref="ApplyMergeItem.SourceHlc"/>,
+    /// <see cref="ApplyMergeItem.OriginClusterId"/>, 
+    /// <see cref="ApplyMergeItem.SourceVectorClock"/>, 
+    /// <see cref="ApplyMergeItem.ExpiresAtTicks"/>) so the persisted
+    /// <see cref="LwwValue{T}"/> matches the authoring cluster
+    /// bit-identically — semantics are equivalent to invoking
+    /// <see cref="ApplySetAsync"/> / <see cref="ApplyDeleteAsync"/> for
+    /// each item in order, only with the per-item dictionary allocation
+    /// and the per-item shard-RPC fan-out elided.
+    /// </summary>
+    /// <param name="items">
+    /// The remote mutations to install. Items targeting different shards
+    /// are dispatched in parallel; items targeting the same shard are
+    /// merged into a single <see cref="IShardRootGrain.MergeManyAsync"/>
+    /// call per shard.
+    /// </param>
+    Task ApplyMergeManyAsync(IReadOnlyList<ApplyMergeItem> items);
 }

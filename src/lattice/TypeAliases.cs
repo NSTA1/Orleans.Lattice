@@ -125,6 +125,9 @@ internal static class TypeAliases
     internal const string IReplicationApplyGrain = "ol.gra";
     internal const string ILeafReplayCoordinatorGrain = "ol.grc";
 
+    // Replication apply DTO (batch path)
+    internal const string ApplyMergeItem = "ol.ami";
+
     // Leaf-projection replay coordinator slice DTO
     internal const string CommitLogSliceEntry = "ol.cls";
 
