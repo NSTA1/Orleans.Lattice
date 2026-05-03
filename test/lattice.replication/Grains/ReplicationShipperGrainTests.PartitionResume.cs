@@ -233,7 +233,8 @@ public partial class ReplicationShipperGrainTests
         var grain = new ReplicationShipperGrain(
             ctx, Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry, factory, fakeState);
+            monitor, transport, encoder, registry, factory, fakeState,
+            new ReplicationPeerStats());
         grain.InitializeForTesting(Tree, Peer);
         return (grain, fakeState, feeds, transport, encoder);
     }
@@ -300,7 +301,8 @@ public partial class ReplicationShipperGrainTests
         var grain = new ReplicationShipperGrain(
             ctx, Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry, factory, fakeState);
+            monitor, transport, encoder, registry, factory, fakeState,
+            new ReplicationPeerStats());
         grain.InitializeForTesting(Tree, Peer);
 
         await grain.OnDoorbellAsync(CancellationToken.None);
@@ -425,7 +427,8 @@ public partial class ReplicationShipperGrainTests
             NullLogger<ReplicationShipperGrain>.Instance,
             monitor, freshTransport, new TestEncoder(),
             Substitute.For<ILatticeReplicationCursorRegistry>(),
-            BuildGrainFactory(null, stubs, Tree), fakeState);
+            BuildGrainFactory(null, stubs, Tree), fakeState,
+            new ReplicationPeerStats());
         freshGrain.InitializeForTesting(Tree, Peer);
         // Don't use the unused locals.
         _ = grain2;

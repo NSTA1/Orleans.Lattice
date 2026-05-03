@@ -227,6 +227,7 @@
     {
       "id": 4,
       "title": "Dependency wait p95 (ms) — causal-consistency staging",
+      "description": "Wait time for entries parked in the causal-apply buffer awaiting dependency satisfaction. Only emits samples when causal staging is enabled AND at least one entry parks. Flat-zero (no series) is the healthy steady state — the 'or vector(0)' guard renders zero rather than 'No data'.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -247,7 +248,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_dependency_wait_ms_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_dependency_wait_ms_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)",
           "legendFormat": "p95"
         }
       ]
@@ -293,6 +294,7 @@
     {
       "id": 6,
       "title": "Dead-letter queue churn (ops/s)",
+      "description": "Dead-letter enqueue/removal rate. Only emits when permanent transport or apply failures occur. Flat-zero is the healthy steady state.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -313,12 +315,12 @@
       "targets": [
         {
           "refId": "E",
-          "expr": "sum(rate(orleans_lattice_replication_dead_letter_enqueued_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum(rate(orleans_lattice_replication_dead_letter_enqueued_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "enqueued"
         },
         {
           "refId": "R",
-          "expr": "sum by (reason) (rate(orleans_lattice_replication_dead_letter_removed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum by (reason) (rate(orleans_lattice_replication_dead_letter_removed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "removed {{reason}}"
         }
       ]
@@ -326,6 +328,7 @@
     {
       "id": 7,
       "title": "Apply correctness violations (rate)",
+      "description": "FIFO and causal-violation counters. A sustained nonzero rate indicates a real correctness regression. Flat-zero is required for a healthy cluster.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -359,12 +362,12 @@
       "targets": [
         {
           "refId": "F",
-          "expr": "sum(rate(orleans_lattice_replication_apply_fifo_violations_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum(rate(orleans_lattice_replication_apply_fifo_violations_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "fifo violations"
         },
         {
           "refId": "C",
-          "expr": "sum(rate(orleans_lattice_replication_apply_causal_violations_blocked_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum(rate(orleans_lattice_replication_apply_causal_violations_blocked_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "causal violations blocked"
         }
       ]
@@ -372,6 +375,7 @@
     {
       "id": 8,
       "title": "Peer fell-off-log events (count over range)",
+      "description": "Receiver fell-off-log detections per peer. Nonzero means the receiver's high-water-mark is older than the sender's oldest WAL entry — i.e. the receiver missed the catch-up window. Flat-zero is the healthy steady state.",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -422,6 +426,7 @@
     {
       "id": 9,
       "title": "Apply buffer (entries / bytes)",
+      "description": "Causal-apply buffer occupancy. Only emits when causal staging parks an entry. Flat-zero (or absent) means no causal staging is engaged. When non-zero, see the apply-lag overlay panel for the bistability signal.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -440,12 +445,12 @@
       "targets": [
         {
           "refId": "E",
-          "expr": "sum by (tree) (orleans_lattice_replication_apply_buffered_entries{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "expr": "sum by (tree) (orleans_lattice_replication_apply_buffered_entries{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}) or vector(0)",
           "legendFormat": "entries {{tree}}"
         },
         {
           "refId": "B",
-          "expr": "sum by (tree) (orleans_lattice_replication_apply_buffer_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "expr": "sum by (tree) (orleans_lattice_replication_apply_buffer_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}) or vector(0)",
           "legendFormat": "bytes {{tree}}"
         }
       ]
@@ -476,7 +481,7 @@
         },
         {
           "refId": "B",
-          "expr": "sum by (peer) (orleans_lattice_replication_peer_bytes_behind{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "expr": "sum by (peer) (orleans_lattice_replication_peer_bytes_behind_bytes{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
           "legendFormat": "bytes {{peer}}"
         }
       ]
@@ -550,6 +555,57 @@
           "refId": "A",
           "expr": "max by (peer) (orleans_lattice_replication_peer_consecutive_errors{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
           "legendFormat": "{{peer}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Apply lag p99 vs apply-buffer depth (causal-staging bistability overlay)",
+      "description": "Overlays apply-lag p99 (left axis, ms) against the causal-apply buffer occupancy (right axis, entries). The bistability hypothesis: once the buffer crosses ~N entries, apply-lag p99 stays pegged at a high level for the rest of the window even as the buffer eventually drains. If only the lag panel renders (buffer flat-zero), causal staging is not engaged and the bistability is in a different layer (e.g. shipper backpressure, sender-side WAL). Use this panel as the first stop when the lag-p99 sweep shows wide run-to-run variance.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRefId", "options": "BUF" },
+            "properties": [
+              { "id": "unit", "value": "short" },
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "custom.axisLabel", "value": "buffered entries" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byRefId", "options": "LAG99" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "purple" } },
+              { "id": "custom.axisLabel", "value": "apply-lag p99 (ms)" }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "LAG99",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_replication_apply_lag_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)",
+          "legendFormat": "apply-lag p99"
+        },
+        {
+          "refId": "BUF",
+          "expr": "sum (orleans_lattice_replication_apply_buffered_entries{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}) or vector(0)",
+          "legendFormat": "buffered entries"
         }
       ]
     }

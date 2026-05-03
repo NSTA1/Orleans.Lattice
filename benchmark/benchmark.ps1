@@ -39,7 +39,7 @@
     avoid rebuilding on every iteration.
 
 .PARAMETER FleetSizeOverride
-    Override BENCH_FLEET_SIZE (and the .fleet-size.config calibrated value) for
+    Override BENCH_FLEET_SIZE (and the .fleet-size config calibrated value) for
     a single run. Used by initialise.ps1 to sweep the saturation ladder, but
     also handy for one-off probes. Zero (default) means "no override".
 
@@ -205,15 +205,12 @@ $ScalarPanelExtra = [ordered]@{
     'sink_dropped_combined_increase' =
         'sum(increase(vehicle_fleet_simulator_sink_dropped_total[{Ws}s])) + sum(increase(vehicle_fleet_simulator_sink_dropped_on_shutdown_total[{Ws}s]))'
 
-    # ── Replication KPI aliases (the source histograms are emitted as
-    #    *_duration_milliseconds_bucket / *_apply_lag_milliseconds_bucket because
-    #    the OTel→Prom exporter appends the canonical "milliseconds" suffix when
-    #    the instrument's unit is "ms"; these aliases hide that mangling behind
-    #    short, stable names the persona dashboards bind to). ──
-    'replication_ship_p95_ms' =
-        'histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_ship_duration_milliseconds_bucket[{Ws}s])))'
-    'replication_apply_lag_p95_ms' =
-        'histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_lag_milliseconds_bucket[{Ws}s])))'
+    # ── Replication KPI aliases moved to $ScalarAliases (below) so they read
+    #    auto-discovered values rather than re-issuing duplicate PromQL queries.
+    #    The duplicate-query approach observed run-to-run divergence of up to
+    #    10x on tail-heavy runs because each query snapshotted a slightly
+    #    different rate window; the alias-copy approach is bit-identical to
+    #    the underlying auto-discovered field by construction. ──
 
     # ── WAL-step aliases (label-filtered cuts of the step-tagged
     #    orleans.lattice.leaf.commit.duration histogram, exposed by the
@@ -255,6 +252,34 @@ $ScalarPanelExtra = [ordered]@{
         'sum(increase(dotnet_gc_collections_total{gc_heap_generation="gen2"}[{Ws}s]))'
 }
 
+# ── Curated KPI aliases (post-process; no PromQL queries issued) ────────────
+#
+# Maps a short stable KPI name to the canonical auto-discovered key produced
+# by Get-AutoScalarPanel. Resolution happens in-memory after Get-ScalarMetrics
+# returns: for each (short, canonical) pair, metrics[short] = metrics[canonical].
+#
+# This replaces the previous "duplicate PromQL alias" approach, which observed
+# run-to-run divergence of up to 10x on tail-heavy runs because each query
+# snapshotted a slightly different rate window. The alias-copy approach is
+# bit-identical to the underlying auto-discovered field by construction and
+# costs zero extra HTTP round-trips.
+#
+# Add a new entry here when a downstream consumer (dashboard, CI threshold,
+# history-VM aggregation) needs a short, stable name for a metric the
+# auto-discovery already produces.
+$ScalarAliases = [ordered]@{
+    # Replication KPI shorts (the auto-discovered names carry the OTel→Prom
+    # _milliseconds suffix that gets appended for unit:"ms"; these aliases
+    # hide that mangling behind short, stable names the persona dashboards
+    # and any CI threshold checks bind to).
+    'replication_ship_p95_ms'                     = 'orleans_lattice_replication_ship_duration_milliseconds_p95'
+    'replication_ship_p99_ms'                     = 'orleans_lattice_replication_ship_duration_milliseconds_p99'
+    'replication_apply_lag_p95_ms'                = 'orleans_lattice_replication_apply_lag_milliseconds_p95'
+    'replication_apply_lag_p99_ms'                = 'orleans_lattice_replication_apply_lag_milliseconds_p99'
+    'replication_wal_entries_appended_per_second' = 'orleans_lattice_replication_wal_entries_appended_per_second'
+    'replication_wal_entries_shipped_per_second'  = 'orleans_lattice_replication_wal_entries_shipped_per_second'
+}
+
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 function Read-EnvFile {
     param([string] $Path)
@@ -279,6 +304,61 @@ function Set-ProcessEnv {
     param([System.Collections.IDictionary] $Map)
     foreach ($k in $Map.Keys) {
         Set-Item -Path "Env:$k" -Value $Map[$k]
+    }
+}
+
+# ── Scenario env-var leak guard ────────────────────────────────────────────────
+#
+# `Set-ProcessEnv` only *adds* keys; it never unsets a pre-existing process env
+# var that's absent from the new scenario's .env file. That breaks scenario
+# isolation when the script is invoked back-to-back via benchmark-all.ps1: any
+# key set by an earlier scenario (e.g. `BENCH_ORIGIN_PEER_ENDPOINT` from
+# `current-state-single-peer.env`) leaks into the next scenario's `docker
+# compose up`, where the `${VAR:-}` default substitution picks up the leaked
+# value instead of the empty string the next scenario expects.
+#
+# The concrete failure mode this guards against: `observer-no-peer.env` does
+# *not* set `BENCH_ORIGIN_PEER_ENDPOINT`, so the silo container should be
+# brought up with an empty `Replication__GrpcPeers__vfs-bench-replica` value
+# (which Bench.Silo's `.Where(c => !string.IsNullOrWhiteSpace(c.Value))` filter
+# discards, leaving the no-op transport in place). With the leak, the silo gets
+# `http://silo-replica:5001` from the previous scenario, registers
+# `GrpcPushTransport`, activates a per-(tree, peer) shipper, and then every
+# ship attempt fails at the gRPC connect timeout because the replica overlay
+# isn't running for `observer-no-peer`. The failure-path duration (~250-500 ms
+# per attempt) lands in the `[250, 500)` histogram bucket and `ship.duration`
+# p95 reports ~475 ms — making the no-peer control look like the slowest
+# replication scenario in the suite.
+#
+# `$ScenarioControlledEnvKeys` is computed once at script load by scanning
+# every `scenarios/*.env` and collecting every assigned key name. Before each
+# scenario applies its own .env via `Set-ProcessEnv`, we call
+# `Reset-ScenarioEnv` to remove every key in the union set from process env.
+# `Set-ProcessEnv` then re-adds only the keys present in the current scenario,
+# so any "absent in this scenario but present in another" var ends up unset
+# rather than carrying over.
+#
+# Vars set externally (e.g. `BENCH_API_URL`, `BENCH_PROMETHEUS_URL`,
+# `BENCH_GIT_SHA`) and vars set by the script itself for results.json
+# bookkeeping (`BENCH_SCENARIO`, `BENCH_RUN_ID`) are NOT in any .env file, so
+# they are not in `$ScenarioControlledEnvKeys` and are left untouched.
+$ScenarioControlledEnvKeys = @(
+    Get-ChildItem -Path (Join-Path $benchmarkRoot 'scenarios') -Filter '*.env' -File | ForEach-Object {
+        Get-Content $_.FullName | ForEach-Object {
+            $trimmed = $_.Trim()
+            if ($trimmed.StartsWith('#') -or [string]::IsNullOrWhiteSpace($trimmed)) { return }
+            $eq = $trimmed.IndexOf('=')
+            if ($eq -lt 1) { return }
+            $trimmed.Substring(0, $eq).Trim()
+        }
+    }
+) | Sort-Object -Unique
+
+function Reset-ScenarioEnv {
+    foreach ($key in $ScenarioControlledEnvKeys) {
+        if (Test-Path "Env:$key") {
+            Remove-Item -Path "Env:$key" -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -537,6 +617,43 @@ function Get-ScalarMetrics {
         $out[$key] = $val
     }
     return $out
+}
+
+function Resolve-ScalarAliases {
+    <#
+    .SYNOPSIS
+        In-memory alias resolution: copies auto-discovered metric values
+        into short, stable KPI keys.
+
+    .DESCRIPTION
+        Iterates $Aliases (short → canonical) and assigns
+        $Metrics[short] = $Metrics[canonical] for every entry whose
+        canonical key is present in $Metrics. If the canonical key is
+        absent (e.g. its underlying instrument never emitted a sample
+        in this scenario), the alias is set to $null so consumers can
+        distinguish "alias never resolved" from "alias resolved to 0".
+
+        This replaces the previous duplicate-PromQL approach which
+        observed up to 10x divergence between the alias and the
+        auto-discovered field on tail-heavy runs (each query
+        snapshotted a slightly different rate window). The copy
+        approach is bit-identical by construction.
+    #>
+    [CmdletBinding()]
+    param(
+        [System.Collections.IDictionary] $Metrics,
+        [System.Collections.IDictionary] $Aliases
+    )
+    if (-not $Metrics -or -not $Aliases) { return $Metrics }
+    foreach ($short in $Aliases.Keys) {
+        $canonical = $Aliases[$short]
+        if ($Metrics.Contains($canonical)) {
+            $Metrics[$short] = $Metrics[$canonical]
+        } else {
+            $Metrics[$short] = $null
+        }
+    }
+    return $Metrics
 }
 
 function Get-GitSha {
@@ -848,9 +965,22 @@ function Invoke-Compare {
     Write-Host ""
     Write-Host "Latest results (one row per scenario):" -ForegroundColor Cyan
     # Console preview pulls from the curated KPI-alias keys (defined in
-    # $ScalarPanelExtra) so the summary stays stable even as auto-discovery
-    # widens the underlying schema.
-    $csvRows | Format-Table -Property scenario, run_id, lattice_commit_p99_ms, lattice_commits_per_second, sink_published_per_second, sink_dropped_combined_increase -AutoSize
+    # $ScalarPanelExtra and $ScalarAliases) so the summary stays stable
+    # even as auto-discovery widens the underlying schema. The visible
+    # column set switches based on scenario so replication-focused runs
+    # surface ship/apply KPIs instead of irrelevant sink/commit ones.
+    if ($Scenario -match 'replication') {
+        $csvRows | Format-Table -Property scenario, run_id,
+            replication_ship_p95_ms, replication_ship_p99_ms,
+            replication_apply_lag_p95_ms, replication_apply_lag_p99_ms,
+            replication_wal_entries_appended_per_second,
+            replication_wal_entries_shipped_per_second,
+            lattice_commits_per_second -AutoSize
+    } else {
+        $csvRows | Format-Table -Property scenario, run_id,
+            lattice_commit_p99_ms, lattice_commits_per_second,
+            sink_published_per_second, sink_dropped_combined_increase -AutoSize
+    }
 }
 
 function Invoke-ImportHistory {
@@ -1011,7 +1141,14 @@ if ($envMap['BENCH_KIND'] -eq 'microbench') {
 }
 
 # Set the env vars in the current process so docker compose (which inherits them)
-# substitutes them into docker-compose.yml.
+# substitutes them into docker-compose.yml. `Reset-ScenarioEnv` runs first so any
+# scenario-controlled BENCH_* var set by a previous scenario (e.g. when
+# benchmark-all.ps1 invokes us back-to-back) is cleared before this scenario's
+# .env is applied. Without the reset, vars absent from the current scenario's
+# .env would silently inherit the previous scenario's value through `docker
+# compose`'s `${VAR:-}` default substitution. See the comment block above
+# `$ScenarioControlledEnvKeys` for the concrete failure mode this guards.
+Reset-ScenarioEnv
 Set-ProcessEnv -Map $envMap
 
 # Pick compose files. Replication scenarios add the overlay.
@@ -1115,8 +1252,9 @@ try {
     Write-Host ("[capture] panel: {0} keys ({1} extra overrides)" -f $resolvedPanel.Count, $ScalarPanelExtra.Count) -ForegroundColor DarkGray
     Write-Host "[capture] querying Prometheus over the ${duration}s measurement window ..." -ForegroundColor Cyan
     $capturedMetrics = Get-ScalarMetrics -WindowSeconds $duration -Panel $resolvedPanel
+    $capturedMetrics = Resolve-ScalarAliases -Metrics $capturedMetrics -Aliases $ScalarAliases
     $nonNull = ($capturedMetrics.Values | Where-Object { $null -ne $_ }).Count
-    Write-Host ("[capture] {0}/{1} metrics populated" -f $nonNull, $capturedMetrics.Count) -ForegroundColor Green
+    Write-Host ("[capture] {0}/{1} metrics populated ({2} alias keys)" -f $nonNull, $capturedMetrics.Count, $ScalarAliases.Count) -ForegroundColor Green
 
     Write-Host "[load] stop-all" -ForegroundColor Cyan
     try {

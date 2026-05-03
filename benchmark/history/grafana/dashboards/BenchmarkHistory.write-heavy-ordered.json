@@ -83,7 +83,8 @@
           },
           "expr": "bench_lattice_commit_p99_ms{scenario=\"event-log-with-ttl\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },
@@ -150,7 +151,8 @@
           },
           "expr": "bench_lattice_commits_per_second{scenario=\"event-log-with-ttl\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },
@@ -217,7 +219,8 @@
           },
           "expr": "bench_sink_published_per_second{scenario=\"event-log-with-ttl\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },

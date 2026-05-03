@@ -36,12 +36,54 @@ namespace Orleans.Lattice.Replication;
 /// pending set is empty or <paramref name="stoppingToken"/> is
 /// cancelled.
 /// </para>
+/// <para>
+/// The <see cref="ReplicationPeerStats"/> dependency is taken purely
+/// to force eager DI activation of the singleton at silo Start: the
+/// type's constructor is what registers the four observable peer
+/// gauges (<c>peer.entries_behind</c>, <c>peer.bytes_behind</c>,
+/// <c>peer.consecutive_errors</c>, <c>peer.last_contact_seconds</c>)
+/// on the shared meter, and a <c>TryAddSingleton</c> with no consumer
+/// would otherwise leave the singleton lazy — the gauges would never
+/// be observed because <c>_current</c> stays null until the first
+/// resolution. Holding a reference here makes the DI graph resolve
+/// the singleton during <see cref="IHostedService.StartAsync"/>, so
+/// the gauges are observable from the silo's first scrape onward.
+/// </para>
 /// </summary>
-internal sealed class ReplicationDriverActivationService(
-    IGrainFactory grainFactory,
-    IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
-    ILogger<ReplicationDriverActivationService> logger) : BackgroundService
+internal sealed class ReplicationDriverActivationService : BackgroundService
 {
+    private readonly IGrainFactory _grainFactory;
+    private readonly IOptionsMonitor<LatticeReplicationOptions> _optionsMonitor;
+    private readonly ILogger<ReplicationDriverActivationService> _logger;
+
+    /// <summary>
+    /// Initialises the service. The <paramref name="peerStats"/> dependency
+    /// is taken purely to force eager DI activation of the
+    /// <see cref="ReplicationPeerStats"/> singleton at silo Start: that
+    /// type's constructor registers the four observable peer gauges
+    /// (<c>peer.entries_behind</c>, <c>peer.bytes_behind</c>,
+    /// <c>peer.consecutive_errors</c>, <c>peer.last_contact_seconds</c>)
+    /// on the shared meter, and a <c>TryAddSingleton</c> with no consumer
+    /// would otherwise leave the singleton lazy — the gauges would never
+    /// fire because <c>_current</c> stays null until first resolution.
+    /// Resolving the parameter (even though we never read it inside this
+    /// class) wires the gauge registration into the silo's first scrape.
+    /// </summary>
+    public ReplicationDriverActivationService(
+        IGrainFactory grainFactory,
+        IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
+        ILogger<ReplicationDriverActivationService> logger,
+        ReplicationPeerStats peerStats)
+    {
+        _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
+        _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentNullException.ThrowIfNull(peerStats);
+        // peerStats is intentionally not stored: the DI container roots
+        // the singleton; resolving it here is sufficient to trigger the
+        // constructor-side gauge registration on silo Start.
+    }
+
     /// <summary>
     /// Initial delay between retry passes when at least one
     /// activation is still pending. Tuned for fast-silo startup —
@@ -60,11 +102,11 @@ internal sealed class ReplicationDriverActivationService(
         // overrides apply when each grain calls IOptionsMonitor.Get;
         // the activation service only needs the membership set
         // (ReplicatedTrees + ReplicationPeers) which is cluster-wide.
-        var options = optionsMonitor.CurrentValue;
+        var options = _optionsMonitor.CurrentValue;
 
         if (options.ReplicatedTrees is not { } trees || trees.Count == 0)
         {
-            logger.LogInformation("No replicated trees configured; skipping replication driver activation.");
+            _logger.LogInformation("No replicated trees configured; skipping replication driver activation.");
             return;
         }
 
@@ -90,7 +132,7 @@ internal sealed class ReplicationDriverActivationService(
             pending.Add(new ActivationWorkItem(
                 Kind: "maintenance",
                 Label: $"tree '{capturedTree}'",
-                Activate: ct => grainFactory
+                Activate: ct => _grainFactory
                     .GetGrain<IReplicationMaintenanceGrain>(capturedTree)
                     .EnsureActiveAsync(ct)));
 
@@ -104,7 +146,7 @@ internal sealed class ReplicationDriverActivationService(
                 pending.Add(new ActivationWorkItem(
                     Kind: "shipper",
                     Label: $"({capturedTree}, {capturedPeer})",
-                    Activate: ct => grainFactory
+                    Activate: ct => _grainFactory
                         .GetGrain<IReplicationShipperGrain>($"{capturedTree}/{capturedPeer}")
                         .EnsureActiveAsync(ct)));
             }
@@ -145,7 +187,7 @@ internal sealed class ReplicationDriverActivationService(
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex,
+                    _logger.LogWarning(ex,
                         "Replication driver activation failed for {Kind} {Label} on pass {Pass}; will retry",
                         item.Kind, item.Label, pass);
                 }

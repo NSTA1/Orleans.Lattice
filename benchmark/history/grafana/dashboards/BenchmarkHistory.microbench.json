@@ -83,7 +83,8 @@
           },
           "expr": "bench_microbench_point_write_p99_ns{scenario=\"microbench\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },
@@ -150,7 +151,8 @@
           },
           "expr": "bench_microbench_point_read_p99_ns{scenario=\"microbench\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },
@@ -217,7 +219,8 @@
           },
           "expr": "bench_microbench_bulk_load_per_second{scenario=\"microbench\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },
@@ -282,9 +285,10 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_microbench_mixed_70r_30w_p99_ns{scenario=\"microbench\"}",
+          "expr": "bench_microbench_mixed_70_r_30_w_p99_ns{scenario=\"microbench\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },
@@ -568,7 +572,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "bench_microbench_mixed_70r_30w_p99_ns{scenario=\"microbench\"}",
+          "expr": "bench_microbench_mixed_70_r_30_w_p99_ns{scenario=\"microbench\"}",
           "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
           "format": "time_series",
           "refId": "A"

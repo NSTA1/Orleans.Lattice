@@ -42,7 +42,8 @@ public class ReplicationDriverActivationServiceTests
         var factory = customFactory ?? Substitute.For<IGrainFactory>();
         var service = new ReplicationDriverActivationService(
             factory, Monitor(trees, peers),
-            NullLogger<ReplicationDriverActivationService>.Instance);
+            NullLogger<ReplicationDriverActivationService>.Instance,
+            new ReplicationPeerStats());
         return (service, factory);
     }
 
@@ -291,5 +292,62 @@ public class ReplicationDriverActivationServiceTests
         Assert.That(
             async () => await RunExecuteAsync(service, cts.Token),
             Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    // --- Constructor null guards ---
+
+    [Test]
+    public void Constructor_throws_when_grain_factory_is_null()
+    {
+        Assert.That(
+            () => new ReplicationDriverActivationService(
+                null!,
+                Monitor(trees: null),
+                NullLogger<ReplicationDriverActivationService>.Instance,
+                new ReplicationPeerStats()),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_options_monitor_is_null()
+    {
+        Assert.That(
+            () => new ReplicationDriverActivationService(
+                Substitute.For<IGrainFactory>(),
+                null!,
+                NullLogger<ReplicationDriverActivationService>.Instance,
+                new ReplicationPeerStats()),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_logger_is_null()
+    {
+        Assert.That(
+            () => new ReplicationDriverActivationService(
+                Substitute.For<IGrainFactory>(),
+                Monitor(trees: null),
+                null!,
+                new ReplicationPeerStats()),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_peer_stats_is_null()
+    {
+        // The peerStats dependency is taken to force eager DI
+        // activation of the singleton so its constructor-side gauge
+        // registrations fire on silo Start. The ctor still validates
+        // the parameter even though it is never read after
+        // construction — passing null here is a wiring bug and must
+        // throw to surface it at startup rather than silently lose
+        // the gauge registration.
+        Assert.That(
+            () => new ReplicationDriverActivationService(
+                Substitute.For<IGrainFactory>(),
+                Monitor(trees: null),
+                NullLogger<ReplicationDriverActivationService>.Instance,
+                null!),
+            Throws.InstanceOf<ArgumentNullException>());
     }
 }

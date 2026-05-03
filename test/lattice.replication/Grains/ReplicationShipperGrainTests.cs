@@ -207,7 +207,8 @@ public partial class ReplicationShipperGrainTests
         var factory = BuildGrainFactory(grainFactory, new[] { feed }, treeName);
         var grain = new ReplicationShipperGrain(
             ctx, reminders, NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry, factory, fakeState);
+            monitor, transport, encoder, registry, factory, fakeState,
+            new ReplicationPeerStats());
         grain.InitializeForTesting(treeName, peerClusterId);
         return (grain, fakeState, feed, transport, encoder, registry, monitor.CurrentValue);
     }
@@ -222,7 +223,8 @@ public partial class ReplicationShipperGrainTests
         IReplicationBatchEncoder? encoder = null,
         ILatticeReplicationCursorRegistry? registry = null,
         IGrainFactory? grainFactory = null,
-        IPersistentState<ReplicationShipperState>? state = null)
+        IPersistentState<ReplicationShipperState>? state = null,
+        ReplicationPeerStats? peerStats = null)
         => new(
             ctx ?? Substitute.For<IGrainContext>(),
             reminders ?? Substitute.For<IReminderRegistry>(),
@@ -232,7 +234,8 @@ public partial class ReplicationShipperGrainTests
             encoder ?? Substitute.For<IReplicationBatchEncoder>(),
             registry ?? Substitute.For<ILatticeReplicationCursorRegistry>(),
             grainFactory ?? Substitute.For<IGrainFactory>(),
-            state ?? new FakePersistentState<ReplicationShipperState>());
+            state ?? new FakePersistentState<ReplicationShipperState>(),
+            peerStats ?? new ReplicationPeerStats());
 
     [Test]
     public void Constructor_throws_when_options_monitor_is_null() =>
@@ -254,7 +257,8 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IReplicationBatchEncoder>(),
                 Substitute.For<ILatticeReplicationCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
-                new FakePersistentState<ReplicationShipperState>()),
+                new FakePersistentState<ReplicationShipperState>(),
+                new ReplicationPeerStats()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -271,7 +275,8 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IReplicationBatchEncoder>(),
                 Substitute.For<ILatticeReplicationCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
-                new FakePersistentState<ReplicationShipperState>()),
+                new FakePersistentState<ReplicationShipperState>(),
+                new ReplicationPeerStats()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -288,7 +293,8 @@ public partial class ReplicationShipperGrainTests
                 null!,
                 Substitute.For<ILatticeReplicationCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
-                new FakePersistentState<ReplicationShipperState>()),
+                new FakePersistentState<ReplicationShipperState>(),
+                new ReplicationPeerStats()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -305,7 +311,8 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IReplicationBatchEncoder>(),
                 null!,
                 Substitute.For<IGrainFactory>(),
-                new FakePersistentState<ReplicationShipperState>()),
+                new FakePersistentState<ReplicationShipperState>(),
+                new ReplicationPeerStats()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -322,7 +329,8 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IReplicationBatchEncoder>(),
                 Substitute.For<ILatticeReplicationCursorRegistry>(),
                 null!,
-                new FakePersistentState<ReplicationShipperState>()),
+                new FakePersistentState<ReplicationShipperState>(),
+                new ReplicationPeerStats()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -833,7 +841,8 @@ public partial class ReplicationShipperGrainTests
             NullLogger<ReplicationShipperGrain>.Instance,
             monitor, transport, encoder, registry,
             factory,
-            fakeState);
+            fakeState,
+            new ReplicationPeerStats());
         grain.InitializeForTesting(Tree, Peer);
         return (grain, fakeState, feed, transport, encoder);
     }
@@ -900,5 +909,172 @@ public partial class ReplicationShipperGrainTests
             encoder.CapturedWriters[1],
             Is.Not.SameAs(encoder.CapturedWriters[0]),
             "A buffer that grew at-or-past the soft cap must be recreated on the next pump tick rather than pinning the large array forever.");
+    }
+
+    // --- Peer stats recording ---
+
+    /// <summary>
+    /// Variant of <see cref="Create"/> that exposes the
+    /// <see cref="ReplicationPeerStats"/> instance handed to the grain
+    /// so tests can assert against <see cref="ReplicationPeerStats.Snapshot"/>
+    /// after driving the pump tick. Mirrors <see cref="Create"/> but
+    /// returns a smaller tuple containing only the dependencies the
+    /// peer-stats tests actually need.
+    /// </summary>
+    private static (
+        ReplicationShipperGrain Grain,
+        StubReplogShardGrain Feed,
+        IReplicationTransport Transport,
+        ReplicationPeerStats Stats) CreateWithStats(
+            LatticeReplicationOptions? options = null)
+    {
+        var ctx = Substitute.For<IGrainContext>();
+        ctx.GrainId.Returns(GrainId.Create("shipper", $"{Tree}/{Peer}"));
+        var reminders = Substitute.For<IReminderRegistry>();
+        var monitor = Monitor(options);
+        var feed = new StubReplogShardGrain();
+        var transport = Substitute.For<IReplicationTransport>();
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
+        var encoder = new TestEncoder();
+        var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var fakeState = new FakePersistentState<ReplicationShipperState>();
+        var factory = BuildGrainFactory(null, new[] { feed }, Tree);
+        var stats = new ReplicationPeerStats();
+        var grain = new ReplicationShipperGrain(
+            ctx, reminders, NullLogger<ReplicationShipperGrain>.Instance,
+            monitor, transport, encoder, registry, factory, fakeState, stats);
+        grain.InitializeForTesting(Tree, Peer);
+        return (grain, feed, transport, stats);
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_records_peer_success_after_round_trip()
+    {
+        var (grain, feed, _, stats) = CreateWithStats();
+        feed.Append(MakeEntry("k1", ticks: 1));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        var snapshot = stats.Snapshot();
+        Assert.That(snapshot, Has.Count.EqualTo(1));
+        var snap = snapshot.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(snap.Tree, Is.EqualTo(Tree));
+            Assert.That(snap.Peer, Is.EqualTo(Peer));
+            Assert.That(snap.ConsecutiveErrors, Is.EqualTo(0));
+            // LastContactSeconds is NaN until the first successful contact;
+            // after a successful round-trip it must be a real, non-negative
+            // value.
+            Assert.That(snap.LastContactSeconds, Is.Not.NaN);
+            Assert.That(snap.LastContactSeconds, Is.GreaterThanOrEqualTo(0.0));
+        });
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_records_peer_error_on_transport_throw()
+    {
+        var (grain, feed, transport, stats) = CreateWithStats();
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns<ReplicationAck>(_ => throw new InvalidOperationException("transport-down"));
+        feed.Append(MakeEntry("k", ticks: 1));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        var snap = stats.Snapshot().Single();
+        Assert.That(snap.ConsecutiveErrors, Is.EqualTo(1));
+        // A transport throw never reaches RecordSuccess, so the
+        // last-contact timestamp must remain unset (NaN sentinel).
+        Assert.That(snap.LastContactSeconds, Is.NaN);
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_records_peer_error_on_ack_rejected()
+    {
+        var (grain, feed, transport, stats) = CreateWithStats();
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck { Accepted = false, HighestAppliedHlc = HybridLogicalClock.Zero });
+        feed.Append(MakeEntry("k", ticks: 1));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        var snap = stats.Snapshot().Single();
+        Assert.That(snap.ConsecutiveErrors, Is.EqualTo(1));
+        Assert.That(snap.LastContactSeconds, Is.NaN);
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_does_not_record_peer_error_on_drain_throw()
+    {
+        // Drain failures (local WAL read errors) must NOT bump the
+        // per-peer consecutive_errors gauge — the peer is fine; the
+        // local source is down. The shipper still increments its own
+        // ConsecutiveFailures backoff counter, but the peer-stats
+        // surface stays clean.
+        var (grain, feed, _, stats) = CreateWithStats();
+        feed.ThrowOnRead = new InvalidOperationException("feed-down");
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        // No RecordError, no RecordSuccess: the peer entry is never
+        // touched, so Snapshot() returns an empty collection.
+        Assert.That(stats.Snapshot(), Is.Empty);
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_records_zero_backlog_when_batch_below_cap()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
+            ShipBatchSize = 64,
+        };
+        var (grain, feed, _, stats) = CreateWithStats(opts);
+        // Single entry — the drain returns 1 < ShipBatchSize so
+        // hitBatchCap is false and the recorded backlog is zero.
+        feed.Append(MakeEntry("k", ticks: 1));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        var snap = stats.Snapshot().Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(snap.EntriesBehind, Is.EqualTo(0L));
+            Assert.That(snap.BytesBehind, Is.EqualTo(0L));
+        });
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_records_backlog_lower_bound_when_batch_capped()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
+            ShipBatchSize = 2,
+        };
+        var (grain, feed, _, stats) = CreateWithStats(opts);
+        // Three entries forces the drain to fill the buffer to the
+        // ShipBatchSize cap — _drainBuffer.Count >= maxPerBatch is
+        // the lower-bound signal that the WAL has at least one full
+        // batch's worth of entries past the cursor.
+        feed.Append(MakeEntry("k1", ticks: 1));
+        feed.Append(MakeEntry("k2", ticks: 2));
+        feed.Append(MakeEntry("k3", ticks: 3));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        var snap = stats.Snapshot().Single();
+        Assert.Multiple(() =>
+        {
+            // entries_behind reports the just-shipped count (>=
+            // ShipBatchSize) as a floor.
+            Assert.That(snap.EntriesBehind, Is.GreaterThanOrEqualTo(opts.ShipBatchSize));
+            // bytes_behind is the encoded payload size — TestEncoder
+            // writes 3 bytes per encode so bytes_behind is at least 1.
+            Assert.That(snap.BytesBehind, Is.GreaterThan(0L));
+        });
     }
 }

@@ -330,7 +330,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_leaf_compaction_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_leaf_compaction_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)",
           "legendFormat": "p95"
         }
       ]
@@ -358,7 +358,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(orleans_lattice_leaf_replay_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(orleans_lattice_leaf_replay_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m]))) or vector(0)",
           "legendFormat": "p95 {{outcome}}"
         }
       ]
@@ -386,7 +386,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (outcome) (rate(orleans_lattice_leaf_replay_entries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m]))",
+          "expr": "sum by (outcome) (rate(orleans_lattice_leaf_replay_entries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) or vector(0)",
           "legendFormat": "{{outcome}}"
         }
       ]
@@ -414,17 +414,17 @@
       "targets": [
         {
           "refId": "R",
-          "expr": "sum(rate(orleans_lattice_leaf_tombstones_reaped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum(rate(orleans_lattice_leaf_tombstones_reaped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "reaped (delete)"
         },
         {
           "refId": "X",
-          "expr": "sum(rate(orleans_lattice_leaf_tombstones_expired_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum(rate(orleans_lattice_leaf_tombstones_expired_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "expired (ttl)"
         },
         {
           "refId": "C",
-          "expr": "sum(rate(orleans_lattice_leaf_tombstones_created_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum(rate(orleans_lattice_leaf_tombstones_created_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "created"
         }
       ]

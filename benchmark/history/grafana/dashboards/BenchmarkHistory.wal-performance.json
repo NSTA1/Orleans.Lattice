@@ -22,7 +22,7 @@
     },
     {
       "id": 2,
-      "type": "stat",
+      "type": "barchart",
       "title": "WAL append p99 (ms)",
       "datasource": {
         "type": "prometheus",
@@ -40,7 +40,7 @@
           "unit": "ms",
           "decimals": 2,
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
           "thresholds": {
             "steps": [
@@ -62,18 +62,21 @@
         }
       },
       "options": {
-        "graphMode": "area",
-        "colorMode": "background",
-        "justifyMode": "auto",
-        "textMode": "value_and_name",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
+        "orientation": "vertical",
+        "xTickLabelRotation": 0,
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "hidden",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "xTickLabelMaxLength": 0,
+        "xTickLabelSpacing": 0
       },
       "targets": [
         {
@@ -82,14 +85,15 @@
             "uid": "victoriametrics"
           },
           "expr": "bench_lattice_wal_append_p99_ms{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
-          "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
+          "refId": "A",
+          "format": "time_series"
         }
       ]
     },
     {
       "id": 3,
-      "type": "stat",
+      "type": "barchart",
       "title": "Apply step p99 (ms)",
       "datasource": {
         "type": "prometheus",
@@ -107,7 +111,7 @@
           "unit": "ms",
           "decimals": 2,
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
           "thresholds": {
             "steps": [
@@ -129,18 +133,21 @@
         }
       },
       "options": {
-        "graphMode": "area",
-        "colorMode": "background",
-        "justifyMode": "auto",
-        "textMode": "value_and_name",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
+        "orientation": "vertical",
+        "xTickLabelRotation": 0,
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "hidden",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "xTickLabelMaxLength": 0,
+        "xTickLabelSpacing": 0
       },
       "targets": [
         {
@@ -149,14 +156,15 @@
             "uid": "victoriametrics"
           },
           "expr": "bench_lattice_apply_p99_ms{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
-          "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
+          "refId": "A",
+          "format": "time_series"
         }
       ]
     },
     {
       "id": 4,
-      "type": "stat",
+      "type": "barchart",
       "title": "Shadow-write p99 (ms)",
       "datasource": {
         "type": "prometheus",
@@ -174,7 +182,7 @@
           "unit": "ms",
           "decimals": 2,
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
           "thresholds": {
             "steps": [
@@ -196,18 +204,21 @@
         }
       },
       "options": {
-        "graphMode": "area",
-        "colorMode": "background",
-        "justifyMode": "auto",
-        "textMode": "value_and_name",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
+        "orientation": "vertical",
+        "xTickLabelRotation": 0,
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "hidden",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "xTickLabelMaxLength": 0,
+        "xTickLabelSpacing": 0
       },
       "targets": [
         {
@@ -216,14 +227,15 @@
             "uid": "victoriametrics"
           },
           "expr": "bench_lattice_shadow_write_p99_ms{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
-          "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
+          "refId": "A",
+          "format": "time_series"
         }
       ]
     },
     {
       "id": 5,
-      "type": "stat",
+      "type": "barchart",
       "title": "WAL appends/sec",
       "datasource": {
         "type": "prometheus",
@@ -241,7 +253,7 @@
           "unit": "ops",
           "decimals": 2,
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
           "thresholds": {
             "steps": [
@@ -263,18 +275,21 @@
         }
       },
       "options": {
-        "graphMode": "area",
-        "colorMode": "background",
-        "justifyMode": "auto",
-        "textMode": "value_and_name",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
+        "orientation": "vertical",
+        "xTickLabelRotation": 0,
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "hidden",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "xTickLabelMaxLength": 0,
+        "xTickLabelSpacing": 0
       },
       "targets": [
         {
@@ -283,8 +298,9 @@
             "uid": "victoriametrics"
           },
           "expr": "bench_lattice_wal_appends_per_second{scenario=~\"(current-state-single-peer|replication-backpressure|receiver-crash|bidirectional-replication|replication-key-filter)\"}",
-          "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
+          "refId": "A",
+          "format": "time_series"
         }
       ]
     },

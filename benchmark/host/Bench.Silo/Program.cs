@@ -60,24 +60,21 @@ var serviceId = builder.Configuration["Orleans:ServiceId"] ?? "VehicleFleetSimul
 //   • Tree opt-in: `LatticeReplicationOptions.ReplicatedTrees[treeId] = LwwRegister` so
 //     the producer-side observer accepts mutations and records WAL entries (without this
 //     the WAL is permanently empty on a replicated tree).
+//   • Driver opt-in: `LatticeReplicationOptions.ReplicationPeers` lists the peer cluster
+//     ids the production driver activation service iterates to spin up one
+//     `IReplicationShipperGrain` per (tree, peer). Without this the activation service
+//     activates only the maintenance grain and zero shippers, so the WAL grows but
+//     `IReplicationTransport.SendAsync` is never called and every ship/apply histogram
+//     stays empty.
 //
-// Status note (do not delete without verifying first): the canonical outbound pump that
-// drives WAL → `IReplicationTransport.SendAsync` is not yet shipped in
-// `Orleans.Lattice.Replication`. The library exposes all the seams (`IChangeFeed`,
-// `IReplicationTransport`, `ILatticeReplicationCursorRegistry`, `IReplicationBatchEncoder`)
-// but no in-process consumer that wires them together — see the docs talking about an
-// "outbound shipper" / "canonical shipper" in `docs/lattice.replication/transport.md` and
-// the test-only `ChaosDeliveryPump` under `test/lattice.replication/Chaos`. Until the
-// library ships that pump:
-//   • `orleans_lattice_replication_wal_entries_appended_total` populates (producer side
-//     records every committed mutation against a replicated tree).
-//   • `orleans_lattice_replication_ship_duration_*` and
-//     `orleans_lattice_replication_apply_*` histograms stay empty (no
-//     `IReplicationTransport.SendAsync` is ever called from production code).
-// The benchmark deliberately does NOT implement its own pump here — that would be a
-// duplicate surface destined to be ripped out the moment the library lands the canonical
-// loop. The wiring below is intentionally forward-compatible: when the library's pump
-// ships, every replication histogram comes online without changing this file.
+// The two "peers" knobs split by concern, on purpose:
+//   • `LatticeReplicationOptions.ReplicationPeers` — transport-agnostic membership list
+//     (the cluster ids); consumed by the production drivers in `Orleans.Lattice.Replication`.
+//   • `GrpcPushTransportOptions.PeerEndpoints` — transport-specific cluster-id-to-URL map;
+//     consumed by the gRPC push transport in `Orleans.Lattice.Replication.Grpc` to resolve
+//     a peer to a wire endpoint. The benchmark binds both from the same env-driven
+//     `Replication:GrpcPeers:<id>` configuration map so a single env var (e.g.
+//     `BENCH_ORIGIN_PEER_ENDPOINT=http://silo-replica:5001`) wires both sides coherently.
 //
 // Configuration knobs (read from env via the ASP.NET Core configuration binder):
 //   • Replication:GrpcServerEnabled  — register the receiver service and map the gRPC
@@ -89,7 +86,10 @@ var serviceId = builder.Configuration["Orleans:ServiceId"] ?? "VehicleFleetSimul
 //   • Replication:GrpcPeers:<id>     — peer endpoint map keyed by TargetClusterId. When
 //                                      non-empty, replaces the no-op transport with the
 //                                      gRPC push transport so the outbound shipper actually
-//                                      delivers batches to the peers.
+//                                      delivers batches to the peers. The keys also
+//                                      populate `LatticeReplicationOptions.ReplicationPeers`
+//                                      so the production drivers activate one shipper per
+//                                      (tree, peer).
 //
 // Both halves are independent: a silo can be a sender-only (peers set, server off), a
 // receiver-only (server on, no peers), or both (bidirectional-replication). The benchmark
@@ -140,6 +140,19 @@ switch (telemetrySink)
 if (telemetrySink == "lattice")
 {
     builder.Services.AddLatticeReadDriver(builder.Configuration.GetSection("ReadDriver"));
+}
+
+// ─── Write-driver (optional) ───────────────────────────────────────────────────
+//
+// When WriteDriver:Enabled=true, registers a hosted service that issues SetAsync calls
+// against the configured tree. Used by bidirectional-replication scenarios so the replica
+// silo produces its own outbound WAL traffic (the simulator API only writes to the origin
+// cluster, so the replica's lattice sink is otherwise idle and the reverse-direction
+// ship/apply histograms stay empty). Activates whenever Lattice itself is registered
+// (telemetrySink=lattice OR replicationEnabled), gated at runtime by WriteDriver:Enabled.
+if (telemetrySink == "lattice" || replicationEnabled)
+{
+    builder.Services.AddLatticeWriteDriver(builder.Configuration.GetSection("WriteDriver"));
 }
 
 builder.Host.UseOrleans(silo =>
@@ -203,6 +216,31 @@ builder.Host.UseOrleans(silo =>
                 opts.KeyPrefixes = prefixes
                     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             }
+
+            // Production driver membership: the same cluster ids that key the gRPC peer
+            // endpoint map populate `ReplicationPeers` so `ReplicationDriverActivationService`
+            // activates one `IReplicationShipperGrain` per (tree, peer) on host startup.
+            // Empty `grpcPeers` (sender-off scenarios such as observer-no-peer and the
+            // receiver side of single-direction overlays) leaves `ReplicationPeers` null,
+            // which the activation service treats as "no shippers" — only the per-tree
+            // maintenance grain is activated, which is the correct shape for a
+            // receiver-only silo.
+            if (grpcPeers.Count > 0)
+            {
+                opts.ReplicationPeers = grpcPeers.Keys.ToArray();
+            }
+
+            // Optional override of the per-(tree, peer) shipper grain's phase-timer period.
+            // Used by the ship-cadence sweep to find the point where shipping stops being
+            // bound by the timer cadence and becomes bound by network/apply throughput.
+            // Unset = library default (100 ms).
+            var shipPhaseTimerMs = builder.Configuration["Replication:ShipPhaseTimerMs"];
+            if (!string.IsNullOrWhiteSpace(shipPhaseTimerMs)
+                && int.TryParse(shipPhaseTimerMs, out var shipPhaseTimerMsValue)
+                && shipPhaseTimerMsValue > 0)
+            {
+                opts.ShipPhaseTimerPeriod = TimeSpan.FromMilliseconds(shipPhaseTimerMsValue);
+            }
         });
 
         // Receiver-side: register the gRPC Push handler so a peer that ships to this
@@ -260,6 +298,25 @@ double[] latencyMsBuckets = new[]
     10.0, 15.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0
 };
 
+// `apply.lag` measures `now - entry.Timestamp.WallClockTicks` on the receiver — i.e. how
+// long ago the entry was committed at the origin. Under healthy synchronous replication
+// it sits in the sub-second range; under backpressure / receiver-crash / WAL-full chaos
+// scenarios it can climb into the tens of seconds and beyond. The shared `latencyMsBuckets`
+// set above tops out at 10s, which means every saturated apply lands in the `+Inf` bucket
+// and `histogram_quantile(0.99, ...)` pins flat at 10000ms — the dashboard tile cannot
+// distinguish "10s lag" from "5min lag", and the chaos signal is invisible.
+//
+// Apply.lag gets its own boundary set extending the long tail to 5min so saturated states
+// remain measurable. The lower portion mirrors the shared set so the typical-case quantile
+// resolution doesn't regress.
+double[] applyLagMsBuckets = new[]
+{
+    0.1, 0.25, 0.5, 0.75,
+    1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 7.5,
+    10.0, 15.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0,
+    25000.0, 60000.0, 120000.0, 300000.0
+};
+
 builder.Services
     .AddOpenTelemetry()
     .WithMetrics(b => b
@@ -268,6 +325,7 @@ builder.Services
         .AddMeter("orleans.lattice.replication")
         .AddMeter(LatticeSinkMetrics.MeterName)
         .AddMeter(LatticeReadDriverMetrics.MeterName)
+        .AddMeter(LatticeWriteDriverMetrics.MeterName)
         .AddView(instrument =>
         {
             // Apply finer latency buckets to every double-valued histogram emitted by the
@@ -277,12 +335,21 @@ builder.Services
                 meterName == "orleans.lattice" ||
                 meterName == "orleans.lattice.replication" ||
                 meterName == LatticeSinkMetrics.MeterName ||
-                meterName == LatticeReadDriverMetrics.MeterName;
-            if (isOurMeter && instrument is System.Diagnostics.Metrics.Histogram<double>)
+                meterName == LatticeReadDriverMetrics.MeterName ||
+                meterName == LatticeWriteDriverMetrics.MeterName;
+            if (!isOurMeter || instrument is not System.Diagnostics.Metrics.Histogram<double>)
             {
-                return new ExplicitBucketHistogramConfiguration { Boundaries = latencyMsBuckets };
+                return null;
             }
-            return null;
+
+            // apply.lag gets the extended-tail boundary set; everything else gets the
+            // standard latency boundaries. Match by canonical name to avoid coupling to
+            // the exact Histogram<double> instance reference.
+            if (instrument.Name == Orleans.Lattice.Replication.LatticeReplicationMetrics.ApplyLagName)
+            {
+                return new ExplicitBucketHistogramConfiguration { Boundaries = applyLagMsBuckets };
+            }
+            return new ExplicitBucketHistogramConfiguration { Boundaries = latencyMsBuckets };
         })
         .AddPrometheusExporter());
 

@@ -58,4 +58,28 @@ public static class LatticeSinkServiceCollectionExtensions
         services.AddHostedService<LatticeReadDriver>();
         return services;
     }
+
+    /// <summary>
+    /// Registers <see cref="LatticeWriteDriver"/> as an <see cref="IHostedService"/> bound
+    /// to the supplied <paramref name="configurationSection"/>. Safe to call
+    /// unconditionally - the driver short-circuits its <c>ExecuteAsync</c> when
+    /// <c>WriteDriver:Enabled</c> is <c>false</c>, so scenarios that don't generate
+    /// in-silo write load incur only the cost of an empty hosted-service slot.
+    /// </summary>
+    /// <remarks>
+    /// Intended for the bidirectional-replication scenario where the replica silo needs an
+    /// in-process write producer (the simulator API only points at the origin cluster).
+    /// </remarks>
+    public static IServiceCollection AddLatticeWriteDriver(
+        this IServiceCollection services,
+        IConfiguration configurationSection)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configurationSection);
+
+        services.AddOptions<LatticeWriteDriverOptions>().Bind(configurationSection);
+        services.TryAddSingleton<LatticeWriteDriverMetrics>();
+        services.AddHostedService<LatticeWriteDriver>();
+        return services;
+    }
 }
