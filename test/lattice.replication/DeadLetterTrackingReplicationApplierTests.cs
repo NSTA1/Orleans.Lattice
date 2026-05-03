@@ -6,7 +6,7 @@ using Orleans.Lattice.Replication.Grains;
 namespace Orleans.Lattice.Replication.Tests;
 
 [TestFixture]
-public class DeadLetterTrackingReplicationApplierTests
+public partial class DeadLetterTrackingReplicationApplierTests
 {
     private const string TreeId = "tree";
 

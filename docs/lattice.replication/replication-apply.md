@@ -14,6 +14,10 @@ public interface IReplicationApplier
     Task<ApplyResult> ApplyAsync(
         ReplogEntry entry,
         CancellationToken cancellationToken = default);
+
+    Task<ApplyResult> ApplyBatchAsync(
+        IReadOnlyList<ReplogEntry> entries,
+        CancellationToken cancellationToken = default);
 }
 
 public readonly record struct ApplyResult
@@ -25,8 +29,8 @@ public readonly record struct ApplyResult
 
 | `ApplyResult` member | Semantics |
 |---|---|
-| `Applied` | `true` when the entry was merged onto the local tree; `false` when the entry was filtered out as a re-delivery (its `Timestamp` was at or below the per-origin high-water-mark) or rejected as inapplicable (its `OriginClusterId` matched the local cluster id and would have looped). |
-| `HighWaterMark` | For point applies (`Set` / `Delete`) this is the per-origin HWM after the call — equal to `entry.Timestamp` when `Applied` is `true`, or the HWM that suppressed the apply when `Applied` is `false`. For range deletes and local-origin no-op rejections — neither of which consults the HWM — this is `HybridLogicalClock.Zero`. |
+| `Applied` | `true` when the entry was merged onto the local tree; `false` when the entry was filtered out as a re-delivery (its `Timestamp` was at or below the per-origin high-water-mark) or rejected as inapplicable (its `OriginClusterId` matched the local cluster id and would have looped). For batch calls, `true` if **any** entry in the batch was newly merged. |
+| `HighWaterMark` | For point applies (`Set` / `Delete`) this is the per-origin HWM after the call — equal to `entry.Timestamp` when `Applied` is `true`, or the HWM that suppressed the apply when `Applied` is `false`. For range deletes and local-origin no-op rejections — neither of which consults the HWM — this is `HybridLogicalClock.Zero`. For batch calls, the pointwise maximum HWM across every distinct origin in the batch. |
 
 ## Apply semantics
 
@@ -88,3 +92,36 @@ The per-origin high-water-mark is the explicit handoff contract for the bootstra
 
 - **Range deletes do not preserve a single source HLC.** The wire format does not carry per-leaf HLCs, so the receiver tombstones with fresh local HLCs. LWW resolution against a concurrent local write therefore depends on the local clock at apply time, not the remote walk's clock. Idempotence at the leaf layer is the primary correctness guarantee.
 - **The HWM is per-origin, not per-shard.** A receiver applying entries from origin `X` against a tree split into N shards advances a single HWM row keyed `(tree, X)` regardless of which shard the entry targets. This is intentional: the HWM contract is the bootstrap-handoff seam, and bootstrap operates per-origin not per-shard.
+
+## Batch apply path
+
+Inbound transports deliver batches of `ReplogEntry` records, not single entries: a 256-entry gRPC push from a single producer is one network round-trip carrying 256 mutations. `ApplyBatchAsync` is the seam that lets the receiver process such a batch as one logical operation rather than 256 independent `ApplyAsync` calls — it collapses the per-entry per-origin HWM grain RPCs to one `GetAsync` + one `TryAdvanceAsync` per distinct origin per batch and drains the causal-apply buffer once at the end of the batch instead of after every successful apply.
+
+The default-interface-method body provides backward-compatible semantics: it loops over `ApplyAsync` and aggregates the per-entry results, so any custom `IReplicationApplier` written before the batch seam existed continues to work without changes. The shipped `ReplicationApplier` overrides the batch path with the optimised implementation described below.
+
+### Run grouping
+
+The optimised batch path walks the inbound list and identifies maximal contiguous runs of entries that share the same `(TreeId, OriginClusterId)` tuple. For a 256-entry batch shipped by a single producer the entire batch is one run; for an interleaved batch (e.g. a snapshot recovery merge that intersperses entries from two origins) the path emits one run per contiguous group, each amortised independently. Within a run:
+
+- A single `GetAsync` reads the persisted per-origin HWM at the start of the run.
+- An in-memory `runningHwm` tracks the highest applied HLC for the rest of the run, so subsequent entries dedupe without a fresh round trip. The producer's per-origin HLC monotonicity guarantee makes this strictly equivalent to per-entry `GetAsync` + dedupe.
+- Causal-dependency entries fetch the local vector clock lazily on first use and reuse it until an apply has occurred, at which point a `localVcDirty` flag forces a re-fetch on the next causal-dep check.
+- A single `TryAdvanceAsync` advances the persisted HWM to the highest applied HLC at the end of the run.
+- A single `DrainBufferAsync` drains the causal-apply buffer once if the run advanced the persisted HWM.
+
+For a 256-entry single-origin batch this collapses ~3·256 = 768 grain round-trips (per-entry `GetAsync` + `ApplyPointAsync` + `TryAdvanceAsync`) to 256 + 2 = 258 — the dominant receiver-side cost on every inbound push.
+
+### Preserved per-entry semantics
+
+Every classification the per-entry path produces survives the batch path:
+
+- **Range-delete entries** bypass HWM dedup and apply unconditionally (they carry `HybridLogicalClock.Zero` by design).
+- **Local-origin runs** classify every entry as `Dedup` with `HighWaterMark = HybridLogicalClock.Zero` and emit no grain calls.
+- **In-batch dedup** against the in-memory `runningHwm` is bit-equivalent to per-entry dedup against a freshly-read HWM, because the producer guarantees per-origin HLC monotonicity within the batch.
+- **Causal-park** is exercised per-entry; only the local-vector-clock fetch is lazy.
+- **Per-entry instrumentation** (`ApplyDuration`, `ApplyLag`, `ApplyFifoViolations`) is recorded inside the per-entry loop so observability is preserved verbatim.
+- **Single-entry batches** defer to `ApplyAsync` so behaviour is bit-identical with the legacy receiver for the trivial case.
+
+### Failure model
+
+Per-entry failures inside the batch surface as `ApplyAsync`-equivalent exceptions. The `LatticeReplicationGrpcService.Push` receiver wraps the batch call in a transport-level exception so the sender's backoff/retry loop kicks in for the whole batch — partial-batch acceptance is not a guarantee the seam offers. A `DeadLetterTrackingReplicationApplier` decorator detects retry history on any entry in the batch and falls back to per-entry routing so its DLQ accounting is exact.

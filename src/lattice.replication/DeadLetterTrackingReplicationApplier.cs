@@ -61,6 +61,106 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         return result;
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Steady-state fast path: when no entry in the batch has any
+    /// recorded retry history we delegate the entire batch to the
+    /// inner applier's optimised batch-mode implementation, which
+    /// collapses the per-entry HWM round-trips to one
+    /// <see cref="IReplicationHighWaterMarkGrain.GetAsync"/> + one
+    /// <see cref="IReplicationHighWaterMarkGrain.TryAdvanceAsync"/>
+    /// per distinct origin per batch. A successful return clears any
+    /// per-entry failure counters that may have accumulated for the
+    /// applied entries.
+    /// <para>
+    /// Slow path: when at least one entry already has accumulated
+    /// failure history, OR when the inner batch call throws (a poison
+    /// entry mid-batch), we fall back to the per-entry decorator path
+    /// so retry budgets and dead-letter parking continue to apply
+    /// per-entry. Inner-batch exceptions on a clean batch fall through
+    /// to per-entry retries that re-establish the correct retry-budget
+    /// accounting on the offending entry.
+    /// </para>
+    /// </remarks>
+    public async Task<ApplyResult> ApplyBatchAsync(
+        IReadOnlyList<ReplogEntry> entries,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (entries.Count == 0)
+        {
+            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+        }
+
+        // Single-entry fast path: defer to the per-entry decorator so
+        // there is exactly one retry-budget code path on the hot path
+        // for low-rate (single-entry per push) deployments.
+        if (entries.Count == 1)
+        {
+            return await ApplyAsync(entries[0], cancellationToken).ConfigureAwait(false);
+        }
+
+        // Steady-state heuristic: if no entry has any prior failure
+        // history we route the batch through the inner applier's
+        // optimised batch path. The check is O(n) over the dictionary
+        // count (~zero in steady state) so this is cheap.
+        var hasHistory = false;
+        if (!_failures.IsEmpty)
+        {
+            for (var i = 0; i < entries.Count; i++)
+            {
+                if (_failures.ContainsKey(KeyFor(entries[i])))
+                {
+                    hasHistory = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasHistory)
+        {
+            try
+            {
+                return await inner.ApplyBatchAsync(entries, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                // Fall through to per-entry slow path so the retry-budget
+                // accounting kicks in for whichever entry caused the
+                // throw (the inner applier surfaces the exception
+                // partway through the batch; the per-entry retry path
+                // re-establishes correct accounting for the offending
+                // tuple).
+            }
+        }
+
+        // Slow path: per-entry through the decorator's own ApplyAsync,
+        // preserving retry-budget accounting and dead-letter parking
+        // semantics for every entry in the batch.
+        var applied = false;
+        var highest = HybridLogicalClock.Zero;
+        for (var i = 0; i < entries.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = await ApplyAsync(entries[i], cancellationToken).ConfigureAwait(false);
+            if (result.Applied)
+            {
+                applied = true;
+            }
+            if (result.HighWaterMark.CompareTo(highest) > 0)
+            {
+                highest = result.HighWaterMark;
+            }
+        }
+        return new ApplyResult { Applied = applied, HighWaterMark = highest };
+    }
+
     private async Task<ApplyResult> OnFailureAsync(
         ReplogEntry entry,
         Exception failure,

@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Replication;
 /// drain of the per-tree causal-apply buffer so blocked entries
 /// whose deps are now satisfied wake up and apply in FIFO order.
 /// </summary>
-internal sealed class ReplicationApplier(
+internal sealed partial class ReplicationApplier(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeReplicationOptions> options) : IReplicationApplier
 {

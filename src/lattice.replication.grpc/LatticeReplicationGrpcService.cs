@@ -142,40 +142,34 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         }
 
         var entries = request.Entries ?? Array.Empty<ReplogEntry>();
-        var highest = Primitives.HybridLogicalClock.Zero;
 
-        for (var i = 0; i < entries.Count; i++)
+        ApplyResult result;
+        try
         {
-            context.CancellationToken.ThrowIfCancellationRequested();
-            var entry = entries[i];
+            result = await _applier.ApplyBatchAsync(entries, context.CancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Best-effort context for the failure: surface the tree id
+            // and batch size in the structured log so operators can
+            // correlate the gRPC exception to a specific inbound push.
+            // Per-entry detail is owned by the applier (it logs / parks
+            // / records-metrics inside the batch loop), so we do not
+            // re-inflate it here.
+            _logger.LogError(ex,
+                "Replication apply failed for tree {Tree} on a {EntryCount}-entry batch from origin {Origin}.",
+                request.TreeName, entries.Count, request.OriginClusterId);
 
-            ApplyResult result;
-            try
-            {
-                result = await _applier.ApplyAsync(entry, context.CancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "Replication apply failed for tree {Tree}, key {Key}, origin {Origin} at HLC {Hlc}; "
-                    + "highest HWM advanced so far was {Hwm}.",
-                    entry.TreeId, entry.Key, entry.OriginClusterId, entry.Timestamp, highest);
-
-                throw new RpcException(
-                    new Status(StatusCode.Internal,
-                        $"Replication apply failed at entry index {i} on tree '{entry.TreeId}'; "
-                        + "see server logs for the underlying exception."),
-                    ex.Message);
-            }
-
-            if (result.HighWaterMark > highest)
-            {
-                highest = result.HighWaterMark;
-            }
+            throw new RpcException(
+                new Status(StatusCode.Internal,
+                    $"Replication apply failed on tree '{request.TreeName}' "
+                    + $"({entries.Count} entries from origin '{request.OriginClusterId}'); "
+                    + "see server logs for the underlying exception."),
+                ex.Message);
         }
 
         return new ReplicationAckBox
@@ -183,7 +177,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
             Value = new ReplicationAck
             {
                 Accepted = true,
-                HighestAppliedHlc = highest,
+                HighestAppliedHlc = result.HighWaterMark,
             },
         };
     }
