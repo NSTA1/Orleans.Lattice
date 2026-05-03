@@ -83,7 +83,8 @@
           },
           "expr": "bench_lattice_commit_p99_ms{scenario=~\"(current-state-no-replication|skewed-key-shard-splits)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },
@@ -150,7 +151,8 @@
           },
           "expr": "bench_lattice_commits_per_second{scenario=~\"(current-state-no-replication|skewed-key-shard-splits)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },
@@ -217,7 +219,8 @@
           },
           "expr": "bench_orleans_lattice_leaf_write_duration_milliseconds_p99{scenario=~\"(current-state-no-replication|skewed-key-shard-splits)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },
@@ -284,7 +287,8 @@
           },
           "expr": "bench_lattice_cache_hit_ratio{scenario=~\"(current-state-no-replication|skewed-key-shard-splits)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },

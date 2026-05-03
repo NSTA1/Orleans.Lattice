@@ -78,6 +78,10 @@ services:
       # configuration binder + the .Where(...) filter in Bench.Silo's GrpcPeers reader
       # discard empty values, leaving the no-op transport in place.
       Replication__GrpcPeers__vfs-bench-replica: ${BENCH_ORIGIN_PEER_ENDPOINT:-}
+      # Per-(tree, peer) shipper grain phase-timer period in ms. Unset/empty falls back to
+      # the library default of 100 ms; lowering reduces the worst-case ship latency floor
+      # when the doorbell signal is unavailable. Used by the ship-cadence sweep.
+      Replication__ShipPhaseTimerMs: ${BENCH_SHIP_PHASE_TIMER_MS:-}
       # Read-driver bindings (only consumed when Telemetry__Sink=lattice). Drives the read-heavy-*
       # and read-write-mix-* scenarios.
       ReadDriver__Enabled: ${BENCH_READ_DRIVER_ENABLED:-false}

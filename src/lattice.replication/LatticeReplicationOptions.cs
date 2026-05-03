@@ -367,6 +367,23 @@ public class LatticeReplicationOptions
     public TimeSpan ShipBackoffInitial { get; set; } = DefaultShipBackoffInitial;
 
     /// <summary>
+    /// Period of the per-(tree, peer) shipper grain's phase timer
+    /// — the wall-clock cadence at which the shipper polls the WAL
+    /// for new entries to ship to the peer. A shorter period reduces
+    /// the worst-case latency between a write being appended to the
+    /// WAL and the next ship attempt picking it up; a longer period
+    /// trades latency for cheaper steady-state load on the silo
+    /// scheduler when the WAL is empty. The setting only matters when
+    /// the doorbell signal (<see cref="ShipDoorbellEnabled"/>) is
+    /// disabled or fails to ring (e.g. shipper grain not yet active);
+    /// in normal operation the doorbell drives the next pump tick
+    /// immediately on append. Defaults to
+    /// <see cref="DefaultShipPhaseTimerPeriod"/>. Must be strictly
+    /// greater than <see cref="TimeSpan.Zero"/>.
+    /// </summary>
+    public TimeSpan ShipPhaseTimerPeriod { get; set; } = DefaultShipPhaseTimerPeriod;
+
+    /// <summary>
     /// Maximum backoff delay between failed ship attempts, capping
     /// the doubling sequence seeded by <see cref="ShipBackoffInitial"/>.
     /// Defaults to <see cref="DefaultShipBackoffMax"/>. Must be
@@ -551,6 +568,13 @@ public class LatticeReplicationOptions
     /// Default value for <see cref="ShipBackoffInitial"/>: 100 ms.
     /// </summary>
     public static readonly TimeSpan DefaultShipBackoffInitial = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// Default value for <see cref="ShipPhaseTimerPeriod"/>: 100 ms.
+    /// Matches the legacy hard-coded period of the shipper's phase
+    /// timer so the option is a strict superset of prior behaviour.
+    /// </summary>
+    public static readonly TimeSpan DefaultShipPhaseTimerPeriod = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
     /// Default value for <see cref="ShipBackoffMax"/>: 30 seconds.

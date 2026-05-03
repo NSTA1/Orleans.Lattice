@@ -155,6 +155,15 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "transport failures; the doubling sequence needs a non-zero seed value.");
         }
 
+        if (options.ShipPhaseTimerPeriod <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ShipPhaseTimerPeriod)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "A zero or negative phase-timer period would either tight-loop the shipper or never "
+                + "fire the polling fallback when the doorbell signal is unavailable.");
+        }
+
         if (options.ShipBackoffMax < options.ShipBackoffInitial)
         {
             return ValidateOptionsResult.Fail(

@@ -82,6 +82,18 @@ public sealed class DashboardJsonTests
         map[underscored + "_seconds_count"] = meterName;
         map[underscored + "_seconds_sum"] = meterName;
 
+        // Histogram with no explicit unit (the .NET name itself encodes the unit,
+        // e.g. ".apply.dependency_wait_ms"): the exporter appends the suffix
+        // directly to the underscored name without inserting a unit segment.
+        map[underscored + "_bucket"] = meterName;
+        map[underscored + "_count"] = meterName;
+        map[underscored + "_sum"] = meterName;
+
+        // Counter / observable gauge with bytes unit ("By"): the exporter
+        // appends "_bytes" (and "_bytes_total" for monotonic counters).
+        map[underscored + "_bytes"] = meterName;
+        map[underscored + "_bytes_total"] = meterName;
+
         // Gauge / observable / un-suffixed reference (some queries use the bare name)
         map[underscored] = meterName;
     }

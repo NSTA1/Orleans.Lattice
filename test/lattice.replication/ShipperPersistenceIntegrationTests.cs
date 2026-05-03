@@ -182,7 +182,8 @@ public class ShipperPersistenceIntegrationTests
             ctx,
             Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry, factory, persistent);
+            monitor, transport, encoder, registry, factory, persistent,
+            new ReplicationPeerStats());
         grain.InitializeForTesting(Tree, Peer);
         return grain;
     }

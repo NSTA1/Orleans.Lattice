@@ -83,7 +83,8 @@
           },
           "expr": "bench_vehicle_fleet_simulator_read_driver_duration_ms_p99{scenario=~\"(read-heavy-random|read-heavy-ordered)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },
@@ -150,7 +151,8 @@
           },
           "expr": "bench_vehicle_fleet_simulator_read_driver_reads_per_second{scenario=~\"(read-heavy-random|read-heavy-ordered)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },
@@ -217,7 +219,8 @@
           },
           "expr": "bench_lattice_cache_hit_ratio{scenario=~\"(read-heavy-random|read-heavy-ordered)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },
@@ -284,7 +287,8 @@
           },
           "expr": "bench_lattice_commit_p99_ms{scenario=~\"(read-heavy-random|read-heavy-ordered)\"}",
           "legendFormat": "{{scenario}} @ {{git_sha}}",
-          "refId": "A"
+          "refId": "A",
+          "instant": true
         }
       ]
     },

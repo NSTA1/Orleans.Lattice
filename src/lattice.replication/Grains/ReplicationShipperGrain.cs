@@ -37,7 +37,8 @@ internal sealed class ReplicationShipperGrain(
     ILatticeReplicationCursorRegistry cursorRegistry,
     IGrainFactory grainFactory,
     [PersistentState("replication-shipper", LatticeOptions.StorageProviderName)]
-    IPersistentState<ReplicationShipperState> state)
+    IPersistentState<ReplicationShipperState> state,
+    ReplicationPeerStats peerStats)
     : CoordinatorGrain<ReplicationShipperGrain>(context, reminderRegistry, logger),
       IReplicationShipperGrain
 {
@@ -51,6 +52,8 @@ internal sealed class ReplicationShipperGrain(
         cursorRegistry ?? throw new ArgumentNullException(nameof(cursorRegistry));
     private readonly IGrainFactory _grainFactory =
         grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
+    private readonly ReplicationPeerStats _peerStats =
+        peerStats ?? throw new ArgumentNullException(nameof(peerStats));
 
     private string _treeName = "";
     private string _peerClusterId = "";
@@ -165,7 +168,14 @@ internal sealed class ReplicationShipperGrain(
     protected override TimeSpan KeepaliveReminderPeriod => TimeSpan.FromSeconds(90);
 
     /// <inheritdoc />
-    protected override TimeSpan PhaseTimerPeriod => TimeSpan.FromMilliseconds(200);
+    /// <remarks>
+    /// Read once at activation via <see cref="IOptionsMonitor{TOptions}.CurrentValue"/>.
+    /// The Orleans timer infrastructure registers the period at
+    /// <see cref="CoordinatorGrain{TSelf}.StartPhaseTimer"/> time, so a runtime
+    /// option change does not propagate until the activation is recycled —
+    /// which is the same scope as "silo restart picks up the new value".
+    /// </remarks>
+    protected override TimeSpan PhaseTimerPeriod => _optionsMonitor.CurrentValue.ShipPhaseTimerPeriod;
 
     /// <inheritdoc />
     protected override bool InProgress => true; // The shipper is steady-state — always running.
@@ -393,6 +403,23 @@ internal sealed class ReplicationShipperGrain(
         // Successful round-trip resets the backoff counter.
         state.State.ConsecutiveFailures = 0;
         _nextRetryAtUtc = DateTime.MinValue;
+
+        // Per-peer telemetry. RecordSuccess clears the consecutive-error
+        // counter and stamps the last-contact timestamp; RecordBacklog
+        // updates the entries_behind / bytes_behind gauges. The backlog
+        // reading is a *lower bound* derived from this tick's drain
+        // outcome: when the drain hit ShipBatchSize the WAL had at
+        // least one batch worth of entries past our cursor, so we
+        // report the just-shipped count and bytes as a floor; when
+        // the drain returned fewer than the cap we know we caught up
+        // and report zero. This avoids a hot-path WAL frontier query
+        // (one extra grain call per partition per tick) while still
+        // making "is this peer keeping up?" answerable on the dashboard.
+        _peerStats.RecordSuccess(_treeName, _peerClusterId);
+        var hitBatchCap = _drainBuffer.Count >= maxPerBatch;
+        var entriesBehind = hitBatchCap ? (long)_drainBuffer.Count : 0L;
+        var bytesBehind = hitBatchCap ? (long)_writeBuffer.WrittenCount : 0L;
+        _peerStats.RecordBacklog(_treeName, _peerClusterId, entriesBehind, bytesBehind);
     }
 
     /// <summary>
@@ -771,6 +798,17 @@ internal sealed class ReplicationShipperGrain(
 
         var delay = TimeSpan.FromMilliseconds(delayMs);
         _nextRetryAtUtc = DateTime.UtcNow.Add(delay);
+
+        // Per-peer error tally: only count failures that are attributable
+        // to the peer round-trip (transport throw, receiver ack rejection).
+        // "drain" failures are local WAL read errors — the peer is fine,
+        // so they must not bump the consecutive_errors gauge for that peer.
+        if (string.Equals(reason, "transport", StringComparison.Ordinal)
+            || string.Equals(reason, "ack-rejected", StringComparison.Ordinal))
+        {
+            _peerStats.RecordError(_treeName, _peerClusterId);
+        }
+
         if (exception is not null)
         {
             Logger.LogWarning(exception,

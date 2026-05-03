@@ -320,17 +320,17 @@
       "targets": [
         {
           "refId": "C",
-          "expr": "sum(rate(orleans_lattice_leaf_tombstones_created_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum(rate(orleans_lattice_leaf_tombstones_created_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "created"
         },
         {
           "refId": "R",
-          "expr": "sum(rate(orleans_lattice_leaf_tombstones_reaped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum(rate(orleans_lattice_leaf_tombstones_reaped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "reaped"
         },
         {
           "refId": "X",
-          "expr": "sum(rate(orleans_lattice_leaf_tombstones_expired_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum(rate(orleans_lattice_leaf_tombstones_expired_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "expired (ttl)"
         }
       ]
@@ -358,7 +358,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_leaf_compaction_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_leaf_compaction_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)",
           "legendFormat": "p95"
         }
       ]
@@ -386,12 +386,12 @@
       "targets": [
         {
           "refId": "S",
-          "expr": "sum by (tree) (rate(orleans_lattice_shard_splits_committed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60",
+          "expr": "sum by (tree) (rate(orleans_lattice_shard_splits_committed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60 or vector(0)",
           "legendFormat": "shard {{tree}}"
         },
         {
           "refId": "L",
-          "expr": "sum by (tree) (rate(orleans_lattice_leaf_splits_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60",
+          "expr": "sum by (tree) (rate(orleans_lattice_leaf_splits_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60 or vector(0)",
           "legendFormat": "leaf {{tree}}"
         }
       ]
@@ -419,7 +419,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (outcome) (rate(orleans_lattice_atomic_write_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum by (outcome) (rate(orleans_lattice_atomic_write_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "{{outcome}}"
         }
       ]
@@ -447,7 +447,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (kind) (rate(orleans_lattice_coordinator_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m]))",
+          "expr": "sum by (kind) (rate(orleans_lattice_coordinator_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) or vector(0)",
           "legendFormat": "{{kind}}"
         }
       ]
@@ -475,7 +475,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (kind) (rate(orleans_lattice_events_published_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum by (kind) (rate(orleans_lattice_events_published_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "{{kind}}"
         }
       ]
@@ -503,7 +503,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (reason) (rate(orleans_lattice_events_dropped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum by (reason) (rate(orleans_lattice_events_dropped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "{{reason}}"
         }
       ]
@@ -538,7 +538,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (kind) (increase(orleans_lattice_tree_lifecycle_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range]))",
+          "expr": "sum by (kind) (increase(orleans_lattice_tree_lifecycle_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range])) or vector(0)",
           "legendFormat": "{{kind}}"
         }
       ]
@@ -567,7 +567,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (tree, config) (increase(orleans_lattice_config_changed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range]))",
+          "expr": "sum by (tree, config) (increase(orleans_lattice_config_changed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range])) or vector(0)",
           "format": "table",
           "instant": true
         }

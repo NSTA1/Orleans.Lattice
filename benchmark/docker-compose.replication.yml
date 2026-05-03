@@ -71,6 +71,26 @@ services:
       # empty string, which Bench.Silo's `GetSection("Replication:GrpcPeers").GetChildren()`
       # filter discards — leaving the no-op transport in place on the back-channel.
       Replication__GrpcPeers__vfs-bench: ${BENCH_REPLICA_PEER_ENDPOINT:-}
+      # Per-(tree, peer) shipper grain phase-timer period in ms. Mirrors the origin-side
+      # docker-compose.yml override so the bidirectional scenario applies the same cadence
+      # in both directions.
+      Replication__ShipPhaseTimerMs: ${BENCH_SHIP_PHASE_TIMER_MS:-}
+      # In-silo write driver (bidirectional-replication only). The simulator API only
+      # points at the origin cluster, so the replica has no producer of its own; without
+      # an in-silo SetAsync generator the replica's outbound WAL stays empty and the
+      # reverse-direction ship/apply histograms never fire. WriteDriver__Enabled=true
+      # (set per-scenario via BENCH_REPLICA_WRITE_DRIVER_ENABLED) flips the
+      # LatticeWriteDriver background service on; rate / concurrency / keyspace are
+      # tunable for stress shapes. Defaults are off so non-bidirectional replication
+      # scenarios stay unaffected.
+      WriteDriver__Enabled: ${BENCH_REPLICA_WRITE_DRIVER_ENABLED:-false}
+      WriteDriver__TreeId: ${BENCH_TREE_ID:-vehicle-fleet}
+      WriteDriver__RatePerSecond: ${BENCH_REPLICA_WRITE_DRIVER_RATE:-2000}
+      WriteDriver__Concurrency: ${BENCH_REPLICA_WRITE_DRIVER_CONCURRENCY:-16}
+      WriteDriver__KeyspaceSize: ${BENCH_REPLICA_WRITE_DRIVER_KEYSPACE:-2000}
+      WriteDriver__KeyPrefix: ${BENCH_REPLICA_WRITE_DRIVER_KEY_PREFIX:-replica-}
+      WriteDriver__ValueSizeBytes: ${BENCH_REPLICA_WRITE_DRIVER_VALUE_BYTES:-256}
+      WriteDriver__WarmupDelay: ${BENCH_REPLICA_WRITE_DRIVER_WARMUP:-00:00:15}
     expose:
       - "11111"
       - "30000"
