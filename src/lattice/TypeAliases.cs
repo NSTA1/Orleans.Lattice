@@ -133,4 +133,8 @@ internal static class TypeAliases
 
     // Leaf projection digest (cross-silo determinism check)
     internal const string LeafProjectionDigest = "ol.lpd";
+
+    // Write-ahead-log durability seam (consumed by the replication
+    // package today; foreground commit-log adapter tomorrow)
+    internal const string WalEntry = "ol.we";
 }

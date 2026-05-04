@@ -1,3 +1,4 @@
+using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 
@@ -9,10 +10,10 @@ public class InMemoryWalStorageProviderTests
     private static WalEntry MakeEntry(long offset, string key = "k") => new()
     {
         Offset = offset,
-        Entry = new ReplogEntry
+        Mutation = new LatticeMutation
         {
             TreeId = "tree",
-            Op = ReplogOp.Set,
+            Kind = MutationKind.Set,
             Key = key,
             Value = new byte[] { 1 },
             Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),

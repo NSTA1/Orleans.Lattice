@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Default in-memory <see cref="IWalStorageProvider"/> implementation.
@@ -9,7 +9,8 @@ namespace Orleans.Lattice.Replication;
 /// per-shard list; suitable for tests, single-process samples, and as
 /// the registered DI default until a host wires up a durable provider
 /// (Azure Table Storage, Cosmos DB, file system, …) via
-/// <see cref="LatticeReplicationOptions.WalStorageProvider"/>.
+/// <see cref="LatticeServiceCollectionExtensions.AddWalStorage"/> or
+/// (for replicated trees) <c>LatticeReplicationOptions.WalStorageProvider</c>.
 /// <para>
 /// State is kept entirely in process memory and is lost on silo
 /// restart. The implementation honours the

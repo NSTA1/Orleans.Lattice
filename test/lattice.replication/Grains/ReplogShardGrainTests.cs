@@ -1,8 +1,10 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
+using Orleans.Lattice.Replication.Adapters;
 using Orleans.Lattice.Replication.Grains;
 using Orleans.Runtime;
 
@@ -29,7 +31,7 @@ public class ReplogShardGrainTests
         var grainContext = Substitute.For<IGrainContext>();
         var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
-        var grain = new ReplogShardGrain(grainContext, services, monitor);
+        var grain = new ReplogShardGrain(grainContext, services, monitor, CreatePermissiveResolver());
         await grain.InitializeForTestingAsync(TreeId, ShardIndex, provider, options, CancellationToken.None);
         return grain;
     }
@@ -43,6 +45,18 @@ public class ReplogShardGrainTests
         Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
         OriginClusterId = "site-a",
     };
+
+    /// <summary>
+    /// Permissive <see cref="IReplicationModeResolver"/> stub that reports
+    /// every tree as <see cref="ReplicationMode.LwwRegister"/>. Tests
+    /// that exercise per-tree mode dispatch supply their own.
+    /// </summary>
+    private static IReplicationModeResolver CreatePermissiveResolver()
+    {
+        var resolver = Substitute.For<IReplicationModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns(ReplicationMode.LwwRegister);
+        return resolver;
+    }
 
     [Test]
     public async Task AppendAsync_assigns_zero_for_first_entry()
@@ -86,8 +100,8 @@ public class ReplogShardGrainTests
             Assert.That(read, Has.Count.EqualTo(2));
             Assert.That(read[0].Offset, Is.EqualTo(0L));
             Assert.That(read[1].Offset, Is.EqualTo(1L));
-            Assert.That(read[0].Entry.Key, Is.EqualTo("a"));
-            Assert.That(read[1].Entry.Key, Is.EqualTo("b"));
+            Assert.That(read[0].Mutation.Key, Is.EqualTo("a"));
+            Assert.That(read[1].Mutation.Key, Is.EqualTo("b"));
         });
     }
 
@@ -158,9 +172,9 @@ public class ReplogShardGrainTests
         var provider = new InMemoryWalStorageProvider();
         await provider.AppendBatchAsync(TreeId, ShardIndex, new[]
         {
-            new WalEntry { Offset = 0, Entry = MakeEntry("pre-a") },
-            new WalEntry { Offset = 1, Entry = MakeEntry("pre-b") },
-            new WalEntry { Offset = 2, Entry = MakeEntry("pre-c") },
+            new WalEntry { Offset = 0, Mutation = ReplogEntryConverter.FromReplogEntry(MakeEntry("pre-a")) },
+            new WalEntry { Offset = 1, Mutation = ReplogEntryConverter.FromReplogEntry(MakeEntry("pre-b")) },
+            new WalEntry { Offset = 2, Mutation = ReplogEntryConverter.FromReplogEntry(MakeEntry("pre-c")) },
         }, CancellationToken.None);
 
         var grain = await CreateGrainAsync(provider);
@@ -491,7 +505,7 @@ public class ReplogShardGrainTests
         var grainContext = Substitute.For<IGrainContext>();
         var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
-        var grain = new ReplogShardGrain(grainContext, services, monitor);
+        var grain = new ReplogShardGrain(grainContext, services, monitor, CreatePermissiveResolver());
 
         Assert.That(
             async () => await grain.InitializeForTestingAsync(null!, 0, new InMemoryWalStorageProvider(), null, CancellationToken.None),
@@ -504,7 +518,7 @@ public class ReplogShardGrainTests
         var grainContext = Substitute.For<IGrainContext>();
         var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
-        var grain = new ReplogShardGrain(grainContext, services, monitor);
+        var grain = new ReplogShardGrain(grainContext, services, monitor, CreatePermissiveResolver());
 
         Assert.That(
             async () => await grain.InitializeForTestingAsync(TreeId, 0, null!, null, CancellationToken.None),

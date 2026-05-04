@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.Replication.Adapters;
 using Orleans.Runtime;
 
 namespace Orleans.Lattice.Replication.Grains;
@@ -37,7 +38,8 @@ namespace Orleans.Lattice.Replication.Grains;
 internal sealed class ReplogShardGrain(
     IGrainContext context,
     IServiceProvider services,
-    IOptionsMonitor<LatticeReplicationOptions> optionsMonitor) : IReplogShardGrain, IGrainBase
+    IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
+    IReplicationModeResolver modeResolver) : IReplogShardGrain, IGrainBase
 {
     /// <summary>Per-entry serialised-size estimate overhead in bytes (envelope + HLC + origin id + slot tags).</summary>
     private const int EntrySizeOverhead = 128;
@@ -146,7 +148,7 @@ internal sealed class ReplogShardGrain(
         }
 
         var offset = _nextOffset++;
-        _pendingBatch.Add(new WalEntry { Offset = offset, Entry = entry });
+        _pendingBatch.Add(new WalEntry { Offset = offset, Mutation = ReplogEntryConverter.FromReplogEntry(entry) });
         _pendingBatchSizeBytes += size;
 
         var tcs = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -189,7 +191,16 @@ internal sealed class ReplogShardGrain(
             .ReadAsync(_treeId, _shardIndex, fromOffsetExclusive, maxEntries, cancellationToken)
             .ConfigureAwait(true))
         {
-            collected.Add(new ReplogShardEntry { Sequence = walEntry.Offset, Entry = walEntry.Entry });
+            // Re-resolve the declared replication mode from the resolver:
+            // the WAL deliberately does not carry the mode (it's
+            // recoverable from a deterministic, side-effect-free source)
+            // so the storage shape stays free of replication-only
+            // metadata. A null resolver result means "tree no longer in
+            // the replicated set"; ship as the canonical default so the
+            // outbound batch is still typed.
+            var mode = modeResolver.Resolve(walEntry.Mutation.TreeId) ?? ReplicationMode.LwwRegister;
+            var entry = ReplogEntryConverter.ToReplogEntry(walEntry.Mutation, mode, _options.ClusterId);
+            collected.Add(new ReplogShardEntry { Sequence = walEntry.Offset, Entry = entry });
             if (collected.Count >= maxEntries)
             {
                 break;
