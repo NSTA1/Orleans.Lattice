@@ -119,6 +119,29 @@ Detailed design documentation is split by concept:
 | [TTL](docs/lattice/ttl.md) | Per-entry time-to-live: `SetAsync(ttl)`, server-side absolute expiry, read-path filtering, preservation across splits / snapshots / resize / merge / saga compensation, CRDT replication invariant |
 | [WAL Storage Providers](docs/lattice/wal-storage-providers.md) | `IWalStorageProvider` durability seam, in-memory default, optional Azure Table Storage backend, configuration / capacity / operational notes |
 
+## Releases
+
+Each publishable package is released by pushing a Git tag whose prefix is the literal folder name under `src/`, joined to the version with `-v`. The publish workflow auto-discovers the matching csproj and test project — adding a new package only requires creating `src/<name>/` and (optionally) `test/<name>/`, no workflow edits.
+
+| Source folder | Tag pattern | NuGet package id |
+|---|---|---|
+| `src/lattice/` | `lattice-v<X.Y.Z>` | `Orleans.Lattice` |
+| `src/lattice.replication/` | `lattice.replication-v<X.Y.Z>` | `Orleans.Lattice.Replication` |
+| `src/lattice.replication.grpc/` | `lattice.replication.grpc-v<X.Y.Z>` | `Orleans.Lattice.Replication.Grpc` |
+| `src/lattice.storage.azuretable/` | `lattice.storage.azuretable-v<X.Y.Z>` | `Orleans.Lattice.Storage.AzureTable` |
+| `src/lattice.dashboards/` | `lattice.dashboards-v<X.Y.Z>` | `Orleans.Lattice.Dashboards` |
+
+All packages currently version-lock at **3.3.0**. Cross-package `<ProjectReference>` declarations pack as `>= <Version>` floors automatically, so a tag of `lattice.replication-v3.3.0` produces a NuGet package whose `Orleans.Lattice` dependency resolves to `>= 3.3.0`.
+
+To cut a release:
+
+```powershell
+git tag lattice.replication.grpc-v3.3.0
+git push origin lattice.replication.grpc-v3.3.0
+```
+
+The publish workflow then runs the chaos and deterministic test suites for that package, packs with `-p:PackageVersion=3.3.0`, pushes to NuGet via OIDC, and creates a GitHub Release with auto-generated notes.
+
 ## Performance Characteristics
 
 Orleans.Lattice inherits the asymptotic properties of a [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree). In a single shard containing *n* keys with branching factor *b*:

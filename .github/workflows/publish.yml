@@ -3,15 +3,18 @@ name: Publish
 on:
   push:
     tags:
-      # Core library:        vX.Y.Z[-suffix]
-      # Replication package: repl-vX.Y.Z[-suffix]
-      - 'v[0-9]+.[0-9]+.[0-9]+*'
-      - 'repl-v[0-9]+.[0-9]+.[0-9]+*'
-      - 'stg.azure-table-v[0-9]+.[0-9]+.[0-9]+*'
+      # Convention: <src-folder-name>-v<X.Y.Z>[-suffix]
+      # Examples:
+      #   lattice-v3.3.0
+      #   lattice.replication-v3.3.0
+      #   lattice.replication.grpc-v3.3.0
+      #   lattice.storage.azuretable-v3.3.0
+      #   lattice.dashboards-v3.3.0
+      # The tag prefix is the literal folder name under src/, dots and all.
+      - '*-v[0-9]+.[0-9]+.[0-9]+*'
 
 jobs:
-  publish-core:
-    if: startsWith(github.ref_name, 'v')
+  publish:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -20,127 +23,65 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
+      - name: Parse tag → package + version
+        id: parse
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          # Split on the LAST '-v' so package names containing dots (and
+          # potentially hyphens, though none today) round-trip cleanly.
+          pkg="${tag%-v*}"
+          ver="${tag##*-v}"
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          if [ ! -d "src/${pkg}" ]; then
+            echo "::error::Tag '${tag}' does not map to any src/${pkg}/ folder."
+            echo "::error::Expected convention: <src-folder-name>-v<X.Y.Z>"
+            exit 1
+          fi
 
-      - name: Restore
-        run: dotnet restore
+          csproj=$(ls "src/${pkg}"/*.csproj | head -n1)
+          if [ -z "${csproj}" ]; then
+            echo "::error::No .csproj found under src/${pkg}/"
+            exit 1
+          fi
 
-      - name: Build
-        run: dotnet build --no-restore --configuration Release -p:Version=${{ steps.version.outputs.VERSION }}
+          testProj=""
+          if [ -d "test/${pkg}" ]; then
+            testProj=$(ls "test/${pkg}"/*.Tests.csproj 2>/dev/null | head -n1 || true)
+          fi
 
-      - name: Test core (chaos first — isolate flaky-prone surface)
-        run: dotnet test test/lattice/Orleans.Lattice.Tests.csproj --no-build --configuration Release --filter "TestCategory=Chaos"
+          echo "PACKAGE=${pkg}"     >> "$GITHUB_OUTPUT"
+          echo "VERSION=${ver}"     >> "$GITHUB_OUTPUT"
+          echo "CSPROJ=${csproj}"   >> "$GITHUB_OUTPUT"
+          echo "TEST_PROJECT=${testProj}" >> "$GITHUB_OUTPUT"
 
-      - name: Test core (deterministic)
-        run: dotnet test test/lattice/Orleans.Lattice.Tests.csproj --no-build --configuration Release --filter "TestCategory!=Chaos"
-
-      - name: Pack
-        run: dotnet pack src/lattice/Orleans.Lattice.csproj --no-build --configuration Release -p:PackageVersion=${{ steps.version.outputs.VERSION }} --output ./artifacts
-
-      - name: NuGet login (OIDC)
-        uses: NuGet/login@v1
-        id: login
-        with:
-          user: ${{ secrets.NUGET_USER }}
-
-      - name: NuGet push
-        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
-
-      - name: Create GitHub Release
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  publish-replication:
-    if: startsWith(github.ref_name, 'repl-v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-
-    steps:
-      - uses: actions/checkout@v4
+          echo "::notice::Publishing src/${pkg} as version ${ver} (csproj: ${csproj}, test: ${testProj:-<none>})"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#repl-v}" >> "$GITHUB_OUTPUT"
-
       - name: Restore
         run: dotnet restore
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release -p:Version=${{ steps.version.outputs.VERSION }}
+        run: dotnet build --no-restore --configuration Release -p:Version=${{ steps.parse.outputs.VERSION }}
 
-      - name: Test replication (chaos first — isolate flaky-prone surface)
-        run: dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --no-build --configuration Release --filter "TestCategory=Chaos"
+      - name: Test (chaos first — isolate flaky-prone surface)
+        if: steps.parse.outputs.TEST_PROJECT != ''
+        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory=Chaos"
 
-      - name: Test replication (deterministic)
-        run: dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --no-build --configuration Release --filter "TestCategory!=Chaos"
-
-      - name: Pack
-        run: dotnet pack src/lattice.replication/Orleans.Lattice.Replication.csproj --no-build --configuration Release -p:PackageVersion=${{ steps.version.outputs.VERSION }} --output ./artifacts
-
-      - name: NuGet login (OIDC)
-        uses: NuGet/login@v1
-        id: login
-        with:
-          user: ${{ secrets.NUGET_USER }}
-
-      - name: NuGet push
-        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
-
-      - name: Create GitHub Release
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  publish-azuretable:
-    if: startsWith(github.ref_name, 'stg.azure-table-v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#stg.azure-table-v}" >> "$GITHUB_OUTPUT"
-
-      - name: Restore
-        run: dotnet restore
-
-      - name: Build
-        run: dotnet build --no-restore --configuration Release -p:Version=${{ steps.version.outputs.VERSION }}
-
-      # Azurite-gated integration tests are excluded because the publish
-      # runner has no Azurite instance; the unit tests cover the
-      # provider's offset/payload/partition-key logic against an
-      # in-process serializer. The category exclusion mirrors the CI
-      # workflow's deterministic step.
-      - name: Test storage.azuretable (deterministic, no Azurite)
-        run: dotnet test test/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.Tests.csproj --no-build --configuration Release --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator"
+      # The Azurite-gated AzureTableEmulator category is excluded because
+      # the GitHub-hosted runner has no Azurite instance. This mirrors the
+      # ci.yml deterministic step. The exclusion is harmless for packages
+      # that don't define the category.
+      - name: Test (deterministic, no Azurite)
+        if: steps.parse.outputs.TEST_PROJECT != ''
+        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator"
 
       - name: Pack
-        run: dotnet pack src/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.csproj --no-build --configuration Release -p:PackageVersion=${{ steps.version.outputs.VERSION }} --output ./artifacts
+        run: dotnet pack "${{ steps.parse.outputs.CSPROJ }}" --no-build --configuration Release -p:PackageVersion=${{ steps.parse.outputs.VERSION }} --output ./artifacts
 
       - name: NuGet login (OIDC)
         uses: NuGet/login@v1
