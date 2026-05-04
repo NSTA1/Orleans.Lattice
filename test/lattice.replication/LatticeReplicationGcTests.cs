@@ -1,8 +1,10 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
+using Orleans.Lattice.Replication.Adapters;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -31,7 +33,11 @@ public class LatticeReplicationGcTests
 
     private static async Task SeedAsync(IWalStorageProvider provider, int shard, params ReplogEntry[] entries)
     {
-        var wal = entries.Select((e, i) => new WalEntry { Offset = i, Entry = e }).ToArray();
+        var wal = entries.Select((e, i) => new WalEntry
+        {
+            Offset = i,
+            Mutation = ReplogEntryConverter.FromReplogEntry(e),
+        }).ToArray();
         await provider.AppendBatchAsync(Tree, shard, wal, CancellationToken.None);
     }
 

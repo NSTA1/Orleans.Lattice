@@ -167,7 +167,7 @@ public sealed class LatticeReplicationGc(
                 pageEntries++;
                 lastSeenOffset = walEntry.Offset;
 
-                if (IsEligible(walEntry.Entry, minCursor, ttlCeiling, causalStable))
+                if (IsEligible(walEntry.Mutation, minCursor, ttlCeiling, causalStable))
                 {
                     lastEligibleOffset = walEntry.Offset;
                     eligibleCount++;
@@ -210,7 +210,7 @@ public sealed class LatticeReplicationGc(
     }
 
     private static bool IsEligible(
-        ReplogEntry entry,
+        LatticeMutation entry,
         HybridLogicalClock? minCursor,
         HybridLogicalClock? ttlCeiling,
         VersionVector? causalStable)

@@ -1,11 +1,13 @@
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Pluggable durability seam for the per-shard write-ahead log. Lets a
 /// host swap the WAL's underlying storage backend (Orleans grain
 /// persistence, Azure Table Storage, an in-memory test fake) without
-/// touching the rest of the replication pipeline. Configurable per-tree
-/// via <see cref="LatticeReplicationOptions.WalStorageProvider"/>.
+/// touching the rest of the commit-log pipeline. Registered at silo
+/// startup via <see cref="LatticeServiceCollectionExtensions.AddWalStorage"/>;
+/// the replication package additionally exposes per-tree configurability
+/// via <c>LatticeReplicationOptions.WalStorageProvider</c>.
 /// <para>
 /// <b>Atomicity contract.</b> <see cref="AppendBatchAsync"/> is
 /// all-or-nothing per call: either every entry in the supplied list is
@@ -24,12 +26,11 @@ namespace Orleans.Lattice.Replication;
 /// assign.
 /// </para>
 /// <para>
-/// <b>Forward compatibility.</b> The contract is identical between the
-/// today's replication-only WAL and the future log-first commit-point
-/// model in which the WAL is the sole durability mechanism — see the
-/// replication design doc and <c>docs/future.md</c>. Implementations
-/// authored against this interface today are reusable in v2 without
-/// API change.
+/// <b>Cross-package consumer.</b> The contract is identical between
+/// today's replication-only WAL consumer and the future log-first
+/// commit-point model in which the WAL is the sole durability mechanism
+/// — see <c>docs/future.md</c>. Implementations authored against this
+/// interface today are reusable in v2 without API change.
 /// </para>
 /// </summary>
 public interface IWalStorageProvider

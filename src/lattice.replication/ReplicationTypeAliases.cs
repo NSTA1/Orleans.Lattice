@@ -63,10 +63,7 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="VersionVectorDelta"/>.</summary>
     internal const string VersionVectorDelta = "olr.vd";
 
-    // WAL storage abstraction and transport-side resume token
-
-    /// <summary>Alias for <see cref="WalEntry"/>.</summary>
-    internal const string WalEntry = "olr.w2";
+    // Transport-side resume token
 
     /// <summary>Alias for <see cref="WalResumeToken"/>.</summary>
     internal const string WalResumeToken = "olr.wt";

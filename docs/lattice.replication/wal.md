@@ -95,7 +95,7 @@ Direct grain access is the low-level entry point; in-process consumers should us
 
 ## Pluggable durability — `IWalStorageProvider`
 
-The grain shape above (`IReplogShardGrain` + Orleans grain persistence) is the WAL's **logical** contract. The **durability backend** is pluggable via `IWalStorageProvider`, a public seam in `Orleans.Lattice.Replication`:
+The grain shape above (`IReplogShardGrain` + Orleans grain persistence) is the WAL's **logical** contract. The **durability backend** is pluggable via `IWalStorageProvider`, a public seam in `Orleans.Lattice` (promoted from `Orleans.Lattice.Replication` so single-cluster hosts that do not register replication can still wire a durable WAL backend):
 
 ```text
 public interface IWalStorageProvider
@@ -114,7 +114,7 @@ public interface IWalStorageProvider
 | `GetHighestOffsetAsync` | Returns the highest persisted `WalEntry.Offset`, or `-1` when the shard is empty. Used by the WAL grain on activation to recover its next-offset counter. |
 | `TrimAsync` | Removes entries with offset `<= throughOffsetInclusive`. Idempotent; safe to call concurrently with reads. Trimming through an offset that does not yet exist reserves the trim point for a future append. |
 
-The exchanged `WalEntry` is a public `readonly record struct` carrying the dense per-shard `Offset` and the captured `ReplogEntry`. It is intentionally distinct from the internal `ReplogShardEntry` grain RPC envelope so the in-cluster grain protocol can evolve without breaking host-supplied storage backends.
+The exchanged `WalEntry` is a public `readonly record struct` carrying the dense per-shard `Offset` and the captured `LatticeMutation` (the post-commit author-intent payload that flows through every observer hook). The replication-only metadata that `ReplogEntry` carries (`Mode`, `DependencySummary`) is reconstructed at ship time inside `ReplogShardGrain.ReadAsync` via `IReplicationModeResolver` and the mutation's `VectorClock`, so the on-disk WAL stays storage-pluggable for both single-cluster and multi-cluster hosts. It is intentionally distinct from the internal `ReplogShardEntry` grain RPC envelope so the in-cluster grain protocol can evolve without breaking host-supplied storage backends.
 
 ### Configuration
 

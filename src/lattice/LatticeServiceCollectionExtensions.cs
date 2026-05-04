@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 
@@ -55,6 +56,35 @@ public static class LatticeServiceCollectionExtensions
         Action<LatticeOptions> configure)
     {
         builder.Services.Configure(treeName, configure);
+        return builder;
+    }
+
+    /// <summary>
+    /// Registers an <see cref="IWalStorageProvider"/> on the silo. When
+    /// <paramref name="factory"/> is supplied it is invoked once at
+    /// resolution time; otherwise the in-memory default
+    /// (<see cref="InMemoryWalStorageProvider"/>) is registered. This is
+    /// the core-side seam consumed by single-cluster deployments under
+    /// the WAL-as-sole-commit-point flip; the replication package builds
+    /// on top of this registration via
+    /// <c>LatticeReplicationOptions.WalStorageProvider</c> for per-tree
+    /// configurability. Idempotent: a previously-registered provider
+    /// (whether from a host-supplied factory or from
+    /// <c>AddLatticeReplication</c>) is preserved.
+    /// </summary>
+    public static ISiloBuilder AddWalStorage(
+        this ISiloBuilder builder,
+        Func<IServiceProvider, IWalStorageProvider>? factory = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        if (factory is null)
+        {
+            builder.Services.TryAddSingleton<IWalStorageProvider, InMemoryWalStorageProvider>();
+        }
+        else
+        {
+            builder.Services.TryAddSingleton<IWalStorageProvider>(factory);
+        }
         return builder;
     }
 }
