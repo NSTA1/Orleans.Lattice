@@ -33,6 +33,8 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
 | Replication test namespace | `Orleans.Lattice.Replication.Tests.{Area}` | `Orleans.Lattice.Replication.Tests` |
 | gRPC transport public API namespace | `Orleans.Lattice.Replication.Grpc` | `GrpcPushTransportOptions`, `LatticeReplicationGrpcServiceCollectionExtensions` |
 | gRPC transport test namespace | `Orleans.Lattice.Replication.Grpc.Tests` | `Orleans.Lattice.Replication.Grpc.Tests` |
+| Azure Table WAL public API namespace | `Orleans.Lattice.Storage.AzureTable` | `AzureTableWalStorageOptions`, `AzureTableWalStorageProvider`, `LatticeAzureTableServiceCollectionExtensions` |
+| Azure Table WAL test namespace | `Orleans.Lattice.Storage.AzureTable.Tests` | `Orleans.Lattice.Storage.AzureTable.Tests` |
 | Grain interface | `I{Name}Grain` (prefix `I`, suffix `Grain`) | `IBPlusLeafGrain` |
 | Grain class | `{Name}Grain` | `BPlusLeafGrain` |
 | Async methods | Suffix `Async` | `GetAsync`, `SetAsync` |

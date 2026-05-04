@@ -117,6 +117,7 @@ Detailed design documentation is split by concept:
 | [Tree Storage](docs/lattice/tree-storage.md) | Per-provider storage limits, leaf/internal node size estimation, per-provider sizing recommendations, default-configuration assessment, key trade-offs |
 | [Tree Structure](docs/lattice/tree-structure.md) | Internal/leaf node layout, two-phase leaf splits, idempotent split propagation |
 | [TTL](docs/lattice/ttl.md) | Per-entry time-to-live: `SetAsync(ttl)`, server-side absolute expiry, read-path filtering, preservation across splits / snapshots / resize / merge / saga compensation, CRDT replication invariant |
+| [WAL Storage Providers](docs/lattice/wal-storage-providers.md) | `IWalStorageProvider` durability seam, in-memory default, optional Azure Table Storage backend, configuration / capacity / operational notes |
 
 ## Performance Characteristics
 

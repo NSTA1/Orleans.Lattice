@@ -61,6 +61,14 @@ services:
       LatticeSink__Regions: ${BENCH_REGIONS:-eu-west,eu-east,us-west,us-east}
       LatticeSink__HotRegionShare: ${BENCH_HOT_SHARE:-0.7}
       LatticeSink__DropOnFull: ${BENCH_DROP_ON_FULL:-true}
+      # WAL storage provider switch (only consumed when Telemetry__Sink=lattice or
+      # Replication__Enabled=true). "memory" keeps the library default in-memory WAL;
+      # "azuretable" routes every WAL append through Azure Tables (the same Azurite
+      # instance the silo already uses for clustering/reminders). Used by the
+      # current-state-no-replication-azuretable and bidirectional-replication-azuretable
+      # scenarios to compare durable-WAL throughput against the in-memory baseline.
+      Lattice__Wal__Provider: ${BENCH_WAL_PROVIDER:-memory}
+      Lattice__Wal__TableName: ${BENCH_WAL_TABLE_NAME:-OrleansLatticeWal}
       # Replication switch (only consumed when Telemetry__Sink=lattice).
       Replication__Enabled: ${BENCH_REPLICATION_ENABLED:-false}
       Replication__OriginClusterId: ${BENCH_REPLICATION_CLUSTER_ID:-vfs-bench}

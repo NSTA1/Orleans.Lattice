@@ -11,6 +11,7 @@ WORKDIR /src
 COPY src/lattice/ src/lattice/
 COPY src/lattice.replication/ src/lattice.replication/
 COPY src/lattice.replication.grpc/ src/lattice.replication.grpc/
+COPY src/lattice.storage.azuretable/ src/lattice.storage.azuretable/
 
 # Simulator's reused projects (unmodified).
 COPY samples/VehicleFleetSimulator/src/VehicleFleetSimulator.Abstractions/ samples/VehicleFleetSimulator/src/VehicleFleetSimulator.Abstractions/
