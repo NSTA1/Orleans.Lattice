@@ -72,7 +72,7 @@ The replication library is functionally complete for an initial NuGet release �
 
 - **Causal+ scope.** R-080 → R-088 deliver causal+ for the point-write, single-shard-per-mutation path. The R-089 / R-090 / R-091 / R-093 wave (atomic multi-key writes, maintenance rewrites, shard-split / merge / saga shadow-forwards, intra-cluster snapshot/restore) is fully unblocked on the core side (Core F-043 / F-044 / F-045 / F-046 all shipped) but the replication-side consumers are not yet in the release. R-092 has no outstanding core dep and is also unshipped. Operators exercising any of those write paths under heavy concurrent replication should expect transient causal-buffer churn that resolves once the matching items land.
 - **Extended CRDT modes.** Of the three follow-on dispatch items, **R-034 (MV-Register) is unblocked** by the already-shipped Core F-039 and is the cheapest 1.1 win. **R-035 (OR-Map)** and **R-036 (RGA sequence)** remain gated on Core F-040 and F-041 respectively.
-- **WAL-as-sole-commit-point.** R-079 is the consumer-side counterpart to the Core F-049 v2 commit-path promotion. Out of scope for 1.0 by design — the v1 "WAL is a side-car of the leaf write" model is the supported configuration.
+- **WAL-as-sole-commit-point.** Out of scope for 1.0 by design — the v1 "WAL is a side-car of the leaf write" model is the supported configuration. The v2 forward-compat audit lives next to Core F-049d's acceptance criteria rather than as a separate replication-side item, because under F-049d's default flip the cleanest disposition is to *not register* `ReplicationMutationObserver` (no observer-WAL-write to short-circuit) rather than add a runtime gate.
 - **Performance follow-ons.** R-047 / R-043 / R-044 / R-045 / R-074 / R-075 / R-076 / R-078 close perf gaps documented in the WAL design doc's deferred-acceptance rows. None affect correctness; all are scheduled post-1.0.
 
 **Suggested release sequencing.** Ship `1.0.0-preview1` today on the strength of the shipped surface; converge `1.0.0` GA on R-046 + R-073; schedule R-062 / R-065 / R-066 / R-077 for `1.0.x`; pair R-034 + R-092 in `1.1` (both unblocked, both small).
@@ -166,7 +166,7 @@ The replication library is functionally complete for an initial NuGet release �
 
 ### WAL hardening (post-critical-path)
 
-These six items close the WAL design doc's deferred acceptance rows from R-070 / R-071, plus the v2-commit-path consumer side. R-074 / R-075 / R-077 are independent and parallelisable; R-076 sequences after R-075; R-078 sequences after R-047 and R-076; R-079 is blocked on the matching core-side leaf flip (Core F-049a adapter seams + F-049b dual-durability commit) and is the v2 forward-compat audit.
+These five items close the WAL design doc's deferred acceptance rows from R-070 / R-071. R-074 / R-075 / R-077 are independent and parallelisable; R-076 sequences after R-075; R-078 sequences after R-047 and R-076.
 
 29. **R-074 — Multi-batch in-flight flush concurrency** `[deps: R-071 ✓]`
     Closes WAL design §9.1.4. Lifts the hard-coded single-in-flight flush to `WalMaxPendingBatches` while preserving dense offsets via grain-turn-serialised offset assignment.
@@ -183,25 +183,22 @@ These six items close the WAL design doc's deferred acceptance rows from R-070 /
 33. **R-078 — Single-encode hot path** `[deps: R-047, R-076, R-072 ✓]`
     Performance follow-on. Stamps the WAL's encoded payload bytes onto the `IChangeFeed` envelope so the gRPC ship loop ships verbatim — eliminates the third encode per replicated mutation.
 
-34. **R-079 — Replication consumer of WAL-as-commit-point promotion** `[deps: Core F-049a ✓, Core F-049b ✓, R-071 ✓, R-082 ✓]`
-    Forward-compat audit + GC / causal-stable predicate widening so the local materialiser registered by Core F-050 is a first-class `IChangeFeed` consumer indistinguishable from a remote peer. Adds concrete adapter implementations for Core F-049a's commit-log seams inside `AddLatticeReplication` and a `SourceIsCommitLog` short-circuit on `ReplicationMutationObserver` to prevent double-WAL-append once F-049b lands. Cannot start until Core F-049a + F-049b land.
-
 ### Causal+ apply pipeline (after R-080; runs in parallel with snapshot/bootstrap once R-081 is in)
 
-35. **R-081 ✓ shipped — Local vector clock generalises per-origin HWM** `[deps: R-080 ✓]`
+34. **R-081 ✓ shipped — Local vector clock generalises per-origin HWM** `[deps: R-080 ✓]`
     Reframe the existing per-origin HWM table (`{(tree, origin) → HLC}`) as the diagonal of the local vector clock without breaking the wire. No new grain, no new persistence — same `IReplicationHighWaterMarkGrain` interface, same Orleans-storage rows. Adds an internal `GetVectorAsync(treeId)` member returning the full clock for use by R-082's dependency check. `PinSnapshotAsync` widens to `PinSnapshotAsync((HLC asOf, VectorClock frontier))` ahead of R-050 / R-084 consuming it.
 
-36. **R-082 ✓ shipped — Causal dependency check + bounded buffer**
+35. **R-082 ✓ shipped — Causal dependency check + bounded buffer**
     Receiver-side change to `ReplicationApplier.ApplyPointAsync`: HWM check first (O(1) duplicate fast path, unchanged), then `∀ origin in entry.VectorClock: localVc[origin] >= entry.VectorClock[origin]`. Unsatisfied entries park in a per-shard bounded `BlockedQueue` keyed by `(missingOrigin, missingHlc)`; on every successful apply that advances `localVc`, wake any blocked entry whose deps are now satisfied. New `LatticeReplicationOptions.CausalBufferMaxEntries` (default `1024`, validator `>= 1`) and `CausalBufferMaxBytes` (default `16 MB`, validator `>= 64 KB`). Overflow routes the oldest blocked entry through `IReplicationDeadLetterGrain.EnqueueAsync` with reason tag `LatticeReplicationMetrics.ReasonHlcSkew` (reserved by R-064 for exactly this case) — no second dead-letter store. No cross-shard locks; the buffer lives in the applier's shard-local state.
 
-37. **R-083 ✓ shipped — Causal-stable WAL GC frontier**
+36. **R-083 ✓ shipped — Causal-stable WAL GC frontier**
     Replace R-061's `min(cursor)` predicate with `causal_stable = min(peerVectorClock)` across `IChangeFeed` subscribers. `ILatticeReplicationCursorRegistry.ReportAsync` gains a VC-shaped overload (additive — old callers continue to report HLC-only and contribute a degenerate diagonal-only VC). `LatticeReplicationGc` caches `causal_stable` and recomputes only on ack updates. An entry is GC-eligible iff `entry.VectorClock <= causal_stable AND entry.Offset <= minAckedOffset` (R-061's offset predicate AND-ed in for safety). Documented as an extension to [`wal-gc.md`](../../docs/lattice.replication/wal-gc.md).
     *Future-compat:* a future C-050 local materialiser reports its own VC and pins the log identically to a remote peer.
 
-38. **R-084 ✓ shipped — Causal-stable snapshot cut-point**
+37. **R-084 ✓ shipped — Causal-stable snapshot cut-point**
     Pair with R-050 in a single cycle: `ISnapshotProvider.ExportAsync` returns the causal-stable frontier alongside the as-of HLC; the receiver bootstrap state machine (R-051) calls `PinSnapshotAsync((HLC, VectorClock))`; the dependency check (R-082) runs from the pinned VC frontier on the first incremental entry. Snapshot scan algorithm is unchanged — only the cut-point selection. Co-build with R-050 in a single feature cycle to avoid retrofitting the snapshot handoff contract.
 
-39. **R-085 ✓ shipped — Causal+ observability** `[deps: R-082 ✓, R-064 ✓]`
+38. **R-085 ✓ shipped — Causal+ observability** `[deps: R-082 ✓, R-064 ✓]`
     Three new instruments on the `orleans.lattice.replication` meter, following R-064's reason-tag conventions:
     - `apply.buffered_entries` UpDownCounter<long> tagged `tree`, `shard`
     - `apply.buffer_bytes` UpDownCounter<long> tagged `tree`, `shard`
@@ -209,13 +206,13 @@ These six items close the WAL design doc's deferred acceptance rows from R-070 /
 
     Plus `apply.causal_violations_blocked` Counter<long> tagged `tree`, incremented on every park (so an alert on `rate > 0` flags causal-skew health). Documented in [`docs/lattice.replication/observability.md`](../../docs/lattice.replication/observability.md) as a new "Causal+ instruments" section. Test coverage: per-instrument unit tests under existing `LatticeReplicationMetricsTests` patterns.
 
-40. **R-086 ✓ shipped — Transport metadata pass-through contract test**
+39. **R-086 ✓ shipped — Transport metadata pass-through contract test**
     Per the perf note in §9, transport stays dumb. Add a contract test in `Orleans.Lattice.Replication.Tests` (and a mirror in `Orleans.Lattice.Replication.Grpc.Tests`) that asserts `IReplicationTransport` implementations preserve `VectorClock` and `DependencySummary` slots verbatim across a round-trip — no reordering, no mutation, no synthesis. Lifts the existing `LoopbackTransport` round-trip fixture and parameterises it over the new fields. No production code change; this is the regression scaffold so a future transport doesn't quietly break causal+ in the way R-021's "thread-local cycle-break" sample-shortcut would have if R-022 hadn't pinned source-HLC preservation as a contract test.
 
-41. **R-087 ✓ shipped — Per-origin FIFO invariant + out-of-order detection**
+40. **R-087 ✓ shipped — Per-origin FIFO invariant + out-of-order detection**
     Receiver-side instrumentation that pins the per-origin FIFO contract R-082's buffer relies on for occupancy bounds. Cheap to land alongside R-085; same instrumentation surface. Closes the gap left by the user-facing R-201 / R-211 design split — sender-side FIFO is implicit in the partitioned change feed (per-shard offset order ⇒ per-(origin, shard) HLC monotonicity), so there is no sender-side enforcement work; the genuine gap is a receiver-side metric that surfaces a transport regression breaking that invariant.
 
-42. **R-088 ✓ shipped — Bootstrap → incremental causal handoff verification** `[deps: R-082 ✓, R-084 ✓]`
+41. **R-088 ✓ shipped — Bootstrap → incremental causal handoff verification** `[deps: R-082 ✓, R-084 ✓]`
     Joins the snapshot/bootstrap stream and the causal+ apply stream — schedule after both R-082 and R-084 land. R-082 + R-084 already provide the mechanism (initial `local_vc` from the pinned `causalStableFrontier`, dep-check from there on the first incremental); R-088 is the explicit acceptance test + DLQ-overflow operator playbook that pins the contract end-to-end.
 
 
@@ -223,31 +220,31 @@ These six items close the WAL design doc's deferred acceptance rows from R-070 /
 
 The R-080 → R-088 wave delivers causal+ for the point-write, single-tree, single-shard-per-mutation path. The five items below extend that guarantee to every write path the core library exposes (`SetManyAtomic`, resize, reshard / shadow-forward, snapshot/restore) so a host that enables any one of those features still gets full causal+ semantics. Each pairs with a core-side dependency (F-043–F-046) and the core change + replication consumer must land in a single feature cycle. Cross-tree causality is intentionally out of scope.
 
-43. **R-089 — Atomic multi-key VC capture point** `[deps: R-080 ✓, R-081 ✓, Core F-044 ✓]`
+42. **R-089 — Atomic multi-key VC capture point** `[deps: R-080 ✓, R-081 ✓, Core F-044 ✓]`
     Closes per-key VC drift in `SetManyAtomic`: capture the local VC **once** at the start of the atomic transaction and stamp every emitted `ReplogEntry.VectorClock` in that batch with the identical frontier so a remote peer never sees a partial-set state where the writer's frontier said all N should be visible together. Receiver: no change — entries with identical VCs unblock together when their shared frontier is satisfied.
 
-44. **R-090 — `MutationKind` classification + maintenance skip** `[deps: R-080 ✓, Core F-045 ✓]`
+43. **R-090 — `MutationKind` classification + maintenance skip** `[deps: R-080 ✓, Core F-045 ✓]`
     Resize / rebalance / compaction emits structural rewrites that are not user-authored causal events. Reading them as causal would inflate every replicated tree's VC under maintenance pressure and pollute the dependency graph. R-090 reads the new `MutationKind { User, Maintenance }` slot on `LatticeMutation` and skips the WAL append for `Maintenance` on replicated trees. Independent of `OriginClusterId`.
 
-45. **R-091 — Shadow-forward VC preservation** `[deps: R-080 ✓, R-081 ✓, R-022 ✓, Core F-046 ✓]`
+44. **R-091 — Shadow-forward VC preservation** `[deps: R-080 ✓, R-081 ✓, R-022 ✓, Core F-046 ✓]`
     Shard-split / merge / saga-compensate shadow-forward a user write into a different shard. Today F-036's `LatticeOriginContext` carries `OriginClusterId` through these rewrites; R-091 extends the same end-to-end discipline to `VectorClock`. The replication observer never re-captures a VC for any emit whose ambient context already supplies one. Receiver-side: a small `RecentApplyCache<(origin, hlc, key, op)>` LRU (default `4096`, new `ShadowForwardDedupeCacheSize` option) drops the duplicate emit pair shadow-forward generates so the receiver applies the shadow-forwarded write exactly once.
 
-46. **R-092 — Tree-global producer VC at commit time** `[deps: R-080 ✓, R-081 ✓]`
+45. **R-092 — Tree-global producer VC at commit time** `[deps: R-080 ✓, R-081 ✓]`
     R-080 captures VC at the per-grain commit-time observer site, but a single user write touching multiple shards (range delete, multi-leaf saga) emits from multiple grains in close succession; if each grain reads its own diagonal-only HWM the resulting per-emit VCs disagree on cross-shard origins. R-092 introduces a per-`(silo, tree)` in-memory `LocalVectorClock` cache populated from `IReplicationHighWaterMarkGrain.GetVectorAsync` on cold start, advanced on every WAL append (local origin) and every inbound apply (foreign origin). Producer reads from the cache; cost is one grain call per (silo, tree, restart). The cache is the producer-side counterpart to R-081's receiver-side `LocalVectorClock`.
 
-47. **R-093 — Snapshot/restore VC reconstruction** `[deps: R-080 ✓, R-081 ✓, Core F-043 ✓]`
+46. **R-093 — Snapshot/restore VC reconstruction** `[deps: R-080 ✓, R-081 ✓, Core F-043 ✓]`
     Closes the intra-cluster snapshot-as-a-tool gap: when an operator snapshots a tree and restores it (same cluster, possibly different timestamp) the live HWM table is wiped but the values still carry their commit-time VC slot (Core F-043). R-093 introduces an `IReplicationLocalVcSeeder.SeedFromTreeAsync(treeName)` that walks the restored values' VC slots and seeds `LocalVectorClock` to per-origin pointwise max. Without this, a restore-then-replicate cycle would replay every restored entry against a zeroed VC and either re-park or re-merge them. Cross-cluster bootstrap (R-050 / R-084) is unaffected — that path pins the snapshot's `causalStableFrontier` directly via `PinSnapshotAsync`.
 ### Extended CRDT modes (gated on outstanding core primitives)
 
 These ship as paired (core primitive ↔ replication delta) deliverables — building either side in isolation freezes a contract before its consumer validates it. Order between the three is by user demand, not technical dependency.
 
-48. **R-034 — MV-Register delta + dispatch** `[deps: Core F-039 outstanding]`
+47. **R-034 — MV-Register delta + dispatch** `[deps: Core F-039 outstanding]`
     Pair with F-039 in a single cycle.
 
-49. **R-035 — OR-Map delta + dispatch** `[deps: Core F-040 outstanding]`
+48. **R-035 — OR-Map delta + dispatch** `[deps: Core F-040 outstanding]`
     Pair with F-040. Includes the recursive `InnerMode` wire-envelope extension.
 
-50. **R-036 — RGA sequence delta + dispatch** `[deps: Core F-041 outstanding]`
+49. **R-036 — RGA sequence delta + dispatch** `[deps: Core F-041 outstanding]`
     Pair with F-041. Highest implementation complexity of the three (sequence convergence, back-pressure for high-frequency editors).
 
 ### Suggested concurrency
@@ -547,12 +544,6 @@ These items are gating for **R-041** (binary framing) and **R-042** (gRPC push t
   Today a replicated entry is encoded **three times** between user write and peer apply: (1) on commit by the publish helper into a `LatticeMutation`; (2) on WAL append into `_pendingBatch` accounting bytes; (3) on ship by `OrleansBinaryReplicationBatchEncoder` into the gRPC stream. R-047 eliminates ship-side decode-then-re-encode; R-076 lets the WAL append consume already-encoded bytes; R-078 ties the two together by stamping the encoded `ReplogEntry` payload bytes onto the in-flight `IChangeFeed` envelope so the gRPC push transport (R-042) ships the WAL's exact stored bytes verbatim. Implementation: the grain's pending-batch buffer becomes the source of truth for both persistence and replication. After R-076 lands, `_pendingBatch` already holds `ArraySegment<byte>` encoded payloads; R-078 plumbs those segments through to `IChangeFeed.Subscribe`'s yielded entries (a new `internal readonly struct EncodedReplogEntry` carrying offset + segment + `ReplogEntry` view) so consumers that already consume bytes (the gRPC transport) skip the re-encode entirely. Consumers that consume objects (loopback transport, in-process projections under v2 C-050) use the `ReplogEntry` view at zero cost. Net effect: the ship hot path becomes one Orleans-binary encode at commit time and zero further encodes anywhere downstream.
 
   Acceptance: a `BenchmarkDotNet` end-to-end measurement of "user `SetAsync` → peer apply" shows the encode cost drops from `3 × encode(ReplogEntry)` to `1 × encode(ReplogEntry)`; allocation count on the ship path is zero beyond the gRPC box wrapper; loopback transport regression tests pass unchanged because the object view is preserved; an injected encoder mismatch (provider stored bytes A, ship encodes B from a different encoder) surfaces as an explicit error rather than silent drift (the encoded segment is the only artefact in flight, so a mismatch is impossible by construction).
-
-- [ ] **R-079 — Replication consumer of WAL-as-commit-point promotion** *(forward dep on Core F-049a ✓ + F-049b ✓)* `[deps: Core F-049a ✓, Core F-049b ✓, R-071 ✓, R-082 ✓]`
-  When Core F-049 promotes the leaf WAL to the sole durable commit point in four sequential sub-items (F-049a dormant adapter seams, F-049b dual-durability commit on `BPlusLeafGrain` with `LeafShadowWrites = true`, F-049c per-shard replay coordinator + fall-off-log recovery + digest API, F-049d default flip; see `docs/future.md` §C-020 / C-030 / C-040 for the design sketch and `src/lattice/roadmap.md` for the landable form), the replication package switches from "WAL is a side-car of the leaf write" to "WAL **is** the commit". For the replication package the change is mostly observational — `IChangeFeed`, `IReplicationApplier`, the per-origin HWM, and the bootstrap state machine all consume the WAL today and continue to consume it under v2. R-079 lands the consumer-side counterpart in five concrete sub-tasks: (a) audits every `IChangeFeed` / `IReplicationApplier` / HWM API surface for assumptions that the consumer is remote (per the §"Future compatibility" note up top, none should remain — this item enforces it); (b) registers concrete adapter implementations for Core F-049a's three commit-log seams inside `AddLatticeReplication` — `ReplicationCommitLogWriter` over `IReplogShardGrain.AppendAsync`, `ReplicationCommitLogReader` over the existing change-feed primitive, and `ReplicationLeafSnapshotProvider` over the existing `ISnapshotProvider`; (c) short-circuits `ReplicationMutationObserver` when `LatticeMutation.SourceIsCommitLog` is `true` (the F-049b ambient signal set by `ICommitLogWriter.AppendAsync` for the duration of the synchronous publish step) so the WAL is not double-appended once the leaf write path commits through it; (d) widens R-061's GC predicate to consume the local-materialiser cursor registered under the reserved `_lattice_materialiser_{treeId}_{leafGrainId}` consumerId (Core F-050) as a first-class subscriber — the existing `ILatticeReplicationCursorRegistry` shape generalises directly; (e) widens R-083's causal-stable frontier predicate to include the local materialiser's vector clock (same shape, same generalisation).
-
-  Acceptance: a fixture replaces the configured `IReplicationApplier` with a fake "local materialiser" that drains the change feed into an in-memory dictionary and reports its progress via `ILatticeReplicationCursorRegistry`; R-061's GC pins the WAL on the slowest of {remote peers, local materialiser}; R-083's causal-stable frontier consumes the local materialiser's VC; the replication wire format (R-041 / R-042) is unchanged; a regression test asserts that disabling the local materialiser (i.e. removing it from the registry) does not change observed replication behaviour vs today's "remote-peers-only" world; an additional fixture asserts that a foreground leaf write under Core F-049b's `LeafShadowWrites = true` produces exactly one WAL entry (not two), verifying the `SourceIsCommitLog` short-circuit on `ReplicationMutationObserver`.
-
 
 ---
 
