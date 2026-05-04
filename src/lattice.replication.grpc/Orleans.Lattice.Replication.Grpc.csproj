@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Replication.Grpc</PackageId>
-    <Version>0.1.0</Version>
+    <Version>3.3.0</Version>
     <Description>gRPC streaming push transport for Orleans.Lattice.Replication. Provides a sub-second-latency IReplicationTransport implementation and a receiver-side ASP.NET Core gRPC service that frames replication batches with the canonical Orleans binary encoder.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
