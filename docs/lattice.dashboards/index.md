@@ -2,12 +2,12 @@
 
 `Orleans.Lattice.Dashboards` is a sibling package that ships pre-built Grafana dashboards and provisioning templates for the `orleans.lattice` and `orleans.lattice.replication` meters. Install it when you want operator dashboards bundled with the library version — the core library has no dependency on it.
 
-> **Note:** v0.1.0 takes a direct project reference on `Orleans.Lattice.Replication` so the Replication dashboard always resolves. Splitting that into an optional reference (so local-only deployments can skip the replication meter entirely) is planned for a future minor version once both packages are published to NuGet.
+> **Note:** v3.4.0 takes a direct project reference on `Orleans.Lattice.Replication` so the Replication dashboard always resolves. Splitting that into an optional reference (so local-only deployments can skip the replication meter entirely) is planned for a future minor version once both packages are published to NuGet.
 
 ## Install
 
 ```xml
-<PackageReference Include="Orleans.Lattice.Dashboards" Version="0.1.0" />
+<PackageReference Include="Orleans.Lattice.Dashboards" Version="3.4.0" />
 ```
 
 ## Wire up the meters
@@ -37,7 +37,7 @@ Either import each JSON via Grafana's *Dashboards → New → Import* UI, or wri
 | Dashboard | Source meter | Focus |
 |-----------|---------------|-------|
 | `Overview` | `orleans.lattice` | Throughput, leaf-write percentiles, cache hit-rate, tombstone churn, splits, atomic-write outcomes, coordinator completions, tree-lifecycle, events, runtime config changes. |
-| `CommitPath` | `orleans.lattice` | Dual-durability commit path: per-step latency (`wal` / `apply` / `shadow` / `observer`), shadow-write tail (must collapse to zero once `LeafShadowWrites=false`), activation replay duration and entries by recovery outcome, storage-provider IOPS contribution, compaction. |
+| `CommitPath` | `orleans.lattice` | WAL-only commit path: per-step latency (`wal` / `apply` / `observer`), activation replay duration and entries by recovery outcome, storage-provider IOPS contribution, compaction. |
 | `Replication` | `orleans.lattice.replication` | Ship / apply / lag percentiles, WAL append vs trim throughput, dead-letter queue churn, apply FIFO and causal violations, dependency-wait histogram, fell-off-log events, per-peer entries / bytes behind, last contact, consecutive errors. |
 
 See [`metrics-to-panel-map.md`](metrics-to-panel-map.md) for the per-instrument coverage table.

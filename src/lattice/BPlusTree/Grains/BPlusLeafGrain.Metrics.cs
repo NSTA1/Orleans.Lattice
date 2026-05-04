@@ -108,30 +108,4 @@ internal sealed partial class BPlusLeafGrain
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty),
             new KeyValuePair<string, object?>(LatticeMetrics.TagStep, step));
     }
-
-    /// <summary>
-    /// Persists the leaf's state on the dual-durability commit path's
-    /// shadow step. Records elapsed time on both
-    /// <see cref="LatticeMetrics.LeafWriteDuration"/> (matching the
-    /// behaviour of <see cref="PersistAsync"/>) and
-    /// <see cref="LatticeMetrics.LeafShadowWriteDuration"/> so operators
-    /// can isolate the shadow contribution. Re-throws on failure so the
-    /// caller can decide whether to swallow (the dual-durability path
-    /// does, treating the WAL as the durable boundary) or propagate.
-    /// </summary>
-    private async Task ShadowPersistAsync()
-    {
-        var startTicks = Stopwatch.GetTimestamp();
-        try
-        {
-            await state.WriteStateAsync();
-        }
-        finally
-        {
-            var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
-            var treeTag = LeafTreeTag();
-            LatticeMetrics.LeafWriteDuration.Record(elapsedMs, treeTag);
-            LatticeMetrics.LeafShadowWriteDuration.Record(elapsedMs, treeTag);
-        }
-    }
 }

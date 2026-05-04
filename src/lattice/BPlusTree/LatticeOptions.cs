@@ -317,7 +317,6 @@ public class LatticeOptions
     /// When <c>true</c>, Lattice publishes <see cref="LatticeTreeEvent"/> notifications
     /// on an Orleans stream (namespace <see cref="LatticeEventConstants.StreamNamespace"/>,
     /// snapshots, resizes, reshards, and tree-lifecycle transitions. Consumers
-    /// cost on the write path. Enabling publication requires that an Orleans
     /// publishes are logged-and-swallowed and subscribers never receive
     /// events.
     /// </summary>
@@ -405,50 +404,6 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="MaterialiserCheckpointEntries"/> (1 000).</summary>
     public const int DefaultMaterialiserCheckpointEntries = 1_000;
-
-    /// <summary>
-    /// When <see langword="false"/> (the default), every durably-committed
-    /// leaf data write is persisted exactly once — appended to the
-    /// per-shard write-ahead log via the registered
-    /// <c>ICommitLogWriter</c>. The leaf's legacy
-    /// <c>IPersistentState</c> storage row is no longer written on the
-    /// foreground commit path; reads continue to serve from the
-    /// in-memory projection, which is rebuilt from the WAL on
-    /// activation.
-    /// <para>
-    /// Setting <see langword="true"/> re-enables the legacy
-    /// <c>WriteStateAsync()</c> shadow persist alongside the WAL append,
-    /// keeping the pre-WAL commit path available as a rollback target
-    /// during the deprecation window. New deployments should leave this
-    /// at the default; existing deployments that wired up the WAL
-    /// adapter under the previous dual-durability default can flip this
-    /// to <see langword="true"/> for one minor release if they need to
-    /// roll back to the persisted-state-row commit path before the
-    /// option and the legacy call site are removed entirely.
-    /// </para>
-    /// <para>
-    /// Setting <see langword="false"/> (the default) on a host where
-    /// the WAL adapter is absent yields a non-durable foreground commit
-    /// — the in-memory projection updates and the call returns success,
-    /// but a silo crash before the next checkpoint flush loses the
-    /// write. Hosts that have not yet wired up the WAL must flip this
-    /// back to <see langword="true"/> until the adapter is registered.
-    /// </para>
-    /// <para>
-    /// One minor version after this default flip, the option and the
-    /// legacy persist call site are removed entirely; at that point the
-    /// leaf has no fallback and the WAL is the sole durable boundary.
-    /// </para>
-    /// <para>
-    /// Structural ops (leaf splits, compaction) keep their persists
-    /// unconditionally regardless of this flag — only the per-mutation
-    /// data write is gated.
-    /// </para>
-    /// </summary>
-    public bool LeafShadowWrites { get; set; } = DefaultLeafShadowWrites;
-
-    /// <summary>Default value for <see cref="LeafShadowWrites"/> (<see langword="false"/>).</summary>
-    public const bool DefaultLeafShadowWrites = false;
 
     /// <summary>
     /// Maximum age beyond which a leaf grain's persisted projection

@@ -75,8 +75,8 @@ you want edit rights). Under *Dashboards → Orleans.Lattice* you'll find:
 
 - **Orleans.Lattice — Overview** — throughput, leaf-write percentiles,
   cache hit-rate, splits, atomic-write outcomes.
-- **Orleans.Lattice — Commit Path** — dual-durability per-step latency,
-  shadow-write tail, activation replay duration.
+- **Orleans.Lattice — Commit Path** — WAL-only per-step latency,
+  activation replay duration.
 - **Orleans.Lattice — Replication** — ship/apply/lag percentiles,
   dead-letter churn, per-peer entries/bytes behind.
 
