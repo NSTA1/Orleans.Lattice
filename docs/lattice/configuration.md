@@ -339,9 +339,11 @@ This option can be changed freely at any time.
 
 ### `LeafShadowWrites`
 
-When `true` (default) every committed leaf mutation is durably persisted **both** through the per-shard write-ahead log **and** through the leaf's legacy `WriteStateAsync` state row. The dual write keeps the pre-WAL commit path available as a rollback target during the transition to WAL-as-sole-commit-point. Flipping to `false` (in a future minor release) reduces commit cost to one durable write at the cost of removing that escape hatch.
+When `false` (default) every committed leaf mutation is persisted exactly once — appended to the per-shard write-ahead log via the registered `ICommitLogWriter`. The leaf's legacy `WriteStateAsync` row is no longer written on the foreground commit path; reads continue to serve from the in-memory projection, which is rebuilt from the WAL on activation. Setting `true` re-enables the legacy state-row persist alongside the WAL append, keeping the pre-WAL commit path available as a rollback target during the deprecation window. One minor version after this default flip the option and the legacy persist call site are removed entirely, at which point the WAL is the sole durable boundary.
 
-This option can be changed freely at any time.
+Hosts that have not yet wired up the WAL adapter must keep this at `true` until the adapter is registered, otherwise foreground commits become non-durable (the in-memory projection updates and the call returns success, but a silo crash before the next checkpoint flush loses the write).
+
+This option can be changed freely at any time; the new value takes effect on the next foreground commit because options are resolved per-mutation.
 
 ## Storage Provider Name
 

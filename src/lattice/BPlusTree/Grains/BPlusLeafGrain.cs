@@ -218,8 +218,9 @@ internal sealed partial class BPlusLeafGrain(
     ///   <item><b>apply</b> — merge the LWW value into the in-memory
     ///   projection and check the leaf-split predicate;</item>
     ///   <item><b>shadow</b> — persist the legacy state row when
-    ///   <c>LeafShadowWrites</c> is enabled. Failures here are logged
-    ///   and swallowed because the WAL is the durable boundary;</item>
+    ///   <c>LeafShadowWrites</c> is set (opt-in; the default is now
+    ///   WAL-only). Failures here are logged and swallowed because the
+    ///   WAL is the durable boundary;</item>
     ///   <item><b>observer</b> — publish the post-commit mutation to
     ///   any registered <see cref="IMutationObserver"/> inside a
     ///   <see cref="LatticeCommitLogContext"/> scope so a downstream
