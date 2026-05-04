@@ -11,7 +11,11 @@ on:
       #   lattice.storage.azuretable-v3.3.0
       #   lattice.dashboards-v3.3.0
       # The tag prefix is the literal folder name under src/, dots and all.
-      - '*-v[0-9]+.[0-9]+.[0-9]+*'
+      - 'lattice-v*'
+      - 'lattice.replication-v*'
+      - 'lattice.replication.grpc-v*'
+      - 'lattice.storage.azuretable-v*'
+      - 'lattice.dashboards-v*'
 
 jobs:
   publish:
