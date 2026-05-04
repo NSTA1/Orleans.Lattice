@@ -54,4 +54,16 @@ public class LatticeOptionsValidatorTests
         var result = Validate(o => o.MaxLeafReplayEntries = 1);
         Assert.That(result.Succeeded, Is.True);
     }
+
+    [Test]
+    public void DefaultLeafShadowWrites_is_false()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeOptions.DefaultLeafShadowWrites, Is.False,
+                "DefaultLeafShadowWrites const must be false: WAL is the sole durable commit point by default.");
+            Assert.That(new LatticeOptions().LeafShadowWrites, Is.False,
+                "A freshly-constructed LatticeOptions must have LeafShadowWrites = false by default.");
+        });
+    }
 }

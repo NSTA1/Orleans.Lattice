@@ -226,18 +226,22 @@ siloBuilder.ConfigureLattice(o =>
 
 ### `LeafShadowWrites` (transitional)
 
-Until the WAL becomes the sole durable commit point for leaf data,
-every committed mutation is written **both** to the WAL and to the
-leaf's legacy state row. `LatticeOptions.LeafShadowWrites` (default
-`true`) governs that legacy `WriteStateAsync` call: leaving it on
-keeps the pre-WAL commit path available as a rollback target;
-flipping it off (a future minor release) reduces commit cost to one
-durable write at the cost of removing that escape hatch.
+`LatticeOptions.LeafShadowWrites` (default `false`) selects the leaf
+commit path. With the default the WAL is the sole durable boundary —
+every committed mutation is appended to the per-shard write-ahead log
+and the leaf's in-memory projection is updated; the legacy
+`WriteStateAsync` state row is no longer persisted on the foreground
+path. Setting it to `true` re-enables the legacy state-row persist
+alongside the WAL append, keeping the pre-WAL commit path available
+as a rollback target during the deprecation window. One minor release
+after the default flip, the option and the legacy persist call site
+are removed entirely.
 
-Operators running on the dual-durability default see no behavioural
-change from the digest API — the digest is computed against the
-in-memory projection, which is identical to both the WAL prefix and
-the persisted state row when both writes succeed.
+Operators on either setting see no behavioural change from the digest
+API — the digest is computed against the in-memory projection, which
+is identical to the WAL prefix in both modes (and additionally
+identical to the persisted state row when the legacy fallback is
+re-enabled).
 
 ## Related surfaces
 
