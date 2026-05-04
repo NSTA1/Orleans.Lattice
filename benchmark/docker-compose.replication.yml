@@ -54,6 +54,13 @@ services:
       Telemetry__Prometheus__Endpoint: "http://0.0.0.0:9090/metrics/"
       LatticeSink__TreeId: ${BENCH_TREE_ID:-vehicle-fleet}
       LatticeSink__KeyShape: ${BENCH_KEY_SHAPE:-CurrentStateByVehicleId}
+      # WAL storage provider switch — see docker-compose.yml for the full comment.
+      # The replica points at its own dedicated azurite-replica instance, so it can
+      # safely use the same table name as the origin. Bidirectional-replication-azuretable
+      # sets BENCH_WAL_PROVIDER=azuretable so both silos exercise the durable-WAL append
+      # path symmetrically.
+      Lattice__Wal__Provider: ${BENCH_WAL_PROVIDER:-memory}
+      Lattice__Wal__TableName: ${BENCH_WAL_TABLE_NAME:-OrleansLatticeWal}
       Replication__Enabled: ${BENCH_REPLICA_REPLICATION_ENABLED:-true}
       Replication__OriginClusterId: ${BENCH_REPLICA_CLUSTER_ID:-vfs-bench-replica}
       Replication__KeyPrefixes: ${BENCH_REPLICATION_KEY_PREFIXES:-}

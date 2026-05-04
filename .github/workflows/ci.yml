@@ -234,7 +234,7 @@ jobs:
               testName=$(basename "$testProj" .csproj)
               echo "::group::Test sample: $sampleName / $testName"
               dotnet test "$testProj" --no-build --configuration Release \
-                --filter "TestCategory!=Chaos" \
+                --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" \
                 --logger "trx;LogFileName=samples-${sampleName}-${testName}.trx"
               echo "::endgroup::"
             done
@@ -286,7 +286,7 @@ jobs:
             fi
             echo "::group::Test ${name} (deterministic)"
             dotnet test "$proj" --no-build --configuration Release \
-              --filter "TestCategory!=Chaos" \
+              --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" \
               --logger "trx;LogFileName=${name}-results.trx"
             echo "::endgroup::"
           done

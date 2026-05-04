@@ -121,6 +121,23 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   read-heavy variants pair: the gap between random and ordered is the
   cache-effectiveness signal under contention.
 
+- [x] **current-state-no-replication-azuretable: Current-state tree, replication off, Azure Table WAL.**
+  Mirror of `current-state-no-replication` with `Lattice:Wal:Provider=azuretable`
+  routing every WAL append through `Orleans.Lattice.Storage.AzureTable` against
+  the same Azurite instance the silo uses for clustering / reminders. Quantifies
+  the per-commit cost of one `TableClient.SubmitTransactionAsync` versus the
+  in-memory baseline. Compare commit p99 / commits-per-second against
+  `current-state-no-replication` to read the durability tax in isolation.
+
+- [x] **bidirectional-replication-azuretable: Two-cluster bidirectional replication, Azure Table WAL.**
+  Mirror of `bidirectional-replication` with `Lattice:Wal:Provider=azuretable`
+  set on both silos. Each side writes its WAL to its own dedicated Azurite
+  instance (`vfs-azurite` / `vfs-azurite-replica`), so the durable-WAL append
+  cost is paid symmetrically under LWW-conflict load. Compare ship/apply
+  histograms and `replication_wal_entries_appended_per_second` against
+  `bidirectional-replication` to attribute any throughput regression between
+  the WAL append path and the ship/apply pipeline.
+
 ## Cross-cutting requirements
 
 These apply to every benchmark above and should be verified before kicking off a run.

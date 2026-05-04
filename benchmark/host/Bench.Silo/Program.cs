@@ -11,6 +11,7 @@ using Orleans.Configuration;
 using Orleans.Lattice;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grpc;
+using Orleans.Lattice.Storage.AzureTable;
 using VehicleFleetSimulator.Abstractions;
 using VehicleFleetSimulator.Benchmark.Sink;
 using VehicleFleetSimulator.Grains;
@@ -187,6 +188,35 @@ builder.Host.UseOrleans(silo =>
     if (telemetrySink == "lattice" || replicationEnabled)
     {
         silo.AddLattice((s, name) => s.AddMemoryGrainStorage(name));
+
+        // ─── WAL storage provider switch (Lattice:Wal:Provider) ────────────────
+        //
+        //   "memory"      → default. The library falls through to InMemoryWalStorageProvider;
+        //                   no AddWalStorage call is required. WAL state is process-scoped
+        //                   and lost on silo restart — fine for non-durability-sensitive
+        //                   benchmarks.
+        //   "azuretable"  → AddAzureTableWalStorage points the WAL at the same Azurite
+        //                   instance the silo already uses for clustering / reminders
+        //                   (Persistence:ConnectionString). Every replication-relevant
+        //                   commit becomes one Azure Tables transaction, so the durable-WAL
+        //                   throughput / tail-latency penalty vs. the in-memory baseline
+        //                   is what the *-azuretable scenarios measure.
+        //
+        // The provider is enabled regardless of replicationEnabled — current-state-no-replication-azuretable
+        // exercises the WAL append path on a single silo with no downstream peer (the WAL
+        // grain is engaged by every Set, the durability cost is the same).
+        var walProvider = (builder.Configuration["Lattice:Wal:Provider"] ?? "memory")
+            .Trim()
+            .ToLowerInvariant();
+        if (walProvider == "azuretable")
+        {
+            var walTableName = builder.Configuration["Lattice:Wal:TableName"] ?? "OrleansLatticeWal";
+            silo.AddAzureTableWalStorage(o =>
+            {
+                o.ConnectionString = azuriteConnection;
+                o.TableName = walTableName;
+            });
+        }
     }
 
     if (replicationEnabled)

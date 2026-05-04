@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
     <ProjectReference Include="..\..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
     <ProjectReference Include="..\..\..\src\lattice.replication.grpc\Orleans.Lattice.Replication.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
   </ItemGroup>
 
   <ItemGroup>
