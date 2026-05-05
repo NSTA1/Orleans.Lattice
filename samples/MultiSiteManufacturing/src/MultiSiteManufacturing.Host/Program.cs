@@ -4,6 +4,8 @@ using OpenTelemetry.Metrics;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using Orleans.Lattice;
+using Orleans.Lattice.Replication;
+using Orleans.Lattice.Replication.Grpc;
 using MultiSiteManufacturing.Host;
 using MultiSiteManufacturing.Host.Baseline;
 using MultiSiteManufacturing.Host.Components;
@@ -14,6 +16,15 @@ using MultiSiteManufacturing.Host.Inventory;
 using MultiSiteManufacturing.Host.Lattice;
 using MultiSiteManufacturing.Host.Operator;
 using MultiSiteManufacturing.Host.Replication;
+
+// HTTP/2 cleartext (h2c) for the gRPC push transport. The dev
+// docker-compose topology and the local `dotnet run` topology both
+// expose plaintext HTTP/2 on the silo HTTP ports; the grpc-dotnet
+// channel needs this AppContext switch enabled before constructing a
+// GrpcChannel against an http:// URI. Production deployments swap to
+// https:// + mTLS (configured via GrpcPushTransportOptions.ConfigureChannel)
+// and do not need this switch.
+AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -110,6 +121,19 @@ if (!useInMemoryStorage && replicationTopology.IsEnabled)
     builder.Services.AddHostedService<ReplicationBootstrapHostedService>();
 }
 
+// Migration step 1: package-shipped replication wired in alongside the
+// host-rolled pipeline. The package observes only trees declared in
+// LatticeReplicationOptions.ReplicatedTrees - currently `mfg-facts-v2`
+// only - so the host-rolled and package pipelines are disjoint by
+// tree id and can run side by side. See `samples/MultiSiteManufacturing/migration.md`
+// for the full staged plan.
+var packagePeerClusterId = builder.Configuration["PackageReplication:PeerClusterId"];
+var packagePeerGrpcEndpoint = builder.Configuration["PackageReplication:PeerGrpcEndpoint"];
+var packageReplicationConfigured = !useInMemoryStorage
+    && !string.IsNullOrWhiteSpace(packagePeerClusterId)
+    && !string.IsNullOrWhiteSpace(packagePeerGrpcEndpoint)
+    && Uri.TryCreate(packagePeerGrpcEndpoint, UriKind.Absolute, out _);
+
 builder.Host.UseOrleans(silo =>
 {
     // Register the outgoing grain-call filter so every ILattice
@@ -199,10 +223,59 @@ builder.Host.UseOrleans(silo =>
         {
             options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
         });
+
+        // Migration step 1: package-shipped replication. Disjoint from
+        // the host-rolled pipeline by tree id - the package's
+        // ReplicatedTrees map opts in `mfg-facts-v2` only, while the
+        // host-rolled ReplicationTopology covers `mfg-facts`,
+        // `mfg-site-activity-index`, `mfg-part-crdt`. Wired only on
+        // the persistent-storage path because the package's WAL,
+        // shipper, and maintenance grain require Azure Table
+        // reminders + grain storage; the in-memory path runs without
+        // package replication and is unaffected.
+        if (packageReplicationConfigured)
+        {
+            silo.AddLatticeReplication(opts =>
+            {
+                opts.ClusterId = clusterName;
+                opts.ReplicatedTrees = new Dictionary<string, ReplicationMode>(StringComparer.Ordinal)
+                {
+                    [PackageReplicationFactMirror.MirrorTreeId] = ReplicationMode.LwwRegister,
+                };
+                opts.ReplicationPeers = new[] { packagePeerClusterId! };
+            });
+        }
     }
 });
 
 builder.Services.AddGrpc();
+
+// Migration step 1: package-shipped replication's gRPC push transport
+// and receiver-side gRPC service. The receiver service piggy-backs on
+// the same Kestrel + AddGrpc as the existing FactIngress / SiteControl
+// / Compliance / Inventory services; the sender's GrpcChannel is
+// constructed lazily on the first ship attempt and reused thereafter
+// (HTTP/2 multiplexing). Wired only when a peer endpoint has been
+// resolved from configuration so the in-memory test path and partial
+// local runs do not trip the transport's strict "every peer must be
+// in PeerEndpoints" check.
+if (packageReplicationConfigured)
+{
+    var peerUri = new Uri(packagePeerGrpcEndpoint!, UriKind.Absolute);
+
+    builder.Services.AddLatticeReplicationGrpcServer();
+    builder.Services.AddLatticeReplicationGrpcPushTransport(opts =>
+    {
+        opts.PeerEndpoints[packagePeerClusterId!] = peerUri;
+    });
+
+    // Mirror every fact that flows through FederationRouter into the
+    // lattice tree the package replicates (`mfg-facts-v2`). Removed at
+    // step 2 of the migration when `mfg-facts` itself moves under
+    // package replication.
+    builder.Services.AddHostedService<PackageReplicationFactMirror>();
+}
+
 
 // OpenTelemetry: export the orleans.lattice and orleans.lattice.replication
 // meters via Prometheus. Each silo serves /metrics on its ASP.NET Core port
@@ -299,6 +372,15 @@ app.MapGrpcService<FactIngressServiceImpl>();
 app.MapGrpcService<SiteControlServiceImpl>();
 app.MapGrpcService<ComplianceServiceImpl>();
 app.MapGrpcService<InventoryServiceImpl>();
+
+// Migration step 1: package-shipped replication receiver-side gRPC
+// route. Mapped only when the package was wired in above so the
+// in-memory test path does not require the gRPC method singleton to
+// resolve at startup.
+if (packageReplicationConfigured)
+{
+    app.MapLatticeReplicationGrpcService();
+}
 
 // Prometheus scrape endpoint - served at /metrics on the ASP.NET Core
 // HTTP port. Anonymous access is fine because the endpoint is only

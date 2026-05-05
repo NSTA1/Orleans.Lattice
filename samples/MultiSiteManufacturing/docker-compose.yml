@@ -198,6 +198,9 @@ services:
       # multi-zone topologies where each zone has its own Traefik.
       Replication__Peers__0__Name: "eu"
       Replication__Peers__0__BaseUrls__0: "http://traefik-eu:80"
+      # Migration step 1: package-shipped replication peer endpoint.
+      PackageReplication__PeerClusterId: "eu"
+      PackageReplication__PeerGrpcEndpoint: "http://traefik-eu:80"
     command: ["--cluster", "us", "--silo-id", "a"]
     networks:
       - us-net
@@ -223,6 +226,9 @@ services:
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-us:10000/devstoreaccount1;QueueEndpoint=http://azurite-us:10001/devstoreaccount1;TableEndpoint=http://azurite-us:10002/devstoreaccount1;"
       Replication__Peers__0__Name: "eu"
       Replication__Peers__0__BaseUrls__0: "http://traefik-eu:80"
+      # Migration step 1: package-shipped replication peer endpoint.
+      PackageReplication__PeerClusterId: "eu"
+      PackageReplication__PeerGrpcEndpoint: "http://traefik-eu:80"
     command: ["--cluster", "us", "--silo-id", "b"]
     networks:
       - us-net
@@ -292,6 +298,9 @@ services:
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-eu:10000/devstoreaccount1;QueueEndpoint=http://azurite-eu:10001/devstoreaccount1;TableEndpoint=http://azurite-eu:10002/devstoreaccount1;"
       Replication__Peers__0__Name: "us"
       Replication__Peers__0__BaseUrls__0: "http://traefik-us:80"
+      # Migration step 1: package-shipped replication peer endpoint.
+      PackageReplication__PeerClusterId: "us"
+      PackageReplication__PeerGrpcEndpoint: "http://traefik-us:80"
     command: ["--cluster", "eu", "--silo-id", "a"]
     networks:
       - eu-net
@@ -317,6 +326,9 @@ services:
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-eu:10000/devstoreaccount1;QueueEndpoint=http://azurite-eu:10001/devstoreaccount1;TableEndpoint=http://azurite-eu:10002/devstoreaccount1;"
       Replication__Peers__0__Name: "us"
       Replication__Peers__0__BaseUrls__0: "http://traefik-us:80"
+      # Migration step 1: package-shipped replication peer endpoint.
+      PackageReplication__PeerClusterId: "us"
+      PackageReplication__PeerGrpcEndpoint: "http://traefik-us:80"
     command: ["--cluster", "eu", "--silo-id", "b"]
     networks:
       - eu-net
