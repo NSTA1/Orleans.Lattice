@@ -83,14 +83,12 @@ you want edit rights). Under *Dashboards → Orleans.Lattice* you'll find:
 > **Note** — every replicated tree in the sample ships through
 > `Orleans.Lattice.Replication`'s gRPC push transport: `mfg-facts`
 > and `mfg-site-activity-index` as `LwwRegister`, `mfg-part-labels`
-> as `OrSet` (typed CRDT delta shipping). The host-rolled pipeline
-> was deleted in migration step 5; the only sample-specific seam
-> remaining is `BaselineReplicationReplay`, an `IChangeFeed`
+> as `OrSet` (typed CRDT delta shipping). The only sample-specific
+> seam remaining is `BaselineReplicationReplay`, an `IChangeFeed`
 > subscriber that drives the divergence-visualisation backend.
-> See [`migration.md`](./migration.md) for the staged plan and
-> [`docs/lattice.replication/`](../../docs/lattice.replication/) for
-> the package's wire format and bootstrap protocol. The Overview and
-> Commit Path dashboards render every replicated tree.
+> See [`docs/lattice.replication/`](../../docs/lattice.replication/)
+> for the package's wire format and bootstrap protocol. The Overview
+> and Commit Path dashboards render every replicated tree.
 
 The JSON for these dashboards is bind-mounted read-only from
 `src/lattice.dashboards/Grafana/` — a CI test in the package keeps

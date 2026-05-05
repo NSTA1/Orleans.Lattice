@@ -53,15 +53,15 @@ flowchart TB
     siloHA --- azH
     siloHB --- azH
 
-    siloFA -.->|"POST /replicate/{tree}"| tHE1
-    siloFB -.->|"POST /replicate/{tree}"| tHE1
-    siloHA -.->|"POST /replicate/{tree}"| tFE2
-    siloHB -.->|"POST /replicate/{tree}"| tFE2
+    siloFA -.->|"gRPC push (LatticeReplication)"| tHE1
+    siloFB -.->|"gRPC push (LatticeReplication)"| tHE1
+    siloHA -.->|"gRPC push (LatticeReplication)"| tFE2
+    siloHB -.->|"gRPC push (LatticeReplication)"| tFE2
 
-    tHE1 ===|"round-robin · /replicate"| siloHA
-    tHE1 ===|"round-robin · /replicate"| siloHB
-    tFE2 ===|"round-robin · /replicate"| siloFA
-    tFE2 ===|"round-robin · /replicate"| siloFB
+    tHE1 ===|"round-robin · /orleans.lattice.replication.*"| siloHA
+    tHE1 ===|"round-robin · /orleans.lattice.replication.*"| siloHB
+    tFE2 ===|"round-robin · /orleans.lattice.replication.*"| siloFA
+    tFE2 ===|"round-robin · /orleans.lattice.replication.*"| siloFB
 ```
 
 Reachability matrix:
@@ -78,8 +78,8 @@ Only two host ports are published:
 
 | Host port | Container | Role |
 |---|---|---|
-| 5001 | `traefik-us:80` | US UI (sticky) + replication inbound (round-robin) |
-| 5002 | `traefik-eu:80` | EU UI (sticky) + replication inbound (round-robin) |
+| 5001 | `traefik-us:80` | US UI (sticky) + replication gRPC inbound (round-robin) |
+| 5002 | `traefik-eu:80` | EU UI (sticky) + replication gRPC inbound (round-robin) |
 
 Silo HTTP (`:8080`), Orleans silo (`:11111`), and gateway (`:30000`)
 ports are internal-only.
@@ -88,7 +88,7 @@ Each Traefik runs two routers over the same backend pool:
 
 | Router | Rule | LB |
 |---|---|---|
-| `{cluster}-replicate` | `PathPrefix(/replicate)`, priority 100 | round-robin + active health check |
+| `{cluster}-replicate` | `PathPrefix(/orleans.lattice.replication.)`, priority 100 | round-robin + active health check |
 | `{cluster}-web` | `PathPrefix(/)` | sticky cookie `msmfg_{cluster}_affinity` |
 
 ### Tier-5 partition commands
@@ -332,7 +332,7 @@ sequenceDiagram
 
     loop package shipping cadence
         Ship->>WAL: drain [Cursor+, end]
-        Ship->>Traefik: gRPC push (batch)
+        Ship->>Traefik: gRPC push (LatticeReplication.Push)
         Traefik->>Apply: round-robin to silo-eu-{a|b}
         Apply->>PeerTree: merge entry per CRDT mode
         Apply-->>Ship: ack (peer cursor advanced)
@@ -353,7 +353,7 @@ Failure modes and their recovery:
 | Silo-B of peer restarts | Traefik health check evicts it within ~2 s | Next push lands on silo-A; transparent to the shipper. |
 | Duplicate delivery | Same entry merged twice | CRDT-idempotent: LWW collapses to identity, OrSet add/remove dots are deduped by replica id, write-once `mfg-facts` keys are stable. |
 | A → B → A cycle | Receiver re-emits a remote-origin entry | Broken by the package's per-origin high-water-mark - replicated applies are short-circuited before they hit the WAL again. |
-| Cluster split preset | `IReplicationDisconnectGrain.IsDisconnected = true` | Step 6 of the migration re-implements this as an `IReplicationTransport` decorator wrapping `GrpcPushTransport`; pushes become no-ops, inbound returns "unavailable", and on clear the WAL drains in HLC order. |
+| Replication-disconnect preset | `IReplicationDisconnectGrain.IsDisconnected = true` | `ChaosReplicationTransport` decorates the package's `IReplicationTransport` and returns `Accepted=false` while the flag is set; the package shipper holds its per-peer cursor steady, the WAL grows locally, and on clear the WAL drains in HLC order. |
 | Tier-5 `docker network disconnect` | gRPC push fails at transport | Identical to "peer unreachable"; shipper backs off and catches up on reconnect. |
 | Baseline replay decode fails | Single entry skipped on peer's baseline; lattice apply still succeeds | Logged; subsequent entries continue to apply. Baseline is a demo-visualisation backend, not a correctness-critical store. |
 

@@ -131,9 +131,8 @@ builder.Services.AddSingleton(new SiloIdentity(siloId, isPrimarySilo, clusterNam
 // transport: `mfg-facts` and `mfg-site-activity-index` as
 // LwwRegister, `mfg-part-labels` as OrSet. The `mfg-part-operator`
 // tree stays cluster-local - LWW across clusters with disjoint HLCs
-// is meaningless. See `samples/MultiSiteManufacturing/migration.md`
-// for the full staged plan and `docs/lattice.replication/` for the
-// package's wire format and bootstrap protocol.
+// is meaningless. See `docs/lattice.replication/` for the package's
+// wire format and bootstrap protocol.
 var packagePeerClusterId = builder.Configuration["PackageReplication:PeerClusterId"];
 var packagePeerGrpcEndpoint = builder.Configuration["PackageReplication:PeerGrpcEndpoint"];
 var packageReplicationConfigured = !useInMemoryStorage

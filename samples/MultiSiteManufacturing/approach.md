@@ -94,12 +94,14 @@ exercised independently from the UI and from tests:
 | 2 | `ChaosFactBackend` decorator (per backend) | Storage jitter, transient failure, write amplification | `IBackendChaosGrain` |
 | 3 | Reorder buffer inside `ProcessSiteGrain` | Cross-site out-of-order arrival after a pause lifts | `ReorderEnabled` |
 | 4 | `FederationRouter.IsDroppedByPartitionAsync` + `PartCrdtStore` shadow prefix | Simulated intra-cluster silo partition | `IPartitionChaosGrain.IsPartitioned` |
-| 4b | `ReplicatorGrain.TickAsync` early-return + `POST /replicate/{tree}` 503 | App-level cross-cluster replication pause | `IReplicationDisconnectGrain.IsDisconnected` |
+| 4b | `ChaosReplicationTransport` decorator on `IReplicationTransport` | App-level cross-cluster replication pause | `IReplicationDisconnectGrain.IsDisconnected` |
 | 5 | `docker network disconnect` against the peer Traefik | Genuine cross-cluster transport partition | Manual `docker network` commands |
 
-Tier 4b is a pure application-level shortcut that leaves the local
-replog growing; once the flag clears, replication resumes from the
-current cursor and catches the peer up with the accumulated backlog.
+Tier 4b is a pure application-level shortcut: the decorator returns
+`Accepted=false` so the package shipper holds its per-peer cursor
+steady and the local WAL keeps growing. Once the flag clears,
+replication resumes from the stationary cursor and catches the peer
+up with the accumulated backlog.
 Tier 5 achieves the same effect at the transport layer without
 co-operation from the application — useful as a forcing function
 when proving the replicator's cursor and backoff behaviour.
@@ -156,16 +158,22 @@ The sample's contribution is the per-tree opt-in:
 | `mfg-part-labels` | Yes | `OrSet` | One OrSet per serial; the package ships typed `add` / `remove` / `merge` deltas instead of raw byte writes. |
 | `mfg-part-operator` | No (cluster-local) | n/a | Per-serial LWW register. LWW across clusters with disjoint HLCs is meaningless - concurrent cross-cluster writes would pick different winners on each side. |
 
-The receiver-side baseline tap (`BaselineReplicationReplay`) is the
-only sample-specific seam: it subscribes to the package's
-`IChangeFeed` for `mfg-facts`, filters to remote-origin entries, and
-emits each replicated payload into the local naive
-`BaselineFactBackend` so the side-by-side divergence visualisation
-keeps working under cross-cluster traffic.
+Three sample-specific seams sit alongside the package:
 
-The Tier 4b chaos toggle (app-level replication pause) is pending
-re-implementation as an `IReplicationTransport` decorator wrapping
-the gRPC push transport - see step 6 of the migration plan.
+- `BaselineReplicationReplay` subscribes to the package's
+  `IChangeFeed` for `mfg-facts`, filters to remote-origin entries,
+  and emits each replicated payload into the local naive
+  `BaselineFactBackend` so the side-by-side divergence visualisation
+  keeps working under cross-cluster traffic.
+- `ChaosReplicationTransport` decorates the package's gRPC push
+  transport (Tier 4b chaos): when the operator toggles the disconnect
+  flag, `SendAsync` returns `Accepted=false` so the shipper holds
+  its cursor and the local WAL grows until the flag clears.
+- `ReplicationActivityTracker` + `ClusterReplicationActivityGrain`
+  bridge the package's `orleans.lattice.replication` meter into a
+  cluster-wide aggregate that drives the in-page per-peer ship/recv
+  strip; without it, a Blazor circuit pinned to one silo would only
+  see that silo's slice of replication activity.
 
 ## 7. UI design
 
@@ -217,11 +225,15 @@ active injections.
 
 All tests run against Orleans `TestingHost` fixtures with in-memory
 storage — no Azurite dependency in the test suite, keeping CI fast
-and hermetic. The cross-cluster replication path is covered by unit
-tests on the deterministic pieces (replog key encoding, topology
-parsing, wire-type JSON round-trips). Two-cluster end-to-end
-replication is exercised manually via Docker Compose because the
-`TestingHost` fixture materialises a single cluster.
+and hermetic. The cross-cluster replication path itself is covered by
+the `Orleans.Lattice.Replication` and
+`Orleans.Lattice.Replication.Grpc` packages' own test suites; the
+sample's tests focus on the sample-specific seams (the chaos transport
+decorator, the baseline-replay tap, the activity-meter aggregator,
+and the typed-CRDT accessors over `mfg-part-labels` /
+`mfg-part-operator`). Two-cluster end-to-end replication is
+exercised manually via Docker Compose because the `TestingHost`
+fixture materialises a single cluster.
 
 Long-running stress tests are tagged `[Category("Chaos")]` and
 excluded from the iterative development filter:
