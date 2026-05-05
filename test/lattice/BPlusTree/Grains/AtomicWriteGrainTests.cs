@@ -749,4 +749,198 @@ public class AtomicWriteGrainTests
         var (grain, _, _, _, _) = CreateGrain(existingState: seeded);
         Assert.That(async () => await grain.ExecuteAsync(TreeId, original), Throws.Nothing);
     }
+
+    // --- Saga-wide vector-clock capture (R-089) ---
+
+    [Test]
+    public async Task ExecuteAsync_captures_caller_VectorClock_once_on_first_prepare()
+    {
+        // Caller wraps the call in LatticeVectorClockContext.With(...);
+        // PrepareAsync must persist the frontier on AtomicWriteState so
+        // every subsequent emit (and any reminder-driven replay) uses
+        // the identical VC.
+        var (grain, state, _, lattice, _) = CreateGrain();
+        lattice.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.CompletedTask);
+
+        var vc = new VersionVector();
+        vc.Tick("origin-peer");
+
+        using (LatticeVectorClockContext.With(vc))
+        {
+            await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1]), ("b", [2])));
+        }
+
+        Assert.That(state.State.VectorClock, Is.SameAs(vc));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_persists_null_VectorClock_when_caller_unset()
+    {
+        // Sanity counterpart: no ambient context => persisted VC stays null.
+        var (grain, state, _, lattice, _) = CreateGrain();
+        lattice.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.CompletedTask);
+
+        await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
+
+        Assert.That(state.State.VectorClock, Is.Null);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_re_stamps_persisted_VectorClock_on_every_per_key_SetAsync()
+    {
+        // The saga's purpose: every per-key SetAsync the saga issues must
+        // observe the saga-wide VC ambient at the time it executes — i.e.
+        // before the leaf grain reads LatticeVectorClockContext.Current
+        // and stamps LwwValue.VectorClock. We capture the ambient inside
+        // each SetAsync callback and assert all observations equal the
+        // captured frontier.
+        var (grain, _, _, lattice, _) = CreateGrain();
+        var vc = new VersionVector();
+        vc.Tick("origin-peer");
+
+        var observed = new List<VersionVector?>();
+        lattice.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>())
+            .Returns(_ =>
+            {
+                observed.Add(LatticeVectorClockContext.Current);
+                return Task.CompletedTask;
+            });
+
+        using (LatticeVectorClockContext.With(vc))
+        {
+            await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1]), ("b", [2]), ("c", [3])));
+        }
+
+        Assert.That(observed, Has.Count.EqualTo(3));
+        Assert.That(observed[0], Is.SameAs(vc));
+        Assert.That(observed[1], Is.SameAs(vc));
+        Assert.That(observed[2], Is.SameAs(vc));
+    }
+
+    [Test]
+    public async Task ReceiveReminder_resumes_execute_re_stamps_persisted_VectorClock()
+    {
+        // Crash-replay regression: a saga that captured a VectorClock on
+        // its original Prepare must re-stamp the persisted frontier on
+        // every resumed per-key write so observers continue to see the
+        // identical batch-wide VC after silo restart. Caller-side ambient
+        // context is deliberately *unset* here — the value must come from
+        // persisted AtomicWriteState alone.
+        var persistedVc = new VersionVector();
+        persistedVc.Tick("origin-peer");
+
+        var state = new FakePersistentState<AtomicWriteState>();
+        state.State.Phase = AtomicWritePhase.Execute;
+        state.State.TreeId = TreeId;
+        state.State.Entries = MakeEntries(("a", [1]), ("b", [2]));
+        state.State.PreValues = new List<AtomicPreValue>
+        {
+            new() { Key = "a", Value = null, Existed = false },
+            new() { Key = "b", Value = null, Existed = false },
+        };
+        state.State.NextIndex = 1;
+        state.State.VectorClock = persistedVc;
+
+        var (grain, _, _, lattice, _) = CreateGrain(state);
+
+        VersionVector? observedDuringSetB = null;
+        lattice.SetAsync("b", Arg.Any<byte[]>())
+            .Returns(_ =>
+            {
+                observedDuringSetB = LatticeVectorClockContext.Current;
+                return Task.CompletedTask;
+            });
+
+        // Sanity: no ambient context outside the resume path.
+        Assert.That(LatticeVectorClockContext.Current, Is.Null);
+
+        await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
+
+        Assert.That(observedDuringSetB, Is.SameAs(persistedVc));
+        Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_does_not_overwrite_persisted_VectorClock_on_replay()
+    {
+        // Reminder-driven replay must reuse the persisted frontier even if
+        // the activation environment somehow leaks a non-null ambient
+        // context — capture-once is honoured.
+        var originalVc = new VersionVector();
+        originalVc.Tick("origin-peer");
+        var contaminatingVc = new VersionVector();
+        contaminatingVc.Tick("other-peer");
+
+        var state = new FakePersistentState<AtomicWriteState>();
+        state.State.Phase = AtomicWritePhase.Execute;
+        state.State.TreeId = TreeId;
+        state.State.Entries = MakeEntries(("a", [1]));
+        state.State.PreValues = new List<AtomicPreValue>
+        {
+            new() { Key = "a", Value = null, Existed = false },
+        };
+        state.State.NextIndex = 0;
+        state.State.VectorClock = originalVc;
+
+        var (grain, _, _, lattice, _) = CreateGrain(state);
+        lattice.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.CompletedTask);
+
+        // Persisted VC is already set, so PrepareAsync's capture-once
+        // block (guarded on `is null`) must not fire even though
+        // ambient context here is non-null. The saga is in Execute
+        // phase so PrepareAsync is not re-entered, but we still pin
+        // the invariant that the persisted slot is the single source
+        // of truth post-capture.
+        using (LatticeVectorClockContext.With(contaminatingVc))
+        {
+            await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
+        }
+
+        Assert.That(state.State.VectorClock, Is.SameAs(originalVc));
+    }
+
+    [Test]
+    public async Task ReceiveReminder_resumes_compensation_observes_per_key_pre_VectorClock()
+    {
+        // Pins the boundary between the saga-wide ambient stamp (set by
+        // StampVectorClockContext at the head of every saga drive) and
+        // the per-key compensation override (the `using
+        // (LatticeVectorClockContext.With(pre.VectorClock))` scope inside
+        // CompensatePhaseAsync). During a rollback the ambient observed
+        // by the per-key SetAsync MUST be the pre-saga frontier, not the
+        // saga-wide stamp — otherwise rolled-back values would re-land
+        // with the saga's frontier and look "newer" than they should.
+        var sagaWideVc = new VersionVector();
+        sagaWideVc.Tick("saga-wide-peer");
+        var preVc = new VersionVector();
+        preVc.Tick("pre-saga-peer");
+
+        var state = new FakePersistentState<AtomicWriteState>();
+        state.State.Phase = AtomicWritePhase.Compensate;
+        state.State.TreeId = TreeId;
+        state.State.Entries = MakeEntries(("a", [1]));
+        state.State.PreValues = new List<AtomicPreValue>
+        {
+            new() { Key = "a", Value = [9], Existed = true, VectorClock = preVc },
+        };
+        // NextIndex=1 => one committed write to roll back (index 0 == "a").
+        state.State.NextIndex = 1;
+        state.State.FailureMessage = "boom";
+        state.State.VectorClock = sagaWideVc;
+
+        var (grain, _, _, lattice, _) = CreateGrain(state);
+        VersionVector? observedDuringRollback = null;
+        lattice.SetAsync("a", Arg.Any<byte[]>())
+            .Returns(_ =>
+            {
+                observedDuringRollback = LatticeVectorClockContext.Current;
+                return Task.CompletedTask;
+            });
+
+        await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
+
+        Assert.That(observedDuringRollback, Is.SameAs(preVc),
+            "Compensation rollback must observe pre.VectorClock, not the saga-wide stamp.");
+        Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
+    }
 }

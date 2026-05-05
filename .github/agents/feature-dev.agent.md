@@ -240,6 +240,21 @@ The combination of `New-TemporaryFile` + `[System.IO.File]::WriteAllText` + non-
 4. **Confirm file size before invoking `gh`**: `(Get-Item .scratch/pr-body.md).Length` must match what you intended (e.g. 5kB+ for a typical feature PR).
 5. **Leaving the scratch file in place is fine** — it's gitignored, so it doesn't pollute the working tree. Keeping it aids debugging if the next PR-edit silently fails.
 
+### Phase 9 — Release (when shipping NuGet packages)
+
+When the user explicitly asks to release one or more packages by tagging `main`:
+
+1. **Confirm the PR has merged before tagging.** Check out `main` and pull (`git checkout main && git pull origin main`) so the tag points at the squash-merge commit on `main`, never at the feature branch.
+2. **Tag each package independently.** The publish workflow's per-tag trigger glob (`<package>-v*`) fires on **`push` events to a single tag ref**. A bulk push (`git push origin tag1 tag2 tag3 tag4`) sends all four refs in one HTTP request and GitHub coalesces them into a single push event — so the publish workflow fires for **at most one** of the tags, and the trailing tags ship no NuGet packages and create no GitHub Release. Push tags **one at a time**:
+
+   ```powershell
+   git push origin <package>-v<X.Y.Z>
+   ```
+
+   After each push, poll `gh run list` for a matching `event=push, headBranch=<tag>, name=Publish` run before pushing the next tag. A "no run detected within 2 min" result means the workflow trigger glob did not match — fix the trigger or the tag spelling before pushing further tags.
+3. **Verify each publish run** reaches `completed/success` before declaring the release done. Failed runs leave NuGet in an inconsistent state where some packages of a coordinated release have shipped and others have not.
+4. **Recovery for an accidental bulk push.** Delete the trailing remote tags (`git push origin --delete <tag>`) and re-push them individually. Local tags can stay in place; only the remote refs need the delete-and-re-push.
+
 ## Important rules
 
 - **Never commit, push, or create a PR unless the user explicitly asks.**
@@ -252,3 +267,4 @@ The combination of `New-TemporaryFile` + `[System.IO.File]::WriteAllText` + non-
 - **Phase 6c is project-scoped, not solution-wide.** Run `dotnet test` against the test project(s) covering the source project you changed, with `--filter "TestCategory!=Chaos"`. The full cross-solution sweep is reserved for the Phase 8 final verify (immediately before commit/push) — running it on every iteration of the inner dev loop wastes wall-clock time without buying additional signal, because CI runs the full suite on every PR.
 - **Build must be clean** — zero errors, zero warnings — before declaring work complete.
 - **One feature per branch.** Branch name: `feature/fXXX-short-description`.
+- **Never use inline PowerShell `-Command` (or `run_command_in_terminal` heredocs) to edit file content with multi-line strings.** Semicolon-joined inline commands have leaked variable-assignment text into target files (the `README.md` `ath = 'README.md'` incident — the literal text `ath = 'README.md'` ended up inside a csharp code block in the Quick Start). For any edit that involves a multi-line string literal, use one of: (a) `edit_file` / `replace_string_in_file` directly, or (b) seed an empty `.scratch/<edit>.ps1` via `New-Item -Force`, populate it with `edit_file`, then dot-source it. Inline `run_command_in_terminal` is fine for single-line, no-string-content commands like `dotnet build` or `git status`.

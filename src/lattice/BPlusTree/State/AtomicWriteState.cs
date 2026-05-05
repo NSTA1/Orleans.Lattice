@@ -153,4 +153,27 @@ internal sealed class AtomicWriteState
     /// <see langword="null"/>.
     /// </summary>
     [Id(10)] public byte[]? DeltaPayload { get; set; }
+
+    /// <summary>
+    /// Vector-clock frontier captured once from
+    /// <see cref="LatticeVectorClockContext.Current"/> when the saga
+    /// was first started, or <see langword="null"/> when the caller
+    /// did not wrap the <c>SetManyAtomicAsync</c> call in a
+    /// <see cref="LatticeVectorClockContext.With"/> scope. Re-stamped
+    /// onto Orleans <see cref="Runtime.RequestContext"/> on every
+    /// per-key <c>SetAsync</c> the saga issues during
+    /// <see cref="AtomicWritePhase.Execute"/> so every emitted
+    /// <see cref="LatticeMutation"/> in the batch carries the
+    /// identical <see cref="LatticeMutation.VectorClock"/> — closing
+    /// the per-key VC drift a remote receiver would otherwise see as
+    /// a partial-set state where the writer's frontier said all N
+    /// should be visible together. Compensation rewrites override the
+    /// saga-wide stamp per-key with each
+    /// <see cref="AtomicPreValue.VectorClock"/> via
+    /// <see cref="LatticeVectorClockContext.With"/>; the
+    /// saga-wide stamp is restored when each rollback's scope
+    /// disposes. Wire-compatible: missing field on legacy persisted
+    /// state decodes to <see langword="null"/>.
+    /// </summary>
+    [Id(11)] public Primitives.VersionVector? VectorClock { get; set; }
 }

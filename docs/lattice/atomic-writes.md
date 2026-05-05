@@ -227,6 +227,41 @@ saga. Set the option to `Timeout.InfiniteTimeSpan` to disable
 retention cleanup (completed saga state then lives forever, at the
 cost of unbounded storage growth).
 
+## Ambient context capture-once
+
+A caller that wraps `SetManyAtomicAsync` in
+`LatticeVectorClockContext.With(...)` (or `LatticeOriginContext.With(...)`)
+has the ambient frontier captured **once** on the saga's first `Prepare`
+and re-stamped onto every per-key write the saga issues during `Execute`
+— including any compensation rewrites, which restore each key's
+pre-saga origin and frontier captured alongside its pre-saga value. The
+saga guarantees that every emit in the batch carries the **identical**
+`VectorClock` (and identical `OriginClusterId`), closing per-key drift a
+remote replication consumer would otherwise see as a partial-set state
+where the writer's frontier said all N keys should be visible together.
+
+The captured frontier is durable: a silo crash mid-saga resumes from
+persisted state and re-stamps the persisted ambient on every remaining
+emit, so observers see the same VC across the original commits and the
+post-recovery emits.
+
+```csharp verify
+var vc = new Orleans.Lattice.Primitives.VersionVector();
+vc.Tick("origin-peer");
+
+using (LatticeVectorClockContext.With(vc))
+{
+    await tree.SetManyAtomicAsync(new List<KeyValuePair<string, byte[]>>
+    {
+        new("k1", Encoding.UTF8.GetBytes("v1")),
+        new("k2", Encoding.UTF8.GetBytes("v2")),
+        new("k3", Encoding.UTF8.GetBytes("v3")),
+    });
+}
+// Every per-key mutation observed downstream carries the identical
+// VectorClock, regardless of how the saga's writes were interleaved.
+```
+
 ## Related
 
 - [API Reference](api.md) — full `SetManyAtomicAsync` signature and typed
