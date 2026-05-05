@@ -96,6 +96,25 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
                 $"Unknown mutation kind: {mutation.Kind}"),
         };
 
+        // Maintenance-category mutations (resize / rebalance / compaction /
+        // internal structural rewrite) are stamped with
+        // <see cref="MutationCategory.Maintenance"/> by the producer site
+        // via <c>LatticeMaintenanceContext</c>. They are structural rewrites
+        // of state already authored by user writes, not semantic causal
+        // events; replicating them would (a) inflate every peer's vector
+        // clock with edges the writer never authored, (b) pollute the
+        // dependency graph with non-user-authored edges, and (c) generate
+        // wire traffic for events that converged peers will run
+        // independently against their own copy of the data. Skip the WAL
+        // append entirely - no entry is constructed, no filter runs, no
+        // resolver is consulted. The classification is independent of
+        // <see cref="LatticeMutation.OriginClusterId"/>: a remote-origin
+        // maintenance emit is still Maintenance and still skipped.
+        if (mutation.Category == MutationCategory.Maintenance)
+        {
+            return Task.CompletedTask;
+        }
+
         // Mode resolution is the gate: an undeclared tree never replicates.
         var mode = _modeResolver.Resolve(mutation.TreeId);
         if (mode is null)

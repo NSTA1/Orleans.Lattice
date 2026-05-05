@@ -187,4 +187,119 @@ public class ChangeCaptureIntegrationTests
         Assert.That(ranges, Is.Not.Empty);
         Assert.That(ranges[^1].OriginClusterId, Is.EqualTo(TwoSiteClusterFixture.SiteBClusterId));
     }
+
+    // ------------------------------------------------------------------
+    // R-090 - MutationCategory.Maintenance writes are skipped end-to-end
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task SetAsync_under_maintenance_scope_does_not_emit_replog_entry()
+    {
+        // A write authored inside LatticeMaintenanceContext.BeginScope()
+        // is stamped with MutationCategory.Maintenance by the leaf grain's
+        // mutation publisher, and the replication observer skips the WAL
+        // append entirely. The originating lattice call still commits the
+        // value to the local tree (maintenance writes are real mutations
+        // of state); they just don't cross cluster boundaries.
+        const string tree = "ccap-maint-set";
+        var lattice = _fixture.SiteA.Client.GetGrain<ILattice>(tree);
+
+        var before = _fixture.SiteASink.Entries.Count;
+        using (LatticeMaintenanceContext.BeginScope())
+        {
+            await lattice.SetAsync("k-maint", new byte[] { 1, 2, 3 });
+        }
+
+        // Source-site sink saw zero entries for the maintenance write.
+        var entries = _fixture.SiteASink.Entries.Skip(before)
+            .Where(e => e.TreeId == tree && e.Key == "k-maint").ToArray();
+        Assert.That(entries, Is.Empty);
+
+        // The local tree still committed the value - maintenance is a
+        // skip on the *replication* WAL, not on the underlying write.
+        var stored = await lattice.GetAsync("k-maint");
+        Assert.That(stored, Is.EqualTo(new byte[] { 1, 2, 3 }));
+    }
+
+    [Test]
+    public async Task DeleteAsync_under_maintenance_scope_does_not_emit_replog_entry()
+    {
+        // Same contract for tombstones: the leaf still commits the
+        // tombstone (subsequent GetAsync returns null) but the
+        // replication WAL is silent.
+        const string tree = "ccap-maint-del";
+        var lattice = _fixture.SiteA.Client.GetGrain<ILattice>(tree);
+        await lattice.SetAsync("gone-maint", new byte[] { 9 });
+
+        var before = _fixture.SiteASink.Entries.Count;
+        using (LatticeMaintenanceContext.BeginScope())
+        {
+            await lattice.DeleteAsync("gone-maint");
+        }
+
+        var entries = _fixture.SiteASink.Entries.Skip(before)
+            .Where(e => e.TreeId == tree && e.Key == "gone-maint").ToArray();
+        Assert.That(entries, Is.Empty);
+
+        // Pin that the underlying tombstone still committed locally -
+        // the maintenance gate is on replication only, never on the
+        // underlying write path.
+        var stored = await lattice.GetAsync("gone-maint");
+        Assert.That(stored, Is.Null);
+    }
+
+    [Test]
+    public async Task User_write_after_maintenance_scope_disposes_emits_replog_entry()
+    {
+        // The maintenance scope is per-call: a follow-up write outside
+        // the scope reverts to the User default and emits normally.
+        const string tree = "ccap-maint-revert";
+        var lattice = _fixture.SiteA.Client.GetGrain<ILattice>(tree);
+
+        var before = _fixture.SiteASink.Entries.Count;
+        using (LatticeMaintenanceContext.BeginScope())
+        {
+            await lattice.SetAsync("inside", new byte[] { 1 });
+        }
+        await lattice.SetAsync("outside", new byte[] { 2 });
+
+        var entries = _fixture.SiteASink.Entries.Skip(before)
+            .Where(e => e.TreeId == tree).ToArray();
+        Assert.That(entries.Select(e => e.Key).ToArray(), Is.EqualTo(new[] { "outside" }));
+    }
+
+    [Test]
+    public async Task DeleteRangeAsync_under_maintenance_scope_does_not_emit_replog_entries()
+    {
+        // Range deletes fan out to one emit per shard inside the range.
+        // The maintenance gate must apply uniformly to every per-shard
+        // emit, leaving the source sink with no DeleteRange entries for
+        // the suppressed range.
+        const string tree = "ccap-maint-range";
+        var lattice = _fixture.SiteA.Client.GetGrain<ILattice>(tree);
+        await lattice.SetAsync("ma", new byte[] { 1 });
+        await lattice.SetAsync("mb", new byte[] { 2 });
+
+        var before = _fixture.SiteASink.Entries.Count;
+        using (LatticeMaintenanceContext.BeginScope())
+        {
+            await lattice.DeleteRangeAsync("ma", "mz");
+        }
+
+        var ranges = _fixture.SiteASink.Entries.Skip(before)
+            .Where(e => e.TreeId == tree && e.Op == ReplogOp.DeleteRange)
+            .ToArray();
+        Assert.That(ranges, Is.Empty);
+
+        // Pin that the underlying range tombstones still committed
+        // locally - both keys are gone after the maintenance-scoped
+        // range delete returns.
+        var maAfter = await lattice.GetAsync("ma");
+        var mbAfter = await lattice.GetAsync("mb");
+        Assert.Multiple(() =>
+        {
+            Assert.That(maAfter, Is.Null);
+            Assert.That(mbAfter, Is.Null);
+        });
+    }
 }
