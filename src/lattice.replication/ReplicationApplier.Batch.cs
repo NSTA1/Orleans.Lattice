@@ -149,6 +149,20 @@ internal sealed partial class ReplicationApplier
         var hwmGrain = GetHwmGrain(treeId);
         var hwm = await hwmGrain.GetAsync(origin!, cancellationToken).ConfigureAwait(false);
 
+        // Per-tree shadow-forward dedupe cache (see ApplyAsync for the
+        // race scenario it closes). The cache instance is fetched once
+        // per run; per-entry TryAdd is performed after the runningHwm
+        // dedupe so HWM-deduped entries do not pollute the cache (which
+        // would break operator-driven re-pin recovery, where lowering
+        // the per-origin frontier must re-admit previously-deduped
+        // identity tuples). On apply failure the reservation is rolled
+        // back via Remove so the transport's retry path is not silently
+        // suppressed.
+        var dedupeCache = _dedupeCaches.GetOrAdd(
+            treeId,
+            static (_, capacity) => new RecentApplyCache(capacity),
+            resolved.ShadowForwardDedupeCacheSize);
+
         // runningHwm tracks the highest applied HLC in this run so
         // subsequent entries can be deduped without a fresh GetAsync
         // round trip. Within a single inbound run the producer
@@ -209,10 +223,16 @@ internal sealed partial class ReplicationApplier
             catch
             {
                 // Mirror the per-entry path: a throw records OutcomeFailure
-                // for each deferred entry and propagates.
-                foreach (var (_, deferredStartTs) in dispatchApplies)
+                // for each deferred entry and rolls back their
+                // shadow-forward cache reservations so the transport's
+                // retry path admits them again. Without the rollback the
+                // dead-letter decorator's "Applied=false clears the
+                // counter" rule would silently drop the entry until
+                // FIFO eviction.
+                foreach (var (deferredIdx, deferredStartTs) in dispatchApplies)
                 {
                     RecordApplyDuration(treeId, deferredStartTs, LatticeReplicationMetrics.OutcomeFailure);
+                    dedupeCache.Remove(entries[deferredIdx]);
                 }
                 throw;
             }
@@ -249,6 +269,15 @@ internal sealed partial class ReplicationApplier
             var startTs = Stopwatch.GetTimestamp();
             var outcome = LatticeReplicationMetrics.OutcomeFailure;
             var deferred = false;
+            // Tracks whether the current iteration owns a live
+            // shadow-forward cache reservation that must be rolled back
+            // if an exception escapes. Cleared when ownership transfers
+            // (deferral to pendingApplies, successful inline apply) or
+            // when the park branch returns normally — in which case the
+            // reservation is intentionally retained so duplicate-emit
+            // pairs of the parked entry are suppressed while it is
+            // buffered.
+            var cacheReservedForCurrent = false;
             try
             {
                 if (entry.Op == ReplogOp.DeleteRange)
@@ -271,6 +300,20 @@ internal sealed partial class ReplicationApplier
                     continue;
                 }
 
+                // Shadow-forward dedupe cache: suppress the duplicate-emit
+                // pair that structural rewrites (split / merge / saga
+                // compensate) generate when they shadow-forward a user
+                // write into a different shard. See ApplyAsync for the
+                // detailed race scenario. The check sits after the
+                // runningHwm dedupe so HWM-deduped entries do not
+                // pollute the cache.
+                if (!dedupeCache.TryAdd(entry))
+                {
+                    outcome = LatticeReplicationMetrics.OutcomeShadowForwardDedup;
+                    continue;
+                }
+                cacheReservedForCurrent = true;
+
                 if (HasCausalDependencies(entry))
                 {
                     if (cachedLocalVc is null || localVcDirty)
@@ -281,6 +324,16 @@ internal sealed partial class ReplicationApplier
                     if (!CausalApplyBuffer.DependenciesSatisfied(entry, cachedLocalVc))
                     {
                         await ParkAsync(entry, resolved, cancellationToken).ConfigureAwait(false);
+                        // Park retains the cache reservation (mirroring
+                        // ApplyAsync's park branch): the parked entry,
+                        // when drained, routes via ApplyPointAsync
+                        // directly and bypasses the cache, so the
+                        // retained reservation continues to suppress
+                        // duplicate-emit pairs of the parked entry that
+                        // arrive while it is buffered. Release local
+                        // rollback responsibility so the catch below
+                        // does not undo the intentional retention.
+                        cacheReservedForCurrent = false;
                         outcome = LatticeReplicationMetrics.OutcomeParkedCausalBuffer;
                         continue;
                     }
@@ -297,6 +350,11 @@ internal sealed partial class ReplicationApplier
                 {
                     await FlushPendingAsync().ConfigureAwait(false);
                     await ApplyPointAsync(entry).ConfigureAwait(false);
+                    // Successful apply: clear local rollback
+                    // responsibility. The cache reservation is retained
+                    // in the steady-state cache (it is the desired
+                    // outcome for non-failure paths).
+                    cacheReservedForCurrent = false;
                     RecordApplyLag(entry);
                     RecordFifoState(entry);
 
@@ -338,10 +396,24 @@ internal sealed partial class ReplicationApplier
                     IsTombstone = entry.Op == ReplogOp.Delete,
                 });
                 pendingApplies.Add((k, startTs));
+                // Ownership of the cache reservation transfers to
+                // pendingApplies; FlushPendingAsync's failure path
+                // rolls it back if the eventual flush throws.
+                cacheReservedForCurrent = false;
                 deferred = true;
             }
             catch
             {
+                // Roll back the current iteration's reservation if it
+                // was held but neither applied, parked, nor deferred.
+                // Hit by ApplyPointAsync / ParkAsync / GetVectorAsync
+                // throws and by the contract-violation ArgumentException
+                // for batchable Set with null Value.
+                if (cacheReservedForCurrent)
+                {
+                    dedupeCache.Remove(entry);
+                }
+
                 // An exception escaping the loop body would otherwise
                 // leave any previously-deferred entries with a captured
                 // start timestamp but no recorded outcome, producing
@@ -349,13 +421,20 @@ internal sealed partial class ReplicationApplier
                 // duration histogram. Record OutcomeFailure for every
                 // deferred entry now (the throwing entry's own failure
                 // is recorded by the finally below). Cold path only —
-                // hit by contract violations (Set with null Value) and
-                // mid-loop cancellation.
+                // hit by contract violations (Set with null Value),
+                // mid-loop cancellation, and FlushPendingAsync re-throws
+                // when the throw originates somewhere other than inside
+                // FlushPendingAsync (which nulls pendingApplies before
+                // its own await and so leaves this branch a no-op).
+                // Each deferred entry's cache reservation is rolled
+                // back here for the same dead-letter-retry reason
+                // FlushPendingAsync rolls back its own dispatched set.
                 if (pendingApplies is { Count: > 0 })
                 {
-                    foreach (var (_, deferredStartTs) in pendingApplies)
+                    foreach (var (deferredIdx, deferredStartTs) in pendingApplies)
                     {
                         RecordApplyDuration(treeId, deferredStartTs, LatticeReplicationMetrics.OutcomeFailure);
+                        dedupeCache.Remove(entries[deferredIdx]);
                     }
                     pendingItems = null;
                     pendingApplies = null;

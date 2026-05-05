@@ -227,6 +227,51 @@ public class LatticeReplicationOptionsValidatorTests
     }
 
     // ------------------------------------------------------------------
+    // Shadow-forward dedupe cache size
+    // ------------------------------------------------------------------
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    [TestCase(63)]
+    public void Validate_fails_when_shadow_forward_dedupe_cache_size_is_below_64(int size)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ShadowForwardDedupeCacheSize = size,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ShadowForwardDedupeCacheSize)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_shadow_forward_dedupe_cache_size_at_floor()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ShadowForwardDedupeCacheSize = 64,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_for_shadow_forward_dedupe_cache_size_at_default()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        Assert.That(opts.ShadowForwardDedupeCacheSize, Is.EqualTo(LatticeReplicationOptions.DefaultShadowForwardDedupeCacheSize));
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    // ------------------------------------------------------------------
     // Turn-safe batching options
     // ------------------------------------------------------------------
 

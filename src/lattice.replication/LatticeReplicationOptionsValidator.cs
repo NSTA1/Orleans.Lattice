@@ -96,6 +96,16 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "every typical entry to overflow to the dead-letter queue immediately on park.");
         }
 
+        if (options.ShadowForwardDedupeCacheSize < 64)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ShadowForwardDedupeCacheSize)} "
+                + $"must be at least 64 ({scope}). The shadow-forward dedupe cache must retain "
+                + "enough recent identity tuples that a sustained burst of shadow-forwarded duplicates "
+                + "cannot evict the cache faster than concurrent inbound deliveries race past the "
+                + "per-origin high-water-mark check.");
+        }
+
         if (options.WalRetention is { } retention && retention <= TimeSpan.Zero)
         {
             return ValidateOptionsResult.Fail(

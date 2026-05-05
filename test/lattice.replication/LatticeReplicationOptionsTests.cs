@@ -418,4 +418,22 @@ public class LatticeReplicationOptionsTests
         var opts = new LatticeReplicationOptions { ShipDoorbellEnabled = false };
         Assert.That(opts.ShipDoorbellEnabled, Is.False);
     }
+
+    [Test]
+    public void DefaultShadowForwardDedupeCacheSize_is_4096() =>
+        Assert.That(LatticeReplicationOptions.DefaultShadowForwardDedupeCacheSize, Is.EqualTo(4096));
+
+    [Test]
+    public void New_instance_has_default_shadow_forward_dedupe_cache_size()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ShadowForwardDedupeCacheSize, Is.EqualTo(LatticeReplicationOptions.DefaultShadowForwardDedupeCacheSize));
+    }
+
+    [Test]
+    public void ShadowForwardDedupeCacheSize_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { ShadowForwardDedupeCacheSize = 256 };
+        Assert.That(opts.ShadowForwardDedupeCacheSize, Is.EqualTo(256));
+    }
 }

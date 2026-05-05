@@ -180,6 +180,31 @@ public class LatticeReplicationOptions
     public long CausalBufferMaxBytes { get; set; } = DefaultCausalBufferMaxBytes;
 
     /// <summary>
+    /// Maximum number of recently-applied
+    /// <c>(originClusterId, timestamp, key, op)</c> identity tuples
+    /// the per-tree shadow-forward dedupe cache retains. The cache
+    /// is a fast-path receiver-side seam that drops the duplicate
+    /// emit pair structural rewrites (shard split / merge / saga
+    /// compensate) generate when they shadow-forward a user write
+    /// into a different shard: both emits ride the WAL with
+    /// identical <c>(origin, hlc, key, op)</c>, and a concurrent
+    /// inbound delivery can otherwise race past the per-origin
+    /// high-water-mark check (both deliveries observe the same
+    /// pre-advance HWM and both apply before either advances it).
+    /// <para>
+    /// Defaults to <see cref="DefaultShadowForwardDedupeCacheSize"/>.
+    /// Must be at least <c>64</c>; the registered options validator
+    /// rejects smaller values at first-resolve time so a single
+    /// pathological burst cannot evict the cache faster than it
+    /// fills. Cache eviction under sustained churn cannot cause a
+    /// re-merge — the per-origin HWM check is the authoritative
+    /// dedupe key and remains in place for any entry the cache has
+    /// evicted.
+    /// </para>
+    /// </summary>
+    public int ShadowForwardDedupeCacheSize { get; set; } = DefaultShadowForwardDedupeCacheSize;
+
+    /// <summary>
     /// Optional wall-clock hard ceiling for WAL retention. When set,
     /// the WAL garbage collector
     /// (<see cref="ILatticeReplicationGc"/>) trims entries whose
@@ -502,6 +527,17 @@ public class LatticeReplicationOptions
     /// magnitude below typical silo heap sizes.
     /// </summary>
     public const long DefaultCausalBufferMaxBytes = 16L * 1024L * 1024L;
+
+    /// <summary>
+    /// Default value for <see cref="ShadowForwardDedupeCacheSize"/>:
+    /// 4096 retained identity tuples per tree. Sized to absorb a
+    /// burst of shard-split / merge / saga-compensate shadow-forward
+    /// activity without evicting the cache faster than concurrent
+    /// duplicate deliveries can race past the per-origin
+    /// high-water-mark check, while keeping the per-tree memory
+    /// footprint bounded (~256 KB per tree at typical key sizes).
+    /// </summary>
+    public const int DefaultShadowForwardDedupeCacheSize = 4096;
 
     /// <summary>
     /// Default value for <see cref="AutoBootstrapOnFallOffLog"/>:

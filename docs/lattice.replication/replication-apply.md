@@ -54,6 +54,14 @@ Range deletes bypass the HWM by design. Range applies are naturally idempotent a
 
 A `ReplogEntry` whose `OriginClusterId` matches the local cluster id is rejected as a no-op (`Applied = false`). The outbound ship loop's origin filter already prevents this in steady state, but hand-built apply pipelines and tests can still hand the applier such an entry — surfacing it as an explicit rejection rather than silently merging it into the same cluster's state is the safer default.
 
+### 4. Shadow-forward dedupe cache
+
+A structural rewrite (shard split, shard merge, saga compensate) that shadow-forwards a user write into a different shard generates a duplicate-emit pair: one entry from the originating shard's commit, one from the shadow-forwarded shard's commit, both carrying identical `(originClusterId, timestamp, key, op)` identity tuples. The per-origin HWM check catches the second delivery when it is sequential (the first has already advanced the HWM), but a concurrent inbound delivery can otherwise observe the same pre-advance HWM on both deliveries and both pass before either advances it.
+
+The applier holds a per-tree bounded FIFO cache of recently-applied identity tuples (`LatticeReplicationOptions.ShadowForwardDedupeCacheSize`, default `4096`, validator floor `64`). The cache is consulted *after* the per-origin HWM dedupe so HWM-deduped entries do not pollute it (which preserves operator-driven re-pin semantics where lowering the per-origin frontier must re-admit previously-deduped identity tuples). On cache hit the apply is suppressed with `Applied = false` and the apply-duration histogram is tagged `outcome=shadow-forward-dedup`. Range deletes bypass the cache because they carry `HybridLogicalClock.Zero` (ambiguous identity); the leaf layer is naturally idempotent for range applies.
+
+Correctness is still bounded by the HWM. The cache is a fast-path optimisation: it suppresses the duplicate-emit pair before the apply grain hop even when the HWM round-trip would otherwise admit both. Cache eviction under sustained churn cannot cause a re-merge — the HWM remains the authoritative dedupe key for any entry the cache has evicted.
+
 ## Validation
 
 `ApplyAsync` throws `ArgumentException` when:

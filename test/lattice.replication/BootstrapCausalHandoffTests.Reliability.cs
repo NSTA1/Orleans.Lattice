@@ -59,6 +59,63 @@ public partial class BootstrapCausalHandoffTests
     }
 
     /// <summary>
+    /// Reliability 1b: when a parked entry's drained apply fails and is
+    /// dead-lettered, the shadow-forward dedupe cache reservation that
+    /// was made when the entry was originally parked must be rolled back.
+    /// Without rollback, an operator-driven retry from the DLQ would
+    /// observe TryAdd=false (cache hit), classify as Applied=false
+    /// (shadow-forward-dedup), and the dead-letter decorator's
+    /// counter-clearing contract would silently drop the entry until
+    /// FIFO eviction. The HWM was never advanced for the failing entry,
+    /// so cache rollback is the only step required to admit the retry.
+    /// </summary>
+    [Test]
+    public async Task After_pin_drained_apply_failure_rolls_back_cache_so_retry_is_admitted()
+    {
+        var h = CreateHarness();
+        var frontier = Vector((OriginA, Hlc(100)), (OriginB, Hlc(200)));
+        await h.Hwm.PinSnapshotAsync(Hlc(100), frontier, CancellationToken.None);
+
+        var blocked = SetEntry("k-fail", Hlc(150), OriginA, Vector((OriginA, Hlc(150)), (OriginB, Hlc(500))));
+        await h.Applier.ApplyAsync(blocked);
+
+        // First drain: apply throws, entry is dead-lettered, cache
+        // reservation must be rolled back.
+        var failCallCount = 0;
+        h.Apply.WhenForAnyArgs(x => x.ApplySetAsync(default!, default!, default, default!, default, default))
+            .Do(callInfo =>
+            {
+                if ((string)callInfo[0] == "k-fail" && Interlocked.Increment(ref failCallCount) == 1)
+                {
+                    throw new ArgumentException("synthetic schema fault");
+                }
+            });
+
+        var satisfier = SetEntry("k-fail-dep", Hlc(500), OriginB, Vector((OriginB, Hlc(500))));
+        await h.Applier.ApplyAsync(satisfier);
+
+        Assert.That(h.Parked, Has.Count.EqualTo(1),
+            "Failed drained entry must be enqueued on the DLQ.");
+
+        // Operator-driven retry from the DLQ: re-deliver the same entry.
+        // With cache rollback, the retry observes TryAdd=true and
+        // proceeds through the apply pipeline. Since k-fail's deps are
+        // now satisfied (origin-B@500 just applied), the retry applies
+        // directly without parking.
+        var retry = await h.Applier.ApplyAsync(blocked);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(retry.Applied, Is.True,
+                "DLQ retry must be admitted by cache rollback (the original drain failure cleared the reservation).");
+            Assert.That(retry.HighWaterMark, Is.EqualTo(Hlc(150)),
+                "Successful retry must advance the per-origin HWM.");
+            Assert.That(failCallCount, Is.EqualTo(2),
+                "Apply grain should have been called twice: once for the failing drain, once for the successful retry.");
+        });
+    }
+
+    /// <summary>
     /// Reliability 2: an entry whose origin matches the local cluster
     /// id is rejected by the defence-in-depth guard before the HWM
     /// lookup ever fires. This holds even when the entry's HLC is
