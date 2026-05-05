@@ -262,6 +262,29 @@ using (LatticeVectorClockContext.With(vc))
 // VectorClock, regardless of how the saga's writes were interleaved.
 ```
 
+## Atomic-batch metadata on emitted mutations
+
+In addition to the saga-wide `VectorClock` and `OriginClusterId`, every
+per-key `LatticeMutation` the saga emits also carries
+`AtomicBatchSize` (the total entry count of the enclosing transaction)
+and `AtomicBatchIndex` (the zero-based per-key position within the
+batch). The size is captured once on the first `Prepare` from
+`Operations.Count`, persisted on the saga grain's state alongside the
+existing capture-once slots, and re-stamped onto Orleans
+`RequestContext` via the ambient `LatticeAtomicBatchContext` helper at
+the head of every per-key call the saga issues — including
+compensation rolls, which inherit the original prepare's index for
+each key. Single-key writes outside a saga emit `0` / `0` (the
+"not-in-a-saga" sentinel a replication-aware receiver reads to route
+the entry as a point write rather than buffering it for atomic
+delivery).
+
+The pair is the canonical sibling-membership signal a remote receiver
+reads to detect when every entry of a batch has arrived at its
+staging buffer; convergence between the producer and receiver does
+not depend on shipping order — only on every entry of the same
+`TransactionId` being available at apply time.
+
 ## Related
 
 - [API Reference](api.md) — full `SetManyAtomicAsync` signature and typed

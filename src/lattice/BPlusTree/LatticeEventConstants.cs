@@ -112,4 +112,20 @@ public static class LatticeEventConstants
     /// set through <see cref="LatticeHlcOverrideContext"/>.
     /// </summary>
     internal const string HlcOverrideRequestContextKey = "ol.hlc";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry the
+    /// atomic-transaction <c>(Size, Index)</c> pair from the
+    /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> coordinator down
+    /// into the per-key publish helpers so the emitted
+    /// <see cref="LatticeMutation"/> carries
+    /// <see cref="LatticeMutation.AtomicBatchSize"/> /
+    /// <see cref="LatticeMutation.AtomicBatchIndex"/> identifying the
+    /// emit's position within its enclosing atomic transaction. The
+    /// saga stamps this once per per-key emit (including compensation
+    /// rolls); single-key non-saga writes leave the key absent and the
+    /// publish helpers stamp <c>0</c> / <c>0</c> verbatim. Internal —
+    /// set through <see cref="LatticeAtomicBatchContext"/>.
+    /// </summary>
+    internal const string AtomicBatchRequestContextKey = "ol.batch";
 }

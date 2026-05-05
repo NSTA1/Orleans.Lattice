@@ -271,6 +271,7 @@ internal sealed partial class BPlusLeafGrain(
                 VectorClock = LatticeVectorClockContext.Current,
             };
         var delta = LatticeDeltaContext.Current;
+        var batch = LatticeAtomicBatchContext.Current;
         var mutation = new LatticeMutation
         {
             TreeId = state.State.TreeId ?? string.Empty,
@@ -286,6 +287,8 @@ internal sealed partial class BPlusLeafGrain(
             Category = LatticeMaintenanceContext.Current,
             DeltaKind = delta?.Kind,
             DeltaPayload = delta?.Payload,
+            AtomicBatchSize = batch?.Size ?? 0,
+            AtomicBatchIndex = batch?.Index ?? 0,
         };
 
         var options = await GetOptionsAsync();

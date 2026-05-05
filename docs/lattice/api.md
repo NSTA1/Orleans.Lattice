@@ -461,6 +461,21 @@ before reaching the public `ILattice` surface, and the leaf grain reads the cont
 
 The CRDT value-surface accessors (`OrSet`, `PnCounter`, `VersionVector`) and the atomic-write saga set the context on the caller's behalf — observers downstream of those producers see typed delta payloads automatically. The saga additionally **persists** the captured carry on `AtomicWriteState` so a crash mid-execute and a reminder-driven reactivation re-stamps the original delta on every resumed per-key write.
 
+#### Atomic-batch metadata (`AtomicBatchSize` / `AtomicBatchIndex`)
+
+Every emit produced by an in-flight atomic transaction (a `SetManyAtomicAsync` saga, including its compensation rolls) also carries `int AtomicBatchSize` (total entry count) and `int AtomicBatchIndex` (zero-based per-key position). The saga captures the size **once** on its first `Prepare` from the submitted entry count, persists it on `AtomicWriteState`, and re-stamps a `(Size, Index)` ambient via `LatticeAtomicBatchContext` at the head of every per-key call so the leaf grain mutation publish helpers stamp the matching slots on the resulting `LatticeMutation`. Single-key writes outside a saga emit `AtomicBatchSize = 0` / `AtomicBatchIndex = 0` (the "not-in-a-saga" sentinel).
+
+```csharp verify
+using (LatticeAtomicBatchContext.With((5, 2)))
+{
+    // A producer forwarding a remote saga emit can stamp the
+    // ambient pair directly; the typical caller does not — the
+    // SetManyAtomicAsync saga owns the stamping.
+}
+```
+
+The saga's stamping is independent of `OriginClusterId`, `VectorClock`, and `Category`: a remote-origin or maintenance atomic emit (no such caller exists today, but the slot is shape-stable for it) still carries the same size. Wire-compatible: missing slots on legacy persisted state decode to `0`.
+
 ## Leaf-projection digest
 
 `ILattice.GetLeafProjectionDigestAsync(int shardIndex, CancellationToken)` returns a deterministic XxHash128 fingerprint of a single physical shard's leaf-chain projection. The shard hash chains every leaf's per-leaf hash through XxHash128 (`XxHash128(leaf_1.Hash || leaf_2.Hash || ...)`); the per-leaf hash folds in `(key, hlc.WallClockTicks, hlc.Counter, isTombstone, expiresAtTicks, originClusterId, vector-clock-fingerprint, length-prefixed-value)` for every entry plus the leaf's entry count and persisted projection-checkpoint offset. Operators running multiple silos can poll the digest on each silo and compare bytes — equality is the strongest cross-silo state-equivalence check the library provides. Returned as `LeafProjectionDigest { byte[] Hash; long EntryCount; long CheckpointOffset; }` (alias `ol.lpd`).

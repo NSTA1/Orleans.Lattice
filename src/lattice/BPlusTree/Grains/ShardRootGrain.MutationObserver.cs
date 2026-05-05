@@ -28,6 +28,7 @@ internal sealed partial class ShardRootGrain
     {
         if (!mutationObservers.HasObservers) return Task.CompletedTask;
         var delta = LatticeDeltaContext.Current;
+        var batch = LatticeAtomicBatchContext.Current;
         var mutation = new LatticeMutation
         {
             TreeId = TreeId,
@@ -64,6 +65,12 @@ internal sealed partial class ShardRootGrain
             // payload.
             DeltaKind = delta?.Kind,
             DeltaPayload = delta?.Payload,
+            // Range deletes that fan out from inside a saga inherit the
+            // saga's batch metadata verbatim; user-driven range deletes
+            // outside a saga stamp 0 / 0. Today no saga emits a range
+            // delete, but the slot is shape-stable for that case.
+            AtomicBatchSize = batch?.Size ?? 0,
+            AtomicBatchIndex = batch?.Index ?? 0,
         };
         return mutationObservers.PublishAsync(mutation);
     }
