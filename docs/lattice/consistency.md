@@ -191,5 +191,24 @@ eventually returns `true`.
   (e.g. `MergeAsync`, `SnapshotAsync`) are not atomic across the tree
   boundary; they are LWW-convergent on the destination but readers of
   both trees may observe the in-flight state.
-- **Cross-cluster consistency.** Lattice is single-cluster. Geo-replication
-  is a roadmap item.
+- **Cross-cluster atomic visibility.** When the
+  `Orleans.Lattice.Replication` package is registered, replicated writes
+  converge across clusters under causal+ consistency (see
+  [`../lattice.replication/wal-causal-plus.md`](../lattice.replication/wal-causal-plus.md)) —
+  a remote peer never observes a state that violates the writer's causal
+  frontier, and every write path the core library exposes (point writes,
+  `SetManyAtomicAsync`, `DeleteRangeAsync`, shard-split shadow-forward,
+  saga compensation, snapshot/restore) carries that guarantee end-to-end.
+  Causal+ is **strictly weaker than atomic visibility**: a remote reader
+  concurrent with replication of a `SetManyAtomicAsync` may observe a
+  partial view (some keys updated, some not) until the batch finishes
+  converging on that peer. Cross-cluster transactional batch delivery —
+  the primitive that closes this gap by buffering every key in an atomic
+  batch on the receiver until the whole batch is in hand and then
+  applying them under one saga — is a tracked roadmap item.
+- **Cross-tree causality.** The causal+ guarantees shipped in the
+  replication package are scoped to single-tree writes; a multi-tree
+  operation (e.g. one saga touching two `ILattice` trees, or a merge
+  fanning into a destination tree) does not establish a causal edge
+  between those trees on remote peers. Each tree converges independently
+  under its own per-tree vector clock.
