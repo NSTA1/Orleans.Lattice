@@ -1,7 +1,9 @@
 @inherits LayoutComponentBase
 @implements IDisposable
 @inject MultiSiteManufacturing.Host.SiloIdentity Silo
-@inject MultiSiteManufacturing.Host.Replication.ReplicationActivityTracker Activity
+@inject IGrainFactory Grains
+@using MultiSiteManufacturing.Host.Replication
+@using MultiSiteManufacturing.Host.Replication.Grains
 
 <header class="container">
     <nav>
@@ -13,6 +15,23 @@
             <li>
                 <small>silo: <kbd>@($"{Silo.ClusterName}/{Silo.Id.ToUpperInvariant()}")</kbd></small>
             </li>
+            <li title="Diagnostics: total polls / silos currently contributing / peers in merged snapshot / last error">
+                <small>
+                    diag: <kbd>@_pollCount</kbd>p
+                    / <kbd>@_snapshot.ContributingSilos.Count</kbd>s
+                    / <kbd>@_snapshot.Peers.Count</kbd>peer
+                    @if (!string.IsNullOrEmpty(_lastError))
+                    {
+                        <span class="repl-error" title="@_lastError">!</span>
+                    }
+                </small>
+            </li>
+            @if (_snapshot.ContributingSilos.Count > 0)
+            {
+                <li title="Silos that have pushed within the cluster grain's stale-after window">
+                    <small>from: <kbd>@string.Join(',', _snapshot.ContributingSilos)</kbd></small>
+                </li>
+            }
             @foreach (var peer in _snapshot.Peers)
             {
                 <li title="Outbound batches shipped to @peer.Peer (process lifetime: @peer.RowsSent rows in @peer.BatchesSent batches, @peer.SendErrors errors)">
@@ -52,6 +71,8 @@
     private MultiSiteManufacturing.Host.Replication.ReplicationActivitySnapshot _snapshot =
         new(System.Array.Empty<MultiSiteManufacturing.Host.Replication.ReplicationPeerActivity>());
     private System.Threading.Timer? _timer;
+    private long _pollCount;
+    private string? _lastError;
 
     // Stale thresholds for the per-peer indicators. Anything fresher than
     // `FreshThreshold` reads green; older than `StaleThreshold` reads
@@ -60,18 +81,43 @@
     private static readonly System.TimeSpan FreshThreshold = System.TimeSpan.FromSeconds(5);
     private static readonly System.TimeSpan StaleThreshold = System.TimeSpan.FromSeconds(30);
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        _snapshot = Activity.Snapshot();
+        // Eager first refresh so the strip populates immediately on
+        // navigation, instead of waiting a full poll interval before the
+        // peers list appears for the first time.
+        await RefreshAsync();
         _timer = new System.Threading.Timer(_ => InvokeAsync(RefreshAsync),
-            null, System.TimeSpan.FromSeconds(1), System.TimeSpan.FromSeconds(1));
+            null, System.TimeSpan.FromMilliseconds(500), System.TimeSpan.FromMilliseconds(500));
     }
 
-    private Task RefreshAsync()
+    private async Task RefreshAsync()
     {
-        _snapshot = Activity.Snapshot();
-        StateHasChanged();
-        return Task.CompletedTask;
+        // Source the strip from the cluster-singleton aggregator rather
+        // than the local-silo tracker. The package's ReplicationShipperGrain
+        // activates on a single silo per (tree, peer) pair, so the local
+        // MeterListener only sees ship events when this silo happens to
+        // host that activation. Polling the aggregator means a sticky-
+        // cookied tab on any silo sees the merged cluster-wide view.
+        _pollCount++;
+        try
+        {
+            var grain = Grains.GetGrain<IClusterReplicationActivityGrain>(
+                IClusterReplicationActivityGrain.SingletonKey);
+            _snapshot = await grain.SnapshotAsync();
+            _lastError = null;
+            StateHasChanged();
+        }
+        catch (System.Exception ex)
+        {
+            // Capture the message so we can see it surfaced in the diag
+            // chip rather than silently swallowing every grain-call
+            // failure. A persistent error here means the cluster grain
+            // isn't routable from this silo - which is the actual root
+            // cause we care about, not a transient network blip.
+            _lastError = $"{ex.GetType().Name}: {ex.Message}";
+            StateHasChanged();
+        }
     }
 
     private void ToggleChaos() => _chaosOpen = !_chaosOpen;
