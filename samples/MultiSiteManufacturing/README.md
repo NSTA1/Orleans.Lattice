@@ -27,10 +27,10 @@ the system behaves like a minimal MES/QMS slice backed by Lattice.
 | **Secondary index as a second tree** | `mfg-site-activity-index` keys facts as `{site}/{wallTicks:D20}/{counter:D10}/{serial}` for reverse-chronological per-site activity feeds — a worked example of a secondary-index tree paired with a primary fact tree. |
 | **Typed CRDT delta shipping** | `mfg-part-labels` is one OR-Set per serial, accessed through `lattice.OrSet(serial)` and replicated cross-cluster as `ReplicationMode.OrSet` — the package ships typed `add` / `remove` / `merge` deltas instead of raw byte writes. The companion `mfg-part-operator` tree is a per-serial LWW register kept cluster-local (LWW across clusters with disjoint HLCs is meaningless). |
 | **Partition tolerance via shadow prefixes** | During a simulated intra-cluster partition, `PartCrdtStore` writes to a shadow key prefix; `PartitionHealHostedService` promotes shadows back onto the canonical keys on heal. |
-| **Range scans as primitives** | The replog, the site-activity feed, and the partition-heal sweep are all plain half-open range scans over lex-ordered keys — no custom indexing layer. |
-| **Cross-cluster replication built on Lattice** | An HLC-ordered replog (`_replog__{tree}`) is itself a Lattice tree. An `IReplicatorGrain` ships batches per `(tree, peer)` over HTTP; an `IReplogJanitorGrain` compacts entries behind the slowest peer's cursor. Zero library changes. |
-| **Loop-break on replicated apply** | Inbound replay sets a `RequestContext` flag that the outgoing filter checks, so the same `SetAsync` / `DeleteAsync` code path serves both operator writes and replicated applies without re-shipping them. |
-| **Durable operational state via Orleans grains** | Chaos configuration (`IProcessSiteGrain`, `IBackendChaosGrain`, `IPartitionChaosGrain`, `IReplicationDisconnectGrain`) and replicator cursors (`IReplicatorGrain`) persist to Azure Table Storage — restart the host and the system resumes exactly where it left off. |
+| **Range scans as primitives** | The site-activity feed and the partition-heal sweep are plain half-open range scans over lex-ordered keys — no custom indexing layer. |
+| **Cross-cluster replication via the shipped package** | `Orleans.Lattice.Replication` provides the WAL, shipper, applier, and dead-letter handling; `Orleans.Lattice.Replication.Grpc` provides the push transport. Each tree opts in by `ReplicationMode` (`LwwRegister` for `mfg-facts` and `mfg-site-activity-index`, `OrSet` for `mfg-part-labels`); see [`docs/lattice.replication/`](../../docs/lattice.replication/) for the wire format and bootstrap protocol. |
+| **Receiver-side change-feed subscription** | `BaselineReplicationReplay` subscribes to the package's `IChangeFeed` for `mfg-facts` with `includeLocalOrigin: false`, decodes each remote-origin entry, and emits it into the local naive `BaselineFactBackend` so the side-by-side divergence visualisation still works under cross-cluster traffic. |
+| **Durable operational state via Orleans grains** | Chaos configuration (`IProcessSiteGrain`, `IBackendChaosGrain`, `IPartitionChaosGrain`, `IReplicationDisconnectGrain`) persists to Azure Table Storage — restart the host and the system resumes exactly where it left off. The replication WAL and per-peer cursors are managed by `Orleans.Lattice.Replication` against the same storage account. |
 | **Idempotent bulk-load on startup** | `InventorySeeder` emits 5 representative parts (one per reachable `ComplianceState`) through the same router operators use. A singleton `IInventorySeedStateGrain` gates the seed so re-running against the same storage account preserves inventory and operator mutations. |
 
 ## Fault-injection surface
@@ -80,16 +80,17 @@ you want edit rights). Under *Dashboards → Orleans.Lattice* you'll find:
 - **Orleans.Lattice — Replication** — ship/apply/lag percentiles,
   dead-letter churn, per-peer entries/bytes behind.
 
-> **Note** — every replicated tree in the sample now ships through
+> **Note** — every replicated tree in the sample ships through
 > `Orleans.Lattice.Replication`'s gRPC push transport: `mfg-facts`
-> and `mfg-site-activity-index` as `LwwRegister` (migration steps
-> 2 and 3) and `mfg-part-labels` as `OrSet` (typed CRDT delta
-> shipping; migration step 4). The hand-rolled pipeline
-> (`ReplicationLogWriter` / `ReplicationTopology`) is no longer
-> opted into any tree and goes inert; migration step 5 deletes it
-> physically. See [`migration.md`](./migration.md) for the staged
-> plan. The Overview and Commit Path dashboards render every
-> replicated tree.
+> and `mfg-site-activity-index` as `LwwRegister`, `mfg-part-labels`
+> as `OrSet` (typed CRDT delta shipping). The host-rolled pipeline
+> was deleted in migration step 5; the only sample-specific seam
+> remaining is `BaselineReplicationReplay`, an `IChangeFeed`
+> subscriber that drives the divergence-visualisation backend.
+> See [`migration.md`](./migration.md) for the staged plan and
+> [`docs/lattice.replication/`](../../docs/lattice.replication/) for
+> the package's wire format and bootstrap protocol. The Overview and
+> Commit Path dashboards render every replicated tree.
 
 The JSON for these dashboards is bind-mounted read-only from
 `src/lattice.dashboards/Grafana/` — a CI test in the package keeps

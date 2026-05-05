@@ -135,100 +135,37 @@ always shows "recent" activity.
 
 ## 6. Cross-cluster replication
 
-Replication is **outside** `Orleans.Lattice` — zero library changes,
-zero `LatticeOptions` edits. Two properties drive the design: the
-library's current API surface does not expose a change feed or
-source-HLC-preserving apply, and the sample wants to be a worked
-example of what you build on top of Lattice today. When those
-library primitives eventually ship, the pieces called out below
-collapse into thin adapters (marked `FUTURE:` in the source).
+Cross-cluster replication is provided by
+`Orleans.Lattice.Replication` (WAL + shipper + applier) wired with
+the `Orleans.Lattice.Replication.Grpc` push transport. The package
+covers everything the sample used to roll by hand: WAL append on
+every replicated write, per-peer cursor management, batched gRPC
+push to the peer cluster, idempotent receiver-side apply with CRDT
+semantics chosen per tree, and dead-letter handling for entries that
+fail to apply. See
+[`docs/lattice.replication/`](../../docs/lattice.replication/) for
+the gRPC wire format, bootstrap protocol, replog key shape, and
+back-pressure / dead-letter design.
 
-### 6.1 Discovery via an HLC-ordered replog
+The sample's contribution is the per-tree opt-in:
 
-An `IOutgoingGrainCallFilter` (`LatticeReplicationFilter`) fires
-after every `ILattice.SetAsync` / `DeleteAsync` on an opted-in tree
-and appends an envelope to a sibling tree `_replog__{tree}` keyed
-`{wallTicks:D20}{counter:D10}|{clusterId}|{op}|{key}`. A forward lex
-scan of the replog is HLC-ascending; the cluster id is the
-tiebreaker for cross-cluster ordering.
+| Tree | Replicated? | Mode | Why |
+|---|---|---|---|
+| `mfg-facts` | Yes | `LwwRegister` | Write-once immutable keys; double-apply is an idempotent merge. |
+| `mfg-site-activity-index` | Yes | `LwwRegister` | One entry per fact, never overwritten - same reasoning as `mfg-facts`. |
+| `mfg-part-labels` | Yes | `OrSet` | One OrSet per serial; the package ships typed `add` / `remove` / `merge` deltas instead of raw byte writes. |
+| `mfg-part-operator` | No (cluster-local) | n/a | Per-serial LWW register. LWW across clusters with disjoint HLCs is meaningless - concurrent cross-cluster writes would pick different winners on each side. |
 
-> **Gotcha — read args before `await context.Invoke()`.** Orleans
-> codegen releases reference-type invokable argument slots as soon as
-> the wire message is dispatched. A post-await read of
-> `context.Request.GetArgument(0)` returns `null` for reference
-> types. Struct args like `CancellationToken` survive the release but
-> are not useful here. The filter stashes method name, tree name, and
-> the original key into local variables **before** the await, then
-> acts on them after the call completes.
+The receiver-side baseline tap (`BaselineReplicationReplay`) is the
+only sample-specific seam: it subscribes to the package's
+`IChangeFeed` for `mfg-facts`, filters to remote-origin entries, and
+emits each replicated payload into the local naive
+`BaselineFactBackend` so the side-by-side divergence visualisation
+keeps working under cross-cluster traffic.
 
-The replog envelope does **not** carry the user bytes. At ship time
-the replicator reads the primary tree's current `(value, hlc)` for
-each distinct key in the batch, so a key overwritten since the log
-entry landed still ships its latest value — which is correct under
-LWW.
-
-### 6.2 Loop-break on inbound apply
-
-The inbound endpoint sets `RequestContext["lattice.replay"] =
-sourceCluster` before calling `SetAsync` / `DeleteAsync`. The
-outgoing filter checks this flag and skips appending to the replog
-when the write is itself a replicated apply. This breaks the
-A → B → A cycle at the application layer without any library
-support.
-
-### 6.3 Replicator cadence
-
-`IReplicatorGrain` is keyed `"{tree}|{peer}"` and persists a cursor
-to `msmfgGrainState` (not to the lattice — the cursor is operational
-state, not domain state, with a different lifecycle). Cadence is
-split because Orleans reminders have a 1-minute minimum period:
-
-- A **1-minute reminder** (`keepalive`) re-activates the grain after
-  silo restart or idle deactivation.
-- A **3-second grain timer** (`RegisterGrainTimer`) drives the actual
-  shipping loop. Grain timers have no minimum period and are
-  auto-disposed on deactivation — the idiomatic sub-minute cadence
-  pattern under Orleans 10.
-
-Each tick scans `_replog__{tree}` from `Cursor+` to end (bounded by
-batch size), dedupes by key keeping the highest HLC, resolves the
-current primary value per key, POSTs to the peer, advances the
-cursor on ack, backs off exponentially on failure.
-
-### 6.4 Compaction
-
-`IReplogJanitorGrain` runs on a 10-minute reminder, reads every peer
-replicator's cursor, takes the **min**, and deletes replog entries
-with `hlc <= min − 24h`. Never prunes ahead of the slowest peer.
-
-### 6.5 Opt-in matrix
-
-`ReplicationTopology.ReplicatedTrees` is tree-level opt-in;
-`ReplicationTopology.IsKeyReplicated(tree, key)` layers a per-key
-filter on top. The shipped defaults opt all three domain trees in;
-the per-key filter excludes `{serial}/operator` from `mfg-part-crdt`.
-
-| Tree / key shape | Replicated? | Why |
-|---|---|---|
-| `mfg-facts` — `{serial}/{hlc}/{factId}` | Yes | Write-once immutable keys; double-apply is an idempotent `SetAsync` on an existing key with an identical value. |
-| `mfg-site-activity-index` — `{site}/{hlc}/{serial}` | Yes | Same reasoning — one entry per fact, never overwritten. |
-| `mfg-part-crdt` — `{serial}/labels/{label}` (G-Set) | Yes | Union is commutative, associative, idempotent; two clusters adding the same label converge trivially. |
-| `mfg-part-crdt` — `{serial}/operator` (LWW register) | **No** — filtered at origin | LWW by the **receiver's** local HLC would diverge; concurrent cross-cluster writes to the same register would pick different winners on each side. |
-| `_replog__{tree}` | No (per-cluster) | Local discovery ledger — has no meaning on the peer. |
-
-The operator-register filter is the only tree-specific filter today.
-When `Orleans.Lattice` ships source-HLC-preserving apply, the filter
-collapses and the whole `mfg-part-crdt` tree replicates
-unconditionally.
-
-### 6.6 Anti-entropy backstop
-
-A narrow race exists where the primary `SetAsync` succeeds but the
-filter's replog append fails. A second reminder on each replicator
-runs a periodic full-tree sweep (`AntiEntropyCursor`) that re-ships
-any primary entry whose HLC is newer than the cursor. O(N) but
-bounded; acceptable as a backstop because the replog append is the
-common path and the sweep only needs to catch rare gaps.
+The Tier 4b chaos toggle (app-level replication pause) is pending
+re-implementation as an `IReplicationTransport` decorator wrapping
+the gRPC push transport - see step 6 of the migration plan.
 
 ## 7. UI design
 

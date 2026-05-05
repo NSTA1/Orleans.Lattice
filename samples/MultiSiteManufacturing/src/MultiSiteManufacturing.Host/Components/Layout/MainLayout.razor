@@ -1,7 +1,7 @@
 @inherits LayoutComponentBase
 @implements IDisposable
 @inject MultiSiteManufacturing.Host.SiloIdentity Silo
-@inject MultiSiteManufacturing.Host.Replication.ReplicationActivityTracker Replication
+@inject MultiSiteManufacturing.Host.Replication.ReplicationActivityTracker Activity
 
 <header class="container">
     <nav>
@@ -13,23 +13,18 @@
             <li>
                 <small>silo: <kbd>@($"{Silo.ClusterName}/{Silo.Id.ToUpperInvariant()}")</kbd></small>
             </li>
-            <li>
-                <small title="@SentTooltip">
-                    sent:
-                    <kbd class="@SentClass">@SentLabel</kbd>
-                </small>
-            </li>
-            <li>
-                <small title="@ReceivedTooltip">
-                    recv:
-                    <kbd class="@ReceivedClass">@ReceivedLabel</kbd>
-                </small>
-            </li>
-            @if (_snapshot.SendErrors > 0)
+            @foreach (var peer in _snapshot.Peers)
             {
-                <li>
-                    <small title="@($"{_snapshot.SendErrors} outbound error(s); last at {_snapshot.LastSendErrorUtc:HH:mm:ss}Z")">
-                        <kbd class="repl-bad">err @_snapshot.SendErrors</kbd>
+                <li title="Outbound batches shipped to @peer.Peer (process lifetime: @peer.RowsSent rows in @peer.BatchesSent batches, @peer.SendErrors errors)">
+                    <small>
+                        ship&rarr;<kbd>@peer.Peer</kbd>
+                        <span class="@SentClass(peer)">@FormatRelative(peer.LastSentUtc)</span>
+                    </small>
+                </li>
+                <li title="Inbound batches applied from @peer.Peer (process lifetime: @peer.BatchesReceived batches, @peer.ApplyErrors errors)">
+                    <small>
+                        recv&larr;<kbd>@peer.Peer</kbd>
+                        <span class="@RecvClass(peer)">@FormatRelative(peer.LastReceivedUtc)</span>
                     </small>
                 </li>
             }
@@ -38,7 +33,7 @@
                         aria-expanded="@_chaosOpen.ToString().ToLowerInvariant()"
                         aria-controls="chaos-flyout"
                         @onclick="ToggleChaos">
-                    ☰ Chaos
+                    &#9776; Chaos
                 </button>
             </li>
         </ul>
@@ -54,86 +49,80 @@
 
 @code {
     private bool _chaosOpen;
-    private System.Threading.Timer? _refresh;
     private MultiSiteManufacturing.Host.Replication.ReplicationActivitySnapshot _snapshot =
-        new(null, null, 0, 0, 0, 0, 0, null, null, null);
+        new(System.Array.Empty<MultiSiteManufacturing.Host.Replication.ReplicationPeerActivity>());
+    private System.Threading.Timer? _timer;
+
+    // Stale thresholds for the per-peer indicators. Anything fresher than
+    // `FreshThreshold` reads green; older than `StaleThreshold` reads
+    // amber/red. Values picked to match the package's default ship cadence
+    // (sub-second) plus a small buffer for the meter callback path.
+    private static readonly System.TimeSpan FreshThreshold = System.TimeSpan.FromSeconds(5);
+    private static readonly System.TimeSpan StaleThreshold = System.TimeSpan.FromSeconds(30);
 
     protected override void OnInitialized()
     {
-        // Kick an immediate refresh so the bar renders with real values
-        // (when non-zero) rather than the all-zero default snapshot.
-        _ = RefreshAsync();
-
-        // 1 s tick — drives the "Ns ago" relative timestamps and picks
-        // up new sends/receives from the cluster-wide stats grain.
-        _refresh = new System.Threading.Timer(_ => InvokeAsync(RefreshAsync),
-            null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+        _snapshot = Activity.Snapshot();
+        _timer = new System.Threading.Timer(_ => InvokeAsync(RefreshAsync),
+            null, System.TimeSpan.FromSeconds(1), System.TimeSpan.FromSeconds(1));
     }
 
-    private async Task RefreshAsync()
+    private Task RefreshAsync()
     {
-        try
-        {
-            _snapshot = await Replication.SnapshotAsync();
-            StateHasChanged();
-        }
-        catch
-        {
-            // Snapshot is best-effort; swallow and try again on the next tick.
-        }
+        _snapshot = Activity.Snapshot();
+        StateHasChanged();
+        return Task.CompletedTask;
     }
-
-    public void Dispose() => _refresh?.Dispose();
 
     private void ToggleChaos() => _chaosOpen = !_chaosOpen;
     private void CloseChaos() => _chaosOpen = false;
 
-    private string SentLabel => FormatActivity(_snapshot.LastSentUtc, _snapshot.BatchesSent, _snapshot.RowsSent);
-    private string ReceivedLabel => FormatActivity(_snapshot.LastReceivedUtc, _snapshot.BatchesReceived, _snapshot.RowsReceived);
-
-    private string SentClass => FreshnessClass(_snapshot.LastSentUtc);
-    private string ReceivedClass => FreshnessClass(_snapshot.LastReceivedUtc);
-
-    private string SentTooltip => _snapshot.LastSentPeer is null
-        ? "No outbound batches yet."
-        : $"Last peer: {_snapshot.LastSentPeer} · {_snapshot.BatchesSent} batches · {_snapshot.RowsSent} rows · last at {_snapshot.LastSentUtc:HH:mm:ss}Z";
-
-    private string ReceivedTooltip => _snapshot.LastReceivedPeer is null
-        ? "No inbound batches yet."
-        : $"Last peer: {_snapshot.LastReceivedPeer} · {_snapshot.BatchesReceived} batches · {_snapshot.RowsReceived} rows · last at {_snapshot.LastReceivedUtc:HH:mm:ss}Z";
-
-    private static string FormatActivity(DateTime? lastUtc, long batches, long rows)
+    private static string FormatRelative(System.DateTime? whenUtc)
     {
-        if (lastUtc is null)
-        {
-            return "—";
-        }
-        var age = DateTime.UtcNow - lastUtc.Value;
-        return $"{FormatAge(age)} · {batches}b/{rows}r";
+        if (whenUtc is null) return "—";
+        var elapsed = System.DateTime.UtcNow - whenUtc.Value;
+        if (elapsed < System.TimeSpan.Zero) elapsed = System.TimeSpan.Zero;
+        if (elapsed.TotalSeconds < 1) return "just now";
+        if (elapsed.TotalSeconds < 60) return $"{(int)elapsed.TotalSeconds}s ago";
+        if (elapsed.TotalMinutes < 60) return $"{(int)elapsed.TotalMinutes}m ago";
+        return $"{(int)elapsed.TotalHours}h ago";
     }
 
-    private static string FormatAge(TimeSpan age)
+    private static string SentClass(MultiSiteManufacturing.Host.Replication.ReplicationPeerActivity p)
     {
-        if (age.TotalSeconds < 1)   return "now";
-        if (age.TotalSeconds < 60)  return $"{(int)age.TotalSeconds}s ago";
-        if (age.TotalMinutes < 60)  return $"{(int)age.TotalMinutes}m ago";
-        if (age.TotalHours   < 24)  return $"{(int)age.TotalHours}h ago";
-        return $"{(int)age.TotalDays}d ago";
-    }
-
-    private static string FreshnessClass(DateTime? lastUtc)
-    {
-        if (lastUtc is null) return "repl-idle";
-        var age = DateTime.UtcNow - lastUtc.Value;
-        if (age.TotalSeconds < 10) return "repl-fresh";
-        if (age.TotalSeconds < 60) return "repl-warn";
+        if (p.LastSentUtc is null) return "repl-stale";
+        var elapsed = System.DateTime.UtcNow - p.LastSentUtc.Value;
+        if (p.LastSendErrorUtc is { } err && err > p.LastSentUtc.Value && System.DateTime.UtcNow - err < FreshThreshold)
+            return "repl-error";
+        if (elapsed < FreshThreshold) return "repl-fresh";
+        if (elapsed < StaleThreshold) return "repl-warming";
         return "repl-stale";
+    }
+
+    private static string RecvClass(MultiSiteManufacturing.Host.Replication.ReplicationPeerActivity p)
+    {
+        if (p.LastReceivedUtc is null) return "repl-stale";
+        var elapsed = System.DateTime.UtcNow - p.LastReceivedUtc.Value;
+        if (elapsed < FreshThreshold) return "repl-fresh";
+        if (elapsed < StaleThreshold) return "repl-warming";
+        return "repl-stale";
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _timer = null;
     }
 }
 
 <style>
-    /* Top-bar replication strip. Each kbd colour-codes freshness so a
-       glance tells you whether the cluster is actively replicating. */
+    /* Top-bar status strip: silo identity + chaos toggle + per-peer
+       ship / recv indicators. The ship & recv timestamps are sourced
+       from the canonical orleans.lattice.replication meter via a
+       host-side MeterListener (ReplicationActivityTracker); the same
+       meter feeds the bind-mounted Grafana dashboards through
+       Prometheus, so the in-page strip and the operator dashboards
+       stay aligned by construction. */
     .topbar-status {
         gap: 0.75rem;
     }
@@ -141,11 +130,15 @@
         display: inline-flex;
         align-items: center;
     }
-    .topbar-status kbd.repl-fresh { background: #2d8a3e; color: #fff; }
-    .topbar-status kbd.repl-warn  { background: #d18f2a; color: #fff; }
-    .topbar-status kbd.repl-stale { background: #b83a3a; color: #fff; }
-    .topbar-status kbd.repl-idle  { background: var(--pico-muted-color); color: #fff; }
-    .topbar-status kbd.repl-bad   { background: #b83a3a; color: #fff; }
+
+    /* Per-peer ship/recv freshness colouring. Green when the most
+       recent observation is within FreshThreshold, amber on warming,
+       muted-grey on stale or never-observed, and red on a recent
+       outbound failure. */
+    .repl-fresh   { color: #2d8a3e; font-weight: 600; margin-left: 0.25rem; }
+    .repl-warming { color: #b45309; font-weight: 600; margin-left: 0.25rem; } /* amber-700 */
+    .repl-stale   { color: var(--pico-muted-color); margin-left: 0.25rem; }
+    .repl-error   { color: #b83a3a; font-weight: 600; margin-left: 0.25rem; }
 
     /* Widen the default Pico container — at standard widths Pico caps at
        ~1130px which wraps the Serial / Family columns hard on a 1080p

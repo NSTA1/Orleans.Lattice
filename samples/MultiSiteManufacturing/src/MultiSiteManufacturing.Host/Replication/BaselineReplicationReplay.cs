@@ -18,13 +18,11 @@ namespace MultiSiteManufacturing.Host.Replication;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Replaces the host-rolled <c>ReplicationInboundEndpoint.TryReplayToBaselineAsync</c>
-/// path. The host-rolled endpoint received a JSON batch and applied
-/// each entry inline, so the baseline tap could be a synchronous side
-/// effect of the apply loop. The package's apply pipeline lives below
-/// the lattice - replicated entries are merged through
-/// <c>IReplicationApplyGrain</c>, not through <c>ILattice.SetAsync</c> -
-/// so the receiver-side application code does not see them at all. The
+/// Migration step 2 cut <c>mfg-facts</c> over to the package's
+/// replication pipeline. The package's apply pipeline lives below the
+/// lattice - replicated entries are merged through the package's
+/// internal apply grain, not through <c>ILattice.SetAsync</c> - so
+/// the receiver-side application code does not see them at all. The
 /// <see cref="IChangeFeed"/> seam is the supported way to observe
 /// applied entries from in-process consumers; subscribing with
 /// <c>includeLocalOrigin: false</c> yields exactly the entries that

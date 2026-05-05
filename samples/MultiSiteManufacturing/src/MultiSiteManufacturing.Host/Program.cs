@@ -6,6 +6,7 @@ using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grpc;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using MultiSiteManufacturing.Host;
 using MultiSiteManufacturing.Host.Baseline;
 using MultiSiteManufacturing.Host.Components;
@@ -100,36 +101,39 @@ if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ASPNETCORE_URL
 // forms and all @onclick handlers (Chaos flyout, Race, Fix) are dead.
 builder.WebHost.UseStaticWebAssets();
 
+// Cross-cluster replication uses gRPC, which requires HTTP/2 end-to-end.
+// On plaintext Kestrel endpoints, ALPN is unavailable, so Kestrel cannot
+// multiplex HTTP/1.1 and HTTP/2 on the same port: setting Protocols to
+// Http1AndHttp2 silently downgrades to HTTP/1 only on http://. Browsers
+// also refuse HTTP/2 cleartext, so we cannot flip port 8080 to Http2.
+//
+// Solution: two cleartext ports, both declared explicitly here. The
+// presence of any Listen* call in ConfigureKestrel makes Kestrel ignore
+// ASPNETCORE_URLS entirely (it logs `Overriding address(es)`...), so we
+// must re-declare port 8080 alongside the new 8081. Port 8080 keeps
+// HTTP/1.1 for Blazor SignalR + the in-cluster Fact / Site / Compliance
+// / Inventory gRPC services. Port 8081 is dedicated h2c (HTTP/2 prior
+// knowledge) and serves the package's LatticeReplicationGrpcService -
+// the peer Traefik forwards `/orleans.lattice.replication.*` requests
+// onto silo-{cluster}-{a|b}:8081.
+builder.WebHost.ConfigureKestrel(k =>
+{
+    k.ListenAnyIP(8080, o => o.Protocols = HttpProtocols.Http1);
+    k.ListenAnyIP(8081, o => o.Protocols = HttpProtocols.Http2);
+});
+
 builder.Services.AddSingleton(new SiloIdentity(siloId, isPrimarySilo, clusterName));
 
-// Load the replication topology once and publish as a singleton
-// so the outgoing filter, the log writer, the inbound endpoint, and
-// the replicator grain all share one immutable view.
-var replicationTopology = ReplicationTopology.Load(builder.Configuration);
-builder.Services.AddSingleton(replicationTopology);
-builder.Services.AddSingleton<ReplicationLogWriter>();
-builder.Services.AddSingleton<LatticeReplicationFilter>();
-builder.Services.AddSingleton<ReplicationActivityTracker>();
-builder.Services.AddHttpClient<ReplicationHttpClient>();
-
-if (!useInMemoryStorage && replicationTopology.IsEnabled)
-{
-    // Only run the bootstrap service when replication is enabled and
-    // persistent storage is available — in-memory test silos don't
-    // have Azure Table reminders, and the janitor + replicator rely
-    // on IRemindable.
-    builder.Services.AddHostedService<ReplicationBootstrapHostedService>();
-}
-
-// Migration: package-shipped replication. After step 4 every
-// replicated tree in the sample (`mfg-facts`, `mfg-site-activity-index`,
-// `mfg-part-labels`) ships through the package; the host-rolled
-// pipeline is no longer opted into any tree and goes inert (its
-// physical removal is step 5). The `mfg-part-operator` tree stays
-// cluster-local — LWW across clusters with disjoint HLCs is
-// meaningless, matching the per-key filter the host-rolled pipeline
-// applied to the original `mfg-part-crdt` tree. See
-// `samples/MultiSiteManufacturing/migration.md` for the full staged plan.
+// Migration step 5: the host-rolled cross-cluster replication pipeline
+// (replog tree, outgoing filter, replicator grain, HTTP inbound
+// endpoint) was deleted in this commit. Every replicated tree in the
+// sample now ships through Orleans.Lattice.Replication's gRPC push
+// transport: `mfg-facts` and `mfg-site-activity-index` as
+// LwwRegister, `mfg-part-labels` as OrSet. The `mfg-part-operator`
+// tree stays cluster-local - LWW across clusters with disjoint HLCs
+// is meaningless. See `samples/MultiSiteManufacturing/migration.md`
+// for the full staged plan and `docs/lattice.replication/` for the
+// package's wire format and bootstrap protocol.
 var packagePeerClusterId = builder.Configuration["PackageReplication:PeerClusterId"];
 var packagePeerGrpcEndpoint = builder.Configuration["PackageReplication:PeerGrpcEndpoint"];
 var packageReplicationConfigured = !useInMemoryStorage
@@ -139,11 +143,6 @@ var packageReplicationConfigured = !useInMemoryStorage
 
 builder.Host.UseOrleans(silo =>
 {
-    // Register the outgoing grain-call filter so every ILattice
-    // SetAsync/DeleteAsync invocation flows through the filter and is
-    // appended to the replog for opted-in trees.
-    silo.AddOutgoingGrainCallFilter<LatticeReplicationFilter>();
-
     if (useInMemoryStorage)
     {
         // Single-silo in-memory mode (tests + quick-start without Azurite).
@@ -227,16 +226,16 @@ builder.Host.UseOrleans(silo =>
             options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
         });
 
-        // Migration: package-shipped replication. After step 4 the
-        // package's ReplicatedTrees map covers every tree the sample
-        // wants replicated cross-cluster: `mfg-facts` (LWW),
-        // `mfg-site-activity-index` (LWW), and `mfg-part-labels`
-        // (OrSet — typed CRDT delta shipping). The host-rolled
-        // ReplicationTopology is no longer opted into any tree.
-        // Wired only on the persistent-storage path because the
-        // package's WAL, shipper, and maintenance grain require Azure
-        // Table reminders + grain storage; the in-memory path runs
-        // without package replication and is unaffected.
+        // Cross-cluster replication. The package's ReplicatedTrees map
+        // covers every tree the sample wants replicated:
+        // `mfg-facts` (LWW), `mfg-site-activity-index` (LWW), and
+        // `mfg-part-labels` (OrSet - typed CRDT delta shipping). The
+        // `mfg-part-operator` tree stays cluster-local because LWW
+        // across clusters with disjoint HLCs is meaningless. Wired
+        // only on the persistent-storage path because the package's
+        // WAL, shipper, and maintenance grain require Azure Table
+        // reminders + grain storage; the in-memory path runs without
+        // package replication and is unaffected.
         if (packageReplicationConfigured)
         {
             silo.AddLatticeReplication(opts =>
@@ -292,8 +291,16 @@ if (packageReplicationConfigured)
     // cluster. The step-1 mirror service (PackageReplicationFactMirror)
     // and the brand-new `mfg-facts-v2` tree it fed are both retired.
     builder.Services.AddHostedService<BaselineReplicationReplay>();
-}
 
+    // Per-peer ship/recv indicators for the in-page status strip,
+    // sourced from the orleans.lattice.replication meter via a
+    // host-side MeterListener. Both registrations point at the
+    // same singleton so the IHostedService lifecycle owns the
+    // listener while the layout component reads its snapshot.
+    builder.Services.AddSingleton<ReplicationActivityTracker>();
+    builder.Services.AddHostedService(sp =>
+        sp.GetRequiredService<ReplicationActivityTracker>());
+}
 
 // OpenTelemetry: export the orleans.lattice and orleans.lattice.replication
 // meters via Prometheus. Each silo serves /metrics on its ASP.NET Core port
@@ -404,10 +411,6 @@ if (packageReplicationConfigured)
 // HTTP port. Anonymous access is fine because the endpoint is only
 // reachable on the internal cluster network (not published to the host).
 app.MapPrometheusScrapingEndpoint();
-
-// Inbound replication endpoint. Authenticated via
-// X-Replication-Token shared secret (see ReplicationTopology.SharedSecret).
-app.MapReplicationEndpoint();
 
 await app.RunAsync();
 

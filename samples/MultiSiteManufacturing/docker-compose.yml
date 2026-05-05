@@ -15,15 +15,16 @@
 # is attached to us-net) and Traefik then forwards the request onto
 # eu-net to one of the EU silos. Nothing else crosses.
 #
-# Each Traefik provides its cluster's single public endpoint:
-#   - Sticky-session load balancing across the cluster's two silos for
-#     the Blazor UI (SignalR must pin to one silo per browser tab).
-#   - Round-robin (non-sticky) load balancing across the same two silos
-#     for the cross-cluster replication POSTs on /replicate/*.
+# Each Traefik provides its cluster's single public endpoint, sticky-
+# session load balancing across the cluster's two silos for the Blazor
+# UI (SignalR must pin to one silo per browser tab). Cross-cluster
+# replication uses Orleans.Lattice.Replication's gRPC push transport
+# pointed at the peer Traefik; that traffic uses Traefik's default
+# (round-robin) router for the gRPC service path.
 #
 # Only TWO host ports are published:
-#   5001 -> traefik-us -> sticky LB (UI) + round-robin (replication)
-#   5002 -> traefik-eu -> sticky LB (UI) + round-robin (replication)
+#   5001 -> traefik-us -> Blazor UI + replication gRPC
+#   5002 -> traefik-eu -> Blazor UI + replication gRPC
 #
 # Silo HTTP (:8080), Orleans silo (:11111), and gateway (:30000) ports
 # are `expose`-d only on their internal networks - nothing silo-side
@@ -43,14 +44,11 @@
 # Replication path in this topology:
 #   silo-us-X  --(us-net)--> traefik-eu --(eu-net)--> silo-eu-{a|b}
 #
-# The peer config lists a single URL per peer (the peer's Traefik,
-# resolvable on the local cluster network because the peer Traefik is
-# multi-homed there). ReplicationHttpClient still supports a multi-URL
-# BaseUrls list for topologies that want explicit per-silo failover
-# instead of an LB (for example a multi-zone deployment where each
-# zone has its own Traefik); here we use the one-URL form because
-# Traefik's active health check already evicts unhealthy silos from
-# rotation within ~2s.
+# Each silo points its package-shipped gRPC push transport
+# (`PackageReplication__PeerGrpcEndpoint`) at the peer's Traefik, which
+# is resolvable on the local cluster network because the peer Traefik
+# is multi-homed there. Traefik's active health check evicts unhealthy
+# silos from rotation within ~2s.
 #
 # Simulate a cross-cluster partition (Tier 5):
 #   # Sever us -> eu (remove peer Traefik from local cluster net):
@@ -61,10 +59,10 @@
 #   docker network connect    msmfg_eu-net msmfg-traefik-us
 #
 # Disconnecting the peer Traefik from the local cluster net removes
-# the only route from local silos to the peer cluster; the replicator's
-# HTTP POST fails, exponential backoff engages, and on reconnect the
-# replog drains in HLC order. That is a genuine transport-level
-# partition, not the hash-filter sim in
+# the only route from local silos to the peer cluster; the package's
+# gRPC push transport fails, exponential backoff engages, and on
+# reconnect the WAL drains in HLC order. That is a genuine
+# transport-level partition, not the hash-filter sim in
 # FederationRouter.IsDroppedByPartitionAsync (Tier 4) - the two Tier
 # types coexist; Tier 5 is network-level, Tier 4 stays as a fast-path
 # simulation that requires no docker interaction.
@@ -107,6 +105,7 @@ x-silo-common: &silo-common
     Cluster__GatewayPortB: "30000"
   expose:
     - "8080"
+    - "8081"
     - "11111"
     - "30000"
 
@@ -166,8 +165,8 @@ services:
     networks:
       # Multi-homed: us-net reaches its own backend silos; eu-net
       # makes this Traefik the cross-cluster ingress for EU silos
-      # (they POST /replicate/* here). No `wan` - the two cluster nets
-      # are the only bridges, and only Traefiks span both.
+      # (they open replication gRPC streams here). No `wan` - the two
+      # cluster nets are the only bridges, and only Traefiks span both.
       - us-net
       - eu-net
 
@@ -188,17 +187,12 @@ services:
       SILO_ID: "a"
       Seeder__Enabled: "true"
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-us:10000/devstoreaccount1;QueueEndpoint=http://azurite-us:10001/devstoreaccount1;TableEndpoint=http://azurite-us:10002/devstoreaccount1;"
-      # Replication peers: a single URL per peer pointing at the peer's
-      # Traefik. The peer Traefik is resolvable on us-net because it
-      # is multi-homed there; US silos have NO route to EU silos
-      # directly (no shared network). Traefik's round-robin
-      # /replicate/* router + active health check handles per-silo
-      # failover on the peer side. The multi-URL BaseUrls list is still
-      # supported (see ReplicationHttpClient) and is recommended for
-      # multi-zone topologies where each zone has its own Traefik.
-      Replication__Peers__0__Name: "eu"
-      Replication__Peers__0__BaseUrls__0: "http://traefik-eu:80"
-      # Migration step 1: package-shipped replication peer endpoint.
+      # Cross-cluster replication peer. The package's gRPC push
+      # transport opens a stream to the peer's Traefik, which is
+      # resolvable on us-net because it is multi-homed there; US silos
+      # have NO route to EU silos directly (no shared network).
+      # Traefik's active health check handles per-silo failover on the
+      # peer side.
       PackageReplication__PeerClusterId: "eu"
       PackageReplication__PeerGrpcEndpoint: "http://traefik-eu:80"
     command: ["--cluster", "us", "--silo-id", "a"]
@@ -224,9 +218,6 @@ services:
       SILO_ID: "b"
       Seeder__Enabled: "false"
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-us:10000/devstoreaccount1;QueueEndpoint=http://azurite-us:10001/devstoreaccount1;TableEndpoint=http://azurite-us:10002/devstoreaccount1;"
-      Replication__Peers__0__Name: "eu"
-      Replication__Peers__0__BaseUrls__0: "http://traefik-eu:80"
-      # Migration step 1: package-shipped replication peer endpoint.
       PackageReplication__PeerClusterId: "eu"
       PackageReplication__PeerGrpcEndpoint: "http://traefik-eu:80"
     command: ["--cluster", "us", "--silo-id", "b"]
@@ -275,7 +266,7 @@ services:
     networks:
       # Multi-homed: eu-net reaches its own backend silos;
       # us-net makes this Traefik the cross-cluster ingress for
-      # US silos (they POST /replicate/* here).
+      # US silos (they open replication gRPC streams here).
       - eu-net
       - us-net
 
@@ -296,9 +287,6 @@ services:
       SILO_ID: "a"
       Seeder__Enabled: "false"
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-eu:10000/devstoreaccount1;QueueEndpoint=http://azurite-eu:10001/devstoreaccount1;TableEndpoint=http://azurite-eu:10002/devstoreaccount1;"
-      Replication__Peers__0__Name: "us"
-      Replication__Peers__0__BaseUrls__0: "http://traefik-us:80"
-      # Migration step 1: package-shipped replication peer endpoint.
       PackageReplication__PeerClusterId: "us"
       PackageReplication__PeerGrpcEndpoint: "http://traefik-us:80"
     command: ["--cluster", "eu", "--silo-id", "a"]
@@ -324,9 +312,6 @@ services:
       SILO_ID: "b"
       Seeder__Enabled: "false"
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-eu:10000/devstoreaccount1;QueueEndpoint=http://azurite-eu:10001/devstoreaccount1;TableEndpoint=http://azurite-eu:10002/devstoreaccount1;"
-      Replication__Peers__0__Name: "us"
-      Replication__Peers__0__BaseUrls__0: "http://traefik-us:80"
-      # Migration step 1: package-shipped replication peer endpoint.
       PackageReplication__PeerClusterId: "us"
       PackageReplication__PeerGrpcEndpoint: "http://traefik-us:80"
     command: ["--cluster", "eu", "--silo-id", "b"]

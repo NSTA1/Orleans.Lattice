@@ -10,17 +10,26 @@
 #
 # Two routers share the same backend pool but with different LB
 # strategies:
-#   - us-replicate     /replicate/*  round-robin, no sticky cookie.
-#                      Priority 100 so it wins against the / catch-all.
-#                      Reached by the peer cluster's silos over `wan`.
+#   - us-replicate     PathPrefix(`/orleans.lattice.replication.`)
+#                      Round-robin, no sticky cookie. Priority 200 so
+#                      it wins decisively against the / catch-all.
+#                      Reached by the peer cluster's silos opening the
+#                      package's gRPC push transport stream. Upstream
+#                      uses h2c (HTTP/2 cleartext) because gRPC
+#                      requires HTTP/2 end-to-end and the silo Kestrel
+#                      endpoint is configured for h2c.
 #   - us-web           /             sticky cookie. Blazor Server's
 #                      SignalR circuit pins to one silo per browser tab.
 http:
   routers:
     us-replicate:
-      rule: "PathPrefix(`/replicate`)"
+      # gRPC service name: orleans.lattice.replication.LatticeReplication
+      # The trailing dot anchors the prefix so it cannot accidentally
+      # match a Blazor route that happens to start with the same
+      # characters. priority: 200 keeps it ahead of any future router.
+      rule: "PathPrefix(`/orleans.lattice.replication.`)"
 
-      priority: 100
+      priority: 200
       entryPoints:
         - web
       service: us-replicate
@@ -35,17 +44,22 @@ http:
   services:
     us-replicate:
       loadBalancer:
-        # No sticky cookie: replication POSTs are stateless and both
+        # No sticky cookie: replication pushes are stateless and both
         # silos share the same Azure Table Storage and lattice trees,
         # so any silo can apply an inbound batch. Round-robin + active
         # health check gives automatic per-silo failover within ~2s.
+        # `h2c://` upstream tells Traefik to speak HTTP/2 cleartext to
+        # the silo - required for gRPC. Port 8081 is a dedicated h2c
+        # listener (Program.cs ConfigureKestrel) since plaintext Kestrel
+        # cannot multiplex HTTP/1.1 + HTTP/2 on the same port.
         servers:
-          - url: "http://silo-us-a:8080"
-          - url: "http://silo-us-b:8080"
-        healthCheck:
-          path: "/"
-          interval: "2s"
-          timeout: "1s"
+          - url: "h2c://silo-us-a:8081"
+          - url: "h2c://silo-us-b:8081"
+        # No health check: an HTTP/2 GET to the gRPC port returns 405 or
+        # routes through Blazor (which 404s on unknown paths) - both
+        # would mark the upstream "down" and stall replication. Traefik
+        # without a health check just round-robins and the gRPC client
+        # observes failures itself, with retry + backoff in the package.
 
     us-web:
       loadBalancer:

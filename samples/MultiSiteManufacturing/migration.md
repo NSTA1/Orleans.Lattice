@@ -64,7 +64,7 @@ sample broken.
   accordingly. This is the step that delivers the typed-CRDT-delta
   demo the package was built for.
 
-- [ ] **Step 5 — Delete the host-rolled pipeline.**
+- [x] **Step 5 — Delete the host-rolled pipeline.**
   Remove the entire `src/MultiSiteManufacturing.Host/Replication/`
   folder (`LatticeReplicationFilter`, `ReplicationLogWriter`,
   `ReplicatorGrain` + state, `ReplogJanitorGrain`,

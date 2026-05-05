@@ -1,13 +1,12 @@
 namespace MultiSiteManufacturing.Host.Federation;
 
 /// <summary>
-/// Singleton grain tracking whether cross-cluster HTTP replication is
+/// Singleton grain tracking whether cross-cluster replication is
 /// currently paused by the <c>ReplicationDisconnect</c> chaos preset.
-/// Both the outbound <c>ReplicatorGrain.TickAsync</c> loop and the
-/// inbound <c>POST /replicate/{tree}</c> endpoint consult this flag —
-/// when set, outbound ship is a no-op and inbound returns 503. The
-/// local replog keeps growing while disconnected; on clear, replication
-/// resumes from the current cursor.
+/// The package's gRPC push transport consults this flag - when set,
+/// outbound ship is a no-op and inbound returns "unavailable" so the
+/// peer backs off. The local WAL keeps growing while disconnected;
+/// on clear, replication resumes from the current cursor.
 /// </summary>
 public interface IReplicationDisconnectGrain : IGrainWithIntegerKey
 {

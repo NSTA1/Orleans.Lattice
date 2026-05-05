@@ -110,9 +110,9 @@ docker network connect    msmfg_eu-net msmfg-traefik-us
 ## 2. In-silo component graph
 
 Each silo is a single ASP.NET Core process hosting Blazor Server,
-gRPC, Orleans, and the replication outbound/inbound endpoints. Both
-UI and gRPC call paths share the same `FederationRouter` and backend
-instances via DI.
+gRPC, Orleans, and the package's replication WAL + gRPC push
+transport. Both UI and gRPC call paths share the same
+`FederationRouter` and backend instances via DI.
 
 ```mermaid
 flowchart LR
@@ -138,21 +138,25 @@ flowchart LR
             siteG["IProcessSiteGrain × 7"]
             backG["IBackendChaosGrain × 2"]
             partG["IPartitionChaosGrain"]
-            replG["IReplicatorGrain × (tree × peer)"]
-            janG["IReplogJanitorGrain"]
+            replDisc["IReplicationDisconnectGrain"]
             seedG["IInventorySeedStateGrain"]
         end
 
         subgraph lattice["Orleans.Lattice"]
             facts["mfg-facts"]
             siteIdx["mfg-site-activity-index"]
-            crdt["mfg-part-crdt"]
-            replog["_replog__{tree}"]
+            labels["mfg-part-labels (OrSet)"]
+            opReg["mfg-part-operator (LWW)"]
         end
 
-        filter["LatticeReplicationFilter<br/>(IOutgoingGrainCallFilter)"]
-        repClient["ReplicationHttpClient"]
-        inbound["POST /replicate/{tree}<br/>(minimal API)"]
+        subgraph repl["Orleans.Lattice.Replication<br/>(WAL + gRPC push)"]
+            wal["WAL · per replicated tree"]
+            ship["Shipper grain · per (tree × peer)"]
+            apply["Applier · receiver-side"]
+            grpc2["gRPC service /<br/>push transport"]
+        end
+
+        replay["BaselineReplicationReplay<br/>(IChangeFeed subscriber)"]
         dashStream[/"Azure Storage Queue stream<br/>DashboardStreams · msmfg.dashboard.facts<br/>queue msmfgdashboard-0<br/>(durable cluster-wide fan-out)"/]
     end
 
@@ -169,25 +173,29 @@ flowchart LR
     chaosLat --> latBE
     latBE --> facts
     latBE --> siteIdx
-    latBE --> crdt
+    latBE --> labels
+    latBE --> opReg
     router -.->|"FactRouted · FactReplicated · ChaosConfigChanged"| broadcaster
     broadcaster -.->|"publish Fact"| dashStream
     dashStream -.->|"subscribe → fan out to circuits"| broadcaster
     broadcaster -.-> razor
 
-    latBE -->|"SetAsync / DeleteAsync"| filter
-    filter --> replog
-    replG -->|"scan Cursor+ → end"| replog
-    replG -->|"read current value"| facts
-    replG --> repClient
-    janG -->|"prune ≤ min(cursor) − 24h"| replog
-
-    inbound --> latBE
-    inbound -->|"decode + replay (mfg-facts only)"| baseBE
-    inbound -.->|"FactReplicated"| broadcaster
+    facts -.->|"WAL append"| wal
+    siteIdx -.->|"WAL append"| wal
+    labels -.->|"OrSet delta"| wal
+    wal --> ship
+    ship --> grpc2
+    grpc2 -->|"push to peer"| apply
+    apply --> facts
+    apply --> siteIdx
+    apply --> labels
+    wal -.->|"IChangeFeed"| replay
+    replay --> baseBE
+    replay -.->|"FactReplicated"| broadcaster
 
     orleans --- tables
     lattice --- tables
+    repl --- tables
 ```
 
 ---
@@ -207,12 +215,10 @@ flowchart TB
     replDisc["IReplicationDisconnectGrain<br/>(singleton)"]
     seedG["IInventorySeedStateGrain<br/>(singleton)"]
     seeder["InventorySeeder<br/>(IHostedService)"]
-    replG["IReplicatorGrain<br/>(per tree × peer)"]
-    janG["IReplogJanitorGrain<br/>(per tree)"]
+    replay["BaselineReplicationReplay<br/>(IChangeFeed subscriber)"]
     broadcaster["DashboardBroadcaster"]
     healSvc["PartitionHealHostedService"]
     crdtStore["PartCrdtStore"]
-    inbound["POST /replicate/{tree}"]
 
     router -->|"AdmitAsync"| siteG
     router -->|"IsPartitioned"| partG
@@ -226,15 +232,10 @@ flowchart TB
     seeder -->|"snapshot / zero / restore"| siteReg
     seeder -->|"emit seed facts"| router
 
-    replG -->|"IsDisconnected?"| replDisc
-    replG -->|"tick: scan + ship"| janG
-
-    janG -->|"read Cursor"| replG
+    replay -.->|"FactReplicated"| broadcaster
 
     healSvc -->|"IsPartitioned?"| partG
     healSvc -->|"promote shadows"| crdtStore
-
-    inbound -->|"apply with RequestContext"| crdtStore
 ```
 
 Key invariants:
@@ -242,9 +243,11 @@ Key invariants:
 - `FederationRouter` only **reads** chaos grains; it never writes
   them. Writes come from the UI / gRPC control surface via
   `ISiteRegistryGrain` and direct grain calls.
-- `IReplicatorGrain` persists its own cursor; `IReplogJanitorGrain`
-  reads every peer replicator's cursor to compute the safe-to-prune
-  watermark — never prunes ahead of the slowest peer.
+- Cross-cluster replication is opaque to the application: the
+  package's WAL + shipper + applier sit below the lattice, and the
+  sample only observes the receiver-side stream through
+  `BaselineReplicationReplay`'s `IChangeFeed` subscription. WAL
+  compaction is a package concern; the sample does not configure it.
 - `PartitionHealHostedService` only runs shadow promotion when
   `IPartitionChaosGrain.IsPartitioned` has flipped back to `false`.
 
@@ -253,8 +256,9 @@ Key invariants:
 ## 4. Lattice trees
 
 All four trees persist to `msmfgLatticeFacts` in Azure Table Storage.
-Orleans grain state (chaos, replicator cursors, seed flag, baseline
-part grains, inventory) persists to `msmfgGrainState`.
+Orleans grain state (chaos toggles, seed flag, baseline part grains,
+inventory) persists to `msmfgGrainState`. The replication WAL is a
+package-managed table separate from the lattice trees themselves.
 
 ```mermaid
 flowchart LR
@@ -264,26 +268,21 @@ flowchart LR
 
     subgraph derived["Derived / sibling"]
         siteIdx["mfg-site-activity-index<br/>{site}/{wallTicks:D20}/{counter:D10}/{serial}<br/>→ fact id"]
-        crdt["mfg-part-crdt<br/>{serial}/labels/{label} — G-Set<br/>{serial}/operator — LWW register"]
-    end
-
-    subgraph ops["Operational"]
-        replog["_replog__{tree}<br/>{wallTicks}{counter}|{clusterId}|{op}|{key}<br/>→ tombstone / pointer"]
+        labels["mfg-part-labels<br/>{serial} → OrSet&lt;label&gt;<br/>(typed CRDT - replicated)"]
+        opReg["mfg-part-operator<br/>{serial} → operator id (LWW)<br/>(cluster-local)"]
     end
 
     facts -->|"written together"| siteIdx
-    facts -->|"labels written on raise / disposition"| crdt
-    facts -. filter .-> replog
-    siteIdx -. filter .-> replog
-    crdt -. filter .-> replog
+    facts -->|"labels written on raise / disposition"| labels
+    facts -->|"operator stamped on each fact"| opReg
 ```
 
 | Tree | Key shape | Role | Replicated |
 |---|---|---|---|
 | `mfg-facts` | `{serial}/{wallTicks:D20}/{counter:D10}/{factId}` | Immutable per-part fact log. Forward range scan = HLC-ascending history. | Yes |
 | `mfg-site-activity-index` | `{site}/{wallTicks:D20}/{counter:D10}/{serial}` | Per-site reverse-chronological activity feed. | Yes |
-| `mfg-part-crdt` | `{serial}/labels/{label}` · `{serial}/operator` | Mixed G-Set + LWW register per part. | Labels yes · register filtered at origin |
-| `_replog__{tree}` | `{wallTicks:D20}{counter:D10}\|{clusterId}\|{op}\|{key}` | Per-tree HLC-ordered replication log. | No (per-cluster) |
+| `mfg-part-labels` | `{serial}` (one OrSet per serial) | Per-part label set (`damaged`, `awaiting-mrb`, `awaiting-rework`, `accepted`, `scrapped`, …). | Yes - `ReplicationMode.OrSet` (typed CRDT delta shipping) |
+| `mfg-part-operator` | `{serial}` (one LWW register per serial) | Per-part current operator id. | No (cluster-local) - LWW across clusters with disjoint HLCs is meaningless |
 
 Range-scan patterns:
 
@@ -291,17 +290,25 @@ Range-scan patterns:
   `{serial}/`.
 - Per-site recent activity → reverse scan of
   `mfg-site-activity-index` with prefix `{site}/`.
-- Shipping a batch → forward scan of `_replog__{tree}` from `Cursor+`
-  to end, bounded by batch size.
-- Janitor prune → forward range delete of `_replog__{tree}` up to
-  `min(peer cursors) − 24h`.
+
+Cross-cluster shipping and WAL compaction are package concerns - see
+[`docs/lattice.replication/`](../../docs/lattice.replication/) for
+the WAL key shape, the gRPC push protocol, and the receiver-side
+apply pipeline.
 
 ---
 
 ## 5. Cross-cluster replication flow
 
-A single operator write on the US cluster, propagating to the
-EU cluster.
+Cross-cluster replication is provided by
+`Orleans.Lattice.Replication` (WAL + shipper + applier) wired with
+the `Orleans.Lattice.Replication.Grpc` push transport. From the
+sample's perspective the flow is opaque: a write on the US cluster
+lands in the local lattice, the package's WAL captures it, the
+shipper streams it to the EU cluster's gRPC service, and the EU
+applier merges it back into the local lattice using the appropriate
+CRDT semantics (LWW for `mfg-facts` and `mfg-site-activity-index`,
+typed OrSet deltas for `mfg-part-labels`).
 
 ```mermaid
 sequenceDiagram
@@ -310,53 +317,49 @@ sequenceDiagram
     participant Router as FederationRouter
     participant Lat as Lattice backend
     participant Tree as mfg-facts (us)
-    participant Filter as LatticeReplicationFilter
-    participant Replog as _replog__mfg-facts (us)
-    participant Rep as IReplicatorGrain<br/>("mfg-facts|eu")
+    participant WAL as Replication WAL (us)
+    participant Ship as Shipper (us)
     participant Traefik as traefik-eu
-    participant Inbound as POST /replicate/mfg-facts<br/>(eu silo)
+    participant Apply as Applier (eu)
     participant PeerTree as mfg-facts (eu)
+    participant Replay as BaselineReplicationReplay (eu)
     participant PeerBase as Baseline backend (eu)
 
     UI->>Router: EmitFact(env)
     Router->>Lat: AppendAsync(env)
     Lat->>Tree: SetAsync(key, bytes)
-    Tree-->>Filter: outgoing call completes
-    Filter->>Replog: SetAsync(replog-key, envelope)
-    Note over Filter: Skips if<br/>RequestContext["lattice.replay"] set
+    Tree-->>WAL: append (origin=us, hlc, payload)
 
-    loop grain timer · every 3 s
-        Rep->>Replog: scan [Cursor+, end] batched
-        Rep->>Rep: dedupe by key, keep highest HLC
-        Rep->>Tree: GetAsync(key) — current value + HLC
-        Rep->>Traefik: POST /replicate/mfg-facts (batch)
-        Traefik->>Inbound: round-robin to silo-eu-{a|b}
-        Inbound->>Inbound: RequestContext["lattice.replay"] = "us"
-        Inbound->>PeerTree: SetAsync / DeleteAsync per entry
-        PeerTree-->>Filter: outgoing call completes
-        Note over Filter: Sees replay flag → skips replog append<br/>(loop broken)
-        Inbound->>PeerBase: decode + EmitAsync (Set entries only, mfg-facts tree)
-        Note over Inbound,PeerBase: Baseline has no retraction concept —<br/>Delete entries skipped
-        Inbound->>Inbound: RaiseFactReplicated(fact)
-        Note over Inbound: DashboardBroadcaster pushes<br/>PartSummaryUpdate to Blazor subs
-        Inbound-->>Traefik: 200 OK
-        Traefik-->>Rep: ack
-        Rep->>Rep: advance Cursor, persist
+    loop package shipping cadence
+        Ship->>WAL: drain [Cursor+, end]
+        Ship->>Traefik: gRPC push (batch)
+        Traefik->>Apply: round-robin to silo-eu-{a|b}
+        Apply->>PeerTree: merge entry per CRDT mode
+        Apply-->>Ship: ack (peer cursor advanced)
     end
+
+    Note over WAL,Replay: IChangeFeed (eu side)
+    WAL-->>Replay: post-apply, remote-origin entries
+    Replay->>PeerBase: decode + EmitAsync (mfg-facts only)
+    Replay-->>Traefik: -
+    Note over Replay: DashboardBroadcaster pushes<br/>PartSummaryUpdate to Blazor subs
 ```
 
 Failure modes and their recovery:
 
 | Scenario | Effect | Recovery |
 |---|---|---|
-| Peer unreachable | `ReplicationHttpClient` fails all URLs → error counter ↑ | Exponential backoff; next tick retries from same cursor. |
-| Silo-B of peer restarts | Traefik health check removes it from `/replicate` pool within ~2 s | Next POST lands on silo-A; no replicator visibility. |
-| Filter fails after primary write succeeds | One entry missing from replog | `AntiEntropyCursor` reminder re-scans primary and re-ships entries with `hlc > cursor`. |
-| Duplicate delivery | Same `SetAsync` applied twice | Idempotent under write-once key discipline (and LWW for the few mutable keys that replicate). |
-| A → B → A cycle | Would re-append replog on inbound apply | Broken by `RequestContext["lattice.replay"]` check in the filter. |
-| Cluster split preset | `IReplicationDisconnectGrain.IsDisconnected = true` | Tick is a no-op; inbound returns 503; replog grows locally; resumes from cursor on clear. |
-| Tier-5 `docker network disconnect` | HTTP POST fails at transport layer | Identical to "peer unreachable"; replicator backs off, catches up on reconnect. |
+| Peer unreachable | Push transport's RPC fails | Package-internal exponential backoff; shipper retries from the same cursor. |
+| Silo-B of peer restarts | Traefik health check evicts it within ~2 s | Next push lands on silo-A; transparent to the shipper. |
+| Duplicate delivery | Same entry merged twice | CRDT-idempotent: LWW collapses to identity, OrSet add/remove dots are deduped by replica id, write-once `mfg-facts` keys are stable. |
+| A → B → A cycle | Receiver re-emits a remote-origin entry | Broken by the package's per-origin high-water-mark - replicated applies are short-circuited before they hit the WAL again. |
+| Cluster split preset | `IReplicationDisconnectGrain.IsDisconnected = true` | Step 6 of the migration re-implements this as an `IReplicationTransport` decorator wrapping `GrpcPushTransport`; pushes become no-ops, inbound returns "unavailable", and on clear the WAL drains in HLC order. |
+| Tier-5 `docker network disconnect` | gRPC push fails at transport | Identical to "peer unreachable"; shipper backs off and catches up on reconnect. |
 | Baseline replay decode fails | Single entry skipped on peer's baseline; lattice apply still succeeds | Logged; subsequent entries continue to apply. Baseline is a demo-visualisation backend, not a correctness-critical store. |
+
+See [`docs/lattice.replication/`](../../docs/lattice.replication/)
+for the gRPC wire format, bootstrap protocol, and dead-letter
+handling.
 
 ---
 
@@ -368,19 +371,13 @@ Compose overrides only what has to change in containers:
 | Key | Purpose |
 |---|---|
 | `ConnectionStrings__AzureTableStorage` | Per-cluster Azurite URL (`http://azurite-{cluster}:10002/...`). |
-| `Replication__Peers__0__Name` | Peer cluster short name. |
-| `Replication__Peers__0__BaseUrls__0` | Peer Traefik URL (one entry — Traefik handles silo failover). |
-| `Cluster__SiloPortA` / `SiloPortB` | Both `11111` under Compose — each container has its own IP. |
+| `PackageReplication__PeerClusterId` | Peer cluster short name (used as the WAL origin tag). |
+| `PackageReplication__PeerGrpcEndpoint` | Peer Traefik URL for the gRPC push transport. |
+| `Cluster__SiloPortA` / `SiloPortB` | Both `11111` under Compose - each container has its own IP. |
 | `ASPNETCORE_URLS` | `http://+:8080` in Compose; `Program.cs` skips its own `UseUrls` when this is set. |
-| `Seeder__Enabled` | Explicit boolean — `true` on `silo-us-a`, `false` elsewhere. |
+| `Seeder__Enabled` | Explicit boolean - `true` on `silo-us-a`, `false` elsewhere. |
 
-`ReplicationHttpClient.SendAsync` still iterates a multi-URL
-`BaseUrls` list, so three deployment shapes are supported:
-
-1. **Single LB endpoint (Compose default)** — one URL per peer;
-   Traefik absorbs silo churn.
-2. **Per-silo fan-out (localhost dev without an LB)** — one URL per
-   silo; client retries the list until one accepts.
-3. **Multi-zone failover** — one URL per availability zone, each
-   pointing at that zone's regional LB; client stays on the primary
-   zone while healthy.
+The package's gRPC push transport accepts a single peer endpoint per
+peer. Multi-zone failover is delegated to the load balancer in front
+of each peer cluster; in this Compose topology Traefik fills that
+role.
