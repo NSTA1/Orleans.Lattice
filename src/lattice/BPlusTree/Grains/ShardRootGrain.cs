@@ -34,12 +34,13 @@ internal sealed partial class ShardRootGrain(
     /// lifetime. Structural sizing is sourced from the tree registry pin;
     /// non-structural fields flow through from <see cref="LatticeOptions"/>.
     /// </summary>
-    private async Task<ResolvedLatticeOptions> GetOptionsAsync()
-    {
-        if (_cachedOptions is not null) return _cachedOptions;
+    private ValueTask<ResolvedLatticeOptions> GetOptionsAsync() =>
+        _cachedOptions is not null
+            ? new ValueTask<ResolvedLatticeOptions>(_cachedOptions)
+            : ResolveOptionsSlowAsync();
+
+    private async ValueTask<ResolvedLatticeOptions> ResolveOptionsSlowAsync() =>
         _cachedOptions = await optionsResolver.ResolveAsync(TreeId);
-        return _cachedOptions;
-    }
 
     private static readonly ObjectPool<Stack<GrainId>> StackPool =
         new DefaultObjectPoolProvider().Create(new StackPoolPolicy());

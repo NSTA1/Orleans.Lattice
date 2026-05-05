@@ -48,8 +48,13 @@ internal sealed partial class BPlusLeafGrain(
 
     private string ReplicaId => context.GrainId.ToString();
     private ResolvedLatticeOptions? _options;
-    private async Task<ResolvedLatticeOptions> GetOptionsAsync() =>
-        _options ??= await optionsResolver.ResolveAsync(state.State.TreeId ?? string.Empty);
+    private ValueTask<ResolvedLatticeOptions> GetOptionsAsync() =>
+        _options is not null
+            ? new ValueTask<ResolvedLatticeOptions>(_options)
+            : ResolveOptionsSlowAsync();
+
+    private async ValueTask<ResolvedLatticeOptions> ResolveOptionsSlowAsync() =>
+        _options = await optionsResolver.ResolveAsync(state.State.TreeId ?? string.Empty);
 
     public Task<byte[]?> GetAsync(string key)
     {
