@@ -988,7 +988,7 @@ internal sealed partial class LatticeGrain(
         _monitorEnsured = true;
     }
 
-    private async Task<string> GetPhysicalTreeIdAsync()
+    private async ValueTask<string> GetPhysicalTreeIdAsync()
     {
         if (_physicalTreeId is not null) return _physicalTreeId;
 
@@ -1006,7 +1006,7 @@ internal sealed partial class LatticeGrain(
         return _physicalTreeId;
     }
 
-    private async Task<IShardRootGrain> GetShardGrainAsync(string key)
+    private async ValueTask<IShardRootGrain> GetShardGrainAsync(string key)
     {
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
         var shardIndex = shardMap.Resolve(key);
@@ -1021,7 +1021,7 @@ internal sealed partial class LatticeGrain(
     /// <see cref="TryInvalidateStaleAlias"/> when a downstream shard reports
     /// the tree as deleted.
     /// </summary>
-    public async Task<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default)
+    public async ValueTask<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default)
     {
         // NOTE: intentionally NOT guarded — `GetRoutingAsync` is called by the
         // library's own internal coordinator grains (saga compensation, stats,

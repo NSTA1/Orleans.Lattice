@@ -404,7 +404,7 @@ public interface ILattice : IGrainWithStringKey
     /// without re-implementing alias resolution and shard-map fetching.
     /// </summary>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
-    Task<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default);
+    ValueTask<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default);
 
     // ── Diagnostics ─────────────────────────────────────
 
