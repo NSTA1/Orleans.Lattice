@@ -76,6 +76,16 @@ public static class LatticeReplicationServiceCollectionExtensions
         // (foreign entries) by ReplicationApplier.
         builder.Services.TryAddSingleton<LocalVectorClockCache>();
 
+        // Producer-side seeder used by operator tooling after an
+        // intra-cluster snapshot/restore to walk the restored values'
+        // VC slots and re-seed the per-tree LocalVectorClock (durable
+        // pin via IReplicationHighWaterMarkGrain.PinSnapshotAsync +
+        // in-memory prime via LocalVectorClockCache.AdvanceForeign).
+        // IShardCountProvider is the testability seam wrapping the
+        // core LatticeOptionsResolver shard-count component.
+        builder.Services.TryAddSingleton<IShardCountProvider, DefaultShardCountProvider>();
+        builder.Services.TryAddSingleton<IReplicationLocalVcSeeder, LatticeReplicationLocalVcSeeder>();
+
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IMutationObserver, ReplicationMutationObserver>());
         builder.Services.TryAddEnumerable(

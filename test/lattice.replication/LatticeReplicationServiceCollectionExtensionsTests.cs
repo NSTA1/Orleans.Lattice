@@ -810,5 +810,120 @@ public class LatticeReplicationServiceCollectionExtensionsTests
             .ToArray();
         Assert.That(hostedServices, Has.Length.EqualTo(1));
     }
+
+    // ------------------------------------------------------------------
+    // Intra-cluster snapshot/restore VC seeder (R-093)
+    // ------------------------------------------------------------------
+
+    private static void RegisterLatticeOptionsResolver(IServiceCollection services)
+    {
+        // DefaultShardCountProvider wraps LatticeOptionsResolver,
+        // which is registered by core AddLattice. The replication
+        // unit-test scaffolding pre-registers an IGrainFactory stub
+        // only, so we add the resolver + its IOptionsMonitor dep
+        // here to satisfy the seeder graph.
+        var monitor = Substitute.For<Microsoft.Extensions.Options.IOptionsMonitor<LatticeOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        services.AddSingleton(monitor);
+        services.AddSingleton<Orleans.Lattice.BPlusTree.LatticeOptionsResolver>();
+    }
+
+    [Test]
+    public void AddLatticeReplication_registers_default_shard_count_provider()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IGrainFactory>(Substitute.For<IGrainFactory>());
+        RegisterLatticeOptionsResolver(services);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<IShardCountProvider>(),
+            Is.InstanceOf<DefaultShardCountProvider>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_shard_count_provider_is_registered_as_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IGrainFactory>(Substitute.For<IGrainFactory>());
+        RegisterLatticeOptionsResolver(services);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<IShardCountProvider>();
+        var second = provider.GetRequiredService<IShardCountProvider>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_shard_count_provider()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<IShardCountProvider>();
+        services.AddSingleton<IShardCountProvider>(custom);
+        services.AddSingleton<IGrainFactory>(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<IShardCountProvider>(), Is.SameAs(custom));
+    }
+
+    [Test]
+    public void AddLatticeReplication_registers_default_local_vc_seeder()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IGrainFactory>(Substitute.For<IGrainFactory>());
+        services.AddSingleton<IShardCountProvider>(Substitute.For<IShardCountProvider>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<IReplicationLocalVcSeeder>(),
+            Is.InstanceOf<LatticeReplicationLocalVcSeeder>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_local_vc_seeder_is_registered_as_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IGrainFactory>(Substitute.For<IGrainFactory>());
+        services.AddSingleton<IShardCountProvider>(Substitute.For<IShardCountProvider>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<IReplicationLocalVcSeeder>();
+        var second = provider.GetRequiredService<IReplicationLocalVcSeeder>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_local_vc_seeder()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<IReplicationLocalVcSeeder>();
+        services.AddSingleton<IReplicationLocalVcSeeder>(custom);
+        services.AddSingleton<IGrainFactory>(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<IReplicationLocalVcSeeder>(), Is.SameAs(custom));
+    }
 }
 
