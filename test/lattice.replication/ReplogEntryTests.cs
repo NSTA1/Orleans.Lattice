@@ -1,5 +1,7 @@
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
+using Orleans.Serialization;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -26,6 +28,8 @@ public class ReplogEntryTests
             Assert.That(entry.DependencySummary, Is.Null);
             Assert.That(entry.DeltaKind, Is.Null);
             Assert.That(entry.DeltaPayload, Is.Null);
+            Assert.That(entry.AtomicBatchSize, Is.EqualTo(0));
+            Assert.That(entry.AtomicBatchIndex, Is.EqualTo(0));
         });
     }
 
@@ -174,6 +178,134 @@ public class ReplogEntryDeltaSlotTests
         {
             Assert.That(entry.DeltaKind, Is.Null);
             Assert.That(entry.DeltaPayload, Is.Null);
+        });
+    }
+}
+
+[TestFixture]
+public class ReplogEntryAtomicBatchSlotTests
+{
+    [Test]
+    public void Atomic_batch_size_and_index_are_settable_via_object_initialiser()
+    {
+        var entry = new ReplogEntry
+        {
+            TreeId = "t",
+            Key = "k",
+            AtomicBatchSize = 5,
+            AtomicBatchIndex = 2,
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.AtomicBatchSize, Is.EqualTo(5));
+            Assert.That(entry.AtomicBatchIndex, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void Atomic_batch_slots_default_to_zero_when_unset()
+    {
+        var entry = new ReplogEntry { TreeId = "t", Key = "k" };
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.AtomicBatchSize, Is.EqualTo(0));
+            Assert.That(entry.AtomicBatchIndex, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public void Atomic_batch_slots_participate_in_record_struct_equality()
+    {
+        // Defensive: the record-struct equality contract must include
+        // both atomic-batch slots so a future caller that compares
+        // ReplogEntry instances (for example a deduplication cache
+        // keyed off entry equality) does not silently treat two
+        // entries differing only in (Size, Index) as identical.
+        var baseline = new ReplogEntry { TreeId = "t", Key = "k", AtomicBatchSize = 5, AtomicBatchIndex = 2 };
+        var differentIndex = new ReplogEntry { TreeId = "t", Key = "k", AtomicBatchSize = 5, AtomicBatchIndex = 3 };
+        var differentSize = new ReplogEntry { TreeId = "t", Key = "k", AtomicBatchSize = 4, AtomicBatchIndex = 2 };
+        var identical = new ReplogEntry { TreeId = "t", Key = "k", AtomicBatchSize = 5, AtomicBatchIndex = 2 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(baseline, Is.Not.EqualTo(differentIndex));
+            Assert.That(baseline, Is.Not.EqualTo(differentSize));
+            Assert.That(baseline, Is.EqualTo(identical));
+        });
+    }
+}
+
+[TestFixture]
+public class ReplogEntryAtomicBatchRoundTripTests
+{
+    private ServiceProvider _services = null!;
+    private Serializer<ReplogEntry> _serializer = null!;
+
+    [OneTimeSetUp]
+    public void OneTimeSetUp()
+    {
+        _services = new ServiceCollection()
+            .AddSerializer()
+            .BuildServiceProvider();
+        _serializer = _services.GetRequiredService<Serializer<ReplogEntry>>();
+    }
+
+    [OneTimeTearDown]
+    public void OneTimeTearDown() => _services.Dispose();
+
+    private ReplogEntry RoundTrip(ReplogEntry entry)
+    {
+        var bytes = _serializer.SerializeToArray(entry);
+        return _serializer.Deserialize(bytes);
+    }
+
+    [Test]
+    public void Atomic_batch_slots_round_trip_with_explicit_values()
+    {
+        var entry = new ReplogEntry
+        {
+            TreeId = "tree",
+            Op = ReplogOp.Set,
+            Key = "k",
+            Value = new byte[] { 1, 2, 3 },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            OriginClusterId = "site-a",
+            Mode = ReplicationMode.LwwRegister,
+            AtomicBatchSize = 5,
+            AtomicBatchIndex = 2,
+        };
+
+        var decoded = RoundTrip(entry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.AtomicBatchSize, Is.EqualTo(5));
+            Assert.That(decoded.AtomicBatchIndex, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void Atomic_batch_slots_round_trip_zero_for_legacy_decode()
+    {
+        // Wire-compat: a producer that never sets the slots emits the
+        // default zero value; receivers must decode the same shape so
+        // a tree opt-in flip cannot break legacy traffic.
+        var entry = new ReplogEntry
+        {
+            TreeId = "tree",
+            Op = ReplogOp.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+        };
+
+        var decoded = RoundTrip(entry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.AtomicBatchSize, Is.EqualTo(0));
+            Assert.That(decoded.AtomicBatchIndex, Is.EqualTo(0));
         });
     }
 }

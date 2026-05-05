@@ -68,6 +68,23 @@ A compact representation of the causal predecessors of this entry.
 - Start with **"VC as dependency summary"**; only introduce Bloom filters if real-world pressure demands it.
 - Keep this field **read-only** and **immutable** to avoid recomputation.
 
+#### AtomicBatchSize / AtomicBatchIndex
+
+Two purely additive `[Id]` slots on `ReplogEntry` (and the corresponding `LatticeMutation` slots on the observer-side surface) that carry the size and zero-based index of the enclosing atomic transaction.
+
+- `AtomicBatchSize` — total number of entries in the enclosing atomic transaction. `0` for non-atomic single-key writes and non-atomic batches; `N` on every per-key emit produced by a `SetManyAtomicAsync` saga of size `N`, including compensation rolls.
+- `AtomicBatchIndex` — zero-based position of this entry within the enclosing batch; `0` for non-atomic writes. Within a batch the index covers `0..Size-1` exactly once each, derived deterministically from the saga's per-operation iteration order.
+- Sibling membership is keyed by the existing `TransactionId` slot (Core F-044). The receiver detects a complete batch by counting siblings that share an `(originClusterId, transactionId)` against the declared `Size`.
+- There is deliberately **no** separate "commit marker" entry. A partially-shipped batch that loses a sibling surfaces as the orphan-timeout case the receiver-side staging buffer already handles, not an indefinite stall waiting on a commit row that never arrives.
+- Strictly additive on the wire: legacy peers and entries authored before these slots existed decode both fields as `0`, which a receiver with atomic-batch delivery enabled treats identically to a single-key write. A peer with atomic-batch delivery disabled ignores both slots entirely.
+- Producer-side population happens in the saga itself (the `AtomicWriteGrain` capture-once stamp) rather than in the WAL append site; the replication mutation observer mirrors whatever the producer supplies onto the emitted `ReplogEntry`. The schema is therefore independent of the saga implementation — a future `IBatchedMutationProducer` surface stamps the same slots without touching the WAL.
+
+**Performance note:**
+
+- Two `int` fields per entry, packed by the Orleans serializer; storage cost is negligible relative to the existing `OriginClusterId` and HLC slots.
+- The observer pass-through is two struct-field copies on the commit-time hot path; no allocation, no resolver lookup, no decision branch.
+- The slots are unconditional on every emit so a peer flipping atomic-batch delivery on does not require a producer restart or any wire-format change.
+
 ---
 
 ## 2. WAL append semantics (unchanged)
