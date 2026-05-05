@@ -300,6 +300,37 @@ internal sealed partial class ReplicationApplier
                     continue;
                 }
 
+                // Atomic-batch staging buffer gate (batch-path
+                // mirror of the per-entry gate). When the receiver has
+                // opted in via AtomicBatchDelivery and the entry carries
+                // a non-zero AtomicBatchSize, flush any pending LWW batch
+                // first (the producer ordered the WAL such that pending
+                // items must observe their effect before the buffer
+                // admission takes effect), hand the entry off to the
+                // per-tree buffer grain, and skip the rest of the
+                // per-entry classification. The runningHwm and
+                // highestApplied are intentionally not advanced — the
+                // buffer holds the entry until siblings arrive and the
+                // per-origin HWM remains pinned to its pre-batch value
+                // so the producer continues to re-ship.
+                if (resolved.AtomicBatchDelivery && entry.AtomicBatchSize > 0)
+                {
+                    if (entry.TransactionId == Guid.Empty)
+                    {
+                        throw new ArgumentException(
+                            "ReplogEntry.TransactionId must be non-empty when AtomicBatchSize > 0 and "
+                            + "AtomicBatchDelivery is enabled. Producer must stamp a transaction id on every "
+                            + "entry of an atomic batch.",
+                            nameof(entries));
+                    }
+
+                    await FlushPendingAsync().ConfigureAwait(false);
+                    var txBuffer = grainFactory.GetGrain<IReplicationTxBufferGrain>(treeId);
+                    _ = await txBuffer.AdmitAsync(entry, cancellationToken).ConfigureAwait(false);
+                    outcome = LatticeReplicationMetrics.OutcomeAtomicBuffered;
+                    continue;
+                }
+
                 // Shadow-forward dedupe cache: suppress the duplicate-emit
                 // pair that structural rewrites (split / merge / saga
                 // compensate) generate when they shadow-forward a user

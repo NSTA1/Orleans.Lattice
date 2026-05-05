@@ -218,6 +218,16 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             // an observer change.
             AtomicBatchSize = mutation.AtomicBatchSize,
             AtomicBatchIndex = mutation.AtomicBatchIndex,
+            // Atomic-batch sibling-membership key passthrough: mirror
+            // LatticeMutation.TransactionId (the existing core saga
+            // identity captured by AtomicWriteGrain) onto the wire so
+            // a receiver with AtomicBatchDelivery enabled can key its
+            // staging buffer by (originClusterId, transactionId). For
+            // non-saga writes the value is whatever the producer-side
+            // ambient LatticeTransactionContext supplied (Guid.Empty
+            // by default), which the receiver treats identically to a
+            // legacy peer.
+            TransactionId = mutation.TransactionId,
         };
 
         await _sink.WriteAsync(entry, cancellationToken).ConfigureAwait(false);

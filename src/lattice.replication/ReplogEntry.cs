@@ -178,5 +178,33 @@ public readonly record struct ReplogEntry
     /// authored before this slot existed decode as <c>0</c>.
     /// </summary>
     [Id(15)] public int AtomicBatchIndex { get; init; }
+
+    /// <summary>
+    /// Stable identifier of the enclosing atomic transaction
+    /// (<c>SetManyAtomicAsync</c> saga). Mirrored verbatim from the
+    /// producing <see cref="LatticeMutation.TransactionId"/>; every
+    /// per-key emit inside the same saga shares a single
+    /// transaction id, including compensation rolls. Single-key
+    /// non-saga writes mirror whatever the producer-side ambient
+    /// <c>LatticeTransactionContext</c> supplies; in practice this
+    /// is <see cref="Guid.Empty"/> for plain
+    /// <c>SetAsync</c> / <c>DeleteAsync</c> calls.
+    /// <para>
+    /// Receivers with <see cref="LatticeReplicationOptions.AtomicBatchDelivery"/>
+    /// enabled key the per-tree atomic-batch staging buffer by
+    /// <c>(originClusterId, transactionId)</c> and use
+    /// <see cref="AtomicBatchSize"/> as the canonical sibling-count
+    /// completeness signal.
+    /// </para>
+    /// <para>
+    /// Strictly additive on the wire: legacy peers and entries
+    /// authored before this slot existed decode as
+    /// <see cref="Guid.Empty"/>, which receivers treat identically
+    /// to a single-key non-atomic write regardless of the
+    /// <see cref="AtomicBatchSize"/> slot's value (an entry without
+    /// a transaction id has no sibling membership to detect).
+    /// </para>
+    /// </summary>
+    [Id(16)] public Guid TransactionId { get; init; }
 }
 

@@ -106,6 +106,24 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "per-origin high-water-mark check.");
         }
 
+        if (options.AtomicBatchBufferMaxTransactions < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.AtomicBatchBufferMaxTransactions)} "
+                + $"must be at least 1 ({scope}). The per-tree atomic-batch staging buffer must permit "
+                + "at least one in-flight transaction; a zero cap would force every admitted entry to "
+                + "evict the same entry it just admitted.");
+        }
+
+        if (options.AtomicBatchBufferMaxBytes < 1L * 1024L * 1024L)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.AtomicBatchBufferMaxBytes)} "
+                + $"must be at least 1048576 (1 MB) ({scope}). The byte cap on the per-tree atomic-batch "
+                + "staging buffer must remain meaningfully larger than a typical single-entry payload "
+                + "so a partially-buffered batch cannot trigger eviction on its first entry.");
+        }
+
         if (options.WalRetention is { } retention && retention <= TimeSpan.Zero)
         {
             return ValidateOptionsResult.Fail(

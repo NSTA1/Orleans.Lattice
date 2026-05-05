@@ -135,6 +135,49 @@ internal sealed partial class ReplicationApplier(
                 return new ApplyResult { Applied = false, HighWaterMark = hwm };
             }
 
+            // Atomic-batch staging buffer: when the receiver
+            // has opted in via LatticeReplicationOptions.AtomicBatchDelivery
+            // and the entry carries a non-zero AtomicBatchSize (it is
+            // part of an enclosing SetManyAtomicAsync transaction), hand
+            // the entry off to the per-tree buffer grain and return
+            // Applied=false with the per-origin HWM unchanged. The
+            // producer continues to re-ship the entry until every
+            // sibling lands; the buffer dedupes wire-shape re-deliveries
+            // by (origin, transactionId, index). Completion of a batch
+            // is observed inside the buffer (AdmitAsync returns
+            // BatchComplete=true with the in-canonical-order list); the
+            // applier-side hand-off-to-atomic-apply path is the
+            // companion atomic-apply-on-completion item (which depends
+            // on the source-HLC-preserving ApplyManyAtomicAsync seam)
+            // and is not yet wired here. Until that companion item
+            // lands, the buffer holds completed batches as
+            // ready-to-apply state and no per-key apply is performed,
+            // so atomic-batch delivery is intentionally inert at the
+            // receiver end with the staging buffer alone — the option's
+            // default of false reflects this.
+            //
+            // The gate sits after HWM dedup (so a re-delivery of an
+            // already-applied batch is not redundantly buffered) and
+            // before the shadow-forward dedupe cache (the buffer's
+            // (origin, txid, index) dedup is a stronger contract than
+            // the cache's (origin, hlc, key, op) tuple).
+            if (resolved.AtomicBatchDelivery && entry.AtomicBatchSize > 0)
+            {
+                if (entry.TransactionId == Guid.Empty)
+                {
+                    throw new ArgumentException(
+                        "ReplogEntry.TransactionId must be non-empty when AtomicBatchSize > 0 and "
+                        + "AtomicBatchDelivery is enabled. Producer must stamp a transaction id on every "
+                        + "entry of an atomic batch.",
+                        nameof(entry));
+                }
+
+                var txBuffer = grainFactory.GetGrain<IReplicationTxBufferGrain>(entry.TreeId);
+                _ = await txBuffer.AdmitAsync(entry, cancellationToken).ConfigureAwait(false);
+                outcome = LatticeReplicationMetrics.OutcomeAtomicBuffered;
+                return new ApplyResult { Applied = false, HighWaterMark = hwm };
+            }
+
             // Shadow-forward dedupe cache: a structural rewrite (shard
             // split / merge / saga compensate) that shadow-forwards a
             // user write into a different shard generates a duplicate
