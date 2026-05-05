@@ -29,7 +29,7 @@ the system behaves like a minimal MES/QMS slice backed by Lattice.
 | **Partition tolerance via shadow prefixes** | During a simulated intra-cluster partition, `PartCrdtStore` writes to a shadow key prefix; `PartitionHealHostedService` promotes shadows back onto the canonical keys on heal. |
 | **Range scans as primitives** | The site-activity feed and the partition-heal sweep are plain half-open range scans over lex-ordered keys — no custom indexing layer. |
 | **Cross-cluster replication via the shipped package** | `Orleans.Lattice.Replication` provides the WAL, shipper, applier, and dead-letter handling; `Orleans.Lattice.Replication.Grpc` provides the push transport. Each tree opts in by `ReplicationMode` (`LwwRegister` for `mfg-facts` and `mfg-site-activity-index`, `OrSet` for `mfg-part-labels`); see [`docs/lattice.replication/`](../../docs/lattice.replication/) for the wire format and bootstrap protocol. |
-| **Receiver-side change-feed subscription** | `BaselineReplicationReplay` subscribes to the package's `IChangeFeed` for `mfg-facts` with `includeLocalOrigin: false`, decodes each remote-origin entry, and emits it into the local naive `BaselineFactBackend` so the side-by-side divergence visualisation still works under cross-cluster traffic. |
+| **Receiver-side applier decoration** | `BaselineReplicationApplier` decorates the package's `IReplicationApplier` singleton; on every cross-cluster apply it mirrors `mfg-facts` writes into the local naive `BaselineFactBackend` and raises `FederationRouter.FactReplicated`, so the side-by-side divergence visualisation and the dashboard activity feed both update without polling. |
 | **Durable operational state via Orleans grains** | Chaos configuration (`IProcessSiteGrain`, `IBackendChaosGrain`, `IPartitionChaosGrain`, `IReplicationDisconnectGrain`) persists to Azure Table Storage — restart the host and the system resumes exactly where it left off. The replication WAL and per-peer cursors are managed by `Orleans.Lattice.Replication` against the same storage account. |
 | **Idempotent bulk-load on startup** | `InventorySeeder` emits 5 representative parts (one per reachable `ComplianceState`) through the same router operators use. A singleton `IInventorySeedStateGrain` gates the seed so re-running against the same storage account preserves inventory and operator mutations. |
 
@@ -84,11 +84,10 @@ you want edit rights). Under *Dashboards → Orleans.Lattice* you'll find:
 > `Orleans.Lattice.Replication`'s gRPC push transport: `mfg-facts`
 > and `mfg-site-activity-index` as `LwwRegister`, `mfg-part-labels`
 > as `OrSet` (typed CRDT delta shipping). The only sample-specific
-> seam remaining is `BaselineReplicationReplay`, an `IChangeFeed`
-> subscriber that drives the divergence-visualisation backend.
+> seam remaining is `BaselineReplicationApplier`, a decorator on the
+> package's `IReplicationApplier` that mirrors cross-cluster
+> `mfg-facts` writes into the divergence-visualisation backend.
 > See [`docs/lattice.replication/`](../../docs/lattice.replication/)
-> for the package's wire format and bootstrap protocol. The Overview
-> and Commit Path dashboards render every replicated tree.
 
 The JSON for these dashboards is bind-mounted read-only from
 `src/lattice.dashboards/Grafana/` — a CI test in the package keeps

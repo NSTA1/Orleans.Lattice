@@ -160,11 +160,13 @@ The sample's contribution is the per-tree opt-in:
 
 Three sample-specific seams sit alongside the package:
 
-- `BaselineReplicationReplay` subscribes to the package's
-  `IChangeFeed` for `mfg-facts`, filters to remote-origin entries,
-  and emits each replicated payload into the local naive
-  `BaselineFactBackend` so the side-by-side divergence visualisation
-  keeps working under cross-cluster traffic.
+- `BaselineReplicationApplier` decorates the package's
+  `IReplicationApplier` singleton; on every cross-cluster apply it
+  filters to `mfg-facts` entries and emits each replicated payload
+  into the local naive `BaselineFactBackend` so the side-by-side
+  divergence visualisation keeps working under cross-cluster traffic.
+  It also raises `FederationRouter.FactReplicated` so the dashboard
+  activity feed updates without polling.
 - `ChaosReplicationTransport` decorates the package's gRPC push
   transport (Tier 4b chaos): when the operator toggles the disconnect
   flag, `SendAsync` returns `Accepted=false` so the shipper holds

@@ -156,7 +156,7 @@ flowchart LR
             grpc2["gRPC service /<br/>push transport"]
         end
 
-        replay["BaselineReplicationReplay<br/>(IChangeFeed subscriber)"]
+        mirror["BaselineReplicationApplier<br/>(IReplicationApplier decorator)"]
         dashStream[/"Azure Storage Queue stream<br/>DashboardStreams · msmfg.dashboard.facts<br/>queue msmfgdashboard-0<br/>(durable cluster-wide fan-out)"/]
     end
 
@@ -189,9 +189,9 @@ flowchart LR
     apply --> facts
     apply --> siteIdx
     apply --> labels
-    wal -.->|"IChangeFeed"| replay
-    replay --> baseBE
-    replay -.->|"FactReplicated"| broadcaster
+    apply -.->|"decorated by"| mirror
+    mirror --> baseBE
+    mirror -.->|"FactReplicated"| broadcaster
 
     orleans --- tables
     lattice --- tables
@@ -215,7 +215,7 @@ flowchart TB
     replDisc["IReplicationDisconnectGrain<br/>(singleton)"]
     seedG["IInventorySeedStateGrain<br/>(singleton)"]
     seeder["InventorySeeder<br/>(IHostedService)"]
-    replay["BaselineReplicationReplay<br/>(IChangeFeed subscriber)"]
+    mirror["BaselineReplicationApplier<br/>(IReplicationApplier decorator)"]
     broadcaster["DashboardBroadcaster"]
     healSvc["PartitionHealHostedService"]
     crdtStore["PartCrdtStore"]
@@ -232,7 +232,7 @@ flowchart TB
     seeder -->|"snapshot / zero / restore"| siteReg
     seeder -->|"emit seed facts"| router
 
-    replay -.->|"FactReplicated"| broadcaster
+    mirror -.->|"FactReplicated"| broadcaster
 
     healSvc -->|"IsPartitioned?"| partG
     healSvc -->|"promote shadows"| crdtStore
@@ -245,9 +245,11 @@ Key invariants:
   `ISiteRegistryGrain` and direct grain calls.
 - Cross-cluster replication is opaque to the application: the
   package's WAL + shipper + applier sit below the lattice, and the
-  sample only observes the receiver-side stream through
-  `BaselineReplicationReplay`'s `IChangeFeed` subscription. WAL
-  compaction is a package concern; the sample does not configure it.
+  sample observes the receiver-side stream by decorating the
+  package's `IReplicationApplier` with `BaselineReplicationApplier`,
+  so each cross-cluster apply also mirrors `mfg-facts` writes into
+  `BaselineFactBackend` and raises `FactReplicated`. WAL compaction
+  is a package concern; the sample does not configure it.
 - `PartitionHealHostedService` only runs shadow promotion when
   `IPartitionChaosGrain.IsPartitioned` has flipped back to `false`.
 
@@ -322,7 +324,7 @@ sequenceDiagram
     participant Traefik as traefik-eu
     participant Apply as Applier (eu)
     participant PeerTree as mfg-facts (eu)
-    participant Replay as BaselineReplicationReplay (eu)
+    participant Mirror as BaselineReplicationApplier (eu)
     participant PeerBase as Baseline backend (eu)
 
     UI->>Router: EmitFact(env)
@@ -338,11 +340,11 @@ sequenceDiagram
         Apply-->>Ship: ack (peer cursor advanced)
     end
 
-    Note over WAL,Replay: IChangeFeed (eu side)
-    WAL-->>Replay: post-apply, remote-origin entries
-    Replay->>PeerBase: decode + EmitAsync (mfg-facts only)
-    Replay-->>Traefik: -
-    Note over Replay: DashboardBroadcaster pushes<br/>PartSummaryUpdate to Blazor subs
+    Note over Apply,Mirror: IReplicationApplier decorator (eu side)
+    Apply->>Mirror: ApplyAsync(entry)
+    Mirror->>PeerBase: decode + EmitAsync (mfg-facts only)
+    Mirror-->>Apply: forward to inner applier
+    Note over Mirror: DashboardBroadcaster pushes<br/>PartSummaryUpdate to Blazor subs
 ```
 
 Failure modes and their recovery:
@@ -355,7 +357,7 @@ Failure modes and their recovery:
 | A → B → A cycle | Receiver re-emits a remote-origin entry | Broken by the package's per-origin high-water-mark - replicated applies are short-circuited before they hit the WAL again. |
 | Replication-disconnect preset | `IReplicationDisconnectGrain.IsDisconnected = true` | `ChaosReplicationTransport` decorates the package's `IReplicationTransport` and returns `Accepted=false` while the flag is set; the package shipper holds its per-peer cursor steady, the WAL grows locally, and on clear the WAL drains in HLC order. |
 | Tier-5 `docker network disconnect` | gRPC push fails at transport | Identical to "peer unreachable"; shipper backs off and catches up on reconnect. |
-| Baseline replay decode fails | Single entry skipped on peer's baseline; lattice apply still succeeds | Logged; subsequent entries continue to apply. Baseline is a demo-visualisation backend, not a correctness-critical store. |
+| Baseline applier decode fails | Single entry skipped on peer's baseline; lattice apply still succeeds | Logged; subsequent entries continue to apply. Baseline is a demo-visualisation backend, not a correctness-critical store. |
 
 See [`docs/lattice.replication/`](../../docs/lattice.replication/)
 for the gRPC wire format, bootstrap protocol, and dead-letter
