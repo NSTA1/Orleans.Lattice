@@ -1,10 +1,11 @@
 namespace MultiSiteManufacturing.Host.Federation;
 
 /// <summary>
-/// Singleton grain tracking whether the M12c silo-partition chaos
-/// preset is currently active. Writes go to this grain from the chaos
-/// fly-out / preset dispatcher; the <see cref="FederationRouter"/>
-/// caches the value and re-reads on ChaosConfigChanged.
+/// Singleton grain tracking whether the simulated intra-cluster
+/// silo-partition chaos preset is currently active. Writes go to this
+/// grain from the chaos fly-out / preset dispatcher; the
+/// <see cref="FederationRouter"/> caches the value and re-reads on
+/// ChaosConfigChanged.
 /// </summary>
 public interface IPartitionChaosGrain : IGrainWithIntegerKey
 {

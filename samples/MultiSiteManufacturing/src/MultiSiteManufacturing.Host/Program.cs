@@ -124,15 +124,21 @@ builder.WebHost.ConfigureKestrel(k =>
 
 builder.Services.AddSingleton(new SiloIdentity(siloId, isPrimarySilo, clusterName));
 
-// Migration step 5: the host-rolled cross-cluster replication pipeline
-// (replog tree, outgoing filter, replicator grain, HTTP inbound
-// endpoint) was deleted in this commit. Every replicated tree in the
-// sample now ships through Orleans.Lattice.Replication's gRPC push
-// transport: `mfg-facts` and `mfg-site-activity-index` as
-// LwwRegister, `mfg-part-labels` as OrSet. The `mfg-part-operator`
-// tree stays cluster-local - LWW across clusters with disjoint HLCs
+// Cross-cluster replication is delegated end-to-end to
+// Orleans.Lattice.Replication: WAL, shipper, applier, dead-letter
+// handling, plus the gRPC push transport. Every replicated tree in
+// the sample ships through that package — `mfg-facts` and
+// `mfg-site-activity-index` as LwwRegister, `mfg-part-labels` as
+// OrSet (typed CRDT delta shipping). The `mfg-part-operator` tree
+// stays cluster-local because LWW across clusters with disjoint HLCs
 // is meaningless. See `docs/lattice.replication/` for the package's
 // wire format and bootstrap protocol.
+//
+// The two configuration keys below switch the package wire-up on:
+// `PackageReplication:PeerClusterId` and `PackageReplication:PeerGrpcEndpoint`.
+// When either is missing (e.g. the in-memory test path or a stand-alone
+// `dotnet run` against a single cluster), package replication is
+// elided cleanly so the host still boots without a peer.
 var packagePeerClusterId = builder.Configuration["PackageReplication:PeerClusterId"];
 var packagePeerGrpcEndpoint = builder.Configuration["PackageReplication:PeerGrpcEndpoint"];
 var packageReplicationConfigured = !useInMemoryStorage
@@ -242,16 +248,22 @@ builder.Host.UseOrleans(silo =>
                 opts.ClusterId = clusterName;
                 opts.ReplicatedTrees = new Dictionary<string, ReplicationMode>(StringComparer.Ordinal)
                 {
-                    // Migration step 2: `mfg-facts` cut to package.
+                    // The primary HLC-ordered fact log. Every domain
+                    // event lands here; the Compliance fold reads
+                    // from it; cross-cluster replication keeps both
+                    // regions converged on the same fold result.
                     [LatticeFactBackend.FactTreeId] = ReplicationMode.LwwRegister,
-                    // Migration step 3: `mfg-site-activity-index` cut to package.
+                    // Secondary index keyed by {site}/{HLC}/{serial}
+                    // for the "Inventory By Activity" tab. Same
+                    // shipping mode as the fact tree — entries are
+                    // append-only LWW writes.
                     [SiteActivityIndex.TreeId] = ReplicationMode.LwwRegister,
-                    // Migration step 4: `mfg-part-crdt` split into two
-                    // typed-CRDT trees. `mfg-part-labels` ships as
-                    // OrSet (delta-shipping; the typed-CRDT-delta demo
-                    // the package was built for); `mfg-part-operator`
-                    // stays cluster-local (LWW across clusters with
-                    // disjoint HLCs is meaningless).
+                    // Per-serial OR-Set of process labels. Typed
+                    // CRDT delta shipping: the package transmits
+                    // add/remove/merge operations rather than raw
+                    // byte values, which is the reason this tree is
+                    // a separate replicated surface from the
+                    // cluster-local operator-LWW tree.
                     [PartCrdtStore.LabelsTreeId] = ReplicationMode.OrSet,
                 };
                 opts.ReplicationPeers = new[] { packagePeerClusterId! };
@@ -262,15 +274,16 @@ builder.Host.UseOrleans(silo =>
 
 builder.Services.AddGrpc();
 
-// Migration step 1: package-shipped replication's gRPC push transport
-// and receiver-side gRPC service. The receiver service piggy-backs on
-// the same Kestrel + AddGrpc as the existing FactIngress / SiteControl
-// / Compliance / Inventory services; the sender's GrpcChannel is
+// Cross-cluster replication transport. The package's gRPC push
+// transport ships outbound batches via grpc-dotnet over the same
+// Kestrel/AddGrpc pipeline that hosts the in-cluster Fact / Site /
+// Compliance / Inventory services; the sender's GrpcChannel is
 // constructed lazily on the first ship attempt and reused thereafter
-// (HTTP/2 multiplexing). Wired only when a peer endpoint has been
-// resolved from configuration so the in-memory test path and partial
-// local runs do not trip the transport's strict "every peer must be
-// in PeerEndpoints" check.
+// (HTTP/2 multiplexing). The receiver-side gRPC service is mapped at
+// the bottom of this file alongside the other gRPC routes. Wired only
+// when a peer endpoint has been resolved from configuration so the
+// in-memory test path and partial local runs do not trip the
+// transport's strict "every peer must be in PeerEndpoints" check.
 if (packageReplicationConfigured)
 {
     var peerUri = new Uri(packagePeerGrpcEndpoint!, UriKind.Absolute);
@@ -281,36 +294,30 @@ if (packageReplicationConfigured)
         opts.PeerEndpoints[packagePeerClusterId!] = peerUri;
     });
 
-    // Step 6: re-implement the Tier 4b chaos disconnect surface at the
-    // canonical transport seam. Wraps the package's gRPC push transport
-    // with a decorator that consults IReplicationDisconnectGrain on
-    // every ship; when the operator toggles the flag from the dashboard
-    // chaos flyout, outbound ship returns Accepted=false so the
-    // package shipper does not advance its per-peer cursor and the
-    // local WAL grows until the flag is cleared, at which point
-    // replication resumes from the stationary cursor. Tier 5
-    // (`docker network disconnect`) is transport-agnostic and remains
-    // untouched.
+    // Operator-driven Tier 4b chaos: pause cross-cluster replication
+    // from the dashboard fly-out. The decorator wraps the package's
+    // gRPC push transport and consults IReplicationDisconnectGrain on
+    // every ship; when the flag is set, outbound ship returns
+    // Accepted=false so the package shipper does not advance its
+    // per-peer cursor and the local WAL grows until the flag is
+    // cleared, at which point replication resumes from the stationary
+    // cursor. Tier 5 (`docker network disconnect`) is
+    // transport-agnostic and remains untouched.
     builder.Services.AddChaosReplicationTransportDecorator();
 
-    // Migration step 2 originally wired a polling IChangeFeed-based
-    // BaselineReplicationReplay hosted service to mirror cross-cluster
-    // mfg-facts applies into the local BaselineFactBackend and raise
-    // FederationRouter.FactReplicated for the dashboard. That seam was
-    // dead by construction: the package's apply pipeline merges via
-    // IShardRootGrain.MergeManyAsync, which bypasses the leaf's
-    // IMutationObserver publication path; the replog is populated by
-    // ReplicationMutationObserver (one of those observers); foreign-
-    // origin applies therefore never enter the local replog and
-    // IChangeFeed.Subscribe(includeLocalOrigin: false) silently sees
-    // nothing for them.
-    //
-    // The fix is a decorator on IReplicationApplier itself: it runs
-    // synchronously on every receiver-side apply (single + batched),
-    // observes the precise ApplyResult.Applied outcome, decodes the
-    // mfg-facts payload, mirrors the fact into BaselineFactBackend,
-    // and raises FactReplicated so the dashboard's "Inventory By
-    // Activity" tab refreshes live. See BaselineReplicationApplier.
+    // Receiver-side mirror to the baseline backend. The dashboard's
+    // "Inventory By Activity" tab needs to see facts that originated
+    // on the peer cluster as soon as they apply locally; the
+    // BaselineReplicationApplier decorator wraps the package's
+    // IReplicationApplier, observes every successful receiver-side
+    // apply (single and batched), decodes the mfg-facts payload,
+    // mirrors the fact into BaselineFactBackend, and raises
+    // FederationRouter.FactReplicated so the dashboard refreshes live.
+    // (Why a decorator and not an IChangeFeed consumer? See the
+    // BaselineReplicationApplier class-level remarks - briefly: the
+    // package's merge path bypasses the per-key mutation observer that
+    // populates the replog, so a change-feed subscriber never sees
+    // foreign-origin entries.
     builder.Services.AddBaselineReplicationApplierDecorator();
 }
 
@@ -410,10 +417,10 @@ app.MapGrpcService<SiteControlServiceImpl>();
 app.MapGrpcService<ComplianceServiceImpl>();
 app.MapGrpcService<InventoryServiceImpl>();
 
-// Migration step 1: package-shipped replication receiver-side gRPC
-// route. Mapped only when the package was wired in above so the
-// in-memory test path does not require the gRPC method singleton to
-// resolve at startup.
+// Receiver-side gRPC route for cross-cluster replication push. Mapped
+// only when package replication was wired in above so the in-memory
+// test path does not require the gRPC method singleton to resolve at
+// startup.
 if (packageReplicationConfigured)
 {
     app.MapLatticeReplicationGrpcService();

@@ -27,9 +27,10 @@ namespace MultiSiteManufacturing.Host.Replication;
 /// by <c>ReplicationMutationObserver</c>, which is one of those
 /// observers. Net effect: foreign-origin applies never enter the local
 /// replog, and a consumer of <c>IChangeFeed.Subscribe(includeLocalOrigin: false)</c>
-/// silently sees nothing for them. The previous polling implementation
-/// (deleted alongside this file's introduction) was therefore dead from
-/// the moment migration step 5 deleted the host-rolled inbound endpoint.
+/// silently sees nothing for them. Wrapping
+/// <see cref="IReplicationApplier"/> instead lets us observe every
+/// receiver-side apply directly, before the merge path swallows the
+/// signal.
 /// </para>
 /// <para>
 /// The <see cref="IReplicationApplier"/> seam runs synchronously on

@@ -157,16 +157,16 @@ public enum ChaosPreset
     ClusterSplit,
 
     /// <summary>
-    /// Pauses cross-cluster replication in both directions. Step 6 of
-    /// the replication-package migration re-implements this as an
-    /// <c>IReplicationTransport</c> decorator that wraps the gRPC push
-    /// transport: outbound ships become no-ops and inbound applies
-    /// return "unavailable" so the peer backs off. The local WAL keeps
-    /// growing while disconnected; on <see cref="ClearAll"/> the flag
-    /// clears and replication resumes from the current cursor,
-    /// catching the peer up with the accumulated backlog. This is the
-    /// app-level equivalent of <c>docker network disconnect msmfg_wan</c>
-    /// - it lets the operator demonstrate cross-cluster divergence and
+    /// Pauses cross-cluster replication in both directions. Implemented
+    /// as an <see cref="Orleans.Lattice.Replication.IReplicationTransport"/>
+    /// decorator that wraps the gRPC push transport: outbound ships
+    /// become no-ops and inbound applies return "unavailable" so the
+    /// peer backs off. The local WAL keeps growing while disconnected;
+    /// on <see cref="ClearAll"/> the flag clears and replication
+    /// resumes from the current cursor, catching the peer up with the
+    /// accumulated backlog. This is the app-level equivalent of
+    /// <c>docker network disconnect msmfg_wan</c> — it lets the
+    /// operator demonstrate cross-cluster divergence and
     /// convergence-on-heal from the browser without touching the
     /// compose CLI.
     /// </summary>

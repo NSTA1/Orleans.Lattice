@@ -16,11 +16,12 @@ namespace MultiSiteManufacturing.Host.Replication;
 /// cursor when the flag is cleared.
 /// </summary>
 /// <remarks>
-/// Re-implements the host-rolled Tier 4b chaos disconnect surface at
-/// the canonical transport seam after migration step 5 removed the
-/// original outbound tick that consulted the flag. Tier 5
-/// (<c>docker network disconnect</c>) is transport-agnostic and remains
-/// untouched.
+/// Wraps the package's gRPC push transport so the Tier 4b chaos
+/// disconnect surface — exposed via <see cref="ChaosPreset.ReplicationDisconnect"/>
+/// in the dashboard fly-out — can pause outbound replication at the
+/// canonical transport seam without touching the package internals.
+/// Tier 5 (<c>docker network disconnect</c>) is transport-agnostic and
+/// remains untouched.
 /// </remarks>
 internal sealed class ChaosReplicationTransport(
     IReplicationTransport inner,
