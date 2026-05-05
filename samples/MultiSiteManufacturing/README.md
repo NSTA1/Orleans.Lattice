@@ -81,14 +81,14 @@ you want edit rights). Under *Dashboards → Orleans.Lattice* you'll find:
   dead-letter churn, per-peer entries/bytes behind.
 
 > **Note** — the Replication dashboard renders data for the `mfg-facts`
-> tree, which now ships through `Orleans.Lattice.Replication`'s gRPC
-> push transport (migration step 2). The sample is still mid-flight:
-> the hand-rolled pipeline (`ReplicationLogWriter` /
-> `ReplicationTopology`) continues to ship `mfg-site-activity-index`
-> and `mfg-part-crdt` until migration steps 3 and 4 cut them over
-> too. See [`migration.md`](./migration.md) for the staged plan that
-> retires the hand-rolled pipeline. The Overview and Commit Path
-> dashboards render every replicated tree.
+> and `mfg-site-activity-index` trees, both of which now ship
+> through `Orleans.Lattice.Replication`'s gRPC push transport
+> (migration steps 2 and 3). The sample is still mid-flight: the
+> hand-rolled pipeline (`ReplicationLogWriter` / `ReplicationTopology`)
+> continues to ship `mfg-part-crdt` only, until migration step 4
+> cuts it over too. See [`migration.md`](./migration.md) for the
+> staged plan that retires the hand-rolled pipeline. The Overview
+> and Commit Path dashboards render every replicated tree.
 
 The JSON for these dashboards is bind-mounted read-only from
 `src/lattice.dashboards/Grafana/` — a CI test in the package keeps

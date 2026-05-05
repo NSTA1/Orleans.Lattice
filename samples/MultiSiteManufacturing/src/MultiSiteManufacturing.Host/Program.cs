@@ -124,10 +124,10 @@ if (!useInMemoryStorage && replicationTopology.IsEnabled)
 // Migration: package-shipped replication wired in alongside the
 // host-rolled pipeline. The package observes only trees declared in
 // LatticeReplicationOptions.ReplicatedTrees - currently `mfg-facts`
-// (cut over at step 2). `mfg-site-activity-index` and `mfg-part-crdt`
-// still ship through the host-rolled pipeline until steps 3 and 4.
-// See `samples/MultiSiteManufacturing/migration.md` for the full
-// staged plan.
+// (cut over at step 2) and `mfg-site-activity-index` (cut over at
+// step 3). `mfg-part-crdt` still ships through the host-rolled
+// pipeline until step 4. See `samples/MultiSiteManufacturing/migration.md`
+// for the full staged plan.
 var packagePeerClusterId = builder.Configuration["PackageReplication:PeerClusterId"];
 var packagePeerGrpcEndpoint = builder.Configuration["PackageReplication:PeerGrpcEndpoint"];
 var packageReplicationConfigured = !useInMemoryStorage
@@ -228,9 +228,9 @@ builder.Host.UseOrleans(silo =>
         // Migration: package-shipped replication. Disjoint from
         // the host-rolled pipeline by tree id - the package's
         // ReplicatedTrees map currently opts in `mfg-facts` (cut
-        // over at step 2), while the host-rolled
-        // ReplicationTopology now covers `mfg-site-activity-index`
-        // and `mfg-part-crdt` only. Wired only on the
+        // over at step 2) and `mfg-site-activity-index` (cut over at
+        // step 3), while the host-rolled ReplicationTopology now
+        // covers `mfg-part-crdt` only. Wired only on the
         // persistent-storage path because the package's WAL,
         // shipper, and maintenance grain require Azure Table
         // reminders + grain storage; the in-memory path runs without
@@ -242,11 +242,12 @@ builder.Host.UseOrleans(silo =>
                 opts.ClusterId = clusterName;
                 opts.ReplicatedTrees = new Dictionary<string, ReplicationMode>(StringComparer.Ordinal)
                 {
-                    // Migration step 2: `mfg-facts` now ships through the
-                    // package. `mfg-site-activity-index` and
-                    // `mfg-part-crdt` remain on the host-rolled
-                    // pipeline until steps 3 and 4 cut them over.
+                    // Migration step 2: `mfg-facts` cut to package.
                     [LatticeFactBackend.FactTreeId] = ReplicationMode.LwwRegister,
+                    // Migration step 3: `mfg-site-activity-index` cut
+                    // to package. `mfg-part-crdt` is the last tree on
+                    // the host-rolled pipeline; step 4 cuts it over.
+                    [SiteActivityIndex.TreeId] = ReplicationMode.LwwRegister,
                 };
                 opts.ReplicationPeers = new[] { packagePeerClusterId! };
             });

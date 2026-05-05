@@ -47,7 +47,7 @@ sample broken.
   `BaselineFactBackend`. Delete the now-orphan `mfg-facts-v2` tree
   and the mirror hosted service from step 1.
 
-- [ ] **Step 3 — Cut over `mfg-site-activity-index` to the package.**
+- [x] **Step 3 — Cut over `mfg-site-activity-index` to the package.**
   Identical shape to step 2: add to the package's `ReplicatedTrees`
   map under `LwwRegister`; remove from the host-rolled topology.
   No baseline tap needed — this tree has no baseline analogue.
