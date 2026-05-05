@@ -15,8 +15,13 @@ internal sealed class BPlusInternalGrain(
     LatticeOptionsResolver optionsResolver) : IBPlusInternalGrain
 {
     private ResolvedLatticeOptions? _options;
-    private async Task<ResolvedLatticeOptions> GetOptionsAsync() =>
-        _options ??= await optionsResolver.ResolveAsync(state.State.TreeId ?? string.Empty);
+    private ValueTask<ResolvedLatticeOptions> GetOptionsAsync() =>
+        _options is not null
+            ? new ValueTask<ResolvedLatticeOptions>(_options)
+            : ResolveOptionsSlowAsync();
+
+    private async ValueTask<ResolvedLatticeOptions> ResolveOptionsSlowAsync() =>
+        _options = await optionsResolver.ResolveAsync(state.State.TreeId ?? string.Empty);
 
     public async Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild, bool childrenAreLeaves)
     {
