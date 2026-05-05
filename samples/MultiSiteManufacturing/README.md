@@ -25,7 +25,7 @@ the system behaves like a minimal MES/QMS slice backed by Lattice.
 | **HLC-ordered fold → convergent state** | `ComplianceFold.Fold` sorts facts by `(WallClockTicks, Counter, FactId)` before applying them, so concurrent producers across sites converge on the same `ComplianceState`. Contrasted live in the UI against a naïve arrival-order baseline running over the same fact stream. |
 | **Divergence visible under chaos** | Two backends (`baseline`, `lattice`) receive the same facts via a fan-out router. Chaos-induced reorder causes the arrival-order baseline to drift; the HLC-ordered lattice fold does not. Divergent rows surface in the dashboard organically — no scripted saga. |
 | **Secondary index as a second tree** | `mfg-site-activity-index` keys facts as `{site}/{wallTicks:D20}/{counter:D10}/{serial}` for reverse-chronological per-site activity feeds — a worked example of a secondary-index tree paired with a primary fact tree. |
-| **Mixed CRDT semantics in one tree** | `mfg-part-crdt` hosts both a G-Set (`{serial}/labels/{label}`) and an LWW register (`{serial}/operator`) under per-key filters, showing how one tree can mix commutative and last-writer-wins keys. |
+| **Typed CRDT delta shipping** | `mfg-part-labels` is one OR-Set per serial, accessed through `lattice.OrSet(serial)` and replicated cross-cluster as `ReplicationMode.OrSet` — the package ships typed `add` / `remove` / `merge` deltas instead of raw byte writes. The companion `mfg-part-operator` tree is a per-serial LWW register kept cluster-local (LWW across clusters with disjoint HLCs is meaningless). |
 | **Partition tolerance via shadow prefixes** | During a simulated intra-cluster partition, `PartCrdtStore` writes to a shadow key prefix; `PartitionHealHostedService` promotes shadows back onto the canonical keys on heal. |
 | **Range scans as primitives** | The replog, the site-activity feed, and the partition-heal sweep are all plain half-open range scans over lex-ordered keys — no custom indexing layer. |
 | **Cross-cluster replication built on Lattice** | An HLC-ordered replog (`_replog__{tree}`) is itself a Lattice tree. An `IReplicatorGrain` ships batches per `(tree, peer)` over HTTP; an `IReplogJanitorGrain` compacts entries behind the slowest peer's cursor. Zero library changes. |
@@ -80,15 +80,16 @@ you want edit rights). Under *Dashboards → Orleans.Lattice* you'll find:
 - **Orleans.Lattice — Replication** — ship/apply/lag percentiles,
   dead-letter churn, per-peer entries/bytes behind.
 
-> **Note** — the Replication dashboard renders data for the `mfg-facts`
-> and `mfg-site-activity-index` trees, both of which now ship
-> through `Orleans.Lattice.Replication`'s gRPC push transport
-> (migration steps 2 and 3). The sample is still mid-flight: the
-> hand-rolled pipeline (`ReplicationLogWriter` / `ReplicationTopology`)
-> continues to ship `mfg-part-crdt` only, until migration step 4
-> cuts it over too. See [`migration.md`](./migration.md) for the
-> staged plan that retires the hand-rolled pipeline. The Overview
-> and Commit Path dashboards render every replicated tree.
+> **Note** — every replicated tree in the sample now ships through
+> `Orleans.Lattice.Replication`'s gRPC push transport: `mfg-facts`
+> and `mfg-site-activity-index` as `LwwRegister` (migration steps
+> 2 and 3) and `mfg-part-labels` as `OrSet` (typed CRDT delta
+> shipping; migration step 4). The hand-rolled pipeline
+> (`ReplicationLogWriter` / `ReplicationTopology`) is no longer
+> opted into any tree and goes inert; migration step 5 deletes it
+> physically. See [`migration.md`](./migration.md) for the staged
+> plan. The Overview and Commit Path dashboards render every
+> replicated tree.
 
 The JSON for these dashboards is bind-mounted read-only from
 `src/lattice.dashboards/Grafana/` — a CI test in the package keeps

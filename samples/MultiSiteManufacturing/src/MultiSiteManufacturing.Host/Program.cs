@@ -121,13 +121,15 @@ if (!useInMemoryStorage && replicationTopology.IsEnabled)
     builder.Services.AddHostedService<ReplicationBootstrapHostedService>();
 }
 
-// Migration: package-shipped replication wired in alongside the
-// host-rolled pipeline. The package observes only trees declared in
-// LatticeReplicationOptions.ReplicatedTrees - currently `mfg-facts`
-// (cut over at step 2) and `mfg-site-activity-index` (cut over at
-// step 3). `mfg-part-crdt` still ships through the host-rolled
-// pipeline until step 4. See `samples/MultiSiteManufacturing/migration.md`
-// for the full staged plan.
+// Migration: package-shipped replication. After step 4 every
+// replicated tree in the sample (`mfg-facts`, `mfg-site-activity-index`,
+// `mfg-part-labels`) ships through the package; the host-rolled
+// pipeline is no longer opted into any tree and goes inert (its
+// physical removal is step 5). The `mfg-part-operator` tree stays
+// cluster-local — LWW across clusters with disjoint HLCs is
+// meaningless, matching the per-key filter the host-rolled pipeline
+// applied to the original `mfg-part-crdt` tree. See
+// `samples/MultiSiteManufacturing/migration.md` for the full staged plan.
 var packagePeerClusterId = builder.Configuration["PackageReplication:PeerClusterId"];
 var packagePeerGrpcEndpoint = builder.Configuration["PackageReplication:PeerGrpcEndpoint"];
 var packageReplicationConfigured = !useInMemoryStorage
@@ -225,16 +227,16 @@ builder.Host.UseOrleans(silo =>
             options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
         });
 
-        // Migration: package-shipped replication. Disjoint from
-        // the host-rolled pipeline by tree id - the package's
-        // ReplicatedTrees map currently opts in `mfg-facts` (cut
-        // over at step 2) and `mfg-site-activity-index` (cut over at
-        // step 3), while the host-rolled ReplicationTopology now
-        // covers `mfg-part-crdt` only. Wired only on the
-        // persistent-storage path because the package's WAL,
-        // shipper, and maintenance grain require Azure Table
-        // reminders + grain storage; the in-memory path runs without
-        // package replication and is unaffected.
+        // Migration: package-shipped replication. After step 4 the
+        // package's ReplicatedTrees map covers every tree the sample
+        // wants replicated cross-cluster: `mfg-facts` (LWW),
+        // `mfg-site-activity-index` (LWW), and `mfg-part-labels`
+        // (OrSet — typed CRDT delta shipping). The host-rolled
+        // ReplicationTopology is no longer opted into any tree.
+        // Wired only on the persistent-storage path because the
+        // package's WAL, shipper, and maintenance grain require Azure
+        // Table reminders + grain storage; the in-memory path runs
+        // without package replication and is unaffected.
         if (packageReplicationConfigured)
         {
             silo.AddLatticeReplication(opts =>
@@ -244,10 +246,15 @@ builder.Host.UseOrleans(silo =>
                 {
                     // Migration step 2: `mfg-facts` cut to package.
                     [LatticeFactBackend.FactTreeId] = ReplicationMode.LwwRegister,
-                    // Migration step 3: `mfg-site-activity-index` cut
-                    // to package. `mfg-part-crdt` is the last tree on
-                    // the host-rolled pipeline; step 4 cuts it over.
+                    // Migration step 3: `mfg-site-activity-index` cut to package.
                     [SiteActivityIndex.TreeId] = ReplicationMode.LwwRegister,
+                    // Migration step 4: `mfg-part-crdt` split into two
+                    // typed-CRDT trees. `mfg-part-labels` ships as
+                    // OrSet (delta-shipping; the typed-CRDT-delta demo
+                    // the package was built for); `mfg-part-operator`
+                    // stays cluster-local (LWW across clusters with
+                    // disjoint HLCs is meaningless).
+                    [PartCrdtStore.LabelsTreeId] = ReplicationMode.OrSet,
                 };
                 opts.ReplicationPeers = new[] { packagePeerClusterId! };
             });

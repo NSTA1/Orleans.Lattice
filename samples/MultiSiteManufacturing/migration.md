@@ -52,7 +52,7 @@ sample broken.
   map under `LwwRegister`; remove from the host-rolled topology.
   No baseline tap needed — this tree has no baseline analogue.
 
-- [ ] **Step 4 — Split `mfg-part-crdt` into typed-CRDT trees.**
+- [x] **Step 4 — Split `mfg-part-crdt` into typed-CRDT trees.**
   Replace the single `mfg-part-crdt` tree (today: G-Set on the
   `labels/*` keys, LWW-Register on the `operator` key, with a
   per-key replication filter) with two trees:
