@@ -971,5 +971,237 @@ public class ReplicationMutationObserverTests
 
         Assert.That(sink.Entries.Single().DeltaPayload, Is.SameAs(payload));
     }
+
+    // ----------------------------------------------------------------__
+    // R-090 - MutationCategory classification + maintenance skip
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task Maintenance_category_set_is_skipped()
+    {
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = DefaultTree,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1, 2, 3 },
+            Category = MutationCategory.Maintenance,
+        }, CancellationToken.None);
+
+        Assert.That(sink.Entries, Is.Empty);
+    }
+
+    [Test]
+    public async Task Maintenance_category_delete_is_skipped()
+    {
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = DefaultTree,
+            Kind = MutationKind.Delete,
+            Key = "gone",
+            IsTombstone = true,
+            Category = MutationCategory.Maintenance,
+        }, CancellationToken.None);
+
+        Assert.That(sink.Entries, Is.Empty);
+    }
+
+    [Test]
+    public async Task Maintenance_category_delete_range_is_skipped()
+    {
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = DefaultTree,
+            Kind = MutationKind.DeleteRange,
+            Key = "a",
+            EndExclusiveKey = "z",
+            IsTombstone = true,
+            Category = MutationCategory.Maintenance,
+        }, CancellationToken.None);
+
+        Assert.That(sink.Entries, Is.Empty);
+    }
+
+    [Test]
+    public async Task User_category_default_is_emitted_to_sink()
+    {
+        // Wire-compat regression: a freshly-constructed LatticeMutation
+        // with no explicit Category should default to MutationCategory.User
+        // (the [Id(11)] default) and emit through the observer unchanged.
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = DefaultTree,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+        }, CancellationToken.None);
+
+        Assert.That(sink.Entries, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public async Task Explicit_user_category_is_emitted_to_sink()
+    {
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = DefaultTree,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            Category = MutationCategory.User,
+        }, CancellationToken.None);
+
+        Assert.That(sink.Entries, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public async Task Maintenance_category_skip_is_independent_of_origin_cluster_id()
+    {
+        // R-090 spec: the classification is independent of OriginClusterId.
+        // A remote-origin maintenance emit is still Maintenance and still
+        // skips the WAL.
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = DefaultTree,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            OriginClusterId = "site-b",
+            Category = MutationCategory.Maintenance,
+        }, CancellationToken.None);
+
+        Assert.That(sink.Entries, Is.Empty);
+    }
+
+    [Test]
+    public async Task Maintenance_category_skip_does_not_consult_mode_resolver()
+    {
+        // The Maintenance gate runs before mode resolution so the resolver
+        // is never consulted for a structural-maintenance emit.
+        var resolver = Substitute.For<IReplicationModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns(ReplicationMode.LwwRegister);
+
+        var observer = new ReplicationMutationObserver(new CapturingSink(), Monitor("site-a"), resolver);
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = DefaultTree,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            Category = MutationCategory.Maintenance,
+        }, CancellationToken.None);
+
+        resolver.DidNotReceive().Resolve(Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task Maintenance_category_skip_does_not_invoke_key_filter()
+    {
+        // The Maintenance gate runs before per-key filter compilation /
+        // evaluation so the predicate is never invoked for a maintenance
+        // emit, even when one is configured.
+        var calls = 0;
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            KeyFilter = _ => { calls++; return true; },
+        }), AllowAll());
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = DefaultTree,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            Category = MutationCategory.Maintenance,
+        }, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sink.Entries, Is.Empty);
+            Assert.That(calls, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public async Task Maintenance_category_skip_does_not_invoke_sink()
+    {
+        // Pin the no-WriteAsync contract: a maintenance emit must not
+        // touch the sink at all (no allocation, no awaitable).
+        var sink = Substitute.For<IReplogSink>();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = DefaultTree,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            Category = MutationCategory.Maintenance,
+        }, CancellationToken.None);
+
+        await sink.DidNotReceive().WriteAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task User_and_maintenance_emits_interleave_correctly()
+    {
+        // Pin that the gate is per-mutation (not sticky): a maintenance
+        // emit followed by a user emit on the same observer instance
+        // produces exactly one captured entry, and vice versa.
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = DefaultTree,
+            Kind = MutationKind.Set,
+            Key = "k1",
+            Value = new byte[] { 1 },
+            Category = MutationCategory.User,
+        }, CancellationToken.None);
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = DefaultTree,
+            Kind = MutationKind.Set,
+            Key = "k2",
+            Value = new byte[] { 2 },
+            Category = MutationCategory.Maintenance,
+        }, CancellationToken.None);
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = DefaultTree,
+            Kind = MutationKind.Set,
+            Key = "k3",
+            Value = new byte[] { 3 },
+            Category = MutationCategory.User,
+        }, CancellationToken.None);
+
+        Assert.That(
+            sink.Entries.Select(e => e.Key).ToArray(),
+            Is.EqualTo(new[] { "k1", "k3" }));
+    }
 }
 

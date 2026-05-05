@@ -55,6 +55,14 @@ Per-tree overrides are honoured: the observer resolves options via `IOptionsMoni
 
 Filters are precompiled per tree id and cached on the observer so the commit-time hot path is bounded by a `ConcurrentDictionary` lookup, a single bool, and at most one delegate plus a linear prefix scan. The cache is invalidated on `IOptionsMonitor.OnChange`, so reconfiguring filters at runtime takes effect on the next mutation per tree.
 
+## Maintenance writes are skipped
+
+Beyond the per-tree / per-key filters above, the observer skips a second class of mutation entirely: writes classified as `MutationCategory.Maintenance` on the `LatticeMutation.Category` slot. These are library-internal structural rewrites — resize, rebalance, compaction, internal node splits / merges — that operate on state the user never authored directly and that every converged peer will run independently against its own copy of the data. Replicating them would (a) inflate every peer's vector clock with edges the writer never authored, (b) pollute the dependency graph with non-user-authored edges, and (c) generate wire traffic for events that have no semantic causal meaning.
+
+User-driven writes — `SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyAtomicAsync`, bulk-load, and saga compensation rolls — emit with `MutationCategory.User` (the default) and follow the existing per-tree / per-key filter path unchanged. The classification is stamped on the mutation at the producing leaf grain and arrives at the observer pre-stamped; users do not interact with the classification mechanism directly.
+
+The maintenance gate runs **before** mode resolution and per-key filters: a maintenance emit pays nothing more than a single enum compare on the commit-time hot path. The classification is also independent of `OriginClusterId` — a remote-origin maintenance emit (from a peer's apply path that itself ran under maintenance) is still `Maintenance` and still skips the WAL.
+
 ## Failure semantics
 
 WAL-append failures propagate. A failure inside `IReplogSink.WriteAsync` flows back out of the commit-time observer, and because the observer fires inside the originating grain's write path, the failure surfaces as the same exception the underlying storage provider threw — the calling `ILattice.SetAsync` / `DeleteAsync` / `DeleteRangeAsync` observes it. This guarantees that every committed mutation is also captured for replication.
