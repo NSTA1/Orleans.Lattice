@@ -81,7 +81,6 @@ internal sealed class LatticeOptionsResolver(
             DiagnosticsCacheTtl = baseOptions.DiagnosticsCacheTtl,
             MaterialiserCheckpointInterval = baseOptions.MaterialiserCheckpointInterval,
             MaterialiserCheckpointEntries = baseOptions.MaterialiserCheckpointEntries,
-            LeafShadowWrites = baseOptions.LeafShadowWrites,
             LeafProjectionRetention = baseOptions.LeafProjectionRetention,
             ProjectionRebuildPolicy = baseOptions.ProjectionRebuildPolicy,
         };

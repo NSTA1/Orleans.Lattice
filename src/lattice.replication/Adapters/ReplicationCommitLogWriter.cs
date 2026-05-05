@@ -15,17 +15,15 @@ namespace Orleans.Lattice.Replication.Adapters;
 /// <para>
 /// Bypasses <see cref="IReplogSink"/> by design — the public sink seam
 /// returns <see cref="System.Threading.Tasks.Task"/> rather than
-/// <see cref="System.Threading.Tasks.Task{Long}"/>, and the WAL-as-commit-point promotion''s
-/// foreground replay coordinator needs the assigned offset.
+/// <see cref="System.Threading.Tasks.Task{Long}"/>, and the leaf
+/// commit path needs the assigned offset to drive replay coordination
+/// after a leaf reactivation.
 /// </para>
 /// <para>
-/// <b>Dormancy.</b> the dormant seam registers this adapter but no foreground
-/// site invokes <see cref="AppendAsync"/>. the future foreground caller wires it into the
-/// leaf write path under the <c>LatticeOptions.LeafShadowWrites</c>
-/// toggle, at which point a complementary short-circuit on
-/// <c>ReplicationMutationObserver</c> (tracked by the replication package)
-/// suppresses double WAL appends from the post-commit observer
-/// dispatch.
+/// A complementary short-circuit on
+/// <c>ReplicationMutationObserver</c> suppresses double WAL appends
+/// from the post-commit observer dispatch when the foreground commit
+/// path has already appended the same mutation.
 /// </para>
 /// </summary>
 internal sealed class ReplicationCommitLogWriter(
@@ -43,10 +41,10 @@ internal sealed class ReplicationCommitLogWriter(
         var clusterId = perTree.ClusterId ?? string.Empty;
 
         // Resolve the declared replication mode for this tree; default
-        // to LwwRegister so a hand-constructed dormant call site still
-        // gets a meaningful value on the wire. the future foreground caller's foreground
-        // caller will only invoke this adapter for trees the resolver
-        // accepts, but adding a default here keeps the dormant unit-test
+        // to LwwRegister so a hand-constructed test call site still
+        // gets a meaningful value on the wire. The foreground commit
+        // path only invokes this adapter for trees the resolver
+        // accepts, but adding a default here keeps the unit-test
         // surface trivially exercisable without a fully-configured
         // mode-resolver fake.
         var mode = modeResolver.Resolve(mutation.TreeId) ?? ReplicationMode.LwwRegister;

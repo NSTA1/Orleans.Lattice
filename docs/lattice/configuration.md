@@ -337,14 +337,6 @@ Selects the recovery strategy a leaf grain takes when one of the fall-off-log tr
 
 This option can be changed freely at any time.
 
-### `LeafShadowWrites`
-
-When `false` (default) every committed leaf mutation is persisted exactly once — appended to the per-shard write-ahead log via the registered `ICommitLogWriter`. The leaf's legacy `WriteStateAsync` row is no longer written on the foreground commit path; reads continue to serve from the in-memory projection, which is rebuilt from the WAL on activation. Setting `true` re-enables the legacy state-row persist alongside the WAL append, keeping the pre-WAL commit path available as a rollback target during the deprecation window. One minor version after this default flip the option and the legacy persist call site are removed entirely, at which point the WAL is the sole durable boundary.
-
-Hosts that have not yet wired up the WAL adapter must keep this at `true` until the adapter is registered, otherwise foreground commits become non-durable (the in-memory projection updates and the call returns success, but a silo crash before the next checkpoint flush loses the write).
-
-This option can be changed freely at any time; the new value takes effect on the next foreground commit because options are resolved per-mutation.
-
 ## Storage Provider Name
 
 Lattice grains use the storage provider named `"lattice"` (exposed as `LatticeOptions.StorageProviderName`). The `AddLattice` extension method passes this name to your storage registration delegate. In advanced scenarios where you register storage directly, use this constant to ensure the provider name matches:

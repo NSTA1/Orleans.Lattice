@@ -16,7 +16,6 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.leaf.tombstones.reaped` | counter | `tree` | Overview, CommitPath | Tombstone churn |
 | `orleans.lattice.leaf.tombstones.expired` | counter | `tree` | Overview, CommitPath | Tombstone churn (TTL) |
 | `orleans.lattice.leaf.splits` | counter | `tree` | Overview | Splits committed |
-| `orleans.lattice.leaf.shadow_write.duration` | histogram (ms) | `tree` | CommitPath | Shadow-write percentiles, Shadow-write rate (gate for default-flip readiness) |
 | `orleans.lattice.leaf.commit.duration` | histogram (ms) | `tree`, `step` | CommitPath | Commit-step latency p50/p95/p99 |
 | `orleans.lattice.cache.hits` | counter | `tree` | Overview | Cache hit ratio |
 | `orleans.lattice.cache.misses` | counter | `tree` | Overview | Cache hit ratio |

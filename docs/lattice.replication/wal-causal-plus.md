@@ -10,8 +10,8 @@
 > minor-version bump on `ReplicationBatchEnvelope` (alias and
 > `WireVersion` unchanged so legacy peers continue to decode the new
 > entries with both slots flowing through as `null`). Companion to
-> [`wal-design.md`](wal-design.md) (the durable-log Phase 7 spec) and
-> [`wal.md`](wal.md) (the current implementation).
+> [`wal.md`](wal.md) (the replication-side per-shard WAL grain) and
+> [`../lattice/wal.md`](../lattice/wal.md) (the cross-cutting WAL contract).
 
 This document defines the causal+-ready Write-Ahead Log (WAL) for `Orleans.Lattice.Replication`. It extends the existing WAL design without breaking any of its invariants:
 

@@ -118,31 +118,24 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task DeleteRange_persists_state_exactly_once()
-    {
-        var state = new FakePersistentState<LeafNodeState>();
-        var grain = CreateGrain(state);
-        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
-        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
-        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
-
-        var writesBefore = state.WriteCount;
-        await grain.DeleteRangeAsync("a", "c");
-
-        Assert.That(state.WriteCount - writesBefore, Is.EqualTo(1));
-    }
-
-    [Test]
-    public async Task DeleteRange_does_not_persist_when_nothing_deleted()
+    public async Task DeleteRange_does_not_advance_clock_or_version_when_nothing_deleted()
     {
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
         await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
 
-        var writesBefore = state.WriteCount;
+        var clockBefore = state.State.Clock;
+        var versionBefore = state.State.Version.Clone();
         await grain.DeleteRangeAsync("m", "z");
 
-        Assert.That(state.WriteCount - writesBefore, Is.EqualTo(0));
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.Clock, Is.EqualTo(clockBefore),
+                "Leaf must short-circuit the HLC tick when no key matches the range.");
+            Assert.That(state.State.Version.DominatesOrEquals(versionBefore), Is.True);
+            Assert.That(versionBefore.DominatesOrEquals(state.State.Version), Is.True,
+                "Leaf must short-circuit the version-vector tick when no key matches the range.");
+        });
     }
 
     [Test]

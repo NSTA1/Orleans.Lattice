@@ -98,7 +98,7 @@
   "panels": [
     {
       "id": 1,
-      "title": "Commit-step latency p95 (ms) — wal / apply / shadow / observer",
+      "title": "Commit-step latency p95 (ms) — wal / apply / observer",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -192,95 +192,6 @@
     },
     {
       "id": 4,
-      "title": "Shadow-write duration p50/p95/p99 (ms) — should collapse to 0 after LeafShadowWrites=false",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 16,
-        "x": 0,
-        "y": 15
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "P50",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_leaf_shadow_write_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
-          "legendFormat": "p50"
-        },
-        {
-          "refId": "P95",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_leaf_shadow_write_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
-          "legendFormat": "p95"
-        },
-        {
-          "refId": "P99",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_leaf_shadow_write_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
-          "legendFormat": "p99"
-        }
-      ]
-    },
-    {
-      "id": 5,
-      "title": "Shadow-write rate (count/s) — gate for default flip readiness",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 15
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 0.1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(rate(orleans_lattice_leaf_shadow_write_duration_milliseconds_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
-          "legendFormat": "shadow rate"
-        }
-      ]
-    },
-    {
-      "id": 6,
       "title": "Storage-provider write duration (leaf.write.duration p95)",
       "type": "timeseries",
       "datasource": {
@@ -291,7 +202,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 23
+        "y": 15
       },
       "fieldConfig": {
         "defaults": {
@@ -308,7 +219,7 @@
       ]
     },
     {
-      "id": 7,
+      "id": 5,
       "title": "Compaction duration p95 (ms)",
       "type": "timeseries",
       "datasource": {
@@ -319,7 +230,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 23
+        "y": 15
       },
       "fieldConfig": {
         "defaults": {
@@ -336,7 +247,7 @@
       ]
     },
     {
-      "id": 8,
+      "id": 6,
       "title": "Activation replay duration p95 by outcome (ms)",
       "type": "timeseries",
       "datasource": {
@@ -347,7 +258,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 30
+        "y": 22
       },
       "fieldConfig": {
         "defaults": {
@@ -364,7 +275,7 @@
       ]
     },
     {
-      "id": 9,
+      "id": 7,
       "title": "Replay entries (applied vs skipped, ops/s)",
       "type": "timeseries",
       "datasource": {
@@ -375,7 +286,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 30
+        "y": 22
       },
       "fieldConfig": {
         "defaults": {
@@ -392,7 +303,7 @@
       ]
     },
     {
-      "id": 10,
+      "id": 8,
       "title": "Tombstones reaped vs expired (TTL churn)",
       "type": "timeseries",
       "datasource": {
@@ -403,7 +314,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 37
+        "y": 29
       },
       "fieldConfig": {
         "defaults": {

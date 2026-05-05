@@ -27,14 +27,7 @@ public partial class BPlusLeafGrainTests
             grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(siblingStub);
             grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(siblingStub);
         }
-        // Most BPlusLeafGrainTests assertions exercise the legacy
-        // dual-durability commit path (e.g. WriteCount-based persist
-        // assertions). The production default is now WAL-only
-        // (LeafShadowWrites = false); the harness re-enables the legacy
-        // shadow persist so existing tests retain their original intent.
-        // The DualDurability partial and the LeafShadowWritesRestartTests
-        // integration test exercise both paths explicitly.
-        options ??= new LatticeOptions { LeafShadowWrites = true };
+        options ??= new LatticeOptions();
         // Structural sizing (MaxLeafKeys) now flows from the registry
         // pin via LatticeOptionsResolver. Tests pin the desired sizing through
         // the resolver; non-structural knobs still come from LatticeOptions.

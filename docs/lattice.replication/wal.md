@@ -1,6 +1,8 @@
-# Per-shard WAL (write-ahead log)
+# Per-shard replication WAL (write-ahead log)
 
 Every replicated mutation in `Orleans.Lattice.Replication` is committed to a per-shard write-ahead log before any downstream replication consumer observes it. The WAL is the single source of truth for replication: shipping, snapshotting, and recovery all read from the WAL — never from the primary tree.
+
+> This document covers the **replication-side** WAL surface — the per-shard sharded sink, the producer-side filters, the change-feed consumer model, and the `IReplogShardGrain` turn-safe batching protocol. For the cross-cutting WAL semantics shared with the core library (commit pipeline, durability boundary, recovery and rebuild, projection checkpoint, trim and GC), see [`../lattice/wal.md`](../lattice/wal.md). For the pluggable storage backend (in-memory vs Azure Table) see [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md).
 
 ## Topology
 
@@ -72,10 +74,6 @@ There is intentionally no opt-in "best-effort" mode that would catch the excepti
 
 `ReadAsync` validates: `fromSequence >= 0` and `maxEntries >= 1`. Out-of-range reads return `ReplogShardPage.Empty(fromSequence)` instead of throwing.
 
-## Persistence
-
-State is durably persisted via the configured `IWalStorageProvider` (see [Pluggable durability](#pluggable-durability--iwalstorageprovider) below). The grain itself holds no Orleans grain state; every successful `AppendBatchAsync` call against the provider is the commit point for replication, and the grain recovers its next-offset counter on activation by calling `GetHighestOffsetAsync`.
-
 ## Why a WAL grain rather than ship-time read
 
 This design fixes three sample-pipeline shortcuts called out in the [replication design](./replication-design.md):
@@ -93,32 +91,11 @@ This design fixes three sample-pipeline shortcuts called out in the [replication
 
 Direct grain access is the low-level entry point; in-process consumers should use [`IChangeFeed`](./change-feed.md) instead. The change feed walks every WAL partition for a tree, filters by HLC cursor and origin, and merges the result in HLC ascending order — the seam the outbound shipper and the future local materialiser plug into.
 
-## Pluggable durability — `IWalStorageProvider`
+## Pluggable durability
 
-The grain shape above (`IReplogShardGrain` + Orleans grain persistence) is the WAL's **logical** contract. The **durability backend** is pluggable via `IWalStorageProvider`, a public seam in `Orleans.Lattice` (promoted from `Orleans.Lattice.Replication` so single-cluster hosts that do not register replication can still wire a durable WAL backend):
+The replication WAL grain shape (`IReplogShardGrain`) is the WAL's **logical** contract; the **durability backend** is the same pluggable `IWalStorageProvider` seam the core library uses. See [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md) for the provider contract and the shipped in-memory / Azure Table implementations.
 
-```text
-public interface IWalStorageProvider
-{
-    Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken ct);
-    IAsyncEnumerable<WalEntry> ReadAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken ct);
-    Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken ct);
-    Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken ct);
-}
-```
-
-| Member | Contract |
-|---|---|
-| `AppendBatchAsync` | All-or-nothing per call. Backends that cannot meet that for a particular batch (e.g. a multi-partition write on a backend without cross-partition transactions) must reject the batch at validation time rather than silently fragmenting it. Supplied offsets must be dense relative to the persisted tail. |
-| `ReadAsync` | Yields entries strictly above `fromOffsetExclusive` in ascending offset order, up to `maxEntries`. Pass `-1` to read from the start of the log. |
-| `GetHighestOffsetAsync` | Returns the highest persisted `WalEntry.Offset`, or `-1` when the shard is empty. Used by the WAL grain on activation to recover its next-offset counter. |
-| `TrimAsync` | Removes entries with offset `<= throughOffsetInclusive`. Idempotent; safe to call concurrently with reads. Trimming through an offset that does not yet exist reserves the trim point for a future append. |
-
-The exchanged `WalEntry` is a public `readonly record struct` carrying the dense per-shard `Offset` and the captured `LatticeMutation` (the post-commit author-intent payload that flows through every observer hook). The replication-only metadata that `ReplogEntry` carries (`Mode`, `DependencySummary`) is reconstructed at ship time inside `ReplogShardGrain.ReadAsync` via `IReplicationModeResolver` and the mutation's `VectorClock`, so the on-disk WAL stays storage-pluggable for both single-cluster and multi-cluster hosts. It is intentionally distinct from the internal `ReplogShardEntry` grain RPC envelope so the in-cluster grain protocol can evolve without breaking host-supplied storage backends.
-
-### Configuration
-
-The provider is configurable per-tree via a resolver delegate on `LatticeReplicationOptions`:
+`LatticeReplicationOptions` adds one replication-only override on top of that seam: a per-tree resolver delegate that lets a host pick a different provider per tree.
 
 ```text
 siloBuilder.AddLatticeReplication(opts =>
@@ -133,17 +110,11 @@ siloBuilder.AddLatticeReplication(opts =>
 
 When `LatticeReplicationOptions.WalStorageProvider` is `null` (the default), the WAL grain falls back to the DI-registered `IWalStorageProvider` singleton. `AddLatticeReplication` registers `InMemoryWalStorageProvider` as the default fallback; replace it by registering your own implementation before calling `AddLatticeReplication` (the registration uses `TryAddSingleton`, so a pre-registered singleton wins).
 
-### Shipped implementations
-
-| Provider | Use case |
-|---|---|
-| `InMemoryWalStorageProvider` | Default. Stores every appended entry in process memory. Suitable for tests, single-process samples, and pilot deployments before a durable backend is wired up. State is lost on silo restart. |
-
-A canonical Azure Table Storage implementation (matching the `(PartitionKey, RowKey) = ({TreeId}/{ShardIndex}, zero-padded 19-digit Offset)` layout described in [`wal-design.md`](./wal-design.md)) is planned as a separate package so the core replication library does not pull in an Azure dependency.
+The exchanged `WalEntry` carries the dense per-shard `Offset` and the captured `LatticeMutation`. The replication-only metadata that `ReplogEntry` carries (`Mode`, `DependencySummary`) is reconstructed at ship time inside `ReplogShardGrain.ReadAsync` via `IReplicationModeResolver` and the mutation's `VectorClock`, so the on-disk WAL stays storage-pluggable for both single-cluster and multi-cluster hosts.
 
 ## Turn-safe batching protocol
 
-The WAL grain's `AppendAsync` hot path implements the turn-safe batching protocol from [`wal-design.md`](./wal-design.md) §4. Each call accumulates into an in-memory pending batch held on the grain instance; a single in-flight flush at a time fans the batch out to `IWalStorageProvider.AppendBatchAsync` and completes per-caller `TaskCompletionSource<long>` instances when the provider acknowledges durability.
+The WAL grain's `AppendAsync` hot path implements a turn-safe batching protocol. Each call accumulates into an in-memory pending batch held on the grain instance; a single in-flight flush at a time fans the batch out to `IWalStorageProvider.AppendBatchAsync` and completes per-caller `TaskCompletionSource<long>` instances when the provider acknowledges durability.
 
 ```text
 AppendAsync(entry)
@@ -190,6 +161,3 @@ This contract makes WAL append failures observable inline at the originating wri
 - **Multiple in-flight batches.** The current implementation enforces a single in-flight flush per shard. `WalMaxPendingBatches` is reserved for a future change that lifts the cap; today it is validated (`>= 1`) but not consumed by the grain.
 - **Exact-bytes accounting.** `WalMaxBatchBytes` is enforced against an estimate (key UTF-16 worst case + value length + 128 byte envelope), not the post-serialisation byte count. The estimate is conservative for typical payloads; pathological keys or oversized envelopes can drift either way. Documented as approximate in the option's XML doc.
 
-## Forward compatibility
-
-The `IWalStorageProvider` contract is identical between today's replication-only WAL and the future log-first commit-point model in which the WAL becomes the sole durability mechanism. Implementations authored against this interface today are reusable in v2 without API change.

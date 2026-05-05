@@ -24,6 +24,13 @@ mathematical structures where merges are commutative, associative, and
 idempotent. This is what makes operations conflict-free and recoverable
 without distributed locks or coordination protocols.
 
+**Cross-cluster replication is optional and ships in a sibling package.**
+`Orleans.Lattice.Replication` layers gRPC-push transport, snapshot/bootstrap,
+dead-letter handling, and causal+ apply over the core write-ahead log. Causal+
+is shipped end-to-end for point writes (single-shard mutations); multi-key
+atomic, structural-rewrite, and snapshot/restore causal+ paths are scheduled
+for subsequent releases. See the [`Orleans.Lattice.Replication` roadmap](src/lattice.replication/roadmap.md) for the current feature status and the [design notes](docs/lattice.replication/replication-design.md) for the architecture.
+
 The system is designed around a few core properties:
 
 * **Self-organising under load.** Keys are hash-sharded across a virtual
@@ -69,7 +76,7 @@ both live consistency and eventual convergence.
 | **Fast reads** | A `[StatelessWorker]` cache grain per silo serves reads via delta replication from the primary leaf. Cache misses cost a single version-vector comparison. |
 | **Fault-tolerant** | Validated end-to-end by a parametrized fault-injection chaos test: random storage-write failures during concurrent reads, writes, scans, and splits converge to the correct state once faults stop. |
 | **Online Reshard** | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
-| **Projection Rebuild** | `GetLeafProjectionDigestAsync` cross-silo divergence detection, `ProjectionRebuildPolicy` recovery strategies, fall-off-log triggers, dual-durability transition |
+| **Projection Rebuild** | `GetLeafProjectionDigestAsync` cross-silo divergence detection, `ProjectionRebuildPolicy` recovery strategies, fall-off-log triggers, activation-time WAL replay |
 | **Read Caching** | Delta-based `[StatelessWorker]` cache, split-aware pruning |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on an existing tree. Takes an offline snapshot to a new physical tree, swaps the alias, and soft-deletes the old data. The tree is unavailable during the snapshot phase but immediately accessible after the swap. Undoable within the retention window. |
 | **Scalable writes** | Keys are hash-sharded across a configurable number of independent sub-trees (default 64). No single-root bottleneck. Shards split further at runtime as load grows. |
@@ -82,9 +89,49 @@ both live consistency and eventual convergence.
 
 ## Quick Start
 
-See the [API Reference](docs/lattice/api.md) for setup instructions, silo configuration, and full usage examples.
+Register Lattice on a silo. The minimum durable configuration calls
+`AddLattice` (registers the grain catalogue and storage provider) and
+`AddWalStorage` (registers the durability backend behind the per-shard
+write-ahead log — the sole foreground-commit durability boundary):
 
-For sample projects which exercise `ILattice`, see [Samples](docs/lattice/samples.md).
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseOrleans(silo =>
+{
+    silo
+        .AddMemoryGrainStorage(LatticeOptions.StorageProviderName)
+        .AddLattice()
+        .AddWalStorage();           // in-memory default; swap for a durable backend in production.
+});
+
+var app = builder.Build();
+
+// resolve a tree by name and write a key:
+var lattice = app.Services.GetRequiredService<IGrainFactory>().GetGrain<ILattice>("my-tree");
+await lattice.SetAsync("hello", "world"u8.ToArray());
+```
+
+For production, swap the in-memory WAL for a durable backend — e.g.
+Azure Table Storage from the sibling package:
+
+```csharp
+silo
+    .AddLattice()
+    .AddLatticeAzureTableWalStorage(connectionString: "DefaultEndpointsProtocol=https;...");
+```
+
+Add cross-cluster replication on top by registering
+`AddLatticeReplication(...)` alongside the WAL — the replication
+package consumes the same `IWalStorageProvider` registration as the
+core library, so a single durable backend serves both layers. See the
+[`Orleans.Lattice.Replication` quick start](docs/lattice.replication/replication-design.md)
+for the full multi-cluster setup.
+
+For full setup details, silo configuration options, and complete
+usage examples, see the [API Reference](docs/lattice/api.md). For
+runnable sample projects exercising `ILattice`, see
+[Samples](docs/lattice/samples.md).
 
 ## Documentation
 
@@ -105,7 +152,7 @@ Detailed design documentation is split by concept:
 | [Events](docs/lattice/events.md) | Per-tree `LatticeTreeEvent` Orleans stream: event kinds, `OperationId` correlation for atomic writes, delivery semantics, setup |
 | [Metrics](docs/lattice/metrics.md) | `System.Diagnostics.Metrics` instruments published on the `orleans.lattice` meter: shard counters, leaf latency histograms, cache hit/miss, OpenTelemetry registration |
 | [Online Reshard](docs/lattice/online-reshard.md) | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
-| [Projection Rebuild](docs/lattice/projection-rebuild.md) | `GetLeafProjectionDigestAsync` cross-silo divergence detection, `ProjectionRebuildPolicy` recovery strategies, fall-off-log triggers, dual-durability transition |
+| [Projection Rebuild](docs/lattice/projection-rebuild.md) | `GetLeafProjectionDigestAsync` cross-silo divergence detection, `ProjectionRebuildPolicy` recovery strategies, fall-off-log triggers, WAL-replay-driven recovery |
 | [Read Caching](docs/lattice/caching.md) | Delta-based `[StatelessWorker]` cache, split-aware pruning |
 | [Shard Splitting](docs/lattice/shard-splitting.md) | Adaptive online splits, shadow-write design, autonomic monitor, suppression rules, scan semantics during splits, tunables |
 | [Snapshots](docs/lattice/snapshots.md) | Offline and online snapshot modes, crash safety, sizing overrides |
@@ -117,6 +164,7 @@ Detailed design documentation is split by concept:
 | [Tree Storage](docs/lattice/tree-storage.md) | Per-provider storage limits, leaf/internal node size estimation, per-provider sizing recommendations, default-configuration assessment, key trade-offs |
 | [Tree Structure](docs/lattice/tree-structure.md) | Internal/leaf node layout, two-phase leaf splits, idempotent split propagation |
 | [TTL](docs/lattice/ttl.md) | Per-entry time-to-live: `SetAsync(ttl)`, server-side absolute expiry, read-path filtering, preservation across splits / snapshots / resize / merge / saga compensation, CRDT replication invariant |
+| [WAL](docs/lattice/wal.md) | Write-ahead log as the sole foreground-commit durability boundary: per-shard envelope, build → wal → apply → observer commit pipeline, replay-on-activation recovery, projection checkpoint, trim/GC predicate, replication relationship |
 | [WAL Storage Providers](docs/lattice/wal-storage-providers.md) | `IWalStorageProvider` durability seam, in-memory default, optional Azure Table Storage backend, configuration / capacity / operational notes |
 
 ## Releases
@@ -131,16 +179,16 @@ Each publishable package is released by pushing a Git tag whose prefix is the li
 | `src/lattice.storage.azuretable/` | `lattice.storage.azuretable-v<X.Y.Z>` | `Orleans.Lattice.Storage.AzureTable` |
 | `src/lattice.dashboards/` | `lattice.dashboards-v<X.Y.Z>` | `Orleans.Lattice.Dashboards` |
 
-All packages currently version-lock at **3.3.0**. Cross-package `<ProjectReference>` declarations pack as `>= <Version>` floors automatically, so a tag of `lattice.replication-v3.3.0` produces a NuGet package whose `Orleans.Lattice` dependency resolves to `>= 3.3.0`.
+All packages currently version-lock at **3.4.0**. Cross-package `<ProjectReference>` declarations pack as `>= <Version>` floors automatically, so a tag of `lattice.replication-v3.4.0` produces a NuGet package whose `Orleans.Lattice` dependency resolves to `>= 3.4.0`.
 
 To cut a release:
 
 ```powershell
-git tag lattice.replication.grpc-v3.3.0
-git push origin lattice.replication.grpc-v3.3.0
+git tag lattice.replication.grpc-v3.4.0
+git push origin lattice.replication.grpc-v3.4.0
 ```
 
-The publish workflow then runs the chaos and deterministic test suites for that package, packs with `-p:PackageVersion=3.3.0`, pushes to NuGet via OIDC, and creates a GitHub Release with auto-generated notes.
+The publish workflow then runs the chaos and deterministic test suites for that package, packs with `-p:PackageVersion=3.4.0`, pushes to NuGet via OIDC, and creates a GitHub Release with auto-generated notes.
 
 ## Performance Characteristics
 

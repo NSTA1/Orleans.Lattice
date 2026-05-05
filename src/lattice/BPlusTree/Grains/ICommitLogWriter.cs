@@ -1,27 +1,22 @@
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Dormant seam over the per-shard write-ahead log. the dormant seam''s commit-log
-/// adapter abstraction: the core library consumes the WAL through this
-/// interface so the durability commit point can be promoted from
-/// <c>state.WriteStateAsync()</c> on <c>BPlusLeafGrain</c> to a WAL append
-/// without taking a hard reference on the
-/// <c>Orleans.Lattice.Replication</c> package.
+/// Commit-log adapter abstraction over the per-shard write-ahead log.
+/// The core library consumes the WAL through this interface so the
+/// durability commit point lives entirely in the replication package
+/// without the core taking a hard reference on
+/// <c>Orleans.Lattice.Replication</c>.
 /// <para>
 /// Resolved via <see cref="System.IServiceProvider"/> as a nullable
-/// service: when the replication package''s
+/// service: when the replication package's
 /// <c>AddLatticeReplication</c> extension has registered a concrete
 /// adapter the seam yields it, otherwise the resolution returns
-/// <see langword="null"/> and pre-the WAL-as-commit-point promotion commit behaviour applies
-/// unchanged. Internal by design — the seam is the contract between the
-/// core library and a single library-internal adapter, not a public
-/// extensibility surface for third-party producers.
-/// </para>
-/// <para>
-/// <b>Dormancy.</b> the dormant seam ships this interface and its concrete adapter
-/// without any foreground call site. the future foreground caller wires
-/// <see cref="AppendAsync"/> into the leaf write path under the
-/// <c>LatticeOptions.LeafShadowWrites</c> toggle.
+/// <see langword="null"/> and the leaf grain operates from its
+/// in-memory projection alone (suitable for unit tests and
+/// non-replicated single-cluster deployments). Internal by design —
+/// the seam is the contract between the core library and a single
+/// library-internal adapter, not a public extensibility surface for
+/// third-party producers.
 /// </para>
 /// </summary>
 internal interface ICommitLogWriter

@@ -17,7 +17,7 @@ WAL grows. Two operational concerns naturally arise:
 This document covers the two surfaces that answer those questions:
 `ILattice.GetLeafProjectionDigestAsync` (drift detection) and
 `ProjectionRebuildPolicy` together with the supporting
-`MaxLeafReplayEntries` / `LeafProjectionRetention` / `LeafShadowWrites`
+`MaxLeafReplayEntries` / `LeafProjectionRetention`
 options (recovery).
 
 ## Drift detection: `GetLeafProjectionDigestAsync`
@@ -224,32 +224,12 @@ siloBuilder.ConfigureLattice(o =>
 });
 ```
 
-### `LeafShadowWrites` (transitional)
-
-`LatticeOptions.LeafShadowWrites` (default `false`) selects the leaf
-commit path. With the default the WAL is the sole durable boundary —
-every committed mutation is appended to the per-shard write-ahead log
-and the leaf's in-memory projection is updated; the legacy
-`WriteStateAsync` state row is no longer persisted on the foreground
-path. Setting it to `true` re-enables the legacy state-row persist
-alongside the WAL append, keeping the pre-WAL commit path available
-as a rollback target during the deprecation window. One minor release
-after the default flip, the option and the legacy persist call site
-are removed entirely.
-
-Operators on either setting see no behavioural change from the digest
-API — the digest is computed against the in-memory projection, which
-is identical to the WAL prefix in both modes (and additionally
-identical to the persisted state row when the legacy fallback is
-re-enabled).
-
 ## Related surfaces
 
 - `ILattice.GetLeafProjectionDigestAsync` — the public surface.
 - `LeafProjectionDigest` — the returned `readonly record struct`.
 - `ProjectionRebuildPolicy` — the activation-time recovery policy.
 - `LatticeOptions.MaxLeafReplayEntries`, `LatticeOptions.LeafProjectionRetention`,
-  `LatticeOptions.LeafShadowWrites`,
   `LatticeOptions.MaterialiserCheckpointInterval`,
   `LatticeOptions.MaterialiserCheckpointEntries` — see [Configuration](configuration.md).
 - `LeafProjectionStaleException` — thrown by `ProjectionRebuildPolicy.Fail`

@@ -314,15 +314,16 @@ shows which driver is the source of each.
 
 ---
 
-## Forward compatibility
+## Local-apply materialiser reuses the same scheduler
 
-The shipper grain is the canonical scheduler skeleton for a future
-**local-apply materialiser** — the same `IChangeFeed` consumer shape, the
-same per-consumer cursor on `ILatticeReplicationCursorRegistry`, the same
-phase-timer + doorbell + reminder triad. A future materialiser is just
-another change-feed consumer with its own cursor; replacing the
-`IReplicationTransport.SendAsync` call with a local `IReplicationApplier.ApplyAsync`
-call (or the commit-log apply seam) reuses the entire scheduling skeleton
+The shipper grain is the canonical scheduler skeleton for the
+**local-apply materialiser** in the core library — the
+same `IChangeFeed` consumer shape, the same per-consumer cursor on
+`ILatticeReplicationCursorRegistry`, the same phase-timer + doorbell +
+reminder triad. The materialiser is just another change-feed consumer
+with its own cursor; the `IReplicationTransport.SendAsync` call is
+replaced with a local `IReplicationApplier.ApplyAsync` call (or the
+commit-log apply seam) and the rest of the scheduling skeleton is
 verbatim. The maintenance grain is similarly the natural home for any
 future per-tree background pass (compaction, snapshot pruning, projection
 rebuild) without inventing a third scheduler shape.

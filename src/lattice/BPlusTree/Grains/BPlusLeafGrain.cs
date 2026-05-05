@@ -207,7 +207,7 @@ internal sealed partial class BPlusLeafGrain(
     }
 
     /// <summary>
-    /// Dual-durability commit path for <see cref="MutationKind.Set"/>.
+    /// Commit path for <see cref="MutationKind.Set"/>.
     /// Steps in order:
     /// <list type="number">
     ///   <item><b>build</b> — tick HLC + version vector and construct
@@ -217,10 +217,6 @@ internal sealed partial class BPlusLeafGrain(
     ///   adapter is absent);</item>
     ///   <item><b>apply</b> — merge the LWW value into the in-memory
     ///   projection and check the leaf-split predicate;</item>
-    ///   <item><b>shadow</b> — persist the legacy state row when
-    ///   <c>LeafShadowWrites</c> is set (opt-in; the default is now
-    ///   WAL-only). Failures here are logged and swallowed because the
-    ///   WAL is the durable boundary;</item>
     ///   <item><b>observer</b> — publish the post-commit mutation to
     ///   any registered <see cref="IMutationObserver"/> inside a
     ///   <see cref="LatticeCommitLogContext"/> scope so a downstream
@@ -281,29 +277,7 @@ internal sealed partial class BPlusLeafGrain(
         }
         RecordCommitStep("apply", applyStartTicks);
 
-        // step 3 (shadow) - gated legacy persist. Swallow failures: the
-        // WAL is the durable record, replay closes any gap on next
-        // activation, and the in-memory projection is already correct.
-        // Structural splits persist unconditionally inside SplitAsync.
-        if (options.LeafShadowWrites)
-        {
-            var shadowStartTicks = Stopwatch.GetTimestamp();
-            try
-            {
-                await ShadowPersistAsync();
-            }
-            catch (Exception ex)
-            {
-                ResolveLogger()?.LogWarning(
-                    ex,
-                    "Shadow persist failed for tree {TreeId} key {Key}; the WAL is the durable record so foreground call returns success.",
-                    state.State.TreeId ?? string.Empty,
-                    key);
-            }
-            RecordCommitStep("shadow", shadowStartTicks);
-        }
-
-        // step 4 (observer) - publish under a commit-log scope so a
+        // step 3 (observer) - publish under a commit-log scope so a
         // replication-aware observer can detect the source and avoid
         // re-appending its own input back into the WAL.
         var observerStartTicks = Stopwatch.GetTimestamp();
@@ -367,8 +341,6 @@ internal sealed partial class BPlusLeafGrain(
             DeltaPayload = delta?.Payload,
         };
 
-        var options = await GetOptionsAsync();
-
         // step 1 (wal)
         var walStartTicks = Stopwatch.GetTimestamp();
         var writer = ResolveCommitLogWriter();
@@ -383,28 +355,9 @@ internal sealed partial class BPlusLeafGrain(
         StoreEntry(key, tombstone);
         RecordCommitStep("apply", applyStartTicks);
 
-        // step 3 (shadow)
-        if (options.LeafShadowWrites)
-        {
-            var shadowStartTicks = Stopwatch.GetTimestamp();
-            try
-            {
-                await ShadowPersistAsync();
-            }
-            catch (Exception ex)
-            {
-                ResolveLogger()?.LogWarning(
-                    ex,
-                    "Shadow persist failed for tree {TreeId} key {Key} on delete; the WAL is the durable record so foreground call returns success.",
-                    state.State.TreeId ?? string.Empty,
-                    key);
-            }
-            RecordCommitStep("shadow", shadowStartTicks);
-        }
-
         LatticeMetrics.LeafTombstonesCreated.Add(1, LeafTreeTag());
 
-        // step 4 (observer) - inside a commit-log scope.
+        // step 3 (observer) - inside a commit-log scope.
         var observerStartTicks = Stopwatch.GetTimestamp();
         if (mutationObservers.HasObservers)
         {
@@ -480,8 +433,6 @@ internal sealed partial class BPlusLeafGrain(
             DeltaPayload = delta?.Payload,
         };
 
-        var options = await GetOptionsAsync();
-
         // step 1 (wal)
         var walStartTicks = Stopwatch.GetTimestamp();
         var writer = ResolveCommitLogWriter();
@@ -498,26 +449,6 @@ internal sealed partial class BPlusLeafGrain(
             StoreEntry(key, tombstone);
         }
         RecordCommitStep("apply", applyStartTicks);
-
-        // step 3 (shadow)
-        if (options.LeafShadowWrites)
-        {
-            var shadowStartTicks = Stopwatch.GetTimestamp();
-            try
-            {
-                await ShadowPersistAsync();
-            }
-            catch (Exception ex)
-            {
-                ResolveLogger()?.LogWarning(
-                    ex,
-                    "Shadow persist failed for tree {TreeId} on range delete [{Start}, {End}); the WAL is the durable record so foreground call returns success.",
-                    state.State.TreeId ?? string.Empty,
-                    startInclusive,
-                    endExclusive);
-            }
-            RecordCommitStep("shadow", shadowStartTicks);
-        }
 
         LatticeMetrics.LeafTombstonesCreated.Add(keysToDelete.Count, LeafTreeTag());
 
