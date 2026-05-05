@@ -282,6 +282,18 @@ if (packageReplicationConfigured)
         opts.PeerEndpoints[packagePeerClusterId!] = peerUri;
     });
 
+    // Step 6: re-implement the Tier 4b chaos disconnect surface at the
+    // canonical transport seam. Wraps the package's gRPC push transport
+    // with a decorator that consults IReplicationDisconnectGrain on
+    // every ship; when the operator toggles the flag from the dashboard
+    // chaos flyout, outbound ship returns Accepted=false so the
+    // package shipper does not advance its per-peer cursor and the
+    // local WAL grows until the flag is cleared, at which point
+    // replication resumes from the stationary cursor. Tier 5
+    // (`docker network disconnect`) is transport-agnostic and remains
+    // untouched.
+    builder.Services.AddChaosReplicationTransportDecorator();
+
     // Migration step 2: `mfg-facts` now ships through the package, so
     // the receiver-side baseline-replay tap moves off the host-rolled
     // ReplicationInboundEndpoint and onto the package's IChangeFeed.

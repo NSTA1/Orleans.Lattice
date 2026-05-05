@@ -83,7 +83,7 @@ sample broken.
   the wire format and bootstrap protocol rather than re-deriving
   them in `approach.md`.
 
-- [ ] **Step 6 — Migrate the chaos surface.**
+- [x] **Step 6 — Migrate the chaos surface.**
   Today's Tier 4b ("app-level replication disconnect") is an
   `IReplicationDisconnectGrain` flag the host-rolled outbound tick
   and inbound endpoint both consult. Re-implement it as an
