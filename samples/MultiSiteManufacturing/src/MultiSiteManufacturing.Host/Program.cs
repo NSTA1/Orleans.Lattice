@@ -293,24 +293,25 @@ if (packageReplicationConfigured)
     // untouched.
     builder.Services.AddChaosReplicationTransportDecorator();
 
-    // Migration step 2: `mfg-facts` now ships through the package, so
-    // the receiver-side baseline-replay tap moves off the host-rolled
-    // ReplicationInboundEndpoint and onto the package's IChangeFeed.
-    // The replay loop subscribes to remote-origin entries on
-    // `mfg-facts` and emits each into the local BaselineFactBackend so
-    // the peer cluster's baseline view continues to track the seeding
-    // cluster. The step-1 mirror service (PackageReplicationFactMirror)
-    // and the brand-new `mfg-facts-v2` tree it fed are both retired.
-    builder.Services.AddHostedService<BaselineReplicationReplay>();
-
-    // Per-peer ship/recv indicators for the in-page status strip,
-    // sourced from the orleans.lattice.replication meter via a
-    // host-side MeterListener. Both registrations point at the
-    // same singleton so the IHostedService lifecycle owns the
-    // listener while the layout component reads its snapshot.
-    builder.Services.AddSingleton<ReplicationActivityTracker>();
-    builder.Services.AddHostedService(sp =>
-        sp.GetRequiredService<ReplicationActivityTracker>());
+    // Migration step 2 originally wired a polling IChangeFeed-based
+    // BaselineReplicationReplay hosted service to mirror cross-cluster
+    // mfg-facts applies into the local BaselineFactBackend and raise
+    // FederationRouter.FactReplicated for the dashboard. That seam was
+    // dead by construction: the package's apply pipeline merges via
+    // IShardRootGrain.MergeManyAsync, which bypasses the leaf's
+    // IMutationObserver publication path; the replog is populated by
+    // ReplicationMutationObserver (one of those observers); foreign-
+    // origin applies therefore never enter the local replog and
+    // IChangeFeed.Subscribe(includeLocalOrigin: false) silently sees
+    // nothing for them.
+    //
+    // The fix is a decorator on IReplicationApplier itself: it runs
+    // synchronously on every receiver-side apply (single + batched),
+    // observes the precise ApplyResult.Applied outcome, decodes the
+    // mfg-facts payload, mirrors the fact into BaselineFactBackend,
+    // and raises FactReplicated so the dashboard's "Inventory By
+    // Activity" tab refreshes live. See BaselineReplicationApplier.
+    builder.Services.AddBaselineReplicationApplierDecorator();
 }
 
 // OpenTelemetry: export the orleans.lattice and orleans.lattice.replication
