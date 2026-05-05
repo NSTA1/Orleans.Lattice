@@ -36,7 +36,7 @@ sample broken.
   `orleans.lattice.replication` meter is no longer dormant. README's
   empty-dashboard footnote becomes a "side-by-side comparison" note.
 
-- [ ] **Step 2 — Cut over `mfg-facts` to the package; remove the
+- [x] **Step 2 — Cut over `mfg-facts` to the package; remove the
   host-rolled outbound for that tree.** Move `mfg-facts` into the
   package's `ReplicatedTrees` map (`LwwRegister`); remove it from
   `ReplicationTopology.ReplicatedTrees` so the host-rolled outgoing

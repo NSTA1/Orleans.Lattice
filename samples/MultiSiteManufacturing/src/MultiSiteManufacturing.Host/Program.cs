@@ -121,12 +121,13 @@ if (!useInMemoryStorage && replicationTopology.IsEnabled)
     builder.Services.AddHostedService<ReplicationBootstrapHostedService>();
 }
 
-// Migration step 1: package-shipped replication wired in alongside the
+// Migration: package-shipped replication wired in alongside the
 // host-rolled pipeline. The package observes only trees declared in
-// LatticeReplicationOptions.ReplicatedTrees - currently `mfg-facts-v2`
-// only - so the host-rolled and package pipelines are disjoint by
-// tree id and can run side by side. See `samples/MultiSiteManufacturing/migration.md`
-// for the full staged plan.
+// LatticeReplicationOptions.ReplicatedTrees - currently `mfg-facts`
+// (cut over at step 2). `mfg-site-activity-index` and `mfg-part-crdt`
+// still ship through the host-rolled pipeline until steps 3 and 4.
+// See `samples/MultiSiteManufacturing/migration.md` for the full
+// staged plan.
 var packagePeerClusterId = builder.Configuration["PackageReplication:PeerClusterId"];
 var packagePeerGrpcEndpoint = builder.Configuration["PackageReplication:PeerGrpcEndpoint"];
 var packageReplicationConfigured = !useInMemoryStorage
@@ -224,12 +225,13 @@ builder.Host.UseOrleans(silo =>
             options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
         });
 
-        // Migration step 1: package-shipped replication. Disjoint from
+        // Migration: package-shipped replication. Disjoint from
         // the host-rolled pipeline by tree id - the package's
-        // ReplicatedTrees map opts in `mfg-facts-v2` only, while the
-        // host-rolled ReplicationTopology covers `mfg-facts`,
-        // `mfg-site-activity-index`, `mfg-part-crdt`. Wired only on
-        // the persistent-storage path because the package's WAL,
+        // ReplicatedTrees map currently opts in `mfg-facts` (cut
+        // over at step 2), while the host-rolled
+        // ReplicationTopology now covers `mfg-site-activity-index`
+        // and `mfg-part-crdt` only. Wired only on the
+        // persistent-storage path because the package's WAL,
         // shipper, and maintenance grain require Azure Table
         // reminders + grain storage; the in-memory path runs without
         // package replication and is unaffected.
@@ -240,7 +242,11 @@ builder.Host.UseOrleans(silo =>
                 opts.ClusterId = clusterName;
                 opts.ReplicatedTrees = new Dictionary<string, ReplicationMode>(StringComparer.Ordinal)
                 {
-                    [PackageReplicationFactMirror.MirrorTreeId] = ReplicationMode.LwwRegister,
+                    // Migration step 2: `mfg-facts` now ships through the
+                    // package. `mfg-site-activity-index` and
+                    // `mfg-part-crdt` remain on the host-rolled
+                    // pipeline until steps 3 and 4 cut them over.
+                    [LatticeFactBackend.FactTreeId] = ReplicationMode.LwwRegister,
                 };
                 opts.ReplicationPeers = new[] { packagePeerClusterId! };
             });
@@ -269,11 +275,15 @@ if (packageReplicationConfigured)
         opts.PeerEndpoints[packagePeerClusterId!] = peerUri;
     });
 
-    // Mirror every fact that flows through FederationRouter into the
-    // lattice tree the package replicates (`mfg-facts-v2`). Removed at
-    // step 2 of the migration when `mfg-facts` itself moves under
-    // package replication.
-    builder.Services.AddHostedService<PackageReplicationFactMirror>();
+    // Migration step 2: `mfg-facts` now ships through the package, so
+    // the receiver-side baseline-replay tap moves off the host-rolled
+    // ReplicationInboundEndpoint and onto the package's IChangeFeed.
+    // The replay loop subscribes to remote-origin entries on
+    // `mfg-facts` and emits each into the local BaselineFactBackend so
+    // the peer cluster's baseline view continues to track the seeding
+    // cluster. The step-1 mirror service (PackageReplicationFactMirror)
+    // and the brand-new `mfg-facts-v2` tree it fed are both retired.
+    builder.Services.AddHostedService<BaselineReplicationReplay>();
 }
 
 

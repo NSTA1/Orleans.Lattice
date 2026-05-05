@@ -80,18 +80,15 @@ you want edit rights). Under *Dashboards → Orleans.Lattice* you'll find:
 - **Orleans.Lattice — Replication** — ship/apply/lag percentiles,
   dead-letter churn, per-peer entries/bytes behind.
 
-> **Note** — the Replication dashboard renders data only for the
-> `mfg-facts-v2` tree at this point in the migration. The sample is
-> mid-flight: `Orleans.Lattice.Replication` is wired in alongside the
-> original hand-rolled pipeline (`ReplicationLogWriter` /
-> `ReplicationTopology`), and only `mfg-facts-v2` is opted in to the
-> package's `ReplicatedTrees` map. The legacy trees (`mfg-facts`,
-> `mfg-site-activity-index`, `mfg-part-crdt`) still ship through the
-> hand-rolled pipeline and do not emit the
-> `orleans.lattice.replication` meter. See
-> [`migration.md`](./migration.md) for the staged plan that retires
-> the hand-rolled pipeline. The Overview and Commit Path dashboards
-> render every replicated tree.
+> **Note** — the Replication dashboard renders data for the `mfg-facts`
+> tree, which now ships through `Orleans.Lattice.Replication`'s gRPC
+> push transport (migration step 2). The sample is still mid-flight:
+> the hand-rolled pipeline (`ReplicationLogWriter` /
+> `ReplicationTopology`) continues to ship `mfg-site-activity-index`
+> and `mfg-part-crdt` until migration steps 3 and 4 cut them over
+> too. See [`migration.md`](./migration.md) for the staged plan that
+> retires the hand-rolled pipeline. The Overview and Commit Path
+> dashboards render every replicated tree.
 
 The JSON for these dashboards is bind-mounted read-only from
 `src/lattice.dashboards/Grafana/` — a CI test in the package keeps

@@ -9,14 +9,15 @@ using static MultiSiteManufacturing.Tests.Federation.FactFixtures;
 namespace MultiSiteManufacturing.Tests.Replication;
 
 /// <summary>
-/// Unit tests for <see cref="ReplicationInboundEndpoint.TryReplayToBaselineAsync"/>:
-/// the helper that decodes a replicated <c>mfg-facts</c> payload and
-/// feeds it into the peer's <see cref="BaselineFactBackend"/>. The
-/// helper must be robust to malformed payloads because a single bad
-/// entry must not abort an in-progress replication batch.
+/// Unit tests for <see cref="BaselineReplicationReplay.TryReplayToBaselineAsync"/>:
+/// the helper that decodes a replicated <c>mfg-facts</c> payload
+/// observed on the package's <c>IChangeFeed</c> and feeds it into the
+/// peer's <see cref="BaselineFactBackend"/>. The helper must be robust
+/// to malformed payloads because a single bad entry must not wedge the
+/// replay loop.
 /// </summary>
 [TestFixture]
-public sealed class ReplicationInboundBaselineReplayTests
+public sealed class BaselineReplicationReplayTests
 {
     private FederationTestClusterFixture _fixture = null!;
     private BaselineFactBackend _baseline = null!;
@@ -39,7 +40,7 @@ public sealed class ReplicationInboundBaselineReplayTests
         var fact = Nc(serial, tick: 1, ncNumber: "NC-R-1", NcSeverity.Minor, ProcessSite.ToulouseNdtLab);
         var payload = FactJsonCodec.Encode(fact);
 
-        var replayed = await ReplicationInboundEndpoint.TryReplayToBaselineAsync(
+        var replayed = await BaselineReplicationReplay.TryReplayToBaselineAsync(
             _baseline, payload, sourceCluster: "us", key: "replog-key",
             NullLogger.Instance, CancellationToken.None);
 
@@ -59,17 +60,36 @@ public sealed class ReplicationInboundBaselineReplayTests
     [Test]
     public async Task Malformed_payload_is_swallowed_without_throwing()
     {
-        // A payload that fails to decode must never abort the caller;
-        // the batch continues past the bad entry so the rest of the
-        // facts still apply, and the helper signals "don't raise the
-        // dashboard event" by returning null.
+        // A payload that fails to decode must never abort the replay
+        // loop; the loop continues past the bad entry so the rest of
+        // the facts still apply, and the helper signals "don't raise
+        // the dashboard event" by returning null.
         var garbage = new byte[] { 0x7b, 0x99, 0x00 }; // "{" + invalid UTF-8
 
         Fact? result = null;
-        Assert.DoesNotThrowAsync(async () => result = await ReplicationInboundEndpoint.TryReplayToBaselineAsync(
+        Assert.DoesNotThrowAsync(async () => result = await BaselineReplicationReplay.TryReplayToBaselineAsync(
             _baseline, garbage, sourceCluster: "us", key: "bad-key",
             NullLogger.Instance, CancellationToken.None));
 
         Assert.That(result, Is.Null);
+    }
+
+    [Test]
+    public async Task Null_source_cluster_is_logged_as_unknown_and_does_not_throw()
+    {
+        // The change-feed entry's OriginClusterId is nominally always
+        // populated for remote-origin entries, but the parameter is
+        // typed as nullable. The helper must accept null without
+        // throwing - the diagnostic just logs "(unknown)".
+        var serial = new PartSerialNumber("HPT-BLD-S1-2028-99002");
+        var fact = Nc(serial, tick: 2, ncNumber: "NC-R-2", NcSeverity.Major, ProcessSite.ToulouseNdtLab);
+        var payload = FactJsonCodec.Encode(fact);
+
+        var replayed = await BaselineReplicationReplay.TryReplayToBaselineAsync(
+            _baseline, payload, sourceCluster: null, key: "replog-key",
+            NullLogger.Instance, CancellationToken.None);
+
+        Assert.That(replayed, Is.Not.Null);
+        Assert.That(replayed!.FactId, Is.EqualTo(fact.FactId));
     }
 }
