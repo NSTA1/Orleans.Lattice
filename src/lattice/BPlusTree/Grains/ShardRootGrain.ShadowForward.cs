@@ -81,11 +81,17 @@ internal sealed partial class ShardRootGrain
     /// forwarding is currently active. Returns a completed task otherwise.
     /// Callers wire this into <see cref="Task.WhenAll(Task[])"/> alongside
     /// their local write so the two execute in parallel.
+    /// <para>
+    /// State is passed by value via <typeparamref name="TState"/> so callers
+    /// can use <c>static</c> lambdas (compiler-cached singleton delegates) and
+    /// avoid per-call closure allocation. The dispatch is monomorphic at each
+    /// call site after generic specialisation.
+    /// </para>
     /// </summary>
-    private Task ForwardShadowAsync(Func<IShardRootGrain, Task> forwardAction)
+    private Task ForwardShadowAsync<TState>(TState state, Func<IShardRootGrain, TState, Task> forwardAction)
     {
         var target = TryGetShadowTarget();
-        return target is null ? Task.CompletedTask : forwardAction(target);
+        return target is null ? Task.CompletedTask : forwardAction(target, state);
     }
 
     /// <inheritdoc />

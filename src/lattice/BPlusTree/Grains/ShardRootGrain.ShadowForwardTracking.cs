@@ -27,10 +27,16 @@ internal sealed partial class ShardRootGrain
     /// if the caller abandons it (e.g. during a transient-exception retry).
     /// Returns the underlying task so happy-path callers may <c>await</c> it
     /// and surface forward failures alongside local ones.
+    /// <para>
+    /// State is passed by value via <typeparamref name="TState"/> so callers
+    /// can use <c>static</c> lambdas (compiler-cached singleton delegates) and
+    /// avoid per-call closure allocation when shadow-forwarding is inactive
+    /// (the common single-silo case).
+    /// </para>
     /// </summary>
-    private Task TrackShadowForward(Func<IShardRootGrain, Task> forwardAction)
+    private Task TrackShadowForward<TState>(TState state, Func<IShardRootGrain, TState, Task> forwardAction)
     {
-        var task = ForwardShadowAsync(forwardAction);
+        var task = ForwardShadowAsync(state, forwardAction);
         // Fast path: forwarding inactive (target is null) or already completed
         // synchronously - no observation needed.
         if (task.IsCompleted) { _ = task.Exception; return task; }
