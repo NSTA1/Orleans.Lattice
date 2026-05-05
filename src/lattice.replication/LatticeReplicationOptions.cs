@@ -492,6 +492,50 @@ public class LatticeReplicationOptions
     public bool AtomicBatchDelivery { get; set; } = DefaultAtomicBatchDelivery;
 
     /// <summary>
+    /// Maximum number of distinct in-flight atomic-batch transactions
+    /// the per-tree receiver-side staging buffer (<see cref="AtomicBatchDelivery"/>)
+    /// will admit before evicting the oldest partially-buffered
+    /// transaction to make room. Each in-flight batch is keyed by
+    /// <c>(originClusterId, transactionId)</c>; this cap therefore
+    /// bounds the cardinality of partially-completed transactions, not
+    /// the cardinality of buffered entries (a single transaction may
+    /// stage many entries before completing).
+    /// <para>
+    /// Eviction routes the displaced batch through the per-tree
+    /// dead-letter queue tagged
+    /// <see cref="LatticeReplicationMetrics.ReasonEvicted"/>; the
+    /// replication driver re-ships the original entries on the next
+    /// pump cycle because the per-origin high-water-mark was not
+    /// advanced past them. The cap therefore acts as a soft bound on
+    /// the receiver's working set rather than as a correctness
+    /// invariant.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultAtomicBatchBufferMaxTransactions"/>;
+    /// the validator rejects values below 1.
+    /// </para>
+    /// </summary>
+    public int AtomicBatchBufferMaxTransactions { get; set; } = DefaultAtomicBatchBufferMaxTransactions;
+
+    /// <summary>
+    /// Maximum cumulative payload bytes the per-tree receiver-side
+    /// atomic-batch staging buffer will hold before evicting the
+    /// oldest partially-buffered transaction to make room. The byte
+    /// budget is approximate — payload size is read from the entry's
+    /// <see cref="ReplogEntry.Value"/> length plus a constant
+    /// per-entry overhead — and is the soft cap on the buffer's
+    /// memory footprint. A single entry larger than this cap is
+    /// admitted as-is rather than evicting the entire buffer; the
+    /// cap is guidance, not a per-entry hard limit.
+    /// <para>
+    /// Defaults to <see cref="DefaultAtomicBatchBufferMaxBytes"/>;
+    /// the validator rejects values below 1 MB to keep the cap
+    /// meaningfully larger than a typical single-entry payload.
+    /// </para>
+    /// </summary>
+    public long AtomicBatchBufferMaxBytes { get; set; } = DefaultAtomicBatchBufferMaxBytes;
+
+    /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
     /// represents "unset". This default is rejected by
     /// <c>LatticeReplicationOptionsValidator</c> so a host that calls
@@ -677,4 +721,24 @@ public class LatticeReplicationOptions
     /// causal+ behaviour for hosts that have not opted in.
     /// </summary>
     public const bool DefaultAtomicBatchDelivery = false;
+
+    /// <summary>
+    /// Default value for <see cref="AtomicBatchBufferMaxTransactions"/>:
+    /// 512 distinct in-flight atomic-batch transactions per tree.
+    /// Sized so a sustained burst of atomic writes from a partition-
+    /// recovering peer can buffer several hundred concurrent batches
+    /// without escalating to the dead-letter queue, while keeping the
+    /// per-silo working set bounded.
+    /// </summary>
+    public const int DefaultAtomicBatchBufferMaxTransactions = 512;
+
+    /// <summary>
+    /// Default value for <see cref="AtomicBatchBufferMaxBytes"/>:
+    /// 64 MB of cumulative buffered-entry payload per tree. Sized
+    /// so the buffer's worst-case memory footprint is well below
+    /// typical silo heap limits while remaining large enough to
+    /// admit batches with KB-sized payloads at the
+    /// <see cref="DefaultAtomicBatchBufferMaxTransactions"/> default.
+    /// </summary>
+    public const long DefaultAtomicBatchBufferMaxBytes = 64L * 1024L * 1024L;
 }

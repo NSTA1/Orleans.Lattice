@@ -454,4 +454,42 @@ public class LatticeReplicationOptionsTests
         var opts = new LatticeReplicationOptions { AtomicBatchDelivery = true };
         Assert.That(opts.AtomicBatchDelivery, Is.True);
     }
+
+    [Test]
+    public void DefaultAtomicBatchBufferMaxTransactions_is_512() =>
+        Assert.That(LatticeReplicationOptions.DefaultAtomicBatchBufferMaxTransactions, Is.EqualTo(512));
+
+    [Test]
+    public void New_instance_has_default_atomic_batch_buffer_max_transactions()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.AtomicBatchBufferMaxTransactions,
+            Is.EqualTo(LatticeReplicationOptions.DefaultAtomicBatchBufferMaxTransactions));
+    }
+
+    [Test]
+    public void AtomicBatchBufferMaxTransactions_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { AtomicBatchBufferMaxTransactions = 1024 };
+        Assert.That(opts.AtomicBatchBufferMaxTransactions, Is.EqualTo(1024));
+    }
+
+    [Test]
+    public void DefaultAtomicBatchBufferMaxBytes_is_64MB() =>
+        Assert.That(LatticeReplicationOptions.DefaultAtomicBatchBufferMaxBytes, Is.EqualTo(64L * 1024L * 1024L));
+
+    [Test]
+    public void New_instance_has_default_atomic_batch_buffer_max_bytes()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.AtomicBatchBufferMaxBytes,
+            Is.EqualTo(LatticeReplicationOptions.DefaultAtomicBatchBufferMaxBytes));
+    }
+
+    [Test]
+    public void AtomicBatchBufferMaxBytes_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { AtomicBatchBufferMaxBytes = 32L * 1024L * 1024L };
+        Assert.That(opts.AtomicBatchBufferMaxBytes, Is.EqualTo(32L * 1024L * 1024L));
+    }
 }

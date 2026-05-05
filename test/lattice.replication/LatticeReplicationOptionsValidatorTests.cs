@@ -652,5 +652,70 @@ public class LatticeReplicationOptionsValidatorTests
 
         Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
     }
+
+    // ------------------------------------------------------------------
+    // Atomic-batch staging buffer caps
+    // ------------------------------------------------------------------
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_atomic_batch_buffer_max_transactions_is_below_one(int value)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            AtomicBatchBufferMaxTransactions = value,
+        };
+
+        var result = Validator.Validate(null, opts);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.AtomicBatchBufferMaxTransactions)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_atomic_batch_buffer_max_transactions_at_one()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            AtomicBatchBufferMaxTransactions = 1,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [TestCase(0L)]
+    [TestCase(-1L)]
+    [TestCase(1024L * 1024L - 1L)]
+    public void Validate_fails_when_atomic_batch_buffer_max_bytes_is_below_one_mb(long bytes)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            AtomicBatchBufferMaxBytes = bytes,
+        };
+
+        var result = Validator.Validate(null, opts);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.AtomicBatchBufferMaxBytes)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_atomic_batch_buffer_max_bytes_at_one_mb()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            AtomicBatchBufferMaxBytes = 1024L * 1024L,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
 }
 

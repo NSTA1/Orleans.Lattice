@@ -241,4 +241,87 @@ public class ReplicationMutationObserverAtomicBatchTests
             Assert.That(entry.AtomicBatchIndex, Is.EqualTo(1));
         });
     }
+
+    [Test]
+    public async Task Default_mutation_emits_empty_transaction_id()
+    {
+        // R-097 widens ReplogEntry with a [Id(16)] TransactionId slot
+        // mirrored from LatticeMutation.TransactionId. A single-key
+        // non-atomic write whose producer leaves the slot at the
+        // default (Guid.Empty) must surface as Guid.Empty on the
+        // resulting entry so a receiver with AtomicBatchDelivery
+        // enabled treats it as a point write rather than routing it
+        // through the TxApplyBuffer.
+        var (observer, sink) = CreateObserver();
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = Tree,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+        }, CancellationToken.None);
+
+        var entry = sink.Entries.Single();
+        Assert.That(entry.TransactionId, Is.EqualTo(Guid.Empty));
+    }
+
+    [Test]
+    public async Task Mutation_transaction_id_flows_through_to_replog_entry()
+    {
+        // Direct TransactionId pass-through: a producer that stamps
+        // a non-empty TransactionId on the LatticeMutation (the saga
+        // path under R-095) must see that exact Guid mirrored onto
+        // every emitted ReplogEntry so the receiver-side
+        // TxApplyBuffer can group siblings under the same key.
+        var (observer, sink) = CreateObserver();
+        var txId = Guid.NewGuid();
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = Tree,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            TransactionId = txId,
+            AtomicBatchSize = 1,
+            AtomicBatchIndex = 0,
+        }, CancellationToken.None);
+
+        var entry = sink.Entries.Single();
+        Assert.That(entry.TransactionId, Is.EqualTo(txId));
+    }
+
+    [Test]
+    public async Task Atomic_batch_shares_transaction_id_across_emits()
+    {
+        // The defining R-097 invariant on the observer side: every
+        // emit of an atomic transaction carries the identical
+        // TransactionId so the receiver-side buffer keys all siblings
+        // under one (origin, txid) bucket. Indices differ, the txid
+        // does not.
+        var (observer, sink) = CreateObserver();
+        var txId = Guid.NewGuid();
+
+        for (var i = 0; i < 3; i++)
+        {
+            await observer.OnMutationAsync(new LatticeMutation
+            {
+                TreeId = Tree,
+                Kind = MutationKind.Set,
+                Key = $"k{i}",
+                Value = new byte[] { (byte)i },
+                TransactionId = txId,
+                AtomicBatchSize = 3,
+                AtomicBatchIndex = i,
+            }, CancellationToken.None);
+        }
+
+        Assert.That(sink.Entries, Has.Count.EqualTo(3));
+        Assert.Multiple(() =>
+        {
+            Assert.That(sink.Entries.Select(e => e.TransactionId), Is.All.EqualTo(txId));
+            Assert.That(sink.Entries.Select(e => e.AtomicBatchIndex), Is.EquivalentTo(new[] { 0, 1, 2 }));
+        });
+    }
 }

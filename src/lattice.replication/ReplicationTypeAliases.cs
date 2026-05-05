@@ -105,4 +105,15 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for the per-tree maintenance grain persistent state class.</summary>
     internal const string ReplicationMaintenanceState = "olr.ms";
+
+    // Atomic-batch staging buffer (per-tree receiver-side hold-and-apply)
+
+    /// <summary>Alias for the per-tree atomic-batch staging buffer grain interface.</summary>
+    internal const string IReplicationTxBufferGrain = "olr.gt";
+
+    /// <summary>Alias for <see cref="Grains.TxStagedEntry"/>.</summary>
+    internal const string TxStagedEntry = "olr.te";
+
+    /// <summary>Alias for <see cref="Grains.TxBufferAdmissionResult"/>.</summary>
+    internal const string TxBufferAdmissionResult = "olr.tr";
 }

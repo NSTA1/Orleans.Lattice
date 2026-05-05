@@ -104,6 +104,21 @@ public static class LatticeReplicationMetrics
     public const string OutcomeShadowForwardDedup = "shadow-forward-dedup";
 
     /// <summary>
+    /// <see cref="TagOutcome"/> value: the entry was admitted to the
+    /// per-tree atomic-batch staging buffer because the
+    /// receiver has <see cref="LatticeReplicationOptions.AtomicBatchDelivery"/>
+    /// enabled and the entry carries a non-zero
+    /// <see cref="ReplogEntry.AtomicBatchSize"/> indicating membership
+    /// in an enclosing <c>SetManyAtomicAsync</c> transaction. The
+    /// per-origin high-water-mark is left unchanged so the producer
+    /// continues to re-ship the entry until every sibling lands and
+    /// the whole batch is applied atomically; the entry re-enters the
+    /// apply pipeline when the buffer reports completeness for its
+    /// transaction id.
+    /// </summary>
+    public const string OutcomeAtomicBuffered = "atomic-buffered";
+
+    /// <summary>
     /// Tag key for the dead-letter enqueue / removal reason. Values are
     /// drawn from <see cref="ReasonDiscarded"/>, <see cref="ReasonReplayed"/>,
     /// <see cref="ReasonEvicted"/>, and <see cref="ReasonUnknown"/>.
