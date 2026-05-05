@@ -436,4 +436,22 @@ public class LatticeReplicationOptionsTests
         var opts = new LatticeReplicationOptions { ShadowForwardDedupeCacheSize = 256 };
         Assert.That(opts.ShadowForwardDedupeCacheSize, Is.EqualTo(256));
     }
+
+    [Test]
+    public void DefaultAtomicBatchDelivery_is_false() =>
+        Assert.That(LatticeReplicationOptions.DefaultAtomicBatchDelivery, Is.False);
+
+    [Test]
+    public void New_instance_has_default_atomic_batch_delivery()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.AtomicBatchDelivery, Is.EqualTo(LatticeReplicationOptions.DefaultAtomicBatchDelivery));
+    }
+
+    [Test]
+    public void AtomicBatchDelivery_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { AtomicBatchDelivery = true };
+        Assert.That(opts.AtomicBatchDelivery, Is.True);
+    }
 }

@@ -77,7 +77,7 @@ Two purely additive `[Id]` slots on `ReplogEntry` (and the corresponding `Lattic
 - Sibling membership is keyed by the existing `TransactionId` slot (Core F-044). The receiver detects a complete batch by counting siblings that share an `(originClusterId, transactionId)` against the declared `Size`.
 - There is deliberately **no** separate "commit marker" entry. A partially-shipped batch that loses a sibling surfaces as the orphan-timeout case the receiver-side staging buffer already handles, not an indefinite stall waiting on a commit row that never arrives.
 - Strictly additive on the wire: legacy peers and entries authored before these slots existed decode both fields as `0`, which a receiver with atomic-batch delivery enabled treats identically to a single-key write. A peer with atomic-batch delivery disabled ignores both slots entirely.
-- Producer-side population happens in the saga itself (the `AtomicWriteGrain` capture-once stamp) rather than in the WAL append site; the replication mutation observer mirrors whatever the producer supplies onto the emitted `ReplogEntry`. The schema is therefore independent of the saga implementation — a future `IBatchedMutationProducer` surface stamps the same slots without touching the WAL.
+- Receiver-side opt-in is governed by `LatticeReplicationOptions.AtomicBatchDelivery` (per-tree, default `false`). When `false`, the receiver applies each entry as a point write and never consults the metadata; when `true`, the receiver buffers entries with `AtomicBatchSize > 0` until every sibling is in hand and applies the whole batch atomically. Producer-side stamping is unconditional, so flipping a peer to opt-in does not require a producer restart.
 
 **Performance note:**
 
