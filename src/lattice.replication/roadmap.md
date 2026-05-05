@@ -245,10 +245,10 @@ The R-080 → R-093 wave delivers causal+ for every write path the core library 
 47. **R-094 ✓ shipped — Atomic-batch metadata on the WAL schema** `[deps: R-080 ✓, Core F-044 ✓]`
     Two new additive `[Id]` slots on `ReplogEntry` and `LatticeMutation` — `AtomicBatchSize` and `AtomicBatchIndex` — keyed off the existing `TransactionId`. Sibling-count detection over a separate commit marker so a missing entry surfaces as the orphan-timeout case R-100 already handles, not an indefinite stall.
 
-48. **R-095 — Producer-side atomic-batch stamping** `[deps: R-094 ✓, R-089 ✓, Core F-044 ✓]`
+48. **R-095 ✓ shipped — Producer-side atomic-batch stamping** `[deps: R-094 ✓, R-089 ✓, Core F-044 ✓]`
     `AtomicWriteGrain.RunSagaAsync` reads `Operations.Count` once on entry, mints a `LatticeAtomicBatchContext` ambient (RequestContext key `"ol.batch"` mirroring F-044's `"ol.txid"`), and stamps `(Size, Index)` on every per-key emit including compensation rolls. Capture-once-per-saga; survives crash recovery via the persisted `AtomicWriteState`.
 
-49. **R-096 — Per-tree opt-in and validator** `[deps: R-094 ✓, R-095]`
+49. **R-096 — Per-tree opt-in and validator** `[deps: R-094 ✓, R-095 ✓]`
     New `LatticeReplicationOptions.AtomicBatchDelivery` per-tree boolean (default `false`). When `false`, receivers ignore the metadata and apply each entry as a point write — zero per-entry receiver cost and the producer-side stamping is unconditional so flipping a peer to opt-in does not require a producer restart.
 
 50. **R-097 — Receiver-side `TxApplyBuffer`** `[deps: R-094 ✓, R-096, R-082 ✓]`
@@ -305,7 +305,7 @@ Streams converge before R-080 (causal+ schema) → R-050 (snapshot/bootstrap), w
 | Causal+ schema + snapshot | R-080 ✓ → R-050 ✓ → R-051 ✓ → R-052 ✓ / R-053 ✓ → R-084 ✓ → R-088 ✓ |
 | Causal+ apply | R-081 ✓ → R-082 ✓ → (R-083 ✓, R-085 ✓, R-086 ✓, R-087 ✓ parallel) → R-088 ✓ |
 | Causal+ completeness | (R-089 ✓, R-090 ✓, R-091 ✓, R-092 ✓, R-093 ✓ — all shipped) |
-| Atomic visibility cross-cluster | R-094 ✓ → R-095 → R-096 → R-097 → R-098 (gated on Core F-054 ✓) → (R-099, R-100, R-101, R-102 parallel) → R-103 → R-104 |
+| Atomic visibility cross-cluster | R-094 ✓ → R-095 ✓ → R-096 → R-097 → R-098 (gated on Core F-054 ✓) → (R-099, R-100, R-101, R-102 parallel) → R-103 → R-104 |
 
 ---
 
@@ -710,7 +710,7 @@ The phase is a tightly-coupled wave: R-094 / R-095 ship the producer-side metada
 
   Acceptance: a 5-key atomic set asserts `Size = 5` and `Index ∈ {0,1,2,3,4}` across the five emitted `ReplogEntry`s, all sharing the same `TransactionId`; a single-key write asserts `Size = 0` / `Index = 0`; legacy decode round-trip preserves field values.
 
-- [ ] **R-095 — Producer-side atomic-batch stamping** *(depends on R-094 ✓, R-089 ✓, Core F-044 ✓)*
+- [x] **R-095 ✓ shipped — Producer-side atomic-batch stamping** *(depends on R-094 ✓, R-089 ✓, Core F-044 ✓)*
   `AtomicWriteGrain.RunSagaAsync` reads `Operations.Count` once on entry, mints a new `LatticeAtomicBatchContext` ambient (RequestContext key `"ol.batch"`, mirroring F-044's `"ol.txid"` and F-036's `"ol.ocid"` precedents), and stamps `(Size, Index)` on every per-key emit including compensation rolls. Implementation mirrors the R-089 `LatticeVectorClockContext` capture-once-per-saga pattern: the context is set once in the saga's first `Prepare` and read at every per-key call site that constructs a `LatticeMutation`. A new private `StampAtomicBatchContext` helper on `AtomicWriteGrain` (alongside the existing `StampOperationIdContext` / `StampTransactionIdContext` / `StampVectorClockContext`) writes the persisted size into ambient context at the head of every `RunSagaAsync` so the saga-wide stamp survives crash recovery.
 
   Persistence: a new `AtomicWriteState.AtomicBatchSize` slot persists the captured size on the saga's first `Prepare` (capture-once, mirroring the `KeyFingerprint` / `TransactionId` / `DeltaKind` precedents — wire-compatible: missing field on legacy persisted state decodes to `0`). `Index` is computed deterministically from the saga's per-operation iteration order and does not need to be persisted separately.
@@ -719,7 +719,7 @@ The phase is a tightly-coupled wave: R-094 / R-095 ship the producer-side metada
 
   Regression tests: 4 `AtomicWriteGrainTests` partials (capture-once, persists-across-crash-replay, compensation-uses-saga-stamp, no-stamp-when-not-in-saga) and 2 `MutationObserverIntegrationTests.AtomicBatch` end-to-end through the real cluster fixture (`SetManyAtomicAsync` of N keys emits `Size = N` on every entry, `Index` covers `0..N-1` exactly once each).
 
-- [ ] **R-096 — Per-tree opt-in and validator** *(depends on R-094 ✓, R-095)*
+- [ ] **R-096 — Per-tree opt-in and validator** *(depends on R-094 ✓, R-095 ✓)*
   New `LatticeReplicationOptions.AtomicBatchDelivery` per-tree boolean (default `false`). Resolved via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)` so different trees on the same silo can opt in independently. When `false`, receivers ignore the metadata and apply each entry as a point write — zero per-entry receiver cost, zero buffer activation, zero observability dimension. When `true`, receivers route entries with `Size > 0` through the R-097 buffer.
 
   Producer-side stamping (R-094 / R-095) is **unconditional** — every emit carries the metadata regardless of receiver-side opt-in. This means flipping a peer to opt-in does not require a producer restart or any wire-format change; the metadata is already on every entry the producer has ever emitted under R-094. Symmetrically, flipping a peer back to `false` immediately stops receiver-side buffering; in-flight entries in the buffer are flushed atomically (if their `Size` predecessors are present) or routed through the orphan timeout path (R-100) for clean disposition.

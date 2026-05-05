@@ -218,4 +218,27 @@ internal sealed class AtomicWriteState
     /// <see langword="null"/> for legacy local-saga state.
     /// </summary>
     [Id(14)] public string? OriginClusterId { get; set; }
+
+    /// <summary>
+    /// Total entry count of the enclosing atomic transaction, captured
+    /// once on the first <see cref="AtomicWritePhase.Prepare"/> from
+    /// <see cref="Entries"/>'s <c>Count</c> (or
+    /// <see cref="ApplyEntries"/>'s <c>Count</c> in apply mode) and
+    /// re-stamped — together with each per-key index — onto Orleans
+    /// <see cref="Runtime.RequestContext"/> via
+    /// <see cref="LatticeAtomicBatchContext.With"/> on every per-key
+    /// call the saga issues during
+    /// <see cref="AtomicWritePhase.Execute"/> and
+    /// <see cref="AtomicWritePhase.Compensate"/> so every emitted
+    /// <see cref="LatticeMutation"/> in the batch carries the
+    /// identical <see cref="LatticeMutation.AtomicBatchSize"/>. The
+    /// per-key index is computed deterministically from the saga's
+    /// per-operation iteration order, so compensation rolls inherit
+    /// the same <see cref="LatticeMutation.AtomicBatchIndex"/> as the
+    /// original prepare for that key. Wire-compatible: missing field
+    /// on legacy persisted state decodes to <c>0</c> (the
+    /// "not-in-a-saga" sentinel the publish helpers stamp on
+    /// single-key non-saga writes).
+    /// </summary>
+    [Id(15)] public int AtomicBatchSize { get; set; }
 }

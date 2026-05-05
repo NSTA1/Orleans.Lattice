@@ -486,6 +486,23 @@ internal sealed class AtomicWriteGrain(
             state.State.VectorClock = LatticeVectorClockContext.Current;
         }
 
+        // Capture batch size once, on the first Prepare, from the
+        // submitted entries' Count. The Count is the canonical sibling
+        // count a remote receiver reads back off
+        // LatticeMutation.AtomicBatchSize to detect when every entry
+        // of a batch has arrived at its receiver-side staging buffer.
+        // Capture-once mirrors the surrounding KeyFingerprint /
+        // TransactionId / DeltaKind / VectorClock pattern; the guard
+        // is "default = 0" rather than "is null" because the slot is
+        // an int. A persisted-zero value on a reminder-driven replay
+        // is indistinguishable from "never captured", and the saga's
+        // own pre-validation rejects zero-entry batches before reaching
+        // PrepareAsync, so a legitimate capture is always non-zero.
+        if (state.State.AtomicBatchSize == 0)
+        {
+            state.State.AtomicBatchSize = entries.Count;
+        }
+
         var lattice = grainFactory.GetGrain<ILattice>(treeId);
         var routing = await lattice.GetRoutingAsync();
         var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
@@ -549,6 +566,7 @@ internal sealed class AtomicWriteGrain(
         StampTransactionIdContext();
         StampDeltaContext();
         StampVectorClockContext();
+        StampAtomicBatchContext();
 
         if (state.State.Phase == AtomicWritePhase.Prepare)
         {
@@ -591,14 +609,25 @@ internal sealed class AtomicWriteGrain(
         {
             try
             {
-                if (state.State.IsApplyMode)
+                // Stamp the per-key (Size, Index) ambient so the
+                // mutation publish helpers stamp identical
+                // LatticeMutation.AtomicBatchSize across the batch
+                // and a strictly-increasing AtomicBatchIndex per
+                // emit. The saga-wide stamp from
+                // StampAtomicBatchContext seeded Index=0; this
+                // per-key scope overrides that with the actual
+                // per-step index and is restored on disposal.
+                using (LatticeAtomicBatchContext.With((state.State.AtomicBatchSize, state.State.NextIndex)))
                 {
-                    await ExecuteApplyStepAsync(lattice, state.State.NextIndex);
-                }
-                else
-                {
-                    var entry = state.State.Entries[state.State.NextIndex];
-                    await lattice.SetAsync(entry.Key, entry.Value);
+                    if (state.State.IsApplyMode)
+                    {
+                        await ExecuteApplyStepAsync(lattice, state.State.NextIndex);
+                    }
+                    else
+                    {
+                        var entry = state.State.Entries[state.State.NextIndex];
+                        await lattice.SetAsync(entry.Key, entry.Value);
+                    }
                 }
 
                 state.State.NextIndex++;
@@ -670,6 +699,14 @@ internal sealed class AtomicWriteGrain(
 
             try
             {
+                // Compensation rolls inherit the original prepare's
+                // index for each key — `index` is the persisted-cursor
+                // mirror of the per-step index recorded in
+                // ExecutePhaseAsync — so the resulting LatticeMutation
+                // carries the same AtomicBatchIndex as the original
+                // commit. AtomicBatchSize is unchanged across the
+                // saga's lifetime.
+                using (LatticeAtomicBatchContext.With((state.State.AtomicBatchSize, index)))
                 using (LatticeOriginContext.With(pre.OriginClusterId))
                 using (LatticeVectorClockContext.With(pre.VectorClock))
                 {
@@ -881,6 +918,29 @@ internal sealed class AtomicWriteGrain(
     private void StampVectorClockContext()
     {
         LatticeVectorClockContext.Current = state.State.VectorClock;
+    }
+
+    /// <summary>
+    /// Re-establishes the saga's persisted batch size on Orleans
+    /// <see cref="RequestContext"/> via
+    /// <see cref="LatticeAtomicBatchContext"/> as a saga-wide
+    /// <c>(Size, Index=0)</c> default at the head of every
+    /// <see cref="RunSagaAsync"/> entry. The execute and compensate
+    /// per-key loops override the index inside their own
+    /// <see cref="LatticeAtomicBatchContext.With"/> scopes; the
+    /// saga-wide stamp is what reminder-driven re-entry observes
+    /// before the per-key loop runs and what an uncaught throw out
+    /// of a per-key scope leaves visible to any post-saga publish
+    /// helper. Persisted-zero (legacy state from before this field
+    /// existed, or a saga that never entered Prepare) clears the
+    /// ambient explicitly so a single-key non-saga write running on
+    /// the same activation observes the absent default.
+    /// </summary>
+    private void StampAtomicBatchContext()
+    {
+        LatticeAtomicBatchContext.Current = state.State.AtomicBatchSize > 0
+            ? (state.State.AtomicBatchSize, 0)
+            : null;
     }
 
     private async Task PublishCompletedEventAsync()
