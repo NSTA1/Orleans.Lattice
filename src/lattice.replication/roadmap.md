@@ -248,10 +248,10 @@ The R-080 → R-093 wave delivers causal+ for every write path the core library 
 48. **R-095 ✓ shipped — Producer-side atomic-batch stamping** `[deps: R-094 ✓, R-089 ✓, Core F-044 ✓]`
     `AtomicWriteGrain.RunSagaAsync` reads `Operations.Count` once on entry, mints a `LatticeAtomicBatchContext` ambient (RequestContext key `"ol.batch"` mirroring F-044's `"ol.txid"`), and stamps `(Size, Index)` on every per-key emit including compensation rolls. Capture-once-per-saga; survives crash recovery via the persisted `AtomicWriteState`.
 
-49. **R-096 — Per-tree opt-in and validator** `[deps: R-094 ✓, R-095 ✓]`
+49. **R-096 ✓ shipped — Per-tree opt-in and validator** `[deps: R-094 ✓, R-095 ✓]`
     New `LatticeReplicationOptions.AtomicBatchDelivery` per-tree boolean (default `false`). When `false`, receivers ignore the metadata and apply each entry as a point write — zero per-entry receiver cost and the producer-side stamping is unconditional so flipping a peer to opt-in does not require a producer restart.
 
-50. **R-097 — Receiver-side `TxApplyBuffer`** `[deps: R-094 ✓, R-096, R-082 ✓]`
+50. **R-097 — Receiver-side `TxApplyBuffer`** `[deps: R-094 ✓, R-096 ✓, R-082 ✓]`
     Per-tree buffer keyed `(originClusterId, transactionId)` with bounded admission (`AtomicBatchBufferMaxTransactions`, `AtomicBatchBufferMaxBytes`) and durable backing under reserved system tree `_lattice_replog_txbuf_{treeId}` via `ISystemLattice` so a silo crash mid-batch does not lose buffered entries. Per-origin head-of-line ordering preserves R-087's FIFO contract across batches. Forward-dep on Core F-042 (`ILatticeQueue<T>`) for future consolidation; until then the inline buffer is the canonical reference.
 
 51. **R-098 — Atomic apply on completion via Core F-054** `[deps: R-097, Core F-054 outstanding]`
@@ -305,7 +305,7 @@ Streams converge before R-080 (causal+ schema) → R-050 (snapshot/bootstrap), w
 | Causal+ schema + snapshot | R-080 ✓ → R-050 ✓ → R-051 ✓ → R-052 ✓ / R-053 ✓ → R-084 ✓ → R-088 ✓ |
 | Causal+ apply | R-081 ✓ → R-082 ✓ → (R-083 ✓, R-085 ✓, R-086 ✓, R-087 ✓ parallel) → R-088 ✓ |
 | Causal+ completeness | (R-089 ✓, R-090 ✓, R-091 ✓, R-092 ✓, R-093 ✓ — all shipped) |
-| Atomic visibility cross-cluster | R-094 ✓ → R-095 ✓ → R-096 → R-097 → R-098 (gated on Core F-054 ✓) → (R-099, R-100, R-101, R-102 parallel) → R-103 → R-104 |
+| Atomic visibility cross-cluster | R-094 ✓ → R-095 ✓ → R-096 ✓ → R-097 → R-098 (gated on Core F-054 ✓) → (R-099, R-100, R-101, R-102 parallel) → R-103 → R-104 |
 
 ---
 
@@ -719,7 +719,7 @@ The phase is a tightly-coupled wave: R-094 / R-095 ship the producer-side metada
 
   Regression tests: 4 `AtomicWriteGrainTests` partials (capture-once, persists-across-crash-replay, compensation-uses-saga-stamp, no-stamp-when-not-in-saga) and 2 `MutationObserverIntegrationTests.AtomicBatch` end-to-end through the real cluster fixture (`SetManyAtomicAsync` of N keys emits `Size = N` on every entry, `Index` covers `0..N-1` exactly once each).
 
-- [ ] **R-096 — Per-tree opt-in and validator** *(depends on R-094 ✓, R-095 ✓)*
+- [x] **R-096 ✓ shipped — Per-tree opt-in and validator** *(depends on R-094 ✓, R-095 ✓)*
   New `LatticeReplicationOptions.AtomicBatchDelivery` per-tree boolean (default `false`). Resolved via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)` so different trees on the same silo can opt in independently. When `false`, receivers ignore the metadata and apply each entry as a point write — zero per-entry receiver cost, zero buffer activation, zero observability dimension. When `true`, receivers route entries with `Size > 0` through the R-097 buffer.
 
   Producer-side stamping (R-094 / R-095) is **unconditional** — every emit carries the metadata regardless of receiver-side opt-in. This means flipping a peer to opt-in does not require a producer restart or any wire-format change; the metadata is already on every entry the producer has ever emitted under R-094. Symmetrically, flipping a peer back to `false` immediately stops receiver-side buffering; in-flight entries in the buffer are flushed atomically (if their `Size` predecessors are present) or routed through the orphan timeout path (R-100) for clean disposition.
@@ -728,7 +728,7 @@ The phase is a tightly-coupled wave: R-094 / R-095 ship the producer-side metada
 
   Documented in [`docs/lattice.replication/atomic-batch-delivery.md`](../../docs/lattice.replication/atomic-batch-delivery.md) (new in R-104).
 
-- [ ] **R-097 — Receiver-side `TxApplyBuffer`** *(depends on R-094 ✓, R-096, R-082 ✓)*
+- [ ] **R-097 — Receiver-side `TxApplyBuffer`** *(depends on R-094 ✓, R-096 ✓, R-082 ✓)*
   Per-tree buffer keyed `(originClusterId, transactionId)` with bounded admission (`AtomicBatchBufferMaxTransactions`, default `512`, validator `>= 1`; `AtomicBatchBufferMaxBytes`, default `64 MB`, validator `>= 1 MB`) and durable backing under reserved system tree `_lattice_replog_txbuf_{treeId}` via `ISystemLattice` so a silo crash mid-batch does not lose buffered entries. The reserved tree-name prefix is added under Core F-037's existing `_lattice_replog_*` reservation — same hard-guarantee discipline that already protects the WAL and DLQ system trees.
 
   Buffer lifecycle: `ReplicationApplier.ApplyPointAsync` checks `entry.AtomicBatchSize > 0` after the existing HWM dedup but before R-082's causal dependency check. If non-zero, the entry is staged in the buffer keyed `(entry.OriginClusterId, entry.TransactionId)` with its index recorded; if the buffer now has all `Size` entries for that key, the whole batch is handed to R-098's apply path under one saga; otherwise the apply returns `Applied = false` with the per-origin HWM unchanged (so the producer's per-peer cursor does not advance and the entries are durably re-shippable on a receiver restart). Staging is durable: each entry is written to the reserved system tree under a deterministic row key `b/{19-padded-staging-id}/{originClusterId}/{transactionId}/{index}` keyed for cheap range-scan recovery on activation.

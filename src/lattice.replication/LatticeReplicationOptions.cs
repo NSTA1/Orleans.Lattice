@@ -463,6 +463,35 @@ public class LatticeReplicationOptions
     public bool ShipDoorbellEnabled { get; set; } = DefaultShipDoorbellEnabled;
 
     /// <summary>
+    /// Per-tree opt-in for cross-cluster atomic-batch delivery. When
+    /// <see langword="true"/>, the receiver buffers entries that carry a
+    /// non-zero <c>AtomicBatchSize</c> until every sibling in the
+    /// enclosing transaction is in hand, then applies the whole batch
+    /// atomically — preserving cross-cluster atomic visibility for
+    /// writes authored via <c>SetManyAtomicAsync</c>. When
+    /// <see langword="false"/> (the default), the receiver ignores the
+    /// atomic-batch metadata and applies each entry as a point write,
+    /// so concurrent remote readers may observe a partial view of an
+    /// atomic batch until every entry finishes converging.
+    /// <para>
+    /// Producer-side stamping of <c>AtomicBatchSize</c> /
+    /// <c>AtomicBatchIndex</c> is unconditional (every emit carries the
+    /// metadata regardless of receiver-side opt-in), so flipping a peer
+    /// to opt-in does not require a producer restart or any wire-format
+    /// change. Symmetrically, flipping a peer back to
+    /// <see langword="false"/> immediately stops receiver-side
+    /// buffering.
+    /// </para>
+    /// <para>
+    /// Operators trade extra latency (the batch waits for its slowest
+    /// sibling) and a partially-buffered batch's GC pin against the
+    /// stronger visibility guarantee. Defaults to
+    /// <see cref="DefaultAtomicBatchDelivery"/>.
+    /// </para>
+    /// </summary>
+    public bool AtomicBatchDelivery { get; set; } = DefaultAtomicBatchDelivery;
+
+    /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
     /// represents "unset". This default is rejected by
     /// <c>LatticeReplicationOptionsValidator</c> so a host that calls
@@ -639,4 +668,13 @@ public class LatticeReplicationOptions
     /// signalling enabled.
     /// </summary>
     public const bool DefaultShipDoorbellEnabled = true;
+
+    /// <summary>
+    /// Default value for <see cref="AtomicBatchDelivery"/>: cross-cluster
+    /// atomic-batch delivery is disabled. Receivers ignore the
+    /// <c>AtomicBatchSize</c> / <c>AtomicBatchIndex</c> metadata and
+    /// apply each entry as a point write — preserving the historical
+    /// causal+ behaviour for hosts that have not opted in.
+    /// </summary>
+    public const bool DefaultAtomicBatchDelivery = false;
 }

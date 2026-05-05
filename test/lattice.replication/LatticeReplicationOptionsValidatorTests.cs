@@ -639,5 +639,18 @@ public class LatticeReplicationOptionsValidatorTests
 
         Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
     }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public void Validate_succeeds_for_either_atomic_batch_delivery_value(bool enabled)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            AtomicBatchDelivery = enabled,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
 }
 
