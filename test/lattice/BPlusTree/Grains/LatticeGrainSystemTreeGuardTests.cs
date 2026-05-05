@@ -162,7 +162,7 @@ public class LatticeGrainSystemTreeGuardTests
         // further internal calls. It does not read or mutate user data;
         // shard grains enforce the real boundary on reads/writes.
         var grain = CreateGrainFor(treeId);
-        Assert.DoesNotThrowAsync(() => grain.GetRoutingAsync());
+        Assert.DoesNotThrowAsync(() => grain.GetRoutingAsync().AsTask());
     }
 
     [TestCaseSource(nameof(ReservedIds))]

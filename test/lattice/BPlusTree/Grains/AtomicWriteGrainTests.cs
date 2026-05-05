@@ -49,7 +49,7 @@ public class AtomicWriteGrainTests
             TreeId,
             ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, LatticeConstants.DefaultShardCount));
         lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(routing));
+            .Returns(routing);
 
         var reminderRegistry = Substitute.For<IReminderRegistry>();
         reminderRegistry.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
