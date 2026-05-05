@@ -36,6 +36,24 @@ internal sealed partial class ReplicationApplier(
     private readonly ConcurrentDictionary<string, CausalApplyBuffer> _buffers = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Per-tree shadow-forward dedupe caches, lazily created on first
+    /// non-range-delete entry per tree. Each cache holds a bounded
+    /// FIFO of recently-applied
+    /// <c>(originClusterId, timestamp, key, op)</c> identity tuples
+    /// and rejects the duplicate-emit pair structural rewrites
+    /// (shard split / merge / saga compensate) generate when they
+    /// shadow-forward a user write into a different shard. The cache
+    /// is a fast-path race-killer: under concurrent inbound
+    /// delivery, both duplicate emits can otherwise observe the same
+    /// pre-advance per-origin high-water-mark and both pass the HWM
+    /// check before either advances it. Correctness is still bounded
+    /// by the HWM — cache eviction under sustained churn cannot
+    /// cause a re-merge.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, RecentApplyCache> _dedupeCaches =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
     /// Per-<c>(treeId, originClusterId)</c> last-applied source HLC. Used
     /// to surface a transport-side regression that breaks the per-origin
     /// FIFO invariant the causal-apply pipeline relies on for occupancy
@@ -116,45 +134,94 @@ internal sealed partial class ReplicationApplier(
                 return new ApplyResult { Applied = false, HighWaterMark = hwm };
             }
 
-            // Causal-plus dependency check. Skip the fetch entirely
-            // when the entry carries no declared dependencies — legacy
-            // peers and pre-causal-plus entries decode VectorClock as null
-            // and must continue to apply unconditionally on the existing
-            // HWM-only path so this code is wire-compatible with the
-            // additive vector-clock schema slot.
-            if (HasCausalDependencies(entry))
+            // Shadow-forward dedupe cache: a structural rewrite (shard
+            // split / merge / saga compensate) that shadow-forwards a
+            // user write into a different shard generates a duplicate
+            // emit pair with identical (origin, hlc, key, op). The
+            // per-origin HWM check above catches the second delivery
+            // when it is sequential (first has already advanced the
+            // HWM), but a concurrent inbound delivery can otherwise
+            // observe the same pre-advance HWM on both deliveries and
+            // both pass before either advances it. The cache is the
+            // fast-path race-killer for that scenario. The check sits
+            // after HWM so HWM-deduped entries do not pollute the
+            // cache (which would break operator-driven re-pin
+            // scenarios where a lower frontier must re-admit a
+            // previously-deduped identity tuple). Range deletes bypass
+            // it entirely because they carry HLC.Zero (ambiguous
+            // identity).
+            var cache = _dedupeCaches.GetOrAdd(
+                entry.TreeId,
+                static (_, capacity) => new RecentApplyCache(capacity),
+                resolved.ShadowForwardDedupeCacheSize);
+            if (!cache.TryAdd(entry))
             {
-                var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
-                if (!CausalApplyBuffer.DependenciesSatisfied(entry, localVc))
+                outcome = LatticeReplicationMetrics.OutcomeShadowForwardDedup;
+                return new ApplyResult { Applied = false, HighWaterMark = hwm };
+            }
+
+            // Roll back the cache reservation if the apply pipeline
+            // throws (or is cancelled) after TryAdd succeeded. Without
+            // rollback, a transient apply failure would leave a phantom
+            // cache entry that suppresses the transport's retry path:
+            // the retry would observe TryAdd=false (cache hit), classify
+            // the call as Applied=false (shadow-forward-dedup), and the
+            // dead-letter decorator's retry-counter contract would clear
+            // the failure counter on what looks like a filtered call —
+            // silently dropping the entry until FIFO eviction admits a
+            // future retry. The park branch returns normally inside the
+            // try, so its cache reservation is correctly retained: the
+            // drained entry routes through ApplyPointAsync directly,
+            // bypassing the cache, and the retained reservation
+            // continues to suppress duplicate-emit pairs of the parked
+            // entry that arrive while it is buffered.
+            try
+            {
+                // Causal-plus dependency check. Skip the fetch entirely
+                // when the entry carries no declared dependencies — legacy
+                // peers and pre-causal-plus entries decode VectorClock as null
+                // and must continue to apply unconditionally on the existing
+                // HWM-only path so this code is wire-compatible with the
+                // additive vector-clock schema slot.
+                if (HasCausalDependencies(entry))
                 {
-                    await ParkAsync(entry, resolved, cancellationToken);
-                    outcome = LatticeReplicationMetrics.OutcomeParkedCausalBuffer;
-                    return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                    var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
+                    if (!CausalApplyBuffer.DependenciesSatisfied(entry, localVc))
+                    {
+                        await ParkAsync(entry, resolved, cancellationToken);
+                        outcome = LatticeReplicationMetrics.OutcomeParkedCausalBuffer;
+                        return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                    }
                 }
+
+                await ApplyPointAsync(entry);
+                RecordApplyLag(entry);
+                RecordFifoState(entry);
+
+                // Advance the HWM only after the apply commits.
+                var advanced = await hwmGrain.TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken);
+                var newHwm = advanced
+                    ? entry.Timestamp
+                    : await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
+
+                // The advance may have unblocked entries parked by an earlier
+                // delivery whose deps included this origin's diagonal. Drain
+                // FIFO until the buffer reaches a fixed point — each drained
+                // apply may itself advance the local vector clock, so re-fetch
+                // before each pass.
+                if (advanced)
+                {
+                    await DrainBufferAsync(entry.TreeId, hwmGrain, resolved, cancellationToken);
+                }
+
+                outcome = LatticeReplicationMetrics.OutcomeSuccess;
+                return new ApplyResult { Applied = true, HighWaterMark = newHwm };
             }
-
-            await ApplyPointAsync(entry);
-            RecordApplyLag(entry);
-            RecordFifoState(entry);
-
-            // Advance the HWM only after the apply commits.
-            var advanced = await hwmGrain.TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken);
-            var newHwm = advanced
-                ? entry.Timestamp
-                : await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
-
-            // The advance may have unblocked entries parked by an earlier
-            // delivery whose deps included this origin's diagonal. Drain
-            // FIFO until the buffer reaches a fixed point — each drained
-            // apply may itself advance the local vector clock, so re-fetch
-            // before each pass.
-            if (advanced)
+            catch
             {
-                await DrainBufferAsync(entry.TreeId, hwmGrain, resolved, cancellationToken);
+                cache.Remove(entry);
+                throw;
             }
-
-            outcome = LatticeReplicationMetrics.OutcomeSuccess;
-            return new ApplyResult { Applied = true, HighWaterMark = newHwm };
         }
         finally
         {
@@ -272,6 +339,23 @@ internal sealed partial class ReplicationApplier(
                         retryCount: 0,
                         reasonTag: reasonTag,
                         cancellationToken).ConfigureAwait(false);
+
+                    // Roll back the shadow-forward cache reservation
+                    // that was made when ApplyAsync originally parked
+                    // this entry. Without rollback, an operator-driven
+                    // retry from the DLQ would observe TryAdd=false on
+                    // the cache and be classified as Applied=false
+                    // (shadow-forward-dedup); the dead-letter
+                    // decorator's "Applied=false clears the counter"
+                    // contract would then silently drop the entry
+                    // until FIFO eviction. The HWM was never advanced
+                    // for this entry (apply threw before TryAdvance),
+                    // so HWM dedupe will not suppress the retry — the
+                    // cache rollback is the only step required.
+                    if (_dedupeCaches.TryGetValue(ent.TreeId, out var cache))
+                    {
+                        cache.Remove(ent);
+                    }
                 }
             }
         }

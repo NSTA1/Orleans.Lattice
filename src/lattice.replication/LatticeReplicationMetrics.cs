@@ -91,6 +91,19 @@ public static class LatticeReplicationMetrics
     public const string OutcomeParkedCausalBuffer = "parked-causal-buffer";
 
     /// <summary>
+    /// <see cref="TagOutcome"/> value: the entry was suppressed by the
+    /// per-tree shadow-forward dedupe cache because an identity tuple
+    /// (<c>(originClusterId, timestamp, key, op)</c>) matching this
+    /// entry was already applied since the last cache eviction. The
+    /// duplicate arises naturally when a structural rewrite (shard
+    /// split / merge / saga compensate) shadow-forwards a user write
+    /// into a different shard: both emits ride the WAL with identical
+    /// identity tuples. The receiver applies the shadow-forwarded
+    /// write exactly once.
+    /// </summary>
+    public const string OutcomeShadowForwardDedup = "shadow-forward-dedup";
+
+    /// <summary>
     /// Tag key for the dead-letter enqueue / removal reason. Values are
     /// drawn from <see cref="ReasonDiscarded"/>, <see cref="ReasonReplayed"/>,
     /// <see cref="ReasonEvicted"/>, and <see cref="ReasonUnknown"/>.
