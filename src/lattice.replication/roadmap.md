@@ -73,6 +73,7 @@ The replication library is functionally complete for an initial NuGet release �
 **Known limitations to surface in the 1.0 release notes** — these are *not* gates, but users with the matching exposure should know:
 
 - **Causal+ scope.** R-080 → R-088 deliver causal+ for the point-write, single-shard-per-mutation path. The full completeness wave (R-089 atomic multi-key writes, R-090 maintenance rewrites, R-091 shard-split / merge / saga shadow-forwards, R-092 tree-global producer VC, R-093 intra-cluster snapshot/restore) has shipped end-to-end alongside the matching core enablers (Core F-043 / F-044 / F-045 / F-046).
+- **Cross-cluster atomic visibility.** Causal+ is *strictly weaker than atomic visibility*: a remote reader concurrent with replication of a `SetManyAtomicAsync` may observe a partial view (some keys arrived and applied, others have not) until every entry in the batch finishes converging on that peer. Closing this gap is **Phase 9 (R-094 → R-104)**, gated on outstanding **Core F-054** (`ApplyManyAtomicAsync` source-HLC-preserving atomic apply seam) and shipped per-tree opt-in via `LatticeReplicationOptions.AtomicBatchDelivery` (default `false`). 1.0 will ship causal+-only for atomic batches; users who need atomic visibility cross-cluster should track Phase 9.
 - **Extended CRDT modes.** Of the three follow-on dispatch items, **R-034 (MV-Register) is unblocked** by the already-shipped Core F-039 and is the cheapest 1.1 win. **R-035 (OR-Map)** and **R-036 (RGA sequence)** remain gated on Core F-040 and F-041 respectively.
 - **WAL-as-sole-commit-point.** Out of scope for 1.0 by design — the v1 "WAL is a side-car of the leaf write" model is the supported configuration. The v2 forward-compat audit lives next to Core F-049d's acceptance criteria rather than as a separate replication-side item, because under F-049d's default flip the cleanest disposition is to *not register* `ReplicationMutationObserver` (no observer-WAL-write to short-circuit) rather than add a runtime gate.
 - **Performance follow-ons.** R-047 / R-043 / R-044 / R-045 / R-074 / R-075 / R-076 / R-078 close perf gaps documented in the WAL design doc's deferred-acceptance rows. None affect correctness; all are scheduled post-1.0.
@@ -236,17 +237,55 @@ The R-080 → R-088 wave delivers causal+ for the point-write, single-tree, sing
 
 46. **R-093 ✓ shipped — Snapshot/restore VC reconstruction** `[deps: R-080 ✓, R-081 ✓, Core F-043 ✓]`
     Closes the intra-cluster snapshot-as-a-tool gap: when an operator snapshots a tree and restores it (same cluster, possibly different timestamp) the live HWM table is wiped but the values still carry their commit-time VC slot (Core F-043). R-093 introduces an `IReplicationLocalVcSeeder.SeedFromTreeAsync(treeName)` that walks the restored values' VC slots and seeds `LocalVectorClock` to per-origin pointwise max. Without this, a restore-then-replicate cycle would replay every restored entry against a zeroed VC and either re-park or re-merge them. Cross-cluster bootstrap (R-050 / R-084) is unaffected — that path pins the snapshot's `causalStableFrontier` directly via `PinSnapshotAsync`.
+
+### Atomic visibility cross-cluster — closing the carve-out R-089 deferred
+
+The R-080 → R-093 wave delivers causal+ for every write path the core library exposes. Causal+ pins the dependency graph, but it is **strictly weaker than atomic visibility**: a remote reader concurrent with replication of a `SetManyAtomicAsync` may observe a partial view (some keys arrived and applied, others have not) until every entry in the batch finishes converging on that peer. R-089's retrospective explicitly flagged this as a follow-on. The eleven items below close it via a receiver-side staging buffer that holds every key in an in-flight atomic batch until the whole batch is in hand and then applies them under a single saga that preserves source-side metadata verbatim. Per-tree opt-in via `AtomicBatchDelivery` (default `false`); operators trade extra latency and a partially-buffered batch's GC pin against the stronger visibility guarantee. Cross-tree atomicity is intentionally out of scope (one batch is one tree).
+
+47. **R-094 — Atomic-batch metadata on the WAL schema** `[deps: R-080 ✓, Core F-044 ✓]`
+    Two new additive `[Id]` slots on `ReplogEntry` and `LatticeMutation` — `AtomicBatchSize` and `AtomicBatchIndex` — keyed off the existing `TransactionId`. Sibling-count detection over a separate commit marker so a missing entry surfaces as the orphan-timeout case R-100 already handles, not an indefinite stall.
+
+48. **R-095 — Producer-side atomic-batch stamping** `[deps: R-094, R-089 ✓, Core F-044 ✓]`
+    `AtomicWriteGrain.RunSagaAsync` reads `Operations.Count` once on entry, mints a `LatticeAtomicBatchContext` ambient (RequestContext key `"ol.batch"` mirroring F-044's `"ol.txid"`), and stamps `(Size, Index)` on every per-key emit including compensation rolls. Capture-once-per-saga; survives crash recovery via the persisted `AtomicWriteState`.
+
+49. **R-096 — Per-tree opt-in and validator** `[deps: R-094, R-095]`
+    New `LatticeReplicationOptions.AtomicBatchDelivery` per-tree boolean (default `false`). When `false`, receivers ignore the metadata and apply each entry as a point write — zero per-entry receiver cost and the producer-side stamping is unconditional so flipping a peer to opt-in does not require a producer restart.
+
+50. **R-097 — Receiver-side `TxApplyBuffer`** `[deps: R-094, R-096, R-082 ✓]`
+    Per-tree buffer keyed `(originClusterId, transactionId)` with bounded admission (`AtomicBatchBufferMaxTransactions`, `AtomicBatchBufferMaxBytes`) and durable backing under reserved system tree `_lattice_replog_txbuf_{treeId}` via `ISystemLattice` so a silo crash mid-batch does not lose buffered entries. Per-origin head-of-line ordering preserves R-087's FIFO contract across batches. Forward-dep on Core F-042 (`ILatticeQueue<T>`) for future consolidation; until then the inline buffer is the canonical reference.
+
+51. **R-098 — Atomic apply on completion via Core F-054** `[deps: R-097, Core F-054 outstanding]`
+    On batch completion the receiver calls `IReplicationApplyGrain.ApplyManyAtomicAsync(entries, txId, origin, sourceVc, ct)` (Core F-054), which reuses `AtomicWriteGrain.RunSagaAsync` and threads each entry's source-side `(Timestamp, OriginClusterId, VectorClock, ExpiresAtTicks)` through nested `LatticeOriginContext` / `LatticeVectorClockContext` / `LatticeHlcOverrideContext` scopes — preserving the R-022 source-HLC invariant for atomic batches. Per-origin HWM advances once on completion (not per-entry) so a concurrent reader of the HWM never sees an intermediate value.
+
+52. **R-099 — TX-aware causal-stable WAL GC frontier** `[deps: R-097, R-083 ✓]`
+    Extends `ILatticeReplicationCursorRegistry.ReportAsync` with an optional `BlockedAtHlc` parameter; R-083's GC predicate ANDs the lowest-HLC of any partially-buffered batch into the trim-eligibility check so the producer cannot trim past an entry the receiver still needs to recover from buffer state.
+
+53. **R-100 — Orphan transaction timeout + DLQ** `[deps: R-097, R-060 ✓]`
+    `TxBufferOrphanTimeout` (default `5 min`); R-067's maintenance grain sweeps stuck batches at half-cadence and routes a composite DLQ entry tagged `ReasonOrphanTransaction`. Eviction clears `BlockedAtHlc` so R-099 unpins the producer GC frontier and advances the per-origin HWM past the orphan so causal-stream progress resumes.
+
+54. **R-101 — Atomic-batch observability** `[deps: R-097, R-098, R-064 ✓]`
+    Four new instruments on `orleans.lattice.replication`: `apply.tx_buffered` (UpDownCounter), `apply.tx_buffer_bytes` (UpDownCounter), `apply.tx_apply_duration_ms` (Histogram, the user-visible cross-cluster atomic latency), `apply.tx_completed{outcome}` (Counter). Reserves `ReasonOrphanTransaction` and `ReasonAtomicApplyFailure` reason-tag constants up front (mirrors R-064's pre-reservation pattern).
+
+55. **R-102 — Bootstrap snapshot in-progress saga handling** `[deps: R-097, R-050 ✓, R-051 ✓]`
+    Closes the snapshot/handoff hazard where a producer's `ExportAsync` running concurrently with an in-progress saga splits the batch across the snapshot boundary. `ExportAsync` quiesces in-progress sagas under `SnapshotSagaQuiesceTimeout` (default `30 s`); sagas exceeding the timeout are excluded via a `txid blacklist` returned alongside the snapshot stream and re-delivered atomically post-bootstrap via R-097's buffer.
+
+56. **R-103 — End-to-end atomic visibility chaos verification** `[deps: R-098, R-099, R-100, R-101]`
+    Closes the chaos test R-089's retrospective deferred. `[Category("Chaos")]` fixture covering sustained atomic-batch load under ack-loss / partition / silo restart, producer crash mid-saga draining via R-100, and snapshot-during-saga via R-102. Asserts on `apply.tx_completed{outcome}` for terminal disposition.
+
+57. **R-104 — Documentation + operator playbook** `[deps: R-098, R-099, R-100, R-101, R-102, R-103]`
+    New `docs/lattice.replication/atomic-batch-delivery.md` covering the contract, knobs, latency / GC-pin trade-offs, and orphan-timeout operator playbook. Marks the cross-cluster atomic visibility carve-out closed in `docs/lattice/consistency.md` and `docs/lattice.replication/wal-causal-plus.md` §11; updates the R-089 retrospective in this roadmap.
+
 ### Extended CRDT modes (gated on outstanding core primitives)
 
 These ship as paired (core primitive ↔ replication delta) deliverables — building either side in isolation freezes a contract before its consumer validates it. Order between the three is by user demand, not technical dependency.
 
-47. **R-034 — MV-Register delta + dispatch** `[deps: Core F-039 outstanding]`
+58. **R-034 — MV-Register delta + dispatch** `[deps: Core F-039 outstanding]`
     Pair with F-039 in a single cycle.
 
-48. **R-035 — OR-Map delta + dispatch** `[deps: Core F-040 outstanding]`
+59. **R-035 — OR-Map delta + dispatch** `[deps: Core F-040 outstanding]`
     Pair with F-040. Includes the recursive `InnerMode` wire-envelope extension.
 
-49. **R-036 — RGA sequence delta + dispatch** `[deps: Core F-041 outstanding]`
+60. **R-036 — RGA sequence delta + dispatch** `[deps: Core F-041 outstanding]`
     Pair with F-041. Highest implementation complexity of the three (sequence convergence, back-pressure for high-frequency editors).
 
 ### Suggested concurrency
@@ -266,6 +305,7 @@ Streams converge before R-080 (causal+ schema) → R-050 (snapshot/bootstrap), w
 | Causal+ schema + snapshot | R-080 ✓ → R-050 ✓ → R-051 ✓ → R-052 ✓ / R-053 ✓ → R-084 ✓ → R-088 ✓ |
 | Causal+ apply | R-081 ✓ → R-082 ✓ → (R-083 ✓, R-085 ✓, R-086 ✓, R-087 ✓ parallel) → R-088 ✓ |
 | Causal+ completeness | (R-089 ✓, R-090 ✓, R-091 ✓, R-092 ✓, R-093 ✓ — all shipped) |
+| Atomic visibility cross-cluster | R-094 → R-095 → R-096 → R-097 → R-098 (gated on Core F-054) → (R-099, R-100, R-101, R-102 parallel) → R-103 → R-104 |
 
 ---
 
@@ -657,6 +697,128 @@ The R-080 → R-088 wave delivers causal+ for the point-write, single-tree, sing
   *Future-compat:* in v2 the same VC slot drives the local materialiser's apply progress without any code change; the seeder walks the restored materialised projection rather than the restored primary tree.
 
   **Retrospective:** Shipped as a public `IReplicationLocalVcSeeder` seam (default impl `LatticeReplicationLocalVcSeeder`, internal sealed) returning a public `LocalVcSeedReport` diagnostic record (`TreeName`, `Frontier`, `EntriesScanned`, `SeedApplied` — no Orleans serialization, mirrors `OperatorReseedDecision` / `ReplicationGcReport` shape). The default impl walks every shard via `IShardCountProvider.GetShardCountAsync` (new internal seam wrapping `LatticeOptionsResolver` for testability — registered as `DefaultShardCountProvider`) and chains `IShardRootGrain.GetLeftmostLeafIdAsync` → `IBPlusLeafGrain.GetLiveRawEntriesAsync` → `GetNextSiblingAsync` to enumerate leaves; for each `LwwEntry` with a non-null `VectorClock` slot the seeder calls `frontier.MergeFrom(entry.VectorClock)` (pointwise-max). Both halves of the local vector clock are seeded: the durable half via `IReplicationHighWaterMarkGrain.PinSnapshotAsync(HybridLogicalClock.Zero, frontier, ct)` (uses `Zero` because intra-cluster restore has no snapshot timestamp — the frontier is the authoritative seed), the in-memory half via per-origin `LocalVectorClockCache.AdvanceForeign(treeName, origin, hlc)` so the producer-side cache (R-092) does not require a fresh cold-start RPC after the seed. The `IReplicationModeResolver.Resolve(treeName)` no-op gate runs first: a non-replicated tree returns `LocalVcSeedReport { SeedApplied = false, EntriesScanned = 0, Frontier = null }` without consulting the tree. The reported `Frontier` is a defensive `frontier.Clone()` so caller-side mutation does not leak into the cache. Empty trees pin an empty frontier (post-seed HWM grain consistent). Partial restores seed correctly from the surviving subset because the pointwise-max accumulator handles missing-origin components as zero. Both seams registered via `TryAddSingleton` in `AddLatticeReplication` so hosts can pre-register replacements before configuring replication. Test coverage: 18 `LatticeReplicationLocalVcSeederTests` (4 ctor null-arg guards, 3 arg validation, no-op-when-not-replicated, empty-tree, zero-shard-count, pointwise-max-multi-origin, walks-every-shard-and-leaf, skips-null-VC-slots, pins-with-zero-asOfHlc, pin-uses-tree-name-keyed-grain, primes-cache-per-origin, defensive-copy-of-frontier, partial-restore-from-subset), 6 `DefaultShardCountProviderTests` (ctor null-resolver, null/empty treeId, pre-cancellation, returns-resolved-shard-count via real `LatticeOptionsResolver` + substituted `ILatticeRegistry`, system-tree shortcut), 6 DI tests (default-registers / singleton / no-overwrite for each new seam). Documented in [`docs/lattice.replication/wal-causal-plus.md`](../../docs/lattice.replication/wal-causal-plus.md) §12.2.2.
+## 🔲 Phase 9 — Atomic visibility cross-cluster *(closes the carve-out R-089 deferred)*
+
+Causal+ pins the dependency graph but is **strictly weaker than atomic visibility**: a remote reader concurrent with replication of a `SetManyAtomicAsync` may observe a partial view (some keys arrived and applied, others have not) until every entry in the batch finishes converging on that peer. R-089's retrospective explicitly flagged this as a follow-on. Phase 9 closes it via a receiver-side staging buffer that holds every key in an in-flight atomic batch until the whole batch is in hand and then applies them under a single saga that preserves source-side metadata verbatim. Per-tree opt-in via `LatticeReplicationOptions.AtomicBatchDelivery` (default `false`); operators trade extra latency and a partially-buffered batch's GC pin against the stronger visibility guarantee. Cross-tree atomicity is intentionally out of scope (one batch is one tree) — that broader primitive would require multi-tree saga coordination that the core library does not expose.
+
+The phase is a tightly-coupled wave: R-094 / R-095 ship the producer-side metadata; R-096 ships the per-tree opt-in; R-097 ships the receiver-side staging buffer; R-098 ships the atomic apply on completion via Core F-054; R-099 / R-100 close the producer-side GC and orphan-recovery hazards the buffer introduces; R-101 ships observability; R-102 closes the bootstrap interaction; R-103 ships the chaos verification; R-104 ships the operator playbook. Build sequentially — each item directly depends on the prior one and several depend on outstanding core enablers (F-054 most prominently).
+
+- [ ] **R-094 — Atomic-batch metadata on the WAL schema** *(depends on R-080 ✓, Core F-044 ✓)*
+  Two new additive `[Id]` slots on `ReplogEntry` and `LatticeMutation` — `AtomicBatchSize` (the total entry count of the enclosing atomic transaction; `0` for non-atomic single-key writes) and `AtomicBatchIndex` (the zero-based position of this entry within the batch; `0` for non-atomic). Keyed off the existing `TransactionId` slot Core F-044 added — the receiver detects sibling membership by `(originClusterId, transactionId)`. Wire-compatible: legacy persisted `LatticeMutation` payloads decode `Size = 0` / `Index = 0`, which the receiver-side R-097 buffer treats as "not part of an atomic batch" and applies as a point write. The `Size` slot is the canonical sibling-count source; there is deliberately no separate "commit marker" entry, so a partially-shipped batch that loses an entry surfaces as the orphan-timeout case R-100 already handles, not an indefinite stall waiting on a commit row that never arrives.
+
+  Producer-side stamping is unconditional (every emit gets the field) so the slot is the same shape on every wire path — a peer with `AtomicBatchDelivery = false` simply ignores the slot. Storage cost is negligible: two small integers per entry, both packed by the Orleans serializer. Documented in [`docs/lattice.replication/wal-causal-plus.md`](../../docs/lattice.replication/wal-causal-plus.md) as a new "Atomic batch metadata" section alongside the existing causal+ schema.
+
+  Acceptance: a 5-key atomic set asserts `Size = 5` and `Index ∈ {0,1,2,3,4}` across the five emitted `ReplogEntry`s, all sharing the same `TransactionId`; a single-key write asserts `Size = 0` / `Index = 0`; legacy decode round-trip preserves field values.
+
+- [ ] **R-095 — Producer-side atomic-batch stamping** *(depends on R-094, R-089 ✓, Core F-044 ✓)*
+  `AtomicWriteGrain.RunSagaAsync` reads `Operations.Count` once on entry, mints a new `LatticeAtomicBatchContext` ambient (RequestContext key `"ol.batch"`, mirroring F-044's `"ol.txid"` and F-036's `"ol.ocid"` precedents), and stamps `(Size, Index)` on every per-key emit including compensation rolls. Implementation mirrors the R-089 `LatticeVectorClockContext` capture-once-per-saga pattern: the context is set once in the saga's first `Prepare` and read at every per-key call site that constructs a `LatticeMutation`. A new private `StampAtomicBatchContext` helper on `AtomicWriteGrain` (alongside the existing `StampOperationIdContext` / `StampTransactionIdContext` / `StampVectorClockContext`) writes the persisted size into ambient context at the head of every `RunSagaAsync` so the saga-wide stamp survives crash recovery.
+
+  Persistence: a new `AtomicWriteState.AtomicBatchSize` slot persists the captured size on the saga's first `Prepare` (capture-once, mirroring the `KeyFingerprint` / `TransactionId` / `DeltaKind` precedents — wire-compatible: missing field on legacy persisted state decodes to `0`). `Index` is computed deterministically from the saga's per-operation iteration order and does not need to be persisted separately.
+
+  Compensation rolls inherit the same `(Size, Index)` because they replay the same operation list under the saga-wide ambient context; the index is the same as the original prepare for that key. Single-key non-saga writes never enter `AtomicWriteGrain` and emit with `Size = 0` / `Index = 0` because the ambient context is unset.
+
+  Regression tests: 4 `AtomicWriteGrainTests` partials (capture-once, persists-across-crash-replay, compensation-uses-saga-stamp, no-stamp-when-not-in-saga) and 2 `MutationObserverIntegrationTests.AtomicBatch` end-to-end through the real cluster fixture (`SetManyAtomicAsync` of N keys emits `Size = N` on every entry, `Index` covers `0..N-1` exactly once each).
+
+- [ ] **R-096 — Per-tree opt-in and validator** *(depends on R-094, R-095)*
+  New `LatticeReplicationOptions.AtomicBatchDelivery` per-tree boolean (default `false`). Resolved via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)` so different trees on the same silo can opt in independently. When `false`, receivers ignore the metadata and apply each entry as a point write — zero per-entry receiver cost, zero buffer activation, zero observability dimension. When `true`, receivers route entries with `Size > 0` through the R-097 buffer.
+
+  Producer-side stamping (R-094 / R-095) is **unconditional** — every emit carries the metadata regardless of receiver-side opt-in. This means flipping a peer to opt-in does not require a producer restart or any wire-format change; the metadata is already on every entry the producer has ever emitted under R-094. Symmetrically, flipping a peer back to `false` immediately stops receiver-side buffering; in-flight entries in the buffer are flushed atomically (if their `Size` predecessors are present) or routed through the orphan timeout path (R-100) for clean disposition.
+
+  Validator: the existing `LatticeReplicationOptionsValidator` accepts both `true` and `false` for the new field with no additional rules. New observability dimension: every Phase 9 instrument (R-101) is tagged with the `tree` dimension and records only on opt-in trees, so a misconfigured opt-in surfaces as an unexpected metric appearance rather than silent traffic.
+
+  Documented in [`docs/lattice.replication/atomic-batch-delivery.md`](../../docs/lattice.replication/atomic-batch-delivery.md) (new in R-104).
+
+- [ ] **R-097 — Receiver-side `TxApplyBuffer`** *(depends on R-094, R-096, R-082 ✓)*
+  Per-tree buffer keyed `(originClusterId, transactionId)` with bounded admission (`AtomicBatchBufferMaxTransactions`, default `512`, validator `>= 1`; `AtomicBatchBufferMaxBytes`, default `64 MB`, validator `>= 1 MB`) and durable backing under reserved system tree `_lattice_replog_txbuf_{treeId}` via `ISystemLattice` so a silo crash mid-batch does not lose buffered entries. The reserved tree-name prefix is added under Core F-037's existing `_lattice_replog_*` reservation — same hard-guarantee discipline that already protects the WAL and DLQ system trees.
+
+  Buffer lifecycle: `ReplicationApplier.ApplyPointAsync` checks `entry.AtomicBatchSize > 0` after the existing HWM dedup but before R-082's causal dependency check. If non-zero, the entry is staged in the buffer keyed `(entry.OriginClusterId, entry.TransactionId)` with its index recorded; if the buffer now has all `Size` entries for that key, the whole batch is handed to R-098's apply path under one saga; otherwise the apply returns `Applied = false` with the per-origin HWM unchanged (so the producer's per-peer cursor does not advance and the entries are durably re-shippable on a receiver restart). Staging is durable: each entry is written to the reserved system tree under a deterministic row key `b/{19-padded-staging-id}/{originClusterId}/{transactionId}/{index}` keyed for cheap range-scan recovery on activation.
+
+  Per-origin head-of-line ordering: the buffer preserves R-087's per-(origin, shard) FIFO contract by tracking the lowest-HLC entry for each `(originClusterId, transactionId)` and refusing to admit a new transaction whose lowest-HLC predates an already-buffered transaction from the same origin. The check is local to the buffer's in-memory index and runs in O(1) per admission.
+
+  Cross-shard atomicity: a single atomic batch may span multiple WAL shards (because `(treeId, hash(key) % N)` distributes keys across shards independent of transaction membership). The buffer accumulates entries from all shards under the same `transactionId`, so a 5-key batch hashed to 3 shards admits 5 entries before triggering the apply. The receiver does not require any cross-shard coordination; the `Size` field is the canonical completeness signal.
+
+  Activation: on grain activation the applier walks the reserved system tree, rehydrates every staged entry into the in-memory buffer keyed by `(originClusterId, transactionId)`, and resumes admission. A staged batch whose siblings are still in flight remains buffered; a staged batch whose `Size` is fully present (all siblings already rehydrated) triggers immediate apply on the next pump tick.
+
+  Forward-dep on **Core F-042** (`ILatticeQueue<T>`) for future consolidation: the inline FIFO index over the system tree is exactly the shape F-042 will eventually generalise. Until F-042 lands, the buffer's inline implementation is the canonical reference and must not be duplicated elsewhere in the package — the same forward-dep discipline R-060's DLQ established. When F-042 ships, R-097's buffer refactors to consume `ILatticeQueue<TxStagedEntry>` rather than re-implementing the index.
+
+  Documented in [`docs/lattice.replication/atomic-batch-delivery.md`](../../docs/lattice.replication/atomic-batch-delivery.md) (new in R-104).
+
+- [ ] **R-098 — Atomic apply on completion via Core F-054** *(depends on R-097, Core F-054 outstanding)*
+  On batch completion (every `Size` entries for a `(originClusterId, transactionId)` key are buffered), the receiver dequeues the batch under one saga via `IReplicationApplyGrain.ApplyManyAtomicAsync(entries, transactionId, originClusterId, sourceVectorClock, ct)` (Core F-054). The apply grain reuses `AtomicWriteGrain.RunSagaAsync` end-to-end and threads each entry's source-side `(Timestamp, OriginClusterId, VectorClock, ExpiresAtTicks)` through nested `LatticeOriginContext` / `LatticeVectorClockContext` / `LatticeHlcOverrideContext` scopes — preserving the R-022 source-HLC-preservation invariant the existing point-apply seam already enforces, but now under one saga rather than per-key.
+
+  Per-origin HWM advance: on apply completion, the receiver advances the per-origin HWM **once** to the maximum HLC across the batch (not per-entry), and **only if** the apply succeeded all-or-nothing. A failed apply leaves the HWM unchanged so the producer re-ships the batch on the next pump cycle. This is the critical invariant that delivers atomic visibility cross-cluster: a concurrent reader observing the per-origin HWM never sees an intermediate value where some-but-not-all keys have been applied.
+
+  Idempotency: F-054's `ApplyManyAtomicAsync` is itself idempotent on `transactionId` (the underlying `AtomicWriteGrain` is keyed by `(treeId, transactionId)` and replays its persisted saga state on re-entry), so a producer that re-ships the same batch after a transient receiver failure observes the same terminal outcome on the second attempt.
+
+  Per-entry observability still fires: R-064's `apply.lag` and R-068's `apply.duration` continue to record per-entry inside the saga, so existing dashboards do not lose granularity. R-101 adds the new transaction-scoped instruments alongside.
+
+  Apply-side failures: if the saga itself throws (storage-provider failure, validation failure inside the saga), R-098 routes the failed transaction through `IReplicationDeadLetterGrain.EnqueueAsync` with reason tag `LatticeReplicationMetrics.ReasonAtomicApplyFailure` (reserved by R-101) — composite payload spans every entry in the batch so an operator inspecting the DLQ sees the whole transaction together. The HWM is **not** advanced; the same producer-side re-ship + receiver-side dedup cycle that handles point-write apply failures applies here.
+
+- [ ] **R-099 — TX-aware causal-stable WAL GC frontier** *(depends on R-097, R-083 ✓)*
+  Closes the producer-side GC hazard the receiver-side buffer introduces. Today R-083's GC predicate `causal_stable = min(peerVectorClock)` allows the producer to trim past any entry the receiver has acknowledged via `ILatticeReplicationCursorRegistry.ReportCursorAsync`. With R-097's buffer, a partially-buffered batch on the receiver is **not** acknowledged (the per-origin HWM has not advanced past it), but the buffered entries are durable on the receiver side and the producer's WAL is the authoritative re-ship source if the receiver buffer is lost (e.g. via R-100's orphan timeout eviction). If the producer trims a buffered entry before the receiver applies the batch, the receiver cannot recover from a buffer loss.
+
+  Fix: extend `ILatticeReplicationCursorRegistry.ReportCursorAsync` with an optional `BlockedAtHlc` parameter (additive; legacy callers pass `null` and contribute no buffer pin). The receiver reports the lowest `entry.Timestamp` of any partially-buffered batch in the registry whenever the buffer admits or releases a transaction. R-083's GC predicate is widened to AND in `entry.Timestamp < blocked_floor` (where `blocked_floor = min(BlockedAtHlc across consumers, default ∞)`) — a null `BlockedAtHlc` from any consumer contributes the default ceiling and does not block trimming. The cache that R-083 introduced for `causal_stable` extends to also memo `blocked_floor`, recomputing only on registry update. Documented as an extension to [`docs/lattice/wal.md`](../../docs/lattice/wal.md) and [`docs/lattice.replication/wal-causal-plus.md`](../../docs/lattice.replication/wal-causal-plus.md).
+
+  Acceptance: a producer with a 1000-entry WAL and a single peer with one buffered atomic transaction at HLC `t` does not trim past `t` on the next GC pass; once R-100 evicts the orphan, the next GC pass trims correctly through the now-unblocked frontier.
+
+- [ ] **R-100 — Orphan transaction timeout + DLQ** *(depends on R-097, R-060 ✓)*
+  A buffered batch that never completes (because a sibling entry was lost in transit, the producer crashed mid-saga, or the buffer was bumped against `AtomicBatchBufferMaxTransactions`) must not pin the WAL forever. New `LatticeReplicationOptions.TxBufferOrphanTimeout` (default `5 min`, validator `> TimeSpan.Zero`) caps the residency time of a buffered transaction; R-067's maintenance grain sweeps stuck batches at half-cadence (every `MaintenanceGcInterval / 2`, default 2.5 s) and routes any transaction whose admission time exceeds the timeout through `IReplicationDeadLetterGrain.EnqueueAsync` with reason tag `LatticeReplicationMetrics.ReasonOrphanTransaction` (reserved by R-101). The DLQ entry is composite — one row per buffered entry, all sharing the same `transactionId` and reason tag — so an operator inspecting the DLQ sees the whole transaction together.
+
+  Eviction sequence: (a) admit the orphan to the DLQ; (b) clear `BlockedAtHlc` for the evicted transaction so R-099 unpins the producer GC frontier; (c) advance the per-origin HWM past the orphan's maximum HLC so causal-stream progress resumes; (d) remove the staged entries from the reserved system tree. Step (c) is the load-bearing invariant: without it, every subsequent inbound entry from the same origin would re-trigger the orphan-completion check and the receiver would stall.
+
+  Replay tooling: the existing `ILatticeReplicationDeadLetters.ReplayAsync(entryId, ct)` API works on orphan entries unchanged — replay routes the entry through the point-write apply path (bypassing R-097's buffer) so an operator can hand-recover individual orphan entries. Replay of an entire orphan transaction (all rows sharing a `transactionId`) is documented in R-104's operator playbook as a multi-call sequence: replay each entry in `Index` order; the final entry observes its predecessors via the per-origin HWM dedup and applies.
+
+  Acceptance: a buffered 5-key transaction with one missing sibling is admitted to the DLQ after `TxBufferOrphanTimeout`; producer GC unpins on the next pass; per-origin HWM advances past the orphan's max HLC; subsequent inbound traffic from the same origin resumes normal apply.
+
+- [ ] **R-101 — Atomic-batch observability** *(depends on R-097, R-098, R-064 ✓)*
+  Four new instruments on the `orleans.lattice.replication` meter, tagged `tree` everywhere and `outcome` where relevant:
+
+  - `apply.tx_buffered` UpDownCounter<long> — count of distinct `(originClusterId, transactionId)` keys currently in the buffer. Incremented on first-entry admission; decremented on apply completion or orphan eviction.
+  - `apply.tx_buffer_bytes` UpDownCounter<long> — wire-bytes total of all buffered entries. Drives `IHealthCheck` integration in R-065 once that ships.
+  - `apply.tx_apply_duration_ms` Histogram<double> — the user-visible cross-cluster atomic latency. Recorded once per terminal apply outcome; sampled from `transaction admission timestamp → R-098 apply completion timestamp`. The single most operationally-important metric on the surface — a host configuring `AtomicBatchDelivery = true` is explicitly trading latency for visibility, and this histogram is how they verify the trade-off lands as expected.
+  - `apply.tx_completed{outcome}` Counter<long>, outcome ∈ `{success, dlq_orphan, dlq_apply_failure, evicted_capacity}` — terminal disposition counter for buffered batches.
+
+  Two new reason-tag constants on `LatticeReplicationMetrics` reserved up front (mirrors R-064's pre-reservation pattern so a future cause-of-failure refinement does not break alert cardinality):
+  - `ReasonOrphanTransaction = "orphan-transaction"`
+  - `ReasonAtomicApplyFailure = "atomic-apply-failure"`
+
+  Documented in [`docs/lattice.replication/observability.md`](../../docs/lattice.replication/observability.md) as a new "Atomic-batch instruments" section. The `apply.lag` (R-064) and `apply.duration` (R-068) histograms continue to record per-entry inside the saga, so the per-entry view is preserved for diagnostics that compare the producer-emit-to-receiver-apply lag of point writes vs. atomic batches on the same tree.
+
+  Test coverage: per-instrument unit tests under existing `LatticeReplicationMetricsTests` patterns; receiver-side integration tests that assert each terminal outcome path emits the correct `apply.tx_completed{outcome}` sample.
+
+- [ ] **R-102 — Bootstrap snapshot in-progress saga handling** *(depends on R-097, R-050 ✓, R-051 ✓)*
+  Closes the snapshot/handoff hazard where a producer's `ExportAsync` running concurrently with an in-progress saga splits the batch across the snapshot boundary — some keys land in the snapshot stream (because they were already committed to the producer's tree at the as-of HLC), others arrive via the post-snapshot incremental stream. Without coordination, the receiver's R-097 buffer would never complete the batch (the snapshot delivery path bypasses the buffer because each snapshot entry is a point-write into a freshly-bootstrapping receiver), and the post-bootstrap incremental delivery would arrive with `Size = N` but only `N - k` siblings present.
+
+  Fix: `ISnapshotProvider.ExportAsync` quiesces in-progress sagas under `SnapshotSagaQuiesceTimeout` (default `30 s`, validator `> TimeSpan.Zero`); the export blocks new saga starts and waits for any saga whose `AtomicWriteState` is `InProgress` to commit-or-rollback before scanning the tree. Sagas exceeding the timeout are excluded via a `txid blacklist` returned alongside the snapshot stream as a new `SnapshotEntry.SagaBlacklist` field (additive; legacy receivers ignore the field). The receiver's bootstrap state machine (R-051) records the blacklist in `BootstrapCoordinatorState`; on transition to `IncrementalHandoff` the receiver's R-097 buffer admits blacklisted-transaction entries directly to the buffer and, on completion, applies them atomically via R-098 — the entries were never in the snapshot, so the buffer-then-apply path delivers the atomic batch without splitting.
+
+  Edge case: if a blacklisted saga's incremental delivery is itself orphaned (never completes within `TxBufferOrphanTimeout`), R-100's standard orphan path handles it — the batch is admitted to the DLQ tagged `ReasonOrphanTransaction`, the operator recovers via the standard replay tooling.
+
+  Acceptance: a producer running a 10-key `SetManyAtomicAsync` while a peer bootstrapping observes either (a) all 10 keys in the snapshot, or (b) 0 keys in the snapshot + 10 keys in the post-bootstrap incremental stream — never a partial-snapshot view that splits the batch.
+
+- [ ] **R-103 — End-to-end atomic visibility chaos verification** *(depends on R-098, R-099, R-100, R-101)*
+  Closes the chaos test R-089's retrospective deferred. New `[Category("Chaos")]` fixture `AtomicBatchDeliveryChaosTests` covering:
+
+  - Sustained atomic-batch load (50 batches/s × 30 s, batch size uniform `[2, 16]`) under ack-loss / partition / silo restart on both producer and receiver sides;
+  - Producer crash mid-saga (kill the `AtomicWriteGrain` activation between persisting `AtomicWriteState` and committing every `Set`); R-100's orphan timeout drains the receiver-side buffer; per-origin HWM resumes;
+  - Snapshot-during-saga (R-102): pause a producer mid-saga, run `ISnapshotProvider.ExportAsync` against a freshly-bootstrapping peer, resume the producer, assert the batch arrives atomically on the bootstrapped peer;
+  - Buffer overflow: inject `AtomicBatchBufferMaxTransactions = 4` and submit 100 concurrent transactions; the surplus is evicted via `apply.tx_completed{outcome=evicted_capacity}` and admitted to the DLQ tagged `ReasonOrphanTransaction`.
+
+  Asserts on `apply.tx_completed{outcome}` for terminal disposition: every submitted transaction reaches exactly one terminal outcome; the sum of terminal outcomes equals the total submitted. Asserts on cross-cluster atomic visibility: a continuous reader on the receiving peer never observes a partial view of any submitted batch — for every batch, the reader sees either zero of the keys or all of them, never an intermediate state.
+
+  Excluded from inner-loop runs per repo convention; gated on CI / pre-PR runs.
+
+- [ ] **R-104 — Documentation + operator playbook** *(depends on R-098, R-099, R-100, R-101, R-102, R-103)*
+  New `docs/lattice.replication/atomic-batch-delivery.md` covering:
+  - The contract: per-tree opt-in semantics, atomic visibility guarantee, latency vs. visibility trade-off table.
+  - Knobs: `AtomicBatchDelivery`, `AtomicBatchBufferMaxTransactions`, `AtomicBatchBufferMaxBytes`, `TxBufferOrphanTimeout`, `SnapshotSagaQuiesceTimeout` — defaults, recommended ranges per workload class, validator bounds.
+  - Observability: every R-101 instrument's units / tags / interpretation.
+  - Operator playbook: orphan-timeout recovery (single-entry replay; whole-transaction replay sequence); buffer-overflow recovery (capacity tuning; DLQ replay); snapshot-during-saga troubleshooting.
+  - Capacity planning: how to size `AtomicBatchBufferMaxBytes` against expected concurrent-batch load × average-batch-size × replication-window-rtt.
+
+  Marks the cross-cluster atomic visibility carve-out closed in `docs/lattice/consistency.md` (delete the "tracked roadmap item" reference) and `docs/lattice.replication/wal-causal-plus.md` §11; updates the R-089 retrospective in this roadmap to reference the closed-out Phase 9; updates the Pre Initial Release "Causal+ scope" bullet to reflect the now-shipped guarantee.
+
+  Recommend shipping in a single feature cycle alongside R-103's chaos verification — the chaos fixture's behaviour is the load-bearing input for the operator playbook's capacity-planning section.
+
 ---
 ## Dependencies on the core library
 
@@ -687,7 +849,14 @@ These four enable the R-089–R-093 wave. Independent of each other; each may la
 - **Core F-045 — `MutationKind` classification on `LatticeMutation`** *(required by R-090 ✓)*: New `[Id]` enum slot `MutationKind { User, Maintenance }` with default `User` for wire-compat. Every internal mutation site (resize / rebalance / compaction / internal structural rewrite) tags emits with `MutationKind.Maintenance`. User-driven writes (`SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetManyAtomicAsync`, saga prepare, saga compensate, bulk-load) tag emits with `MutationKind.User`. The replication observer reads this slot and skips the WAL append for `Maintenance` on replicated trees. Note: this classification is independent of `OriginClusterId` — a remote-origin maintenance mutation would still be `Maintenance` and still skip the WAL.
 
 - **Core F-046 — VC + origin context preservation through structural ops** *(required by R-091)*: Extend the existing `LatticeOriginContext` (F-036) to carry a `VectorClock` alongside the `OriginClusterId` so structural rewrites that shadow-forward a user write (shard split, shard merge, saga compensate) inherit both pieces of metadata as immutable inputs rather than re-capturing fresh values. Same end-to-end preservation discipline F-036 applied — every structural site that previously read `LatticeOriginContext.Current.OriginClusterId` to stamp `with { OriginClusterId = ... }` also reads `Current.VectorClock` to stamp `with { VectorClock = ... }`. The replication observer never re-captures a VC for any emit whose ambient context already supplies one.
-These surface as tracked items on `../lattice/roadmap.md` under the "Replication enablers" section; they must land in the core library *before* the corresponding `R-###` item can be implemented here. F-035 / F-036 / F-037 / F-038 are complete; F-039 / F-040 / F-041 / F-043 / F-044 / F-045 / F-046 are net-new and gate their respective Phase 3 / Phase 8 follow-ons.
+
+### Atomic visibility cross-cluster enablers
+
+This single enabler unblocks Phase 9 (R-094 → R-104). Tracked on `../lattice/roadmap.md` under the same "Replication enablers" section as F-035–F-046.
+
+- **Core F-054 — `ApplyManyAtomicAsync` source-HLC-preserving atomic apply seam** *(required by R-098)*: New method on the existing internal `IReplicationApplyGrain` so the receiver side of cross-cluster atomic-batch delivery can apply every key in an atomic batch under a single saga that preserves each entry's source-side `(Timestamp, OriginClusterId, VectorClock, ExpiresAtTicks)` verbatim. Reuses `AtomicWriteGrain.RunSagaAsync` end-to-end with deterministic key `(treeId, transactionId)` for idempotent retry. Threads source-side metadata through nested `LatticeOriginContext` / `LatticeVectorClockContext` / new `LatticeHlcOverrideContext` (RequestContext key `"ol.hlc"`) scopes — the latter is the missing piece versus the point-apply seam, which threads `Timestamp` directly through a per-method parameter; under the saga indirection the leaf grain reads the value from ambient context instead. Compensation rolls inherit the same scopes so a partial-apply rollback re-stamps the **pre-saga** values' metadata, matching the behaviour the saga already provides for local writes via `AtomicPreValue`. Wire-additive on an internal grain interface; the public `ILattice` surface is unchanged. New types: `AtomicApplyEntry` (alias `ol.aae`), `AtomicApplyResult` (alias `ol.aar`).
+
+These surface as tracked items on `../lattice/roadmap.md` under the "Replication enablers" section; they must land in the core library *before* the corresponding `R-###` item can be implemented here. F-035 / F-036 / F-037 / F-038 are complete; F-039 / F-040 / F-041 / F-043 / F-044 / F-045 / F-046 / F-054 are net-new and gate their respective Phase 3 / Phase 8 / Phase 9 follow-ons.
 
 ---
 
