@@ -13,7 +13,7 @@ using Orleans.Timers;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 [TestFixture]
-public class AtomicWriteGrainTests
+public partial class AtomicWriteGrainTests
 {
     private const string TreeId = "atomic-tree";
     private const string OperationId = "op-123";

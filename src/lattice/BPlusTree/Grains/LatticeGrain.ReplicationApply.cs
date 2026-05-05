@@ -286,4 +286,50 @@ internal sealed partial class LatticeGrain
             VectorClock = item.SourceVectorClock,
         };
     }
+
+    /// <inheritdoc />
+    public Task<AtomicApplyResult> ApplyManyAtomicAsync(
+        IReadOnlyList<AtomicApplyEntry> applyEntries,
+        Guid transactionId,
+        string originClusterId,
+        VersionVector? sourceVectorClock,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        ArgumentNullException.ThrowIfNull(applyEntries);
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        if (transactionId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "ApplyManyAtomicAsync requires a non-empty transactionId for idempotent retry.",
+                nameof(transactionId));
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (applyEntries.Count == 0)
+        {
+            return Task.FromResult(new AtomicApplyResult
+            {
+                Outcome = AtomicApplyOutcome.Committed,
+                AppliedCount = 0,
+                FailureReason = null,
+            });
+        }
+
+        // The saga's PrepareAsync captures LatticeVectorClockContext.Current
+        // as the saga-wide pre-saga frontier; stamp it here so the saga
+        // sees the remote cluster's frontier verbatim. Per-entry
+        // VectorClock values override this saga-wide stamp during each
+        // per-key dispatch (see ExecuteApplyStepAsync).
+        using var vcScope = LatticeVectorClockContext.With(sourceVectorClock);
+
+        // Materialize the apply list once. The interface's IReadOnlyList<T>
+        // shape lets callers pass any collection; the saga's persisted state
+        // requires a concrete List<T>. The cost is a single allocation per
+        // batch — small relative to the per-shard saga overhead.
+        var entries = applyEntries as List<AtomicApplyEntry> ?? new List<AtomicApplyEntry>(applyEntries);
+
+        var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{transactionId:N}");
+        return saga.ExecuteApplyAsync(TreeId, entries, originClusterId);
+    }
 }

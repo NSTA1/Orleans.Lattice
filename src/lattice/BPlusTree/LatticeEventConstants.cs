@@ -93,4 +93,23 @@ public static class LatticeEventConstants
     /// Internal — set through <see cref="LatticeCommitLogContext"/>.
     /// </summary>
     internal const string CommitLogSourceRequestContextKey = "ol.cls";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry the source-cluster
+    /// <see cref="Primitives.HybridLogicalClock"/> that the leaf grain
+    /// must persist verbatim on the freshly-constructed
+    /// <see cref="Primitives.LwwValue{T}"/>'s timestamp slot — bypassing
+    /// the standard
+    /// <see cref="Primitives.HybridLogicalClock.Tick(Primitives.HybridLogicalClock)"/>
+    /// behaviour — so receiver-side LWW resolution sees the authoring
+    /// cluster's HLC bit-identically. The leaf still advances its local
+    /// clock past the override via
+    /// <see cref="Primitives.HybridLogicalClock.Merge(Primitives.HybridLogicalClock, Primitives.HybridLogicalClock)"/>
+    /// to preserve local monotonicity for any subsequent foreground
+    /// tick. The single supported authoring path is the receiver-side
+    /// cross-cluster atomic-batch apply seam
+    /// (<c>IReplicationApplyGrain.ApplyManyAtomicAsync</c>). Internal —
+    /// set through <see cref="LatticeHlcOverrideContext"/>.
+    /// </summary>
+    internal const string HlcOverrideRequestContextKey = "ol.hlc";
 }

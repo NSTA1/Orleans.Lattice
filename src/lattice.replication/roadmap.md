@@ -305,7 +305,7 @@ Streams converge before R-080 (causal+ schema) → R-050 (snapshot/bootstrap), w
 | Causal+ schema + snapshot | R-080 ✓ → R-050 ✓ → R-051 ✓ → R-052 ✓ / R-053 ✓ → R-084 ✓ → R-088 ✓ |
 | Causal+ apply | R-081 ✓ → R-082 ✓ → (R-083 ✓, R-085 ✓, R-086 ✓, R-087 ✓ parallel) → R-088 ✓ |
 | Causal+ completeness | (R-089 ✓, R-090 ✓, R-091 ✓, R-092 ✓, R-093 ✓ — all shipped) |
-| Atomic visibility cross-cluster | R-094 → R-095 → R-096 → R-097 → R-098 (gated on Core F-054) → (R-099, R-100, R-101, R-102 parallel) → R-103 → R-104 |
+| Atomic visibility cross-cluster | R-094 → R-095 → R-096 → R-097 → R-098 (gated on Core F-054 ✓) → (R-099, R-100, R-101, R-102 parallel) → R-103 → R-104 |
 
 ---
 
@@ -743,7 +743,7 @@ The phase is a tightly-coupled wave: R-094 / R-095 ship the producer-side metada
 
   Documented in [`docs/lattice.replication/atomic-batch-delivery.md`](../../docs/lattice.replication/atomic-batch-delivery.md) (new in R-104).
 
-- [ ] **R-098 — Atomic apply on completion via Core F-054** *(depends on R-097, Core F-054 outstanding)*
+- [ ] **R-098 — Atomic apply on completion via Core F-054** *(depends on R-097, Core F-054 ✓)*
   On batch completion (every `Size` entries for a `(originClusterId, transactionId)` key are buffered), the receiver dequeues the batch under one saga via `IReplicationApplyGrain.ApplyManyAtomicAsync(entries, transactionId, originClusterId, sourceVectorClock, ct)` (Core F-054). The apply grain reuses `AtomicWriteGrain.RunSagaAsync` end-to-end and threads each entry's source-side `(Timestamp, OriginClusterId, VectorClock, ExpiresAtTicks)` through nested `LatticeOriginContext` / `LatticeVectorClockContext` / `LatticeHlcOverrideContext` scopes — preserving the R-022 source-HLC-preservation invariant the existing point-apply seam already enforces, but now under one saga rather than per-key.
 
   Per-origin HWM advance: on apply completion, the receiver advances the per-origin HWM **once** to the maximum HLC across the batch (not per-entry), and **only if** the apply succeeded all-or-nothing. A failed apply leaves the HWM unchanged so the producer re-ships the batch on the next pump cycle. This is the critical invariant that delivers atomic visibility cross-cluster: a concurrent reader observing the per-origin HWM never sees an intermediate value where some-but-not-all keys have been applied.
@@ -856,7 +856,7 @@ This single enabler unblocks Phase 9 (R-094 → R-104). Tracked on `../lattice/r
 
 - **Core F-054 — `ApplyManyAtomicAsync` source-HLC-preserving atomic apply seam** *(required by R-098)*: New method on the existing internal `IReplicationApplyGrain` so the receiver side of cross-cluster atomic-batch delivery can apply every key in an atomic batch under a single saga that preserves each entry's source-side `(Timestamp, OriginClusterId, VectorClock, ExpiresAtTicks)` verbatim. Reuses `AtomicWriteGrain.RunSagaAsync` end-to-end with deterministic key `(treeId, transactionId)` for idempotent retry. Threads source-side metadata through nested `LatticeOriginContext` / `LatticeVectorClockContext` / new `LatticeHlcOverrideContext` (RequestContext key `"ol.hlc"`) scopes — the latter is the missing piece versus the point-apply seam, which threads `Timestamp` directly through a per-method parameter; under the saga indirection the leaf grain reads the value from ambient context instead. Compensation rolls inherit the same scopes so a partial-apply rollback re-stamps the **pre-saga** values' metadata, matching the behaviour the saga already provides for local writes via `AtomicPreValue`. Wire-additive on an internal grain interface; the public `ILattice` surface is unchanged. New types: `AtomicApplyEntry` (alias `ol.aae`), `AtomicApplyResult` (alias `ol.aar`).
 
-These surface as tracked items on `../lattice/roadmap.md` under the "Replication enablers" section; they must land in the core library *before* the corresponding `R-###` item can be implemented here. F-035 / F-036 / F-037 / F-038 are complete; F-039 / F-040 / F-041 / F-043 / F-044 / F-045 / F-046 / F-054 are net-new and gate their respective Phase 3 / Phase 8 / Phase 9 follow-ons.
+These surface as tracked items on `../lattice/roadmap.md` under the "Replication enablers" section; they must land in the core library *before* the corresponding `R-###` item can be implemented here. F-035 / F-036 / F-037 / F-038 are complete; F-039 / F-040 / F-041 / F-043 / F-044 / F-045 / F-046 are net-new and gate their respective Phase 3 / Phase 8 follow-ons; F-054 ✓ has shipped and unblocks Phase 9 (R-098).
 
 ---
 

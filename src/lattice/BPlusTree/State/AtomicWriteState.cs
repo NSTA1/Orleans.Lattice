@@ -176,4 +176,46 @@ internal sealed class AtomicWriteState
     /// state decodes to <see langword="null"/>.
     /// </summary>
     [Id(11)] public Primitives.VersionVector? VectorClock { get; set; }
+
+    /// <summary>
+    /// <see langword="true"/> when this saga was started via
+    /// <c>IReplicationApplyGrain.ApplyManyAtomicAsync</c> (cross-cluster
+    /// atomic-batch apply). In apply mode the saga reads
+    /// per-entry source metadata from <see cref="ApplyEntries"/> rather
+    /// than treating every entry as a fresh local write: each per-key
+    /// call is wrapped in nested
+    /// <see cref="LatticeOriginContext.With(string?)"/> +
+    /// <see cref="LatticeVectorClockContext.With(Primitives.VersionVector?)"/> +
+    /// <see cref="LatticeHlcOverrideContext.With(Primitives.HybridLogicalClock?)"/>
+    /// scopes drawn from <see cref="OriginClusterId"/> and the entry's
+    /// <see cref="AtomicApplyEntry.VectorClock"/> /
+    /// <see cref="AtomicApplyEntry.Timestamp"/>, so the leaf grain
+    /// re-stamps the source-side metadata bit-identically. Wire-compatible:
+    /// missing field on legacy persisted state decodes to
+    /// <see langword="false"/> (local-saga semantics).
+    /// </summary>
+    [Id(12)] public bool IsApplyMode { get; set; }
+
+    /// <summary>
+    /// Per-entry source metadata for an apply-mode saga, populated when
+    /// <see cref="IsApplyMode"/> is <see langword="true"/>. Indices are
+    /// kept in lock-step with <see cref="Entries"/> so the
+    /// pre-saga-capture and execute machinery in
+    /// <see cref="Grains.AtomicWriteGrain"/> can reuse the existing
+    /// <see cref="NextIndex"/> cursor. Empty for legacy local-saga state.
+    /// </summary>
+    [Id(13)] public List<AtomicApplyEntry> ApplyEntries { get; set; } = [];
+
+    /// <summary>
+    /// Saga-wide origin cluster id captured from the
+    /// <see cref="IReplicationApplyGrain.ApplyManyAtomicAsync"/>
+    /// call's <c>originClusterId</c> argument and re-stamped onto
+    /// every per-key call the saga issues during
+    /// <see cref="AtomicWritePhase.Execute"/> via
+    /// <see cref="LatticeOriginContext.With(string?)"/> so the leaf
+    /// grain stamps the authoring cluster's id verbatim onto the
+    /// persisted <see cref="Primitives.LwwValue{T}.OriginClusterId"/>
+    /// <see langword="null"/> for legacy local-saga state.
+    /// </summary>
+    [Id(14)] public string? OriginClusterId { get; set; }
 }

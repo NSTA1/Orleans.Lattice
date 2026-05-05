@@ -114,6 +114,20 @@ internal sealed class AtomicWriteGrain(
         // Empty batch: fast success, no saga work, no reminder needed.
         if (entries.Count == 0) return;
 
+        // Defensive grain-key collision guard: the apply-mode saga
+        // (ExecuteApplyAsync) and the local saga (ExecuteAsync) share a
+        // grain interface but use disjoint composite-key conventions
+        // ({tree}/{tx:N} vs {tree}/{opId}). Reject the mismatch loudly
+        // so a colliding caller-supplied opId surfaces as a caller error
+        // rather than silently bleeding apply-mode state into the local
+        // saga's resume path.
+        if (state.State.Phase != AtomicWritePhase.NotStarted && state.State.IsApplyMode)
+        {
+            throw new InvalidOperationException(
+                $"Atomic-write operation '{OperationKey}' grain id collides with a previously-started apply-mode saga; " +
+                "use a different operationId.");
+        }
+
         // Caller-supplied idempotency keys: if the same operationId is
         // re-submitted with a different key set, reject it rather than
         // silently replaying the original persisted entries. Only
@@ -159,6 +173,190 @@ internal sealed class AtomicWriteGrain(
             state.State.Phase == AtomicWritePhase.NotStarted ||
             state.State.Phase == AtomicWritePhase.Completed);
 
+    /// <inheritdoc />
+    public async Task<AtomicApplyResult> ExecuteApplyAsync(
+        string treeId,
+        List<AtomicApplyEntry> applyEntries,
+        string originClusterId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(applyEntries);
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+
+        // Empty batch: fast success, no saga work, no reminder needed.
+        if (applyEntries.Count == 0)
+        {
+            return new AtomicApplyResult
+            {
+                Outcome = AtomicApplyOutcome.Committed,
+                AppliedCount = 0,
+                FailureReason = null,
+            };
+        }
+
+        // Validate every incoming batch — including idempotent re-entry and
+        // reminder-driven resume — so a caller passing a malformed payload
+        // gets a clean ArgumentException regardless of saga state, rather
+        // than a downstream NullReferenceException from the projection /
+        // fingerprint helpers.
+        ValidateApplyInputs(applyEntries);
+
+        // Defensive grain-key collision guard: the local saga
+        // (ExecuteAsync) and the apply-mode saga (ExecuteApplyAsync) share
+        // a grain interface but use disjoint composite-key conventions
+        // ({tree}/{opId} vs {tree}/{tx:N}). If a caller's opId happens to
+        // collide with a transactionId.N format, persistent state from one
+        // path would otherwise silently bleed into the other. Reject the
+        // mismatch loudly so the collision surfaces as a caller error
+        // rather than a wrong AppliedCount.
+        if (state.State.Phase != AtomicWritePhase.NotStarted && !state.State.IsApplyMode)
+        {
+            throw new InvalidOperationException(
+                $"Atomic-apply saga '{OperationKey}' grain id collides with a previously-started local saga; " +
+                "use a different transactionId.");
+        }
+
+        // Caller-supplied transactionId: if the same saga grain is
+        // re-targeted with a different key set, reject it rather than
+        // silently replaying the original persisted entries. Mirrors
+        // the local saga's KeyFingerprint check. Computed directly
+        // against the IReadOnlyList shape so the resume path skips the
+        // per-entry projection allocation. Runs BEFORE the Completed
+        // idempotent-replay early-return so a malformed retry against a
+        // committed saga surfaces as a clean InvalidOperationException
+        // rather than a silent no-op.
+        if (state.State.Phase != AtomicWritePhase.NotStarted
+            && state.State.KeyFingerprint is { } persistedFingerprint)
+        {
+            var incomingFingerprint = ComputeKeyFingerprint(applyEntries);
+            if (!CryptographicOperations.FixedTimeEquals(persistedFingerprint, incomingFingerprint))
+            {
+                throw new InvalidOperationException(
+                    $"Atomic-apply saga '{OperationKey}' was previously submitted with a different key set; " +
+                    "reuse of a transactionId requires the exact same set of keys.");
+            }
+        }
+
+        // Idempotent re-entry: a prior call has already completed this
+        // saga, so the second call observes the original outcome
+        // verbatim. Reconstruct the result from persisted state rather
+        // than persisting an extra slot.
+        if (state.State.Phase == AtomicWritePhase.Completed)
+        {
+            return BuildApplyResult();
+        }
+
+        // Fresh saga - validate inputs, register the keepalive reminder
+        // first (so a crash mid-Prepare still has a reminder-driven
+        // recovery path), and then capture pre-saga state for
+        // compensation. Projection from AtomicApplyEntry to the
+        // local-saga KeyValuePair shape happens only here — the
+        // resume / re-entry paths above never need it.
+        if (state.State.Phase == AtomicWritePhase.NotStarted)
+        {
+            state.State.IsApplyMode = true;
+            state.State.ApplyEntries = applyEntries;
+            state.State.OriginClusterId = originClusterId;
+            await RegisterKeepaliveAsync();
+            var derivedEntries = ProjectApplyEntriesToLocalEntries(applyEntries);
+            await PrepareAsync(treeId, derivedEntries);
+        }
+
+        try
+        {
+            await RunSagaAsync();
+        }
+        catch (InvalidOperationException ex)
+        {
+            // RunSagaAsync throws after compensation completes for the
+            // local-saga code path; for apply mode we surface the same
+            // information through the structured result type. Persisted
+            // state is already terminal at this point.
+            return new AtomicApplyResult
+            {
+                Outcome = AtomicApplyOutcome.Compensated,
+                AppliedCount = 0,
+                FailureReason = state.State.FailureMessage ?? ex.Message,
+            };
+        }
+
+        return BuildApplyResult();
+    }
+
+    /// <summary>
+    /// Validates the apply batch: non-null keys and no duplicate keys.
+    /// Tombstone entries deliberately allow <see langword="null"/>
+    /// values (they carry no payload); non-tombstone entries with a
+    /// <see langword="null"/> value are rejected.
+    /// </summary>
+    private static void ValidateApplyInputs(List<AtomicApplyEntry> applyEntries)
+    {
+        var seen = new HashSet<string>(applyEntries.Count, StringComparer.Ordinal);
+        foreach (var entry in applyEntries)
+        {
+            if (entry.Key is null)
+                throw new ArgumentException(
+                    "Atomic apply batch contains a null key.", nameof(applyEntries));
+            if (!entry.IsTombstone && entry.Value is null)
+                throw new ArgumentException(
+                    $"Atomic apply batch contains a null value for non-tombstone key '{entry.Key}'.",
+                    nameof(applyEntries));
+            if (entry.IsTombstone && entry.ExpiresAtTicks != 0)
+                throw new ArgumentException(
+                    $"Atomic apply batch contains a tombstone with non-zero ExpiresAtTicks for key '{entry.Key}'.",
+                    nameof(applyEntries));
+            if (!seen.Add(entry.Key))
+                throw new ArgumentException(
+                    $"Atomic apply batch contains duplicate key '{entry.Key}'.", nameof(applyEntries));
+        }
+    }
+
+    /// <summary>
+    /// Projects the apply-mode batch into the
+    /// <see cref="AtomicWriteState.Entries"/> shape used by the existing
+    /// <see cref="PrepareAsync"/> capture and <see cref="ComputeKeyFingerprint"/>
+    /// helper. Tombstone entries surface as a zero-length placeholder
+    /// value because the local saga's value field is non-null; the
+    /// real authoritative shape lives in <see cref="AtomicWriteState.ApplyEntries"/>.
+    /// </summary>
+    private static List<KeyValuePair<string, byte[]>> ProjectApplyEntriesToLocalEntries(
+        List<AtomicApplyEntry> applyEntries)
+    {
+        var derived = new List<KeyValuePair<string, byte[]>>(applyEntries.Count);
+        foreach (var entry in applyEntries)
+        {
+            derived.Add(new KeyValuePair<string, byte[]>(
+                entry.Key,
+                entry.IsTombstone ? Array.Empty<byte>() : entry.Value!));
+        }
+        return derived;
+    }
+
+    /// <summary>
+    /// Reconstructs the terminal <see cref="AtomicApplyResult"/> from
+    /// persisted state. Called on idempotent re-entry and on the
+    /// post-saga return path.
+    /// </summary>
+    private AtomicApplyResult BuildApplyResult()
+    {
+        if (state.State.FailureMessage is not null)
+        {
+            return new AtomicApplyResult
+            {
+                Outcome = AtomicApplyOutcome.Compensated,
+                AppliedCount = 0,
+                FailureReason = state.State.FailureMessage,
+            };
+        }
+
+        return new AtomicApplyResult
+        {
+            Outcome = AtomicApplyOutcome.Committed,
+            AppliedCount = state.State.ApplyEntries.Count,
+            FailureReason = null,
+        };
+    }
+
     /// <summary>
     /// Validates the batch: non-null values and no duplicate keys.
     /// </summary>
@@ -192,9 +390,33 @@ internal sealed class AtomicWriteGrain(
         for (int i = 0; i < entries.Count; i++) sortedKeys[i] = entries[i].Key;
         Array.Sort(sortedKeys, StringComparer.Ordinal);
 
+        return ComputeKeyFingerprintCore(sortedKeys);
+    }
+
+    /// <summary>
+    /// Apply-mode overload of <see cref="ComputeKeyFingerprint(List{KeyValuePair{string, byte[]}})"/>
+    /// that reads keys directly from the
+    /// <see cref="IReadOnlyList{AtomicApplyEntry}"/> shape, avoiding the
+    /// per-entry projection allocation on the resume path. The two
+    /// overloads must produce identical fingerprints for the same set
+    /// of keys so the apply saga's fingerprint persisted on first
+    /// Prepare can be cross-checked against the apply-mode resubmit
+    /// path.
+    /// </summary>
+    internal static byte[] ComputeKeyFingerprint(IReadOnlyList<AtomicApplyEntry> applyEntries)
+    {
+        var sortedKeys = new string[applyEntries.Count];
+        for (int i = 0; i < applyEntries.Count; i++) sortedKeys[i] = applyEntries[i].Key;
+        Array.Sort(sortedKeys, StringComparer.Ordinal);
+
+        return ComputeKeyFingerprintCore(sortedKeys);
+    }
+
+    private static byte[] ComputeKeyFingerprintCore(string[] sortedKeys)
+    {
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Span<byte> lenBuf = stackalloc byte[4];
-        BinaryPrimitives.WriteInt32LittleEndian(lenBuf, entries.Count);
+        BinaryPrimitives.WriteInt32LittleEndian(lenBuf, sortedKeys.Length);
         sha.AppendData(lenBuf);
         foreach (var key in sortedKeys)
         {
@@ -367,11 +589,18 @@ internal sealed class AtomicWriteGrain(
 
         while (state.State.NextIndex < state.State.Entries.Count)
         {
-            var entry = state.State.Entries[state.State.NextIndex];
-
             try
             {
-                await lattice.SetAsync(entry.Key, entry.Value);
+                if (state.State.IsApplyMode)
+                {
+                    await ExecuteApplyStepAsync(lattice, state.State.NextIndex);
+                }
+                else
+                {
+                    var entry = state.State.Entries[state.State.NextIndex];
+                    await lattice.SetAsync(entry.Key, entry.Value);
+                }
+
                 state.State.NextIndex++;
                 state.State.RetriesOnCurrentStep = 0;
                 await state.WriteStateAsync();
@@ -403,16 +632,17 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
-    /// Rolls back committed entries in reverse order by rewriting pre-saga
-    /// values (or tombstoning previously-absent keys). Each revert uses a
-    /// fresh HLC via the normal write path; LWW merge guarantees the revert
-    /// wins over the prior commit. Entries captured with a non-zero
-    /// <see cref="AtomicPreValue.ExpiresAtTicks"/> are restored through the
-    /// TTL overload <see cref="ILattice.SetAsync(string, byte[], TimeSpan, CancellationToken)"/>
-    /// with the remaining time-to-live computed against the current wall clock,
-    /// so expiry is preserved across compensation. If the entry's
-    /// absolute expiry has already elapsed by the time compensation runs it
-    /// is treated as absent and tombstoned instead.
+    /// Walks committed writes in reverse, restoring each pre-saga value via
+    /// <see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/> or
+    /// <see cref="ILattice.DeleteAsync(string, CancellationToken)"/>. Each
+    /// per-key call is wrapped in
+    /// <see cref="LatticeOriginContext.With"/> /
+    /// <see cref="LatticeVectorClockContext.With"/> scopes drawn from the
+    /// captured <see cref="AtomicPreValue"/> so the rollback emits a
+    /// <see cref="LatticeMutation"/> bearing the same source-side
+    /// metadata the original write carried. A persistent failure leaves
+    /// the saga in <see cref="AtomicWritePhase.Compensate"/>; a future
+    /// reminder tick re-runs this method.
     /// </summary>
     private async Task CompensatePhaseAsync()
     {
@@ -490,6 +720,54 @@ internal sealed class AtomicWriteGrain(
                     "Atomic-write saga {OperationKey}: compensation of step {Index} failed after retries; saga is poisoned.",
                     OperationKey, index);
                 throw;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Apply-mode per-key dispatch. Wraps the per-key call in nested
+    /// <see cref="LatticeOriginContext"/> + <see cref="LatticeVectorClockContext"/>
+    /// + <see cref="LatticeHlcOverrideContext"/> scopes drawn from
+    /// <see cref="AtomicWriteState.OriginClusterId"/> and the entry's
+    /// <see cref="AtomicApplyEntry.VectorClock"/> /
+    /// <see cref="AtomicApplyEntry.Timestamp"/> so the leaf grain
+    /// re-stamps the source-side metadata bit-identically. TTL'd
+    /// entries route through the
+    /// <see cref="ILattice.SetAsync(string, byte[], TimeSpan, CancellationToken)"/>
+    /// overload with the remaining time-to-live computed against the
+    /// current wall clock; if the absolute expiry has already elapsed
+    /// the entry is treated as absent and tombstoned instead, matching
+    /// the public-read semantics for expired entries.
+    /// </summary>
+    private async Task ExecuteApplyStepAsync(ILattice lattice, int index)
+    {
+        var apply = state.State.ApplyEntries[index];
+
+        using (LatticeOriginContext.With(state.State.OriginClusterId))
+        using (LatticeVectorClockContext.With(apply.VectorClock))
+        using (LatticeHlcOverrideContext.With(apply.Timestamp))
+        {
+            if (apply.IsTombstone)
+            {
+                await lattice.DeleteAsync(apply.Key);
+            }
+            else if (apply.ExpiresAtTicks > 0)
+            {
+                var remainingTicks = apply.ExpiresAtTicks - DateTimeOffset.UtcNow.UtcTicks;
+                if (remainingTicks <= 0)
+                {
+                    // Absolute expiry already elapsed — treat as absent
+                    // (public reads would already hide the entry).
+                    await lattice.DeleteAsync(apply.Key);
+                }
+                else
+                {
+                    await lattice.SetAsync(apply.Key, apply.Value!, TimeSpan.FromTicks(remainingTicks));
+                }
+            }
+            else
+            {
+                await lattice.SetAsync(apply.Key, apply.Value!);
             }
         }
     }

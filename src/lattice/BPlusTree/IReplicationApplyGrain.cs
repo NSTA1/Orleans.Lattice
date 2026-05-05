@@ -140,4 +140,62 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// call per shard.
     /// </param>
     Task ApplyMergeManyAsync(IReadOnlyList<ApplyMergeItem> items);
+
+    /// <summary>
+    /// Installs a batch of remote mutations atomically as a saga, so the
+    /// entire batch either commits to the local tree or rolls back as a
+    /// unit. Unlike <see cref="ApplyMergeManyAsync"/> — which collapses
+    /// per-key shard fan-out for steady-state throughput but commits
+    /// each key independently — this seam dispatches the batch through
+    /// the existing <see cref="IAtomicWriteGrain"/> saga keyed by
+    /// <c>{treeId}/{transactionId}</c>, providing transactional
+    /// all-or-nothing semantics on the receiver side. Each entry's
+    /// authoring metadata (<see cref="AtomicApplyEntry.Timestamp"/>,
+    /// <see cref="AtomicApplyEntry.VectorClock"/>,
+    /// <see cref="AtomicApplyEntry.ExpiresAtTicks"/>) is preserved
+    /// verbatim so the persisted <see cref="LwwValue{T}"/> matches the
+    /// authoring cluster bit-identically.
+    /// </summary>
+    /// <param name="applyEntries">
+    /// The per-key remote mutations to install. Each entry carries its
+    /// own source HLC and frontier so the saga's per-step dispatch
+    /// stamps the leaf grain's persisted entry with the source-side
+    /// metadata exactly as authored.
+    /// </param>
+    /// <param name="transactionId">
+    /// Caller-supplied idempotency key. Resubmissions with the same id
+    /// re-attach to the original saga and inherit its terminal outcome
+    /// without re-executing the writes. Must be a non-empty
+    /// <see cref="Guid"/>.
+    /// </param>
+    /// <param name="originClusterId">
+    /// The id of the remote cluster that authored the batch. Stamped
+    /// onto every per-key write via the ambient
+    /// <see cref="LatticeOriginContext"/> so the receiver-side observer
+    /// publishes mutations bearing the remote origin (and the outbound
+    /// ship loop filters them back out).
+    /// </param>
+    /// <param name="sourceVectorClock">
+    /// The saga-wide vector-clock frontier captured by the remote
+    /// cluster at commit time, used to seed the saga's
+    /// <see cref="LatticeMutation.VectorClock"/> stamp during the
+    /// Prepare-phase pre-saga capture. Per-entry
+    /// <see cref="AtomicApplyEntry.VectorClock"/> values take precedence
+    /// during each per-key dispatch.
+    /// </param>
+    /// <param name="cancellationToken">Token to cancel the call.</param>
+    /// <returns>
+    /// An <see cref="AtomicApplyResult"/> carrying the saga's terminal
+    /// <see cref="AtomicApplyOutcome"/> — <see cref="AtomicApplyOutcome.Committed"/>
+    /// when every entry committed, <see cref="AtomicApplyOutcome.Compensated"/>
+    /// when any entry failed and the saga rolled back. The structured
+    /// return shape lets callers branch on the outcome rather than
+    /// catching the local saga's terminal exception.
+    /// </returns>
+    Task<AtomicApplyResult> ApplyManyAtomicAsync(
+        IReadOnlyList<AtomicApplyEntry> applyEntries,
+        Guid transactionId,
+        string originClusterId,
+        VersionVector? sourceVectorClock,
+        CancellationToken cancellationToken = default);
 }
