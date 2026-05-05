@@ -197,7 +197,7 @@ public class ReplicationApplyIntegrationTests
         var opts = new LatticeReplicationOptions { ClusterId = TwoSiteClusterFixture.SiteBClusterId };
         monitor.CurrentValue.Returns(opts);
         monitor.Get(Arg.Any<string>()).Returns(opts);
-        return new ReplicationApplier(_fixture.SiteB.Client, monitor);
+        return new ReplicationApplier(_fixture.SiteB.Client, monitor, new LocalVectorClockCache(_fixture.SiteB.Client));
     }
 
     [Test]

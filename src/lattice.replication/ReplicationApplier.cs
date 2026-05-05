@@ -23,7 +23,8 @@ namespace Orleans.Lattice.Replication;
 /// </summary>
 internal sealed partial class ReplicationApplier(
     IGrainFactory grainFactory,
-    IOptionsMonitor<LatticeReplicationOptions> options) : IReplicationApplier
+    IOptionsMonitor<LatticeReplicationOptions> options,
+    LocalVectorClockCache localVectorClockCache) : IReplicationApplier
 {
     /// <summary>
     /// Per-tree causal-apply buffers, lazily created on first park.
@@ -211,6 +212,18 @@ internal sealed partial class ReplicationApplier(
                 // before each pass.
                 if (advanced)
                 {
+                    // Mirror the foreign advance into the producer-side
+                    // local vector clock cache so a subsequent local emit
+                    // stamps a VectorClock that reflects the just-applied
+                    // foreign entry. Without this, a producer would emit
+                    // a VC with the foreign origin's entry one HLC behind
+                    // and a remote receiver could park the resulting
+                    // entry until the next cold-start refreshes the
+                    // producer's view.
+                    localVectorClockCache.AdvanceForeign(
+                        entry.TreeId,
+                        entry.OriginClusterId!,
+                        entry.Timestamp);
                     await DrainBufferAsync(entry.TreeId, hwmGrain, resolved, cancellationToken);
                 }
 
@@ -316,8 +329,24 @@ internal sealed partial class ReplicationApplier(
                     await ApplyPointAsync(ent);
                     RecordApplyLag(ent);
                     RecordFifoState(ent);
-                    await hwmGrain.TryAdvanceAsync(ent.OriginClusterId!, ent.Timestamp, cancellationToken)
+                    var advancedDrained = await hwmGrain
+                        .TryAdvanceAsync(ent.OriginClusterId!, ent.Timestamp, cancellationToken)
                         .ConfigureAwait(false);
+                    if (advancedDrained)
+                    {
+                        // Mirror the drained foreign advance into the
+                        // producer-side cache so the next local emit
+                        // observes it. The drain loop's next pass
+                        // re-fetches localVc from the grain and may
+                        // unblock further entries — the producer cache
+                        // is updated independently here so a concurrent
+                        // commit-time observer sees the advance even
+                        // before the drain loop completes.
+                        localVectorClockCache.AdvanceForeign(
+                            ent.TreeId,
+                            ent.OriginClusterId!,
+                            ent.Timestamp);
+                    }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {

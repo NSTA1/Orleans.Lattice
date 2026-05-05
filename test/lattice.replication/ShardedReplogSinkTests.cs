@@ -30,7 +30,7 @@ public class ShardedReplogSinkTests
         var defaultGrain = Substitute.For<IReplogShardGrain>();
         defaultGrain.AppendAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>()).Returns(0L);
         factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(defaultGrain);
-        var sink = new ShardedReplogSink(factory, Monitor(partitions), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, Monitor(partitions), new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
         return (sink, factory, defaultGrain);
     }
 
@@ -148,7 +148,7 @@ public class ShardedReplogSinkTests
         monitor.CurrentValue.Returns(new LatticeReplicationOptions { ClusterId = "x", ReplogPartitions = 8 });
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(Substitute.For<IReplogShardGrain>());
-        var sink = new ShardedReplogSink(factory, monitor, NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync(MakeEntry("hot", "k"), CancellationToken.None);
 
@@ -165,7 +165,7 @@ public class ShardedReplogSinkTests
         grain.AppendAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
             .Returns<long>(_ => throw new InvalidOperationException("boom"));
         factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(grain);
-        var sink = new ShardedReplogSink(factory, monitor, NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         Assert.That(
             async () => await sink.WriteAsync(MakeEntry("tree", "k"), CancellationToken.None),
@@ -201,7 +201,7 @@ public class ShardedReplogSinkTests
         grain.AppendAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
             .Returns<long>(_ => throw new InvalidOperationException("boom"));
         factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(grain);
-        var sink = new ShardedReplogSink(factory, monitor, NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         Assert.That(
             async () => await sink.WriteAsync(MakeEntry("tree", "k"), CancellationToken.None),
@@ -247,7 +247,7 @@ public class ShardedReplogSinkTests
         factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(shard);
         factory.GetGrain<IReplicationShipperGrain>("orders/site-b").Returns(shipperB);
         factory.GetGrain<IReplicationShipperGrain>("orders/site-c").Returns(shipperC);
-        var sink = new ShardedReplogSink(factory, monitor, NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
         // Doorbell ring is fire-and-forget; let the continuations drain.
@@ -268,7 +268,7 @@ public class ShardedReplogSinkTests
         var shipperB = Substitute.For<IReplicationShipperGrain>();
         factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(shard);
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipperB);
-        var sink = new ShardedReplogSink(factory, monitor, NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
         await Task.Delay(20);
@@ -286,7 +286,7 @@ public class ShardedReplogSinkTests
         var shipper = Substitute.For<IReplicationShipperGrain>();
         factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(shard);
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
-        var sink = new ShardedReplogSink(factory, monitor, NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
         await Task.Delay(20);
@@ -295,7 +295,7 @@ public class ShardedReplogSinkTests
 
         // And again with an empty collection.
         var monitor2 = MonitorWithPeers(peers: Array.Empty<string>());
-        var sink2 = new ShardedReplogSink(factory, monitor2, NullLogger<ShardedReplogSink>.Instance);
+        var sink2 = new ShardedReplogSink(factory, monitor2, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
         await sink2.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
         await Task.Delay(20);
         await shipper.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());
@@ -313,7 +313,7 @@ public class ShardedReplogSinkTests
             .Returns<Task>(_ => Task.FromException(new InvalidOperationException("doorbell-failed")));
         factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(shard);
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
-        var sink = new ShardedReplogSink(factory, monitor, NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         // The producer-side commit path must never fault on a
         // doorbell ring failure; WriteAsync awaits the WAL append
@@ -335,7 +335,7 @@ public class ShardedReplogSinkTests
         var shipper = Substitute.For<IReplicationShipperGrain>();
         factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(shard);
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
-        var sink = new ShardedReplogSink(factory, monitor, NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
         await Task.Delay(20);

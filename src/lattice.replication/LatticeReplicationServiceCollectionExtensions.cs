@@ -68,6 +68,14 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<Orleans.Lattice.BPlusTree.Grains.ILeafCursorReporter, ReplicationLeafCursorReporter>();
         builder.Services.TryAddSingleton<ILatticeReplicationGc, LatticeReplicationGc>();
         builder.Services.TryAddSingleton<ReplicationPeerStats>();
+        // Producer-side per-(silo, tree) local vector clock cache.
+        // Read by ReplicationMutationObserver to stamp every emit's
+        // VectorClock when the caller does not supply one via
+        // LatticeVectorClockContext; advanced post-WAL-append (local
+        // diagonal) by ShardedReplogSink and post-TryAdvanceAsync
+        // (foreign entries) by ReplicationApplier.
+        builder.Services.TryAddSingleton<LocalVectorClockCache>();
+
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IMutationObserver, ReplicationMutationObserver>());
         builder.Services.TryAddEnumerable(

@@ -40,6 +40,7 @@ namespace Orleans.Lattice.Replication;
 internal sealed class ShardedReplogSink(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeReplicationOptions> options,
+    LocalVectorClockCache localVectorClockCache,
     ILogger<ShardedReplogSink> logger) : IReplogSink
 {
     /// <inheritdoc />
@@ -59,6 +60,25 @@ internal sealed class ShardedReplogSink(
             1,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, entry.TreeId ?? string.Empty));
 
+        // Advance the producer-side local vector clock cache's local
+        // diagonal entry for this tree. The receiver-side HWM grain
+        // never advances the local cluster's diagonal (the apply path
+        // filters local-origin entries), so this is the only seam that
+        // tracks "what is the highest HLC this silo has appended for
+        // its own cluster id". A subsequent emit (range delete fan-out,
+        // multi-leaf saga, follow-on write) reads the advanced value
+        // when it stamps its VectorClock from the cache. Range deletes
+        // (HLC.Zero) never advance the diagonal — pointwise-max in the
+        // cache leaves it unchanged. Skipped entirely for foreign-origin
+        // entries because foreign origins are advanced post-apply via
+        // AdvanceForeign, not post-WAL-append.
+        if (entry.TreeId is { Length: > 0 } treeId
+            && entry.OriginClusterId is { Length: > 0 } originClusterId
+            && string.Equals(originClusterId, resolved.ClusterId, StringComparison.Ordinal))
+        {
+            localVectorClockCache.AdvanceLocal(treeId, originClusterId, entry.Timestamp);
+        }
+
         // Doorbell fan-out: wake every configured shipper for
         // this tree so newly-committed entries reach peers at
         // sub-second latency. Best-effort and fire-and-forget — the
@@ -66,7 +86,7 @@ internal sealed class ShardedReplogSink(
         if (resolved.ShipDoorbellEnabled
             && resolved.ReplicationPeers is { } peers
             && peers.Count > 0
-            && entry.TreeId is { Length: > 0 } treeId)
+            && entry.TreeId is { Length: > 0 } doorbellTreeId)
         {
             foreach (var peer in peers)
             {
@@ -74,7 +94,7 @@ internal sealed class ShardedReplogSink(
                 {
                     continue;
                 }
-                _ = RingDoorbellAsync(treeId, peer);
+                _ = RingDoorbellAsync(doorbellTreeId, peer);
             }
         }
     }
