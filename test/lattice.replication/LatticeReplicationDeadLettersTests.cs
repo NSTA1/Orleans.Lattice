@@ -20,9 +20,11 @@ public class LatticeReplicationDeadLettersTests
         // substituted dependencies — the inner is only invoked by ReplayAsync,
         // which our tests cover by stubbing TryGetAsync to return null (so
         // the inner is never called) for the unit-level tests.
+        var innerFactory = Substitute.For<IGrainFactory>();
         var inner = new ReplicationApplier(
-            Substitute.For<IGrainFactory>(),
-            Substitute.For<Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>>());
+            innerFactory,
+            Substitute.For<Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>>(),
+            new LocalVectorClockCache(innerFactory));
         var seam = new LatticeReplicationDeadLetters(grainFactory, inner);
         return (seam, grain);
     }

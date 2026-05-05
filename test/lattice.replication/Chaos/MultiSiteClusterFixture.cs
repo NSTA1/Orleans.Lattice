@@ -81,7 +81,7 @@ internal sealed class MultiSiteClusterFixture
             options.Get(Arg.Any<string>()).Returns(perSiteOptions);
 
             _changeFeeds[i] = new ChangeFeed(_sites[i].Client, options);
-            _appliers[i] = new ReplicationApplier(_sites[i].Client, options);
+            _appliers[i] = new ReplicationApplier(_sites[i].Client, options, new LocalVectorClockCache(_sites[i].Client));
         }
     }
 

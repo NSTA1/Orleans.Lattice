@@ -38,7 +38,9 @@ public partial class ReplicationApplierTests
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);
-        var applier = new ReplicationApplier(factory, Monitor());
+        hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
+        var cache = new LocalVectorClockCache(factory);
+        var applier = new ReplicationApplier(factory, Monitor(), cache);
         return (applier, factory, apply, hwm);
     }
 
@@ -253,11 +255,12 @@ public partial class ReplicationApplierTests
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>()).Returns(true);
+        hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
 
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         monitor.Get(Arg.Any<string>())
             .Returns(new LatticeReplicationOptions { ClusterId = LocalCluster });
-        var applier = new ReplicationApplier(factory, monitor);
+        var applier = new ReplicationApplier(factory, monitor, new LocalVectorClockCache(factory));
 
         await applier.ApplyAsync(new ReplogEntry
         {
@@ -373,7 +376,7 @@ public partial class ReplicationApplierTests
             .Returns(new VersionedValue { Value = null, Version = HybridLogicalClock.Zero });
         lattice.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);
-        return (new ReplicationApplier(factory, Monitor()), lattice, apply, hwm);
+        return (new ReplicationApplier(factory, Monitor(), new LocalVectorClockCache(factory)), lattice, apply, hwm);
     }
 
     private static byte[] EncodeOrSet(Action<OrSet>? configure = null)

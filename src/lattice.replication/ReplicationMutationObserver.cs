@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication;
 
@@ -60,6 +61,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
     private readonly IReplogSink _sink;
     private readonly IOptionsMonitor<LatticeReplicationOptions> _options;
     private readonly IReplicationModeResolver _modeResolver;
+    private readonly LocalVectorClockCache _localVectorClockCache;
     private readonly ConcurrentDictionary<string, CompiledFilter> _filters = new(StringComparer.Ordinal);
     private readonly Func<string, CompiledFilter> _factory;
     private readonly IDisposable? _changeSubscription;
@@ -67,14 +69,17 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
     public ReplicationMutationObserver(
         IReplogSink sink,
         IOptionsMonitor<LatticeReplicationOptions> options,
-        IReplicationModeResolver modeResolver)
+        IReplicationModeResolver modeResolver,
+        LocalVectorClockCache localVectorClockCache)
     {
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(modeResolver);
+        ArgumentNullException.ThrowIfNull(localVectorClockCache);
         _sink = sink;
         _options = options;
         _modeResolver = modeResolver;
+        _localVectorClockCache = localVectorClockCache;
         _factory = treeId => CompiledFilter.From(_options.Get(treeId));
 
         // Any options change invalidates every cached filter. ConfigureAll
@@ -85,7 +90,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
     }
 
     /// <inheritdoc />
-    public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)
+    public async Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)
     {
         var op = mutation.Kind switch
         {
@@ -112,14 +117,14 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
         // maintenance emit is still Maintenance and still skipped.
         if (mutation.Category == MutationCategory.Maintenance)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         // Mode resolution is the gate: an undeclared tree never replicates.
         var mode = _modeResolver.Resolve(mutation.TreeId);
         if (mode is null)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         var filter = _filters.GetOrAdd(mutation.TreeId, _factory);
@@ -127,7 +132,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
         var key = mutation.Key ?? string.Empty;
         if (!filter.AcceptsKey(key))
         {
-            return Task.CompletedTask;
+            return;
         }
 
         // The mutation already carries an origin when it is a replay of a
@@ -136,18 +141,38 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
         // before any observer call can reach this point.
         var origin = mutation.OriginClusterId ?? filter.ClusterId;
 
-        // Defensive snapshot of the ambient causal-plus frontier:
-        // VersionVector is a mutable reference type whose Entries
-        // dictionary is publicly mutable, so retaining the supplied
-        // mutation.VectorClock reference would leave the captured entry
-        // exposed to any caller that advances the frontier after this
-        // observer returns. Cloning once and aliasing both slots to
-        // the clone preserves the "DependencySummary initially mirrors
-        // VectorClock" contract while breaking the mutation -> entry
-        // aliasing that would otherwise allow silent post-emit drift.
-        // The clone is null-safe: a non-replicated local write flows
-        // through as null and decodes back to null on legacy peers.
-        var capturedFrontier = mutation.VectorClock?.Clone();
+        // Vector-clock capture priority:
+        //   1. mutation.VectorClock when supplied via
+        //      LatticeVectorClockContext.With(...) — preserves the
+        //      caller-supplied frontier verbatim. This is the path
+        //      structural rewrites (shard-split shadow-forward, saga
+        //      compensate, atomic multi-key writes) take so the
+        //      shadow-forwarded entry inherits the originating commit's
+        //      VC rather than capturing a fresh one against the
+        //      destination shard's local view.
+        //   2. LocalVectorClockCache snapshot when the mutation does
+        //      not carry an explicit VC. Multi-shard user writes
+        //      (range delete, multi-leaf saga) emit from multiple
+        //      grains in close succession; reading the cache on each
+        //      emit yields a silo-wide consistent view of the local
+        //      vector clock so every per-emit VC agrees on cross-shard
+        //      origins. The cache cold-starts from
+        //      IReplicationHighWaterMarkGrain.GetVectorAsync once per
+        //      tree per silo lifetime.
+        // Defensive snapshot (case 1): VersionVector is a mutable
+        // reference type whose Entries dictionary is publicly mutable,
+        // so retaining the supplied mutation.VectorClock reference
+        // would leave the captured entry exposed to any caller that
+        // advances the frontier after this observer returns. The
+        // cache's GetSnapshotAsync already returns a defensive copy
+        // (no further clone needed for case 2).
+        VersionVector? capturedFrontier = mutation.VectorClock?.Clone();
+        if (capturedFrontier is null)
+        {
+            capturedFrontier = await _localVectorClockCache
+                .GetSnapshotAsync(mutation.TreeId, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         var entry = new ReplogEntry
         {
@@ -161,10 +186,11 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             ExpiresAtTicks = mutation.ExpiresAtTicks,
             OriginClusterId = origin,
             Mode = mode.Value,
-            // Causal-plus frontier: stamp the defensive snapshot so
-            // the captured entry is detached from any post-emit
-            // mutation of mutation.VectorClock. Both slots share the
-            // single clone instance - the dependency summary slot is
+            // Causal-plus frontier: stamp the captured snapshot (either
+            // the caller-supplied clone or the cache's defensive copy)
+            // so the entry is detached from any post-emit mutation of
+            // the producer's frontier source. Both slots share the
+            // single instance — the dependency summary slot is
             // reserved for a future Bloom-filter shape but starts
             // identical to the absolute frontier so a receiver
             // consulting either slot sees the same value.
@@ -182,7 +208,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             DeltaPayload = mutation.DeltaPayload,
         };
 
-        return _sink.WriteAsync(entry, cancellationToken);
+        await _sink.WriteAsync(entry, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

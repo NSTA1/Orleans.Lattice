@@ -463,6 +463,12 @@ internal sealed partial class ReplicationApplier
 
             if (advanced)
             {
+                // Mirror the foreign advance into the producer-side
+                // local vector clock cache. Mirrors the per-entry path's
+                // AdvanceForeign call site post-TryAdvanceAsync so a
+                // batch-applied run keeps the producer view in sync
+                // with the receiver-side HWM grain.
+                localVectorClockCache.AdvanceForeign(treeId, origin!, highestApplied);
                 await DrainBufferAsync(treeId, hwmGrain, resolved, cancellationToken).ConfigureAwait(false);
             }
 
