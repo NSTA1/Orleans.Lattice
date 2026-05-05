@@ -206,6 +206,18 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             // author a delta.
             DeltaKind = mutation.DeltaKind,
             DeltaPayload = mutation.DeltaPayload,
+            // Atomic-batch metadata passthrough: mirror
+            // LatticeMutation.AtomicBatchSize / AtomicBatchIndex onto
+            // the ReplogEntry verbatim. The slots are wire-shape-stable
+            // and flow through whatever the producer supplies; today
+            // every emit defaults to 0/0 because the saga-wide
+            // capture-once stamp inside AtomicWriteGrain is not yet
+            // wired (a separate roadmap item). The observer is
+            // independent of that wiring - the slot copy is unconditional
+            // so a producer flipping the saga stamp on does not require
+            // an observer change.
+            AtomicBatchSize = mutation.AtomicBatchSize,
+            AtomicBatchIndex = mutation.AtomicBatchIndex,
         };
 
         await _sink.WriteAsync(entry, cancellationToken).ConfigureAwait(false);

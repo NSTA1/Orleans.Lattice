@@ -166,4 +166,35 @@ public readonly record struct LatticeMutation
     /// persisted before this field existed.
     /// </summary>
     [Id(13)] public byte[]? DeltaPayload { get; init; }
+
+    /// <summary>
+    /// Total number of mutations in the enclosing atomic transaction
+    /// (a <c>SetManyAtomicAsync</c> saga). Single-key writes and
+    /// non-atomic batches stamp <c>0</c>; an atomic N-key write stamps
+    /// <c>N</c> on every per-key emit produced by both the execute and
+    /// compensate phases. Sibling membership is keyed by
+    /// <see cref="TransactionId"/>; this slot is the canonical
+    /// completeness signal a receiver-side staging buffer reads to
+    /// detect when every entry of a batch has arrived. Independent of
+    /// <see cref="OriginClusterId"/> and <see cref="Category"/>: a
+    /// remote-origin or maintenance atomic emit (no such caller exists
+    /// today, but the slot is shape-stable for it) still carries the
+    /// same size. Defaults to <c>0</c> for wire compatibility with
+    /// observers persisted before this field existed.
+    /// </summary>
+    [Id(14)] public int AtomicBatchSize { get; init; }
+
+    /// <summary>
+    /// Zero-based position of this mutation within the enclosing
+    /// atomic transaction. Defined only when
+    /// <see cref="AtomicBatchSize"/> is greater than <c>0</c>; for
+    /// non-atomic writes (<see cref="AtomicBatchSize"/> = <c>0</c>) the
+    /// slot is unused and stamps <c>0</c>. Within a batch the index
+    /// covers <c>0..AtomicBatchSize-1</c> exactly once each, derived
+    /// deterministically from the saga's per-operation iteration order;
+    /// compensation rolls inherit the original prepare's index for
+    /// each key. Defaults to <c>0</c> for wire compatibility with
+    /// observers persisted before this field existed.
+    /// </summary>
+    [Id(15)] public int AtomicBatchIndex { get; init; }
 }

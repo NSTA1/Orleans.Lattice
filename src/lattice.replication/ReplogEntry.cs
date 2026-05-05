@@ -152,5 +152,31 @@ public readonly record struct ReplogEntry
     /// authored. Strictly additive on the wire.
     /// </summary>
     [Id(13)] public byte[]? DeltaPayload { get; init; }
+
+    /// <summary>
+    /// Total number of entries in the enclosing atomic transaction
+    /// (a <c>SetManyAtomicAsync</c> saga). Single-key writes and
+    /// non-atomic batches stamp <c>0</c>; an atomic N-key write stamps
+    /// <c>N</c> on every per-key emit. Mirrored verbatim from the
+    /// producing <see cref="LatticeMutation.AtomicBatchSize"/>. Sibling
+    /// membership is keyed by the existing <c>TransactionId</c> the
+    /// core mutation observer already supplies; this slot is the
+    /// canonical completeness signal a receiver-side staging buffer
+    /// reads to detect when every entry of a batch has arrived.
+    /// Strictly additive on the wire: legacy peers and entries
+    /// authored before this slot existed decode as <c>0</c>, which a
+    /// receiver with atomic-batch delivery enabled treats identically
+    /// to a single-key write.
+    /// </summary>
+    [Id(14)] public int AtomicBatchSize { get; init; }
+
+    /// <summary>
+    /// Zero-based position of this entry within the enclosing atomic
+    /// transaction; <c>0</c> for non-atomic writes. Mirrored verbatim
+    /// from the producing <see cref="LatticeMutation.AtomicBatchIndex"/>.
+    /// Strictly additive on the wire: legacy peers and entries
+    /// authored before this slot existed decode as <c>0</c>.
+    /// </summary>
+    [Id(15)] public int AtomicBatchIndex { get; init; }
 }
 
