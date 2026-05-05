@@ -251,6 +251,19 @@ internal sealed class AtomicWriteGrain(
             }
         }
 
+        // Capture caller's ambient vector-clock frontier once, on the
+        // first Prepare. On a reminder-driven replay (no caller
+        // context) the persisted value is reused verbatim, mirroring
+        // the KeyFingerprint / TransactionId / DeltaKind capture-once
+        // pattern. The guard exists for symmetry with the parallel
+        // capture blocks; a persisted-null value is observably
+        // indistinguishable from "never captured" because reminder
+        // re-entry has no ambient context either.
+        if (state.State.VectorClock is null)
+        {
+            state.State.VectorClock = LatticeVectorClockContext.Current;
+        }
+
         var lattice = grainFactory.GetGrain<ILattice>(treeId);
         var routing = await lattice.GetRoutingAsync();
         var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
@@ -313,6 +326,7 @@ internal sealed class AtomicWriteGrain(
         StampOperationIdContext();
         StampTransactionIdContext();
         StampDeltaContext();
+        StampVectorClockContext();
 
         if (state.State.Phase == AtomicWritePhase.Prepare)
         {
@@ -569,6 +583,26 @@ internal sealed class AtomicWriteGrain(
     {
         if (state.State.DeltaKind is null || state.State.DeltaPayload is null) return;
         LatticeDeltaContext.Current = (state.State.DeltaKind, state.State.DeltaPayload);
+    }
+
+    /// <summary>
+    /// Re-establishes the saga's persisted vector-clock frontier on
+    /// Orleans <see cref="RequestContext"/> so every per-key
+    /// <c>SetAsync</c> the saga issues during the
+    /// <see cref="AtomicWritePhase.Execute"/> phase emits a
+    /// <see cref="LatticeMutation"/> carrying the identical
+    /// <see cref="LatticeMutation.VectorClock"/> across the batch.
+    /// Compensation rolls override this per-key with each
+    /// <see cref="AtomicPreValue.VectorClock"/> via
+    /// <see cref="LatticeVectorClockContext.With"/>; the saga-wide
+    /// stamp is restored when each rollback's scope disposes.
+    /// Setting <see langword="null"/> explicitly clears any stale
+    /// ambient context inherited from the reminder-driven activation
+    /// so a saga that captured a null frontier emits null verbatim.
+    /// </summary>
+    private void StampVectorClockContext()
+    {
+        LatticeVectorClockContext.Current = state.State.VectorClock;
     }
 
     private async Task PublishCompletedEventAsync()

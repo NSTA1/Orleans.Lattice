@@ -369,8 +369,247 @@ Every item in the completeness wave is constrained by the same rules that bound 
 - **Wire-additive only.** F-043 / F-045 / F-046 are new `[Id]` slots with decode-as-empty defaults. Legacy peers and legacy persisted state continue to decode and behave identically to today's per-origin-only HWM check.
 - **Idempotent under re-delivery.** R-091's `RecentApplyCache<(origin, hlc, key, op)>` LRU is a fast-path optimisation; correctness is still bounded by the per-origin HWM (R-023) plus the dep-check (R-082).
 
-### 12.3 What is intentionally not delivered
+### 12.2.1 R-089 shipped mechanism
 
-- **Atomic visibility cross-cluster.** R-089 preserves the writer's causal frontier across an atomic batch but does not deliver all-or-none cross-replica visibility. A remote reader can observe key 1 and key 3 of a 5-key atomic set before key 2 has been delivered, as long as no causal edge from the reader's prior observations is violated. Atomic visibility is strictly stronger than causal+ and would require a transactional-batch delivery primitive — flagged as a separate follow-on if demand surfaces.
-- **Cross-tree causality.** A write to tree A followed by a write to tree B does not carry a cross-tree dependency edge. Each tree has its own independent vector clock; cross-tree causal ordering would require either a cluster-global VC (which does not scale) or a cross-tree dependency graph the user explicitly opts into (out of scope for this design).
-- **Maintenance-mutation replay.** R-090 deliberately drops `MutationKind.Maintenance` on the producer; the receiver never sees them. A remote peer that needs to mirror the producer's exact tombstone-compaction state must rebuild it from the user-write replog stream that drove the data into the tree, not from the maintenance events themselves.
+The atomic-transaction boundary (`TransactionId`, F-044) is the per-emit signal a future causal+ consumer reads to detect that several entries belong to the same enclosing batch. The producer-side VC capture is the **batch-wide consistency** half: a new `[Id(11)] AtomicWriteState.VectorClock` slot persists the caller's ambient frontier on the saga's first `Prepare` (capture-once, mirroring the `KeyFingerprint` / `TransactionId` / `DeltaKind` precedent — wire-compatible, missing field on legacy persisted state decodes to `null`); the saga grain re-stamps the persisted slot onto `LatticeVectorClockContext.Current` at the head of every `RunSagaAsync` so every per-key `SetAsync` issued during `Execute` reads the identical ambient and the leaf grain stamps it onto the freshly-constructed `LwwValue`. The saga-wide stamp survives crash recovery because the persisted slot is the single source of truth. Compensation rolls override the saga-wide stamp per-key with each `AtomicPreValue.VectorClock` so a rolled-back key re-lands with its original frontier.
+
+---
+
+## 13. Examples
+
+### 13.1 Simplified causal+ entry sketch
+
+```text
+message ReplogEntry {
+    Metadata metadata = 1;
+
+    oneof operation {
+        // multi-key atomic upsert
+        AtomicUpsert upsert = 2;
+        // single-key delete
+        Delete delete = 3;
+    }
+
+    // per-entry causal metadata
+    VectorClock vector_clock = 10;
+    DependencySummary dependency_summary = 11;
+}
+```
+
+### 13.2 Causal+ entry lifecycle
+
+1. Initial state:
+
+```text
+local_vc = {}
+```
+
+2. Produce an entry:
+
+```text
+// Set X=1
+upsert = {
+    "X": 1
+};
+
+vector_clock = {
+    "A": 5,
+    "B": 5
+};
+
+// no dependencies
+dependency_summary = {};
+```
+
+3. Append as offset 123:
+
+```text
+append({
+    "offset": 123,
+    "operation": {
+        "upsert": upsert
+    },
+    "vector_clock": vector_clock,
+    "dependency_summary": dependency_summary
+});
+```
+
+4. On replay, before apply:
+
+```text
+WAL: [ ..., { offset: 123, vector_clock: { A: 5, B: 5 } } , ... ]
+
+local_vc: { A: 4, B: 5 } // or { A: 5, B: 4 } -- both are ok
+
+entry: { offset: 123, vector_clock: { A: 5, B: 5 } }
+
+// metadata matches, applies idempotently
+```
+
+5. On replay, after apply:
+
+```text
+local_vc: { A: 5, B: 5 } // or { A: 5, B: 5 } -- both are ok
+
+// buffered entries with satisfied dependencies are eligible
+```
+
+6. Produce a conflicting entry:
+
+```text
+// Set A=2
+upsert = {
+    "A": 2
+};
+
+vector_clock = {
+    "A": 6, // advance A's clock
+    "B": 5
+};
+
+// depends on A's prior value
+dependency_summary = {
+    "A": 5
+};
+```
+
+7. Append as offset 124:
+
+```text
+append({
+    "offset": 124,
+    "operation": {
+        "upsert": upsert
+    },
+    "vector_clock": vector_clock,
+    "dependency_summary": dependency_summary
+});
+```
+
+8. On replay, before apply:
+
+```text
+WAL: [ ..., { offset: 124, vector_clock: { A: 6, B: 5 } } , ... ]
+
+local_vc: { A: 5, B: 5 }
+
+entry: { offset: 124, vector_clock: { A: 6, B: 5 } }
+
+// A's VC is ahead, but the dependency (summary) is satisfied
+```
+
+9. On replay, after apply:
+
+```text
+local_vc: { A: 6, B: 5 }
+
+// the dependency on A's prior value allows this to apply
+// buffered entries with satisfied dependencies are eligible
+```
+
+10. Produce an entry with indirect dependency:
+
+```text
+// Set B=3 (indirectly dependent on A)
+upsert = {
+    "B": 3
+};
+
+vector_clock = {
+    "A": 7, // advance A's clock
+    "B": 6
+};
+
+// depends on A's new value
+dependency_summary = {
+    "A": 6
+};
+```
+
+11. Append as offset 125:
+
+```text
+append({
+    "offset": 125,
+    "operation": {
+        "upsert": upsert
+    },
+    "vector_clock": vector_clock,
+    "dependency_summary": dependency_summary
+});
+```
+
+12. On replay, before apply:
+
+```text
+WAL: [ ..., { offset: 125, vector_clock: { A: 7, B: 6 } } , ... ]
+
+local_vc: { A: 6, B: 5 }
+
+entry: { offset: 125, vector_clock: { A: 7, B: 6 } }
+
+// B's VC is ahead, and the dependency (summary) is satisfied
+```
+
+13. On replay, after apply:
+
+```text
+local_vc: { A: 7, B: 6 }
+
+// the dependency on A's new value allows this to apply
+// buffered entries with satisfied dependencies are eligible
+```
+
+14. Effects of trim and GC:
+
+```text
+// GC trims up to offset 124, entries 123 and 124 are preserved
+trim_to_offset = 124;
+
+WAL: [ ... , { offset: 123, vector_clock: { A: 5, B: 5 } } , { offset: 124, vector_clock: { A: 6, B: 5 } } , ... ]
+
+// causal stable is now at 124, any entry with VC <= 124 is GC eligible
+```
+
+15. After GC:
+
+```text
+WAL: [ ... , { offset: 124, vector_clock: { A: 6, B: 5 } } , ... ]
+
+// entry 123 is gone, but its effects are preserved by entry 124
+```
+
+16. Snapshot at causal stable:
+
+```text
+// snapshot_frontier is stable at 124
+snapshot_frontier = 124;
+
+// any entry with vector_clock <= 124 is included in the snapshot
+// this includes the last stable state for all keys
+```
+
+17. Incremental replication starts at the snapshot frontier:
+
+```text
+start = 124;
+
+// subsequent entries are delivered starting from the snapshot frontier
+// the receiver's local VC is updated to 124 for all origins
+```
+
+18. End-to-end causal+ replication guarantees:
+
+- causally ordered delivery
+- no cycles
+- no duplicates
+- snapshots include all necessary state
+- incremental from the latest stable snapshot
+
+**Performance notes:**
+
+- The above example uses an idealised entry sketch for clarity.
+- Actual implementation details may vary, e.g., use of forward deltas or batch encapsulation.
+- Focus on the causal relationships and VC/DS semantics.
+
+---
