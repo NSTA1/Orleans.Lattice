@@ -56,6 +56,35 @@ internal sealed partial class BPlusLeafGrain(
     private async ValueTask<ResolvedLatticeOptions> ResolveOptionsSlowAsync() =>
         _options = await optionsResolver.ResolveAsync(state.State.TreeId ?? string.Empty);
 
+    /// <summary>
+    /// Advances the leaf's local <see cref="HybridLogicalClock"/> for a
+    /// commit and returns the value to persist on the freshly-constructed
+    /// <see cref="LwwValue{T}"/>. When
+    /// <see cref="LatticeHlcOverrideContext.Current"/> is <see langword="null"/>
+    /// (the foreground-caller default), the local clock advances via
+    /// <see cref="HybridLogicalClock.Tick"/> and the same value is
+    /// returned. When an override is present (the cross-cluster atomic
+    /// apply path), the local clock advances via
+    /// <see cref="HybridLogicalClock.Merge"/> so subsequent foreground
+    /// ticks remain strictly greater than the override (preserving local
+    /// monotonicity), but the <em>override</em> is returned verbatim so
+    /// the persisted <see cref="LwwValue{T}.Timestamp"/> matches the
+    /// authoring cluster's HLC bit-identically — preserving the
+    /// receiver-side LWW resolution invariant.
+    /// </summary>
+    private HybridLogicalClock AdvanceClockOrOverride()
+    {
+        var ovr = LatticeHlcOverrideContext.Current;
+        if (ovr is { } sourceHlc)
+        {
+            state.State.Clock = HybridLogicalClock.Merge(state.State.Clock, sourceHlc);
+            return sourceHlc;
+        }
+
+        state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
+        return state.State.Clock;
+    }
+
     public Task<byte[]?> GetAsync(string key)
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
@@ -231,11 +260,11 @@ internal sealed partial class BPlusLeafGrain(
     /// </summary>
     private async Task<SplitResult?> CommitSetAsync(string key, byte[] value, long expiresAtTicks)
     {
-        // step 0 (build) - HLC tick, build LwwValue. Version vector is
-        // foreground-only; ILeafProjection.Apply does not advance it.
-        state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
+        // step 0 (build) - HLC tick (or override), build LwwValue. Version
+        // vector is foreground-only; ILeafProjection.Apply does not advance it.
+        var stamp = AdvanceClockOrOverride();
         state.State.Version.Tick(ReplicaId);
-        var newEntry = LwwValue<byte[]>.CreateWithExpiry(value, state.State.Clock, expiresAtTicks)
+        var newEntry = LwwValue<byte[]>.CreateWithExpiry(value, stamp, expiresAtTicks)
             with
             {
                 OriginClusterId = LatticeOriginContext.Current,
@@ -321,10 +350,10 @@ internal sealed partial class BPlusLeafGrain(
             return false;
         }
 
-        // step 0 (build) - HLC tick, build tombstone, build mutation envelope.
-        state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
+        // step 0 (build) - HLC tick (or override), build tombstone, build mutation envelope.
+        var stamp = AdvanceClockOrOverride();
         state.State.Version.Tick(ReplicaId);
-        var tombstone = LwwValue<byte[]>.Tombstone(state.State.Clock)
+        var tombstone = LwwValue<byte[]>.Tombstone(stamp)
             with
             {
                 OriginClusterId = LatticeOriginContext.Current,
@@ -408,14 +437,15 @@ internal sealed partial class BPlusLeafGrain(
             return new RangeDeleteResult { Deleted = 0, PastRange = pastRange };
         }
 
-        // step 0 (build) - HLC tick, build tombstone, build mutation envelope
-        // covering the whole range. The leaf does not publish the per-range
-        // mutation - that's a shard-level concern - but it still appends
-        // the range tombstone to the WAL so a future replay applies the
-        // same set-of-keys closure rather than each individual key.
-        state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
+        // step 0 (build) - HLC tick (or override), build tombstone, build
+        // mutation envelope covering the whole range. The leaf does not
+        // publish the per-range mutation - that's a shard-level concern -
+        // but it still appends the range tombstone to the WAL so a future
+        // replay applies the same set-of-keys closure rather than each
+        // individual key.
+        var stamp = AdvanceClockOrOverride();
         state.State.Version.Tick(ReplicaId);
-        var tombstone = LwwValue<byte[]>.Tombstone(state.State.Clock)
+        var tombstone = LwwValue<byte[]>.Tombstone(stamp)
             with
             {
                 OriginClusterId = LatticeOriginContext.Current,

@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// verbatim on the persisted <see cref="Primitives.LwwValue{T}"/>.
 /// </summary>
 [TestFixture]
-public class LatticeGrainReplicationApplyTests
+public partial class LatticeGrainReplicationApplyTests
 {
     private ClusterFixture _fixture = null!;
 

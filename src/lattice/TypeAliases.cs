@@ -137,4 +137,9 @@ internal static class TypeAliases
     // Write-ahead-log durability seam (consumed by the replication
     // package today; foreground commit-log adapter tomorrow)
     internal const string WalEntry = "ol.we";
+
+    // Cross-cluster atomic-batch apply DTOs (source-HLC-preserving apply seam)
+    internal const string AtomicApplyEntry = "ol.aae";
+    internal const string AtomicApplyResult = "ol.aar";
+    internal const string AtomicApplyOutcome = "ol.aao";
 }
