@@ -38,7 +38,7 @@ else
         <article>
             <header><strong>CRDT state (Orleans.Lattice)</strong></header>
             <dl>
-                <dt>Current operator (LWW)</dt>
+                <dt>Current operator (LWW, cluster-local)</dt>
                 <dd>
                     @if (_currentOperator is { } op)
                     {
@@ -49,7 +49,7 @@ else
                         <em>none</em>
                     }
                 </dd>
-                <dt>Process labels (G-Set)</dt>
+                <dt>Process labels (G-Set, cross-cluster)</dt>
                 <dd>
                     @if (_labels.Count == 0)
                     {
@@ -68,18 +68,24 @@ else
                 <label>Assign operator
                     <input type="text" @bind="_operatorInput" placeholder="operator:alice" />
                 </label>
-                <button type="submit" disabled="@_busy">Assign (LWW)</button>
+                <button type="submit" disabled="@_busy">Assign (local-only)</button>
             </form>
             <form @onsubmit="AddLabelAsync" @onsubmit:preventDefault>
                 <label>Add process label
                     <input type="text" @bind="_labelInput" placeholder="heat-lot-X" />
                 </label>
-                <button type="submit" disabled="@_busy">Add label (G-Set)</button>
+                <button type="submit" disabled="@_busy">Add label (cross-cluster)</button>
             </form>
             <small>
-                Operator is a last-writer-wins register; concurrent writes from silo A
-                and silo B converge on the higher lattice HLC. Labels are a grow-only
-                set — adds on either silo union without conflict.
+                Operator is a last-writer-wins register kept <strong>cluster-local
+                by design</strong>: concurrent writes from two silos in the same
+                cluster converge on the higher lattice HLC, but operator
+                assignments do not replicate across clusters because LWW between
+                disjoint cluster HLC ID spaces is semantically arbitrary.
+                Labels are an OR-Set replicated <strong>cross-cluster</strong>
+                as typed <code>add</code> / <code>remove</code> / <code>merge</code>
+                deltas — adds on any silo in either cluster union without
+                conflict.
             </small>
         </article>
 

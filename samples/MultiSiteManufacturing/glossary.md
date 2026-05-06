@@ -48,14 +48,13 @@ Terms used throughout the sample. Split into the **domain** side
 | **Orleans** | Distributed actor framework ("virtual actors" called grains) used by the sample for single-writer-per-entity coordination, timers, reminders, and persistence. |
 | **Grain** | Virtual actor — a uniquely-keyed, single-threaded object managed by Orleans. Transparently activated on first use and deactivated when idle. |
 | **Grain interface** | The public API of a grain (`ISomethingGrain`). All grain calls go through this interface. |
-| **Grain key** | The identity of a grain instance. In this sample, strings like `"mfg-facts|eu"` or enum values like `ProcessSite.OhioForge`. |
+| **Grain key** | The identity of a grain instance. In this sample, enum values like `ProcessSite.OhioForge` and short strings like backend names (`"baseline"`, `"lattice"`). |
 | **Silo** | An Orleans host process. This sample runs two silos per cluster. |
 | **Cluster** | A set of silos sharing a membership table. The sample runs two — `us` and `eu`. |
 | **Grain storage** | Orleans' persistent state facility. Here backed by Azure Table Storage (`msmfgGrainState`). |
 | **Grain timer** | A periodic callback registered inside a grain activation. No minimum period; auto-disposed on deactivation. Used for the replicator's 3-second shipping loop. |
 | **Reminder** | Durable, cluster-wide scheduled callback surviving silo restarts. Minimum period of 1 minute. Used for the replicator keepalive and the replog janitor. |
-| **RequestContext** | Orleans per-call ambient dictionary flowing across grain calls. Used to carry the `lattice.replay = sourceCluster` flag that breaks the A → B → A replication loop. |
-| **Outgoing grain call filter** | An `IOutgoingGrainCallFilter` interceptor that runs around every outgoing grain call. The sample uses one (`LatticeReplicationFilter`) to append to the replog after every replicated `SetAsync` / `DeleteAsync`. |
+| **RequestContext** | Orleans per-call ambient dictionary flowing across grain calls. The sample no longer threads its own loop-break flag through it - that responsibility moved into the replication package's per-origin HWM (see Replication section below). |
 | **TestingHost** | Orleans' in-process test-cluster fixture. The sample's integration tests materialise a single cluster with in-memory storage. |
 
 ### Lattice
@@ -85,19 +84,23 @@ Terms used throughout the sample. Split into the **domain** side
 
 ### Replication
 
+Provided by `Orleans.Lattice.Replication` (WAL + shipper + applier)
+and `Orleans.Lattice.Replication.Grpc` (HTTP/2 gRPC push transport).
+
 | Term | Meaning |
 |---|---|
-| **Replog** | HLC-ordered replication log — a Lattice tree (`_replog__{tree}`) acting as the discovery ledger for "what changed locally since cursor X?". |
-| **Replicator grain** | `IReplicatorGrain`, one per `(tree, peer-cluster)`. Persists a cursor, scans the replog, ships batches to the peer, advances the cursor on ack. |
-| **Cursor** | The replicator's high-watermark HLC — everything at or before this has been successfully shipped to the peer. |
-| **Janitor** | `IReplogJanitorGrain`. Compacts the replog by deleting entries older than `min(peer cursors) − retention`. |
-| **Anti-entropy** | Backstop full-tree sweep that re-ships any primary entry newer than the cursor; catches the rare race where the filter fails after the primary write succeeds. |
-| **Loop-break** | The `RequestContext["lattice.replay"]` flag pattern that prevents an inbound replicated apply from re-entering the replog and shipping itself back. |
-| **Opt-in (tree level)** | `ReplicationTopology.ReplicatedTrees` — whitelist of trees whose writes the filter observes. |
-| **Opt-in (key level)** | `ReplicationTopology.IsKeyReplicated(tree, key)` — per-key filter applied on top of the tree-level whitelist. |
-| **Traefik** | The HTTP reverse proxy fronting each cluster. Two routers per cluster: sticky-session for the UI, round-robin with active health check for `/replicate`. |
+| **WAL** | The package's per-tree write-ahead log of replicated mutations. Replaces the sample's earlier hand-rolled `_replog__{tree}` tree. |
+| **Shipper grain** | One package-managed grain per `(tree, peer-cluster)` pair. Drains the WAL, calls `IReplicationTransport.SendAsync`, advances its per-peer cursor on ack. |
+| **Applier** | Receiver-side package component that merges incoming batches into the local lattice using the tree's CRDT semantics (`LwwRegister` or `OrSet`). |
+| **Cursor** | The shipper's per-peer high-watermark - everything at or before this HLC has been successfully shipped to the peer. The package persists it in grain storage. |
+| **Replication mode** | Per-tree CRDT semantic chosen on opt-in. `LwwRegister` for write-once keys (`mfg-facts`, `mfg-site-activity-index`); `OrSet` for set-typed values (`mfg-part-labels`); unreplicated trees stay cluster-local. |
+| **Per-origin HWM** | The package's loop-break: each cluster tracks the highest HLC it has seen from each peer origin and short-circuits replicated applies before they re-enter its own WAL. Replaces the sample's earlier `RequestContext["lattice.replay"]` flag. |
+| **IReplicationApplier** | Package-side seam invoked once per cross-cluster apply. `BaselineReplicationApplier` (sample-side) decorates the package's singleton to mirror `mfg-facts` writes into the divergence-visualisation backend and raise `FederationRouter.FactReplicated`. |
+| **IReplicationTransport** | Single-method (`SendAsync`) seam between the shipper and the wire. `ChaosReplicationTransport` (sample-side, Tier 4b) decorates it; `GrpcPushTransport` (package-side, internal) is the concrete implementation. |
+| **Opt-in (tree level)** | `LatticeReplicationOptions.ReplicatedTrees` - a tree -> `ReplicationMode` map. The shipper observes only listed trees. |
+| **Traefik** | The HTTP reverse proxy fronting each cluster. Two routers per cluster: sticky-session for the UI, round-robin with active health check for the `/orleans.lattice.replication.*` gRPC service path. |
 | **Multi-homed container** | A container attached to more than one Docker network. In this sample, each Traefik is attached to both cluster networks and is the only cross-cluster bridge. |
-| **Tier-N chaos** | The sample's fault-injection taxonomy (tiers 1–5 + 4b). Each tier models a distinct failure class at a distinct seam. See [`approach.md`](./approach.md) §4. |
+| **Tier-N chaos** | The sample's fault-injection taxonomy (tiers 1-5 + 4b). Each tier models a distinct failure class at a distinct seam. See [`approach.md`](./approach.md) §4. |
 
 ### Storage
 
@@ -105,7 +108,7 @@ Terms used throughout the sample. Split into the **domain** side
 |---|---|
 | **Azurite** | The local Azure Storage emulator. The sample ships two instances (one per cluster) under Docker Compose. |
 | **`msmfgGrainState`** | Azure Table holding Orleans grain state — chaos config, replicator cursors, seed flag, baseline part grains, inventory. |
-| **`msmfgLatticeFacts`** | Azure Table holding every Lattice tree — facts, site-activity index, part CRDT, replogs. |
+| **`msmfgLatticeFacts`** | Azure Table holding every Lattice tree - `mfg-facts`, `mfg-site-activity-index`, `mfg-part-labels`, `mfg-part-operator`. The package's replication WAL lives in a separate package-managed table. |
 
 ---
 

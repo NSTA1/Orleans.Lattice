@@ -13,9 +13,14 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-# Copy only what the Host csproj transitively needs, so the build layer
-# cache invalidates on meaningful changes only.
-COPY src/lattice/ ./src/lattice/
+# Copy the package source roots and the sample source. We pull the whole
+# `src/` tree rather than enumerating each package directory: every time
+# the host adds a ProjectReference to a new lattice package the
+# fine-grained list went stale, and `.dockerignore` already strips
+# bin/obj/test artefacts so the extra layer cost is bounded. Keeping the
+# sample source as a separate COPY layer means edits to the sample don't
+# invalidate the package-restore layer cache.
+COPY src/ ./src/
 COPY samples/MultiSiteManufacturing/src/ ./samples/MultiSiteManufacturing/src/
 
 RUN dotnet publish \

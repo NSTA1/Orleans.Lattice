@@ -75,9 +75,9 @@ public sealed class SiteActivityIndex(
     /// the fact's hybrid logical clock, with one row per part (the
     /// latest activity for that part at that site). Implemented as a
     /// native descending <see cref="ILattice"/> range scan over the
-    /// <c>{site}/</c> prefix (the core M12d demo) — the zero-padded
-    /// HLC embedded in each key means a reverse lexicographic scan is
-    /// already HLC-descending; no post-sort is required.
+    /// <c>{site}/</c> prefix — the zero-padded HLC embedded in each
+    /// key means a reverse lexicographic scan is already
+    /// HLC-descending; no post-sort is required.
     /// </summary>
     public async Task<IReadOnlyList<SiteActivityIndexEntry>> ListAtSiteAsync(
         ProcessSite site, CancellationToken cancellationToken = default)

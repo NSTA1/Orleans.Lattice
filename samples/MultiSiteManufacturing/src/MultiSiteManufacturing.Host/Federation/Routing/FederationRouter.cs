@@ -15,7 +15,8 @@ namespace MultiSiteManufacturing.Host.Federation;
 /// before fan-out. Facts held by a paused site are released through
 /// <see cref="ConfigureSiteAsync"/> and <see cref="ApplyPresetAsync"/>.
 /// <para>
-/// When the M12c silo-partition preset is active the router also
+/// When the simulated intra-cluster silo partition preset is active
+/// (see <see cref="ChaosPreset.ClusterSplit"/>) the router also
 /// consults <see cref="IPartitionChaosGrain"/>: each silo accepts only
 /// the half of the serial-hash space assigned to it (silo A keeps
 /// <c>hash % 2 == 0</c>, silo B keeps <c>hash % 2 == 1</c>). Dropped
@@ -105,10 +106,10 @@ public sealed class FederationRouter(
     {
         ArgumentNullException.ThrowIfNull(fact);
 
-        // M12c: silo-partition filter. Dropped facts never touch the
-        // site grain or the backends so they produce no visible side
-        // effects on the current silo; the other silo (which owns the
-        // opposite hash bucket) accepts the write.
+        // Simulated intra-cluster silo-partition filter. Dropped facts
+        // never touch the site grain or the backends so they produce
+        // no visible side effects on the current silo; the other silo
+        // (which owns the opposite hash bucket) accepts the write.
         if (await IsDroppedByPartitionAsync(fact))
         {
             logger.LogInformation(
@@ -265,7 +266,7 @@ public sealed class FederationRouter(
             return false;
         }
 
-        // M12c partitioning: deterministic hash-based filter. Silo A
+        // Deterministic hash-based partition filter. Silo A
         // (IsPrimary == true) keeps even-hash serials; silo B keeps
         // odd. Using string.GetHashCode is fine for a demo — we only
         // need the same answer on every call, not cryptographic
@@ -277,7 +278,7 @@ public sealed class FederationRouter(
     }
 
     /// <summary>
-    /// Process-stable FNV-1a hash. Used so the M12c partition filter
+    /// Process-stable FNV-1a hash. Used so the silo-partition filter
     /// produces the same "which silo owns this serial" answer on every
     /// silo (unlike <see cref="string.GetHashCode()"/>, which is
     /// randomized per process).

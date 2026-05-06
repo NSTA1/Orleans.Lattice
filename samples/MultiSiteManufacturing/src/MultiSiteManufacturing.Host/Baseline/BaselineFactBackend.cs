@@ -16,13 +16,14 @@ namespace MultiSiteManufacturing.Host.Baseline;
 /// durable — the directory is a cache, not the source of truth.
 /// </para>
 /// <para>
-/// On peer clusters, <see cref="EmitAsync"/> is also called from the
-/// inbound replication endpoint (<c>ReplicationInboundEndpoint</c>) for
-/// every replicated <c>mfg-facts</c> Set entry. This models naive
-/// event-log replication for the baseline backend so a peer's baseline
-/// view matches the seeding cluster on cold start. Deletes are not
-/// replayed — the baseline is an append-only fold with no retraction
-/// concept.
+/// On peer clusters, <see cref="EmitAsync"/> is also called from
+/// <see cref="MultiSiteManufacturing.Host.Replication.BaselineReplicationReplay"/>
+/// for every replicated <c>mfg-facts</c> Set entry observed on the
+/// package's <c>IChangeFeed</c>. This models naive event-log
+/// replication for the baseline backend so a peer's baseline view
+/// matches the seeding cluster on cold start. Deletes are not
+/// replayed - the baseline is an append-only fold with no
+/// retraction concept.
 /// </para>
 /// </remarks>
 public sealed class BaselineFactBackend(IGrainFactory grainFactory) : IFactBackend

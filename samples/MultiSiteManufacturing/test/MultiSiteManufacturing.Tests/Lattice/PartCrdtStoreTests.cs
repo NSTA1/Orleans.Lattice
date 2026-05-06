@@ -9,12 +9,15 @@ namespace MultiSiteManufacturing.Tests.Lattice;
 
 /// <summary>
 /// Covers <see cref="PartCrdtStore"/>: the LWW current-operator
-/// register and the G-Set process-label set, both backed by an
-/// Orleans.Lattice tree. Also covers partition-awareness: writes
-/// during partition land in a silo-local shadow prefix, cross-silo
-/// reads diverge, and <see cref="PartCrdtStore.HealLocalShadowAsync"/>
-/// promotes the shadow into the shared prefix so LWW/G-Set merge
-/// becomes visible from every silo.
+/// register (in <c>mfg-part-operator</c>) and the OR-Set process-label
+/// set (in <c>mfg-part-labels</c>, accessed through the package's
+/// <see cref="Orleans.Lattice.OrSetAccessor"/>). Also covers
+/// partition-awareness: writes during partition land in a silo-local
+/// shadow key in each tree, cross-silo reads diverge, and
+/// <see cref="PartCrdtStore.HealLocalShadowAsync"/> promotes the
+/// shadow into the shared key — for the operator via a plain shared-key
+/// Set, for labels via the OR-Set's natural causal merge — so LWW /
+/// OR-Set convergence becomes visible from every silo.
 /// </summary>
 [TestFixture]
 public class PartCrdtStoreTests
@@ -90,8 +93,12 @@ public class PartCrdtStoreTests
     }
 
     [Test]
-    public async Task AddLabel_is_idempotent()
+    public async Task AddLabel_is_idempotent_at_the_set_level()
     {
+        // OR-Set adds produce a fresh causal dot every time, but live
+        // element membership (the `Elements()` projection) is
+        // unchanged — that's the user-observable idempotence the store
+        // exposes through `GetLabelsAsync`.
         var serial = new PartSerialNumber("HPT-CRDT-2028-91003");
         await _store.AddLabelAsync(serial, "first-article");
         await _store.AddLabelAsync(serial, "first-article");
@@ -112,7 +119,10 @@ public class PartCrdtStoreTests
 
         var labels = await _store.GetLabelsAsync(serial);
 
-        // Range scan yields keys in lexicographic order.
+        // PartCrdtStore.GetLabelsAsync sorts the OR-Set's live
+        // elements through a `SortedSet<string>` before returning,
+        // so the surface contract is lexicographic order regardless of
+        // the OR-Set's internal base64-keyed enumeration.
         Assert.That(labels, Is.EqualTo(new[] { "aged", "heat-lot-17", "priority" }));
     }
 
@@ -127,8 +137,9 @@ public class PartCrdtStoreTests
     [Test]
     public async Task GetLabels_does_not_leak_other_serials()
     {
-        // G-Set isolation: labels for serial X must not appear when
-        // scanning serial Y, even though both share the same tree.
+        // OR-Set isolation: labels for serial X must not appear when
+        // reading serial Y, even though both live in the same tree
+        // (each serial gets its own OR-Set value under a distinct key).
         var sA = new PartSerialNumber("HPT-CRDT-2028-91006");
         var sB = new PartSerialNumber("HPT-CRDT-2028-91007");
         await _store.AddLabelAsync(sA, "only-a");
@@ -283,6 +294,120 @@ public class PartCrdtStoreTests
         Assert.That(promoted, Is.EqualTo(0));
         var result = await _storeA.GetOperatorAsync(serial);
         Assert.That(result!.Value.Value, Is.EqualTo("operator:quiet"));
+    }
+
+    [Test]
+    public async Task AssignOperator_raises_PartChanged_for_the_serial()
+    {
+        var serial = new PartSerialNumber("HPT-CRDT-2028-91020");
+        var seen = new List<PartSerialNumber>();
+        void Handler(PartSerialNumber s) => seen.Add(s);
+        _store.PartChanged += Handler;
+        try
+        {
+            await _store.AssignOperatorAsync(serial, new OperatorId("operator:eve"));
+        }
+        finally
+        {
+            _store.PartChanged -= Handler;
+        }
+
+        Assert.That(seen, Is.EqualTo(new[] { serial }), "serial not seen in PartChanged event");
+    }
+
+    [Test]
+    public async Task AddLabel_raises_PartChanged_for_the_serial()
+    {
+        var serial = new PartSerialNumber("HPT-CRDT-2028-91021");
+        var seen = new List<PartSerialNumber>();
+        void Handler(PartSerialNumber s) => seen.Add(s);
+        _store.PartChanged += Handler;
+        try
+        {
+            await _store.AddLabelAsync(serial, "first-article");
+            // Idempotent at the set level, but each call still raises -
+            // the event is "the part's CRDT state may have changed", not
+            // "an actual element was added", because the broadcaster
+            // doesn't carry deltas, only "rebuild the summary for serial".
+            await _store.AddLabelAsync(serial, "first-article");
+        }
+        finally
+        {
+            _store.PartChanged -= Handler;
+        }
+
+        Assert.That(seen, Is.EqualTo(new[] { serial, serial }), "serial not seen in PartChanged event");
+    }
+
+    [Test]
+    public async Task PartChanged_subscriber_exception_does_not_propagate()
+    {
+        // A single bad subscriber must never break the mutation path
+        // (which would fail the user-facing operator-assign / label-add
+        // RPC) or the receiver-side replication apply (which would
+        // surface as a 500 on the inbound gRPC Push and stall replication).
+        var serial = new PartSerialNumber("HPT-CRDT-2028-91022");
+        void BadHandler(PartSerialNumber _) => throw new InvalidOperationException("subscriber boom");
+        _store.PartChanged += BadHandler;
+        try
+        {
+            Assert.DoesNotThrowAsync(async () =>
+                await _store.AssignOperatorAsync(serial, new OperatorId("operator:isolation")));
+
+            // Assignment must have completed despite the bad subscriber.
+            var result = await _store.GetOperatorAsync(serial);
+            Assert.That(result!.Value.Value, Is.EqualTo("operator:isolation"));
+        }
+        finally
+        {
+            _store.PartChanged -= BadHandler;
+        }
+    }
+
+    [Test]
+    public async Task Heal_raises_PartChanged_once_per_distinct_serial_promoted()
+    {
+        // Two distinct serials touched under partition (one with a
+        // shadow operator, one with a shadow label) must surface
+        // exactly two PartChanged events on heal - one per serial -
+        // even though three shadow entries promoted across the two
+        // trees.
+        var sX = new PartSerialNumber("HPT-CRDT-2028-91030");
+        var sY = new PartSerialNumber("HPT-CRDT-2028-91031");
+
+        await SetPartitionedAsync(true);
+        try
+        {
+            await _storeA.AssignOperatorAsync(sX, new OperatorId("operator:px"));
+            await _storeA.AddLabelAsync(sX, "px-shadow-label");
+            await _storeA.AddLabelAsync(sY, "py-shadow-label");
+        }
+        finally
+        {
+            await SetPartitionedAsync(false);
+        }
+
+        var seen = new List<PartSerialNumber>();
+        void Handler(PartSerialNumber s) => seen.Add(s);
+        _storeA.PartChanged += Handler;
+        try
+        {
+            var promoted = await _storeA.HealLocalShadowAsync();
+            Assert.That(promoted, Is.GreaterThanOrEqualTo(3));
+        }
+        finally
+        {
+            _storeA.PartChanged -= Handler;
+        }
+
+        // Distinct-serial guarantee: every touched serial appears at
+        // least once; no duplicates.
+        Assert.Multiple(() =>
+        {
+            Assert.That(seen, Has.Count.EqualTo(2));
+            Assert.That(seen, Does.Contain(sX));
+            Assert.That(seen, Does.Contain(sY));
+        });
     }
 }
 

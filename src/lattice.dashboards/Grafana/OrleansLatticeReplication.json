@@ -579,7 +579,7 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byRefId", "options": "BUF" },
+            "matcher": { "id": "byFrameRefID", "options": "BUF" },
             "properties": [
               { "id": "unit", "value": "short" },
               { "id": "custom.axisPlacement", "value": "right" },
@@ -588,7 +588,7 @@
             ]
           },
           {
-            "matcher": { "id": "byRefId", "options": "LAG99" },
+            "matcher": { "id": "byFrameRefID", "options": "LAG99" },
             "properties": [
               { "id": "color", "value": { "mode": "fixed", "fixedColor": "purple" } },
               { "id": "custom.axisLabel", "value": "apply-lag p99 (ms)" }

@@ -3,8 +3,10 @@
 http:
   routers:
     eu-replicate:
-      rule: "PathPrefix(`/replicate`)"
+      # gRPC service name: orleans.lattice.replication.LatticeReplication
+      rule: "PathPrefix(`/orleans.lattice.replication.`)"
 
+      priority: 200
       entryPoints:
         - web
       service: eu-replicate
@@ -18,15 +20,15 @@ http:
   services:
     eu-replicate:
       loadBalancer:
-        # Round-robin, no sticky cookie: replication POSTs are
-        # stateless and either silo can apply a batch.
+        # Round-robin, no sticky cookie: replication pushes are
+        # stateless and either silo can apply a batch. h2c upstream
+        # because gRPC requires HTTP/2 end-to-end. Port 8081 is a
+        # dedicated h2c listener (Program.cs ConfigureKestrel) since
+        # plaintext Kestrel cannot multiplex HTTP/1.1 + HTTP/2 on the
+        # same port.
         servers:
-          - url: "http://silo-eu-a:8080"
-          - url: "http://silo-eu-b:8080"
-        healthCheck:
-          path: "/"
-          interval: "2s"
-          timeout: "1s"
+          - url: "h2c://silo-eu-a:8081"
+          - url: "h2c://silo-eu-b:8081"
 
     eu-web:
       loadBalancer:

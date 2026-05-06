@@ -3,8 +3,12 @@
 # uploading bin/ / obj/ from developer machines.
 **
 
-# Project sources referenced by the Host csproj.
-!src/lattice/**
+# Project sources referenced by the Host csproj. Whitelist the entire
+# `src/` tree so adding a ProjectReference to a new lattice package
+# (e.g. Orleans.Lattice.Replication[.Grpc]) doesn't require a parallel
+# edit here. The `**/bin` and `**/obj` re-excludes below still strip
+# build artefacts inside any whitelisted directory.
+!src/**
 !samples/MultiSiteManufacturing/src/**
 
 # Never ship build outputs, IDE state, test results, or node_modules.
