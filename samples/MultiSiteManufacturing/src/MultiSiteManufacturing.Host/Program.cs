@@ -373,6 +373,16 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SiteActivityIndex>
 builder.Services.AddSingleton<DashboardBroadcaster>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DashboardBroadcaster>());
 
+// Per-silo bridge from the canonical orleans.lattice.replication meter
+// into the cluster-singleton aggregator that backs the topbar's
+// ship/recv strip. Registered as both a singleton (so MainLayout can
+// hold a stable reference if needed) and a hosted service (so its
+// MeterListener starts at silo boot and its 500ms push loop keeps
+// the cluster grain warm).
+builder.Services.AddSingleton<MultiSiteManufacturing.Host.Replication.ReplicationActivityTracker>();
+builder.Services.AddHostedService(sp =>
+    sp.GetRequiredService<MultiSiteManufacturing.Host.Replication.ReplicationActivityTracker>());
+
 // Seeder runs on exactly one silo of exactly one cluster so the
 // two clusters don't race and produce duplicate keys. Suppressed in
 // the Testing environment so contract tests start against empty state.
