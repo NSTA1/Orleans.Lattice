@@ -100,6 +100,7 @@ public class LatticeReplicationMetricsTests
             Assert.That(LatticeReplicationMetrics.ReasonDiscarded, Is.EqualTo("discarded"));
             Assert.That(LatticeReplicationMetrics.ReasonReplayed, Is.EqualTo("replayed"));
             Assert.That(LatticeReplicationMetrics.ReasonEvicted, Is.EqualTo("evicted"));
+            Assert.That(LatticeReplicationMetrics.ReasonOrphanTransaction, Is.EqualTo("orphan-transaction"));
             Assert.That(LatticeReplicationMetrics.ReasonUnknown, Is.EqualTo("unknown"));
         });
     }

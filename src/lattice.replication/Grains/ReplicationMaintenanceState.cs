@@ -25,4 +25,14 @@ internal sealed class ReplicationMaintenanceState
     /// </summary>
     [Id(1)]
     public long LastFallOffCheckTicks { get; set; }
+
+    /// <summary>
+    /// Wall-clock ticks (UtcNow) of the most-recent successful
+    /// atomic-batch buffer orphan-sweep pass. Used by the phase pump
+    /// to skip the orphan sweep until the half-cadence relative to
+    /// MaintenanceGcInterval has elapsed. Default <c>0</c> fires the
+    /// sweep on the first phase tick after activation.
+    /// </summary>
+    [Id(2)]
+    public long LastOrphanSweepTicks { get; set; }
 }
