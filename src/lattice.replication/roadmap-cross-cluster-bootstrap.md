@@ -152,6 +152,17 @@ below.
   of the stream so the receiver can `PinSnapshotAsync` correctly without
   requiring the sender to embed cut-point markers inside the entry stream.
 
+  **Forward-compat with `R-102` (atomic-batch saga blacklist).** If
+  `R-102` has shipped before this item lands, `RemoteSnapshotMetadata`
+  also carries the snapshot's `SagaBlacklist` (the set of in-progress
+  saga `transactionId`s the sender excluded from the entry stream when
+  the snapshot-saga-quiesce timeout elapsed). Reserve the field on the
+  metadata DTO and on the wire format (`R-154`) up front so the
+  cross-cluster transport never silently drops the blacklist; if `R-102`
+  ships after this item, the field is empty until then. The receiver's
+  state machine (`R-051 ✓ shipped`) records the blacklist on
+  `BootstrapCoordinatorState` per `R-102`'s contract.
+
   `IRemoteSnapshotTransport` is a separate seam from `IReplicationTransport`
   (which today carries live-incremental push only). Keeping them split
   lets a host plug a different binding for snapshot vs. live (e.g.
@@ -290,6 +301,14 @@ below.
   **Acceptance:** end-to-end gRPC-backed integration test with two
   `TestCluster`s wired via gRPC; cluster B bootstraps from cluster A
   through the wire. Reuses the `R-152` integration test scaffolding.
+  If `R-102` / `R-103` have shipped, the suite extends `R-103`'s
+  snapshot-during-saga atomic-visibility assertion across the gRPC
+  transport: a producer running an in-flight `SetManyAtomicAsync` on
+  cluster A while cluster B drains its bootstrap snapshot must observe
+  either (a) all keys of the batch in the snapshot stream, or (b) zero
+  keys in the snapshot plus all keys in the post-bootstrap incremental
+  stream — never a partial-snapshot view that splits the batch on the
+  bootstrapped peer.
 
 ---
 
