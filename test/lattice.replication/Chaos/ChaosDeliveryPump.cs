@@ -181,14 +181,23 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
 
     /// <summary>
     /// Waits for every healed edge to ship every committed entry from its
-    /// sender. The drain criterion is "two consecutive empty polls per
-    /// edge" — once an edge sees no new entries on two successive iterations
-    /// it is considered drained. Throws on <paramref name="timeout"/>.
+    /// sender. The drain criterion is "every edge's cursor has reached its
+    /// sender's WAL tail HLC for <see cref="DrainStabilityWindow"/>
+    /// consecutive polls" — multi-poll stability guards against a transient
+    /// race where the (i→j) pump's <c>ApplyAsync</c> has returned (so
+    /// <c>cursor[i,j]</c> caught up to the entry's HLC) but the entry has
+    /// not yet been re-emitted on site <c>j</c>'s change feed (so the
+    /// gossip-forward pumps <c>(j→k)</c> have not yet observed it). Without
+    /// the window, a single lucky poll where every <c>(i,j)</c> happens to
+    /// satisfy <c>cursor &gt;= tailHlc</c> would short-circuit the drain
+    /// before forward propagation has a chance to start. Throws on
+    /// <paramref name="timeout"/>.
     /// </summary>
     public async Task DrainAsync(TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
         var n = _fixture.SiteCount;
+        var consecutiveStable = 0;
         while (DateTime.UtcNow < deadline)
         {
             var drained = true;
@@ -230,7 +239,15 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
 
             if (drained)
             {
-                return;
+                consecutiveStable++;
+                if (consecutiveStable >= DrainStabilityWindow)
+                {
+                    return;
+                }
+            }
+            else
+            {
+                consecutiveStable = 0;
             }
 
             await Task.Delay(_pollInterval);
@@ -238,6 +255,16 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
 
         throw new TimeoutException($"ChaosDeliveryPump.DrainAsync timed out after {timeout}.");
     }
+
+    /// <summary>
+    /// Number of consecutive polls during which every edge must satisfy
+    /// <c>cursor &gt;= tailHlc</c> before <see cref="DrainAsync"/> returns.
+    /// At <see cref="_pollInterval"/> = 50 ms this gives a 150 ms settle
+    /// window, which empirically covers the worst-case gap between a
+    /// receiver's <c>ApplyAsync</c> returning and the entry becoming
+    /// visible on its outbound change feed for forward gossip.
+    /// </summary>
+    private const int DrainStabilityWindow = 3;
 
     private async Task<HybridLogicalClock> GetTailHlcAsync(int senderIdx)
     {
