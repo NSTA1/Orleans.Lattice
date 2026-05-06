@@ -7,6 +7,16 @@ Feature plan for the `Orleans.Lattice.Replication` package — a cross-cluster r
 > **Package boundary.** Everything here ships in a new `Orleans.Lattice.Replication` assembly. Public API lives under `Orleans.Lattice.Replication`; internal grains/types under `Orleans.Lattice.Replication.{Area}`. The package has a single upstream dependency: `Orleans.Lattice`.
 >
 > **Non-goals for the initial release.** Cross-cluster Orleans cluster membership, multi-region storage provisioning, conflict UIs, user-facing admin tooling. This package is the on-the-wire replication engine only.
+>
+> **Scoped sub-roadmaps.** Larger work items that span multiple feature ids
+> are tracked in their own scoped roadmap files alongside this one and
+> graduate back into this canonical roadmap when they ship:
+>
+> - [`roadmap-cross-cluster-bootstrap.md`](./roadmap-cross-cluster-bootstrap.md)
+>   - closes the cross-cluster bootstrap-snapshot gap (`R-150`-`R-157`):
+>   ships a remote-snapshot transport seam, a gRPC binding, and the
+>   receiver-side wiring needed to make the auto-bootstrap path actually
+>   deliver entries across clusters.
 
 ---
 

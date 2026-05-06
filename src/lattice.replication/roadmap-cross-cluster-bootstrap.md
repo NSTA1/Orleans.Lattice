@@ -14,8 +14,9 @@ will graduate to `roadmap.md` (or a future Phase 9 "Cross-cluster
 bootstrap transport" section) and this file will retain only a pointer
 to the resolved entries.
 
-Items use a fresh `R-1XX` numbering block to avoid collision with the
-existing `R-050`–`R-093` snapshot/bootstrap items in the canonical roadmap.
+Items use a fresh `R-15X` numbering block to avoid collision with the
+existing `R-050`–`R-093` snapshot/bootstrap items and the in-flight
+`R-094`–`R-104` atomic-batch / WAL-GC items in the canonical roadmap.
 **Item ordering is topological:** prerequisite items always have a lower
 `R-1NN` number than the items that depend on them, so the implementation
 order is the same as the numeric order.
@@ -122,7 +123,7 @@ below.
 
 ## 3. Proposed features (priority + dependency order)
 
-- [ ] **R-100 — Cross-cluster `ISnapshotProvider` transport contract** *(no deps)*
+- [ ] **R-150 — Cross-cluster `ISnapshotProvider` transport contract** *(no deps)*
 
   Define the transport-shaped sub-interface that delivers a snapshot
   stream from a sender cluster to a receiver cluster. Pure abstraction
@@ -163,7 +164,7 @@ below.
 
 ---
 
-- [ ] **R-101 — Sender-side snapshot service handler** *(deps: R-100)*
+- [ ] **R-151 — Sender-side snapshot service handler** *(deps: R-150)*
 
   A service registered on the *sender* silo that responds to inbound
   `IRemoteSnapshotTransport.RequestSnapshotAsync` calls by invoking the
@@ -172,21 +173,21 @@ below.
 
   The handler is independent of the transport binding — gRPC, in-process,
   or test-loopback can all reuse the same handler. Concrete bindings
-  plug in via the transport's host-registration surface (`R-104` for gRPC).
+  plug in via the transport's host-registration surface (`R-154` for gRPC).
 
-  Sequenced before the receiver-side adapter (`R-102`) because the
-  receiver-side integration test for `R-102` requires a working sender
-  to round-trip against; landing the sender first lets `R-102`'s
+  Sequenced before the receiver-side adapter (`R-152`) because the
+  receiver-side integration test for `R-152` requires a working sender
+  to round-trip against; landing the sender first lets `R-152`'s
   acceptance suite use the real handler instead of a hand-rolled stub.
 
   **Acceptance:** handler unit tests + a transport-agnostic loopback
   fixture asserting metadata-then-stream consistency under concurrent
-  sender writes (correctness side of the `R-100` contract test, on the
+  sender writes (correctness side of the `R-150` contract test, on the
   sender side).
 
 ---
 
-- [ ] **R-102 — Receiver-side `RemoteSnapshotProvider` adapter** *(deps: R-100, R-101)*
+- [ ] **R-152 — Receiver-side `RemoteSnapshotProvider` adapter** *(deps: R-150, R-151)*
 
   An `ISnapshotProvider` implementation that hosts can register *before*
   `AddLatticeReplication` to override the local-tree default. It calls
@@ -219,7 +220,7 @@ below.
   deployment concern (one peer per tree in a hub-spoke topology, multiple
   peers in a mesh) and must not be hard-coded into the package.
 
-  Listed as depending on `R-101` (not just `R-100`) because the
+  Listed as depending on `R-151` (not just `R-150`) because the
   acceptance suite below round-trips against the real sender-side
   handler rather than a hand-rolled stub, which catches metadata /
   stream contract drifts a stub would mask.
@@ -234,7 +235,7 @@ below.
 
 ---
 
-- [ ] **R-103 — `LatticeBootstrapCoordinatorGrain` routes snapshot drain through `IReplicationApplier`** *(deps: R-102)*
+- [ ] **R-153 — `LatticeBootstrapCoordinatorGrain` routes snapshot drain through `IReplicationApplier`** *(deps: R-152)*
 
   Internal-seam change: `DrainSnapshotAsync` switches from
   `IReplicationApplyGrain.ApplySetAsync(...)` to
@@ -242,7 +243,7 @@ below.
   tracking, causal buffer, host-supplied per-key change observers) fires
   identically for bootstrap-arrived entries and live-incremental entries.
 
-  This is gated on `R-102` because it only becomes a user-visible change
+  This is gated on `R-152` because it only becomes a user-visible change
   once cross-cluster bootstrap actually delivers entries. Today the
   bootstrap path drains an empty stream so the bypass has no observable
   effect; the moment payload starts flowing, the missing observer signal
@@ -262,7 +263,7 @@ below.
 
 ---
 
-- [ ] **R-104 — gRPC binding for `IRemoteSnapshotTransport`** *(deps: R-100, R-101, R-103)*
+- [ ] **R-154 — gRPC binding for `IRemoteSnapshotTransport`** *(deps: R-150, R-151, R-153)*
 
   Concrete `IRemoteSnapshotTransport` implementation in
   `Orleans.Lattice.Replication.Grpc`, mirroring the existing
@@ -271,7 +272,7 @@ below.
   - New `Bootstrap.proto` defining `GetMetadata` (unary) and
     `RequestSnapshot` (server-streaming) RPCs.
   - New `GrpcRemoteSnapshotTransport` (client) and
-    `GrpcRemoteSnapshotService` (server handler invoking the `R-101`
+    `GrpcRemoteSnapshotService` (server handler invoking the `R-151`
     service).
   - Host-registration extension
     `LatticeReplicationGrpcServiceCollectionExtensions.AddGrpcRemoteSnapshotTransport(...)`,
@@ -279,7 +280,7 @@ below.
   - Reuses the same `GrpcPushTransportOptions`-style configuration shape
     (TLS, deadline, channel reuse).
 
-  Listed as depending on `R-103` (the apply-through-decorator change),
+  Listed as depending on `R-153` (the apply-through-decorator change),
   not just on the transport-abstraction items, because the first
   cross-cluster bootstrap that actually delivers payload over the wire
   must exhibit the intended decorator-fan-out behaviour or the
@@ -288,11 +289,11 @@ below.
 
   **Acceptance:** end-to-end gRPC-backed integration test with two
   `TestCluster`s wired via gRPC; cluster B bootstraps from cluster A
-  through the wire. Reuses the `R-102` integration test scaffolding.
+  through the wire. Reuses the `R-152` integration test scaffolding.
 
 ---
 
-- [ ] **R-105 — Auto-bootstrap rate limit + concurrency floor** *(no new deps; refines `R-051 ✓ shipped` / `R-052 ✓ shipped`)*
+- [ ] **R-155 — Auto-bootstrap rate limit + concurrency floor** *(no new deps; refines `R-051 ✓ shipped` / `R-052 ✓ shipped`)*
 
   Independent of the transport work but observable only once the transport
   work lands. Today `LatticeFallOffLogDetector.CheckAndTriggerAsync`
@@ -320,7 +321,7 @@ below.
 
 ---
 
-- [ ] **R-106 — Bootstrap progress observability** *(deps: R-102, R-103)*
+- [ ] **R-156 — Bootstrap progress observability** *(deps: R-152, R-153)*
 
   Three new instruments on the existing `orleans.lattice.replication` meter
   plus a structured log at each phase transition. Mirrors the per-peer
@@ -349,7 +350,7 @@ below.
 
 ---
 
-- [ ] **R-107 — Operator-facing "force re-bootstrap" admin RPC widening** *(deps: R-102, refines `R-053 ✓ shipped`)*
+- [ ] **R-157 — Operator-facing "force re-bootstrap" admin RPC widening** *(deps: R-152, refines `R-053 ✓ shipped`)*
 
   `R-053`'s `ILatticeReplicationAdmin.RequestSnapshotAsync(treeName,
   sourceClusterId, ct)` already routes through the bootstrap coordinator,
@@ -387,7 +388,7 @@ below.
   the snapshot's `causalStableFrontier`. Not in scope here.
 
 - **Cross-cluster transport authentication / authorization.** The gRPC
-  binding (`R-104`) reuses the existing `GrpcPushTransportOptions` TLS
+  binding (`R-154`) reuses the existing `GrpcPushTransportOptions` TLS
   + bearer-token configuration shape. Per-tree ACLs (cluster A may
   bootstrap tree X but not tree Y from cluster B) are a separate
   concern, tracked elsewhere if needed.
@@ -410,15 +411,15 @@ below.
 Item ids are assigned in topological order so the numeric order is the
 implementation order:
 
-`R-100` → `R-101` → `R-102` → `R-103` → `R-104` → `R-105` → `R-106` → `R-107`.
+`R-150` → `R-151` → `R-152` → `R-153` → `R-154` → `R-155` → `R-156` → `R-157`.
 
-`R-100` (the contract) blocks everything else. `R-101` (the sender
-handler) lands next so `R-102`'s acceptance suite can round-trip against
-a real handler rather than a stub. `R-103` (route the bootstrap drain
-through `IReplicationApplier`) lands before `R-104` (the gRPC binding)
+`R-150` (the contract) blocks everything else. `R-151` (the sender
+handler) lands next so `R-152`'s acceptance suite can round-trip against
+a real handler rather than a stub. `R-153` (route the bootstrap drain
+through `IReplicationApplier`) lands before `R-154` (the gRPC binding)
 so the first cross-cluster bootstrap that actually delivers payload
 over the wire exhibits the intended decorator-fan-out behaviour.
-`R-105`, `R-106`, and `R-107` are quality-of-service refinements that
+`R-155`, `R-156`, and `R-157` are quality-of-service refinements that
 become observable only once the core transport is real and can land in
-any order after `R-104`; they are listed in numeric order purely for
+any order after `R-154`; they are listed in numeric order purely for
 convenience and do not depend on each other.
