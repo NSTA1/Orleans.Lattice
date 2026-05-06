@@ -47,6 +47,27 @@ each modelling a distinct real-world failure class:
 | 4b | App-level cross-cluster replication pause | `IReplicationDisconnectGrain` |
 | 5 | Genuine cross-cluster transport partition | `docker network disconnect` against the peer Traefik |
 
+## Known limitation: cross-cluster replication on cold start
+
+When you start the stack from scratch, mutations made in one cluster do
+not yet replicate across to the other. Label a part in the EU dashboard,
+and it will not appear on the US dashboard (and vice versa) until you
+reset the demo data and re-seed both clusters from a common starting
+point. Within a single cluster the fact ledger and CRDT trees behave
+exactly as designed — only cross-cluster catch-up is dormant.
+
+This is not a sample bug. The underlying replication library ships only
+the seam for cross-cluster snapshot transport; it does not yet ship a
+default implementation, so a freshly-started cluster has no way to catch
+up to a peer that already holds writes. Once a cluster falls behind its
+peer's write-ahead log, the auto-bootstrap path runs but finds nothing
+to copy and the gap never closes.
+
+The planned fix is tracked in
+[`roadmap-cross-cluster-bootstrap.md`](../../src/lattice.replication/roadmap-cross-cluster-bootstrap.md).
+When those items land, this sample will pick up cross-cluster live
+updates without further changes here.
+
 ## Running
 
 The supported local topology is Docker Compose: two Azurite containers,

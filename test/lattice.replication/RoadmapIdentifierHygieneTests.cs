@@ -43,7 +43,15 @@ public class RoadmapIdentifierHygieneTests
         {
             var full = Path.GetFullPath(file);
             if (string.Equals(full, thisFile, StringComparison.OrdinalIgnoreCase)) continue;
-            if (string.Equals(Path.GetFileName(full), "roadmap.md", StringComparison.OrdinalIgnoreCase)) continue;
+            // Any file whose name starts with "roadmap" and ends with ".md"
+            // is treated as a roadmap file. The canonical entry is
+            // `roadmap.md`; scoped follow-ons (e.g.
+            // `roadmap-cross-cluster-bootstrap.md`) are also legitimate
+            // locations for tracker identifiers, so they share the
+            // exemption.
+            var fileName = Path.GetFileName(full);
+            if (fileName.StartsWith("roadmap", StringComparison.OrdinalIgnoreCase)
+                && fileName.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) continue;
             // wal-design.md is a forward-looking design document that legitimately
             // references tracker identifiers when discussing how design decisions
             // map onto specific upcoming roadmap items. Exempted by convention.
