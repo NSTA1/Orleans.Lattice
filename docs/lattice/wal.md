@@ -286,6 +286,63 @@ await registry.ReportCursorAsync(
 The registry takes a defensive clone of the supplied vector, so callers may
 continue to mutate their local frontier after the report returns.
 
+### Blocked-floor (TX-aware GC pin)
+
+The cross-cluster atomic-batch delivery path stages every entry of an
+in-flight `SetManyAtomicAsync` on the receiver until the whole batch arrives.
+While a batch is partially staged, the receiver has **not** acknowledged the
+buffered entries through its per-origin high-water-mark — the producer's WAL
+is the authoritative re-ship source if the receiver's buffer state is lost
+(e.g. via the orphan-timeout eviction path). The GC must therefore not trim
+past any entry the receiver still needs to recover from buffer state.
+
+The GC predicate widens to AND in a **strict-less** clause:
+
+```
+entry.Timestamp < blockedFloor
+```
+
+where `blockedFloor = min(BlockedAtHlc across reporting consumers)`. A
+consumer with a partially-staged batch reports the lowest staged HLC `t` via
+the blocked-floor overload of `ReportCursorAsync`:
+
+```text
+await registry.ReportCursorAsync(
+    treeName: "orders",
+    consumerId: "applier:atomic-batch",
+    cursor: HybridLogicalClock.Zero,   // applier does not own a cursor
+    blockedAtHlc: lowestStagedHlc,     // null releases the pin
+    cancellationToken: cancellationToken);
+```
+
+The blocked-floor overload accepts `cursor = Zero` because a buffer-pin-only
+consumer (typically the receiver-side applier) has no cursor of its own and
+must not pollute the GC's `min(cursor)` branch. `GetMinCursorAsync` skips any
+consumer reporting a Zero cursor for the same reason. Negative cursors and
+negative pins are rejected.
+
+Pin updates use **replace semantics**, not monotonic merge: as the buffer
+admits new transactions the lowest staged HLC can drop, and the registry
+must reflect the new pin so the GC stops trimming further forward. Reporting
+`blockedAtHlc: null` clears the pin entirely — used when the buffer drains.
+
+Consumers that do not call the blocked-floor overload contribute `null` to
+the floor and are excluded from `min(...)`. When **no** consumer reports a
+pin, `blockedFloor` is `null` and the GC predicate degrades to the existing
+`min(cursor)` + causal-stable + TTL clauses alone.
+
+The strict-less comparison is load-bearing: an entry whose `Timestamp`
+exactly equals the blocked-floor must remain in the WAL because that entry
+is itself the lowest-staged entry on at least one receiver. A `<=` clause
+would silently trim it and the receiver could never recover from a buffer
+loss at that HLC.
+
+The blocked-floor surfaces as a diagnostic on `ReplicationGcReport.BlockedFloor`,
+alongside the existing `MinCursor` / `TtlCeilingHlc` / `CausalStable` slots,
+so dashboards can alert on a pin that does not advance for an extended
+period (typical signal: a stuck atomic-batch admit waiting on a missing
+sibling — see the orphan-timeout operator playbook).
+
 ### Scheduling
 
 `ILatticeReplicationGc.RunOnceAsync(treeName)` is a single-pass GC invocation.

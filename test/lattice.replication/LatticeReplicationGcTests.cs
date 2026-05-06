@@ -511,4 +511,171 @@ public class LatticeReplicationGcTests
 
         Assert.That(report.EntriesTrimmed, Is.EqualTo(1));
     }
+
+    // ---- Blocked-floor predicate (TX-aware GC) -----------------------
+
+    [Test]
+    public async Task RunOnceAsync_blocks_trim_at_blocked_floor_strict_less_clause()
+    {
+        // Strict-less: an entry whose Timestamp equals the blocked-floor
+        // is NOT eligible — the buffered entry itself must survive a
+        // trim pass so it can be re-shipped if the receiver's buffer
+        // state is lost (e.g. via orphan-timeout eviction).
+        var provider = new InMemoryWalStorageProvider();
+        await SeedAsync(provider, 0,
+            SetEntry("a", Hlc(10)),  // below floor -> eligible
+            SetEntry("b", Hlc(50)),  // == floor    -> blocked
+            SetEntry("c", Hlc(60))); // above floor -> blocked
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        // Cursor consumer authorises the HLC branch; applier consumer
+        // pins the buffer floor at HLC 50.
+        await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100));
+        await registry.ReportCursorAsync(Tree, "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(50));
+
+        var sut = new LatticeReplicationGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(1));
+        Assert.That(report.BlockedFloor, Is.EqualTo(Hlc(50)));
+    }
+
+    [Test]
+    public async Task RunOnceAsync_null_blocked_floor_does_not_block_trim()
+    {
+        var provider = new InMemoryWalStorageProvider();
+        await SeedAsync(provider, 0,
+            SetEntry("a", Hlc(10)),
+            SetEntry("b", Hlc(20)),
+            SetEntry("c", Hlc(30)));
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        // Consumer reports cursor only; no applier reports a pin so the
+        // blocked-floor is null and the GC predicate degrades to the
+        // HLC + causal-stable + TTL clauses alone.
+        await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100));
+
+        var sut = new LatticeReplicationGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(3));
+        Assert.That(report.BlockedFloor, Is.Null);
+    }
+
+    [Test]
+    public async Task RunOnceAsync_blocked_floor_anded_with_cursor_predicate()
+    {
+        // The blocked-floor clause is AND-ed with the existing cursor
+        // clause: an entry above the cursor is not eligible regardless
+        // of the floor; an entry below the cursor but at-or-above the
+        // floor is also not eligible.
+        var provider = new InMemoryWalStorageProvider();
+        await SeedAsync(provider, 0,
+            SetEntry("a", Hlc(10)),  // below floor AND below cursor -> eligible
+            SetEntry("b", Hlc(50)),  // == floor (blocked) AND below cursor
+            SetEntry("c", Hlc(150))); // above cursor (blocked) AND above floor
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100));
+        await registry.ReportCursorAsync(Tree, "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(50));
+
+        var sut = new LatticeReplicationGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task RunOnceAsync_reports_blocked_floor_in_diagnostic_even_when_no_trim_happens()
+    {
+        var provider = new InMemoryWalStorageProvider();
+        await SeedAsync(provider, 0, SetEntry("a", Hlc(50)));
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(40));
+
+        var sut = new LatticeReplicationGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        // Even with no consumer reporting a cursor (nothing trimmable
+        // by HLC), the GC report still surfaces the blocked-floor for
+        // diagnostic / dashboard consumption.
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(0));
+        Assert.That(report.BlockedFloor, Is.EqualTo(Hlc(40)));
+    }
+
+    [Test]
+    public async Task RunOnceAsync_blocked_floor_pointwise_min_across_appliers()
+    {
+        // Two appliers each report a different lowest-staged HLC; the
+        // GC must use the lower of the two (the one that pins the log
+        // further back) rather than a per-applier average.
+        var provider = new InMemoryWalStorageProvider();
+        await SeedAsync(provider, 0,
+            SetEntry("a", Hlc(10)),  // below both pins -> eligible
+            SetEntry("b", Hlc(25)),  // == applier-A's pin (lower) -> blocked
+            SetEntry("c", Hlc(40))); // == applier-B's pin (higher) -> blocked
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "peer", Hlc(1000));
+        await registry.ReportCursorAsync(Tree, "applier-A", HybridLogicalClock.Zero, blockedAtHlc: Hlc(25));
+        await registry.ReportCursorAsync(Tree, "applier-B", HybridLogicalClock.Zero, blockedAtHlc: Hlc(40));
+
+        var sut = new LatticeReplicationGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        Assert.That(report.EntriesTrimmed, Is.EqualTo(1));
+        Assert.That(report.BlockedFloor, Is.EqualTo(Hlc(25)));
+    }
+
+    [Test]
+    public async Task RunOnceAsync_blocked_floor_unpins_after_clear()
+    {
+        // Lifecycle: the buffer drains, the applier clears its pin to
+        // null, and the next GC pass trims through what was previously
+        // blocked.
+        var provider = new InMemoryWalStorageProvider();
+        await SeedAsync(provider, 0,
+            SetEntry("a", Hlc(10)),
+            SetEntry("b", Hlc(50)));
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "peer", Hlc(100));
+        await registry.ReportCursorAsync(Tree, "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(40));
+
+        var sut = new LatticeReplicationGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
+
+        var first = await sut.RunOnceAsync(Tree);
+        Assert.That(first.EntriesTrimmed, Is.EqualTo(1)); // only "a"
+
+        // Applier drains; clears the pin.
+        await registry.ReportCursorAsync(Tree, "applier", HybridLogicalClock.Zero, blockedAtHlc: null);
+
+        var second = await sut.RunOnceAsync(Tree);
+        Assert.That(second.EntriesTrimmed, Is.EqualTo(1)); // now "b" too
+        Assert.That(second.BlockedFloor, Is.Null);
+    }
 }

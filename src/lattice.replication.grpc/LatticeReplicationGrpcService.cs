@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication.Grpc;
 
@@ -94,6 +95,7 @@ internal static class LatticeReplicationGrpcMethodHolder
 internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServiceBase
 {
     private readonly IReplicationApplier _applier;
+    private readonly ILatticeReplicationCursorRegistry _cursorRegistry;
     private readonly ILogger<LatticeReplicationGrpcService> _logger;
 
     /// <summary>
@@ -111,13 +113,16 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     public LatticeReplicationGrpcService(
         LatticeReplicationGrpcMethod method,
         IReplicationApplier applier,
+        ILatticeReplicationCursorRegistry cursorRegistry,
         ILogger<LatticeReplicationGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(method);
         ArgumentNullException.ThrowIfNull(applier);
+        ArgumentNullException.ThrowIfNull(cursorRegistry);
         ArgumentNullException.ThrowIfNull(logger);
 
         _applier = applier;
+        _cursorRegistry = cursorRegistry;
         _logger = logger;
     }
 
@@ -172,12 +177,42 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 ex.Message);
         }
 
+        // Stamp the receiver-side blocked-floor pin (the lowest
+        // staged HLC across every partially-buffered atomic batch on
+        // this tree) onto the ack so the producer-side WAL GC AND-s
+        // a strict-less entry.Timestamp < blockedFloor clause into
+        // its trim predicate. Failure is swallowed: the receiver
+        // already applied / buffered the batch, the WAL still holds
+        // the canonical mutation, and a subsequent batch's ack will
+        // re-stamp the pin. Surfacing a registry-side exception out
+        // of a successful apply path would convert a diagnostic
+        // outage into a transport failure, which is the wrong
+        // trade-off.
+        HybridLogicalClock? blockedAtHlc = null;
+        try
+        {
+            blockedAtHlc = await _cursorRegistry
+                .GetBlockedFloorAsync(request.TreeName, context.CancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Reading receiver-side blocked-floor pin failed for tree {Tree}; ack will omit the slot.",
+                request.TreeName);
+        }
+
         return new ReplicationAckBox
         {
             Value = new ReplicationAck
             {
                 Accepted = true,
                 HighestAppliedHlc = result.HighWaterMark,
+                BlockedAtHlc = blockedAtHlc,
             },
         };
     }

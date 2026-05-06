@@ -48,6 +48,7 @@ public class ReplicationMaintenanceGrainTests
                 MinCursor: null,
                 TtlCeilingHlc: null,
                 CausalStable: null,
+                BlockedFloor: null,
                 ShardsScanned: 0,
                 EntriesTrimmed: 0));
         var detector = Substitute.For<ILatticeFallOffLogDetector>();

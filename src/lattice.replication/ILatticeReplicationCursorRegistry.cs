@@ -52,6 +52,47 @@ public interface ILatticeReplicationCursorRegistry
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Blocked-floor overload of <see cref="ReportCursorAsync(string, string, HybridLogicalClock, CancellationToken)"/>
+    /// that additionally reports the consumer's atomic-batch staging
+    /// buffer pin (<paramref name="blockedAtHlc"/>). The
+    /// <see cref="ILatticeReplicationGc"/> AND-s a strict-less
+    /// <c>entry.Timestamp &lt; blockedFloor</c> clause into its trim
+    /// predicate so the producer cannot trim past an entry the
+    /// receiver still needs to recover from buffer state, where
+    /// <c>blockedFloor = min(BlockedAtHlc across consumers that have
+    /// reported a non-null pin)</c>.
+    /// <para>
+    /// The cursor contract is partially relaxed: this overload accepts
+    /// <see cref="HybridLogicalClock.Zero"/> for <paramref name="cursor"/>
+    /// (a "blocked-floor-only" registration). Such consumers are
+    /// excluded from <see cref="GetMinCursorAsync"/> so they do not
+    /// pin the WAL on the cursor side; they contribute only to the
+    /// blocked-floor meet via <see cref="GetBlockedFloorAsync"/>.
+    /// Strictly negative cursors are rejected as before.
+    /// </para>
+    /// <para>
+    /// <paramref name="blockedAtHlc"/> uses replace semantics: the
+    /// consumer is the authority on its own pin and each call
+    /// replaces the previous value, including transitioning back to
+    /// <see langword="null"/> when the buffer drains. A
+    /// <see langword="null"/> report contributes nothing to the
+    /// blocked-floor meet — only consumers that report a non-null
+    /// pin participate.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">Logical tree id whose state is being reported. Must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="consumerId">Stable identifier for the reporting consumer. Must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="cursor">Highest HLC the consumer has fully consumed, or <see cref="HybridLogicalClock.Zero"/> when the consumer is reporting only a blocked-floor pin and has no cursor of its own.</param>
+    /// <param name="blockedAtHlc">Lowest HLC of any partially-buffered atomic batch the consumer is currently holding, or <see langword="null"/> when the consumer's buffer is empty.</param>
+    /// <param name="cancellationToken">Cancellation token observed before any state mutation.</param>
+    Task ReportCursorAsync(
+        string treeName,
+        string consumerId,
+        HybridLogicalClock cursor,
+        HybridLogicalClock? blockedAtHlc,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Causal+ overload of <see cref="ReportCursorAsync(string, string, HybridLogicalClock, CancellationToken)"/>.
     /// In addition to the highest HLC the consumer has fully consumed,
     /// the consumer reports the per-origin <see cref="VersionVector"/>
@@ -92,6 +133,30 @@ public interface ILatticeReplicationCursorRegistry
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Causal+ × blocked-floor overload that combines the per-origin
+    /// <paramref name="vector"/> (pointwise-max coalescing) with the
+    /// blocked-floor pin (<paramref name="blockedAtHlc"/>, replace
+    /// semantics). Cursor contract matches the VC-shaped overload —
+    /// must be strictly greater than <see cref="HybridLogicalClock.Zero"/>
+    /// for VC-reporting consumers (the blocked-floor-only relaxation
+    /// is reserved for the HLC-shape overload because a VC-reporting
+    /// consumer is by definition not a blocked-floor-only consumer).
+    /// </summary>
+    /// <param name="treeName">Logical tree id whose state is being reported. Must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="consumerId">Stable identifier for the reporting consumer. Must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="cursor">Highest HLC the consumer has fully consumed.</param>
+    /// <param name="vector">Per-origin <see cref="VersionVector"/> frontier the consumer has fully applied.</param>
+    /// <param name="blockedAtHlc">Lowest HLC of any partially-buffered atomic batch the consumer is currently holding, or <see langword="null"/> when the consumer's buffer is empty.</param>
+    /// <param name="cancellationToken">Cancellation token observed before any state mutation.</param>
+    Task ReportCursorAsync(
+        string treeName,
+        string consumerId,
+        HybridLogicalClock cursor,
+        VersionVector vector,
+        HybridLogicalClock? blockedAtHlc,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Removes <paramref name="consumerId"/>'s registration from the
     /// per-tree map. Called when a consumer goes away (peer removed
     /// from topology, materialiser stopped) so it no longer pins the
@@ -110,6 +175,12 @@ public interface ILatticeReplicationCursorRegistry
     /// "trim by cursor" half of the GC predicate; the GC additionally
     /// applies <see cref="LatticeReplicationOptions.WalRetention"/> as
     /// an optional hard ceiling.
+    /// <para>
+    /// Consumers registered with <see cref="HybridLogicalClock.Zero"/>
+    /// for cursor (blocked-floor-only registrations) are
+    /// excluded from the meet so a buffer-only consumer does not
+    /// disable the cursor branch of the GC predicate.
+    /// </para>
     /// </summary>
     Task<HybridLogicalClock?> GetMinCursorAsync(
         string treeName,
@@ -141,6 +212,36 @@ public interface ILatticeReplicationCursorRegistry
     /// <param name="treeName">Logical tree id whose causal-stable frontier is being read. Must not be <see langword="null"/> or whitespace.</param>
     /// <param name="cancellationToken">Cancellation token observed before any state mutation.</param>
     Task<VersionVector?> GetCausalStableAsync(
+        string treeName,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the blocked-floor for <paramref name="treeName"/>: the
+    /// pointwise minimum <see cref="HybridLogicalClock"/> across every
+    /// consumer that has reported a non-<see langword="null"/>
+    /// <c>BlockedAtHlc</c> through the blocked-floor overloads of
+    /// <see cref="ReportCursorAsync(string, string, HybridLogicalClock, HybridLogicalClock?, CancellationToken)"/>.
+    /// Consumers that have never reported a non-null pin (the
+    /// majority — leaf materialisers, peer ship loops) are excluded,
+    /// and a consumer that previously reported a non-null pin and
+    /// later cleared it via a null report no longer contributes.
+    /// <para>
+    /// Returns <see langword="null"/> when no consumer currently
+    /// reports a buffer pin. When the result is <see langword="null"/>
+    /// the GC skips the blocked-floor half of its predicate and
+    /// degrades cleanly to the cursor / TTL / causal-stable
+    /// branches.
+    /// </para>
+    /// <para>
+    /// Implementations are expected to cache the computed floor
+    /// behind the same per-tree generation counter that gates the
+    /// causal-stable cache, so a high-frequency GC pass that
+    /// observes a stable registry is O(1) per call.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">Logical tree id whose blocked-floor is being read. Must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="cancellationToken">Cancellation token observed before any state mutation.</param>
+    Task<HybridLogicalClock?> GetBlockedFloorAsync(
         string treeName,
         CancellationToken cancellationToken = default);
 

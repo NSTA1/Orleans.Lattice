@@ -1,7 +1,9 @@
 using System.Globalization;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Primitives;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Replication.Grains;
@@ -49,8 +51,13 @@ internal sealed class ReplicationTxBufferGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
-    Serializer<TxStagedEntry> serializer) : IReplicationTxBufferGrain, IGrainBase
+    Serializer<TxStagedEntry> serializer,
+    ILatticeReplicationCursorRegistry? cursorRegistry = null,
+    ILogger<ReplicationTxBufferGrain>? logger = null) : IReplicationTxBufferGrain, IGrainBase
 {
+    private readonly ILogger<ReplicationTxBufferGrain> _logger =
+        logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ReplicationTxBufferGrain>.Instance;
+
     /// <summary>Inclusive prefix every staged-entry key carries inside the system tree.</summary>
     private const string EntryKeyPrefix = "b/";
 
@@ -86,6 +93,39 @@ internal sealed class ReplicationTxBufferGrain(
     /// <summary>Index back into <see cref="_admissionOrder"/> so removal is O(1).</summary>
     private readonly Dictionary<TransactionKey, LinkedListNode<TransactionKey>> _admissionNodes = new();
 
+    /// <summary>
+    /// Sorted multiset of staged HLCs supporting O(log N) lookup of
+    /// the lowest staged HLC for the producer-side blocked-floor GC
+    /// pin. Each staged entry contributes its <see cref="ReplogEntry.Timestamp"/>
+    /// as a key; the value is the reference count (multiple entries
+    /// can share the same HLC if a producer stamps siblings of an
+    /// atomic batch with the same source HLC). Maintained
+    /// incrementally on every admit / removal so
+    /// <see cref="GetLowestStagedHlcAsync(CancellationToken)"/>
+    /// resolves in O(log N) rather than scanning the full
+    /// <see cref="_byTransaction"/> graph (worst-case
+    /// O(<see cref="LatticeReplicationOptions.AtomicBatchBufferMaxTransactions"/>
+    /// × per-batch siblings)).
+    /// </summary>
+    private readonly SortedDictionary<HybridLogicalClock, int> _stagedHlcCounts =
+        new(HlcComparer.Instance);
+
+    /// <summary>
+    /// Comparer used to drive <see cref="_stagedHlcCounts"/>.
+    /// <see cref="HybridLogicalClock"/> exposes
+    /// <see cref="HybridLogicalClock.CompareTo(HybridLogicalClock)"/>
+    /// but does not declare
+    /// <see cref="IComparable{T}"/> in its base list, so the default
+    /// <see cref="Comparer{T}"/> for the type cannot be resolved.
+    /// Providing an explicit comparer keeps the sorted multiset
+    /// O(log N) without a public-API change to the primitive.
+    /// </summary>
+    private sealed class HlcComparer : IComparer<HybridLogicalClock>
+    {
+        public static readonly HlcComparer Instance = new();
+        public int Compare(HybridLogicalClock x, HybridLogicalClock y) => x.CompareTo(y);
+    }
+
     /// <summary>Cumulative tracked bytes across every staged entry.</summary>
     private long _trackedBytes;
 
@@ -109,6 +149,8 @@ internal sealed class ReplicationTxBufferGrain(
 
         await BulkLoadAsync(cancellationToken).ConfigureAwait(true);
         _initialized = true;
+
+        await RepublishRehydratedFloorAsync(cancellationToken).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -132,11 +174,83 @@ internal sealed class ReplicationTxBufferGrain(
         _byTransaction.Clear();
         _admissionOrder.Clear();
         _admissionNodes.Clear();
+        _stagedHlcCounts.Clear();
         _trackedBytes = 0;
 
         await BulkLoadAsync(cancellationToken).ConfigureAwait(true);
         _initialized = true;
+
+        await RepublishRehydratedFloorAsync(cancellationToken).ConfigureAwait(true);
     }
+
+    /// <summary>
+    /// Republishes the lowest staged HLC to the cursor registry after
+    /// activation rehydrates the in-memory index from the backing
+    /// system tree. Without this republish, a silo restart that loses
+    /// the in-process registry state (the default
+    /// <see cref="InMemoryReplicationCursorRegistry"/> is per-silo,
+    /// not durable) would silently drop the producer-side blocked-floor
+    /// GC pin until the next admit or removal call — and a producer
+    /// running ahead of the receiver could trim the WAL through HLCs
+    /// the buffer is still staging.
+    /// <para>
+    /// Failures are logged at Warning level and swallowed: the next
+    /// admit / remove call will reattempt the publish through the
+    /// applier's standard reporting path, so a transient registry
+    /// failure does not block activation.
+    /// </para>
+    /// </summary>
+    private async Task RepublishRehydratedFloorAsync(CancellationToken cancellationToken)
+    {
+        if (cursorRegistry is null || _stagedHlcCounts.Count == 0)
+        {
+            return;
+        }
+
+        HybridLogicalClock floor;
+        using (var enumerator = _stagedHlcCounts.Keys.GetEnumerator())
+        {
+            if (!enumerator.MoveNext())
+            {
+                return;
+            }
+
+            floor = enumerator.Current;
+        }
+
+        try
+        {
+            await cursorRegistry.ReportCursorAsync(
+                _treeId,
+                BlockedFloorConsumerId,
+                HybridLogicalClock.Zero,
+                floor,
+                cancellationToken).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Buffer-rehydrate registry republish failed for tree {Tree}; "
+                + "the next admit or removal will republish the pin through the applier.",
+                _treeId);
+        }
+    }
+
+    /// <summary>
+    /// Cursor-registry consumer id under which both the applier's
+    /// post-admit/remove report path and the buffer-grain's
+    /// post-rehydration republish path publish the blocked-floor pin.
+    /// Sharing one consumer id means a republish from activation is
+    /// transparently superseded by the next applier report once the
+    /// buffer state next changes — no stale pin lingers in the
+    /// registry.
+    /// </summary>
+    internal const string BlockedFloorConsumerId = "applier:atomic-batch";
 
     private async Task BulkLoadAsync(CancellationToken cancellationToken)
     {
@@ -194,6 +308,25 @@ internal sealed class ReplicationTxBufferGrain(
         {
             throw new ArgumentException(
                 "ReplogEntry.TransactionId must be non-empty for atomic-batch staging admission.",
+                nameof(entry));
+        }
+
+        // Range-delete entries (and any future op that emits with
+        // HybridLogicalClock.Zero) must not be staged: the
+        // producer-side WAL GC reads the buffer's lowest staged HLC
+        // and treats Zero as "no pin" (Zero >= positiveFloor is
+        // always false). A staged Zero entry would silently disable
+        // the GC pin for that tree, allowing the producer to trim
+        // entries the receiver still needs to recover from buffer
+        // state. The atomic-batch contract today only stamps Set /
+        // Delete (which carry positive HLCs); this guard is the
+        // forward-compatibility belt for that invariant.
+        if (entry.Timestamp <= HybridLogicalClock.Zero)
+        {
+            throw new ArgumentException(
+                "ReplogEntry.Timestamp must be strictly greater than HybridLogicalClock.Zero "
+                + "for atomic-batch staging admission. Entries with Zero HLCs would silently "
+                + "disable the producer-side blocked-floor GC pin.",
                 nameof(entry));
         }
 
@@ -278,6 +411,30 @@ internal sealed class ReplicationTxBufferGrain(
         return Task.FromResult(_trackedBytes);
     }
 
+    /// <inheritdoc />
+    public Task<HybridLogicalClock?> GetLowestStagedHlcAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        if (_stagedHlcCounts.Count == 0)
+        {
+            return Task.FromResult<HybridLogicalClock?>(null);
+        }
+
+        // O(log N) lookup: the sorted multiset is maintained
+        // incrementally by AdmitInMemory / RemoveTransactionAsync so
+        // the smallest key is always the minimum staged HLC across
+        // every partially-buffered transaction. Single grain-turn
+        // visibility means the result is consistent with the most
+        // recent admit / removal call against this activation.
+        // SortedDictionary's first key is its minimum (the underlying
+        // red-black tree's leftmost node).
+        using var enumerator = _stagedHlcCounts.Keys.GetEnumerator();
+        enumerator.MoveNext();
+        return Task.FromResult<HybridLogicalClock?>(enumerator.Current);
+    }
+
     private void AdmitInMemory(TxStagedEntry staged, bool isRehydration)
     {
         var key = new TransactionKey(staged.OriginClusterId, staged.TransactionId);
@@ -299,6 +456,50 @@ internal sealed class ReplicationTxBufferGrain(
 
         siblings[staged.BatchIndex] = staged;
         _trackedBytes += EstimateBytes(staged);
+        IncrementStagedHlc(staged.Entry.Timestamp);
+    }
+
+    /// <summary>
+    /// Increments the reference count for <paramref name="hlc"/> in
+    /// the sorted multiset that backs <see cref="GetLowestStagedHlcAsync(CancellationToken)"/>.
+    /// </summary>
+    private void IncrementStagedHlc(HybridLogicalClock hlc)
+    {
+        if (_stagedHlcCounts.TryGetValue(hlc, out var current))
+        {
+            _stagedHlcCounts[hlc] = current + 1;
+        }
+        else
+        {
+            _stagedHlcCounts[hlc] = 1;
+        }
+    }
+
+    /// <summary>
+    /// Decrements the reference count for <paramref name="hlc"/> in
+    /// the sorted multiset; removes the key entirely when the count
+    /// drops to zero.
+    /// </summary>
+    private void DecrementStagedHlc(HybridLogicalClock hlc)
+    {
+        if (!_stagedHlcCounts.TryGetValue(hlc, out var current))
+        {
+            // Defensive: a removal without a matching increment would
+            // indicate a bookkeeping bug. Log-as-no-op rather than
+            // throwing so an arithmetic regression does not crash the
+            // grain activation; the next admit will re-anchor the
+            // multiset.
+            return;
+        }
+
+        if (current <= 1)
+        {
+            _stagedHlcCounts.Remove(hlc);
+        }
+        else
+        {
+            _stagedHlcCounts[hlc] = current - 1;
+        }
     }
 
     private async Task EvictUntilCapacityAsync(
@@ -409,6 +610,7 @@ internal sealed class ReplicationTxBufferGrain(
         foreach (var staged in siblings.Values)
         {
             releasedBytes += EstimateBytes(staged);
+            DecrementStagedHlc(staged.Entry.Timestamp);
         }
         _trackedBytes -= releasedBytes;
         if (_trackedBytes < 0)

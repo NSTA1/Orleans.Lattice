@@ -337,6 +337,13 @@ internal sealed partial class ReplicationApplier
                     var txBuffer = grainFactory.GetGrain<IReplicationTxBufferGrain>(treeId);
                     var admission = await txBuffer.AdmitAsync(entry, cancellationToken).ConfigureAwait(false);
 
+                    // Blocked-floor report (mirror of ApplyAsync's
+                    // gate). Publish the buffer's current floor so the
+                    // producer-side WAL GC AND-s the strict-less
+                    // entry.Timestamp < blockedFloor clause into its
+                    // trim predicate.
+                    await ReportBlockedFloorAsync(treeId, txBuffer, cancellationToken).ConfigureAwait(false);
+
                     if (!admission.BatchComplete)
                     {
                         outcome = LatticeReplicationMetrics.OutcomeAtomicBuffered;
@@ -345,6 +352,11 @@ internal sealed partial class ReplicationApplier
 
                     var batchOutcome = await DispatchCompletedAtomicBatchAsync(
                         entry, admission.CompletedBatch, cancellationToken).ConfigureAwait(false);
+
+                    // Defensive re-publish after the saga returns -
+                    // mirrors ApplyAsync's post-batch sweep so the
+                    // floor reflects post-saga buffer state.
+                    await ReportBlockedFloorAsync(treeId, txBuffer, cancellationToken).ConfigureAwait(false);
 
                     if (batchOutcome.Committed)
                     {

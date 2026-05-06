@@ -609,12 +609,12 @@ public partial class ReplicationApplierTests
     }
 
     // -------------------------------------------------------------------
-    // R-098 closure tests (T1–T10) — fill remaining test gaps and pin the
-    // B1 (empty-batch guard) and B2 (AppliedCount==BatchSize assertion)
+    // R-098 closure tests — fill remaining test gaps and pin the
+    // empty-batch guard and AppliedCount==BatchSize assertion
     // defence-in-depth contracts shipped on RunAtomicSagaAsync.
     // -------------------------------------------------------------------
 
-    /// <summary>T1 — mixed Set / Delete entries in the same batch round-trip
+    /// <summary>Mixed Set / Delete entries in the same batch round-trip
     /// to <see cref="AtomicApplyEntry"/> with the correct per-index
     /// <see cref="AtomicApplyEntry.IsTombstone"/> flag and value-shape.
     /// Exercises <c>MapStagedToAtomicApplyEntry</c>'s switch arms in the
@@ -673,10 +673,10 @@ public partial class ReplicationApplierTests
             Arg.Any<CancellationToken>());
     }
 
-    /// <summary>T2 — a <see cref="ReplogOp.DeleteRange"/> entry inside an
+    /// <summary>A <see cref="ReplogOp.DeleteRange"/> entry inside an
     /// atomic batch is a producer-contract violation
     /// (<c>SetManyAtomicAsync</c> only emits Set/Delete). The applier's
-    /// upstream B7 guard fires *before* the range fast-path bypasses the
+    /// upstream guard fires *before* the range fast-path bypasses the
     /// atomic gate, surfacing it as <see cref="ArgumentException"/>; no
     /// range delete is applied and no saga is dispatched. The
     /// <c>MapStagedToAtomicApplyEntry</c> default-arm
@@ -712,7 +712,7 @@ public partial class ReplicationApplierTests
                 .With.Message.Contains("Atomic batches must contain only Set / Delete"));
     }
 
-    /// <summary>T3 — a <see cref="ReplogOp.Set"/> entry whose
+    /// <summary>A <see cref="ReplogOp.Set"/> entry whose
     /// <see cref="ReplogEntry.Value"/> is <c>null</c> is a producer-side
     /// stamping bug. <c>MapStagedToAtomicApplyEntry</c> rejects it with
     /// <see cref="ArgumentException"/> so the receiver fails fast rather
@@ -743,7 +743,7 @@ public partial class ReplicationApplierTests
                 .With.Message.Contains("Value must be non-null"));
     }
 
-    /// <summary>T4 — <see cref="LatticeReplicationOptions.AtomicBatchDelivery"/>
+    /// <summary><see cref="LatticeReplicationOptions.AtomicBatchDelivery"/>
     /// is <c>false</c>. Even though the entry carries a non-empty
     /// <see cref="ReplogEntry.TransactionId"/> and a non-zero
     /// <see cref="ReplogEntry.AtomicBatchSize"/>, the gate must NOT engage
@@ -772,7 +772,7 @@ public partial class ReplicationApplierTests
             Arg.Any<CancellationToken>());
     }
 
-    /// <summary>T5 — opt-in is enabled but the entry's
+    /// <summary>Opt-in is enabled but the entry's
     /// <see cref="ReplogEntry.AtomicBatchSize"/> is <c>0</c> (a non-atomic
     /// point write co-existing on the wire with atomic-batch traffic).
     /// The gate must NOT engage — the buffer is never consulted and the
@@ -811,7 +811,7 @@ public partial class ReplicationApplierTests
             Arg.Any<CancellationToken>());
     }
 
-    /// <summary>T6 — batch-path counterpart to
+    /// <summary>Batch-path counterpart to
     /// <c>ApplyAsync_atomic_batch_propagates_cancellation_without_dlq_park</c>.
     /// A saga-time cancellation inside <c>ApplyBatchAsync</c> propagates
     /// without parking the batch to the DLQ and without advancing the
@@ -836,7 +836,7 @@ public partial class ReplicationApplierTests
             Throws.InstanceOf<OperationCanceledException>());
     }
 
-    /// <summary>T7 — admission is partial (
+    /// <summary>Admission is partial (
     /// <see cref="TxBufferAdmissionResult.BatchComplete"/> is <c>false</c>).
     /// The applier returns immediately with <c>OutcomeAtomicBuffered</c>
     /// semantics: <see cref="ApplyResult.Applied"/> is <c>false</c>, the
@@ -877,7 +877,7 @@ public partial class ReplicationApplierTests
             Arg.Any<CancellationToken>());
     }
 
-    /// <summary>T8 — defence-in-depth (B2): a saga that returns
+    /// <summary>Defence-in-depth: a saga that returns
     /// <see cref="AtomicApplyOutcome.Committed"/> with
     /// <see cref="AtomicApplyResult.AppliedCount"/> &lt;
     /// <c>BatchSize</c> is a saga-contract violation. The applier surfaces
@@ -913,7 +913,7 @@ public partial class ReplicationApplierTests
                 .With.Message.Contains("AppliedCount=1").And.Message.Contains("BatchSize=3"));
     }
 
-    /// <summary>T9 — the saga commits successfully but
+    /// <summary>The saga commits successfully but
     /// <c>TryAdvanceAsync</c> on the per-origin HWM grain throws (e.g.
     /// transient storage failure). The exception propagates from the
     /// applier so the producer's pump retries; the per-origin HWM row is
@@ -940,7 +940,7 @@ public partial class ReplicationApplierTests
         Assert.That(h.HwmRows, Is.Empty);
     }
 
-    /// <summary>T10 — defence-in-depth (B1): a buffer-grain admission
+    /// <summary>Defence-in-depth: a buffer-grain admission
     /// that reports <see cref="TxBufferAdmissionResult.BatchComplete"/>
     /// <c>true</c> with an empty
     /// <see cref="TxBufferAdmissionResult.CompletedBatch"/> is a

@@ -896,4 +896,76 @@ internal sealed class ReplicationShipperGrain(
         _peerClusterId = peerClusterId;
         _keyParsed = true;
     }
+
+    /// <summary>
+    /// Cursor-registry consumer-id prefix under which the shipper
+    /// publishes the cross-cluster propagation of the receiver-side
+    /// blocked-floor pin. Each (tree, peer) shipper publishes under
+    /// the prefix concatenated with the peer cluster id, so multiple
+    /// peer pins for the same tree do not collide. Cursor=Zero on
+    /// every report so the registry's GC min(cursor) branch is not
+    /// double-counted (the per-peer cursor advance already feeds
+    /// that branch).
+    /// </summary>
+    private const string PeerBlockedFloorConsumerIdPrefix = "shipper:peer-blocked-floor:";
+
+    /// <summary>
+    /// Whether <see cref="PublishPeerBlockedFloorAsync"/> has reported
+    /// at least once on this activation. Combined with
+    /// <see cref="_peerBlockedFloorLast"/>, this lets the helper skip
+    /// duplicate reports (the registry already enforces
+    /// replace-semantics, but the per-tree semaphore inside
+    /// <see cref="InMemoryReplicationCursorRegistry"/> still costs a
+    /// Wait/Release pair per call we can avoid).
+    /// </summary>
+    private bool _peerBlockedFloorReported;
+
+    /// <summary>Last receiver pin reported under <see cref="PeerBlockedFloorConsumerIdPrefix"/>; used to skip identical re-reports.</summary>
+    private HybridLogicalClock? _peerBlockedFloorLast;
+
+    /// <summary>
+    /// Publishes <paramref name="receiverPin"/> (the value of
+    /// <see cref="ReplicationAck.BlockedAtHlc"/> on the most recent
+    /// successful ack) into the local cursor registry under the
+    /// peer-specific consumer id, skipping when the pin has not
+    /// changed. Failures are logged at Warning level and swallowed:
+    /// a registry outage does not unwind the cursor advance the
+    /// caller already booked, and a subsequent ack re-publishes the
+    /// pin.
+    /// </summary>
+    private async Task PublishPeerBlockedFloorAsync(
+        HybridLogicalClock? receiverPin,
+        CancellationToken cancellationToken)
+    {
+        if (_peerBlockedFloorReported
+            && Nullable.Equals(_peerBlockedFloorLast, receiverPin))
+        {
+            return;
+        }
+
+        var consumerId = PeerBlockedFloorConsumerIdPrefix + _peerClusterId;
+        try
+        {
+            await _cursorRegistry.ReportCursorAsync(
+                _treeName,
+                consumerId,
+                HybridLogicalClock.Zero,
+                receiverPin,
+                cancellationToken).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            _peerBlockedFloorReported = true;
+            _peerBlockedFloorLast = receiverPin;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "Peer blocked-floor registry report failed for {Context}; pin {Pin} will be retried on the next ack.",
+                LogContext,
+                receiverPin);
+        }
+    }
 }

@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Replication;
 /// and asks the configured <see cref="IWalStorageProvider"/> to trim
 /// through that offset.
 /// <para>
-/// The predicate combines three conditions:
+/// The predicate combines four conditions:
 /// <list type="bullet">
 ///   <item>
 ///     <b>Cursor</b> - <c>entry.Timestamp &lt;= minCursor</c> when the
@@ -40,6 +40,21 @@ namespace Orleans.Lattice.Replication;
 ///     causal-stable clause before it is trimmed. When no consumer has
 ///     reported a vector the GC degrades cleanly to the legacy
 ///     HLC-only predicate.
+///   </item>
+///   <item>
+///     <b>Blocked-floor</b> - when at least one consumer has
+///     reported a non-<see langword="null"/> <c>BlockedAtHlc</c> pin
+///     through the blocked-floor overloads of
+///     <see cref="ILatticeReplicationCursorRegistry.ReportCursorAsync(string, string, HybridLogicalClock, HybridLogicalClock?, CancellationToken)"/>,
+///     the GC AND-s a strict-less <c>entry.Timestamp &lt; blockedFloor</c>
+///     clause where <c>blockedFloor = min(BlockedAtHlc across reporting
+///     consumers)</c>. The strict-less semantics protect the buffered
+///     entry itself from being trimmed: a partial atomic batch with
+///     lowest staged HLC <c>t</c> reports <c>blockedFloor=t</c> and
+///     blocks the trim of every WAL row at or after <c>t</c> until
+///     the buffer drains or the batch is evicted (later phase). When no
+///     consumer reports a pin the GC degrades cleanly to the cursor /
+///     TTL / causal-stable branches.
 ///   </item>
 /// </list>
 /// </para>
@@ -87,6 +102,7 @@ public sealed class LatticeReplicationGc(
 
         var minCursor = await cursors.GetMinCursorAsync(treeName, cancellationToken).ConfigureAwait(false);
         var causalStable = await cursors.GetCausalStableAsync(treeName, cancellationToken).ConfigureAwait(false);
+        var blockedFloor = await cursors.GetBlockedFloorAsync(treeName, cancellationToken).ConfigureAwait(false);
         HybridLogicalClock? ttlCeiling = null;
         if (resolved.WalRetention is { } retention)
         {
@@ -116,18 +132,19 @@ public sealed class LatticeReplicationGc(
             // Nothing to do: no consumer has reported a cursor and no
             // TTL is configured. Return early so the run is observably
             // a no-op (counter is zero, ShipDuration is unaffected).
-            // The causal-stable frontier alone never trims an entry
-            // because it is AND-ed with the HLC-shaped clauses, so a
-            // present-but-unused frontier is still reported in the
-            // diagnostic for transparency.
-            return new ReplicationGcReport(treeName, minCursor, ttlCeiling, causalStable, partitions, 0);
+            // Neither the causal-stable frontier nor the
+            // blocked-floor alone permits trimming - they only block
+            // entries that the HLC-shaped clauses would otherwise
+            // allow. So a present-but-unused frontier or floor is
+            // still reported in the diagnostic for transparency.
+            return new ReplicationGcReport(treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, 0);
         }
 
         long totalTrimmed = 0;
         for (var partition = 0; partition < partitions; partition++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            totalTrimmed += await TrimShardAsync(provider, treeName, partition, minCursor, ttlCeiling, causalStable, cancellationToken).ConfigureAwait(false);
+            totalTrimmed += await TrimShardAsync(provider, treeName, partition, minCursor, ttlCeiling, causalStable, blockedFloor, cancellationToken).ConfigureAwait(false);
         }
 
         if (totalTrimmed > 0)
@@ -137,7 +154,7 @@ public sealed class LatticeReplicationGc(
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName));
         }
 
-        return new ReplicationGcReport(treeName, minCursor, ttlCeiling, causalStable, partitions, totalTrimmed);
+        return new ReplicationGcReport(treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed);
     }
 
     private static async Task<long> TrimShardAsync(
@@ -147,6 +164,7 @@ public sealed class LatticeReplicationGc(
         HybridLogicalClock? minCursor,
         HybridLogicalClock? ttlCeiling,
         VersionVector? causalStable,
+        HybridLogicalClock? blockedFloor,
         CancellationToken cancellationToken)
     {
         long lastEligibleOffset = -1;
@@ -167,7 +185,7 @@ public sealed class LatticeReplicationGc(
                 pageEntries++;
                 lastSeenOffset = walEntry.Offset;
 
-                if (IsEligible(walEntry.Mutation, minCursor, ttlCeiling, causalStable))
+                if (IsEligible(walEntry.Mutation, minCursor, ttlCeiling, causalStable, blockedFloor))
                 {
                     lastEligibleOffset = walEntry.Offset;
                     eligibleCount++;
@@ -213,7 +231,8 @@ public sealed class LatticeReplicationGc(
         LatticeMutation entry,
         HybridLogicalClock? minCursor,
         HybridLogicalClock? ttlCeiling,
-        VersionVector? causalStable)
+        VersionVector? causalStable,
+        HybridLogicalClock? blockedFloor)
     {
         // HLC-shaped clause: cursor OR TTL must accept the entry
         // (existing legacy HLC-only behaviour).
@@ -247,6 +266,20 @@ public sealed class LatticeReplicationGc(
             {
                 return false;
             }
+        }
+
+        // Blocked-floor clause: when at least one consumer
+        // reports a non-null buffer pin, every WAL entry whose HLC is
+        // at or after the floor is held back so the receiver can
+        // recover from buffer state. Strict-less semantics protect the
+        // buffered entry itself: an entry whose Timestamp equals the
+        // floor is the buffer's lowest staged entry and must remain on
+        // the WAL until the batch completes or evicts. Range-delete
+        // entries carry HybridLogicalClock.Zero and are therefore
+        // never blocked by a positive floor (Zero < any positive HLC).
+        if (blockedFloor is { } floor && entry.Timestamp >= floor)
+        {
+            return false;
         }
 
         return true;
