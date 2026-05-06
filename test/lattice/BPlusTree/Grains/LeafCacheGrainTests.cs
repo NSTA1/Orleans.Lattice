@@ -7,7 +7,7 @@ using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
-public class LeafCacheGrainTests
+public partial class LeafCacheGrainTests
 {
     private static readonly GrainId LeafGrainId = GrainId.Create("leaf", "primary-leaf");
 

@@ -41,6 +41,16 @@ internal sealed partial class BPlusLeafGrain(
         finally
         {
             DisposeProjectionHasher();
+
+            // Remove this activation's same-silo revision cookie so a
+            // future re-activation starts fresh and any same-silo
+            // LeafCacheGrain that may still hold _lastSeenPrimaryRevision
+            // from this activation falls through to the cross-grain
+            // refresh path on its next read. Cookies are best-effort,
+            // not correctness-critical, but pruning keeps the registry
+            // bounded by the live-leaf set rather than the lifetime-leaf
+            // set.
+            LeafRevisionRegistry.TryRemove(context.GrainId, out _);
         }
     }
 
@@ -298,6 +308,7 @@ internal sealed partial class BPlusLeafGrain(
         // vector is foreground-only; ILeafProjection.Apply does not advance it.
         var stamp = AdvanceClockOrOverride();
         state.State.Version.Tick(ReplicaId);
+        BumpLocalRevision();
         var newEntry = LwwValue<byte[]>.CreateWithExpiry(value, stamp, expiresAtTicks)
             with
             {
@@ -390,6 +401,7 @@ internal sealed partial class BPlusLeafGrain(
         // step 0 (build) - HLC tick (or override), build tombstone, build mutation envelope.
         var stamp = AdvanceClockOrOverride();
         state.State.Version.Tick(ReplicaId);
+        BumpLocalRevision();
         var tombstone = LwwValue<byte[]>.Tombstone(stamp)
             with
             {
@@ -482,6 +494,7 @@ internal sealed partial class BPlusLeafGrain(
         // individual key.
         var stamp = AdvanceClockOrOverride();
         state.State.Version.Tick(ReplicaId);
+        BumpLocalRevision();
         var tombstone = LwwValue<byte[]>.Tombstone(stamp)
             with
             {
@@ -774,6 +787,7 @@ internal sealed partial class BPlusLeafGrain(
             if (maxIncoming > state.State.Clock)
                 state.State.Clock = maxIncoming;
             state.State.Version.Tick(ReplicaId);
+            BumpLocalRevision();
         }
 
         await PersistAsync();
@@ -968,6 +982,7 @@ internal sealed partial class BPlusLeafGrain(
             if (maxIncoming > state.State.Clock)
                 state.State.Clock = maxIncoming;
             state.State.Version.Tick(ReplicaId);
+            BumpLocalRevision();
         }
     }
 
