@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MultiSiteManufacturing.Host.Baseline;
 using MultiSiteManufacturing.Host.Federation;
+using MultiSiteManufacturing.Host.Lattice;
 using Orleans.Lattice.Replication;
 
 namespace MultiSiteManufacturing.Host.Replication;
@@ -55,6 +56,7 @@ internal static class BaselineReplicationApplierRegistrationExtensions
                     (IReplicationApplier)sp.GetRequiredService(implType),
                     sp.GetRequiredService<BaselineFactBackend>(),
                     sp.GetRequiredService<FederationRouter>(),
+                    sp.GetRequiredService<PartCrdtStore>(),
                     sp.GetRequiredService<ILogger<BaselineReplicationApplier>>()));
         }
         else if (existing.ImplementationFactory is { } factory)
@@ -64,6 +66,7 @@ internal static class BaselineReplicationApplierRegistrationExtensions
                     (IReplicationApplier)factory(sp),
                     sp.GetRequiredService<BaselineFactBackend>(),
                     sp.GetRequiredService<FederationRouter>(),
+                    sp.GetRequiredService<PartCrdtStore>(),
                     sp.GetRequiredService<ILogger<BaselineReplicationApplier>>()));
         }
         else if (existing.ImplementationInstance is IReplicationApplier instance)
@@ -73,6 +76,7 @@ internal static class BaselineReplicationApplierRegistrationExtensions
                     instance,
                     sp.GetRequiredService<BaselineFactBackend>(),
                     sp.GetRequiredService<FederationRouter>(),
+                    sp.GetRequiredService<PartCrdtStore>(),
                     sp.GetRequiredService<ILogger<BaselineReplicationApplier>>()));
         }
         else

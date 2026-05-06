@@ -77,6 +77,67 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
     private string ReplicaId => silo.ClusterName + ":" + silo.Id;
 
     /// <summary>
+    /// Raised after every successful CRDT mutation that may have
+    /// changed what <see cref="GetOperatorAsync"/> or
+    /// <see cref="GetLabelsAsync"/> would return for the carried
+    /// serial. Subscribed by <c>DashboardBroadcaster</c> so the
+    /// part-detail page's CRDT card refreshes live without the user
+    /// reloading the browser. Also raised on the receiver side of
+    /// cross-cluster <c>mfg-part-labels</c> applies (see
+    /// <c>BaselineReplicationApplier</c>) so OR-Set deltas arriving
+    /// from a peer cluster light up the local UI immediately.
+    ///
+    /// <para>
+    /// Handler exceptions are swallowed - a single bad subscriber
+    /// must never propagate back into the mutation path or the
+    /// receiver-side apply pipeline (which would surface as a 500
+    /// on the inbound gRPC <c>Push</c> RPC and stall replication).
+    /// Mirrors <see cref="FederationRouter.RaiseFactReplicated"/>'s
+    /// fault-isolation contract.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Coverage scope.</b> The event reaches every Blazor circuit
+    /// pinned to the same silo as the mutation, plus every circuit on
+    /// the peer cluster (because OR-Set label deltas replicate). It
+    /// does <b>not</b> currently reach circuits pinned to a different
+    /// silo within the same cluster - that would require a second
+    /// cluster-wide Orleans stream typed for CRDT notices, and is a
+    /// deferred enhancement. The sample's main demo case (one browser
+    /// per cluster, sticky cookie) is fully covered.
+    /// </para>
+    /// </summary>
+    public event Action<PartSerialNumber>? PartChanged;
+
+    /// <summary>
+    /// Fires <see cref="PartChanged"/> for <paramref name="serial"/>,
+    /// swallowing any handler exceptions. Exposed as <c>internal</c>
+    /// so <c>BaselineReplicationApplier</c> can raise it from the
+    /// cross-cluster receive path - the OR-Set merge that fans the
+    /// label delta into the local labels tree happens inside the
+    /// package's apply pipeline (which we don't decorate at the
+    /// per-key level), so the store's mutation methods aren't on
+    /// that path and we have to fan out explicitly.
+    /// </summary>
+    internal void RaisePartChanged(PartSerialNumber serial)
+    {
+        var handler = PartChanged;
+        if (handler is null)
+        {
+            return;
+        }
+        try
+        {
+            handler(serial);
+        }
+        catch
+        {
+            // Subscribers own their own error reporting; the store
+            // must not leak handler faults back into the caller.
+        }
+    }
+
+    /// <summary>
     /// Assigns <paramref name="op"/> as the current operator for
     /// <paramref name="serial"/>. Under partition the write goes to
     /// this silo's shadow key in the operator tree; otherwise directly
@@ -91,6 +152,7 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
             ? ShadowKey(silo.Id, serial)
             : SharedKey(serial);
         await OperatorTree.SetAsync(key, op, cancellationToken).ConfigureAwait(false);
+        RaisePartChanged(serial);
     }
 
     /// <summary>
@@ -133,6 +195,7 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
             : SharedKey(serial);
         var bytes = Encoding.UTF8.GetBytes(label);
         await LabelsTree.OrSet(key).AddAsync(bytes, ReplicaId, cancellationToken).ConfigureAwait(false);
+        RaisePartChanged(serial);
     }
 
     /// <summary>
@@ -182,6 +245,11 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
     {
         var (start, end) = ShadowRange(silo.Id);
         var promoted = 0;
+        // Track every distinct serial we touched so we can raise
+        // PartChanged exactly once per serial at the end - regardless
+        // of whether it was the operator tree, the labels tree, or
+        // both that promoted entries for that serial.
+        var touchedSerials = new HashSet<string>(StringComparer.Ordinal);
 
         // ---- Operator tree: byte-for-byte promote shadow → shared. ----
         // Materialise the shadow keyspace first — we're going to mutate
@@ -192,6 +260,7 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
         {
             operatorEntries.Add(entry);
         }
+
         foreach (var entry in operatorEntries)
         {
             var shared = PromoteShadowKey(entry.Key);
@@ -202,6 +271,7 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
             await OperatorTree.SetAsync(shared, entry.Value, cancellationToken).ConfigureAwait(false);
             await OperatorTree.DeleteAsync(entry.Key, cancellationToken).ConfigureAwait(false);
             promoted++;
+            touchedSerials.Add(shared);
         }
 
         // ---- Labels tree: OR-Set merge for every shadow key. ----
@@ -221,6 +291,12 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
             await LabelsTree.OrSet(sharedKey).MergeAsync(shadowSet, cancellationToken).ConfigureAwait(false);
             await LabelsTree.DeleteAsync(shadowKey, cancellationToken).ConfigureAwait(false);
             promoted++;
+            touchedSerials.Add(sharedKey);
+        }
+
+        foreach (var serial in touchedSerials)
+        {
+            RaisePartChanged(new PartSerialNumber(serial));
         }
 
         return promoted;

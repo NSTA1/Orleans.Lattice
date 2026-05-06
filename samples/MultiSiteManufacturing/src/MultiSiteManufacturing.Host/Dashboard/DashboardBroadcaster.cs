@@ -95,6 +95,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
     private readonly FederationRouter _router;
     private readonly IClusterClient _client;
     private readonly IGrainFactory _grainFactory;
+    private readonly PartCrdtStore _crdtStore;
     private readonly ILogger<DashboardBroadcaster> _logger;
     private readonly StreamId _streamId;
     private readonly CancellationTokenSource _shutdownCts = new();
@@ -122,9 +123,22 @@ public sealed partial class DashboardBroadcaster : IHostedService
     /// <see cref="IGrainFactory"/>, so every pre-existing grain call
     /// (e.g. <see cref="IPartitionChaosGrain"/>) flows through the
     /// same reference.
+    /// <para>
+    /// Also takes <see cref="PartCrdtStore"/> so the broadcaster can
+    /// subscribe to <see cref="PartCrdtStore.PartChanged"/> and fan
+    /// out a fresh <see cref="PartSummaryUpdate"/> whenever the
+    /// per-part CRDT state changes (operator assignment, label add,
+    /// or shadow heal). Without this, the part-detail page's CRDT
+    /// card would be stale on every circuit other than the one that
+    /// issued the mutation, until the user reloaded.
+    /// </para>
     /// </remarks>
-    public DashboardBroadcaster(FederationRouter router, IClusterClient client, ILogger<DashboardBroadcaster> logger)
-        : this(router, client, logger, DefaultBroadcastStreamId)
+    public DashboardBroadcaster(
+        FederationRouter router,
+        IClusterClient client,
+        PartCrdtStore crdtStore,
+        ILogger<DashboardBroadcaster> logger)
+        : this(router, client, crdtStore, logger, DefaultBroadcastStreamId)
     {
     }
 
@@ -134,11 +148,17 @@ public sealed partial class DashboardBroadcaster : IHostedService
     /// stream traffic to a single test and avoid cross-test event
     /// leakage on the shared TestCluster.
     /// </summary>
-    internal DashboardBroadcaster(FederationRouter router, IClusterClient client, ILogger<DashboardBroadcaster> logger, StreamId streamId)
+    internal DashboardBroadcaster(
+        FederationRouter router,
+        IClusterClient client,
+        PartCrdtStore crdtStore,
+        ILogger<DashboardBroadcaster> logger,
+        StreamId streamId)
     {
         _router = router;
         _client = client;
         _grainFactory = client;
+        _crdtStore = crdtStore;
         _logger = logger;
         _streamId = streamId;
     }
@@ -153,6 +173,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
         _router.FactRouted += OnFactForBroadcast;
         _router.FactReplicated += OnFactForBroadcast;
         _router.ChaosConfigChanged += OnChaosConfigChanged;
+        _crdtStore.PartChanged += OnPartCrdtChanged;
 
         _broadcastStream = _client
             .GetStreamProvider(StreamProviderName)
@@ -174,6 +195,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
         _router.FactRouted -= OnFactForBroadcast;
         _router.FactReplicated -= OnFactForBroadcast;
         _router.ChaosConfigChanged -= OnChaosConfigChanged;
+        _crdtStore.PartChanged -= OnPartCrdtChanged;
 
         if (_broadcastSubscription is not null)
         {
@@ -218,6 +240,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
         _router.FactRouted -= OnFactForBroadcast;
         _router.FactReplicated -= OnFactForBroadcast;
         _router.ChaosConfigChanged -= OnChaosConfigChanged;
+        _crdtStore.PartChanged -= OnPartCrdtChanged;
 
         foreach (var sub in _partSubs.Values)
         {

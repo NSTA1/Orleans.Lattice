@@ -18,6 +18,17 @@ public sealed partial class DashboardBroadcaster
     private void OnChaosConfigChanged(object? sender, EventArgs e) => _ = PublishChaosAsync();
 
     /// <summary>
+    /// Subscribed to <see cref="PartCrdtStore.PartChanged"/> in
+    /// <see cref="StartAsync"/>. Forwards the carried serial into the
+    /// same per-circuit fan-out path the fact stream uses, so a
+    /// CRDT-only mutation (operator assignment, label add, shadow
+    /// heal, or cross-cluster OR-Set delta) lights up the part-detail
+    /// page's CRDT card without the user reloading. Fire-and-forget;
+    /// any rebuild error is logged inside <see cref="PublishPartAsync"/>.
+    /// </summary>
+    private void OnPartCrdtChanged(PartSerialNumber serial) => _ = PublishPartAsync(serial);
+
+    /// <summary>
     /// Builds a <see cref="SiteActivityIndexEntry"/> from the in-memory
     /// fact and fans it out to every site-activity subscriber. Exposed
     /// as a standalone helper so <see cref="OnBroadcastReceived"/> can
@@ -43,11 +54,11 @@ public sealed partial class DashboardBroadcaster
         }
     }
 
-    private async Task PublishPartAsync(Fact fact)
+    private async Task PublishPartAsync(PartSerialNumber serial)
     {
         try
         {
-            var update = await BuildSummaryAsync(fact.Serial, CancellationToken.None);
+            var update = await BuildSummaryAsync(serial, CancellationToken.None);
             foreach (var sub in _partSubs.Values)
             {
                 sub.Writer.TryWrite(update);
@@ -103,7 +114,7 @@ public sealed partial class DashboardBroadcaster
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to build dashboard update for fact {FactId}", fact.FactId);
+            _logger.LogWarning(ex, "Failed to build dashboard update for serial {Serial}", serial.Value);
         }
     }
 

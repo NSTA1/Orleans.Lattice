@@ -295,5 +295,119 @@ public class PartCrdtStoreTests
         var result = await _storeA.GetOperatorAsync(serial);
         Assert.That(result!.Value.Value, Is.EqualTo("operator:quiet"));
     }
+
+    [Test]
+    public async Task AssignOperator_raises_PartChanged_for_the_serial()
+    {
+        var serial = new PartSerialNumber("HPT-CRDT-2028-91020");
+        var seen = new List<PartSerialNumber>();
+        void Handler(PartSerialNumber s) => seen.Add(s);
+        _store.PartChanged += Handler;
+        try
+        {
+            await _store.AssignOperatorAsync(serial, new OperatorId("operator:eve"));
+        }
+        finally
+        {
+            _store.PartChanged -= Handler;
+        }
+
+        Assert.That(seen, Is.EqualTo(new[] { serial }), "serial not seen in PartChanged event");
+    }
+
+    [Test]
+    public async Task AddLabel_raises_PartChanged_for_the_serial()
+    {
+        var serial = new PartSerialNumber("HPT-CRDT-2028-91021");
+        var seen = new List<PartSerialNumber>();
+        void Handler(PartSerialNumber s) => seen.Add(s);
+        _store.PartChanged += Handler;
+        try
+        {
+            await _store.AddLabelAsync(serial, "first-article");
+            // Idempotent at the set level, but each call still raises -
+            // the event is "the part's CRDT state may have changed", not
+            // "an actual element was added", because the broadcaster
+            // doesn't carry deltas, only "rebuild the summary for serial".
+            await _store.AddLabelAsync(serial, "first-article");
+        }
+        finally
+        {
+            _store.PartChanged -= Handler;
+        }
+
+        Assert.That(seen, Is.EqualTo(new[] { serial, serial }), "serial not seen in PartChanged event");
+    }
+
+    [Test]
+    public async Task PartChanged_subscriber_exception_does_not_propagate()
+    {
+        // A single bad subscriber must never break the mutation path
+        // (which would fail the user-facing operator-assign / label-add
+        // RPC) or the receiver-side replication apply (which would
+        // surface as a 500 on the inbound gRPC Push and stall replication).
+        var serial = new PartSerialNumber("HPT-CRDT-2028-91022");
+        void BadHandler(PartSerialNumber _) => throw new InvalidOperationException("subscriber boom");
+        _store.PartChanged += BadHandler;
+        try
+        {
+            Assert.DoesNotThrowAsync(async () =>
+                await _store.AssignOperatorAsync(serial, new OperatorId("operator:isolation")));
+
+            // Assignment must have completed despite the bad subscriber.
+            var result = await _store.GetOperatorAsync(serial);
+            Assert.That(result!.Value.Value, Is.EqualTo("operator:isolation"));
+        }
+        finally
+        {
+            _store.PartChanged -= BadHandler;
+        }
+    }
+
+    [Test]
+    public async Task Heal_raises_PartChanged_once_per_distinct_serial_promoted()
+    {
+        // Two distinct serials touched under partition (one with a
+        // shadow operator, one with a shadow label) must surface
+        // exactly two PartChanged events on heal - one per serial -
+        // even though three shadow entries promoted across the two
+        // trees.
+        var sX = new PartSerialNumber("HPT-CRDT-2028-91030");
+        var sY = new PartSerialNumber("HPT-CRDT-2028-91031");
+
+        await SetPartitionedAsync(true);
+        try
+        {
+            await _storeA.AssignOperatorAsync(sX, new OperatorId("operator:px"));
+            await _storeA.AddLabelAsync(sX, "px-shadow-label");
+            await _storeA.AddLabelAsync(sY, "py-shadow-label");
+        }
+        finally
+        {
+            await SetPartitionedAsync(false);
+        }
+
+        var seen = new List<PartSerialNumber>();
+        void Handler(PartSerialNumber s) => seen.Add(s);
+        _storeA.PartChanged += Handler;
+        try
+        {
+            var promoted = await _storeA.HealLocalShadowAsync();
+            Assert.That(promoted, Is.GreaterThanOrEqualTo(3));
+        }
+        finally
+        {
+            _storeA.PartChanged -= Handler;
+        }
+
+        // Distinct-serial guarantee: every touched serial appears at
+        // least once; no duplicates.
+        Assert.Multiple(() =>
+        {
+            Assert.That(seen, Has.Count.EqualTo(2));
+            Assert.That(seen, Does.Contain(sX));
+            Assert.That(seen, Does.Contain(sY));
+        });
+    }
 }
 

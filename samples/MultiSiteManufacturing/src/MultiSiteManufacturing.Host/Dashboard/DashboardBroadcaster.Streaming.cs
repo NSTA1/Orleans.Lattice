@@ -209,7 +209,7 @@ public sealed partial class DashboardBroadcaster
     {
         try
         {
-            await PublishPartAsync(fact);
+            await PublishPartAsync(fact.Serial);
             FanOutSiteActivity(fact);
         }
         catch (Exception ex)

@@ -60,6 +60,17 @@ public sealed class FederationTestClusterFixture
     public LatticeFactBackend NewLatticeBackend() =>
         new(GrainFactory, NullLogger<LatticeFactBackend>.Instance, $"mfg-facts-{Guid.NewGuid():N}");
 
+    /// <summary>
+    /// Convenience: a <see cref="PartCrdtStore"/> wired to the
+    /// cluster's grain factory under silo identity
+    /// <c>("a", primary=true, cluster="us")</c> — matching
+    /// <see cref="NewRouter"/>'s default. Used by the broadcaster
+    /// tests, which need a real store to satisfy the broadcaster's
+    /// ctor and to drive <see cref="PartCrdtStore.PartChanged"/>.
+    /// </summary>
+    public PartCrdtStore NewPartCrdtStore() =>
+        new(GrainFactory, new SiloIdentity("a", IsPrimary: true, ClusterName: "us"));
+
     /// <summary>Convenience: a router wired to fresh baseline + lattice backends.</summary>
     public (FederationRouter Router, BaselineFactBackend Baseline, LatticeFactBackend Lattice) NewRouter()
     {

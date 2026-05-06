@@ -69,7 +69,9 @@ public sealed class BaselineReplicationApplierTests
              StubInnerApplier Inner,
              BaselineFactBackend Baseline,
              FederationRouter Router,
-             List<Fact> Replicated) Build(ApplyResult innerResult)
+             List<Fact> Replicated,
+             PartCrdtStore CrdtStore,
+             List<PartSerialNumber> CrdtChanged) Build(ApplyResult innerResult)
     {
         var (router, baseline, _) = _fixture.NewRouter();
         var inner = new StubInnerApplier(innerResult);
@@ -77,13 +79,18 @@ public sealed class BaselineReplicationApplierTests
         var replicated = new List<Fact>();
         router.FactReplicated += (_, fact) => replicated.Add(fact);
 
+        var crdtStore = _fixture.NewPartCrdtStore();
+        var crdtChanged = new List<PartSerialNumber>();
+        crdtStore.PartChanged += serial => crdtChanged.Add(serial);
+
         var decorator = new BaselineReplicationApplier(
             inner,
             baseline,
             router,
+            crdtStore,
             NullLogger<BaselineReplicationApplier>.Instance);
 
-        return (decorator, inner, baseline, router, replicated);
+        return (decorator, inner, baseline, router, replicated, crdtStore, crdtChanged);
     }
 
     private static ReplogEntry FactEntry(Fact fact, string treeId = LatticeFactBackend.FactTreeId)
@@ -108,7 +115,7 @@ public sealed class BaselineReplicationApplierTests
     {
         var serial = new PartSerialNumber("HPT-BLD-S1-2028-99001");
         var fact = Nc(serial, tick: 1, ncNumber: "NC-A-1", NcSeverity.Major, ProcessSite.ToulouseNdtLab);
-        var (decorator, inner, baseline, _, replicated) = Build(
+        var (decorator, inner, baseline, _, replicated, _, _) = Build(
             new ApplyResult { Applied = true, HighWaterMark = fact.Hlc });
         var entry = FactEntry(fact);
 
@@ -135,7 +142,7 @@ public sealed class BaselineReplicationApplierTests
         // baseline backend - that would produce duplicate rows / events.
         var serial = new PartSerialNumber("HPT-BLD-S1-2028-99002");
         var fact = Nc(serial, tick: 2, ncNumber: "NC-A-2", NcSeverity.Minor, ProcessSite.ToulouseNdtLab);
-        var (decorator, _, baseline, _, replicated) = Build(
+        var (decorator, _, baseline, _, replicated, _, _) = Build(
             new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero });
         var entry = FactEntry(fact);
 
@@ -156,7 +163,7 @@ public sealed class BaselineReplicationApplierTests
         // decorator must not interpret its payload as a Fact.
         var serial = new PartSerialNumber("HPT-BLD-S1-2028-99003");
         var fact = Nc(serial, tick: 3, ncNumber: "NC-A-3", NcSeverity.Minor, ProcessSite.ToulouseNdtLab);
-        var (decorator, _, baseline, _, replicated) = Build(
+        var (decorator, _, baseline, _, replicated, _, _) = Build(
             new ApplyResult { Applied = true, HighWaterMark = fact.Hlc });
         var entry = FactEntry(fact, treeId: SiteActivityIndex.TreeId);
 
@@ -177,7 +184,7 @@ public sealed class BaselineReplicationApplierTests
         // replay loop's documented behaviour.
         var serial = new PartSerialNumber("HPT-BLD-S1-2028-99004");
         var fact = Nc(serial, tick: 4, ncNumber: "NC-A-4", NcSeverity.Minor, ProcessSite.ToulouseNdtLab);
-        var (decorator, _, baseline, _, replicated) = Build(
+        var (decorator, _, baseline, _, replicated, _, _) = Build(
             new ApplyResult { Applied = true, HighWaterMark = fact.Hlc });
 
         var tombstoneEntry = FactEntry(fact) with { IsTombstone = true };
@@ -200,7 +207,7 @@ public sealed class BaselineReplicationApplierTests
         // A payload that fails to decode must never propagate back into
         // the package's apply pipeline (which would surface as a 500 on
         // the inbound gRPC Push and stall replication).
-        var (decorator, _, _, _, replicated) = Build(
+        var (decorator, _, _, _, replicated, _, _) = Build(
             new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero });
         var entry = new ReplogEntry
         {
@@ -224,7 +231,7 @@ public sealed class BaselineReplicationApplierTests
         var s2 = new PartSerialNumber("HPT-BLD-S1-2028-99006");
         var f1 = Nc(s1, tick: 1, ncNumber: "NC-B-1", NcSeverity.Minor, ProcessSite.ToulouseNdtLab);
         var f2 = Nc(s2, tick: 2, ncNumber: "NC-B-2", NcSeverity.Major, ProcessSite.ToulouseNdtLab);
-        var (decorator, _, baseline, _, replicated) = Build(
+        var (decorator, _, baseline, _, replicated, _, _) = Build(
             new ApplyResult { Applied = true, HighWaterMark = f2.Hlc });
 
         var batch = new[] { FactEntry(f1), FactEntry(f2) };
@@ -247,7 +254,7 @@ public sealed class BaselineReplicationApplierTests
     {
         var s1 = new PartSerialNumber("HPT-BLD-S1-2028-99007");
         var f1 = Nc(s1, tick: 1, ncNumber: "NC-B-3", NcSeverity.Minor, ProcessSite.ToulouseNdtLab);
-        var (decorator, _, baseline, _, replicated) = Build(
+        var (decorator, _, baseline, _, replicated, _, _) = Build(
             new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero });
 
         await decorator.ApplyBatchAsync(new[] { FactEntry(f1) }, CancellationToken.None);
@@ -263,8 +270,114 @@ public sealed class BaselineReplicationApplierTests
     [Test]
     public void ApplyBatchAsync_throws_on_null_entries()
     {
-        var (decorator, _, _, _, _) = Build(default);
+        var (decorator, _, _, _, _, _, _) = Build(default);
         Assert.ThrowsAsync<ArgumentNullException>(
             async () => await decorator.ApplyBatchAsync(null!, CancellationToken.None));
+    }
+
+    [Test]
+    public async Task Successful_apply_for_labels_tree_raises_PartChanged_for_the_serial()
+    {
+        // Cross-cluster OR-Set label arrival: the package's apply
+        // pipeline merges the delta into the local labels tree
+        // transparently, so the decorator's only job is to surface
+        // the change to the dashboard via PartCrdtStore.PartChanged.
+        var serial = new PartSerialNumber("HPT-BLD-S1-2028-99100");
+        var (decorator, _, _, _, replicated, _, crdtChanged) = Build(
+            new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero });
+        var entry = new ReplogEntry
+        {
+            TreeId = PartCrdtStore.LabelsTreeId,
+            Op = ReplogOp.Set,
+            Key = serial.Value,
+            Value = new byte[] { 0x01 }, // payload shape is opaque to the decorator
+            Timestamp = HybridLogicalClock.Zero,
+            OriginClusterId = "eu",
+            Mode = ReplicationMode.OrSet,
+        };
+
+        await decorator.ApplyAsync(entry, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(crdtChanged, Has.Count.EqualTo(1));
+            Assert.That(crdtChanged[0].Value, Is.EqualTo(serial.Value));
+            Assert.That(replicated, Is.Empty, "Labels-tree applies must not surface as Fact mirroring.");
+        });
+    }
+
+    [Test]
+    public async Task Shadow_key_on_labels_tree_is_skipped_silently()
+    {
+        // Foreign-silo shadow keys do replicate (the labels tree is
+        // opted into replication), but the receiving cluster's UI
+        // never renders foreign-silo shadow state, so the decorator
+        // must skip them rather than firing a no-op refresh.
+        var (decorator, _, _, _, _, _, crdtChanged) = Build(
+            new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero });
+        var entry = new ReplogEntry
+        {
+            TreeId = PartCrdtStore.LabelsTreeId,
+            Op = ReplogOp.Set,
+            Key = "shadow/b/HPT-BLD-S1-2028-99101",
+            Value = new byte[] { 0x01 },
+            Timestamp = HybridLogicalClock.Zero,
+            OriginClusterId = "eu",
+            Mode = ReplicationMode.OrSet,
+        };
+
+        await decorator.ApplyAsync(entry, CancellationToken.None);
+
+        Assert.That(crdtChanged, Is.Empty);
+    }
+
+    [Test]
+    public async Task Labels_tree_apply_with_inner_not_applied_does_not_raise_PartChanged()
+    {
+        // Mirror of the facts-tree dedupe defence: an inner that
+        // returns Applied=false (HWM-deduped, parked-causal, etc.)
+        // must not produce a dashboard refresh.
+        var serial = new PartSerialNumber("HPT-BLD-S1-2028-99102");
+        var (decorator, _, _, _, _, _, crdtChanged) = Build(
+            new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero });
+        var entry = new ReplogEntry
+        {
+            TreeId = PartCrdtStore.LabelsTreeId,
+            Op = ReplogOp.Set,
+            Key = serial.Value,
+            Value = new byte[] { 0x01 },
+            Timestamp = HybridLogicalClock.Zero,
+            OriginClusterId = "eu",
+            Mode = ReplicationMode.OrSet,
+        };
+
+        await decorator.ApplyAsync(entry, CancellationToken.None);
+
+        Assert.That(crdtChanged, Is.Empty);
+    }
+
+    [Test]
+    public async Task Tombstone_on_labels_tree_does_not_raise_PartChanged()
+    {
+        // Tombstones / deletes on the labels tree are produced by
+        // shadow-key cleanup after heal; they don't change what
+        // GetLabelsAsync would return for any user-visible serial.
+        var (decorator, _, _, _, _, _, crdtChanged) = Build(
+            new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero });
+        var entry = new ReplogEntry
+        {
+            TreeId = PartCrdtStore.LabelsTreeId,
+            Op = ReplogOp.Delete,
+            Key = "HPT-BLD-S1-2028-99103",
+            Value = null,
+            IsTombstone = true,
+            Timestamp = HybridLogicalClock.Zero,
+            OriginClusterId = "eu",
+            Mode = ReplicationMode.OrSet,
+        };
+
+        await decorator.ApplyAsync(entry, CancellationToken.None);
+
+        Assert.That(crdtChanged, Is.Empty);
     }
 }

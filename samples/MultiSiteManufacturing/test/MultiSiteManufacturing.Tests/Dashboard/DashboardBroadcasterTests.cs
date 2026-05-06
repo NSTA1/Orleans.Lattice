@@ -38,6 +38,7 @@ public sealed class DashboardBroadcasterTests
         var broadcaster = new DashboardBroadcaster(
             router,
             _fixture.Cluster.Client,
+            _fixture.NewPartCrdtStore(),
             NullLogger<DashboardBroadcaster>.Instance,
             streamId);
         broadcaster.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
@@ -80,6 +81,48 @@ public sealed class DashboardBroadcasterTests
         Assert.That(update.LatestStage, Is.EqualTo(ProcessStage.Forge));
         Assert.That(update.FactCount, Is.EqualTo(1));
         Assert.That(update.Diverges, Is.False);
+
+        await subscriber.DisposeAsync();
+    }
+
+    [Test]
+    public async Task PartCrdtStore_PartChanged_pushes_PartSummaryUpdate_to_subscriber()
+    {
+        // The broadcaster must subscribe to PartCrdtStore.PartChanged
+        // and rebuild a PartSummaryUpdate for the carried serial, so a
+        // CRDT-only mutation (operator assignment, label add) lights
+        // up the part-detail page's CRDT card without the user
+        // reloading. Build the broadcaster inline so we can drive the
+        // store directly.
+        var (router, _, _) = _fixture.NewRouter();
+        var crdtStore = _fixture.NewPartCrdtStore();
+        var streamId = StreamId.Create(
+            DashboardBroadcaster.StreamNamespace,
+            $"broadcast-{Guid.NewGuid():N}");
+        await using var broadcaster = new DashboardBroadcaster(
+            router,
+            _fixture.Cluster.Client,
+            crdtStore,
+            NullLogger<DashboardBroadcaster>.Instance,
+            streamId);
+        await broadcaster.StartAsync(CancellationToken.None);
+
+        var serial = new PartSerialNumber("HPT-BLD-S1-2028-90050");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var subscriber = broadcaster.SubscribePartUpdates(cts.Token).GetAsyncEnumerator(cts.Token);
+        var moveTask = subscriber.MoveNextAsync().AsTask();
+        await Task.Delay(50, cts.Token);
+
+        // Driving the store's mutation API also raises PartChanged via
+        // the production code path - so this test exercises the wired
+        // Subscribe + RaisePartChanged + PublishPartAsync chain end to end.
+        await crdtStore.AssignOperatorAsync(serial, new OperatorId("operator:live"));
+        var moved = await moveTask;
+
+        Assert.That(moved, Is.True);
+        var update = subscriber.Current;
+        Assert.That(update.Serial, Is.EqualTo(serial));
 
         await subscriber.DisposeAsync();
     }
@@ -426,11 +469,11 @@ public sealed class DashboardBroadcasterTests
         var (routerB, _, _) = _fixture.NewRouter();
 
         await using var broadcasterA = new DashboardBroadcaster(
-            routerA, _fixture.Cluster.Client, NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
+            routerA, _fixture.Cluster.Client, _fixture.NewPartCrdtStore(), NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
         await broadcasterA.StartAsync(CancellationToken.None);
 
         await using var broadcasterB = new DashboardBroadcaster(
-            routerB, _fixture.Cluster.Client, NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
+            routerB, _fixture.Cluster.Client, _fixture.NewPartCrdtStore(), NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
         await broadcasterB.StartAsync(CancellationToken.None);
 
         var serial = new PartSerialNumber("HPT-BLD-XSILO-91001");

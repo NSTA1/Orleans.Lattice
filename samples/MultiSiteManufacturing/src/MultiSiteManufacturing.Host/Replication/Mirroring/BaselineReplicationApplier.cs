@@ -55,6 +55,7 @@ internal sealed class BaselineReplicationApplier(
     IReplicationApplier inner,
     BaselineFactBackend baseline,
     FederationRouter router,
+    PartCrdtStore partCrdtStore,
     ILogger<BaselineReplicationApplier> logger) : IReplicationApplier
 {
     /// <summary>
@@ -120,11 +121,27 @@ internal sealed class BaselineReplicationApplier(
     /// </returns>
     internal async Task<Fact?> TryFanOutAsync(ReplogEntry entry, CancellationToken cancellationToken)
     {
-        if (entry.TreeId != ObservedTreeId)
+        if (entry.TreeId == ObservedTreeId)
         {
+            return await TryFanOutFactAsync(entry, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (entry.TreeId == PartCrdtStore.LabelsTreeId)
+        {
+            FanOutLabelChange(entry);
             return null;
         }
 
+        return null;
+    }
+
+    /// <summary>
+    /// Existing fact-tree path: decode the payload as a
+    /// <see cref="Fact"/>, emit it into the baseline backend, and
+    /// raise <see cref="FederationRouter.FactReplicated"/>.
+    /// </summary>
+    private async Task<Fact?> TryFanOutFactAsync(ReplogEntry entry, CancellationToken cancellationToken)
+    {
         if (entry.Op != ReplogOp.Set || entry.IsTombstone || entry.Value is not { Length: > 0 } payload)
         {
             // Only successful Set entries with a non-empty value carry
@@ -164,5 +181,47 @@ internal sealed class BaselineReplicationApplier(
         // wrap the call.
         router.RaiseFactReplicated(fact);
         return fact;
+    }
+
+    /// <summary>
+    /// Cross-cluster <c>mfg-part-labels</c> apply path: extract the
+    /// serial from <see cref="ReplogEntry.Key"/> and raise
+    /// <see cref="PartCrdtStore.PartChanged"/> so the local
+    /// <c>DashboardBroadcaster</c> rebuilds and fans out a
+    /// <c>PartSummaryUpdate</c> for every subscribed circuit. Without
+    /// this, an OR-Set label delta arriving from the peer cluster
+    /// would update the local labels tree (the package's apply
+    /// pipeline merges it transparently) but the part-detail page's
+    /// CRDT card would stay stale until the user reloaded.
+    ///
+    /// <para>
+    /// <b>Shadow-key filter.</b> Shadow keys
+    /// (<c>shadow/{siloId}/{serial}</c>) belong to a remote silo's
+    /// partition-local state. They <i>do</i> replicate cross-cluster
+    /// because the labels tree is opted into replication, but the
+    /// receiving cluster's UI never renders foreign-silo shadow state
+    /// (each silo's local heal owns its own shadow keyspace), so we
+    /// skip them silently rather than firing a UI refresh that has no
+    /// observable effect.
+    /// </para>
+    /// </summary>
+    private void FanOutLabelChange(ReplogEntry entry)
+    {
+        // Only Set entries on the labels tree carry an OR-Set delta
+        // worth surfacing. Tombstones / range-deletes / Op=Delete do
+        // happen (e.g. shadow-key cleanup after heal) but don't
+        // change what GetLabelsAsync would return for any user-visible
+        // serial, so they're skipped.
+        if (entry.Op != ReplogOp.Set || entry.IsTombstone)
+        {
+            return;
+        }
+
+        if (string.IsNullOrEmpty(entry.Key) || entry.Key.StartsWith("shadow/", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        partCrdtStore.RaisePartChanged(new PartSerialNumber(entry.Key));
     }
 }
