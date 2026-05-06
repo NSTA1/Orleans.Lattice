@@ -46,6 +46,40 @@ internal sealed partial class BPlusLeafGrain(
 
     private static readonly Dictionary<string, LwwValue<byte[]>> EmptyEntries = new();
 
+    /// <summary>
+    /// Process-wide singleton returned by <see cref="GetDeltaSinceAsync"/>
+    /// on the cache-up-to-date fast path (caller's version dominates the
+    /// leaf's, no pending split). Sharing the singleton elides three
+    /// per-read allocations on the steady-state read path through
+    /// <see cref="LeafCacheGrain.RefreshAsync"/>:
+    /// <list type="bullet">
+    ///   <item>The <see cref="StateDelta"/> record itself (~24 B).</item>
+    ///   <item>The <see cref="VersionVector"/> wrapper (~24 B).</item>
+    ///   <item>The wrapper's <c>Dictionary&lt;string, HybridLogicalClock&gt;</c>
+    ///   (~80 B once the leaf has any writes).</item>
+    /// </list>
+    /// Safe to share because the only production callers of
+    /// <see cref="GetDeltaSinceAsync"/> consume <c>delta.Version</c>
+    /// exclusively through the pure static
+    /// <see cref="VersionVector.Merge(VersionVector, VersionVector)"/>
+    /// (see <see cref="LeafCacheGrain.RefreshAsync"/>) — no caller mutates
+    /// the returned vector. The singleton's empty version is also
+    /// correctness-equivalent on this branch: the dominate-or-equals
+    /// precondition guarantees the caller already saw everything the leaf
+    /// has, so merging an empty vector into the caller's vector is a no-op
+    /// in observable state. The pre-allocated <see cref="EmptyDeltaTask"/>
+    /// elides the <c>Task.FromResult</c> wrapper as well, leaving the
+    /// fast-path return as a single static-field load.
+    /// </summary>
+    private static readonly StateDelta EmptyDelta = new()
+    {
+        Entries = EmptyEntries,
+        Version = new VersionVector(),
+        SplitKey = null,
+    };
+
+    private static readonly Task<StateDelta> EmptyDeltaTask = Task.FromResult(EmptyDelta);
+
     private string ReplicaId => context.GrainId.ToString();
     private ResolvedLatticeOptions? _options;
     private ValueTask<ResolvedLatticeOptions> GetOptionsAsync() =>
@@ -638,6 +672,20 @@ internal sealed partial class BPlusLeafGrain(
         // If the caller's version dominates ours, they already have everything.
         if (sinceVersion.DominatesOrEquals(state.State.Version))
         {
+            // Steady-state fast path: no pending split, return the
+            // process-wide empty-delta singleton so the receiver's
+            // VersionVector.Merge folds in nothing (the caller already
+            // dominates) and we elide three heap allocations per read.
+            // See EmptyDelta XML doc above for the safety argument.
+            if (state.State.SplitKey is null)
+            {
+                return EmptyDeltaTask;
+            }
+
+            // SplitKey is set: the caller needs the prune signal even
+            // though Entries is empty. Allocate a per-call envelope so
+            // SplitKey is observed; this branch is rare (only fires
+            // between a split commit and the next compaction sweep).
             return Task.FromResult(new StateDelta
             {
                 Entries = EmptyEntries,
@@ -674,12 +722,7 @@ internal sealed partial class BPlusLeafGrain(
 
         if (sortedMovedSlots.Length == 0 || sinceVersion.DominatesOrEquals(state.State.Version))
         {
-            return Task.FromResult(new StateDelta
-            {
-                Entries = EmptyEntries,
-                Version = state.State.Version.Clone(),
-                SplitKey = state.State.SplitKey
-            });
+            return EmptyDeltaTask;
         }
 
         var callerClock = sinceVersion.GetClock(ReplicaId);
