@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Concurrency;
 using Orleans.Lattice.Primitives;
-
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
@@ -27,6 +27,15 @@ internal sealed partial class LatticeGrain(
     private bool _monitorEnsured;
     private string? _physicalTreeId;
     private ShardMap? _shardMap;
+    // Per-activation single-slot cache of the most-recent resolved IShardRootGrain
+    // reference. A hit on GetShardGrainAsync skips the entire grain-reference
+    // materialisation pipeline (string interpolation + IdSpan byte-array alloc +
+    // GrainReference proxy alloc). The cache key is the int shard index; the
+    // physicalTreeId is implicitly invariant per activation because the
+    // invalidation hooks below null this field on the same conditions that
+    // null _physicalTreeId / _shardMap.
+    private int _cachedShardIndex = -1;
+    private IShardRootGrain? _cachedShard;
     private readonly PublishEventsGate _eventsGate = new();
 
     /// <summary>
@@ -701,7 +710,7 @@ internal sealed partial class LatticeGrain(
             // ShardMap.Version is monotonically incremented on every persist,
             // so if it is still 0 at the end of the call, no split can have
             // started during our fan-out. Use the cheap leaf.CountAsync()
-            // path (O(1) per leaf) and avoid BuildOwnedSlotMap / per-key
+            // path (O1 per leaf) and avoid BuildOwnedSlotMap / per-key
             // slot hashing / binary-search entirely.
             if (versionAtStart == 0L)
             {
@@ -1010,8 +1019,18 @@ internal sealed partial class LatticeGrain(
     {
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
         var shardIndex = shardMap.Resolve(key);
-        var shardKey = $"{physicalTreeId}/{shardIndex}";
-        return grainFactory.GetGrain<IShardRootGrain>(shardKey);
+        return (_cachedShard is { } existing && _cachedShardIndex == shardIndex)
+            ? existing
+            : ResolveShardSlow(physicalTreeId, shardIndex);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private IShardRootGrain ResolveShardSlow(string physicalTreeId, int shardIndex)
+    {
+        var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+        _cachedShardIndex = shardIndex;
+        _cachedShard = shard;
+        return shard;
     }
 
     /// <summary>
@@ -1069,6 +1088,8 @@ internal sealed partial class LatticeGrain(
         if (_physicalTreeId is null) return false;
         _physicalTreeId = null;
         _shardMap = null;
+        _cachedShard = null;
+        _cachedShardIndex = -1;
         return true;
     }
 
@@ -1082,6 +1103,8 @@ internal sealed partial class LatticeGrain(
     private bool InvalidateShardMap()
     {
         _shardMap = null;
+        _cachedShard = null;
+        _cachedShardIndex = -1;
         return true;
     }
 
