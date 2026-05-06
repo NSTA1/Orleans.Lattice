@@ -569,4 +569,260 @@ public class ReplicationTxBufferGrainTests
         });
         Assert.That(await revived.CountTransactionsAsync(CancellationToken.None), Is.EqualTo(1));
     }
+
+    // -------- GetLowestStagedHlcAsync (R-099 producer GC pin) --------
+
+    private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
+        new() { WallClockTicks = ticks, Counter = counter };
+
+    private static ReplogEntry MakeEntryAt(
+        Guid txId,
+        int batchSize,
+        int batchIndex,
+        HybridLogicalClock timestamp,
+        string origin = OriginA)
+    {
+        return new ReplogEntry
+        {
+            TreeId = TreeId,
+            Op = ReplogOp.Set,
+            Key = $"k{batchIndex}",
+            Value = new byte[] { (byte)batchIndex },
+            Timestamp = timestamp,
+            OriginClusterId = origin,
+            AtomicBatchSize = batchSize,
+            AtomicBatchIndex = batchIndex,
+            TransactionId = txId,
+            Mode = ReplicationMode.LwwRegister,
+        };
+    }
+
+    [Test]
+    public async Task GetLowestStagedHlcAsync_returns_null_when_empty()
+    {
+        var (grain, _, _, _) = await CreateGrainAsync();
+        Assert.That(await grain.GetLowestStagedHlcAsync(CancellationToken.None), Is.Null);
+    }
+
+    [Test]
+    public async Task GetLowestStagedHlcAsync_returns_min_across_single_partial_transaction()
+    {
+        var (grain, _, _, _) = await CreateGrainAsync();
+        var tx = Guid.NewGuid();
+
+        // Admit a 3-entry partial batch with explicit, non-monotonic
+        // HLCs so the lowest is not the first-arrived.
+        await grain.AdmitAsync(MakeEntryAt(tx, 3, 0, Hlc(500)), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntryAt(tx, 3, 1, Hlc(100)), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntryAt(tx, 3, 2, Hlc(300)), CancellationToken.None);
+
+        // Batch is complete — partial buffer is now empty.
+        Assert.That(await grain.GetLowestStagedHlcAsync(CancellationToken.None), Is.Null);
+    }
+
+    [Test]
+    public async Task GetLowestStagedHlcAsync_returns_min_across_partial_transaction()
+    {
+        var (grain, _, _, _) = await CreateGrainAsync();
+        var tx = Guid.NewGuid();
+
+        // 3-entry batch but only 2 admitted so the buffer is still
+        // pinning the producer GC.
+        await grain.AdmitAsync(MakeEntryAt(tx, 3, 0, Hlc(500)), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntryAt(tx, 3, 1, Hlc(100)), CancellationToken.None);
+
+        Assert.That(await grain.GetLowestStagedHlcAsync(CancellationToken.None), Is.EqualTo(Hlc(100)));
+    }
+
+    [Test]
+    public async Task GetLowestStagedHlcAsync_returns_min_across_multiple_transactions()
+    {
+        var (grain, _, _, _) = await CreateGrainAsync();
+        var txA = Guid.NewGuid();
+        var txB = Guid.NewGuid();
+
+        // Two partial transactions; the GC must pin to the lowest HLC
+        // across both, not just the lowest within one.
+        await grain.AdmitAsync(MakeEntryAt(txA, 2, 0, Hlc(800)), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntryAt(txB, 2, 0, Hlc(50)), CancellationToken.None);
+
+        Assert.That(await grain.GetLowestStagedHlcAsync(CancellationToken.None), Is.EqualTo(Hlc(50)));
+    }
+
+    [Test]
+    public async Task GetLowestStagedHlcAsync_unpins_after_batch_completes()
+    {
+        var (grain, _, _, _) = await CreateGrainAsync();
+        var tx = Guid.NewGuid();
+
+        await grain.AdmitAsync(MakeEntryAt(tx, 2, 0, Hlc(100)), CancellationToken.None);
+        Assert.That(await grain.GetLowestStagedHlcAsync(CancellationToken.None), Is.EqualTo(Hlc(100)));
+
+        // Complete the batch — the entries leave the partial-buffer
+        // map and the pin is released.
+        await grain.AdmitAsync(MakeEntryAt(tx, 2, 1, Hlc(200)), CancellationToken.None);
+
+        Assert.That(await grain.GetLowestStagedHlcAsync(CancellationToken.None), Is.Null);
+    }
+
+    [Test]
+    public async Task GetLowestStagedHlcAsync_advances_after_lower_pin_evicted_by_capacity()
+    {
+        // Cap-overflow eviction releases the offending transaction's
+        // entries from the in-memory index, so the next pin must rise
+        // to the next-lowest surviving transaction.
+        var (grain, _, _, _) = await CreateGrainAsync(maxTransactions: 2);
+        var txOldest = Guid.NewGuid();
+        var txMiddle = Guid.NewGuid();
+        var txNewest = Guid.NewGuid();
+
+        await grain.AdmitAsync(MakeEntryAt(txOldest, 2, 0, Hlc(50)), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntryAt(txMiddle, 2, 0, Hlc(200)), CancellationToken.None);
+
+        // Pin reflects the oldest's lowest HLC.
+        Assert.That(await grain.GetLowestStagedHlcAsync(CancellationToken.None), Is.EqualTo(Hlc(50)));
+
+        // Admitting a third tx evicts txOldest (FIFO).
+        await grain.AdmitAsync(MakeEntryAt(txNewest, 2, 0, Hlc(900)), CancellationToken.None);
+
+        Assert.That(await grain.GetLowestStagedHlcAsync(CancellationToken.None), Is.EqualTo(Hlc(200)));
+    }
+
+    [Test]
+    public async Task GetLowestStagedHlcAsync_observes_pre_cancelled_token()
+    {
+        var (grain, _, _, _) = await CreateGrainAsync();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.That(
+            async () => await grain.GetLowestStagedHlcAsync(cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    // -------- HLC.Zero rejection --------
+
+    /// <summary>
+    /// HybridLogicalClock.Zero is the registry sentinel meaning
+    /// "no pin contributed", so it must never appear as a staged HLC.
+    /// An entry whose Timestamp decodes to Zero is a programming error
+    /// (a producer that forgot to stamp its HLC, or a wire-format
+    /// regression) and is rejected at admission with
+    /// ArgumentException rather than silently corrupting the
+    /// blocked-floor multiset.
+    /// </summary>
+    [Test]
+    public async Task AdmitAsync_throws_when_entry_timestamp_is_zero()
+    {
+        var (grain, _, _, _) = await CreateGrainAsync();
+        var tx = Guid.NewGuid();
+        var entry = MakeEntry(tx, batchSize: 3, batchIndex: 0)
+            with { Timestamp = HybridLogicalClock.Zero };
+
+        Assert.That(
+            async () => await grain.AdmitAsync(entry, CancellationToken.None),
+            Throws.ArgumentException);
+    }
+
+    // -------- Restart-safe republish --------
+
+    /// <summary>
+    /// Silo-restart recovery: the in-memory cursor registry is
+    /// per-silo and not durable; a silo restart wipes the registry's
+    /// blocked-floor pin. The buffer grain rehydrates its in-memory
+    /// state from the backing system tree on activation, and after
+    /// rehydration must republish the lowest staged HLC under the
+    /// canonical applier consumer id so the producer-side GC pin
+    /// survives the restart without waiting for a fresh
+    /// admit/removal call to repopulate the registry.
+    /// </summary>
+    [Test]
+    public async Task InitializeForTestingAsync_republishes_blocked_floor_after_rehydration()
+    {
+        // Phase 1: stage a partial batch and confirm the registry pin
+        // is published.
+        var (store, data) = FakeSystemLattice.Create();
+        var context = Substitute.For<IGrainContext>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>()).Returns(dlq);
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = OriginB,
+            AtomicBatchDelivery = true,
+        };
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(options);
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        var grain1 = new ReplicationTxBufferGrain(
+            context, grainFactory, monitor, Serializer, registry);
+        await grain1.InitializeForTestingAsync(TreeId, store, CancellationToken.None);
+
+        var tx = Guid.NewGuid();
+        await grain1.AdmitAsync(MakeEntry(tx, batchSize: 3, batchIndex: 0), CancellationToken.None);
+        await grain1.AdmitAsync(MakeEntry(tx, batchSize: 3, batchIndex: 1), CancellationToken.None);
+        // Buffer holds 2 of 3 staged entries; their timestamps were stamped
+        // by HybridLogicalClock.Tick(Zero) inside MakeEntry — non-zero by
+        // construction.
+
+        // Simulate silo restart by discarding registry + grain instance
+        // but preserving the backing system-tree rows.
+        var registry2 = new InMemoryReplicationCursorRegistry();
+        var grain2 = new ReplicationTxBufferGrain(
+            context, grainFactory, monitor, Serializer, registry2);
+
+        // Sanity: the new registry starts empty.
+        var preSnapshot = await registry2.SnapshotAsync(TreeId, CancellationToken.None);
+        Assert.That(preSnapshot, Is.Empty);
+
+        // Reactivate against the surviving system-tree rows; the new
+        // grain must rehydrate AND republish the floor.
+        await grain2.InitializeForTestingAsync(TreeId, store, CancellationToken.None);
+
+        var postSnapshot = await registry2.SnapshotAsync(TreeId, CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(postSnapshot, Has.Count.EqualTo(1),
+                "rehydration must republish the blocked-floor pin under the canonical applier consumer id");
+            Assert.That(postSnapshot[0].BlockedAtHlc, Is.Not.Null);
+            Assert.That(postSnapshot[0].BlockedAtHlc!.Value, Is.Not.EqualTo(HybridLogicalClock.Zero));
+            Assert.That(postSnapshot[0].Cursor, Is.EqualTo(HybridLogicalClock.Zero),
+                "the rehydrate report uses cursor=Zero so it does not contribute to the GC's min(cursor) branch");
+        });
+    }
+
+    /// <summary>
+    /// Counterpart to the rehydration test: when the buffer is
+    /// empty after rehydration (e.g. all batches completed before
+    /// the silo restarted and the system-tree rows were already
+    /// removed), the grain must NOT publish a stale
+    /// (cursor=Zero, blockedAt=null) row. The next admit republishes
+    /// cleanly through the applier path.
+    /// </summary>
+    [Test]
+    public async Task InitializeForTestingAsync_does_not_publish_when_no_entries_rehydrated()
+    {
+        var (store, _) = FakeSystemLattice.Create();
+        var context = Substitute.For<IGrainContext>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>()).Returns(dlq);
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = OriginB,
+            AtomicBatchDelivery = true,
+        };
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(options);
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        var grain = new ReplicationTxBufferGrain(
+            context, grainFactory, monitor, Serializer, registry);
+        await grain.InitializeForTestingAsync(TreeId, store, CancellationToken.None);
+
+        var snapshot = await registry.SnapshotAsync(TreeId, CancellationToken.None);
+        Assert.That(snapshot, Is.Empty,
+            "an empty rehydration must not publish a (Zero, null) row to the registry");
+    }
 }

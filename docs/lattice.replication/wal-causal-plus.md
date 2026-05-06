@@ -260,6 +260,31 @@ An entry is GC-eligible when:
 
 The predicate must consult **every** change-feed consumer's VC — including any future local materialiser — not just remote peers. A lagging consumer must pin the log identically regardless of whether it is remote or in-process.
 
+### 7.3 Blocked-floor (TX-aware GC pin)
+
+Cross-cluster atomic-batch delivery (Phase 9, `AtomicBatchDelivery = true`) introduces a receiver-side staging buffer that holds every key in an in-flight `SetManyAtomicAsync` until the whole batch arrives. While a batch is partially staged, the receiver has **not** acknowledged the buffered entries through its per-origin high-water-mark — the producer's WAL is the authoritative re-ship source if the receiver buffer is lost (e.g. via the orphan-timeout eviction path documented in the dead-letter queue). The GC must therefore not trim past any entry the receiver still needs to recover from buffer state.
+
+The predicate widens to AND in a **strict-less** clause:
+
+```text
+entry.Timestamp < blocked_floor
+```
+
+where `blocked_floor = min(BlockedAtHlc across reporting consumers)`.
+
+A consumer with a partially-staged batch reports the lowest staged HLC `t` via the blocked-floor overload of `ReportCursorAsync`. The overload accepts `cursor = HybridLogicalClock.Zero` so the applier can register a pin without contributing to the `min(cursor)` branch — `GetMinCursorAsync` skips Zero-cursor consumers symmetrically. Pin updates use **replace semantics**, not monotonic merge: as the buffer admits new transactions the lowest staged HLC can drop, and the registry must reflect the new pin so the GC stops trimming further forward. Reporting `blockedAtHlc: null` releases the pin entirely (used when the buffer drains).
+
+The strict-less comparison is load-bearing: an entry whose `Timestamp` exactly equals the blocked-floor must remain in the WAL because that entry is itself the lowest-staged entry on at least one receiver. A `<=` clause would silently trim it and the receiver could never recover from a buffer loss at that HLC.
+
+Consumers that do not call the blocked-floor overload contribute `null` to the floor and are excluded from `min(...)`. When **no** consumer reports a pin, `blocked_floor` is `null` and the predicate degrades to the §7.2 form above. Backwards-compatible by construction: pre-Phase-9 receivers never stamp a pin and never block the producer GC.
+
+**Cross-cluster propagation.** The receiver-side gRPC server stamps the locally-computed `blocked_floor` onto every outbound `ReplicationAck.BlockedAtHlc` (a new `[Id]` slot on the ack envelope). The producer-side shipper grain reads the slot from each ack and republishes it via `IReplicationCursorRegistry.ReportCursorAsync` under the consumer key `shipper:peer-blocked-floor:{peerId}`. The producer's WAL GC then AND-s the same strict-less clause from §7.3 into its own trim predicate using the per-peer pin, so a partially-staged batch on **any** downstream peer pins the producer's WAL identically to a partially-staged batch on a local in-process consumer. The propagation channel is wire-additive — the new `[Id]` slot on `ReplicationAck` decodes as `null` on legacy producers, which then degrade transparently to the §7.2 frontier without any pinning behaviour.
+
+**Performance note:**
+
+- The blocked-floor is cached behind the same per-tree generation counter as the causal-stable frontier; recompute only on ack / pin updates, not per entry.
+- Surfaces on `ReplicationGcReport.BlockedFloor` for dashboards and operator playbooks.
+
 ---
 
 ## 8. Snapshot semantics

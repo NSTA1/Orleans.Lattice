@@ -1,3 +1,5 @@
+using Orleans.Lattice.Primitives;
+
 namespace Orleans.Lattice.Replication.Grains;
 
 /// <summary>
@@ -75,4 +77,28 @@ internal interface IReplicationTxBufferGrain : IGrainWithStringKey
     /// overhead). Diagnostic helper.
     /// </summary>
     Task<long> CountBytesAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Returns the lowest <see cref="HybridLogicalClock"/>
+    /// across every entry the buffer is currently holding, or
+    /// <see langword="null"/> when the buffer is empty. The receiver-
+    /// side applier publishes this value through the
+    /// <see cref="ILatticeReplicationCursorRegistry"/> blocked-floor
+    /// reporting overload after every admit / batch-completion event
+    /// so the producer-side WAL garbage collector AND-s a strict-less
+    /// <c>entry.Timestamp &lt; blockedFloor</c> clause into its trim
+    /// predicate. Without this pin, the producer could trim a WAL
+    /// entry that the receiver has staged-but-not-yet-applied — and
+    /// a subsequent buffer loss (silo crash, eviction, orphan
+    /// timeout) would leave the receiver unable to recover the
+    /// missing key.
+    /// <para>
+    /// Computed as <c>min(staged.Entry.Timestamp)</c> across every
+    /// staged entry of every partially-buffered transaction; the
+    /// scan is O(N) in the total staged-entry count and is cheap
+    /// because the buffer is typically empty or holds a handful of
+    /// in-flight batches at a time.
+    /// </para>
+    /// </summary>
+    Task<HybridLogicalClock?> GetLowestStagedHlcAsync(CancellationToken cancellationToken);
 }

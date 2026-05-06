@@ -14,12 +14,20 @@ public class LatticeReplicationGrpcServiceTests
 {
     private static LatticeReplicationGrpcService CreateService(IReplicationApplier applier, out LatticeReplicationGrpcMethod method)
     {
+        return CreateService(applier, new InMemoryReplicationCursorRegistry(), out method);
+    }
+
+    private static LatticeReplicationGrpcService CreateService(
+        IReplicationApplier applier,
+        ILatticeReplicationCursorRegistry cursorRegistry,
+        out LatticeReplicationGrpcMethod method)
+    {
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
         var ackSerializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
         var envSerializer = sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>();
         var encoder = new TestEncoder(envSerializer);
         method = new LatticeReplicationGrpcMethod(encoder, ackSerializer);
-        return new LatticeReplicationGrpcService(method, applier, NullLogger<LatticeReplicationGrpcService>.Instance);
+        return new LatticeReplicationGrpcService(method, applier, cursorRegistry, NullLogger<LatticeReplicationGrpcService>.Instance);
     }
 
     private sealed class TestEncoder : IReplicationBatchEncoder
@@ -75,7 +83,7 @@ public class LatticeReplicationGrpcServiceTests
     public void Constructor_throws_when_method_null()
     {
         Assert.That(
-            () => new LatticeReplicationGrpcService(null!, Substitute.For<IReplicationApplier>(), NullLogger<LatticeReplicationGrpcService>.Instance),
+            () => new LatticeReplicationGrpcService(null!, Substitute.For<IReplicationApplier>(), new InMemoryReplicationCursorRegistry(), NullLogger<LatticeReplicationGrpcService>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -87,7 +95,7 @@ public class LatticeReplicationGrpcServiceTests
         var method = new LatticeReplicationGrpcMethod(encoder, sp.GetRequiredService<Serializer<ReplicationAck>>());
 
         Assert.That(
-            () => new LatticeReplicationGrpcService(method, null!, NullLogger<LatticeReplicationGrpcService>.Instance),
+            () => new LatticeReplicationGrpcService(method, null!, new InMemoryReplicationCursorRegistry(), NullLogger<LatticeReplicationGrpcService>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -99,7 +107,7 @@ public class LatticeReplicationGrpcServiceTests
         var method = new LatticeReplicationGrpcMethod(encoder, sp.GetRequiredService<Serializer<ReplicationAck>>());
 
         Assert.That(
-            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), null!),
+            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryReplicationCursorRegistry(), null!),
             Throws.ArgumentNullException);
     }
 
@@ -325,6 +333,121 @@ public class LatticeReplicationGrpcServiceTests
         Assert.That(
             () => LatticeReplicationGrpcServiceBase.BindService(binder, svc),
             Throws.Nothing);
+    }
+
+    // ---- Cross-cluster blocked-floor propagation -----------------------
+
+    /// <summary>
+    /// The gRPC <c>Push</c> handler must stamp the receiver-side
+    /// blocked-floor pin (the lowest staged HLC across every partially
+    /// buffered atomic batch on this tree) onto the <see cref="ReplicationAck.BlockedAtHlc"/>
+    /// slot it returns to the producer. This is the cross-cluster
+    /// propagation half of the TX-aware GC pin: the producer's
+    /// shipper reads the slot off the ack and republishes it under
+    /// its own consumer id so its WAL GC AND-s the same strict-less
+    /// clause into its trim predicate.
+    /// </summary>
+    [Test]
+    public async Task Push_stamps_receiver_side_blocked_floor_on_ack_from_registry()
+    {
+        var applier = Substitute.For<IReplicationApplier>();
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        // Pre-pin a buffer floor on the receiver side as if a partial
+        // atomic batch were staged. The HLC=Zero cursor uses the
+        // blocked-floor overload that the applier publishes on every
+        // admit -- exactly the shape the production code uses.
+        var floor = new HybridLogicalClock { WallClockTicks = 12345, Counter = 0 };
+        await registry.ReportCursorAsync("tree", "applier:atomic-batch", HybridLogicalClock.Zero, blockedAtHlc: floor);
+
+        var svc = CreateService(applier, registry, out _);
+        var box = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = "tree",
+                OriginClusterId = "remote",
+                Entries = new[] { MakeSet("a", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 }) },
+            },
+        };
+
+        var ack = await svc.Push(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ack.Value.Accepted, Is.True);
+            Assert.That(ack.Value.BlockedAtHlc, Is.Not.Null);
+            Assert.That(ack.Value.BlockedAtHlc!.Value, Is.EqualTo(floor));
+        });
+    }
+
+    /// <summary>
+    /// When no consumer has registered a buffer pin
+    /// the ack carries <see langword="null"/> in the
+    /// <see cref="ReplicationAck.BlockedAtHlc"/> slot. The legacy
+    /// HLC-only producer GC degrades cleanly in that case.
+    /// </summary>
+    [Test]
+    public async Task Push_omits_blocked_floor_on_ack_when_no_pin_registered()
+    {
+        var applier = Substitute.For<IReplicationApplier>();
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        // No reports issued.
+
+        var svc = CreateService(applier, registry, out _);
+        var box = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = "tree",
+                OriginClusterId = "remote",
+                Entries = Array.Empty<ReplogEntry>(),
+            },
+        };
+
+        var ack = await svc.Push(box, new TestServerCallContext());
+
+        Assert.That(ack.Value.BlockedAtHlc, Is.Null);
+    }
+
+    /// <summary>
+    /// A buffer pin registered against <c>tree-A</c>
+    /// must not bleed into the ack returned for a push to
+    /// <c>tree-B</c>. The server-side <c>GetBlockedFloorAsync</c>
+    /// call is keyed on the request's <see cref="ReplicationBatchEnvelope.TreeName"/>,
+    /// not on a process-wide singleton.
+    /// </summary>
+    [Test]
+    public async Task Push_blocked_floor_is_isolated_per_tree()
+    {
+        var applier = Substitute.For<IReplicationApplier>();
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        var floorA = new HybridLogicalClock { WallClockTicks = 500, Counter = 0 };
+        await registry.ReportCursorAsync("tree-A", "applier:atomic-batch", HybridLogicalClock.Zero, blockedAtHlc: floorA);
+
+        var svc = CreateService(applier, registry, out _);
+        var box = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = "tree-B",
+                OriginClusterId = "remote",
+                Entries = Array.Empty<ReplogEntry>(),
+            },
+        };
+
+        var ack = await svc.Push(box, new TestServerCallContext());
+
+        Assert.That(ack.Value.BlockedAtHlc, Is.Null,
+            "ack for tree-B must not carry tree-A's pin");
     }
 }
 

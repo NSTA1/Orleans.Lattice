@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
@@ -24,8 +26,13 @@ namespace Orleans.Lattice.Replication;
 internal sealed partial class ReplicationApplier(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeReplicationOptions> options,
-    LocalVectorClockCache localVectorClockCache) : IReplicationApplier
+    LocalVectorClockCache localVectorClockCache,
+    ILatticeReplicationCursorRegistry? cursorRegistry = null,
+    ILogger<ReplicationApplier>? logger = null) : IReplicationApplier
 {
+    private readonly ILogger<ReplicationApplier> _logger =
+        logger ?? NullLogger<ReplicationApplier>.Instance;
+
     /// <summary>
     /// Per-tree causal-apply buffers, lazily created on first park.
     /// Each tree's buffer is independent — there is no cross-tree
@@ -72,6 +79,38 @@ internal sealed partial class ReplicationApplier(
     /// </summary>
     private readonly ConcurrentDictionary<(string TreeId, string Origin), HybridLogicalClock> _lastAppliedSourceHlc =
         new();
+
+    /// <summary>
+    /// Per-tree semaphore serialising the
+    /// <see cref="ReportBlockedFloorAsync(string, IReplicationTxBufferGrain, CancellationToken)"/>
+    /// helper's grain-call + registry-call pair. Concurrent applier
+    /// invocations (e.g. multiple peer ship loops pushing into the
+    /// same receiver tree) would otherwise interleave the
+    /// <c>GetLowestStagedHlc</c> read against the
+    /// <c>ReportCursorAsync</c> write and a stale snapshot from a
+    /// late-arriving thread could clobber a fresher snapshot from an
+    /// earlier-resolving thread (replace semantics: most-recent
+    /// caller wins, but "most recent" was wall-clock arrival, not
+    /// most-recent observation of buffer state). Holding the
+    /// semaphore across both calls collapses the TOCTOU window so
+    /// the registry's pin always reflects the latest observation in
+    /// linearisable order.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _floorReportLocks =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Last value (and observed-vs-never) the applier has published
+    /// to the cursor registry for each tree's blocked-floor pin.
+    /// Used to suppress redundant reports when a steady-state batch
+    /// of identical-HLC admissions does not move the floor; also used
+    /// by the on-drain unregister path to detect the
+    /// "transition to null after a non-null" case.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, BlockedFloorReport> _lastReportedFloor =
+        new(StringComparer.Ordinal);
+
+    private readonly record struct BlockedFloorReport(bool Reported, HybridLogicalClock? Value);
 
     /// <inheritdoc />
     public async Task<ApplyResult> ApplyAsync(ReplogEntry entry, CancellationToken cancellationToken = default)
@@ -122,7 +161,7 @@ internal sealed partial class ReplicationApplier(
             // are naturally idempotent at the leaf layer.
             if (entry.Op == ReplogOp.DeleteRange)
             {
-                // Defence-in-depth (B7): a DeleteRange entry tagged with
+                // Defence-in-depth: a DeleteRange entry tagged with
                 // atomic-batch metadata (AtomicBatchSize > 0) is a
                 // producer-contract violation — the producer's
                 // SetManyAtomicAsync surface emits only Set/Delete, never
@@ -196,6 +235,20 @@ internal sealed partial class ReplicationApplier(
                 var txBuffer = grainFactory.GetGrain<IReplicationTxBufferGrain>(entry.TreeId);
                 var admission = await txBuffer.AdmitAsync(entry, cancellationToken).ConfigureAwait(false);
 
+                // Publish the buffer's lowest staged HLC to the
+                // cursor registry so the producer-side WAL GC AND-s a
+                // strict-less blocked-floor clause into its trim
+                // predicate. Reported after every admit (admit may
+                // have grown the buffer with a fresh batch) and after
+                // every batch-completion path (admission below
+                // returned BatchComplete=true; the staged entries for
+                // that transaction have been removed and the floor
+                // may have advanced or cleared). Failure is swallowed
+                // with no observable apply-path impact - the WAL still
+                // holds the entry and a subsequent admit / removal
+                // re-publishes the floor.
+                await ReportBlockedFloorAsync(entry.TreeId, txBuffer, cancellationToken).ConfigureAwait(false);
+
                 if (!admission.BatchComplete)
                 {
                     outcome = LatticeReplicationMetrics.OutcomeAtomicBuffered;
@@ -209,6 +262,18 @@ internal sealed partial class ReplicationApplier(
                     hwm,
                     resolved,
                     cancellationToken).ConfigureAwait(false);
+
+                // Re-report after the saga returns: a successful
+                // commit does not mutate the buffer further (the
+                // siblings were removed atomically inside the
+                // BatchComplete=true branch above), but a thrown saga
+                // path may have routed entries to the DLQ without
+                // changing the in-memory floor. Re-publishing here is
+                // a defensive sweep so the floor reflects post-saga
+                // buffer state; redundant when the saga did not
+                // mutate the buffer (no-op cost is one cheap grain
+                // call).
+                await ReportBlockedFloorAsync(entry.TreeId, txBuffer, cancellationToken).ConfigureAwait(false);
 
                 outcome = batchResult.Applied
                     ? LatticeReplicationMetrics.OutcomeSuccess
@@ -347,6 +412,130 @@ internal sealed partial class ReplicationApplier(
 
     private static bool HasCausalDependencies(ReplogEntry entry) =>
         entry.VectorClock is { Entries.Count: > 0 };
+
+    /// <summary>
+    /// Consumer id under which the receiver-side applier
+    /// registers its atomic-batch staging buffer pin in the
+    /// <see cref="ILatticeReplicationCursorRegistry"/>. The applier
+    /// is a blocked-floor-only consumer (cursor=Zero) so its
+    /// registration does not pollute the GC's HLC <c>min(cursor)</c>
+    /// branch — the per-origin HWM grain and the leaf cursor reporter
+    /// already cover that side. Per-tree scoping is achieved by the
+    /// registry's <c>(treeName, consumerId)</c> key shape so the same
+    /// constant is safely reused across every replicated tree.
+    /// </summary>
+    private const string AtomicBatchApplierConsumerId = "applier:atomic-batch";
+
+    /// <summary>
+    /// Reads the per-tree atomic-batch staging buffer's
+    /// lowest staged HLC and publishes it to the
+    /// <see cref="ILatticeReplicationCursorRegistry"/> as the
+    /// applier's blocked-floor pin. Called after every admit and
+    /// every batch-completion event so the producer-side WAL GC sees
+    /// the current floor across silos. No-op when the registry seam
+    /// was not supplied (test-only constructor path); production DI
+    /// always injects the registered singleton.
+    /// </summary>
+    /// <remarks>
+    /// Failures are intentionally swallowed: the WAL retains the
+    /// authoritative copy of every staged entry and a subsequent
+    /// admit / removal call against the buffer re-publishes the
+    /// floor. Surfacing a registry exception out of the apply hot
+    /// path would convert a diagnostic-side outage into an apply-
+    /// path failure, which is the wrong trade-off (the GC is the
+    /// only consumer of the registry's blocked-floor and a stale
+    /// frontier merely defers a trim, never breaks correctness).
+    /// Swallowed exceptions are logged at <see cref="LogLevel.Warning"/>
+    /// so an operator dashboard can still surface a sustained
+    /// registry outage.
+    /// </remarks>
+    private async Task ReportBlockedFloorAsync(
+        string treeName,
+        IReplicationTxBufferGrain txBuffer,
+        CancellationToken cancellationToken)
+    {
+        if (cursorRegistry is null)
+        {
+            return;
+        }
+
+        var lockTaken = false;
+        var semaphore = _floorReportLocks.GetOrAdd(treeName, static _ => new SemaphoreSlim(1, 1));
+        try
+        {
+            // Serialise across both the GetLowestStagedHlc read + ReportCursorAsync
+            // write so a stale snapshot from a late-arriving thread does not clobber
+            // a fresher snapshot from an earlier-resolving thread (replace semantics:
+            // most-recent caller wins, but "most recent" was wall-clock arrival, not
+            // most-recent observation of buffer state).
+            await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            lockTaken = true;
+
+            var floor = await txBuffer.GetLowestStagedHlcAsync(cancellationToken).ConfigureAwait(false);
+
+            // Suppress duplicate reports: the steady-state hot path
+            // through the helper observes an unchanged floor on every
+            // call (admit raises buffer count but does not always
+            // change the minimum HLC; the post-saga defensive sweep
+            // re-publishes the same value). The cache eliminates the
+            // redundant grain hops without affecting correctness.
+            var previous = _lastReportedFloor.TryGetValue(treeName, out var existing)
+                ? existing
+                : default;
+            if (previous.Reported && Nullable.Equals(previous.Value, floor))
+            {
+                return;
+            }
+
+            // Drain transition: when the buffer has fully drained
+            // (floor == null) AND we previously had a non-null pin
+            // registered, unregister the consumer entirely instead
+            // of holding a (cursor=Zero, blockedAtHlc=null) row that
+            // contributes nothing to either GC predicate branch but
+            // still surfaces in SnapshotAsync output. A subsequent
+            // non-null admit re-registers cleanly.
+            if (floor is null && previous.Reported && previous.Value is not null)
+            {
+                await cursorRegistry.UnregisterAsync(
+                    treeName,
+                    AtomicBatchApplierConsumerId,
+                    cancellationToken).ConfigureAwait(false);
+                _lastReportedFloor[treeName] = new BlockedFloorReport(true, null);
+                return;
+            }
+
+            await cursorRegistry.ReportCursorAsync(
+                treeName,
+                AtomicBatchApplierConsumerId,
+                HybridLogicalClock.Zero,
+                floor,
+                cancellationToken).ConfigureAwait(false);
+            _lastReportedFloor[treeName] = new BlockedFloorReport(true, floor);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Swallow: see <remarks/> on this method. The WAL retains
+            // the staged entry and a subsequent admit / removal call
+            // re-publishes the floor. Logged at Warning so a
+            // sustained outage is visible on the dashboard.
+            _logger.LogWarning(ex,
+                "Replication blocked-floor registry report failed for tree {Tree}; "
+                + "the WAL retains the staged entry and a subsequent admit / removal "
+                + "will re-publish the floor.",
+                treeName);
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                semaphore.Release();
+            }
+        }
+    }
 
     private async Task ParkAsync(
         ReplogEntry entry,
@@ -695,7 +884,7 @@ internal sealed partial class ReplicationApplier(
         HybridLogicalClock baselineHlc,
         CancellationToken cancellationToken)
     {
-        // Defence-in-depth (B1): the buffer-grain contract guarantees a
+        // Defence-in-depth: the buffer-grain contract guarantees a
         // non-empty CompletedBatch on BatchComplete=true. A zero-entry
         // admission would index [0] below for the saga-wide VC capture
         // and trip an opaque IndexOutOfRangeException; surface a typed
@@ -775,7 +964,7 @@ internal sealed partial class ReplicationApplier(
             return (false, baselineHlc);
         }
 
-        // Defence-in-depth (B2): a Committed outcome must have applied
+        // Defence-in-depth: a Committed outcome must have applied
         // every entry in the batch — the saga is all-or-nothing by
         // construction. A mismatch indicates a saga-contract violation
         // (e.g. a future RunSagaAsync refactor that silently drops a

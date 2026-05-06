@@ -20,11 +20,12 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// <para>
 /// The causal-stable frontier returned by
-/// <see cref="GetCausalStableAsync"/> is cached behind a per-tree
-/// generation counter that bumps on every accepted mutation. A GC pass
-/// that observes a stable registry therefore reads the cached frontier
-/// in O(1); a recompute only happens after a consumer reports or
-/// unregisters.
+/// <see cref="GetCausalStableAsync"/> and the blocked-floor
+/// returned by <see cref="GetBlockedFloorAsync"/> are both cached
+/// behind a per-tree generation counter that bumps on every accepted
+/// mutation. A GC pass that observes a stable registry therefore
+/// reads each cached value in O(1); a recompute only happens after a
+/// consumer reports or unregisters.
 /// </para>
 /// </summary>
 public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCursorRegistry
@@ -38,7 +39,20 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
         string consumerId,
         HybridLogicalClock cursor,
         CancellationToken cancellationToken = default)
-        => ReportCursorCoreAsync(treeName, consumerId, cursor, vector: null, cancellationToken);
+        => ReportCursorCoreAsync(
+            treeName, consumerId, cursor, vector: null,
+            blockedAtHlc: null, blockedAtHlcSpecified: false, cancellationToken);
+
+    /// <inheritdoc />
+    public Task ReportCursorAsync(
+        string treeName,
+        string consumerId,
+        HybridLogicalClock cursor,
+        HybridLogicalClock? blockedAtHlc,
+        CancellationToken cancellationToken = default)
+        => ReportCursorCoreAsync(
+            treeName, consumerId, cursor, vector: null,
+            blockedAtHlc, blockedAtHlcSpecified: true, cancellationToken);
 
     /// <inheritdoc />
     public Task ReportCursorAsync(
@@ -49,7 +63,24 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(vector);
-        return ReportCursorCoreAsync(treeName, consumerId, cursor, vector, cancellationToken);
+        return ReportCursorCoreAsync(
+            treeName, consumerId, cursor, vector,
+            blockedAtHlc: null, blockedAtHlcSpecified: false, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task ReportCursorAsync(
+        string treeName,
+        string consumerId,
+        HybridLogicalClock cursor,
+        VersionVector vector,
+        HybridLogicalClock? blockedAtHlc,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(vector);
+        return ReportCursorCoreAsync(
+            treeName, consumerId, cursor, vector,
+            blockedAtHlc, blockedAtHlcSpecified: true, cancellationToken);
     }
 
     private Task ReportCursorCoreAsync(
@@ -57,18 +88,41 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
         string consumerId,
         HybridLogicalClock cursor,
         VersionVector? vector,
+        HybridLogicalClock? blockedAtHlc,
+        bool blockedAtHlcSpecified,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
-        if (cursor <= HybridLogicalClock.Zero)
+        // The blocked-floor overloads relax the cursor precondition
+        // to allow HybridLogicalClock.Zero so a blocked-floor-only
+        // consumer (typically the receiver-side applier) can register
+        // without polluting the GC's HLC min(cursor) branch. Strictly
+        // negative cursors remain rejected; legacy overloads that do
+        // not pass a blocked-floor still require cursor > Zero.
+        if (cursor < HybridLogicalClock.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(cursor),
+                cursor,
+                "Cursor reports must not be negative.");
+        }
+        if (!blockedAtHlcSpecified && cursor <= HybridLogicalClock.Zero)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(cursor),
                 cursor,
                 "Cursor reports must be strictly greater than HybridLogicalClock.Zero. A consumer that has not yet "
                 + "observed any entries should not register at all; once it consumes at least one non-range-delete "
-                + "entry it has a non-zero cursor to report.");
+                + "entry it has a non-zero cursor to report. Use the blocked-floor overload to register a "
+                + "buffer-pin-only consumer with cursor=Zero.");
+        }
+        if (blockedAtHlc is { } pin && pin < HybridLogicalClock.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(blockedAtHlc),
+                pin,
+                "Blocked-floor reports must not be negative; pass null to clear the pin.");
         }
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -114,11 +168,23 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
                     }
                 }
 
+                // Blocked-floor uses replace semantics. The
+                // consumer is the authority on its own buffer pin and
+                // must be able to clear it (transition to null) when
+                // the buffer drains. Untouched when the caller did not
+                // pass the parameter (legacy overload).
+                var nextBlockedAtHlc = existing.BlockedAtHlc;
+                if (blockedAtHlcSpecified)
+                {
+                    nextBlockedAtHlc = blockedAtHlc;
+                }
+
                 state.PerConsumer[consumerId] = new ReplicationCursorSnapshot(
                     consumerId,
                     advancedCursor,
                     nowTicks,
-                    mergedVector);
+                    mergedVector,
+                    nextBlockedAtHlc);
             }
             else
             {
@@ -126,7 +192,8 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
                     consumerId,
                     cursor,
                     nowTicks,
-                    defensiveClone);
+                    defensiveClone,
+                    blockedAtHlcSpecified ? blockedAtHlc : null);
             }
 
             state.InvalidateCaches();
@@ -182,6 +249,13 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
             HybridLogicalClock? min = null;
             foreach (var snapshot in state.PerConsumer.Values)
             {
+                // Skip blocked-floor-only consumers (registered
+                // with cursor=Zero) so a buffer pin does not disable
+                // the cursor branch of the GC predicate.
+                if (snapshot.Cursor <= HybridLogicalClock.Zero)
+                {
+                    continue;
+                }
                 if (min is null || snapshot.Cursor < min.Value)
                 {
                     min = snapshot.Cursor;
@@ -218,6 +292,33 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
             state.HasCachedCausalStable = true;
             state.CachedCausalStable = computed;
             return Task.FromResult(computed?.Clone());
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<HybridLogicalClock?> GetBlockedFloorAsync(
+        string treeName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_gate)
+        {
+            if (!_byTree.TryGetValue(treeName, out var state) || state.PerConsumer.Count == 0)
+            {
+                return Task.FromResult<HybridLogicalClock?>(null);
+            }
+
+            if (state.HasCachedBlockedFloor)
+            {
+                return Task.FromResult(state.CachedBlockedFloor);
+            }
+
+            var computed = ComputeBlockedFloor(state.PerConsumer.Values);
+            state.HasCachedBlockedFloor = true;
+            state.CachedBlockedFloor = computed;
+            return Task.FromResult(computed);
         }
     }
 
@@ -296,11 +397,36 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
     }
 
     /// <summary>
+    /// Computes the pointwise-min <see cref="HybridLogicalClock"/>
+    /// across every consumer that has reported a non-<see langword="null"/>
+    /// blocked-floor pin. Consumers reporting <see langword="null"/>
+    /// (the majority — leaf materialisers, peer ship loops) are
+    /// skipped. Returns <see langword="null"/> when no consumer
+    /// currently reports a buffer pin.
+    /// </summary>
+    private static HybridLogicalClock? ComputeBlockedFloor(IEnumerable<ReplicationCursorSnapshot> snapshots)
+    {
+        HybridLogicalClock? min = null;
+        foreach (var snapshot in snapshots)
+        {
+            if (snapshot.BlockedAtHlc is not { } pin)
+            {
+                continue;
+            }
+            if (min is null || pin < min.Value)
+            {
+                min = pin;
+            }
+        }
+        return min;
+    }
+
+    /// <summary>
     /// Per-tree mutable state held under <see cref="_gate"/>. The
-    /// causal-stable cache is invalidated by
+    /// causal-stable and blocked-floor caches are invalidated by
     /// <see cref="InvalidateCaches"/> on every accepted mutation so a
-    /// stable registry serves <see cref="GetCausalStableAsync"/> in
-    /// O(1).
+    /// stable registry serves <see cref="GetCausalStableAsync"/> and
+    /// <see cref="GetBlockedFloorAsync"/> in O(1).
     /// </summary>
     private sealed class TreeState
     {
@@ -311,10 +437,16 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
 
         public VersionVector? CachedCausalStable { get; set; }
 
+        public bool HasCachedBlockedFloor { get; set; }
+
+        public HybridLogicalClock? CachedBlockedFloor { get; set; }
+
         public void InvalidateCaches()
         {
             HasCachedCausalStable = false;
             CachedCausalStable = null;
+            HasCachedBlockedFloor = false;
+            CachedBlockedFloor = null;
         }
     }
 }

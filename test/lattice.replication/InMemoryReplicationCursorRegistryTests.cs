@@ -421,7 +421,7 @@ public class InMemoryReplicationCursorRegistryTests
     {
         var sut = new InMemoryReplicationCursorRegistry();
         Assert.That(
-            async () => await sut.ReportCursorAsync("tree", "peer", Hlc(1), null!),
+            async () => await sut.ReportCursorAsync("tree", "peer", Hlc(1), vector: (VersionVector)null!),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -461,5 +461,321 @@ public class InMemoryReplicationCursorRegistryTests
         Assert.That(
             async () => await sut.GetCausalStableAsync("tree", cts.Token),
             Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    // ---- Blocked-floor overload ----------------------------------------
+
+    [Test]
+    public async Task ReportCursorAsync_blocked_floor_overload_accepts_zero_cursor()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+
+        await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(500));
+
+        var floor = await sut.GetBlockedFloorAsync("tree");
+        Assert.That(floor, Is.EqualTo(Hlc(500)));
+        // The Zero-cursor consumer must not pollute the GC's HLC min(cursor)
+        // branch — GetMinCursorAsync skips it.
+        Assert.That(await sut.GetMinCursorAsync("tree"), Is.Null);
+    }
+
+    [Test]
+    public void ReportCursorAsync_blocked_floor_overload_rejects_negative_cursor()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+        var negative = new HybridLogicalClock { WallClockTicks = -1, Counter = 0 };
+        Assert.That(
+            async () => await sut.ReportCursorAsync("tree", "applier", negative, blockedAtHlc: Hlc(500)),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public void ReportCursorAsync_blocked_floor_overload_rejects_negative_blocked_at_hlc()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+        var negative = new HybridLogicalClock { WallClockTicks = -1, Counter = 0 };
+        Assert.That(
+            async () => await sut.ReportCursorAsync("tree", "applier", Hlc(100), blockedAtHlc: negative),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public void ReportCursorAsync_legacy_overload_still_rejects_zero_cursor()
+    {
+        // Regression: the blocked-floor overloads relax cursor=Zero; the
+        // legacy single-arg overload must keep rejecting it because a
+        // legacy consumer has no buffer pin and therefore would silently
+        // pin the GC's HLC branch at Zero.
+        var sut = new InMemoryReplicationCursorRegistry();
+        Assert.That(
+            async () => await sut.ReportCursorAsync("tree", "peer-A", HybridLogicalClock.Zero),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task GetBlockedFloorAsync_returns_null_when_no_consumer_registered()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+        Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.Null);
+    }
+
+    [Test]
+    public async Task GetBlockedFloorAsync_returns_null_when_all_consumers_report_null_pin()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+
+        await sut.ReportCursorAsync("tree", "peer-A", Hlc(100));
+        await sut.ReportCursorAsync("tree", "peer-B", Hlc(200), blockedAtHlc: null);
+
+        Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.Null);
+    }
+
+    [Test]
+    public async Task GetBlockedFloorAsync_returns_pointwise_min_across_consumers()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+
+        await sut.ReportCursorAsync("tree", "applier-A", HybridLogicalClock.Zero, blockedAtHlc: Hlc(500));
+        await sut.ReportCursorAsync("tree", "applier-B", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
+        await sut.ReportCursorAsync("tree", "applier-C", HybridLogicalClock.Zero, blockedAtHlc: Hlc(800));
+
+        Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.EqualTo(Hlc(300)));
+    }
+
+    [Test]
+    public async Task GetBlockedFloorAsync_skips_consumers_with_null_pin()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+
+        // Applier-A reports a pin; peer-B reports a cursor only (no pin)
+        // — the meet is the applier's pin alone, not influenced by the
+        // peer's HLC cursor.
+        await sut.ReportCursorAsync("tree", "applier-A", HybridLogicalClock.Zero, blockedAtHlc: Hlc(500));
+        await sut.ReportCursorAsync("tree", "peer-B", Hlc(100));
+
+        Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.EqualTo(Hlc(500)));
+    }
+
+    [Test]
+    public async Task ReportCursorAsync_blocked_floor_replace_semantics_advances_forward()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+
+        await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
+        await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(700));
+
+        Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.EqualTo(Hlc(700)));
+    }
+
+    [Test]
+    public async Task ReportCursorAsync_blocked_floor_replace_semantics_can_lower_pin()
+    {
+        // Replace, not monotonic-merge: as the buffer admits new
+        // transactions the lowest staged HLC can drop, and the registry
+        // must reflect the new pin.
+        var sut = new InMemoryReplicationCursorRegistry();
+
+        await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(700));
+        await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
+
+        Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.EqualTo(Hlc(300)));
+    }
+
+    [Test]
+    public async Task ReportCursorAsync_blocked_floor_replace_semantics_clears_to_null()
+    {
+        // The buffer drains: applier reports null to release the pin.
+        var sut = new InMemoryReplicationCursorRegistry();
+
+        await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
+        Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.EqualTo(Hlc(300)));
+
+        await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: null);
+
+        Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.Null);
+    }
+
+    [Test]
+    public async Task ReportCursorAsync_legacy_overload_does_not_disturb_existing_blocked_floor()
+    {
+        // A legacy HLC-only re-report from the same consumer must leave
+        // its buffer pin untouched (the parameter was not specified).
+        var sut = new InMemoryReplicationCursorRegistry();
+
+        await sut.ReportCursorAsync("tree", "applier", Hlc(100), blockedAtHlc: Hlc(500));
+        await sut.ReportCursorAsync("tree", "applier", Hlc(200));
+
+        Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.EqualTo(Hlc(500)));
+        Assert.That(await sut.GetMinCursorAsync("tree"), Is.EqualTo(Hlc(200)));
+    }
+
+    [Test]
+    public async Task GetMinCursorAsync_skips_zero_cursor_blocked_floor_only_consumers()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+
+        await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(50));
+        await sut.ReportCursorAsync("tree", "peer-A", Hlc(200));
+        await sut.ReportCursorAsync("tree", "peer-B", Hlc(300));
+
+        // The applier's Zero cursor must not be the GC's min — that
+        // would freeze the cursor branch of the predicate forever.
+        Assert.That(await sut.GetMinCursorAsync("tree"), Is.EqualTo(Hlc(200)));
+    }
+
+    [Test]
+    public async Task SnapshotAsync_includes_blocked_at_hlc_per_consumer()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+
+        await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(500));
+        await sut.ReportCursorAsync("tree", "peer-A", Hlc(200));
+
+        var snapshot = await sut.SnapshotAsync("tree");
+        Assert.That(snapshot, Has.Count.EqualTo(2));
+        var applier = snapshot.Single(s => s.ConsumerId == "applier");
+        var peer = snapshot.Single(s => s.ConsumerId == "peer-A");
+        Assert.That(applier.BlockedAtHlc, Is.EqualTo(Hlc(500)));
+        Assert.That(peer.BlockedAtHlc, Is.Null);
+    }
+
+    [Test]
+    public async Task UnregisterAsync_invalidates_blocked_floor_cache()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+
+        await sut.ReportCursorAsync("tree", "applier-A", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
+        await sut.ReportCursorAsync("tree", "applier-B", HybridLogicalClock.Zero, blockedAtHlc: Hlc(500));
+
+        // Prime the cache.
+        Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.EqualTo(Hlc(300)));
+
+        // Unregister the consumer pinning the lower bound; the cache must
+        // be invalidated so the next read recomputes against the
+        // surviving consumer.
+        await sut.UnregisterAsync("tree", "applier-A");
+
+        Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.EqualTo(Hlc(500)));
+    }
+
+    [Test]
+    public async Task ReportCursorAsync_invalidates_blocked_floor_cache()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+
+        await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
+        Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.EqualTo(Hlc(300)));
+
+        // The applier reports a new pin; the cached value must be
+        // invalidated so the next read returns the updated floor.
+        await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(700));
+
+        Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.EqualTo(Hlc(700)));
+    }
+
+    [Test]
+    public async Task GetBlockedFloorAsync_isolates_per_tree()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+
+        await sut.ReportCursorAsync("tree-A", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
+        await sut.ReportCursorAsync("tree-B", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(700));
+
+        Assert.That(await sut.GetBlockedFloorAsync("tree-A"), Is.EqualTo(Hlc(300)));
+        Assert.That(await sut.GetBlockedFloorAsync("tree-B"), Is.EqualTo(Hlc(700)));
+    }
+
+    [Test]
+    public void GetBlockedFloorAsync_throws_on_null_tree_name()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+        Assert.That(
+            async () => await sut.GetBlockedFloorAsync(null!),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void GetBlockedFloorAsync_throws_on_whitespace_tree_name()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+        Assert.That(
+            async () => await sut.GetBlockedFloorAsync("   "),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void GetBlockedFloorAsync_observes_cancellation()
+    {
+        var sut = new InMemoryReplicationCursorRegistry();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        Assert.That(
+            async () => await sut.GetBlockedFloorAsync("tree", cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    // ---- Concurrent-race coverage --------------------------------------
+
+    /// <summary>
+    /// Concurrent <c>UnregisterAsync</c> and
+    /// <c>ReportCursorAsync</c> calls against the same consumer must
+    /// leave the registry in one of two well-defined terminal states
+    /// (either the report wins and the consumer is present with the
+    /// new pin, or the unregister wins and the consumer is absent),
+    /// with no torn state, no exception, no missing snapshot row, and
+    /// no stale cached blocked-floor.
+    /// </summary>
+    [Test]
+    public async Task ReportCursorAsync_and_UnregisterAsync_concurrent_race_leaves_consistent_state()
+    {
+        // 64 iterations to give the race window a fair chance to flip
+        // each direction at least once on a multi-core host.
+        for (var iter = 0; iter < 64; iter++)
+        {
+            var sut = new InMemoryReplicationCursorRegistry();
+
+            // Seed an initial pin so a stale cache entry would be
+            // observable if invalidation broke under contention.
+            await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(100));
+            Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.EqualTo(Hlc(100)));
+
+            using var start = new ManualResetEventSlim(false);
+            var reportTask = Task.Run(() =>
+            {
+                start.Wait();
+                return sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(200));
+            });
+            var unregisterTask = Task.Run(() =>
+            {
+                start.Wait();
+                return sut.UnregisterAsync("tree", "applier");
+            });
+            start.Set();
+            await Task.WhenAll(reportTask, unregisterTask);
+
+            var snapshot = await sut.SnapshotAsync("tree");
+            var floor = await sut.GetBlockedFloorAsync("tree");
+
+            if (snapshot.Count == 0)
+            {
+                // Unregister won the race: the registry is empty and the
+                // floor must report null. A stale cached 100 or 200 here
+                // would mean Unregister failed to invalidate the cache.
+                Assert.That(floor, Is.Null,
+                    $"iteration {iter}: unregister winner must clear the cached blocked-floor");
+            }
+            else
+            {
+                // Report won the race: exactly one snapshot entry, with
+                // the new pin (200) -- never a stale 100, never a torn
+                // intermediate value.
+                Assert.That(snapshot, Has.Count.EqualTo(1),
+                    $"iteration {iter}: report winner must leave exactly one consumer row");
+                Assert.That(snapshot[0].BlockedAtHlc, Is.EqualTo(Hlc(200)),
+                    $"iteration {iter}: report winner must reflect the latest pin, never a stale value");
+                Assert.That(floor, Is.EqualTo(Hlc(200)),
+                    $"iteration {iter}: report winner must invalidate the cached floor");
+            }
+        }
     }
 }
