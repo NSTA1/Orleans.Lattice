@@ -19,7 +19,7 @@
 
   <ItemGroup>
     <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />
-    <PackageReference Include="Grpc.AspNetCore" Version="2.70.0" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.71.0" />
     <PackageReference Include="Microsoft.Orleans.Server" Version="10.1.0" />
     <PackageReference Include="Microsoft.Orleans.Reminders" Version="10.1.0" />
     <PackageReference Include="Microsoft.Orleans.Streaming" Version="10.1.0" />
@@ -37,6 +37,13 @@
   <ItemGroup>
     <ProjectReference Include="..\MultiSiteManufacturing.Contracts\MultiSiteManufacturing.Contracts.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice\Orleans.Lattice.csproj" />
+    <!-- Migration step 1: package-shipped replication wired in alongside the
+         host-rolled pipeline (see ../../migration.md). The package observes
+         only trees declared in LatticeReplicationOptions.ReplicatedTrees -
+         currently `mfg-facts-v2` only - so it is disjoint from the existing
+         host-rolled ReplicationTopology. -->
+    <ProjectReference Include="..\..\..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.replication.grpc\Orleans.Lattice.Replication.Grpc.csproj" />
   </ItemGroup>
 
   <ItemGroup>
