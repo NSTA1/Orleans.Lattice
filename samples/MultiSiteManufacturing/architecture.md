@@ -358,6 +358,7 @@ Failure modes and their recovery:
 | Replication-disconnect preset | `IReplicationDisconnectGrain.IsDisconnected = true` | `ChaosReplicationTransport` decorates the package's `IReplicationTransport` and returns `Accepted=false` while the flag is set; the package shipper holds its per-peer cursor steady, the WAL grows locally, and on clear the WAL drains in HLC order. |
 | Tier-5 `docker network disconnect` | gRPC push fails at transport | Identical to "peer unreachable"; shipper backs off and catches up on reconnect. |
 | Baseline applier decode fails | Single entry skipped on peer's baseline; lattice apply still succeeds | Logged; subsequent entries continue to apply. Baseline is a demo-visualisation backend, not a correctness-critical store. |
+| **Cold-start fall-off** | Receiver started against an empty Azurite has no per-origin high-water mark, falls behind the sender's WAL on first probe, and the auto-bootstrap path runs against the default local-tree `ISnapshotProvider` (which yields zero entries cross-cluster) | **Not yet recovered automatically.** The default snapshot provider only reads the *local* tree, so cross-cluster catch-up never copies anything. Tracked as a known limitation in [`README.md`](./README.md) and the planned fix is in [`src/lattice.replication/roadmap-cross-cluster-bootstrap.md`](../../src/lattice.replication/roadmap-cross-cluster-bootstrap.md). |
 
 See [`docs/lattice.replication/`](../../docs/lattice.replication/)
 for the gRPC wire format, bootstrap protocol, and dead-letter

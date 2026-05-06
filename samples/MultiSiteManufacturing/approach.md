@@ -177,6 +177,15 @@ Three sample-specific seams sit alongside the package:
   strip; without it, a Blazor circuit pinned to one silo would only
   see that silo's slice of replication activity.
 
+> **Known limitation — cold-start cross-cluster catch-up.** The
+> package's default `ISnapshotProvider` reads the *local* tree, so a
+> receiver started against an empty Azurite cannot catch up to a peer
+> that already has writes — auto-bootstrap runs but copies nothing.
+> See [`README.md`](./README.md#known-limitation-cross-cluster-replication-on-cold-start)
+> for what this means in the running sample, and
+> [`src/lattice.replication/roadmap-cross-cluster-bootstrap.md`](../../src/lattice.replication/roadmap-cross-cluster-bootstrap.md)
+> for the planned fix.
+
 ## 7. UI design
 
 Blazor Server components own an `IAsyncEnumerable<T>` subscription
@@ -242,3 +251,10 @@ excluded from the iterative development filter:
 
 ```powershell
 dotnet test --filter "TestCategory!=Chaos"
+```
+
+The cross-cluster replication path itself — WAL, shipper, applier,
+gRPC push transport, dead-letter handling, bootstrap — is covered by
+the test suites of `Orleans.Lattice.Replication` and
+`Orleans.Lattice.Replication.Grpc`. The sample's tests stay focused on
+the sample-specific seams listed in §6.

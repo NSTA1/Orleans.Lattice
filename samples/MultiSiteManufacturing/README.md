@@ -108,7 +108,7 @@ you want edit rights). Under *Dashboards → Orleans.Lattice* you'll find:
 > seam remaining is `BaselineReplicationApplier`, a decorator on the
 > package's `IReplicationApplier` that mirrors cross-cluster
 > `mfg-facts` writes into the divergence-visualisation backend.
-> See [`docs/lattice.replication/`](../../docs/lattice.replication/)
+> See [`docs/lattice.replication/`](../../docs/lattice.replication/) for the wire format and bootstrap protocol.
 
 The JSON for these dashboards is bind-mounted read-only from
 `src/lattice.dashboards/Grafana/` — a CI test in the package keeps
