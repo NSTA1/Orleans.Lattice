@@ -220,4 +220,168 @@ public sealed partial class DashboardBroadcaster
                 fact.FactId);
         }
     }
+
+    /// <summary>
+    /// Subscribes to the cluster-wide part-change stream with bounded
+    /// exponential backoff. Mirrors <see cref="SubscribeWithRetryAsync"/>
+    /// for the parallel <see cref="PartSerialNumber"/> stream — a
+    /// failure here means CRDT-card live updates on this silo's
+    /// circuits are limited to mutations that landed on this silo,
+    /// which we tolerate gracefully (a page reload falls back to the
+    /// initial-snapshot path).
+    /// </summary>
+    private async Task SubscribePartChangeWithRetryAsync(CancellationToken cancellationToken)
+    {
+        if (_partChangeStream is null)
+        {
+            return;
+        }
+
+        for (var attempt = 0; attempt <= SubscribeBackoff.Length; attempt++)
+        {
+            if (cancellationToken.IsCancellationRequested || _shutdownCts.IsCancellationRequested)
+            {
+                return;
+            }
+            try
+            {
+                _partChangeSubscription = await _partChangeStream.SubscribeAsync(
+                    OnPartChangeBroadcastReceived,
+                    OnPartChangeSubscriptionError);
+                if (attempt > 0)
+                {
+                    _logger.LogInformation(
+                        "Subscribed to dashboard part-change stream after {Attempts} attempt(s)",
+                        attempt + 1);
+                }
+                return;
+            }
+            catch (Exception ex) when (attempt < SubscribeBackoff.Length)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Dashboard part-change subscribe failed (attempt {Attempt}); retrying in {Delay}",
+                    attempt + 1,
+                    SubscribeBackoff[attempt]);
+                try
+                {
+                    await Task.Delay(SubscribeBackoff[attempt], cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "Dashboard part-change subscribe permanently failed after {Attempts} attempts; live CRDT-card updates disabled on this silo",
+                    SubscribeBackoff.Length + 1);
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Stream <c>onError</c> callback for the part-change stream.
+    /// Mirrors <see cref="OnSubscriptionError"/>: log, drop the stale
+    /// handle, and kick off a fresh subscribe on a background task so
+    /// a transient queue-agent fault doesn't permanently silence
+    /// CRDT-card updates on this silo.
+    /// </summary>
+    private Task OnPartChangeSubscriptionError(Exception ex)
+    {
+        _logger.LogWarning(ex, "Dashboard part-change stream reported an error; attempting resubscribe");
+        _partChangeSubscription = null;
+        _ = Task.Run(() => SubscribePartChangeWithRetryAsync(_shutdownCts.Token));
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Publishes a part-change notification to the cluster-wide
+    /// part-change stream so every silo's broadcaster — including
+    /// this one — can fan out a fresh <see cref="PartSummaryUpdate"/>
+    /// to its locally-attached Blazor circuits. Fire-and-forget;
+    /// retries transient storage-queue failures with bounded
+    /// exponential backoff before giving up.
+    /// </summary>
+    private async Task PublishPartChangeToBroadcastStreamAsync(PartSerialNumber serial)
+    {
+        var stream = _partChangeStream;
+        if (stream is null)
+        {
+            return;
+        }
+        for (var attempt = 0; attempt <= PublishBackoff.Length; attempt++)
+        {
+            if (_shutdownCts.IsCancellationRequested)
+            {
+                return;
+            }
+            try
+            {
+                await stream.OnNextAsync(serial);
+                if (attempt > 0)
+                {
+                    _logger.LogInformation(
+                        "Published part-change for {Serial} after {Attempts} attempt(s)",
+                        serial.Value,
+                        attempt + 1);
+                }
+                return;
+            }
+            catch (Exception ex) when (attempt < PublishBackoff.Length)
+            {
+                _logger.LogDebug(
+                    ex,
+                    "Transient publish failure for part-change {Serial} (attempt {Attempt}); retrying in {Delay}",
+                    serial.Value,
+                    attempt + 1,
+                    PublishBackoff[attempt]);
+                try
+                {
+                    await Task.Delay(PublishBackoff[attempt], _shutdownCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to publish part-change {Serial} to dashboard part-change stream after {Attempts} attempts",
+                    serial.Value,
+                    PublishBackoff.Length + 1);
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Handles a part-change notification delivered via the
+    /// cluster-wide part-change stream. Runs on every subscribed silo,
+    /// so per-circuit fan-out happens locally wherever the Blazor
+    /// session is attached, regardless of which silo's
+    /// <see cref="PartCrdtStore"/> raised the original event (local
+    /// mutation, shadow heal, or cross-cluster OR-Set apply landing on
+    /// any silo). Swallows exceptions for the same reason as
+    /// <see cref="OnBroadcastReceived"/>.
+    /// </summary>
+    private async Task OnPartChangeBroadcastReceived(PartSerialNumber serial, StreamSequenceToken? token)
+    {
+        try
+        {
+            await PublishPartAsync(serial);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Dashboard part-change fan-out threw for {Serial}; dropping to protect stream agent",
+                serial.Value);
+        }
+    }
 }

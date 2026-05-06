@@ -44,14 +44,17 @@ namespace MultiSiteManufacturing.Host.Dashboard;
 /// which silo the user is connected to.
 /// </para>
 /// <para>
-/// Locally-emitted facts arrive via <c>FactRouted</c>;
-/// peer-replicated facts arrive via <c>FactReplicated</c> (raised
-/// by the inbound replication endpoint after baseline replay). Both
-/// events share the same handler because the downstream work —
-/// publish to the stream, rebuild a <see cref="PartSummaryUpdate"/>
-/// / <see cref="SiteActivityIndexEntry"/>, and fan out — is identical
-/// regardless of fact origin. This is what lets a peer cluster's
-/// dashboard refresh automatically as replicated facts land.
+/// The same problem applies to <see cref="PartCrdtStore.PartChanged"/>:
+/// a label add or operator assignment fires the event only on the
+/// silo that wrote it, and a cross-cluster OR-Set apply fires it
+/// only on whichever local silo the gRPC push transport happened to
+/// dispatch into. To keep CRDT-card live updates uniform regardless
+/// of where the mutation landed, every silo's broadcaster also
+/// publishes / subscribes a cluster-wide <see cref="PartSerialNumber"/>
+/// stream
+/// (<see cref="StreamProviderName"/> · <see cref="PartChangeStreamNamespace"/>)
+/// and re-runs the same per-circuit fan-out
+/// (<see cref="PublishPartAsync"/>) on receipt.
 /// </para>
 /// <para>
 /// Implementation is split across partial files for readability:
@@ -83,6 +86,17 @@ public sealed partial class DashboardBroadcaster : IHostedService
     public const string StreamNamespace = "msmfg.dashboard.facts";
 
     /// <summary>
+    /// Stream namespace used for the cluster-wide per-part-change
+    /// broadcast. Every <see cref="PartCrdtStore.PartChanged"/> event
+    /// — local CRDT mutation, shadow heal, or cross-cluster OR-Set
+    /// apply landing on any silo — is published to a single stream
+    /// inside this namespace; every silo subscribes so the part-detail
+    /// CRDT card refreshes on every Blazor circuit, not just the
+    /// circuit attached to the silo that handled the mutation.
+    /// </summary>
+    public const string PartChangeStreamNamespace = "msmfg.dashboard.part-changes";
+
+    /// <summary>
     /// Default singleton stream id — one logical stream per cluster.
     /// A fixed key lets every silo subscribe to and publish on the
     /// exact same stream instance without coordination. Tests may
@@ -92,12 +106,24 @@ public sealed partial class DashboardBroadcaster : IHostedService
     public static readonly StreamId DefaultBroadcastStreamId =
         StreamId.Create(StreamNamespace, "broadcast");
 
+    /// <summary>
+    /// Default singleton stream id for the part-change stream — one
+    /// logical stream per cluster, parallel to
+    /// <see cref="DefaultBroadcastStreamId"/>. Tests get an
+    /// auto-derived sibling id from the test-only ctor's
+    /// <see cref="StreamId"/> argument so per-test isolation extends
+    /// to both streams without requiring callers to pass two ids.
+    /// </summary>
+    public static readonly StreamId DefaultPartChangeStreamId =
+        StreamId.Create(PartChangeStreamNamespace, "broadcast");
+
     private readonly FederationRouter _router;
     private readonly IClusterClient _client;
     private readonly IGrainFactory _grainFactory;
     private readonly PartCrdtStore _crdtStore;
     private readonly ILogger<DashboardBroadcaster> _logger;
     private readonly StreamId _streamId;
+    private readonly StreamId _partChangeStreamId;
     private readonly CancellationTokenSource _shutdownCts = new();
     private readonly ConcurrentDictionary<Guid, Channel<PartSummaryUpdate>> _partSubs = new();
     private readonly ConcurrentDictionary<Guid, Channel<ChaosOverview>> _chaosSubs = new();
@@ -112,6 +138,9 @@ public sealed partial class DashboardBroadcaster : IHostedService
 
     private IAsyncStream<Fact>? _broadcastStream;
     private StreamSubscriptionHandle<Fact>? _broadcastSubscription;
+
+    private IAsyncStream<PartSerialNumber>? _partChangeStream;
+    private StreamSubscriptionHandle<PartSerialNumber>? _partChangeSubscription;
 
     /// <summary>Creates the broadcaster (DI ctor).</summary>
     /// <remarks>
@@ -161,6 +190,28 @@ public sealed partial class DashboardBroadcaster : IHostedService
         _crdtStore = crdtStore;
         _logger = logger;
         _streamId = streamId;
+        _partChangeStreamId = DerivePartChangeStreamId(streamId);
+    }
+
+    /// <summary>
+    /// Derives the part-change stream id from the broadcast stream id
+    /// so a single test-only constructor argument scopes traffic on
+    /// both streams. Production wiring uses the default broadcast id,
+    /// which maps to the default part-change id; per-test ids share
+    /// the same key under the part-change namespace, giving identical
+    /// per-test isolation without forcing every test to construct two
+    /// stream ids.
+    /// </summary>
+    private static StreamId DerivePartChangeStreamId(StreamId factStreamId)
+    {
+        if (factStreamId.Equals(DefaultBroadcastStreamId))
+        {
+            return DefaultPartChangeStreamId;
+        }
+        var key = factStreamId.GetKeyAsString();
+        return StreamId.Create(
+            PartChangeStreamNamespace,
+            string.IsNullOrEmpty(key) ? Guid.NewGuid().ToString("N") : key);
     }
 
     /// <inheritdoc />
@@ -175,9 +226,9 @@ public sealed partial class DashboardBroadcaster : IHostedService
         _router.ChaosConfigChanged += OnChaosConfigChanged;
         _crdtStore.PartChanged += OnPartCrdtChanged;
 
-        _broadcastStream = _client
-            .GetStreamProvider(StreamProviderName)
-            .GetStream<Fact>(_streamId);
+        var provider = _client.GetStreamProvider(StreamProviderName);
+        _broadcastStream = provider.GetStream<Fact>(_streamId);
+        _partChangeStream = provider.GetStream<PartSerialNumber>(_partChangeStreamId);
 
         // Subscribe with bounded retry. A failure here means no live
         // dashboard updates on this silo — we surface it loudly via
@@ -185,6 +236,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
         // because the app is still functional without the live feed
         // (a page reload falls back to the initial snapshot path).
         await SubscribeWithRetryAsync(cancellationToken);
+        await SubscribePartChangeWithRetryAsync(cancellationToken);
     }
 
     /// <inheritdoc />
@@ -208,6 +260,19 @@ public sealed partial class DashboardBroadcaster : IHostedService
                 _logger.LogWarning(ex, "Failed to unsubscribe from dashboard broadcast stream");
             }
             _broadcastSubscription = null;
+        }
+
+        if (_partChangeSubscription is not null)
+        {
+            try
+            {
+                await _partChangeSubscription.UnsubscribeAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to unsubscribe from dashboard part-change stream");
+            }
+            _partChangeSubscription = null;
         }
     }
 
@@ -235,6 +300,19 @@ public sealed partial class DashboardBroadcaster : IHostedService
                 // Best-effort: cluster may already be shutting down.
             }
             _broadcastSubscription = null;
+        }
+
+        if (_partChangeSubscription is not null)
+        {
+            try
+            {
+                await _partChangeSubscription.UnsubscribeAsync();
+            }
+            catch
+            {
+                // Best-effort: cluster may already be shutting down.
+            }
+            _partChangeSubscription = null;
         }
 
         _router.FactRouted -= OnFactForBroadcast;

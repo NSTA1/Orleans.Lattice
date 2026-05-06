@@ -501,4 +501,68 @@ public sealed class DashboardBroadcasterTests
 
         await subscriberB.DisposeAsync();
     }
+
+    /// <summary>
+    /// Cross-silo fan-out for CRDT mutations: a
+    /// <see cref="PartCrdtStore.PartChanged"/> event raised on
+    /// broadcaster A's store must reach a part-summary subscriber
+    /// attached to broadcaster B when both broadcasters share the
+    /// same stream id. This is the mechanism that lets a Blazor
+    /// circuit pinned to silo B see a label add or operator
+    /// assignment whose underlying CRDT mutation landed on silo A —
+    /// broadcaster A publishes the serial to the cluster-wide
+    /// part-change stream, broadcaster B (subscribed to the same
+    /// stream) re-runs the per-circuit
+    /// <see cref="DashboardBroadcaster.SubscribePartUpdates"/> fan-out.
+    /// </summary>
+    /// <remarks>
+    /// Without the cluster-wide part-change stream this test would
+    /// hang on <c>moveTask</c>: broadcaster A would fan out only into
+    /// its own <c>_partSubs</c> dictionary, which has no subscribers,
+    /// while broadcaster B's subscriber would never see the event.
+    /// </remarks>
+    [Test]
+    public async Task PartChanged_on_one_broadcaster_fans_out_on_another()
+    {
+        var sharedStreamId = Orleans.Runtime.StreamId.Create(
+            DashboardBroadcaster.StreamNamespace,
+            $"broadcast-shared-{Guid.NewGuid():N}");
+
+        var (routerA, _, _) = _fixture.NewRouter();
+        var (routerB, _, _) = _fixture.NewRouter();
+
+        var crdtStoreA = _fixture.NewPartCrdtStore();
+        var crdtStoreB = _fixture.NewPartCrdtStore();
+
+        await using var broadcasterA = new DashboardBroadcaster(
+            routerA, _fixture.Cluster.Client, crdtStoreA, NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
+        await broadcasterA.StartAsync(CancellationToken.None);
+
+        await using var broadcasterB = new DashboardBroadcaster(
+            routerB, _fixture.Cluster.Client, crdtStoreB, NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
+        await broadcasterB.StartAsync(CancellationToken.None);
+
+        var serial = new PartSerialNumber("HPT-BLD-XSILO-91100");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        // Subscriber attached ONLY to broadcaster B.
+        var subscriberB = broadcasterB.SubscribePartUpdates(cts.Token).GetAsyncEnumerator(cts.Token);
+        var moveTask = subscriberB.MoveNextAsync().AsTask();
+        await Task.Delay(100, cts.Token);
+
+        // Mutation lands on broadcaster A's CRDT store — emulates a
+        // local label add on silo A, or a cross-cluster OR-Set apply
+        // landing on silo A. broadcasterA publishes the serial to
+        // the cluster-wide part-change stream; broadcasterB receives
+        // it and fans out a fresh PartSummaryUpdate to its local
+        // part subscribers.
+        await crdtStoreA.AddLabelAsync(serial, "supplier:cross-silo-test");
+
+        var moved = await moveTask;
+
+        Assert.That(moved, Is.True);
+        Assert.That(subscriberB.Current.Serial, Is.EqualTo(serial));
+
+        await subscriberB.DisposeAsync();
+    }
 }

@@ -19,14 +19,18 @@ public sealed partial class DashboardBroadcaster
 
     /// <summary>
     /// Subscribed to <see cref="PartCrdtStore.PartChanged"/> in
-    /// <see cref="StartAsync"/>. Forwards the carried serial into the
-    /// same per-circuit fan-out path the fact stream uses, so a
-    /// CRDT-only mutation (operator assignment, label add, shadow
-    /// heal, or cross-cluster OR-Set delta) lights up the part-detail
-    /// page's CRDT card without the user reloading. Fire-and-forget;
-    /// any rebuild error is logged inside <see cref="PublishPartAsync"/>.
+    /// <see cref="StartAsync"/>. Forwards the carried serial onto the
+    /// cluster-wide part-change stream so every silo's broadcaster —
+    /// including this one — re-runs the per-circuit fan-out
+    /// (<see cref="PublishPartAsync"/>) for whichever Blazor sessions
+    /// it hosts. Without this stream hop a CRDT mutation handled on
+    /// silo A would be invisible to a circuit pinned to silo B,
+    /// because <see cref="PartCrdtStore.PartChanged"/> fires only on
+    /// the silo that wrote the CRDT delta (or the silo that received
+    /// the cross-cluster OR-Set apply). Fire-and-forget; any publish
+    /// error is logged inside <see cref="PublishPartChangeToBroadcastStreamAsync"/>.
     /// </summary>
-    private void OnPartCrdtChanged(PartSerialNumber serial) => _ = PublishPartAsync(serial);
+    private void OnPartCrdtChanged(PartSerialNumber serial) => _ = PublishPartChangeToBroadcastStreamAsync(serial);
 
     /// <summary>
     /// Builds a <see cref="SiteActivityIndexEntry"/> from the in-memory
