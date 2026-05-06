@@ -541,4 +541,170 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="PeerFellOffLog"/> counter.
     /// </summary>
     public const string PeerFellOffLogName = "orleans.lattice.replication.peer.fell_off_log";
+
+    // --- Atomic-batch instruments -----------------------------------------------
+    //
+    // Surface receiver-side cross-cluster atomic-batch staging health for hosts
+    // that have flipped <see cref="LatticeReplicationOptions.AtomicBatchDelivery"/>
+    // to <c>true</c>. The four instruments below are only emitted on opt-in
+    // trees; a host running every replicated tree under the default
+    // (<c>AtomicBatchDelivery = false</c>) receives an empty distribution and
+    // an unchanging counter on every dimension, which is the correct signal
+    // (no atomic-batch traffic is being staged, so there is nothing to
+    // observe).
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value emitted by
+    /// <see cref="ApplyTxCompleted"/> when the receiver-side
+    /// atomic-batch saga committed every key in the batch under one
+    /// <see cref="IReplicationApplyGrain.ApplyManyAtomicAsync"/> call
+    /// and the per-origin high-water-mark advanced once to the maximum
+    /// HLC across the batch. Every key in the batch is now visible to
+    /// concurrent readers on the receiver, satisfying the cross-cluster
+    /// atomic-visibility contract this instrument exists to surface.
+    /// </summary>
+    public const string OutcomeTxSuccess = "success";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value emitted by
+    /// <see cref="ApplyTxCompleted"/> when a partially-buffered atomic
+    /// batch exceeded
+    /// <see cref="LatticeReplicationOptions.TxBufferOrphanTimeout"/>
+    /// and was swept by the per-tree maintenance grain. Every staged
+    /// entry of the orphan was parked on the per-tree dead-letter
+    /// queue tagged
+    /// <see cref="ReasonOrphanTransaction"/>; the per-origin
+    /// high-water-mark was advanced past the orphan's max HLC so
+    /// causal-stream progress resumes. Recovery is via the standard
+    /// <c>ILatticeReplicationDeadLetters.ReplayAsync</c> tooling.
+    /// </summary>
+    public const string OutcomeTxDlqOrphan = "dlq_orphan";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value emitted by
+    /// <see cref="ApplyTxCompleted"/> when the receiver-side
+    /// atomic-batch saga returned
+    /// <c>AtomicApplyOutcome.Compensated</c> or threw a non-cancellation
+    /// exception out of
+    /// <see cref="IReplicationApplyGrain.ApplyManyAtomicAsync"/>. Every
+    /// staged entry of the failed batch was parked on the per-tree
+    /// dead-letter queue tagged
+    /// <see cref="ReasonAtomicApplyFailure"/>; the per-origin
+    /// high-water-mark was left unchanged so the producer continues
+    /// to re-ship the batch until the DLQ is recovered or discarded.
+    /// </summary>
+    public const string OutcomeTxDlqApplyFailure = "dlq_apply_failure";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value emitted by
+    /// <see cref="ApplyTxCompleted"/> when the receiver-side
+    /// atomic-batch staging buffer evicted a partially-buffered
+    /// transaction to honour
+    /// <see cref="LatticeReplicationOptions.AtomicBatchBufferMaxTransactions"/>
+    /// or
+    /// <see cref="LatticeReplicationOptions.AtomicBatchBufferMaxBytes"/>.
+    /// Eviction routes every displaced entry through the per-tree
+    /// dead-letter queue tagged <see cref="ReasonEvicted"/>; the
+    /// producer's per-origin high-water-mark was never advanced past
+    /// the displaced entries so they remain durably re-shippable.
+    /// </summary>
+    public const string OutcomeTxEvictedCapacity = "evicted_capacity";
+
+    /// <summary>
+    /// UpDownCounter of distinct <c>(originClusterId, transactionId)</c>
+    /// transactions currently partially-buffered on the receiver-side
+    /// atomic-batch staging buffer. Incremented when an admission
+    /// inserts a new transaction key (the first staged entry of a
+    /// batch) and decremented when the transaction is removed
+    /// (apply-on-completion handoff, capacity eviction, or orphan
+    /// sweep). Subsequent admissions to an already-tracked transaction
+    /// grow <see cref="ApplyTxBufferBytes"/> but not this counter.
+    /// Tagged by <see cref="TagTree"/>.
+    /// <para>
+    /// Activation rehydration does not contribute: a silo restart
+    /// reactivating the buffer with persisted entries inherits the
+    /// occupancy from the prior silo lifetime, so re-incrementing
+    /// would silently double-count under the typical Orleans
+    /// activation churn pattern. The counter is therefore a delta
+    /// surface relative to the activation's lifetime — operators
+    /// should not interpret it as an absolute occupancy gauge across
+    /// silo restarts.
+    /// </para>
+    /// </summary>
+    public static readonly UpDownCounter<long> ApplyTxBuffered =
+        Meter.CreateUpDownCounter<long>("orleans.lattice.replication.apply.tx_buffered", unit: "{transaction}",
+            description: "Distinct atomic-batch transactions currently partially-buffered, tagged by tree.");
+
+    /// <summary>
+    /// UpDownCounter of cumulative serialised payload bytes parked on
+    /// the receiver-side atomic-batch staging buffer. Tracks the same
+    /// lifecycle as <see cref="ApplyTxBuffered"/> at per-entry
+    /// granularity (every staged entry contributes its estimated
+    /// size). Drives a future health-probe integration. Tagged by
+    /// <see cref="TagTree"/>.
+    /// </summary>
+    public static readonly UpDownCounter<long> ApplyTxBufferBytes =
+        Meter.CreateUpDownCounter<long>("orleans.lattice.replication.apply.tx_buffer_bytes", unit: "By",
+            description: "Cumulative serialised payload size parked on the atomic-batch staging buffer, tagged by tree.");
+
+    /// <summary>
+    /// Histogram of the wall-clock interval, in milliseconds, between
+    /// the first staged entry of an atomic batch landing on the
+    /// receiver-side staging buffer and the saga that applies the
+    /// completed batch returning a terminal outcome. Reported once
+    /// per terminal apply outcome (<see cref="OutcomeTxSuccess"/> or
+    /// <see cref="OutcomeTxDlqApplyFailure"/>); orphan eviction and
+    /// capacity eviction do not record this histogram because no
+    /// apply was attempted. The sample is the user-visible
+    /// cross-cluster atomic-batch latency operators alert on when
+    /// they have opted into the stronger visibility guarantee. Tagged
+    /// by <see cref="TagTree"/> and <see cref="TagOutcome"/>.
+    /// <para>
+    /// The instrument name encodes the unit (<c>tx_apply_duration_ms</c>);
+    /// <c>unit:</c> is left null so an OpenTelemetry → Prometheus
+    /// exporter does not append a redundant <c>_milliseconds</c>
+    /// suffix to the wire name.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> ApplyTxApplyDurationMs =
+        Meter.CreateHistogram<double>("orleans.lattice.replication.apply.tx_apply_duration_ms",
+            description: "Cross-cluster atomic-batch apply latency from first-stage to saga-terminal, tagged by tree and outcome.");
+
+    /// <summary>
+    /// Counter of receiver-side atomic-batch transactions that
+    /// reached a terminal disposition. Every transaction admitted to
+    /// the staging buffer is guaranteed to increment this counter
+    /// exactly once across one of the four
+    /// <see cref="TagOutcome"/> partitions —
+    /// <see cref="OutcomeTxSuccess"/>,
+    /// <see cref="OutcomeTxDlqOrphan"/>,
+    /// <see cref="OutcomeTxDlqApplyFailure"/>, or
+    /// <see cref="OutcomeTxEvictedCapacity"/> — so the sum of the
+    /// four counters equals the total number of admitted transactions
+    /// in steady state. Tagged by <see cref="TagTree"/> and
+    /// <see cref="TagOutcome"/>.
+    /// </summary>
+    public static readonly Counter<long> ApplyTxCompleted =
+        Meter.CreateCounter<long>("orleans.lattice.replication.apply.tx_completed", unit: "{transaction}",
+            description: "Receiver-side atomic-batch transactions that reached a terminal disposition, tagged by tree and outcome.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="ApplyTxBuffered"/> up/down counter.
+    /// </summary>
+    public const string ApplyTxBufferedName = "orleans.lattice.replication.apply.tx_buffered";
+
+    /// <summary>
+    /// Canonical name of the <see cref="ApplyTxBufferBytes"/> up/down counter.
+    /// </summary>
+    public const string ApplyTxBufferBytesName = "orleans.lattice.replication.apply.tx_buffer_bytes";
+
+    /// <summary>
+    /// Canonical name of the <see cref="ApplyTxApplyDurationMs"/> histogram.
+    /// </summary>
+    public const string ApplyTxApplyDurationMsName = "orleans.lattice.replication.apply.tx_apply_duration_ms";
+
+    /// <summary>
+    /// Canonical name of the <see cref="ApplyTxCompleted"/> counter.
+    /// </summary>
+    public const string ApplyTxCompletedName = "orleans.lattice.replication.apply.tx_completed";
 }

@@ -44,9 +44,13 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.replication.apply.fifo_violations` | counter | `tree` | Apply correctness violations |
 | `orleans.lattice.replication.apply.causal_violations_blocked` | counter | `tree` | Apply correctness violations |
 | `orleans.lattice.replication.peer.fell_off_log` | counter | `peer` | Peer fell-off-log events |
-| `orleans.lattice.replication.apply.buffered_entries` | gauge | `tree` | Apply buffer |
-| `orleans.lattice.replication.apply.buffer_bytes` | gauge | `tree` | Apply buffer |
-| `orleans.lattice.replication.peer.entries_behind` | gauge | `peer` | Per-peer entries / bytes behind |
-| `orleans.lattice.replication.peer.bytes_behind` | gauge | `peer` | Per-peer entries / bytes behind |
+| `orleans.lattice.replication.apply.buffered_entries` | gauge | `tree` | Apply buffer (entries) |
+| `orleans.lattice.replication.apply.buffer_bytes` | gauge | `tree` | Apply buffer (bytes) |
+| `orleans.lattice.replication.peer.entries_behind` | gauge | `peer` | Per-peer entries behind |
+| `orleans.lattice.replication.peer.bytes_behind` | gauge | `peer` | Per-peer bytes behind |
 | `orleans.lattice.replication.peer.last_contact_seconds` | gauge | `peer` | Per-peer last contact |
 | `orleans.lattice.replication.peer.consecutive_errors` | gauge | `peer` | Per-peer consecutive errors |
+| `orleans.lattice.replication.apply.tx_buffered` | gauge | `tree` | Atomic-batch buffer (transactions) |
+| `orleans.lattice.replication.apply.tx_buffer_bytes` | gauge | `tree` | Atomic-batch buffer (bytes) |
+| `orleans.lattice.replication.apply.tx_apply_duration_ms` | histogram (ms) | `tree`, `outcome` | Atomic-batch apply duration p50/p95/p99 |
+| `orleans.lattice.replication.apply.tx_completed` | counter | `tree`, `outcome` | Atomic-batch completion rate by outcome |
