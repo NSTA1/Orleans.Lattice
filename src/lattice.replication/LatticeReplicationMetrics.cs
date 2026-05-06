@@ -121,7 +121,9 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Tag key for the dead-letter enqueue / removal reason. Values are
     /// drawn from <see cref="ReasonDiscarded"/>, <see cref="ReasonReplayed"/>,
-    /// <see cref="ReasonEvicted"/>, and <see cref="ReasonUnknown"/>.
+    /// <see cref="ReasonEvicted"/>, <see cref="ReasonSchema"/>,
+    /// <see cref="ReasonHlcSkew"/>, <see cref="ReasonOversized"/>,
+    /// <see cref="ReasonAtomicApplyFailure"/>, and <see cref="ReasonUnknown"/>.
     /// </summary>
     public const string TagReason = "reason";
 
@@ -183,6 +185,23 @@ public static class LatticeReplicationMetrics
     /// the canonical applier in a size-validating decorator.
     /// </summary>
     public const string ReasonOversized = "oversized";
+
+    /// <summary>
+    /// Reason tag value: enqueue cause was an atomic-batch saga that
+    /// failed to commit on the receiver. Set when the cross-cluster
+    /// atomic apply seam (<c>IReplicationApplyGrain.ApplyManyAtomicAsync</c>)
+    /// returned <c>AtomicApplyOutcome.Compensated</c> for a completed
+    /// atomic batch surfaced from the per-tree
+    /// <c>IReplicationTxBufferGrain</c>, or threw with a non-cancellation
+    /// exception out of the apply pipeline. The whole batch is parked
+    /// together (one DLQ row per entry, every row sharing the same
+    /// transaction id and reason tag) so an operator inspecting the DLQ
+    /// sees the full atomic batch as a unit. The per-origin
+    /// high-water-mark is intentionally left unchanged on this path so
+    /// the producer continues to re-ship until the DLQ is recovered or
+    /// discarded.
+    /// </summary>
+    public const string ReasonAtomicApplyFailure = "atomic-apply-failure";
 
     /// <summary>
     /// Reason tag value: catch-all bucket for enqueue causes the inbound
