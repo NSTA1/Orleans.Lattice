@@ -177,12 +177,14 @@ Three sample-specific seams sit alongside the package:
   strip; without it, a Blazor circuit pinned to one silo would only
   see that silo's slice of replication activity.
 
-> **Known limitation — cold-start cross-cluster catch-up.** The
-> package's default `ISnapshotProvider` reads the *local* tree, so a
-> receiver started against an empty Azurite cannot catch up to a peer
-> that already has writes — auto-bootstrap runs but copies nothing.
-> See [`README.md`](./README.md#known-limitation-cross-cluster-replication-on-cold-start)
-> for what this means in the running sample, and
+> **Known limitation — cross-cluster receiver catch-up.** When one
+> cluster has been running long enough to GC old WAL entries and the
+> peer's cursor has fallen behind that point, auto-bootstrap fires
+> against the package's default `ISnapshotProvider` (which reads the
+> local tree), copies nothing, and loops. Fresh demo boots and short
+> Tier-4b/Tier-5 disconnects stay safely inside the retention window.
+> See [`README.md`](./README.md#known-limitation-cross-cluster-receiver-catch-up)
+> for the running-sample framing, and
 > [`src/lattice.replication/roadmap-cross-cluster-bootstrap.md`](../../src/lattice.replication/roadmap-cross-cluster-bootstrap.md)
 > for the planned fix.
 
