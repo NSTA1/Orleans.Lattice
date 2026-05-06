@@ -9,8 +9,9 @@ namespace Orleans.Lattice.Replication.Grains;
 
 /// <summary>
 /// Default <see cref="IReplicationMaintenanceGrain"/> implementation.
-/// Schedules WAL garbage collection and per-peer fall-off-the-log
-/// probes for a single replicated tree using the shared
+/// Schedules WAL garbage collection, per-peer fall-off-the-log
+/// probes, and atomic-batch buffer orphan sweeps for a single
+/// replicated tree using the shared
 /// <see cref="CoordinatorGrain{TSelf}"/> reminder + phase-timer
 /// scaffold.
 /// </summary>
@@ -22,6 +23,7 @@ internal sealed class ReplicationMaintenanceGrain(
     ILatticeReplicationGc gc,
     ILatticeFallOffLogDetector fallOffDetector,
     ILatticeWalIntrospection walIntrospection,
+    IGrainFactory grainFactory,
     [PersistentState("replication-maintenance", LatticeOptions.StorageProviderName)]
     IPersistentState<ReplicationMaintenanceState> state)
     : CoordinatorGrain<ReplicationMaintenanceGrain>(context, reminderRegistry, logger),
@@ -35,6 +37,8 @@ internal sealed class ReplicationMaintenanceGrain(
         fallOffDetector ?? throw new ArgumentNullException(nameof(fallOffDetector));
     private readonly ILatticeWalIntrospection _walIntrospection =
         walIntrospection ?? throw new ArgumentNullException(nameof(walIntrospection));
+    private readonly IGrainFactory _grainFactory =
+        grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
 
     /// <summary>
     /// Cached per-activation tree name. The maintenance grain key is
@@ -115,6 +119,30 @@ internal sealed class ReplicationMaintenanceGrain(
             }
         }
 
+        // Atomic-batch buffer orphan sweep — half-cadence relative to
+        // the GC pass. The two cadences share a clock-budget tick:
+        // running orphan-sweep at every other GC tick lets the GC
+        // pick up the buffer's freed blocked-floor pin promptly
+        // without doubling the maintenance grain's wake-up rate. The
+        // cadence stamp advances only on a clean sweep so a thrown
+        // sweep retries on the next phase tick.
+        var orphanCadence = TimeSpan.FromTicks(Math.Max(1L, options.MaintenanceGcInterval.Ticks / 2));
+        if (ShouldRunCadence(nowTicks, state.State.LastOrphanSweepTicks, orphanCadence))
+        {
+            try
+            {
+                await SweepBufferOrphansAsync(options).ConfigureAwait(true);
+                state.State.LastOrphanSweepTicks = nowTicks;
+                await state.WriteStateAsync().ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex,
+                    "Atomic-batch buffer orphan sweep failed for {Context}; will retry on next phase tick",
+                    LogContext);
+            }
+        }
+
         // Fall-off-the-log probe — independent cadence. Same retry
         // contract: the cadence stamp advances only on a clean
         // probe pass.
@@ -133,6 +161,22 @@ internal sealed class ReplicationMaintenanceGrain(
                     LogContext);
             }
         }
+    }
+
+    private async Task SweepBufferOrphansAsync(LatticeReplicationOptions options)
+    {
+        // The buffer grain's SweepOrphansAsync is idempotent and
+        // cheap when the buffer is empty (single in-memory check),
+        // so the maintenance grain calls it unconditionally on
+        // cadence rather than gating on AtomicBatchDelivery: a host
+        // that flips the option from false → true mid-flight starts
+        // accumulating staged entries that the sweep must reach
+        // without waiting for an option-change event to retire stale
+        // state.
+        var buffer = _grainFactory.GetGrain<IReplicationTxBufferGrain>(TreeName);
+        _ = await buffer
+            .SweepOrphansAsync(options.TxBufferOrphanTimeout, CancellationToken.None)
+            .ConfigureAwait(true);
     }
 
     private async Task ProbeFallOffAsync(LatticeReplicationOptions options)

@@ -228,6 +228,16 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + $"{nameof(ILatticeFallOffLogDetector)}.{nameof(ILatticeFallOffLogDetector.CheckAndTriggerAsync)} calls.");
         }
 
+        if (options.TxBufferOrphanTimeout <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.TxBufferOrphanTimeout)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "A zero or negative orphan timeout would force the maintenance grain to evict every "
+                + "partially-buffered atomic-batch transaction on the very first sweep tick after admission, "
+                + "draining the buffer faster than batches can complete.");
+        }
+
         if (options.ReplicatedTrees is { } trees)
         {
             foreach (var kvp in trees)

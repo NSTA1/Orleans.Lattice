@@ -123,7 +123,8 @@ public static class LatticeReplicationMetrics
     /// drawn from <see cref="ReasonDiscarded"/>, <see cref="ReasonReplayed"/>,
     /// <see cref="ReasonEvicted"/>, <see cref="ReasonSchema"/>,
     /// <see cref="ReasonHlcSkew"/>, <see cref="ReasonOversized"/>,
-    /// <see cref="ReasonAtomicApplyFailure"/>, and <see cref="ReasonUnknown"/>.
+    /// <see cref="ReasonAtomicApplyFailure"/>,
+    /// <see cref="ReasonOrphanTransaction"/>, and <see cref="ReasonUnknown"/>.
     /// </summary>
     public const string TagReason = "reason";
 
@@ -202,6 +203,26 @@ public static class LatticeReplicationMetrics
     /// discarded.
     /// </summary>
     public const string ReasonAtomicApplyFailure = "atomic-apply-failure";
+
+    /// <summary>
+    /// Reason tag value: enqueue cause was an atomic-batch transaction
+    /// that remained partially-buffered on the receiver-side
+    /// <c>IReplicationTxBufferGrain</c> for longer than
+    /// <c>LatticeReplicationOptions.TxBufferOrphanTimeout</c>. The
+    /// per-tree maintenance grain sweeps stuck transactions on a
+    /// half-cadence relative to the WAL garbage-collection cadence and
+    /// routes every staged entry of an orphaned transaction through
+    /// <c>IReplicationDeadLetterGrain.EnqueueAsync</c> tagged with this
+    /// value (one DLQ row per entry, every row sharing the same
+    /// transaction id) so an operator inspecting the DLQ sees the
+    /// orphan as a unit. Eviction also clears the buffer's
+    /// blocked-floor pin and advances the per-origin high-water-mark
+    /// past the orphan's maximum HLC so causal-stream progress
+    /// resumes; the orphan's siblings are re-shippable on demand
+    /// through the standard <c>ILatticeReplicationDeadLetters.ReplayAsync</c>
+    /// tooling.
+    /// </summary>
+    public const string ReasonOrphanTransaction = "orphan-transaction";
 
     /// <summary>
     /// Reason tag value: catch-all bucket for enqueue causes the inbound
