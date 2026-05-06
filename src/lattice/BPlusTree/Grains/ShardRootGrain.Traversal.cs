@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -7,6 +8,30 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class ShardRootGrain
 {
+    // Per-activation cache of the most recently resolved ILeafCacheGrain
+    // reference, keyed by leaf GrainId. Eliminates a fresh
+    // "leaf/<32-hex>" string allocation per read on the hot path. In the
+    // common RootIsLeaf=true case (microbench, single-leaf workloads),
+    // every call hits this cache; multi-leaf workloads degrade gracefully
+    // to "cache the most-recently-used leaf" which is still a win for
+    // sequential access patterns and a no-op for diverse access.
+    //
+    // Invalidation: implicit. The cache key check on every access means
+    // any leaf-id rotation (root-split promotes a leaf to internal,
+    // causing RootNodeId to change) is detected on the next call and the
+    // cache is refreshed against the new leafId.
+    private GrainId _cachedLeafCacheKey;
+    private ILeafCacheGrain? _cachedLeafCache;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private ILeafCacheGrain ResolveLeafCacheGrainSlow(GrainId leafId)
+    {
+        var cache = grainFactory.GetGrain<ILeafCacheGrain>(leafId.ToString());
+        _cachedLeafCacheKey = leafId;
+        _cachedLeafCache = cache;
+        return cache;
+    }
+
     private async Task<byte[]?> TraverseForReadAsync(string key)
     {
         GrainId leafId;
@@ -19,7 +44,9 @@ internal sealed partial class ShardRootGrain
             leafId = await TraverseToLeafAsync(key);
         }
 
-        var cache = grainFactory.GetGrain<ILeafCacheGrain>(leafId.ToString());
+        var cache = (_cachedLeafCache is { } existing && _cachedLeafCacheKey.Equals(leafId))
+            ? existing
+            : ResolveLeafCacheGrainSlow(leafId);
         return await cache.GetAsync(key);
     }
 
@@ -51,7 +78,9 @@ internal sealed partial class ShardRootGrain
             leafId = await TraverseToLeafAsync(key);
         }
 
-        var cache = grainFactory.GetGrain<ILeafCacheGrain>(leafId.ToString());
+        var cache = (_cachedLeafCache is { } existing && _cachedLeafCacheKey.Equals(leafId))
+            ? existing
+            : ResolveLeafCacheGrainSlow(leafId);
         return await cache.ExistsAsync(key);
     }
 
@@ -83,7 +112,9 @@ internal sealed partial class ShardRootGrain
         var result = new Dictionary<string, byte[]>();
         foreach (var (leafId, bucket) in leafBuckets)
         {
-            var cache = grainFactory.GetGrain<ILeafCacheGrain>(leafId.ToString());
+            var cache = (_cachedLeafCache is { } existing && _cachedLeafCacheKey.Equals(leafId))
+                ? existing
+                : ResolveLeafCacheGrainSlow(leafId);
             var values = await cache.GetManyAsync(bucket);
             foreach (var (k, v) in values)
             {
