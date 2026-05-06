@@ -154,4 +154,56 @@ internal interface IReplicationTxBufferGrain : IGrainWithStringKey
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The count of evicted (orphaned) transactions.</returns>
     Task<int> SweepOrphansAsync(TimeSpan orphanTimeout, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Registers a set of atomic-batch saga transaction ids that
+    /// must <i>bypass</i> the staging buffer when their entries
+    /// arrive. The receiver-side bootstrap state machine
+    /// (<see cref="LatticeBootstrapCoordinatorGrain"/>) calls this
+    /// on transition to
+    /// <see cref="Replication.LatticeBootstrapState.IncrementalHandoff"/>
+    /// with <see cref="SnapshotStream.SagaBlacklist"/> so subsequent
+    /// admissions for those transactions short-circuit:
+    /// <see cref="AdmitAsync(ReplogEntry, CancellationToken)"/>
+    /// returns
+    /// <see cref="TxBufferAdmissionResult.BlacklistedBypass"/> set
+    /// to <c>true</c> with no entry staged, signalling the caller
+    /// to apply the entry as a point write rather than waiting for
+    /// every sibling to arrive.
+    /// <para>
+    /// The blacklist is the producer-side quiesce timeout's
+    /// fallback: when a saga was mid-emission at snapshot capture
+    /// time and could not drain within
+    /// <see cref="LatticeReplicationOptions.SnapshotSagaQuiesceTimeout"/>,
+    /// some of its keys may have committed before the snapshot's
+    /// <see cref="SnapshotStream.AsOfHlc"/> (and are therefore
+    /// already applied via the snapshot drain) while the remainder
+    /// arrive on the post-snapshot incremental stream. The buffer
+    /// cannot recognise the post-snapshot remainder as a complete
+    /// batch (the missing siblings will never arrive), so admitting
+    /// them would leave the buffer in a stuck state until the
+    /// orphan-timeout sweep evicted them. Bypassing the buffer
+    /// instead delivers each remaining key as a point write —
+    /// degraded to causal+ atomic visibility for that one saga,
+    /// but no orphan stuck.
+    /// </para>
+    /// <para>
+    /// Calls are cumulative: registering an additional set unions
+    /// the new ids onto the existing blacklist; the supplied list
+    /// may be empty, in which case the call is a no-op. The
+    /// blacklist is persisted to the per-tree backing system tree
+    /// under a disjoint key prefix and rehydrates on activation,
+    /// so a silo crash mid-bootstrap does not silently disable the
+    /// bypass path on the next activation. The receiver-side
+    /// bootstrap state machine still re-publishes the blacklist
+    /// from <see cref="BootstrapCoordinatorState.SagaBlacklist"/>
+    /// on every transition to
+    /// <see cref="Replication.LatticeBootstrapState.IncrementalHandoff"/>
+    /// so a fresh bootstrap that takes a snapshot with a different
+    /// blacklist set unions the new ids onto whatever was rehydrated.
+    /// </para>
+    /// </summary>
+    Task RegisterBlacklistedTransactionsAsync(
+        IReadOnlyList<Guid> transactionIds,
+        CancellationToken cancellationToken);
 }

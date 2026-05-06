@@ -74,4 +74,22 @@ internal readonly record struct TxBufferAdmissionResult
     /// <see cref="BatchComplete"/> is <c>true</c>. Empty otherwise.
     /// </summary>
     [Id(2)] public IReadOnlyList<TxStagedEntry> CompletedBatch { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when the entry's
+    /// <see cref="ReplogEntry.TransactionId"/> was registered on
+    /// the buffer's saga blacklist (via
+    /// <see cref="IReplicationTxBufferGrain.RegisterBlacklistedTransactionsAsync(IReadOnlyList{Guid}, CancellationToken)"/>)
+    /// and the entry was therefore <i>not</i> staged. The caller
+    /// must apply the entry as a point write directly — atomic
+    /// visibility is degraded to causal+ for the blacklisted saga
+    /// because the producer's quiesce path could not drain the
+    /// saga to completion before the snapshot capture (see
+    /// <see cref="SnapshotStream.SagaBlacklist"/> for the full
+    /// trade-off rationale). When this flag is <c>true</c>,
+    /// <see cref="BatchComplete"/> is <c>false</c> and
+    /// <see cref="CompletedBatch"/> is empty; the entry is the
+    /// caller's responsibility to apply.
+    /// </summary>
+    [Id(3)] public bool BlacklistedBypass { get; init; }
 }

@@ -180,6 +180,7 @@ await coordinator.BootstrapAsync("orders", sourceClusterId: "site-a", cancellati
 
 LatticeBootstrapState state = await coordinator.GetStateAsync("orders", cancellationToken);
 _ = state; // LatticeBootstrapState.LiveIncremental once the bootstrap completes
+```
 
 ## Operator-driven re-seed
 
@@ -223,3 +224,24 @@ LatticeBootstrapState state = await client.ServiceProvider
     .GetStateAsync("orders", cancellationToken);
 _ = state;
 ```
+
+## Snapshot-time saga quiesce
+
+When per-tree atomic-batch delivery is enabled (`LatticeReplicationOptions.AtomicBatchDelivery = true`), in-progress atomic sagas (`SetManyAtomicAsync`) are coordinated with snapshot export so a remote bootstrap never observes a partial-saga view. The producer-side `LatticeSnapshotProvider.ExportAsync` performs a polling quiesce loop (50 ms cadence, capped by `LatticeReplicationOptions.SnapshotSagaQuiesceTimeout`, default 30 s) over the in-process saga tracker before scanning the tree:
+
+- **All sagas drained within the timeout** — the export proceeds with an empty `SnapshotStream.SagaBlacklist`. Receiver behaviour is unchanged from the pre-opt-in case.
+- **Some sagas still in flight at the deadline** — the still-running transaction ids are returned in `SnapshotStream.SagaBlacklist`. The receiver-side bootstrap state machine captures the list into `BootstrapCoordinatorState.SagaBlacklist`, persists it across crash boundaries, and on transition to `LiveIncremental` registers it with the per-tree `IReplicationTxBufferGrain` via `RegisterBlacklistedTransactionsAsync`.
+
+Subsequent incremental entries on a blacklisted `TransactionId` bypass the staging buffer and apply as point writes — degrading those specific sagas' cross-cluster atomic visibility to causal+ as a last resort, rather than stalling indefinitely on orphan-timeout because some siblings already landed via the snapshot drain. Non-blacklisted sagas continue to receive full atomic visibility under the normal staging-buffer-then-atomic-apply path.
+
+`SnapshotSagaQuiesceTimeout` is tunable per tree via `IOptionsMonitor<LatticeReplicationOptions>`. The default 30 s suits typical write workloads; raise it on trees with long-running sagas, lower it (or set very small) to prefer faster bootstraps over atomic visibility for the bootstrapping peer's first few sagas.
+
+### Producer-side observer call-site contract
+
+The producer's `IInFlightSagaTracker.ObserveEmission` is invoked from the replication-side commit-time mutation observer **before** any per-emit short-circuit (mode resolver, per-key filter, sink write). This is deliberate: the tracker's count is a proxy for "the producer's tree state has committed this many of the saga's keys", **not** "this many of the saga's keys reached the WAL". The two are equivalent in the steady-state replicated case but diverge when individual siblings are filter-rejected or mode-skipped — the tracker must observe every committed sibling so the in-flight count reflects the producer's tree state, not the WAL projection. Maintenance-category mutations (structural rewrites such as shard splits and saga compensates) are excluded at the call site because they are not user-authored causal events.
+
+The default `InMemoryInFlightSagaTracker` evicts entries older than 10 minutes on every observation and read so a producer-side crash that strands an in-flight count cannot block subsequent snapshots indefinitely.
+
+### Receiver-side blacklist persistence
+
+Blacklist tokens registered via `IReplicationTxBufferGrain.RegisterBlacklistedTransactionsAsync` are persisted to the per-tree backing system tree under the disjoint `x/` key prefix (the staged-entry rows live under `b/`; `b` < `x` in ASCII, so range scans over either prefix do not collide). Each row's key is `x/{transactionId in 'N' format}` and its value is a single-byte sentinel. On grain reactivation the buffer's `BulkLoadAsync` issues a second range scan over `[x/, x0)` to rehydrate the in-memory blacklist set, so a buffer-grain crash mid-bootstrap does not lose the blacklist and re-admit blacklisted entries to the staging buffer.

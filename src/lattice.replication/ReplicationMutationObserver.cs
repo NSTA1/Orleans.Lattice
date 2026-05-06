@@ -62,6 +62,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
     private readonly IOptionsMonitor<LatticeReplicationOptions> _options;
     private readonly IReplicationModeResolver _modeResolver;
     private readonly LocalVectorClockCache _localVectorClockCache;
+    private readonly IInFlightSagaTracker _sagaTracker;
     private readonly ConcurrentDictionary<string, CompiledFilter> _filters = new(StringComparer.Ordinal);
     private readonly Func<string, CompiledFilter> _factory;
     private readonly IDisposable? _changeSubscription;
@@ -70,16 +71,19 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
         IReplogSink sink,
         IOptionsMonitor<LatticeReplicationOptions> options,
         IReplicationModeResolver modeResolver,
-        LocalVectorClockCache localVectorClockCache)
+        LocalVectorClockCache localVectorClockCache,
+        IInFlightSagaTracker sagaTracker)
     {
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(modeResolver);
         ArgumentNullException.ThrowIfNull(localVectorClockCache);
+        ArgumentNullException.ThrowIfNull(sagaTracker);
         _sink = sink;
         _options = options;
         _modeResolver = modeResolver;
         _localVectorClockCache = localVectorClockCache;
+        _sagaTracker = sagaTracker;
         _factory = treeId => CompiledFilter.From(_options.Get(treeId));
 
         // Any options change invalidates every cached filter. ConfigureAll
@@ -100,6 +104,38 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             _ => throw new InvalidOperationException(
                 $"Unknown mutation kind: {mutation.Kind}"),
         };
+
+        // Producer-side atomic-batch saga tracking fires BEFORE the
+        // filter / mode-resolver / maintenance-skip early returns
+        // below. The tracker's count must remain a faithful proxy
+        // for "this many of the saga's keys are committed and
+        // visible in the producer's tree state" — and the producer
+        // commits every per-key write to its tree regardless of
+        // whether the per-key filter, the mode resolver, or the
+        // mutation category opts the entry out of replication. A
+        // saga whose siblings are filtered (key-prefix scoped to a
+        // sub-range), mode-resolved as null (tree not declared as
+        // replicated), or category-skipped at the per-emit level
+        // would otherwise leak rows in the tracker — the count
+        // would never reach BatchSize because some siblings short-
+        // circuit before reaching the bottom of this method. The
+        // snapshot quiesce path would then wait for a saga that
+        // never completes from the tracker's perspective and emit
+        // a spurious blacklist entry.
+        //
+        // Maintenance is the one exception: maintenance mutations
+        // are structural rewrites of state already authored by user
+        // writes, so a maintenance "saga" is not a user-authored
+        // atomic batch the snapshot needs to quiesce against. The
+        // tracker call is gated on (Category != Maintenance) so the
+        // maintenance-skip path below remains the single source of
+        // truth for the maintenance opt-out.
+        if (mutation.Category != MutationCategory.Maintenance
+            && mutation.AtomicBatchSize > 0
+            && mutation.TransactionId != Guid.Empty)
+        {
+            _sagaTracker.ObserveEmission(mutation.TreeId, mutation.TransactionId, mutation.AtomicBatchSize);
+        }
 
         // Maintenance-category mutations (resize / rebalance / compaction /
         // internal structural rewrite) are stamped with

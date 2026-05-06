@@ -235,50 +235,80 @@ internal sealed partial class ReplicationApplier(
                 var txBuffer = grainFactory.GetGrain<IReplicationTxBufferGrain>(entry.TreeId);
                 var admission = await txBuffer.AdmitAsync(entry, cancellationToken).ConfigureAwait(false);
 
-                // Publish the buffer's lowest staged HLC to the
-                // cursor registry so the producer-side WAL GC AND-s a
-                // strict-less blocked-floor clause into its trim
-                // predicate. Reported after every admit (admit may
-                // have grown the buffer with a fresh batch) and after
-                // every batch-completion path (admission below
-                // returned BatchComplete=true; the staged entries for
-                // that transaction have been removed and the floor
-                // may have advanced or cleared). Failure is swallowed
-                // with no observable apply-path impact - the WAL still
-                // holds the entry and a subsequent admit / removal
-                // re-publishes the floor.
-                await ReportBlockedFloorAsync(entry.TreeId, txBuffer, cancellationToken).ConfigureAwait(false);
-
-                if (!admission.BatchComplete)
+                // Saga-blacklist bypass: an entry whose
+                // TransactionId was registered on the buffer's saga
+                // blacklist by the receiver-side bootstrap state
+                // machine — because the producer-side quiesce path
+                // could not drain the saga to completion before the
+                // snapshot capture — short-circuits past the staging
+                // buffer entirely. The buffer returns
+                // BlacklistedBypass=true with no entry staged; the
+                // applier falls through to the canonical
+                // point-apply path below so the entry lands as a
+                // direct point write. Atomic visibility is degraded
+                // to causal+ for the blacklisted saga, but the
+                // alternative (admitting the entry to a buffer
+                // whose missing siblings will never arrive) would
+                // stall completion until the orphan-timeout sweep
+                // evicted the partial batch. Operators tune
+                // SnapshotSagaQuiesceTimeout (or reduce snapshot
+                // concurrency) to keep the blacklist empty.
+                //
+                // The bypass branch deliberately does NOT report
+                // the buffer's blocked floor: the buffer did not
+                // mutate (no entry staged), so the blocked-floor
+                // value is unchanged from whatever the previous
+                // admit / removal call published.
+                if (!admission.BlacklistedBypass)
                 {
-                    outcome = LatticeReplicationMetrics.OutcomeAtomicBuffered;
-                    return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                    // Publish the buffer's lowest staged HLC to the
+                    // cursor registry so the producer-side WAL GC AND-s a
+                    // strict-less blocked-floor clause into its trim
+                    // predicate. Reported after every admit (admit may
+                    // have grown the buffer with a fresh batch) and after
+                    // every batch-completion path (admission below
+                    // returned BatchComplete=true; the staged entries for
+                    // that transaction have been removed and the floor
+                    // may have advanced or cleared). Failure is swallowed
+                    // with no observable apply-path impact - the WAL still
+                    // holds the entry and a subsequent admit / removal
+                    // re-publishes the floor.
+                    await ReportBlockedFloorAsync(entry.TreeId, txBuffer, cancellationToken).ConfigureAwait(false);
+
+                    if (!admission.BatchComplete)
+                    {
+                        outcome = LatticeReplicationMetrics.OutcomeAtomicBuffered;
+                        return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                    }
+
+                    var batchResult = await ApplyCompletedAtomicBatchAsync(
+                        entry,
+                        admission.CompletedBatch,
+                        hwmGrain,
+                        hwm,
+                        resolved,
+                        cancellationToken).ConfigureAwait(false);
+
+                    // Re-report after the saga returns: a successful
+                    // commit does not mutate the buffer further (the
+                    // siblings were removed atomically inside the
+                    // BatchComplete=true branch above), but a thrown saga
+                    // path may have routed entries to the DLQ without
+                    // changing the in-memory floor. Re-publishing here is
+                    // a defensive sweep so the floor reflects post-saga
+                    // buffer state; redundant when the saga did not
+                    // mutate the buffer (no-op cost is one cheap grain
+                    // call).
+                    await ReportBlockedFloorAsync(entry.TreeId, txBuffer, cancellationToken).ConfigureAwait(false);
+
+                    outcome = batchResult.Applied
+                        ? LatticeReplicationMetrics.OutcomeSuccess
+                        : LatticeReplicationMetrics.OutcomeFailure;
+                    return batchResult;
                 }
 
-                var batchResult = await ApplyCompletedAtomicBatchAsync(
-                    entry,
-                    admission.CompletedBatch,
-                    hwmGrain,
-                    hwm,
-                    resolved,
-                    cancellationToken).ConfigureAwait(false);
-
-                // Re-report after the saga returns: a successful
-                // commit does not mutate the buffer further (the
-                // siblings were removed atomically inside the
-                // BatchComplete=true branch above), but a thrown saga
-                // path may have routed entries to the DLQ without
-                // changing the in-memory floor. Re-publishing here is
-                // a defensive sweep so the floor reflects post-saga
-                // buffer state; redundant when the saga did not
-                // mutate the buffer (no-op cost is one cheap grain
-                // call).
-                await ReportBlockedFloorAsync(entry.TreeId, txBuffer, cancellationToken).ConfigureAwait(false);
-
-                outcome = batchResult.Applied
-                    ? LatticeReplicationMetrics.OutcomeSuccess
-                    : LatticeReplicationMetrics.OutcomeFailure;
-                return batchResult;
+                // Fall through to the point-apply path below for
+                // blacklisted entries.
             }
 
             // Shadow-forward dedupe cache: a structural rewrite (shard

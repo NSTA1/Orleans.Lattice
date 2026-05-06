@@ -46,6 +46,11 @@ public class ReplicationMutationObserverAtomicBatchTests
         public ReplicationMode? Resolve(string treeId) => ReplicationMode.LwwRegister;
     }
 
+    private sealed class NullModeResolver : IReplicationModeResolver
+    {
+        public ReplicationMode? Resolve(string treeId) => null;
+    }
+
     private static (ReplicationMutationObserver Observer, CapturingSink Sink) CreateObserver()
     {
         var sink = new CapturingSink();
@@ -54,8 +59,30 @@ public class ReplicationMutationObserverAtomicBatchTests
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(grain);
         grain.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
         var cache = new LocalVectorClockCache(factory);
-        var observer = new ReplicationMutationObserver(sink, Monitor(), new AllowAllResolver(), cache);
+        var observer = new ReplicationMutationObserver(sink, Monitor(), new AllowAllResolver(), cache, new InMemoryInFlightSagaTracker());
         return (observer, sink);
+    }
+
+    private static (ReplicationMutationObserver Observer, CapturingSink Sink, InMemoryInFlightSagaTracker Tracker) CreateObserverWithTracker(
+        IReplicationModeResolver? resolver = null,
+        Action<LatticeReplicationOptions>? configure = null)
+    {
+        var sink = new CapturingSink();
+        var factory = Substitute.For<IGrainFactory>();
+        var grain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(grain);
+        grain.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
+        var cache = new LocalVectorClockCache(factory);
+
+        var options = new LatticeReplicationOptions { ClusterId = LocalCluster };
+        configure?.Invoke(options);
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.CurrentValue.Returns(options);
+        monitor.Get(Arg.Any<string>()).Returns(options);
+
+        var tracker = new InMemoryInFlightSagaTracker();
+        var observer = new ReplicationMutationObserver(sink, monitor, resolver ?? new AllowAllResolver(), cache, tracker);
+        return (observer, sink, tracker);
     }
 
     [Test]
@@ -293,35 +320,104 @@ public class ReplicationMutationObserverAtomicBatchTests
     }
 
     [Test]
-    public async Task Atomic_batch_shares_transaction_id_across_emits()
+    public async Task Filter_rejected_atomic_emit_is_still_observed_by_tracker()
     {
-        // The defining R-097 invariant on the observer side: every
-        // emit of an atomic transaction carries the identical
-        // TransactionId so the receiver-side buffer keys all siblings
-        // under one (origin, txid) bucket. Indices differ, the txid
-        // does not.
-        var (observer, sink) = CreateObserver();
+        // The producer commits the per-key write to its tree regardless
+        // of whether the key passes the replication filter. The tracker
+        // must therefore observe the emit even when the filter rejects
+        // it — otherwise sagas with filter-scoped sibling keys would
+        // never reach BatchSize and the snapshot quiesce path would
+        // wait forever (or blacklist a saga that has already fully
+        // committed in the producer's tree).
+        var (observer, sink, tracker) = CreateObserverWithTracker(
+            configure: o => o.KeyFilter = _ => false);
         var txId = Guid.NewGuid();
 
-        for (var i = 0; i < 3; i++)
+        await observer.OnMutationAsync(new LatticeMutation
         {
-            await observer.OnMutationAsync(new LatticeMutation
-            {
-                TreeId = Tree,
-                Kind = MutationKind.Set,
-                Key = $"k{i}",
-                Value = new byte[] { (byte)i },
-                TransactionId = txId,
-                AtomicBatchSize = 3,
-                AtomicBatchIndex = i,
-            }, CancellationToken.None);
-        }
+            TreeId = Tree,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            TransactionId = txId,
+            AtomicBatchSize = 3,
+            AtomicBatchIndex = 0,
+        }, CancellationToken.None);
 
-        Assert.That(sink.Entries, Has.Count.EqualTo(3));
         Assert.Multiple(() =>
         {
-            Assert.That(sink.Entries.Select(e => e.TransactionId), Is.All.EqualTo(txId));
-            Assert.That(sink.Entries.Select(e => e.AtomicBatchIndex), Is.EquivalentTo(new[] { 0, 1, 2 }));
+            Assert.That(sink.Entries, Is.Empty,
+                "Filter rejection must still suppress the WAL append.");
+            Assert.That(tracker.GetInFlightTransactions(Tree), Has.Member(txId),
+                "Tracker must observe the emit before the filter short-circuits.");
+        });
+    }
+
+    [Test]
+    public async Task Mode_null_atomic_emit_is_still_observed_by_tracker()
+    {
+        // A mode resolver returning null means the tree is not declared
+        // as replicated; the WAL append is skipped, but the producer
+        // still committed the per-key write to its tree state. The
+        // tracker observation must precede the mode-resolver short
+        // circuit so sagas on undeclared trees still drive the count
+        // to BatchSize and the snapshot quiesce never deadlocks on
+        // them.
+        var (observer, sink, tracker) = CreateObserverWithTracker(resolver: new NullModeResolver());
+        var txId = Guid.NewGuid();
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = Tree,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            TransactionId = txId,
+            AtomicBatchSize = 3,
+            AtomicBatchIndex = 0,
+        }, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sink.Entries, Is.Empty,
+                "Null mode resolution must suppress the WAL append.");
+            Assert.That(tracker.GetInFlightTransactions(Tree), Has.Member(txId),
+                "Tracker must observe the emit before the mode-resolver short-circuits.");
+        });
+    }
+
+    [Test]
+    public async Task Maintenance_atomic_emit_is_NOT_observed_by_tracker()
+    {
+        // Maintenance is the documented exception to the
+        // observer-before-filter rule: maintenance mutations are
+        // structural rewrites of state already authored by user
+        // writes, not user-authored atomic batches that snapshot
+        // quiesce needs to wait for. The tracker call must be gated
+        // on (Category != Maintenance) so the maintenance opt-out
+        // remains the single source of truth and a maintenance
+        // "saga" never blocks the snapshot path.
+        var (observer, sink, tracker) = CreateObserverWithTracker();
+        var txId = Guid.NewGuid();
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = Tree,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            Category = MutationCategory.Maintenance,
+            TransactionId = txId,
+            AtomicBatchSize = 3,
+            AtomicBatchIndex = 0,
+        }, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sink.Entries, Is.Empty,
+                "Maintenance category must suppress the WAL append.");
+            Assert.That(tracker.GetInFlightTransactions(Tree), Is.Empty,
+                "Tracker must NOT observe maintenance emits — they are not user-authored sagas.");
         });
     }
 }

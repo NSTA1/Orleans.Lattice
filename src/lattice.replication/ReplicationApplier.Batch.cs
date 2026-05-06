@@ -337,47 +337,70 @@ internal sealed partial class ReplicationApplier
                     var txBuffer = grainFactory.GetGrain<IReplicationTxBufferGrain>(treeId);
                     var admission = await txBuffer.AdmitAsync(entry, cancellationToken).ConfigureAwait(false);
 
-                    // Blocked-floor report (mirror of ApplyAsync's
-                    // gate). Publish the buffer's current floor so the
-                    // producer-side WAL GC AND-s the strict-less
-                    // entry.Timestamp < blockedFloor clause into its
-                    // trim predicate.
-                    await ReportBlockedFloorAsync(treeId, txBuffer, cancellationToken).ConfigureAwait(false);
-
-                    if (!admission.BatchComplete)
+                    // Saga-blacklist bypass: an entry whose
+                    // TransactionId was registered on the buffer's
+                    // saga blacklist by the receiver-side bootstrap
+                    // state machine bypasses the staging buffer
+                    // entirely and falls through to the canonical
+                    // point-apply path below. See the per-entry gate
+                    // in ReplicationApplier.cs for the full
+                    // rationale; the batch-path mirror inherits the
+                    // same trade-off (degraded to causal+ for the
+                    // blacklisted saga) and the same operator
+                    // remediation (raise SnapshotSagaQuiesceTimeout).
+                    if (admission.BlacklistedBypass)
                     {
-                        outcome = LatticeReplicationMetrics.OutcomeAtomicBuffered;
-                        continue;
-                    }
-
-                    var batchOutcome = await DispatchCompletedAtomicBatchAsync(
-                        entry, admission.CompletedBatch, cancellationToken).ConfigureAwait(false);
-
-                    // Defensive re-publish after the saga returns -
-                    // mirrors ApplyAsync's post-batch sweep so the
-                    // floor reflects post-saga buffer state.
-                    await ReportBlockedFloorAsync(treeId, txBuffer, cancellationToken).ConfigureAwait(false);
-
-                    if (batchOutcome.Committed)
-                    {
-                        if (batchOutcome.MaxHlc.CompareTo(runningHwm) > 0)
-                        {
-                            runningHwm = batchOutcome.MaxHlc;
-                        }
-                        if (batchOutcome.MaxHlc.CompareTo(highestApplied) > 0)
-                        {
-                            highestApplied = batchOutcome.MaxHlc;
-                        }
-                        anyApplied = true;
-                        advancedAtAll = true;
-                        localVcDirty = true;
-                        outcome = LatticeReplicationMetrics.OutcomeSuccess;
+                        // Fall through: the rest of this iteration
+                        // (shadow-forward dedupe, causal-plus check,
+                        // LWW pending-batch admission) handles the
+                        // entry as a standard point-write. The
+                        // buffer did not mutate, so the blocked-floor
+                        // report is omitted.
                     }
                     else
                     {
-                        outcome = LatticeReplicationMetrics.OutcomeFailure;
+                        // Blocked-floor report (mirror of ApplyAsync's
+                        // gate). Publish the buffer's current floor so the
+                        // producer-side WAL GC AND-s the strict-less
+                        // entry.Timestamp < blockedFloor clause into its
+                        // trim predicate.
+                        await ReportBlockedFloorAsync(treeId, txBuffer, cancellationToken).ConfigureAwait(false);
+
+                        if (!admission.BatchComplete)
+                        {
+                            outcome = LatticeReplicationMetrics.OutcomeAtomicBuffered;
+                            continue;
+                        }
+
+                        var batchOutcome = await DispatchCompletedAtomicBatchAsync(
+                            entry, admission.CompletedBatch, cancellationToken).ConfigureAwait(false);
+
+                        // Defensive re-publish after the saga returns -
+                        // mirrors ApplyAsync's post-batch sweep so the
+                        // floor reflects post-saga buffer state.
+                        await ReportBlockedFloorAsync(treeId, txBuffer, cancellationToken).ConfigureAwait(false);
+
+                        if (batchOutcome.Committed)
+                        {
+                            if (batchOutcome.MaxHlc.CompareTo(runningHwm) > 0)
+                            {
+                                runningHwm = batchOutcome.MaxHlc;
+                            }
+                            if (batchOutcome.MaxHlc.CompareTo(highestApplied) > 0)
+                            {
+                                highestApplied = batchOutcome.MaxHlc;
+                            }
+                            anyApplied = true;
+                            advancedAtAll = true;
+                            localVcDirty = true;
+                            outcome = LatticeReplicationMetrics.OutcomeSuccess;
+                        }
+                        else
+                        {
+                            outcome = LatticeReplicationMetrics.OutcomeFailure;
+                        }
+                        continue;
                     }
-                    continue;
                 }
 
                 // Shadow-forward dedupe cache: suppress the duplicate-emit

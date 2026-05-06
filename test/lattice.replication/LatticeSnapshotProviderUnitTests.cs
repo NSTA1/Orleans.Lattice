@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
@@ -38,7 +39,31 @@ public class LatticeSnapshotProviderUnitTests
             Arg.Any<bool?>(),
             Arg.Any<CancellationToken>()).Returns(EmptyEntries());
 
-        return (new LatticeSnapshotProvider(factory, cursors), factory, cursors, lattice, hwm);
+        return (new LatticeSnapshotProvider(factory, cursors, new InMemoryInFlightSagaTracker(), TestOptions()), factory, cursors, lattice, hwm);
+    }
+
+    /// <summary>
+    /// Returns an <see cref="IOptionsMonitor{TOptions}"/> wired to a
+    /// fresh <see cref="LatticeReplicationOptions"/> for the snapshot
+    /// provider's quiesce-window read. Tests that exercise
+    /// quiesce-specific behaviour build their own monitor.
+    /// </summary>
+    internal static IOptionsMonitor<LatticeReplicationOptions> TestOptions(
+        TimeSpan? quiesceTimeout = null)
+    {
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = "site-test",
+        };
+        if (quiesceTimeout is { } t)
+        {
+            options.SnapshotSagaQuiesceTimeout = t;
+        }
+
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(options);
+        monitor.CurrentValue.Returns(options);
+        return monitor;
     }
 
     private static async IAsyncEnumerable<KeyValuePair<string, byte[]>> EmptyEntries()
@@ -64,7 +89,7 @@ public class LatticeSnapshotProviderUnitTests
     {
         var cursors = Substitute.For<ILatticeReplicationCursorRegistry>();
         Assert.That(
-            () => new LatticeSnapshotProvider(null!, cursors),
+            () => new LatticeSnapshotProvider(null!, cursors, new InMemoryInFlightSagaTracker(), TestOptions()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -73,7 +98,27 @@ public class LatticeSnapshotProviderUnitTests
     {
         var factory = Substitute.For<IGrainFactory>();
         Assert.That(
-            () => new LatticeSnapshotProvider(factory, null!),
+            () => new LatticeSnapshotProvider(factory, null!, new InMemoryInFlightSagaTracker(), TestOptions()),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_saga_tracker_is_null()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var cursors = Substitute.For<ILatticeReplicationCursorRegistry>();
+        Assert.That(
+            () => new LatticeSnapshotProvider(factory, cursors, null!, TestOptions()),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_options_is_null()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var cursors = Substitute.For<ILatticeReplicationCursorRegistry>();
+        Assert.That(
+            () => new LatticeSnapshotProvider(factory, cursors, new InMemoryInFlightSagaTracker(), null!),
             Throws.InstanceOf<ArgumentNullException>());
     }
 

@@ -86,6 +86,14 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<IShardCountProvider, DefaultShardCountProvider>();
         builder.Services.TryAddSingleton<IReplicationLocalVcSeeder, LatticeReplicationLocalVcSeeder>();
 
+        // Producer-side in-flight atomic-batch saga tracker
+        // consumed by LatticeSnapshotProvider's quiesce path
+        // The default in-process tracker is process-local
+        // by design — a silo crash that loses the tracker observes
+        // an empty in-flight set on the next snapshot, which is the
+        // conservative "no quiesce needed" outcome.
+        builder.Services.TryAddSingleton<IInFlightSagaTracker, InMemoryInFlightSagaTracker>();
+
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IMutationObserver, ReplicationMutationObserver>());
         builder.Services.TryAddEnumerable(

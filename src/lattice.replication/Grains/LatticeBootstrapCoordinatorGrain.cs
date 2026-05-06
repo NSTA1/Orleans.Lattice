@@ -236,6 +236,15 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // HWM dedupe makes any overlap a no-op.
         state.State.SnapshotAsOfHlc = snapshot.AsOfHlc;
         state.State.CausalStableFrontier = snapshot.CausalStableFrontier;
+        // Capture the producer-side saga blacklist on the durable
+        // bootstrap state so a silo crash mid-drain re-publishes
+        // the same set on resume rather than re-running the
+        // quiesce wait against a different in-flight set. Replace
+        // semantics (not union) because a re-export from a fresh
+        // ExportAsync call yields a fresh blacklist computed
+        // against the fresh snapshot's quiesce window — the prior
+        // export's blacklist is no longer authoritative.
+        state.State.SagaBlacklist = new List<Guid>(snapshot.SagaBlacklist);
         if (state.State.Phase != LatticeBootstrapState.ApplyingSnapshot)
         {
             state.State.Phase = LatticeBootstrapState.ApplyingSnapshot;
@@ -303,6 +312,24 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         await hwm
             .PinSnapshotAsync(state.State.SnapshotAsOfHlc, state.State.CausalStableFrontier, CancellationToken.None)
             .ConfigureAwait(true);
+
+        // Register the saga blacklist (if any) with the per-tree
+        // staging buffer so subsequent incremental entries carrying
+        // a blacklisted TransactionId bypass the buffer and apply
+        // as point writes directly. Idempotent at the grain (the
+        // buffer's blacklist is a HashSet<Guid> that no-ops on
+        // re-add) so a crash between this call and the
+        // WriteStateAsync below replays safely. Skip the grain RPC
+        // entirely on the steady-state happy path (empty
+        // blacklist) so the bootstrap-completion hot path does not
+        // pay for a no-op grain call.
+        if (state.State.SagaBlacklist is { Count: > 0 } blacklist)
+        {
+            var txBuffer = _grainFactory.GetGrain<IReplicationTxBufferGrain>(treeName);
+            await txBuffer
+                .RegisterBlacklistedTransactionsAsync(blacklist, CancellationToken.None)
+                .ConfigureAwait(true);
+        }
 
         state.State.Phase = LatticeBootstrapState.LiveIncremental;
         state.State.InProgress = false;

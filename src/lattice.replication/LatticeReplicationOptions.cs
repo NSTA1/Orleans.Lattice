@@ -577,6 +577,48 @@ public class LatticeReplicationOptions
     public TimeSpan TxBufferOrphanTimeout { get; set; } = DefaultTxBufferOrphanTimeout;
 
     /// <summary>
+    /// Producer-side wall-clock window during which
+    /// <see cref="ISnapshotProvider.ExportAsync"/> waits for any
+    /// atomic-batch saga that is currently mid-emission to finish
+    /// emitting every sibling before reading the producer's tree
+    /// state. Closes the snapshot/handoff hazard where a producer
+    /// running <c>SetManyAtomicAsync</c> concurrently with an
+    /// outbound snapshot would otherwise split the batch across the
+    /// snapshot / incremental boundary — some keys land in the
+    /// snapshot stream, others arrive on the post-snapshot
+    /// incremental stream where the receiver-side buffer
+    /// (<see cref="AtomicBatchDelivery"/>) cannot recognise them as
+    /// a complete batch.
+    /// <para>
+    /// The snapshot provider consults the registered
+    /// <see cref="IInFlightSagaTracker"/> for the set of saga
+    /// transaction ids currently in flight on this silo, polls for
+    /// completion until either the set drains or this timeout
+    /// elapses, and stamps any still-in-flight ids on
+    /// <see cref="SnapshotStream.SagaBlacklist"/>. The receiver
+    /// records the blacklist in
+    /// <see cref="Grains.BootstrapCoordinatorState.SagaBlacklist"/>
+    /// and registers it with the per-tree
+    /// <see cref="Grains.IReplicationTxBufferGrain"/> so subsequent
+    /// incremental entries carrying a blacklisted transaction id
+    /// bypass the staging buffer and are applied as point writes
+    /// directly. Atomic-visibility is degraded to causal+ for those
+    /// specific timed-out sagas; operators should raise the timeout
+    /// (or reduce snapshot concurrency) if the blacklist is
+    /// non-empty under steady-state load.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultSnapshotSagaQuiesceTimeout"/>;
+    /// the validator rejects zero or negative values at first-resolve
+    /// time. A value of <see cref="TimeSpan.Zero"/> would force every
+    /// in-flight saga onto the blacklist, which is the worst-case
+    /// (degraded-causal+) outcome rather than the desired (atomic)
+    /// path; the validator surfaces it as a configuration error.
+    /// </para>
+    /// </summary>
+    public TimeSpan SnapshotSagaQuiesceTimeout { get; set; } = DefaultSnapshotSagaQuiesceTimeout;
+
+    /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
     /// represents "unset". This default is rejected by
     /// <c>LatticeReplicationOptionsValidator</c> so a host that calls
@@ -792,4 +834,15 @@ public class LatticeReplicationOptions
     /// (producer crash mid-saga, lost-in-transit sibling).
     /// </summary>
     public static readonly TimeSpan DefaultTxBufferOrphanTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Default value for <see cref="SnapshotSagaQuiesceTimeout"/>:
+    /// 30 seconds. Generous enough for a typical
+    /// <c>SetManyAtomicAsync</c> saga to complete every per-key
+    /// emit even under transient producer-side latency; tight
+    /// enough to keep <see cref="ISnapshotProvider.ExportAsync"/>
+    /// from blocking the bootstrap state machine for an
+    /// observably-long interval.
+    /// </summary>
+    public static readonly TimeSpan DefaultSnapshotSagaQuiesceTimeout = TimeSpan.FromSeconds(30);
 }

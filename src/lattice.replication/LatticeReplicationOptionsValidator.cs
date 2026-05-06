@@ -238,6 +238,17 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "draining the buffer faster than batches can complete.");
         }
 
+        if (options.SnapshotSagaQuiesceTimeout <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.SnapshotSagaQuiesceTimeout)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "A zero or negative quiesce window would force every in-flight atomic-batch saga onto the "
+                + $"{nameof(SnapshotStream)}.{nameof(SnapshotStream.SagaBlacklist)} on every snapshot, "
+                + "permanently degrading cross-cluster atomic-batch visibility to causal+ for any saga that "
+                + "happens to be mid-emission when a snapshot is taken.");
+        }
+
         if (options.ReplicatedTrees is { } trees)
         {
             foreach (var kvp in trees)
