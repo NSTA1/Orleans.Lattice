@@ -10,7 +10,7 @@ using Orleans.Serialization;
 namespace Orleans.Lattice.Replication.Tests.Grains;
 
 [TestFixture]
-public class ReplicationTxBufferGrainTests
+public partial class ReplicationTxBufferGrainTests
 {
     private const string TreeId = "tree";
     private const string OriginA = "site-a";

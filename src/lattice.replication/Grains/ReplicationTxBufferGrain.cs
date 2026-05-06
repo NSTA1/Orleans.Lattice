@@ -94,6 +94,29 @@ internal sealed class ReplicationTxBufferGrain(
     private readonly Dictionary<TransactionKey, LinkedListNode<TransactionKey>> _admissionNodes = new();
 
     /// <summary>
+    /// Set of transaction keys that were admitted via activation
+    /// rehydration rather than a live <see cref="AdmitAsync(ReplogEntry, CancellationToken)"/>
+    /// call. Tracked so the matching decrement in
+    /// <see cref="RemoveTransactionAsync(TransactionKey, bool, CancellationToken)"/>
+    /// can be skipped for these keys: the admit-time
+    /// <see cref="LatticeReplicationMetrics.ApplyTxBuffered"/> /
+    /// <see cref="LatticeReplicationMetrics.ApplyTxBufferBytes"/>
+    /// increments were intentionally suppressed (the gauge contract
+    /// is "live admission lifecycle, not durable buffer occupancy"),
+    /// so a paired decrement on removal would push the gauge below
+    /// the activation's true live volume — visible to operators as
+    /// a negative reading after every silo restart that rehydrated
+    /// a non-empty buffer. Membership is removed when the key is
+    /// removed from the buffer for any reason; a transaction that
+    /// rehydrated and later receives a fresh live <c>AdmitAsync</c>
+    /// for a *new* batch index does not leave the set, because the
+    /// admit-on-existing-key path is a no-op on the gauge (only the
+    /// first admit of a new transaction key contributes), and the
+    /// terminal removal still maps to the rehydrated admit.
+    /// </summary>
+    private readonly HashSet<TransactionKey> _rehydratedKeys = new();
+
+    /// <summary>
     /// Sorted multiset of staged HLCs supporting O(log N) lookup of
     /// the lowest staged HLC for the producer-side blocked-floor GC
     /// pin. Each staged entry contributes its <see cref="ReplogEntry.Timestamp"/>
@@ -628,6 +651,25 @@ internal sealed class ReplicationTxBufferGrain(
             // GetLowestStagedHlcAsync read. Irreversible — runs only
             // after the DLQ park attempts above have completed.
             await RemoveTransactionAsync(key, deleteFromStore: true, cancellationToken).ConfigureAwait(true);
+
+            // Atomic-batch terminal-disposition counter: mirror the
+            // eviction path's contract — every orphan that reaches the
+            // dlq_orphan terminal disposition increments
+            // <see cref="LatticeReplicationMetrics.ApplyTxCompleted"/>
+            // exactly once. The increment lives between the in-memory
+            // remove and the HWM advance step so a sweep that is
+            // cancelled mid-orphan (which we do not allow per the
+            // commit-once-we-begin discipline above) cannot
+            // double-record. Counter increment failures cannot occur
+            // — UpDownCounter.Add and Counter.Add are infallible — so
+            // there is no enclosing try/catch.
+            LatticeReplicationMetrics.ApplyTxCompleted.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId),
+                new KeyValuePair<string, object?>(
+                    LatticeReplicationMetrics.TagOutcome,
+                    LatticeReplicationMetrics.OutcomeTxDlqOrphan));
+
             floorChanged = true;
             evicted++;
 
@@ -764,12 +806,14 @@ internal sealed class ReplicationTxBufferGrain(
     private void AdmitInMemory(TxStagedEntry staged, bool isRehydration)
     {
         var key = new TransactionKey(staged.OriginClusterId, staged.TransactionId);
+        var newTransaction = false;
         if (!_byTransaction.TryGetValue(key, out var siblings))
         {
             siblings = new Dictionary<int, TxStagedEntry>();
             _byTransaction[key] = siblings;
             var node = _admissionOrder.AddLast(key);
             _admissionNodes[key] = node;
+            newTransaction = true;
         }
 
         if (siblings.ContainsKey(staged.BatchIndex))
@@ -781,8 +825,45 @@ internal sealed class ReplicationTxBufferGrain(
         }
 
         siblings[staged.BatchIndex] = staged;
-        _trackedBytes += EstimateBytes(staged);
+        var addedBytes = EstimateBytes(staged);
+        _trackedBytes += addedBytes;
         IncrementStagedHlc(staged.Entry.Timestamp);
+
+        // Atomic-batch buffered-count / buffer-bytes deltas:
+        // publish on every admission. Activation rehydration is
+        // intentionally skipped — a silo restart re-admits the
+        // entries it inherited from the prior silo's persisted state,
+        // and re-incrementing here would silently double-count
+        // occupancy across activations. The counters are therefore a
+        // delta surface relative to the activation's lifetime, which
+        // matches the documented contract on
+        // <see cref="LatticeReplicationMetrics.ApplyTxBuffered"/>.
+        // Rehydrated keys are recorded in <see cref="_rehydratedKeys"/>
+        // so the matching decrement in
+        // <see cref="RemoveTransactionAsync(TransactionKey, bool, CancellationToken)"/>
+        // can be suppressed symmetrically — without that bookkeeping
+        // the gauge dips below the live-admission volume on the next
+        // remove (apply / evict / sweep) of any rehydrated entry.
+        if (isRehydration)
+        {
+            if (newTransaction)
+            {
+                _rehydratedKeys.Add(key);
+            }
+        }
+        else
+        {
+            if (newTransaction)
+            {
+                LatticeReplicationMetrics.ApplyTxBuffered.Add(
+                    1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId));
+            }
+
+            LatticeReplicationMetrics.ApplyTxBufferBytes.Add(
+                addedBytes,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId));
+        }
     }
 
     /// <summary>
@@ -890,6 +971,23 @@ internal sealed class ReplicationTxBufferGrain(
         var displaced = siblings.Values.ToArray();
         await RemoveTransactionAsync(oldest, deleteFromStore: true, cancellationToken).ConfigureAwait(true);
 
+        // Atomic-batch terminal-disposition counter: every transaction
+        // that reaches a terminal disposition increments
+        // <see cref="LatticeReplicationMetrics.ApplyTxCompleted"/>
+        // exactly once across one of the four outcome partitions. A
+        // capacity eviction terminates the displaced transaction
+        // before any apply attempt — its siblings are routed to the
+        // DLQ tagged <see cref="LatticeReplicationMetrics.ReasonEvicted"/>
+        // so an operator can recover them later if desired, but from
+        // the visibility surface's perspective the transaction is
+        // closed and the counter advances once for the whole batch.
+        LatticeReplicationMetrics.ApplyTxCompleted.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId),
+            new KeyValuePair<string, object?>(
+                LatticeReplicationMetrics.TagOutcome,
+                LatticeReplicationMetrics.OutcomeTxEvictedCapacity));
+
         var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(_treeId);
         foreach (var staged in displaced)
         {
@@ -944,6 +1042,33 @@ internal sealed class ReplicationTxBufferGrain(
             // Defensive clamp: should never trip in production but
             // protects observability if an estimate drifts.
             _trackedBytes = 0;
+        }
+
+        // Mirror the per-tree atomic-batch buffered / buffer-bytes
+        // deltas symmetrically with
+        // <see cref="AdmitInMemory(TxStagedEntry, bool)"/>. Removal
+        // is invoked from every terminal disposition path
+        // (apply-on-completion, capacity eviction, orphan sweep),
+        // so a single decrement here keeps the counters consistent
+        // across every terminal-disposition outcome partition. Keys
+        // admitted via activation rehydration intentionally suppress
+        // both the admit-time increment *and* this decrement — the
+        // gauge is "live admission lifecycle, not durable buffer
+        // occupancy", so a rehydrated transaction that terminates
+        // during this activation must not reduce the gauge below
+        // the live-admission volume.
+        var wasRehydrated = _rehydratedKeys.Remove(key);
+        if (!wasRehydrated)
+        {
+            LatticeReplicationMetrics.ApplyTxBuffered.Add(
+                -1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId));
+            if (releasedBytes > 0)
+            {
+                LatticeReplicationMetrics.ApplyTxBufferBytes.Add(
+                    -releasedBytes,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId));
+            }
         }
 
         if (deleteFromStore)

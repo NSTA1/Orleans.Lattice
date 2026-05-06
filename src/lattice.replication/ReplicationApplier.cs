@@ -897,89 +897,177 @@ internal sealed partial class ReplicationApplier(
                 + "buffer-grain contract violation (BatchComplete=true requires a non-empty CompletedBatch).");
         }
 
-        // Map TxStagedEntry → AtomicApplyEntry. ReplogOp.Set becomes a
-        // non-tombstone item with its committed value bytes and
-        // ExpiresAtTicks; ReplogOp.Delete becomes a tombstone item with
-        // a null Value and ExpiresAtTicks=0 (the contract on
-        // AtomicApplyEntry forbids non-zero expiry on tombstones).
-        // Range-delete entries are not part of an atomic batch by
-        // construction (the producer's SetManyAtomicAsync surface only
-        // emits Set/Delete) so they do not appear here; if a malformed
-        // entry slips through we surface it as the same
-        // InvalidOperationException the canonical apply path raises.
-        var applyEntries = new AtomicApplyEntry[completedBatch.Count];
-        var maxHlc = baselineHlc;
-        for (var i = 0; i < completedBatch.Count; i++)
+        // Atomic-batch terminal-disposition observability. The
+        // outcome is null until a terminal branch decides it; a
+        // null-on-exit (only reachable via OperationCanceledException
+        // re-throw) intentionally skips both the duration histogram
+        // and the tx_completed counter, because cancellation is not
+        // a terminal disposition — the producer redelivers the
+        // trigger on the next pump cycle and the buffer admits a
+        // fresh transaction-key cycle, which records the eventual
+        // terminal disposition then. Every other path sets `outcome`
+        // before returning so the finally records exactly one
+        // sample/increment per terminal saga.
+        string? outcome = null;
+        try
         {
-            var staged = completedBatch[i].Entry;
-            applyEntries[i] = MapStagedToAtomicApplyEntry(staged, trigger.TreeId);
-
-            if (staged.Timestamp.CompareTo(maxHlc) > 0)
+            // Map TxStagedEntry → AtomicApplyEntry. ReplogOp.Set becomes a
+            // non-tombstone item with its committed value bytes and
+            // ExpiresAtTicks; ReplogOp.Delete becomes a tombstone item with
+            // a null Value and ExpiresAtTicks=0 (the contract on
+            // AtomicApplyEntry forbids non-zero expiry on tombstones).
+            // Range-delete entries are not part of an atomic batch by
+            // construction (the producer's SetManyAtomicAsync surface only
+            // emits Set/Delete) so they do not appear here; if a malformed
+            // entry slips through we surface it as the same
+            // InvalidOperationException the canonical apply path raises.
+            var applyEntries = new AtomicApplyEntry[completedBatch.Count];
+            var maxHlc = baselineHlc;
+            for (var i = 0; i < completedBatch.Count; i++)
             {
-                maxHlc = staged.Timestamp;
+                var staged = completedBatch[i].Entry;
+                applyEntries[i] = MapStagedToAtomicApplyEntry(staged, trigger.TreeId);
+
+                if (staged.Timestamp.CompareTo(maxHlc) > 0)
+                {
+                    maxHlc = staged.Timestamp;
+                }
+            }
+
+            // Saga-wide VC: per the producer-side capture contract every
+            // entry in the batch shares the same frontier, so reading from
+            // index 0 is canonical.
+            var sagaVc = completedBatch[0].Entry.VectorClock;
+
+            var apply = grainFactory.GetGrain<IReplicationApplyGrain>(trigger.TreeId);
+            AtomicApplyResult sagaResult;
+            try
+            {
+                sagaResult = await apply.ApplyManyAtomicAsync(
+                    applyEntries,
+                    trigger.TransactionId,
+                    trigger.OriginClusterId!,
+                    sagaVc,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancellation is not a saga failure — propagate to the
+                // caller so the cooperative cancellation contract is
+                // preserved (no DLQ park, no HWM advance, the producer's
+                // next pump cycle redelivers the trigger entry).
+                throw;
+            }
+            catch (Exception ex)
+            {
+                await RouteAtomicBatchToDlqAsync(
+                    trigger.TreeId,
+                    completedBatch,
+                    ex.Message ?? "Atomic apply saga threw with no message.",
+                    cancellationToken).ConfigureAwait(false);
+                outcome = LatticeReplicationMetrics.OutcomeTxDlqApplyFailure;
+                return (false, baselineHlc);
+            }
+
+            if (sagaResult.Outcome == AtomicApplyOutcome.Compensated)
+            {
+                await RouteAtomicBatchToDlqAsync(
+                    trigger.TreeId,
+                    completedBatch,
+                    sagaResult.FailureReason ?? "Atomic apply saga compensated.",
+                    cancellationToken).ConfigureAwait(false);
+                outcome = LatticeReplicationMetrics.OutcomeTxDlqApplyFailure;
+                return (false, baselineHlc);
+            }
+
+            // Defence-in-depth: a Committed outcome must have applied
+            // every entry in the batch — the saga is all-or-nothing by
+            // construction. A mismatch indicates a saga-contract violation
+            // (e.g. a future RunSagaAsync refactor that silently drops a
+            // per-key write); surface it as a typed exception so the
+            // per-origin HWM is not advanced past entries that never
+            // landed and the producer redelivers on the next pump cycle.
+            if (sagaResult.AppliedCount != completedBatch.Count)
+            {
+                // Contract violation maps onto the dlq_apply_failure
+                // partition for visibility-surface accounting: the
+                // batch did not commit cleanly and is not safely
+                // re-applicable without operator intervention. The
+                // outcome is stamped before throw so the finally
+                // records the terminal disposition.
+                outcome = LatticeReplicationMetrics.OutcomeTxDlqApplyFailure;
+                throw new InvalidOperationException(
+                    $"Atomic apply saga on tree '{trigger.TreeId}' returned Committed with "
+                    + $"AppliedCount={sagaResult.AppliedCount} but BatchSize={completedBatch.Count} — "
+                    + "saga contract violation (Committed implies every entry applied).");
+            }
+
+            outcome = LatticeReplicationMetrics.OutcomeTxSuccess;
+            return (true, maxHlc);
+        }
+        finally
+        {
+            if (outcome is not null)
+            {
+                RecordTxApplyTerminal(trigger.TreeId, completedBatch, outcome);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records the cross-cluster atomic-batch apply latency
+    /// (<see cref="LatticeReplicationMetrics.ApplyTxApplyDurationMs"/>)
+    /// and the matching terminal-disposition counter
+    /// (<see cref="LatticeReplicationMetrics.ApplyTxCompleted"/>) for
+    /// a saga that reached one of the two apply-side outcome
+    /// partitions (<see cref="LatticeReplicationMetrics.OutcomeTxSuccess"/>
+    /// or <see cref="LatticeReplicationMetrics.OutcomeTxDlqApplyFailure"/>).
+    /// The duration sample is the wall-clock interval from the first
+    /// staged entry of the batch landing on the buffer (as the
+    /// minimum <see cref="TxStagedEntry.EnqueuedAtTicks"/>) to the
+    /// saga returning a terminal outcome — i.e. the user-visible
+    /// cross-cluster atomic-batch latency operators alert on. The
+    /// sample is clamped non-negative so a wall-clock skew between
+    /// admit-time and now does not corrupt the histogram.
+    /// </summary>
+    private static void RecordTxApplyTerminal(
+        string treeId,
+        IReadOnlyList<TxStagedEntry> completedBatch,
+        string outcome)
+    {
+        // Skip when treeId is empty so a validation throw on the
+        // tree-id guard does not publish a sample with an empty
+        // tree tag (which would be unusable for per-tree alerting).
+        // Mirrors the same guard on
+        // <see cref="RecordApplyDuration(string, long, string)"/>.
+        if (string.IsNullOrEmpty(treeId) || completedBatch.Count == 0)
+        {
+            return;
+        }
+
+        var minEnqueuedTicks = completedBatch[0].EnqueuedAtTicks;
+        for (var i = 1; i < completedBatch.Count; i++)
+        {
+            if (completedBatch[i].EnqueuedAtTicks < minEnqueuedTicks)
+            {
+                minEnqueuedTicks = completedBatch[i].EnqueuedAtTicks;
             }
         }
 
-        // Saga-wide VC: per the producer-side capture contract every
-        // entry in the batch shares the same frontier, so reading from
-        // index 0 is canonical.
-        var sagaVc = completedBatch[0].Entry.VectorClock;
+        var elapsedTicks = DateTime.UtcNow.Ticks - minEnqueuedTicks;
+        var elapsedMs = elapsedTicks >= 0
+            ? elapsedTicks / (double)TimeSpan.TicksPerMillisecond
+            : 0d;
 
-        var apply = grainFactory.GetGrain<IReplicationApplyGrain>(trigger.TreeId);
-        AtomicApplyResult sagaResult;
-        try
-        {
-            sagaResult = await apply.ApplyManyAtomicAsync(
-                applyEntries,
-                trigger.TransactionId,
-                trigger.OriginClusterId!,
-                sagaVc,
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Cancellation is not a saga failure — propagate to the
-            // caller so the cooperative cancellation contract is
-            // preserved (no DLQ park, no HWM advance, the producer's
-            // next pump cycle redelivers the trigger entry).
-            throw;
-        }
-        catch (Exception ex)
-        {
-            await RouteAtomicBatchToDlqAsync(
-                trigger.TreeId,
-                completedBatch,
-                ex.Message ?? "Atomic apply saga threw with no message.",
-                cancellationToken).ConfigureAwait(false);
-            return (false, baselineHlc);
-        }
+        LatticeReplicationMetrics.ApplyTxApplyDurationMs.Record(
+            elapsedMs,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome));
 
-        if (sagaResult.Outcome == AtomicApplyOutcome.Compensated)
-        {
-            await RouteAtomicBatchToDlqAsync(
-                trigger.TreeId,
-                completedBatch,
-                sagaResult.FailureReason ?? "Atomic apply saga compensated.",
-                cancellationToken).ConfigureAwait(false);
-            return (false, baselineHlc);
-        }
-
-        // Defence-in-depth: a Committed outcome must have applied
-        // every entry in the batch — the saga is all-or-nothing by
-        // construction. A mismatch indicates a saga-contract violation
-        // (e.g. a future RunSagaAsync refactor that silently drops a
-        // per-key write); surface it as a typed exception so the
-        // per-origin HWM is not advanced past entries that never
-        // landed and the producer redelivers on the next pump cycle.
-        if (sagaResult.AppliedCount != completedBatch.Count)
-        {
-            throw new InvalidOperationException(
-                $"Atomic apply saga on tree '{trigger.TreeId}' returned Committed with "
-                + $"AppliedCount={sagaResult.AppliedCount} but BatchSize={completedBatch.Count} — "
-                + "saga contract violation (Committed implies every entry applied).");
-        }
-
-        return (true, maxHlc);
+        LatticeReplicationMetrics.ApplyTxCompleted.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome));
     }
 
     private static AtomicApplyEntry MapStagedToAtomicApplyEntry(ReplogEntry staged, string treeId) =>

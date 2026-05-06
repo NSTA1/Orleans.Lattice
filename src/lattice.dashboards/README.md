@@ -10,7 +10,7 @@ Three Grafana dashboards (Grafana schema v39, Prometheus data source) shipped as
 |------|-------|
 | `Overview` | Per-tree throughput, leaf-write percentiles, cache hit-rate, tombstone churn, splits, atomic-write outcomes, coordinator completions, tree-lifecycle, events, runtime config changes. |
 | `CommitPath` | Foreground commit path: `leaf.commit.duration{step=wal|apply|observer}` percentiles and activation `leaf.replay.duration / .entries{outcome=tail|rebuild}`. |
-| `Replication` | Cross-cluster replication: ship / apply / lag, WAL append-vs-trim, dead-letter churn, apply violations, dependency wait, fell-off-log, per-peer cursor lag. |
+| `Replication` | Cross-cluster replication: ship / apply / lag, WAL append-vs-trim, dead-letter churn, apply violations, dependency wait, fell-off-log, per-peer cursor lag, cross-cluster atomic-batch staging. |
 
 Plus Grafana provisioning templates under `Provisioning/`:
 

@@ -449,4 +449,166 @@ public class LatticeReplicationMetricsTests
         Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
             t.Key == "origin" && (string?)t.Value == "site-a"));
     }
+
+    // --- Atomic-batch instruments (R-101) --------------------------------------
+
+    [Test]
+    public void Atomic_batch_outcome_constants_use_canonical_values()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.OutcomeTxSuccess, Is.EqualTo("success"));
+            Assert.That(LatticeReplicationMetrics.OutcomeTxDlqOrphan, Is.EqualTo("dlq_orphan"));
+            Assert.That(LatticeReplicationMetrics.OutcomeTxDlqApplyFailure, Is.EqualTo("dlq_apply_failure"));
+            Assert.That(LatticeReplicationMetrics.OutcomeTxEvictedCapacity, Is.EqualTo("evicted_capacity"));
+        });
+    }
+
+    [Test]
+    public void Apply_tx_buffered_counter_has_expected_name_and_unit()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ApplyTxBuffered.Name,
+                Is.EqualTo("orleans.lattice.replication.apply.tx_buffered"));
+            Assert.That(LatticeReplicationMetrics.ApplyTxBuffered.Unit, Is.EqualTo("{transaction}"));
+            Assert.That(LatticeReplicationMetrics.ApplyTxBufferedName,
+                Is.EqualTo(LatticeReplicationMetrics.ApplyTxBuffered.Name));
+        });
+    }
+
+    [Test]
+    public void Apply_tx_buffered_counter_records_signed_delta_with_tree_tag()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyTxBufferedName);
+
+        LatticeReplicationMetrics.ApplyTxBuffered.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-tx"));
+        LatticeReplicationMetrics.ApplyTxBuffered.Add(-1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-tx"));
+
+        var samples = collector.Measurements.ToArray();
+        Assert.That(samples, Has.Length.EqualTo(2));
+        Assert.That(samples[0].Value, Is.EqualTo(1L));
+        Assert.That(samples[1].Value, Is.EqualTo(-1L));
+        foreach (var sample in samples)
+        {
+            Assert.That(sample.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "tree" && (string?)t.Value == "tree-tx"));
+        }
+    }
+
+    [Test]
+    public void Apply_tx_buffer_bytes_counter_has_expected_name_and_unit()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ApplyTxBufferBytes.Name,
+                Is.EqualTo("orleans.lattice.replication.apply.tx_buffer_bytes"));
+            Assert.That(LatticeReplicationMetrics.ApplyTxBufferBytes.Unit, Is.EqualTo("By"));
+            Assert.That(LatticeReplicationMetrics.ApplyTxBufferBytesName,
+                Is.EqualTo(LatticeReplicationMetrics.ApplyTxBufferBytes.Name));
+        });
+    }
+
+    [Test]
+    public void Apply_tx_buffer_bytes_counter_records_with_tree_tag()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyTxBufferBytesName);
+
+        LatticeReplicationMetrics.ApplyTxBufferBytes.Add(512,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-tx"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(512L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "tree-tx"));
+    }
+
+    [Test]
+    public void Apply_tx_apply_duration_ms_histogram_has_expected_name()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ApplyTxApplyDurationMs.Name,
+                Is.EqualTo("orleans.lattice.replication.apply.tx_apply_duration_ms"));
+            // Name encodes the unit (`tx_apply_duration_ms`); unit left null so an
+            // OTel→Prometheus exporter does not append `_milliseconds` to the wire
+            // name. Mirrors the existing `apply.dependency_wait_ms` convention.
+            Assert.That(LatticeReplicationMetrics.ApplyTxApplyDurationMs.Unit, Is.Null);
+            Assert.That(LatticeReplicationMetrics.ApplyTxApplyDurationMsName,
+                Is.EqualTo(LatticeReplicationMetrics.ApplyTxApplyDurationMs.Name));
+        });
+    }
+
+    [Test]
+    public void Apply_tx_apply_duration_ms_histogram_records_with_tree_and_outcome_tags()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyTxApplyDurationMsName);
+
+        LatticeReplicationMetrics.ApplyTxApplyDurationMs.Record(75.5,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-tx"),
+            new KeyValuePair<string, object?>(
+                LatticeReplicationMetrics.TagOutcome,
+                LatticeReplicationMetrics.OutcomeTxSuccess));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(75.5));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "tree-tx"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "outcome" && (string?)t.Value == "success"));
+    }
+
+    [Test]
+    public void Apply_tx_completed_counter_has_expected_name_and_unit()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ApplyTxCompleted.Name,
+                Is.EqualTo("orleans.lattice.replication.apply.tx_completed"));
+            Assert.That(LatticeReplicationMetrics.ApplyTxCompleted.Unit, Is.EqualTo("{transaction}"));
+            Assert.That(LatticeReplicationMetrics.ApplyTxCompletedName,
+                Is.EqualTo(LatticeReplicationMetrics.ApplyTxCompleted.Name));
+        });
+    }
+
+    [Test]
+    public void Apply_tx_completed_counter_records_with_tree_and_outcome_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyTxCompletedName);
+
+        // Exercise every outcome partition so the test asserts the
+        // counter accepts each constant value cleanly. The MeterCollector
+        // captures every measurement; we assert one per outcome.
+        var outcomes = new[]
+        {
+            LatticeReplicationMetrics.OutcomeTxSuccess,
+            LatticeReplicationMetrics.OutcomeTxDlqOrphan,
+            LatticeReplicationMetrics.OutcomeTxDlqApplyFailure,
+            LatticeReplicationMetrics.OutcomeTxEvictedCapacity,
+        };
+        foreach (var outcome in outcomes)
+        {
+            LatticeReplicationMetrics.ApplyTxCompleted.Add(1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-tx"),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome));
+        }
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(4));
+        var observedOutcomes = collector.Measurements
+            .Select(m => m.Tags.Single(t => t.Key == "outcome").Value as string)
+            .ToHashSet();
+        Assert.That(observedOutcomes, Is.EquivalentTo(outcomes));
+    }
 }

@@ -425,8 +425,8 @@
     },
     {
       "id": 9,
-      "title": "Apply buffer (entries / bytes)",
-      "description": "Causal-apply buffer occupancy. Only emits when causal staging parks an entry. Flat-zero (or absent) means no causal staging is engaged. When non-zero, see the apply-lag overlay panel for the bistability signal.",
+      "title": "Apply buffer (entries)",
+      "description": "Causal-apply buffer occupancy in entries. Only emits when causal staging parks an entry. Flat-zero (or absent) means no causal staging is engaged. When non-zero, see the apply-lag overlay panel for the bistability signal. The matching bytes panel is rendered to the right of this one.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -444,20 +444,15 @@
       },
       "targets": [
         {
-          "refId": "E",
+          "refId": "A",
           "expr": "sum by (tree) (orleans_lattice_replication_apply_buffered_entries{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}) or vector(0)",
-          "legendFormat": "entries {{tree}}"
-        },
-        {
-          "refId": "B",
-          "expr": "sum by (tree) (orleans_lattice_replication_apply_buffer_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}) or vector(0)",
-          "legendFormat": "bytes {{tree}}"
+          "legendFormat": "{{tree}}"
         }
       ]
     },
     {
       "id": 10,
-      "title": "Per-peer entries / bytes behind",
+      "title": "Per-peer entries behind",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -466,8 +461,8 @@
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 12,
-        "y": 28
+        "x": 0,
+        "y": 35
       },
       "fieldConfig": {
         "defaults": {},
@@ -475,14 +470,9 @@
       },
       "targets": [
         {
-          "refId": "E",
+          "refId": "A",
           "expr": "sum by (peer) (orleans_lattice_replication_peer_entries_behind{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
-          "legendFormat": "entries {{peer}}"
-        },
-        {
-          "refId": "B",
-          "expr": "sum by (peer) (orleans_lattice_replication_peer_bytes_behind_bytes{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
-          "legendFormat": "bytes {{peer}}"
+          "legendFormat": "{{peer}}"
         }
       ]
     },
@@ -498,7 +488,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 35
+        "y": 42
       },
       "fieldConfig": {
         "defaults": {
@@ -526,7 +516,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 35
+        "y": 42
       },
       "fieldConfig": {
         "defaults": {
@@ -571,7 +561,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 49
       },
       "fieldConfig": {
         "defaults": {
@@ -606,6 +596,213 @@
           "refId": "BUF",
           "expr": "sum (orleans_lattice_replication_apply_buffered_entries{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}) or vector(0)",
           "legendFormat": "buffered entries"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "Apply buffer (bytes)",
+      "description": "Causal-apply buffer occupancy in bytes. Tracks the same lifecycle as the entries panel to its left at byte granularity. Together they bound the buffer against CausalBufferMaxEntries and CausalBufferMaxBytes. Flat-zero (or absent) means no causal staging is engaged.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree) (orleans_lattice_replication_apply_buffer_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}) or vector(0)",
+          "legendFormat": "{{tree}}"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "Per-peer bytes behind",
+      "description": "Cumulative WAL payload bytes the local sender has yet to ship to each peer. Companion to the per-peer entries-behind panel to the left.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (peer) (orleans_lattice_replication_peer_bytes_behind_bytes{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{peer}}"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Atomic-batch buffer (transactions)",
+      "description": "Distinct cross-cluster atomic-batch transactions partially-buffered on the receiver-side staging buffer. Only emits when the tree has opted into AtomicBatchDelivery and at least one batch is partially staged. Flat-zero (or absent) is the healthy steady state.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 57
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree) (orleans_lattice_replication_apply_tx_buffered{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}) or vector(0)",
+          "legendFormat": "{{tree}}"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Atomic-batch buffer (bytes)",
+      "description": "Cumulative serialised payload size parked on the receiver-side atomic-batch staging buffer. Tracks the same lifecycle as the transactions panel at per-entry granularity. Only emits when AtomicBatchDelivery is enabled.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 57
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree) (orleans_lattice_replication_apply_tx_buffer_bytes_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}) or vector(0)",
+          "legendFormat": "{{tree}}"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "Atomic-batch apply duration p50/p95/p99 (ms)",
+      "description": "Cross-cluster atomic-batch latency from first-stage to saga-terminal. Recorded once per terminal apply outcome (success or dlq_apply_failure); orphan and capacity eviction do not contribute because no apply is attempted. Flat-zero is the healthy steady state when AtomicBatchDelivery is disabled.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 64
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "P50",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_replication_apply_tx_apply_duration_ms_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "P95",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_tx_apply_duration_ms_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "P99",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_replication_apply_tx_apply_duration_ms_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Atomic-batch completion rate by outcome (ops/s)",
+      "description": "Receiver-side atomic-batch transactions reaching a terminal disposition, split four ways by outcome: success (committed atomically), dlq_apply_failure (saga compensated — parked on the dead-letter queue, producer continues to re-ship), dlq_orphan (partial-buffer timeout swept — parked on the dead-letter queue), evicted_capacity (admission-control eviction — parked on the dead-letter queue). The sum across the four series equals the total admitted-transaction rate in steady state.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 64
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "success" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "dlq_apply_failure" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "dlq_orphan" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "evicted_capacity" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "purple" } }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(orleans_lattice_replication_apply_tx_completed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "{{outcome}}"
         }
       ]
     }
