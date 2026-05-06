@@ -33,10 +33,33 @@ internal sealed class LeafCacheGrain(
     private string? _treeId;
 
     /// <summary>
+    /// Cached resolved <see cref="GrainId"/> of the primary leaf. The
+    /// activation key is immutable for the activation's lifetime, so the
+    /// parsed value is invariant — caching it avoids re-running
+    /// <c>GrainId.Parse(context.GrainId.Key.ToString())</c> on every
+    /// <see cref="RefreshAsync"/>, which allocated a string + a re-parsed
+    /// GrainId per call. Lazily initialised on first use because the
+    /// grain context is set up before the constructor returns but reading
+    /// it eagerly here would order-couple the field initialiser to the
+    /// primary constructor.
+    /// </summary>
+    private GrainId? _cachedPrimaryLeafId;
+
+    /// <summary>
+    /// The most recent same-silo revision cookie this cache successfully
+    /// observed and refreshed against. Used by <see cref="RefreshAsync"/>
+    /// to skip the cross-grain <see cref="IBPlusLeafGrain.GetDeltaSinceAsync"/>
+    /// call when the primary leaf is on the same silo and has not
+    /// advanced since this cache last refreshed. <c>0</c> means "never
+    /// successfully refreshed" — must take the cross-grain refresh path.
+    /// </summary>
+    private long _lastSeenPrimaryRevision;
+
+    /// <summary>
     /// The <see cref="GrainId"/> string of the primary leaf grain this cache
     /// is associated with. Parsed from the grain's own string key.
     /// </summary>
-    private GrainId PrimaryLeafId => GrainId.Parse(context.GrainId.Key.ToString()!);
+    private GrainId PrimaryLeafId => _cachedPrimaryLeafId ??= GrainId.Parse(context.GrainId.Key.ToString()!);
 
     public async Task<byte[]?> GetAsync(string key)
     {
@@ -104,7 +127,27 @@ internal sealed class LeafCacheGrain(
                 return;
         }
 
-        var primaryLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
+        // Same-silo revision-cookie fast path. When the primary leaf
+        // grain is activated on this silo, every state-advancing
+        // operation on it bumps a process-wide cookie published via
+        // BPlusLeafGrain.LeafRevisionRegistry. If the cookie has not
+        // advanced since our last successful refresh, no observable
+        // state has changed on the primary and a cross-grain
+        // GetDeltaSinceAsync call would return the singleton empty
+        // delta — so we elide the entire cross-grain call. Cross-silo
+        // primaries do not populate this silo's registry, so
+        // TryGetLeafRevision returns false and we fall through to the
+        // existing cross-grain refresh path; correctness is preserved
+        // by construction in multi-silo deployments.
+        var primaryId = PrimaryLeafId;
+        if (_lastSeenPrimaryRevision > 0
+            && BPlusLeafGrain.TryGetLeafRevision(primaryId, out var rev)
+            && rev == _lastSeenPrimaryRevision)
+        {
+            return;
+        }
+
+        var primaryLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(primaryId);
         var delta = await primaryLeaf.GetDeltaSinceAsync(_version);
 
         // If the primary leaf has been split, prune any cached entries that
@@ -125,6 +168,15 @@ internal sealed class LeafCacheGrain(
                 _cache.Remove(key);
             }
         }
+
+        // After the cross-grain refresh succeeded, snapshot the cookie
+        // so subsequent same-silo reads can short-circuit. If the
+        // cookie is absent (cross-silo primary), record 0 so the
+        // condition above stays false and we keep RPC'ing — same
+        // behaviour as today.
+        _lastSeenPrimaryRevision = BPlusLeafGrain.TryGetLeafRevision(primaryId, out var observedRev)
+            ? observedRev
+            : 0L;
 
         if (delta.IsEmpty)
             return;
