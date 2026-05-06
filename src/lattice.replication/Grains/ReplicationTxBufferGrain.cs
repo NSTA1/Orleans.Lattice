@@ -435,6 +435,332 @@ internal sealed class ReplicationTxBufferGrain(
         return Task.FromResult<HybridLogicalClock?>(enumerator.Current);
     }
 
+    /// <inheritdoc />
+    public async Task<int> SweepOrphansAsync(TimeSpan orphanTimeout, CancellationToken cancellationToken)
+    {
+        if (orphanTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(orphanTimeout),
+                orphanTimeout,
+                "Orphan timeout must be strictly greater than TimeSpan.Zero.");
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        if (_admissionOrder.Count == 0)
+        {
+            return 0;
+        }
+
+        var cutoffTicks = DateTime.UtcNow.Ticks - orphanTimeout.Ticks;
+
+        // Collect orphan keys before mutating the index. _admissionOrder
+        // is FIFO by first-admit time, so we can stop at the first
+        // non-orphan: every later transaction is younger by construction.
+        // We use the per-transaction min(EnqueuedAtTicks) as the orphan
+        // age clock so a transaction whose first sibling arrived long
+        // ago but whose later siblings arrived recently is still
+        // recognised as an orphan (the missing sibling is the slow one).
+        //
+        // Pre-sized to _admissionOrder.Count: in the common case where
+        // the entire admission queue has aged past cutoff (heavy ack
+        // loss, producer crash) we avoid the default-capacity-4 List
+        // grow-and-copy cycle that would allocate O(log N) intermediate
+        // arrays.
+        var orphanKeys = new List<TransactionKey>(_admissionOrder.Count);
+        foreach (var key in _admissionOrder)
+        {
+            if (!_byTransaction.TryGetValue(key, out var siblings) || siblings.Count == 0)
+            {
+                // Defensive self-heal: if invariant is violated
+                // (admission order tracks a key that has no sibling
+                // map row, or whose row was concurrently emptied),
+                // continue scanning. The key is removed from
+                // _admissionOrder + _admissionNodes inside the per-
+                // orphan loop below where mutation under iteration
+                // is safe.
+                continue;
+            }
+
+            var oldestStagedTicks = long.MaxValue;
+            foreach (var staged in siblings.Values)
+            {
+                if (staged.EnqueuedAtTicks < oldestStagedTicks)
+                {
+                    oldestStagedTicks = staged.EnqueuedAtTicks;
+                }
+            }
+
+            if (oldestStagedTicks > cutoffTicks)
+            {
+                // FIFO ordering: every subsequent transaction was
+                // first-admitted no earlier than this one (admission
+                // append-at-end keeps _admissionOrder monotonic in
+                // first-admit time). Stop scanning.
+                break;
+            }
+
+            orphanKeys.Add(key);
+        }
+
+        if (orphanKeys.Count == 0)
+        {
+            return 0;
+        }
+
+        var hwm = grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(_treeId);
+        var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(_treeId);
+        var floorChanged = false;
+
+        // Build the failure-reason string ONCE per sweep. The orphan
+        // timeout is constant within a single SweepOrphansAsync call,
+        // so per-displaced interpolation would allocate one heap-string
+        // per evicted entry — wasteful when an orphan with N siblings
+        // is the common shape (a 100-entry orphan produces 99 redundant
+        // copies of the same string).
+        var failureReason =
+            "Orphaned atomic-batch transaction: stuck in the per-tree staging buffer "
+            + $"longer than the configured orphan timeout ({orphanTimeout}).";
+        var evicted = 0;
+
+        foreach (var key in orphanKeys)
+        {
+            // Cancellation honoured strictly BETWEEN orphans, not
+            // mid-orphan. Once we begin DLQ-parking an orphan's
+            // entries, we commit to running the full
+            // (DLQ-park → Remove → HWM-advance) sequence so the orphan
+            // never lands in a partial state where some-but-not-all
+            // entries have been parked or where Remove ran without
+            // any park attempt. Inner-loop cancellation is swallowed
+            // for the same reason (see DLQ inner-catch below).
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!_byTransaction.TryGetValue(key, out var siblings) || siblings.Count == 0)
+            {
+                // Defensive self-heal for the invariant-violation
+                // path: drop the stale admission entry so subsequent
+                // sweeps don't re-scan it forever. Mirrors the
+                // detection-loop branch above; mutation here is safe
+                // because we're iterating a snapshot list, not the
+                // live _admissionOrder.
+                if (_admissionNodes.Remove(key, out var staleNode))
+                {
+                    _admissionOrder.Remove(staleNode);
+                }
+                continue;
+            }
+
+            // (1) Snapshot displaced entries before we mutate the
+            // in-memory index so the DLQ-park, Remove, and HWM-advance
+            // steps see a stable view independent of subsequent
+            // removals.
+            var displaced = siblings.Values.ToArray();
+
+            // (2) Compute the orphan's max HLC for the per-origin
+            // high-water-mark advance. Range deletes carry
+            // HybridLogicalClock.Zero, but admission rejects Zero so
+            // every staged entry has a positive HLC by construction.
+            var maxHlc = displaced[0].Entry.Timestamp;
+            for (var i = 1; i < displaced.Length; i++)
+            {
+                if (displaced[i].Entry.Timestamp.CompareTo(maxHlc) > 0)
+                {
+                    maxHlc = displaced[i].Entry.Timestamp;
+                }
+            }
+
+            // (3) Park every snapshot entry on the per-tree DLQ tagged
+            // ReasonOrphanTransaction *first*, before the irreversible
+            // Remove in step (4). Critical durability ordering: if the
+            // DLQ throws after Remove has already deleted the system-
+            // tree rows, the orphan is silently lost — the per-origin
+            // HWM advance in step (5) would cause every future re-ship
+            // from the producer to be filtered as a duplicate, leaving
+            // no recovery path. Parking first means a DLQ failure
+            // leaves the entries in the buffer for the next sweep to
+            // retry.
+            //
+            // Per-displaced try/catch swallows OCE: dlq.EnqueueAsync
+            // is NOT idempotent (it assigns a fresh entry id per call
+            // and creates a new system-tree row regardless of whether
+            // the same (key, timestamp, origin) tuple has been parked
+            // before), so propagating cancellation mid-loop would
+            // cause the next sweep to create duplicate DLQ rows for
+            // already-parked entries. Per-orphan atomicity (commit
+            // once we begin) is the safer trade.
+            foreach (var staged in displaced)
+            {
+                try
+                {
+                    await dlq.EnqueueAsync(
+                        staged.Entry,
+                        failureReason,
+                        retryCount: 0,
+                        reasonTag: LatticeReplicationMetrics.ReasonOrphanTransaction,
+                        cancellationToken).ConfigureAwait(true);
+                }
+                catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+                {
+                    // Swallow rather than propagate: see comment above.
+                    // The WAL still holds the original entry; the next
+                    // sweep will retry parking and Remove has not yet
+                    // run, so the orphan is fully recoverable.
+                    _logger.LogWarning(
+                        ex,
+                        "Orphan-sweep DLQ enqueue cancelled mid-orphan for tree {Tree} entry key {Key}; "
+                        + "the staged entry remains in the buffer and the next sweep will retry.",
+                        _treeId, staged.Entry.Key);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Orphan-sweep DLQ enqueue failed for tree {Tree} entry key {Key}; "
+                        + "the WAL still holds the original and the operator can recover via re-ship.",
+                        _treeId, staged.Entry.Key);
+                }
+            }
+
+            // (4) Remove from in-memory + system tree. This decrements
+            // _stagedHlcCounts for every released entry, so the buffer's
+            // blocked-floor pin advances naturally on the next
+            // GetLowestStagedHlcAsync read. Irreversible — runs only
+            // after the DLQ park attempts above have completed.
+            await RemoveTransactionAsync(key, deleteFromStore: true, cancellationToken).ConfigureAwait(true);
+            floorChanged = true;
+            evicted++;
+
+            // (5) Advance the per-origin HWM past the orphan's max
+            // HLC so causal-stream progress resumes. Best-effort: a
+            // concurrent advance from a newer apply may already have
+            // moved the HWM past this orphan, in which case
+            // TryAdvanceAsync returns false and the call is a no-op.
+            // OCE propagates here because the orphan has already been
+            // DLQ-parked and Removed; an aborted HWM advance only
+            // delays causal-stream progress for this origin until the
+            // next inbound apply, which is the same recovery path the
+            // generic-catch warning describes.
+            try
+            {
+                await hwm.TryAdvanceAsync(key.OriginClusterId, maxHlc, cancellationToken)
+                    .ConfigureAwait(true);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Orphan-sweep HWM advance failed for tree {Tree} origin {Origin} max-hlc {MaxHlc}; "
+                    + "the next inbound apply against this origin will retry the advance.",
+                    _treeId, key.OriginClusterId, maxHlc);
+            }
+        }
+
+        // (6) Republish the buffer's blocked-floor pin so the
+        // producer-side WAL garbage collector unpins through the
+        // orphan's HLC window. The per-tree maintenance grain runs
+        // this sweep outside the applier hot path, so without an
+        // explicit republish the registry would still hold the
+        // pre-sweep pin until the next applier admit / release
+        // fires — which could delay the next GC pass by a full
+        // maintenance cadence.
+        //
+        // Republish is best-effort: a registry failure here does not
+        // unwind the eviction count returned to the caller, because
+        // the eviction itself succeeded and the producer-side GC pin
+        // will be republished by the next applier admit/release on
+        // this tree.
+        if (floorChanged)
+        {
+            try
+            {
+                await RepublishBlockedFloorAsync(cancellationToken).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Orphan-sweep blocked-floor republish failed for tree {Tree}; "
+                    + "the next applier admit / release on this tree will republish the pin.",
+                    _treeId);
+            }
+        }
+
+        return evicted;
+    }
+
+    /// <summary>
+    /// Republishes the buffer's current blocked-floor state to
+    /// <see cref="cursorRegistry"/> after a state change driven by
+    /// the buffer grain itself (rehydration, orphan sweep) rather
+    /// than by an applier admit/release. The applier owns the steady-
+    /// state publish path; this helper covers the gaps where a
+    /// state mutation happens without an applier in the loop.
+    /// <para>
+    /// When the buffer is empty after the mutation the registry pin
+    /// is cleared via <see cref="ILatticeReplicationCursorRegistry.UnregisterAsync(string, string, CancellationToken)"/>;
+    /// when the buffer still holds entries the lowest staged HLC is
+    /// re-published with cursor <see cref="HybridLogicalClock.Zero"/>
+    /// (the registry's "no cursor contributed" sentinel for buffer-
+    /// only consumers, accepted by the blocked-floor overload). Both
+    /// paths swallow registry failures: the applier's standard
+    /// reporting path will republish on the next admit / release.
+    /// </para>
+    /// </summary>
+    private async Task RepublishBlockedFloorAsync(CancellationToken cancellationToken)
+    {
+        if (cursorRegistry is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_stagedHlcCounts.Count == 0)
+            {
+                await cursorRegistry.UnregisterAsync(
+                    _treeId,
+                    BlockedFloorConsumerId,
+                    cancellationToken).ConfigureAwait(true);
+                return;
+            }
+
+            HybridLogicalClock floor;
+            using (var enumerator = _stagedHlcCounts.Keys.GetEnumerator())
+            {
+                enumerator.MoveNext();
+                floor = enumerator.Current;
+            }
+
+            await cursorRegistry.ReportCursorAsync(
+                _treeId,
+                BlockedFloorConsumerId,
+                HybridLogicalClock.Zero,
+                floor,
+                cancellationToken).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Buffer blocked-floor republish failed for tree {Tree} after a self-driven state change; "
+                + "the next applier admit / release will republish the pin through the standard path.",
+                _treeId);
+        }
+    }
+
     private void AdmitInMemory(TxStagedEntry staged, bool isRehydration)
     {
         var key = new TransactionKey(staged.OriginClusterId, staged.TransactionId);

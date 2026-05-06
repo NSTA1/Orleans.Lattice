@@ -536,6 +536,47 @@ public class LatticeReplicationOptions
     public long AtomicBatchBufferMaxBytes { get; set; } = DefaultAtomicBatchBufferMaxBytes;
 
     /// <summary>
+    /// Maximum residency time of a partially-buffered atomic-batch
+    /// transaction on the per-tree receiver-side staging buffer
+    /// (<see cref="AtomicBatchDelivery"/>). The per-tree maintenance
+    /// grain sweeps stuck transactions on a half-cadence relative to
+    /// <see cref="MaintenanceGcInterval"/>; any transaction whose
+    /// oldest staged entry was admitted longer ago than this value
+    /// is evicted as an orphan: every staged entry is parked on the
+    /// per-tree dead-letter queue tagged
+    /// <see cref="LatticeReplicationMetrics.ReasonOrphanTransaction"/>,
+    /// the buffer's blocked-floor pin (the producer-side WAL
+    /// garbage-collection frontier published through
+    /// <see cref="ILatticeReplicationCursorRegistry"/>) is cleared so
+    /// the producer can resume trimming, and the per-origin
+    /// high-water-mark advances past the orphan's maximum HLC so
+    /// causal-stream progress resumes.
+    /// <para>
+    /// An orphan typically arises when a sibling entry was lost in
+    /// transit, the producer crashed mid-saga before emitting every
+    /// sibling, or the buffer was bumped against the per-tree
+    /// transaction-cap before the batch could complete (in which
+    /// case the cap-overflow path tagged <c>ReasonEvicted</c>
+    /// already drained the entry — the orphan-timeout path tagged
+    /// <c>ReasonOrphanTransaction</c> is the residual recovery for
+    /// the slow-arrival case). Operators recover individual orphan
+    /// entries via <c>ILatticeReplicationDeadLetters.ReplayAsync</c>;
+    /// the standard replay tooling routes the entry through the
+    /// canonical applier, bypassing the buffer.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultTxBufferOrphanTimeout"/>; the
+    /// validator rejects zero or negative values at first-resolve
+    /// time. Sized so a routine slow-network re-delivery has time
+    /// to land its missing sibling before the sweep evicts the
+    /// transaction, while still bounding the producer-side GC pin
+    /// and the receiver-side buffer occupancy in the genuine
+    /// orphan case.
+    /// </para>
+    /// </summary>
+    public TimeSpan TxBufferOrphanTimeout { get; set; } = DefaultTxBufferOrphanTimeout;
+
+    /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
     /// represents "unset". This default is rejected by
     /// <c>LatticeReplicationOptionsValidator</c> so a host that calls
@@ -741,4 +782,14 @@ public class LatticeReplicationOptions
     /// <see cref="DefaultAtomicBatchBufferMaxTransactions"/> default.
     /// </summary>
     public const long DefaultAtomicBatchBufferMaxBytes = 64L * 1024L * 1024L;
+
+    /// <summary>
+    /// Default value for <see cref="TxBufferOrphanTimeout"/>: 5
+    /// minutes. Sized so a routine slow-network re-delivery has time
+    /// to land its missing sibling without triggering an orphan
+    /// sweep, while still bounding the producer-side WAL GC pin and
+    /// the receiver-side buffer occupancy in the genuine orphan case
+    /// (producer crash mid-saga, lost-in-transit sibling).
+    /// </summary>
+    public static readonly TimeSpan DefaultTxBufferOrphanTimeout = TimeSpan.FromMinutes(5);
 }

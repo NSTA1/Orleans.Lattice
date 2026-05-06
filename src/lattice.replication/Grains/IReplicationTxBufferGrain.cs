@@ -101,4 +101,57 @@ internal interface IReplicationTxBufferGrain : IGrainWithStringKey
     /// </para>
     /// </summary>
     Task<HybridLogicalClock?> GetLowestStagedHlcAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Sweeps every partially-buffered atomic-batch transaction
+    /// whose oldest staged entry was admitted longer ago than
+    /// <paramref name="orphanTimeout"/>, evicts each as an orphan,
+    /// and returns the count of evicted transactions. Per-tree
+    /// maintenance grain calls this on a half-cadence relative to
+    /// <see cref="LatticeReplicationOptions.MaintenanceGcInterval"/>
+    /// using <see cref="LatticeReplicationOptions.TxBufferOrphanTimeout"/>.
+    /// <para>
+    /// Eviction sequence per orphaned transaction:
+    /// </para>
+    /// <list type="number">
+    ///   <item><description>Snapshot every staged entry of the orphan.</description></item>
+    ///   <item><description>Remove the transaction from the in-memory index and the
+    ///   backing system tree. The
+    ///   <see cref="GetLowestStagedHlcAsync(CancellationToken)"/>
+    ///   blocked-floor pin advances naturally on the next read because
+    ///   the staged HLCs are released from the multiset.</description></item>
+    ///   <item><description>Advance the per-origin high-water-mark
+    ///   past the orphan's maximum HLC via
+    ///   <see cref="IReplicationHighWaterMarkGrain.TryAdvanceAsync(string, HybridLogicalClock, CancellationToken)"/>
+    ///   so causal-stream progress resumes (best-effort: a concurrent
+    ///   advance from a newer apply may have already moved the HWM
+    ///   past the orphan).</description></item>
+    ///   <item><description>Park every snapshot entry on the per-tree
+    ///   dead-letter queue tagged
+    ///   <see cref="LatticeReplicationMetrics.ReasonOrphanTransaction"/>.
+    ///   The DLQ enqueue is best-effort: a deterministically failing
+    ///   DLQ does not pin the sweep, because the WAL still holds the
+    ///   originals (the per-origin HWM advance happens after the
+    ///   sweep, so a future re-ship surfaces as a re-delivery and is
+    ///   filtered by the HWM check).</description></item>
+    /// </list>
+    /// <para>
+    /// Cancellation is observed before each transaction is processed
+    /// so a partially-completed sweep does not stall the maintenance
+    /// grain's phase tick. The sweep is single-grain-turn-serialised
+    /// because every Orleans grain method is — concurrent admit /
+    /// removal calls observe the post-sweep state on their next turn.
+    /// </para>
+    /// </summary>
+    /// <param name="orphanTimeout">
+    /// Wall-clock residency ceiling above which a partially-buffered
+    /// transaction is considered an orphan. Must be strictly greater
+    /// than <see cref="TimeSpan.Zero"/>; the validator on
+    /// <see cref="LatticeReplicationOptions.TxBufferOrphanTimeout"/>
+    /// enforces this at first-resolve time, but the grain repeats
+    /// the guard so a programmatic caller cannot bypass it.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The count of evicted (orphaned) transactions.</returns>
+    Task<int> SweepOrphansAsync(TimeSpan orphanTimeout, CancellationToken cancellationToken);
 }

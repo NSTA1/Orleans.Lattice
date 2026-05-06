@@ -679,7 +679,6 @@ public class ReplicationTxBufferGrainTests
         await grain.AdmitAsync(MakeEntryAt(txOldest, 2, 0, Hlc(50)), CancellationToken.None);
         await grain.AdmitAsync(MakeEntryAt(txMiddle, 2, 0, Hlc(200)), CancellationToken.None);
 
-        // Pin reflects the oldest's lowest HLC.
         Assert.That(await grain.GetLowestStagedHlcAsync(CancellationToken.None), Is.EqualTo(Hlc(50)));
 
         // Admitting a third tx evicts txOldest (FIFO).
@@ -824,5 +823,709 @@ public class ReplicationTxBufferGrainTests
         var snapshot = await registry.SnapshotAsync(TreeId, CancellationToken.None);
         Assert.That(snapshot, Is.Empty,
             "an empty rehydration must not publish a (Zero, null) row to the registry");
+    }
+
+    // -------- Orphan sweep --------
+
+    private static async Task<(ReplicationTxBufferGrain grain, IReplicationDeadLetterGrain dlq, IReplicationHighWaterMarkGrain hwm)>
+        CreateOrphanSweepGrainAsync(int maxTransactions = 512)
+    {
+        var (store, _) = FakeSystemLattice.Create();
+        var context = Substitute.For<IGrainContext>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>()).Returns(dlq);
+        grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = OriginB,
+            AtomicBatchDelivery = true,
+            AtomicBatchBufferMaxTransactions = maxTransactions,
+        };
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(options);
+
+        var grain = new ReplicationTxBufferGrain(context, grainFactory, monitor, Serializer);
+        await grain.InitializeForTestingAsync(TreeId, store, CancellationToken.None);
+        return (grain, dlq, hwm);
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_throws_when_orphan_timeout_is_zero()
+    {
+        var (grain, _, _) = await CreateOrphanSweepGrainAsync();
+
+        Assert.That(
+            async () => await grain.SweepOrphansAsync(TimeSpan.Zero, CancellationToken.None),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_throws_when_orphan_timeout_is_negative()
+    {
+        var (grain, _, _) = await CreateOrphanSweepGrainAsync();
+
+        Assert.That(
+            async () => await grain.SweepOrphansAsync(TimeSpan.FromSeconds(-1), CancellationToken.None),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_propagates_pre_cancelled_token()
+    {
+        var (grain, _, _) = await CreateOrphanSweepGrainAsync();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.That(
+            async () => await grain.SweepOrphansAsync(TimeSpan.FromMinutes(5), cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_returns_zero_when_buffer_empty()
+    {
+        var (grain, dlq, hwm) = await CreateOrphanSweepGrainAsync();
+
+        var evicted = await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), CancellationToken.None);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(evicted, Is.Zero);
+            await dlq.DidNotReceive().EnqueueAsync(
+                Arg.Any<ReplogEntry>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await hwm.DidNotReceive().TryAdvanceAsync(
+                Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_returns_zero_when_no_admissions_exceed_timeout()
+    {
+        var (grain, dlq, hwm) = await CreateOrphanSweepGrainAsync();
+        var tx = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntry(tx, 3, 0), CancellationToken.None);
+
+        var evicted = await grain.SweepOrphansAsync(TimeSpan.FromHours(1), CancellationToken.None);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(evicted, Is.Zero);
+            Assert.That(await grain.CountTransactionsAsync(CancellationToken.None), Is.EqualTo(1));
+            await dlq.DidNotReceive().EnqueueAsync(
+                Arg.Any<ReplogEntry>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await hwm.DidNotReceive().TryAdvanceAsync(
+                Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_evicts_orphan_and_routes_each_entry_to_dlq_with_orphan_transaction_tag()
+    {
+        var (grain, dlq, _) = await CreateOrphanSweepGrainAsync();
+        var tx = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntry(tx, 3, 0), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntry(tx, 3, 1), CancellationToken.None);
+
+        await Task.Delay(50);
+
+        var evicted = await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), CancellationToken.None);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(evicted, Is.EqualTo(1));
+            Assert.That(await grain.CountTransactionsAsync(CancellationToken.None), Is.Zero);
+            // Two siblings, two DLQ enqueues, both tagged orphan-transaction.
+            await dlq.Received(2).EnqueueAsync(
+                Arg.Is<ReplogEntry>(e => e.TransactionId == tx),
+                Arg.Any<string>(),
+                0,
+                LatticeReplicationMetrics.ReasonOrphanTransaction,
+                Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_advances_per_origin_hwm_past_orphan_max_hlc()
+    {
+        var (grain, _, hwm) = await CreateOrphanSweepGrainAsync();
+        var tx = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntryAt(tx, 3, 0, Hlc(500)), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntryAt(tx, 3, 1, Hlc(700)), CancellationToken.None);
+
+        await Task.Delay(50);
+
+        var evicted = await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), CancellationToken.None);
+
+        Assert.That(evicted, Is.EqualTo(1));
+        await hwm.Received(1).TryAdvanceAsync(
+            OriginA, Hlc(700), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_removes_staged_rows_from_system_tree()
+    {
+        var (store, data) = FakeSystemLattice.Create();
+        var context = Substitute.For<IGrainContext>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>()).Returns(dlq);
+        grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = OriginB,
+            AtomicBatchDelivery = true,
+        };
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(options);
+
+        var grain = new ReplicationTxBufferGrain(context, grainFactory, monitor, Serializer);
+        await grain.InitializeForTestingAsync(TreeId, store, CancellationToken.None);
+
+        var tx = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntry(tx, 3, 0), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntry(tx, 3, 1), CancellationToken.None);
+        Assert.That(data.Count, Is.EqualTo(2));
+
+        await Task.Delay(50);
+        await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), CancellationToken.None);
+
+        Assert.That(data, Is.Empty);
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_evicts_multiple_orphans_in_admission_order()
+    {
+        var (grain, dlq, _) = await CreateOrphanSweepGrainAsync();
+        var txA = Guid.NewGuid();
+        var txB = Guid.NewGuid();
+        var txC = Guid.NewGuid();
+
+        await grain.AdmitAsync(MakeEntry(txA, 3, 0), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntry(txB, 3, 0), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntry(txC, 3, 0), CancellationToken.None);
+
+        await Task.Delay(50);
+        var evicted = await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), CancellationToken.None);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(evicted, Is.EqualTo(3));
+            Assert.That(await grain.CountTransactionsAsync(CancellationToken.None), Is.Zero);
+            await dlq.Received(1).EnqueueAsync(
+                Arg.Is<ReplogEntry>(e => e.TransactionId == txA),
+                Arg.Any<string>(), 0, LatticeReplicationMetrics.ReasonOrphanTransaction, Arg.Any<CancellationToken>());
+            await dlq.Received(1).EnqueueAsync(
+                Arg.Is<ReplogEntry>(e => e.TransactionId == txB),
+                Arg.Any<string>(), 0, LatticeReplicationMetrics.ReasonOrphanTransaction, Arg.Any<CancellationToken>());
+            await dlq.Received(1).EnqueueAsync(
+                Arg.Is<ReplogEntry>(e => e.TransactionId == txC),
+                Arg.Any<string>(), 0, LatticeReplicationMetrics.ReasonOrphanTransaction, Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_completed_batches_are_not_orphans()
+    {
+        var (grain, dlq, hwm) = await CreateOrphanSweepGrainAsync();
+        var tx = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntry(tx, 2, 0), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntry(tx, 2, 1), CancellationToken.None);
+        Assert.That(await grain.CountTransactionsAsync(CancellationToken.None), Is.Zero);
+
+        await Task.Delay(50);
+        var evicted = await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), CancellationToken.None);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(evicted, Is.Zero);
+            await dlq.DidNotReceive().EnqueueAsync(
+                Arg.Any<ReplogEntry>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await hwm.DidNotReceive().TryAdvanceAsync(
+                Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_skips_recent_transactions_after_finding_first_non_orphan()
+    {
+        var (grain, dlq, _) = await CreateOrphanSweepGrainAsync();
+        var oldTx = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntry(oldTx, 3, 0), CancellationToken.None);
+
+        await Task.Delay(100);
+
+        var newTx = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntry(newTx, 3, 0), CancellationToken.None);
+
+        var evicted = await grain.SweepOrphansAsync(TimeSpan.FromMilliseconds(50), CancellationToken.None);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(evicted, Is.EqualTo(1));
+            Assert.That(await grain.CountTransactionsAsync(CancellationToken.None), Is.EqualTo(1));
+            await dlq.Received(1).EnqueueAsync(
+                Arg.Is<ReplogEntry>(e => e.TransactionId == oldTx),
+                Arg.Any<string>(), 0, LatticeReplicationMetrics.ReasonOrphanTransaction, Arg.Any<CancellationToken>());
+            await dlq.DidNotReceive().EnqueueAsync(
+                Arg.Is<ReplogEntry>(e => e.TransactionId == newTx),
+                Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_swallows_dlq_failure_and_continues_eviction()
+    {
+        var (store, _) = FakeSystemLattice.Create();
+        var context = Substitute.For<IGrainContext>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        dlq.EnqueueAsync(
+                Arg.Any<ReplogEntry>(),
+                Arg.Any<string>(),
+                Arg.Any<int>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new InvalidOperationException("DLQ unavailable"));
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>()).Returns(dlq);
+        grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = OriginB,
+            AtomicBatchDelivery = true,
+        };
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(options);
+
+        var grain = new ReplicationTxBufferGrain(context, grainFactory, monitor, Serializer);
+        await grain.InitializeForTestingAsync(TreeId, store, CancellationToken.None);
+
+        var txA = Guid.NewGuid();
+        var txB = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntry(txA, 3, 0), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntry(txB, 3, 0), CancellationToken.None);
+
+        await Task.Delay(50);
+
+        // DLQ throws on every enqueue but the sweep must not unwind;
+        // both orphans must still be evicted from the in-memory index
+        // and HWM advances must still fire.
+        int evicted = 0;
+        Assert.DoesNotThrowAsync(async () =>
+        {
+            evicted = await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), CancellationToken.None);
+        });
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(evicted, Is.EqualTo(2));
+            Assert.That(await grain.CountTransactionsAsync(CancellationToken.None), Is.Zero);
+            await hwm.Received(2).TryAdvanceAsync(
+                Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_swallows_hwm_failure_and_continues_eviction()
+    {
+        var (store, _) = FakeSystemLattice.Create();
+        var context = Substitute.For<IGrainContext>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns<Task<bool>>(_ => throw new InvalidOperationException("HWM unavailable"));
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>()).Returns(dlq);
+        grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = OriginB,
+            AtomicBatchDelivery = true,
+        };
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(options);
+
+        var grain = new ReplicationTxBufferGrain(context, grainFactory, monitor, Serializer);
+        await grain.InitializeForTestingAsync(TreeId, store, CancellationToken.None);
+
+        var txA = Guid.NewGuid();
+        var txB = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntry(txA, 3, 0), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntry(txB, 3, 0), CancellationToken.None);
+
+        await Task.Delay(50);
+
+        int evicted = 0;
+        Assert.DoesNotThrowAsync(async () =>
+        {
+            evicted = await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), CancellationToken.None);
+        });
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(evicted, Is.EqualTo(2));
+            Assert.That(await grain.CountTransactionsAsync(CancellationToken.None), Is.Zero);
+            // DLQ still parked both orphans even though HWM advance threw.
+            await dlq.Received(1).EnqueueAsync(
+                Arg.Is<ReplogEntry>(e => e.TransactionId == txA),
+                Arg.Any<string>(), 0, LatticeReplicationMetrics.ReasonOrphanTransaction, Arg.Any<CancellationToken>());
+            await dlq.Received(1).EnqueueAsync(
+                Arg.Is<ReplogEntry>(e => e.TransactionId == txB),
+                Arg.Any<string>(), 0, LatticeReplicationMetrics.ReasonOrphanTransaction, Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_clears_blocked_floor_pin_when_buffer_drains_completely()
+    {
+        var (store, _) = FakeSystemLattice.Create();
+        var context = Substitute.For<IGrainContext>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>()).Returns(dlq);
+        grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = OriginB,
+            AtomicBatchDelivery = true,
+        };
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(options);
+
+        var registry = new InMemoryReplicationCursorRegistry();
+        var grain = new ReplicationTxBufferGrain(
+            context, grainFactory, monitor, Serializer, registry);
+        await grain.InitializeForTestingAsync(TreeId, store, CancellationToken.None);
+
+        var tx = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntry(tx, 3, 0), CancellationToken.None);
+
+        await Task.Delay(50);
+        var evicted = await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), CancellationToken.None);
+        Assert.That(evicted, Is.EqualTo(1));
+
+        var postSweep = await registry.SnapshotAsync(TreeId, CancellationToken.None);
+        var stillPinned = postSweep.Where(s => s.BlockedAtHlc is not null).ToList();
+        Assert.That(stillPinned, Is.Empty,
+            "after the orphan sweep drains the buffer the registry must hold no blocked-floor pin");
+    }
+
+    // -------- Audit-follow-up regression tests --------
+    //
+    // The following tests pin the eviction-step ordering and the
+    // failure-isolation contract surfaced by the post-ship audit:
+    //   * DLQ park runs strictly before the irreversible
+    //     RemoveTransactionAsync, so a DLQ outage cannot silently
+    //     drop entries the per-origin HWM filter would then mask.
+    //   * Cancellation is honoured between orphans only; mid-orphan
+    //     cancellation is swallowed so each orphan is committed-to
+    //     atomically once eviction begins (the per-orphan DLQ-park
+    //     loop must complete before the matching Remove + HWM run).
+    //   * Combined DLQ + HWM failures still evict the orphan.
+    //   * A blocked-floor republish failure does not unwind the
+    //     evicted-count return value.
+    //   * Boundary cases: single-entry partial orphan, MaxValue
+    //     timeout (cutoffTicks underflow protection).
+
+    [Test]
+    public async Task SweepOrphansAsync_evicts_orphan_when_dlq_and_hwm_both_throw()
+    {
+        var (store, _) = FakeSystemLattice.Create();
+        var context = Substitute.For<IGrainContext>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        dlq.EnqueueAsync(
+                Arg.Any<ReplogEntry>(),
+                Arg.Any<string>(),
+                Arg.Any<int>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new InvalidOperationException("DLQ down"));
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns<Task<bool>>(_ => throw new InvalidOperationException("HWM down"));
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>()).Returns(dlq);
+        grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = OriginB,
+            AtomicBatchDelivery = true,
+        };
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(options);
+
+        var grain = new ReplicationTxBufferGrain(context, grainFactory, monitor, Serializer);
+        await grain.InitializeForTestingAsync(TreeId, store, CancellationToken.None);
+
+        var tx = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntry(tx, 3, 0), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntry(tx, 3, 1), CancellationToken.None);
+
+        await Task.Delay(50);
+
+        int evicted = 0;
+        Assert.DoesNotThrowAsync(async () =>
+        {
+            evicted = await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), CancellationToken.None);
+        });
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(evicted, Is.EqualTo(1),
+                "the orphan must still evict from the in-memory buffer when both DLQ and HWM are unavailable");
+            Assert.That(await grain.CountTransactionsAsync(CancellationToken.None), Is.Zero);
+            await dlq.Received(2).EnqueueAsync(
+                Arg.Any<ReplogEntry>(), Arg.Any<string>(), 0,
+                LatticeReplicationMetrics.ReasonOrphanTransaction, Arg.Any<CancellationToken>());
+            await hwm.Received(1).TryAdvanceAsync(
+                OriginA, Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_returns_evicted_count_when_blocked_floor_republish_throws()
+    {
+        var (store, _) = FakeSystemLattice.Create();
+        var context = Substitute.For<IGrainContext>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>()).Returns(dlq);
+        grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = OriginB,
+            AtomicBatchDelivery = true,
+        };
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(options);
+
+        var registry = new ThrowingCursorRegistry();
+        var grain = new ReplicationTxBufferGrain(
+            context, grainFactory, monitor, Serializer, registry);
+        await grain.InitializeForTestingAsync(TreeId, store, CancellationToken.None);
+
+        var tx = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntry(tx, 3, 0), CancellationToken.None);
+
+        await Task.Delay(50);
+
+        int evicted = 0;
+        Assert.DoesNotThrowAsync(async () =>
+        {
+            evicted = await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), CancellationToken.None);
+        });
+
+        Assert.That(evicted, Is.EqualTo(1),
+            "the registry outage during the post-loop republish must not unwind the eviction count");
+        Assert.That(await grain.CountTransactionsAsync(CancellationToken.None), Is.Zero);
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_propagates_cancellation_between_orphans_and_keeps_remainder_buffered()
+    {
+        var (store, _) = FakeSystemLattice.Create();
+        var context = Substitute.For<IGrainContext>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>()).Returns(dlq);
+        grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = OriginB,
+            AtomicBatchDelivery = true,
+        };
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(options);
+
+        using var cts = new CancellationTokenSource();
+        var dlqCalls = 0;
+        dlq.EnqueueAsync(
+                Arg.Any<ReplogEntry>(),
+                Arg.Any<string>(),
+                Arg.Any<int>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                dlqCalls++;
+                if (dlqCalls == 1)
+                {
+                    cts.Cancel();
+                }
+                return Task.FromResult(0L);
+            });
+
+        var grain = new ReplicationTxBufferGrain(context, grainFactory, monitor, Serializer);
+        await grain.InitializeForTestingAsync(TreeId, store, CancellationToken.None);
+
+        var txA = Guid.NewGuid();
+        var txB = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntry(txA, 3, 0), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntry(txB, 3, 0), CancellationToken.None);
+
+        await Task.Delay(50);
+
+        Assert.That(
+            async () => await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), cts.Token),
+            Throws.InstanceOf<OperationCanceledException>(),
+            "cancellation between orphans must propagate as OCE");
+
+        Assert.That(await grain.CountTransactionsAsync(CancellationToken.None), Is.EqualTo(1),
+            "the second orphan must remain in the buffer when cancellation fired between orphans");
+        await dlq.Received(1).EnqueueAsync(
+            Arg.Is<ReplogEntry>(e => e.TransactionId == txA),
+            Arg.Any<string>(), 0, LatticeReplicationMetrics.ReasonOrphanTransaction,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_attempts_dlq_park_before_advancing_per_origin_high_water_mark()
+    {
+        // Critical-bug regression: pre-fix the eviction order was
+        // Remove -> HWM -> DLQ, so a DLQ outage after Remove +
+        // HWM-advance silently lost the orphan (HWM filter would
+        // mask every subsequent re-ship from the producer). Post-fix
+        // the order is DLQ -> Remove -> HWM, so a DLQ failure leaves
+        // the orphan recoverable on the next sweep.
+        //
+        // Partial batch (size=3, 2 admitted) so the transaction
+        // remains in the buffer for the sweep to evict.
+        var (grain, dlq, hwm) = await CreateOrphanSweepGrainAsync();
+        var tx = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntryAt(tx, 3, 0, Hlc(500)), CancellationToken.None);
+        await grain.AdmitAsync(MakeEntryAt(tx, 3, 1, Hlc(700)), CancellationToken.None);
+
+        await Task.Delay(50);
+
+        var evicted = await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), CancellationToken.None);
+        Assert.That(evicted, Is.EqualTo(1));
+
+        // DLQ enqueue must occur for every displaced entry BEFORE
+        // the HWM advance for that orphan.
+        Received.InOrder(() =>
+        {
+            dlq.EnqueueAsync(
+                Arg.Is<ReplogEntry>(e => e.TransactionId == tx),
+                Arg.Any<string>(), 0,
+                LatticeReplicationMetrics.ReasonOrphanTransaction,
+                Arg.Any<CancellationToken>());
+            dlq.EnqueueAsync(
+                Arg.Is<ReplogEntry>(e => e.TransactionId == tx),
+                Arg.Any<string>(), 0,
+                LatticeReplicationMetrics.ReasonOrphanTransaction,
+                Arg.Any<CancellationToken>());
+            hwm.TryAdvanceAsync(
+                OriginA, Hlc(700), Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_evicts_single_entry_partial_orphan()
+    {
+        // Boundary: an atomic batch announced as Size = N where only
+        // one sibling has been admitted. The displaced array has
+        // length 1 so the maxHlc reduction loop is a no-op
+        // (displaced[0] is both first and last). Ensures the inner
+        // for-loop's i = 1 lower bound is correct.
+        var (grain, dlq, hwm) = await CreateOrphanSweepGrainAsync();
+        var tx = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntryAt(tx, 5, 0, Hlc(123)), CancellationToken.None);
+
+        await Task.Delay(50);
+
+        var evicted = await grain.SweepOrphansAsync(TimeSpan.FromTicks(1), CancellationToken.None);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(evicted, Is.EqualTo(1));
+            Assert.That(await grain.CountTransactionsAsync(CancellationToken.None), Is.Zero);
+            await dlq.Received(1).EnqueueAsync(
+                Arg.Is<ReplogEntry>(e => e.TransactionId == tx),
+                Arg.Any<string>(), 0, LatticeReplicationMetrics.ReasonOrphanTransaction,
+                Arg.Any<CancellationToken>());
+            await hwm.Received(1).TryAdvanceAsync(
+                OriginA, Hlc(123), Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task SweepOrphansAsync_returns_zero_when_orphan_timeout_is_max_value()
+    {
+        // Boundary: TimeSpan.MaxValue.Ticks = long.MaxValue; the
+        // cutoffTicks computation `DateTime.UtcNow.Ticks - orphanTimeout.Ticks`
+        // underflows to a strongly negative value, so every staged
+        // entry's EnqueuedAtTicks is strictly greater than the cutoff
+        // and no orphan is detected.
+        var (grain, dlq, hwm) = await CreateOrphanSweepGrainAsync();
+        var tx = Guid.NewGuid();
+        await grain.AdmitAsync(MakeEntry(tx, 3, 0), CancellationToken.None);
+
+        await Task.Delay(50);
+
+        var evicted = await grain.SweepOrphansAsync(TimeSpan.MaxValue, CancellationToken.None);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(evicted, Is.Zero);
+            Assert.That(await grain.CountTransactionsAsync(CancellationToken.None), Is.EqualTo(1));
+            await dlq.DidNotReceive().EnqueueAsync(
+                Arg.Any<ReplogEntry>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await hwm.DidNotReceive().TryAdvanceAsync(
+                Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        });
+    }
+
+    /// <summary>
+    /// Test-double registry that throws on every published
+    /// modification call. Reads return empty snapshots so a
+    /// dependent test fixture can still observe state.
+    /// </summary>
+    private sealed class ThrowingCursorRegistry : ILatticeReplicationCursorRegistry
+    {
+        public Task ReportCursorAsync(string treeName, string consumerId, HybridLogicalClock cursor, CancellationToken ct) =>
+            Task.FromException(new InvalidOperationException("registry unavailable (test)"));
+
+        public Task ReportCursorAsync(string treeName, string consumerId, HybridLogicalClock cursor, HybridLogicalClock? blockedAtHlc, CancellationToken ct) =>
+            Task.FromException(new InvalidOperationException("registry unavailable (test)"));
+
+        public Task ReportCursorAsync(string treeName, string consumerId, HybridLogicalClock cursor, VersionVector vector, CancellationToken ct) =>
+            Task.FromException(new InvalidOperationException("registry unavailable (test)"));
+
+        public Task ReportCursorAsync(string treeName, string consumerId, HybridLogicalClock cursor, VersionVector vector, HybridLogicalClock? blockedAtHlc, CancellationToken ct) =>
+            Task.FromException(new InvalidOperationException("registry unavailable (test)"));
+
+        public Task UnregisterAsync(string treeName, string consumerId, CancellationToken ct) =>
+            Task.FromException(new InvalidOperationException("registry unavailable (test)"));
+
+        public Task<HybridLogicalClock?> GetMinCursorAsync(string treeName, CancellationToken ct) =>
+            Task.FromResult<HybridLogicalClock?>(null);
+
+        public Task<VersionVector?> GetCausalStableAsync(string treeName, CancellationToken ct) =>
+            Task.FromResult<VersionVector?>(null);
+
+        public Task<HybridLogicalClock?> GetBlockedFloorAsync(string treeName, CancellationToken ct) =>
+            Task.FromResult<HybridLogicalClock?>(null);
+
+        public Task<IReadOnlyList<ReplicationCursorSnapshot>> SnapshotAsync(string treeName, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<ReplicationCursorSnapshot>>(Array.Empty<ReplicationCursorSnapshot>());
     }
 }

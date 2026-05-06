@@ -492,4 +492,23 @@ public class LatticeReplicationOptionsTests
         var opts = new LatticeReplicationOptions { AtomicBatchBufferMaxBytes = 32L * 1024L * 1024L };
         Assert.That(opts.AtomicBatchBufferMaxBytes, Is.EqualTo(32L * 1024L * 1024L));
     }
+
+    [Test]
+    public void DefaultTxBufferOrphanTimeout_is_five_minutes() =>
+        Assert.That(LatticeReplicationOptions.DefaultTxBufferOrphanTimeout, Is.EqualTo(TimeSpan.FromMinutes(5)));
+
+    [Test]
+    public void New_instance_has_default_tx_buffer_orphan_timeout()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.TxBufferOrphanTimeout,
+            Is.EqualTo(LatticeReplicationOptions.DefaultTxBufferOrphanTimeout));
+    }
+
+    [Test]
+    public void TxBufferOrphanTimeout_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { TxBufferOrphanTimeout = TimeSpan.FromMinutes(30) };
+        Assert.That(opts.TxBufferOrphanTimeout, Is.EqualTo(TimeSpan.FromMinutes(30)));
+    }
 }

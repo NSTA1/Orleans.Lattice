@@ -717,5 +717,57 @@ public class LatticeReplicationOptionsValidatorTests
 
         Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
     }
+
+    // ------------------------------------------------------------------
+    // Atomic-batch buffer orphan timeout
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Validate_fails_when_tx_buffer_orphan_timeout_is_zero()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            TxBufferOrphanTimeout = TimeSpan.Zero,
+        };
+
+        var result = Validator.Validate(null, opts);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage,
+                Does.Contain(nameof(LatticeReplicationOptions.TxBufferOrphanTimeout)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_tx_buffer_orphan_timeout_is_negative()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            TxBufferOrphanTimeout = TimeSpan.FromSeconds(-1),
+        };
+
+        var result = Validator.Validate(null, opts);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage,
+                Does.Contain(nameof(LatticeReplicationOptions.TxBufferOrphanTimeout)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_tx_buffer_orphan_timeout_at_one_tick()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            TxBufferOrphanTimeout = TimeSpan.FromTicks(1),
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
 }
 
