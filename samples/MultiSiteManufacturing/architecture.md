@@ -74,15 +74,16 @@ Reachability matrix:
 | `silo-eu-*` → `silo-us-*` | — | **No shared network — blocked** |
 | `azurite-us` ↔ `azurite-eu` | — | **No shared network — blocked** |
 
-Only two host ports are published:
+Three host ports are published:
 
 | Host port | Container | Role |
 |---|---|---|
-| 5001 | `traefik-us:80` | US UI (sticky) + replication gRPC inbound (round-robin) |
-| 5002 | `traefik-eu:80` | EU UI (sticky) + replication gRPC inbound (round-robin) |
+| 5001 | `traefik-us:80` | US UI (sticky) + replication gRPC inbound (round-robin). Open <http://localhost:5001>. |
+| 5002 | `traefik-eu:80` | EU UI (sticky) + replication gRPC inbound (round-robin). Open <http://localhost:5002>. |
+| 3000 | `grafana:3000` | Cross-cluster Grafana — Prometheus-backed, multi-homed onto both cluster networks. Open <http://localhost:3000> (anonymous Viewer; `admin`/`admin` for edit). |
 
-Silo HTTP (`:8080`), Orleans silo (`:11111`), and gateway (`:30000`)
-ports are internal-only.
+Silo HTTP (`:8080`), Orleans silo (`:11111`), gateway (`:30000`),
+and Prometheus (`:9090`) ports are internal-only.
 
 Each Traefik runs two routers over the same backend pool:
 
