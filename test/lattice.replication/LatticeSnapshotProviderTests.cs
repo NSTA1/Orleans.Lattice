@@ -29,7 +29,11 @@ public class LatticeSnapshotProviderTests
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
         await _cluster.DeployAsync();
-        _provider = new LatticeSnapshotProvider(_cluster.Client, new InMemoryReplicationCursorRegistry());
+        _provider = new LatticeSnapshotProvider(
+            _cluster.Client,
+            new InMemoryReplicationCursorRegistry(),
+            new InMemoryInFlightSagaTracker(),
+            LatticeSnapshotProviderUnitTests.TestOptions());
     }
 
     [OneTimeTearDown]

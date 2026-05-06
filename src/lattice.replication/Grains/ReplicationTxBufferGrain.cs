@@ -65,6 +65,32 @@ internal sealed class ReplicationTxBufferGrain(
     /// <remarks>ASCII '/' (0x2F) &lt; '0' (0x30); "b0" is therefore strictly greater than every "b/..." key.</remarks>
     private const string EntryKeyPrefixEnd = "b0";
 
+    /// <summary>
+    /// Inclusive prefix every blacklist row key carries inside the
+    /// system tree. Disjoint from <see cref="EntryKeyPrefix"/>
+    /// (ASCII 'b' (0x62) &lt; 'x' (0x78)) so the staged-entry and
+    /// blacklist range scans are independent and either order
+    /// produces the same in-memory state on rehydration.
+    /// </summary>
+    private const string BlacklistKeyPrefix = "x/";
+
+    /// <summary>Exclusive end key for a prefix range scan over <see cref="BlacklistKeyPrefix"/>.</summary>
+    /// <remarks>ASCII '/' (0x2F) &lt; '0' (0x30); "x0" is therefore strictly greater than every "x/..." key.</remarks>
+    private const string BlacklistKeyPrefixEnd = "x0";
+
+    /// <summary>Single-byte sentinel value stored under each blacklist row; the row's existence is the membership signal.</summary>
+    private static readonly byte[] BlacklistRowValue = new byte[] { 0 };
+
+    /// <summary>
+    /// Composes the system-tree row key for a single blacklisted
+    /// transaction id. The "N" Guid format is canonical lowercase
+    /// 32-hex-digit no-hyphen — stable across every silo and
+    /// runtime so a rehydration on a different silo decodes to the
+    /// same id.
+    /// </summary>
+    private static string BlacklistKey(Guid transactionId) =>
+        BlacklistKeyPrefix + transactionId.ToString("N");
+
     /// <summary>Width of the zero-padded batch-index segment in stored keys.</summary>
     private const int IndexWidth = 10;
 
@@ -153,6 +179,29 @@ internal sealed class ReplicationTxBufferGrain(
     private long _trackedBytes;
 
     private bool _initialized;
+
+    /// <summary>
+    /// Atomic-batch saga transaction ids registered via
+    /// <see cref="RegisterBlacklistedTransactionsAsync(IReadOnlyList{Guid}, CancellationToken)"/>.
+    /// Admission for any of these ids short-circuits to
+    /// <see cref="TxBufferAdmissionResult.BlacklistedBypass"/> set
+    /// to <c>true</c> with no entry staged.
+    /// <para>
+    /// Persisted to the per-tree backing system tree under
+    /// <see cref="BlacklistKeyPrefix"/> (one row per id, sentinel
+    /// value, key shape <c>"x/{transactionId-N}"</c>) so a silo
+    /// crash mid-bootstrap does not silently disable the bypass
+    /// path on the next activation. Without persistence a buffer
+    /// grain that deactivated under steady-state load would
+    /// re-stage subsequent incremental entries for blacklisted
+    /// sagas, which can never reach completeness — the orphan
+    /// timeout would eventually evict them, but the bypass-then-
+    /// point-apply contract would be silently disabled until
+    /// then. <see cref="BulkLoadAsync"/> rehydrates the in-memory
+    /// set from the same prefix range on activation.
+    /// </para>
+    /// </summary>
+    private readonly HashSet<Guid> _blacklistedTransactions = new();
 
     /// <inheritdoc />
     IGrainContext IGrainBase.GrainContext => context;
@@ -298,6 +347,34 @@ internal sealed class ReplicationTxBufferGrain(
 
             AdmitInMemory(staged, isRehydration: true);
         }
+
+        // Rehydrate the saga blacklist from the disjoint "x/" prefix.
+        // The two prefixes are independent (bytes 'b' < 'x'), so the
+        // two scans can run in either order and produce the same
+        // post-load state. The blacklist row's value is a single-
+        // byte sentinel — the row's existence under "x/{id}" is the
+        // membership signal; no per-row deserialization is required.
+        await foreach (var kvp in _store.EntriesAsync(
+            startInclusive: BlacklistKeyPrefix,
+            endExclusive: BlacklistKeyPrefixEnd,
+            cancellationToken: cancellationToken).ConfigureAwait(true))
+        {
+            var keyText = kvp.Key;
+            if (keyText.Length != BlacklistKeyPrefix.Length + 32)
+            {
+                // Malformed row (truncated / wrong shape) - skip
+                // rather than crash activation. Same defensive
+                // discipline as the staged-entry deserialization
+                // catch above.
+                continue;
+            }
+
+            if (Guid.TryParseExact(keyText.AsSpan(BlacklistKeyPrefix.Length), "N", out var id)
+                && id != Guid.Empty)
+            {
+                _blacklistedTransactions.Add(id);
+            }
+        }
     }
 
     /// <inheritdoc />
@@ -351,6 +428,40 @@ internal sealed class ReplicationTxBufferGrain(
                 + "for atomic-batch staging admission. Entries with Zero HLCs would silently "
                 + "disable the producer-side blocked-floor GC pin.",
                 nameof(entry));
+        }
+
+        // Blacklist short-circuit: a saga that the producer-side
+        // quiesce path could not drain in time has its transaction
+        // id registered here by the receiver's bootstrap state
+        // machine. Any incremental entry carrying a blacklisted id
+        // must NOT be staged — the missing siblings (committed
+        // before the snapshot's AsOfHlc and already applied via the
+        // snapshot drain) will never arrive on the incremental
+        // stream, so the buffer would never reach completeness and
+        // the orphan-timeout sweep would eventually evict the
+        // partial batch. Bypassing the buffer instead delivers each
+        // remaining key as a point write — degraded to causal+
+        // atomic visibility for the blacklisted saga, no orphan
+        // stuck. The bypass is observable to the caller via the
+        // BlacklistedBypass flag on the admission result; the
+        // ReplicationApplier branches on the flag and routes the
+        // entry through the canonical point-apply path.
+        //
+        // The check happens after the per-entry guard rails so a
+        // malformed entry still fails fast with the same exception
+        // shape as the non-blacklisted path. The check happens
+        // BEFORE the dedupe / capacity / persistence steps because
+        // none of those side effects make sense for an entry the
+        // caller is expected to apply directly.
+        if (_blacklistedTransactions.Contains(entry.TransactionId))
+        {
+            return new TxBufferAdmissionResult
+            {
+                BatchComplete = false,
+                Deduped = false,
+                CompletedBatch = Array.Empty<TxStagedEntry>(),
+                BlacklistedBypass = true,
+            };
         }
 
         var key = new TransactionKey(entry.OriginClusterId!, entry.TransactionId);
@@ -456,6 +567,71 @@ internal sealed class ReplicationTxBufferGrain(
         using var enumerator = _stagedHlcCounts.Keys.GetEnumerator();
         enumerator.MoveNext();
         return Task.FromResult<HybridLogicalClock?>(enumerator.Current);
+    }
+
+    /// <inheritdoc />
+    public async Task RegisterBlacklistedTransactionsAsync(
+        IReadOnlyList<Guid> transactionIds,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(transactionIds);
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        if (transactionIds.Count == 0)
+        {
+            // No-op: an empty list is the steady-state happy path
+            // (the producer-side quiesce drained every in-flight
+            // saga before the snapshot scan began). Avoiding the
+            // for-loop saves the small constant overhead of the
+            // enumerator on the bootstrap hot path.
+            return;
+        }
+
+        // Two-pass: validate the entire list first so a malformed
+        // id later in the list does not leave the store in a
+        // half-persisted shape with the prior ids written but the
+        // in-memory set unmodified. Cumulative union: caller may
+        // invoke this multiple times during a single bootstrap
+        // (e.g. one call on transition to IncrementalHandoff plus
+        // an idempotent retry call from a recovery path). Empty
+        // Guids are rejected loudly so a malformed blacklist
+        // surfaces as a caller error rather than silently widening
+        // the bypass set with a sentinel id that cannot match any
+        // producer-stamped TransactionId.
+        for (var i = 0; i < transactionIds.Count; i++)
+        {
+            if (transactionIds[i] == Guid.Empty)
+            {
+                throw new ArgumentException(
+                    $"transactionIds[{i}] must be non-empty.",
+                    nameof(transactionIds));
+            }
+        }
+
+        // Persist each new id to the system tree under the
+        // disjoint "x/" prefix. Cancellation is honoured BETWEEN
+        // per-id persists (a cancellation mid-call leaves the
+        // already-persisted ids durable; the in-memory set is
+        // only updated post-persist so the activation rehydration
+        // and the live in-memory state remain consistent — a
+        // post-cancellation reactivation will load the ids that
+        // were persisted before the cancellation fired). Already-
+        // known ids skip the round-trip.
+        for (var i = 0; i < transactionIds.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var id = transactionIds[i];
+            if (_blacklistedTransactions.Contains(id))
+            {
+                continue;
+            }
+
+            await _store.SetAsync(BlacklistKey(id), BlacklistRowValue, cancellationToken)
+                .ConfigureAwait(true);
+            _blacklistedTransactions.Add(id);
+        }
     }
 
     /// <inheritdoc />

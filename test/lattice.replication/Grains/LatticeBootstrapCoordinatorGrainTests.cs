@@ -26,7 +26,7 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 /// in <see cref="LatticeBootstrapCoordinatorTests"/>.
 /// </summary>
 [TestFixture]
-public class LatticeBootstrapCoordinatorGrainTests
+public partial class LatticeBootstrapCoordinatorGrainTests
 {
     private const string Tree = "boot-tree";
     private const string SourceCluster = "site-a";
@@ -592,7 +592,8 @@ public class LatticeBootstrapCoordinatorGrainTests
                 Arg.Any<string>(), Arg.Any<VersionVector?>(), Arg.Any<long>())
             .Throws(new InvalidOperationException("boom"));
 
-        Assert.That(async () => await grain.ProcessNextPhaseAsync(),
+        Assert.That(
+            async () => await grain.ProcessNextPhaseAsync(),
             Throws.InstanceOf<InvalidOperationException>());
 
         // First write must be ApplyingSnapshot (drain start), then

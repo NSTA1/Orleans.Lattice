@@ -58,7 +58,7 @@ public class ReplicationMutationObserverLocalVectorClockCacheTests
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(grain);
         grain.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(coldStartVector ?? new VersionVector());
         var cache = new LocalVectorClockCache(factory);
-        var observer = new ReplicationMutationObserver(sink, Monitor(LocalCluster), new AllowAllResolver(), cache);
+        var observer = new ReplicationMutationObserver(sink, Monitor(LocalCluster), new AllowAllResolver(), cache, new InMemoryInFlightSagaTracker());
         return (observer, sink, cache);
     }
 
