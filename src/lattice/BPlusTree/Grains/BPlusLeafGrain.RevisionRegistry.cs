@@ -102,20 +102,26 @@ internal sealed partial class BPlusLeafGrain
     /// publishes the activation's <see cref="StrongBox{T}"/> into the
     /// process-wide registry via
     /// <see cref="ConcurrentDictionary{TKey, TValue}.GetOrAdd(TKey, System.Func{TKey, TValue})"/>;
-    /// every subsequent call is a single
-    /// <see cref="Interlocked.Increment(ref long)"/> on the cached field
-    /// reference -- no dictionary touch, no allocations on the steady
-    /// state path. <see cref="MethodImplOptions.AggressiveInlining"/>
-    /// is applied because tight write loops (e.g. <see cref="SetManyAsync"/>
-    /// over a batch) call this method once per key and the call-site
-    /// overhead would otherwise dominate the tick.
+    /// every subsequent call reads-and-writes <c>box.Value</c> directly
+    /// (Orleans guarantees only one foreground turn touches a given
+    /// activation at a time, so the local read+write is race-free
+    /// against itself; the write uses <see cref="Volatile.Write(ref long, long)"/>
+    /// to publish a release-store so the cross-grain reader on a
+    /// different scheduler thread observes the bumped value through its
+    /// matching <see cref="Interlocked.Read(ref long)"/>). No dictionary
+    /// touch and no atomic increment in the steady-state path keeps tight
+    /// write loops (e.g. <see cref="SetManyAsync"/> over a thousand-key
+    /// batch) free of both per-call allocations and per-call full barriers.
+    /// <see cref="MethodImplOptions.AggressiveInlining"/> is applied
+    /// because tight write loops call this method once per key and the
+    /// call-site overhead would otherwise dominate the tick.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void BumpLocalRevision()
     {
         var box = _localRevisionBox ??=
             LeafRevisionRegistry.GetOrAdd(context.GrainId, static _ => new StrongBox<long>(0L));
-        Interlocked.Increment(ref box.Value);
+        Volatile.Write(ref box.Value, box.Value + 1);
     }
 }
 
