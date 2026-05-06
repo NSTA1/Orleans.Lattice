@@ -307,12 +307,21 @@ internal sealed partial class ReplicationApplier
                 // first (the producer ordered the WAL such that pending
                 // items must observe their effect before the buffer
                 // admission takes effect), hand the entry off to the
-                // per-tree buffer grain, and skip the rest of the
-                // per-entry classification. The runningHwm and
-                // highestApplied are intentionally not advanced — the
-                // buffer holds the entry until siblings arrive and the
-                // per-origin HWM remains pinned to its pre-batch value
-                // so the producer continues to re-ship.
+                // per-tree buffer grain, and — when the admission
+                // completes the enclosing batch — dispatch the whole
+                // batch atomically through the source-HLC-preserving
+                // IReplicationApplyGrain.ApplyManyAtomicAsync seam.
+                // Successful saga commits advance runningHwm /
+                // highestApplied to the maximum HLC across the
+                // atomic batch (the load-bearing invariant for
+                // cross-cluster atomic visibility — a concurrent reader
+                // never sees an intermediate per-origin HWM where some
+                // but not all keys are visible). On
+                // AtomicApplyOutcome.Compensated or a thrown
+                // non-cancellation exception the whole batch is parked
+                // on the per-tree DLQ tagged ReasonAtomicApplyFailure
+                // and run state is left untouched so the producer
+                // continues to re-ship until the DLQ is recovered.
                 if (resolved.AtomicBatchDelivery && entry.AtomicBatchSize > 0)
                 {
                     if (entry.TransactionId == Guid.Empty)
@@ -326,8 +335,36 @@ internal sealed partial class ReplicationApplier
 
                     await FlushPendingAsync().ConfigureAwait(false);
                     var txBuffer = grainFactory.GetGrain<IReplicationTxBufferGrain>(treeId);
-                    _ = await txBuffer.AdmitAsync(entry, cancellationToken).ConfigureAwait(false);
-                    outcome = LatticeReplicationMetrics.OutcomeAtomicBuffered;
+                    var admission = await txBuffer.AdmitAsync(entry, cancellationToken).ConfigureAwait(false);
+
+                    if (!admission.BatchComplete)
+                    {
+                        outcome = LatticeReplicationMetrics.OutcomeAtomicBuffered;
+                        continue;
+                    }
+
+                    var batchOutcome = await DispatchCompletedAtomicBatchAsync(
+                        entry, admission.CompletedBatch, cancellationToken).ConfigureAwait(false);
+
+                    if (batchOutcome.Committed)
+                    {
+                        if (batchOutcome.MaxHlc.CompareTo(runningHwm) > 0)
+                        {
+                            runningHwm = batchOutcome.MaxHlc;
+                        }
+                        if (batchOutcome.MaxHlc.CompareTo(highestApplied) > 0)
+                        {
+                            highestApplied = batchOutcome.MaxHlc;
+                        }
+                        anyApplied = true;
+                        advancedAtAll = true;
+                        localVcDirty = true;
+                        outcome = LatticeReplicationMetrics.OutcomeSuccess;
+                    }
+                    else
+                    {
+                        outcome = LatticeReplicationMetrics.OutcomeFailure;
+                    }
                     continue;
                 }
 
@@ -538,4 +575,29 @@ internal sealed partial class ReplicationApplier
         }
         return new ApplyResult { Applied = anyApplied, HighWaterMark = highest };
     }
+
+    /// <summary>
+    /// Batch-path adapter for the atomic-apply-on-completion saga
+    /// dispatch. Delegates to the shared
+    /// <c>RunAtomicSagaAsync</c> which maps the staged batch onto the
+    /// source-HLC-preserving
+    /// <see cref="IReplicationApplyGrain.ApplyManyAtomicAsync"/> seam,
+    /// returning <c>(Committed, MaxHlc)</c> so the run-walk caller can
+    /// integrate the saga's HLC contribution into its own
+    /// <c>runningHwm</c> / <c>highestApplied</c> state without
+    /// double-advancing the per-origin high-water-mark grain.
+    /// Failures (saga compensated or thrown non-cancellation
+    /// exception) are routed to the per-tree dead-letter queue inside
+    /// the shared helper before the <c>(false, baselineHlc)</c> tuple
+    /// returns.
+    /// </summary>
+    private Task<(bool Committed, HybridLogicalClock MaxHlc)> DispatchCompletedAtomicBatchAsync(
+        ReplogEntry trigger,
+        IReadOnlyList<TxStagedEntry> completedBatch,
+        CancellationToken cancellationToken) =>
+        RunAtomicSagaAsync(
+            trigger,
+            completedBatch,
+            baselineHlc: HybridLogicalClock.Zero,
+            cancellationToken);
 }

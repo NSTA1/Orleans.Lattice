@@ -122,6 +122,29 @@ internal sealed partial class ReplicationApplier(
             // are naturally idempotent at the leaf layer.
             if (entry.Op == ReplogOp.DeleteRange)
             {
+                // Defence-in-depth (B7): a DeleteRange entry tagged with
+                // atomic-batch metadata (AtomicBatchSize > 0) is a
+                // producer-contract violation — the producer's
+                // SetManyAtomicAsync surface emits only Set/Delete, never
+                // DeleteRange, so atomic-batch stamps on a range op are
+                // intrinsic ambiguity (no consistent saga key, no
+                // single-HLC commit point). Surface it as an explicit
+                // ArgumentException so the producer fails fast rather
+                // than the receiver silently applying a non-atomic range
+                // delete that carries an unfulfilled atomic-batch
+                // promise. The check is independent of the receiver-side
+                // AtomicBatchDelivery opt-in because the violation is
+                // producer-shaped, not receiver-shaped.
+                if (entry.AtomicBatchSize > 0)
+                {
+                    throw new ArgumentException(
+                        "ReplogEntry.Op=DeleteRange must not carry atomic-batch metadata "
+                        + "(AtomicBatchSize > 0). Atomic batches must contain only Set / Delete entries; "
+                        + "range deletes are emitted by the producer's DeleteRangeAsync surface, not "
+                        + "SetManyAtomicAsync.",
+                        nameof(entry));
+                }
+
                 await ApplyRangeAsync(entry, cancellationToken);
                 outcome = LatticeReplicationMetrics.OutcomeSuccess;
                 return new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero };
@@ -139,22 +162,20 @@ internal sealed partial class ReplicationApplier(
             // has opted in via LatticeReplicationOptions.AtomicBatchDelivery
             // and the entry carries a non-zero AtomicBatchSize (it is
             // part of an enclosing SetManyAtomicAsync transaction), hand
-            // the entry off to the per-tree buffer grain and return
-            // Applied=false with the per-origin HWM unchanged. The
-            // producer continues to re-ship the entry until every
-            // sibling lands; the buffer dedupes wire-shape re-deliveries
-            // by (origin, transactionId, index). Completion of a batch
-            // is observed inside the buffer (AdmitAsync returns
-            // BatchComplete=true with the in-canonical-order list); the
-            // applier-side hand-off-to-atomic-apply path is the
-            // companion atomic-apply-on-completion item (which depends
-            // on the source-HLC-preserving ApplyManyAtomicAsync seam)
-            // and is not yet wired here. Until that companion item
-            // lands, the buffer holds completed batches as
-            // ready-to-apply state and no per-key apply is performed,
-            // so atomic-batch delivery is intentionally inert at the
-            // receiver end with the staging buffer alone — the option's
-            // default of false reflects this.
+            // the entry off to the per-tree buffer grain. While the
+            // batch is incomplete, return Applied=false with the
+            // per-origin HWM unchanged so the producer continues to
+            // re-ship until every sibling lands and the buffer dedupes
+            // wire-shape re-deliveries by (origin, transactionId, index).
+            // When the admission completes the enclosing batch, dispatch
+            // the whole batch atomically through the source-HLC-preserving
+            // IReplicationApplyGrain.ApplyManyAtomicAsync seam: every key
+            // commits or rolls back together, the per-origin HWM advances
+            // exactly once to the maximum HLC across the batch, and a
+            // failed saga (Compensated outcome or thrown exception) routes
+            // every entry to the per-tree dead-letter queue tagged
+            // ReasonAtomicApplyFailure with the HWM left unchanged so the
+            // producer continues to re-ship until the DLQ is recovered.
             //
             // The gate sits after HWM dedup (so a re-delivery of an
             // already-applied batch is not redundantly buffered) and
@@ -173,9 +194,26 @@ internal sealed partial class ReplicationApplier(
                 }
 
                 var txBuffer = grainFactory.GetGrain<IReplicationTxBufferGrain>(entry.TreeId);
-                _ = await txBuffer.AdmitAsync(entry, cancellationToken).ConfigureAwait(false);
-                outcome = LatticeReplicationMetrics.OutcomeAtomicBuffered;
-                return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                var admission = await txBuffer.AdmitAsync(entry, cancellationToken).ConfigureAwait(false);
+
+                if (!admission.BatchComplete)
+                {
+                    outcome = LatticeReplicationMetrics.OutcomeAtomicBuffered;
+                    return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                }
+
+                var batchResult = await ApplyCompletedAtomicBatchAsync(
+                    entry,
+                    admission.CompletedBatch,
+                    hwmGrain,
+                    hwm,
+                    resolved,
+                    cancellationToken).ConfigureAwait(false);
+
+                outcome = batchResult.Applied
+                    ? LatticeReplicationMetrics.OutcomeSuccess
+                    : LatticeReplicationMetrics.OutcomeFailure;
+                return batchResult;
             }
 
             // Shadow-forward dedupe cache: a structural rewrite (shard
@@ -554,6 +592,274 @@ internal sealed partial class ReplicationApplier(
 
     private IReplicationHighWaterMarkGrain GetHwmGrain(string treeId) =>
         grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeId);
+
+    /// <summary>
+    /// Dispatches a completed atomic batch surfaced from the per-tree
+    /// <see cref="IReplicationTxBufferGrain"/> through the source-HLC-preserving
+    /// <see cref="IReplicationApplyGrain.ApplyManyAtomicAsync"/> seam,
+    /// advances the per-origin high-water-mark exactly once to the
+    /// maximum HLC across the batch on
+    /// <see cref="AtomicApplyOutcome.Committed"/>, and routes every
+    /// entry to the per-tree dead-letter queue tagged
+    /// <see cref="LatticeReplicationMetrics.ReasonAtomicApplyFailure"/>
+    /// on <see cref="AtomicApplyOutcome.Compensated"/> or a thrown
+    /// non-cancellation exception. The HWM advance is critical for the
+    /// atomic-visibility contract: a concurrent reader of the per-origin
+    /// HWM never observes an intermediate value where some-but-not-all
+    /// keys in the batch have been applied. On failure the HWM is left
+    /// unchanged so the producer continues to re-ship until the DLQ is
+    /// recovered or discarded.
+    /// </summary>
+    private async Task<ApplyResult> ApplyCompletedAtomicBatchAsync(
+        ReplogEntry trigger,
+        IReadOnlyList<TxStagedEntry> completedBatch,
+        IReplicationHighWaterMarkGrain hwmGrain,
+        HybridLogicalClock currentHwm,
+        LatticeReplicationOptions resolved,
+        CancellationToken cancellationToken)
+    {
+        var (committed, maxHlc) = await RunAtomicSagaAsync(
+            trigger, completedBatch, currentHwm, cancellationToken).ConfigureAwait(false);
+
+        if (!committed)
+        {
+            return new ApplyResult { Applied = false, HighWaterMark = currentHwm };
+        }
+
+        // Committed: advance the per-origin HWM exactly once to the
+        // maximum HLC across the batch. Doing this in a single grain
+        // call (instead of per-entry) is the load-bearing invariant for
+        // cross-cluster atomic visibility: a concurrent reader of the
+        // per-origin HWM never sees an intermediate value where some
+        // but not all keys are visible.
+        var advanced = await hwmGrain
+            .TryAdvanceAsync(trigger.OriginClusterId!, maxHlc, cancellationToken)
+            .ConfigureAwait(false);
+        var newHwm = advanced
+            ? maxHlc
+            : await hwmGrain.GetAsync(trigger.OriginClusterId!, cancellationToken).ConfigureAwait(false);
+
+        if (advanced)
+        {
+            // Mirror the foreign advance into the producer-side local
+            // vector clock cache so a subsequent local emit observes
+            // the just-applied foreign frontier. Mirrors the per-entry
+            // success path's AdvanceForeign call site.
+            localVectorClockCache.AdvanceForeign(
+                trigger.TreeId,
+                trigger.OriginClusterId!,
+                maxHlc);
+            await DrainBufferAsync(trigger.TreeId, hwmGrain, resolved, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return new ApplyResult { Applied = true, HighWaterMark = newHwm };
+    }
+
+    /// <summary>
+    /// Dispatches the atomic batch through the source-HLC-preserving
+    /// saga seam and routes failures to the per-tree dead-letter
+    /// queue. Returns the saga outcome alongside the maximum HLC across
+    /// the batch on success — callers integrate the HLC into their own
+    /// high-water-mark advance step (the per-entry path advances
+    /// directly via the HWM grain; the batch path defers the advance
+    /// to the end-of-run flush). On a non-committed outcome the
+    /// returned HLC is the supplied <paramref name="baselineHlc"/>
+    /// because no advance is warranted.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The saga-wide <see cref="VersionVector"/> passed to the apply
+    /// seam is read from the first staged entry. Per the producer-side
+    /// atomic-batch capture contract, every entry in an atomic batch
+    /// shares the same saga-wide vector-clock frontier (single capture
+    /// at the start of the saga's first <c>Prepare</c>, stamped on every
+    /// per-key emit), so every staged entry carries an identical
+    /// <see cref="ReplogEntry.VectorClock"/> and reading from index 0
+    /// is canonical.
+    /// </para>
+    /// <para>
+    /// The <see cref="IReplicationApplyGrain.ApplyManyAtomicAsync"/>
+    /// seam is itself idempotent on
+    /// <see cref="ReplogEntry.TransactionId"/> — the underlying
+    /// <c>AtomicWriteGrain</c> activation is keyed
+    /// <c>(treeId, transactionId)</c> and replays its persisted saga
+    /// state on re-entry — so a producer that re-ships the batch after
+    /// a transient receiver failure observes the same terminal outcome
+    /// on the second attempt.
+    /// </para>
+    /// </remarks>
+    private async Task<(bool Committed, HybridLogicalClock MaxHlc)> RunAtomicSagaAsync(
+        ReplogEntry trigger,
+        IReadOnlyList<TxStagedEntry> completedBatch,
+        HybridLogicalClock baselineHlc,
+        CancellationToken cancellationToken)
+    {
+        // Defence-in-depth (B1): the buffer-grain contract guarantees a
+        // non-empty CompletedBatch on BatchComplete=true. A zero-entry
+        // admission would index [0] below for the saga-wide VC capture
+        // and trip an opaque IndexOutOfRangeException; surface a typed
+        // contract violation instead so an operator inspecting the
+        // failure sees the buffer-grain contract that was broken.
+        if (completedBatch.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Atomic batch on tree '{trigger.TreeId}' admitted with zero staged entries — "
+                + "buffer-grain contract violation (BatchComplete=true requires a non-empty CompletedBatch).");
+        }
+
+        // Map TxStagedEntry → AtomicApplyEntry. ReplogOp.Set becomes a
+        // non-tombstone item with its committed value bytes and
+        // ExpiresAtTicks; ReplogOp.Delete becomes a tombstone item with
+        // a null Value and ExpiresAtTicks=0 (the contract on
+        // AtomicApplyEntry forbids non-zero expiry on tombstones).
+        // Range-delete entries are not part of an atomic batch by
+        // construction (the producer's SetManyAtomicAsync surface only
+        // emits Set/Delete) so they do not appear here; if a malformed
+        // entry slips through we surface it as the same
+        // InvalidOperationException the canonical apply path raises.
+        var applyEntries = new AtomicApplyEntry[completedBatch.Count];
+        var maxHlc = baselineHlc;
+        for (var i = 0; i < completedBatch.Count; i++)
+        {
+            var staged = completedBatch[i].Entry;
+            applyEntries[i] = MapStagedToAtomicApplyEntry(staged, trigger.TreeId);
+
+            if (staged.Timestamp.CompareTo(maxHlc) > 0)
+            {
+                maxHlc = staged.Timestamp;
+            }
+        }
+
+        // Saga-wide VC: per the producer-side capture contract every
+        // entry in the batch shares the same frontier, so reading from
+        // index 0 is canonical.
+        var sagaVc = completedBatch[0].Entry.VectorClock;
+
+        var apply = grainFactory.GetGrain<IReplicationApplyGrain>(trigger.TreeId);
+        AtomicApplyResult sagaResult;
+        try
+        {
+            sagaResult = await apply.ApplyManyAtomicAsync(
+                applyEntries,
+                trigger.TransactionId,
+                trigger.OriginClusterId!,
+                sagaVc,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is not a saga failure — propagate to the
+            // caller so the cooperative cancellation contract is
+            // preserved (no DLQ park, no HWM advance, the producer's
+            // next pump cycle redelivers the trigger entry).
+            throw;
+        }
+        catch (Exception ex)
+        {
+            await RouteAtomicBatchToDlqAsync(
+                trigger.TreeId,
+                completedBatch,
+                ex.Message ?? "Atomic apply saga threw with no message.",
+                cancellationToken).ConfigureAwait(false);
+            return (false, baselineHlc);
+        }
+
+        if (sagaResult.Outcome == AtomicApplyOutcome.Compensated)
+        {
+            await RouteAtomicBatchToDlqAsync(
+                trigger.TreeId,
+                completedBatch,
+                sagaResult.FailureReason ?? "Atomic apply saga compensated.",
+                cancellationToken).ConfigureAwait(false);
+            return (false, baselineHlc);
+        }
+
+        // Defence-in-depth (B2): a Committed outcome must have applied
+        // every entry in the batch — the saga is all-or-nothing by
+        // construction. A mismatch indicates a saga-contract violation
+        // (e.g. a future RunSagaAsync refactor that silently drops a
+        // per-key write); surface it as a typed exception so the
+        // per-origin HWM is not advanced past entries that never
+        // landed and the producer redelivers on the next pump cycle.
+        if (sagaResult.AppliedCount != completedBatch.Count)
+        {
+            throw new InvalidOperationException(
+                $"Atomic apply saga on tree '{trigger.TreeId}' returned Committed with "
+                + $"AppliedCount={sagaResult.AppliedCount} but BatchSize={completedBatch.Count} — "
+                + "saga contract violation (Committed implies every entry applied).");
+        }
+
+        return (true, maxHlc);
+    }
+
+    private static AtomicApplyEntry MapStagedToAtomicApplyEntry(ReplogEntry staged, string treeId) =>
+        staged.Op switch
+        {
+            ReplogOp.Set when staged.Value is null
+                => throw new ArgumentException(
+                    "Staged ReplogEntry.Value must be non-null for ReplogOp.Set in an atomic batch.",
+                    nameof(staged)),
+            ReplogOp.Set => new AtomicApplyEntry
+            {
+                Key = staged.Key,
+                Value = staged.Value,
+                Timestamp = staged.Timestamp,
+                ExpiresAtTicks = staged.ExpiresAtTicks,
+                VectorClock = staged.VectorClock,
+                IsTombstone = false,
+            },
+            ReplogOp.Delete => new AtomicApplyEntry
+            {
+                Key = staged.Key,
+                Value = null,
+                Timestamp = staged.Timestamp,
+                ExpiresAtTicks = 0,
+                VectorClock = staged.VectorClock,
+                IsTombstone = true,
+            },
+            _ => throw new InvalidOperationException(
+                $"Atomic batch on tree '{treeId}' carries unsupported op '{staged.Op}' "
+                + "for key '" + staged.Key + "'. Atomic batches must contain only Set / Delete entries."),
+        };
+
+    /// <summary>
+    /// Routes every entry in a failed atomic batch to the per-tree
+    /// dead-letter queue tagged
+    /// <see cref="LatticeReplicationMetrics.ReasonAtomicApplyFailure"/>.
+    /// Every entry in the batch is parked under the same reason and
+    /// transaction id so an operator inspecting the DLQ sees the whole
+    /// batch as a unit. DLQ enqueue failures are swallowed because the
+    /// per-origin high-water-mark was not advanced for this batch — the
+    /// producer continues to re-ship until the DLQ is recovered, so a
+    /// transient DLQ failure does not block apply progress on a
+    /// deterministically-failing DLQ.
+    /// </summary>
+    private async Task RouteAtomicBatchToDlqAsync(
+        string treeId,
+        IReadOnlyList<TxStagedEntry> completedBatch,
+        string failureReason,
+        CancellationToken cancellationToken)
+    {
+        var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(treeId);
+        for (var i = 0; i < completedBatch.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await dlq.EnqueueAsync(
+                    completedBatch[i].Entry,
+                    failureReason,
+                    retryCount: 0,
+                    reasonTag: LatticeReplicationMetrics.ReasonAtomicApplyFailure,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Best-effort routing — see method summary.
+            }
+        }
+    }
 
     /// <summary>
     /// Records the receiver-side replication-lag sample for a successfully

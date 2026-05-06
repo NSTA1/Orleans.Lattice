@@ -27,6 +27,7 @@ public partial class ReplicationApplierTests
         public required IReplicationApplyGrain Apply { get; init; }
         public required IReplicationHighWaterMarkGrain Hwm { get; init; }
         public required IReplicationTxBufferGrain Buffer { get; init; }
+        public required IReplicationDeadLetterGrain Dlq { get; init; }
         public required Dictionary<string, HybridLogicalClock> HwmRows { get; init; }
     }
 
@@ -37,10 +38,12 @@ public partial class ReplicationApplierTests
         var apply = Substitute.For<IReplicationApplyGrain>();
         var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
         var buffer = Substitute.For<IReplicationTxBufferGrain>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
 
         factory.GetGrain<IReplicationApplyGrain>(Tree).Returns(apply);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Tree).Returns(hwm);
         factory.GetGrain<IReplicationTxBufferGrain>(Tree).Returns(buffer);
+        factory.GetGrain<IReplicationDeadLetterGrain>(Tree).Returns(dlq);
 
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(call => Task.FromResult(
@@ -55,6 +58,21 @@ public partial class ReplicationApplierTests
                 BatchComplete = false,
                 Deduped = false,
                 CompletedBatch = Array.Empty<TxStagedEntry>(),
+            }));
+
+        // Default: saga commits successfully so opt-in callers that
+        // do not override the substitute observe a committed outcome.
+        apply.ApplyManyAtomicAsync(
+                Arg.Any<IReadOnlyList<AtomicApplyEntry>>(),
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<VersionVector?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call => Task.FromResult(new AtomicApplyResult
+            {
+                Outcome = AtomicApplyOutcome.Committed,
+                AppliedCount = ((IReadOnlyList<AtomicApplyEntry>)call[0]).Count,
+                FailureReason = null,
             }));
 
         var options = new LatticeReplicationOptions
@@ -73,6 +91,7 @@ public partial class ReplicationApplierTests
             Apply = apply,
             Hwm = hwm,
             Buffer = buffer,
+            Dlq = dlq,
             HwmRows = rows,
         };
     }
@@ -181,46 +200,6 @@ public partial class ReplicationApplierTests
             async () => await h.Applier.ApplyAsync(entry),
             Throws.ArgumentException);
         await h.Buffer.DidNotReceive().AdmitAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task ApplyAsync_atomic_batch_does_not_advance_hwm_even_for_complete_batch()
-    {
-        // Even when the buffer reports the batch is complete, R-097
-        // does not perform the apply or advance HWM — that is R-098's
-        // responsibility. The producer-side HWM remains pinned so the
-        // batch is durably re-shippable until R-098 wires up the
-        // atomic apply seam.
-        var h = CreateAtomicHarness(atomicBatchDelivery: true);
-        var txId = Guid.NewGuid();
-        var entry = AtomicEntry("k0", Hlc(100), txId, 1, 0);
-        h.Buffer.AdmitAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(new TxBufferAdmissionResult
-            {
-                BatchComplete = true,
-                Deduped = false,
-                CompletedBatch = new[] { new TxStagedEntry
-                {
-                    OriginClusterId = RemoteCluster,
-                    TransactionId = txId,
-                    BatchSize = 1,
-                    BatchIndex = 0,
-                    Entry = entry,
-                    EnqueuedAtTicks = DateTime.UtcNow.Ticks,
-                } },
-            }));
-
-        var result = await h.Applier.ApplyAsync(entry);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.Applied, Is.False);
-            Assert.That(result.HighWaterMark, Is.EqualTo(HybridLogicalClock.Zero));
-        });
-        await h.Hwm.DidNotReceive().TryAdvanceAsync(
-            Arg.Any<string>(),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
     }
 
     [Test]
