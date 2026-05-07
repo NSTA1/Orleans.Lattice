@@ -199,13 +199,22 @@ eventually returns `true`.
   frontier, and every write path the core library exposes (point writes,
   `SetManyAtomicAsync`, `DeleteRangeAsync`, shard-split shadow-forward,
   saga compensation, snapshot/restore) carries that guarantee end-to-end.
-  Causal+ is **strictly weaker than atomic visibility**: a remote reader
-  concurrent with replication of a `SetManyAtomicAsync` may observe a
-  partial view (some keys updated, some not) until the batch finishes
-  converging on that peer. Cross-cluster transactional batch delivery —
-  the primitive that closes this gap by buffering every key in an atomic
-  batch on the receiver until the whole batch is in hand and then
-  applying them under one saga — is a tracked roadmap item.
+  Replicated atomic batches authored via `SetManyAtomicAsync` arrive on
+  every receiver as a unit when the per-tree
+  `LatticeReplicationOptions.AtomicBatchDelivery` opt-in is enabled — the
+  receiver buffers every key of the enclosing transaction until the whole
+  batch is in hand and applies them under one saga, advancing the
+  per-origin high-water-mark once at completion. See
+  [`../lattice.replication/atomic-batch-delivery.md`](../lattice.replication/atomic-batch-delivery.md).
+  With the opt-in off (the default), causal+ is **strictly weaker than
+  atomic visibility**: a remote reader concurrent with replication of a
+  `SetManyAtomicAsync` may observe a partial view (some keys updated,
+  some not) until the batch finishes converging on that peer.
+  Real-time receiver-side reader isolation **inside** the saga commit
+  window — a reader concurrent with the per-key sequential commit the
+  receiver-side saga issues — remains an open carve-out (the same gap
+  the local-saga reader-isolation carve-out below describes; both close
+  on the same future receiver-side reader-isolation primitive).
 - **Cross-tree causality.** The causal+ guarantees shipped in the
   replication package are scoped to single-tree writes; a multi-tree
   operation (e.g. one saga touching two `ILattice` trees, or a merge

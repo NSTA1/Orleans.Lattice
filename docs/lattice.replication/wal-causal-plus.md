@@ -663,3 +663,15 @@ start = 124;
 - Focus on the causal relationships and VC/DS semantics.
 
 ---
+
+## 14. Cross-cluster atomic-batch delivery (Phase 9)
+
+Causal+ pins the dependency graph: a remote peer never observes a state that violates the writer's causal frontier. It is **strictly weaker than atomic visibility**: a remote reader concurrent with replication of a `SetManyAtomicAsync` may observe a partial view (some keys arrived and applied, others have not) until every entry in the batch finishes converging on that peer.
+
+Phase 9 (R-094 → R-104) closes the inbound apply boundary half of that gap with a per-tree opt-in, `LatticeReplicationOptions.AtomicBatchDelivery` (default `false`). With the opt-in on, the receiver buffers every entry of an enclosing atomic transaction (keyed by the producer-stamped `(originClusterId, transactionId)` pair, with the batch's total size carried on the additive `AtomicBatchSize` slot) until every sibling is in hand, then applies the whole batch under one saga via `IReplicationApplyGrain.ApplyManyAtomicAsync` — preserving each entry's source-side `(Timestamp, OriginClusterId, VectorClock, ExpiresAtTicks)` verbatim through nested ambient context scopes. The per-origin high-water-mark advances **once** at saga commit, to the maximum HLC across the batch, so a concurrent reader of the high-water-mark never sees an intermediate value.
+
+The producer-side WAL-GC pin documented in §7.3 (the strict-less `entry.Timestamp < blocked_floor` clause) is what keeps a producer from trimming past a partially-staged batch on a downstream peer. Combined with the receiver-side staging buffer this delivers the cross-cluster atomic-batch contract end-to-end: every key of an inbound atomic batch becomes visible together on the receiver, regardless of partial ack-loss / partition / silo restart on either side.
+
+**Carve-out.** Real-time reader isolation **inside** the receiver-side saga commit window — where a reader concurrent with the saga's per-key sequential commits to leaf grains may observe a partial view — remains an open carve-out, identical in shape to the equivalent local-saga reader-isolation carve-out documented in [`../lattice/consistency.md`](../lattice/consistency.md). Until that primitive ships, applications that need strict reader isolation under concurrent atomic-batch apply should layer `GetWithVersionAsync` + `SetIfVersionAsync` on top, exactly as for local sagas.
+
+For the operator-facing surface — knobs, observability, terminal-disposition recovery playbook, and capacity planning — see [`atomic-batch-delivery.md`](atomic-batch-delivery.md).
