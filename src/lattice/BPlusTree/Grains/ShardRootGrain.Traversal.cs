@@ -54,6 +54,40 @@ internal sealed partial class ShardRootGrain
     private GrainId _cachedInternalKey;
     private IBPlusInternalGrain? _cachedInternal;
 
+    // Per-activation cache of internal-node *routing tables*, keyed by the
+    // internal node's GrainId. Each entry is a point-in-time
+    // RoutingTableSnapshot (separator keys + child ids + ChildrenAreLeaves
+    // flag) fetched once via IBPlusInternalGrain.GetRoutingTableAsync and
+    // reused thereafter to perform key-to-child routing locally inside this
+    // grain — eliminating the per-traversal-step
+    // RouteWithMetadataAsync cross-grain RPC for every internal node ever
+    // visited by this activation.
+    //
+    // Invalidation: explicit, via InvalidateRoutingTable(internalId), called
+    // on every site that issues IBPlusInternalGrain.AcceptSplitAsync against
+    // an internal node. AcceptSplitAsync is the only call shape that mutates
+    // an existing internal node's children list (insert+sort, with possible
+    // self-split that further trims children). Brand-new internals created
+    // via InitializeAsync / InitializeWithChildrenAsync have no prior cache
+    // entry and therefore need no invalidation. The crash-recovery branch
+    // inside BPlusInternalGrain.AcceptSplitAsync that nests a sibling
+    // AcceptSplitAsync call is reachable only after a partial-split failure
+    // and is documented as a tolerated invalidation hole — the only effect
+    // of a stale entry there is one extra cross-grain hop on the next
+    // routing query, which is negligible compared to the recovery cost
+    // itself.
+    //
+    // Lifetime: the dictionary is lazily allocated on first miss. Per-entry
+    // footprint is dominated by the separator-key strings + GrainId array;
+    // for an internal node of fanout F the snapshot holds F separator
+    // strings + F GrainIds + a bool. Per-activation memory is therefore
+    // O(touched-internal-nodes × fanout). For pathological access patterns
+    // a future cycle could add an LRU cap; for the workloads this cycle
+    // targets (deep-tree microbench, production trees with bounded
+    // internal-fanout via MaxInternalChildren) the unbounded dictionary
+    // is correct and small.
+    private Dictionary<GrainId, RoutingTableSnapshot>? _routingTableCache;
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private ILeafCacheGrain ResolveLeafCacheGrainSlow(GrainId leafId)
     {
@@ -79,6 +113,55 @@ internal sealed partial class ShardRootGrain
         _cachedInternalKey = internalId;
         _cachedInternal = internalGrain;
         return internalGrain;
+    }
+
+    /// <summary>
+    /// Returns the routing-table snapshot for the internal node identified
+    /// by <paramref name="internalId"/>. On cache hit (the common case
+    /// after the first traversal through any given internal) this is a
+    /// fully synchronous local lookup completing via
+    /// <see cref="ValueTask{T}"/> — no grain dispatch, no Task allocation.
+    /// On cache miss the snapshot is fetched once via
+    /// <see cref="IBPlusInternalGrain.GetRoutingTableAsync"/> (one extra
+    /// cross-grain call relative to today's
+    /// <see cref="IBPlusInternalGrain.RouteWithMetadataAsync"/> shape,
+    /// paid only on the first descent through that internal) and cached
+    /// for all subsequent descents. Callers invoke
+    /// <see cref="RoutingTableSnapshot.Route"/> on the returned snapshot
+    /// to perform the per-key routing decision locally.
+    /// </summary>
+    private ValueTask<RoutingTableSnapshot> GetRoutingTableSnapshotAsync(GrainId internalId)
+    {
+        if (_routingTableCache is { } cache && cache.TryGetValue(internalId, out var snapshot))
+        {
+            return new ValueTask<RoutingTableSnapshot>(snapshot);
+        }
+        return GetRoutingTableSnapshotSlowAsync(internalId);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private async ValueTask<RoutingTableSnapshot> GetRoutingTableSnapshotSlowAsync(GrainId internalId)
+    {
+        var grain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(internalId))
+            ? existing
+            : ResolveInternalGrainSlow(internalId);
+        var snapshot = await grain.GetRoutingTableAsync();
+        (_routingTableCache ??= new Dictionary<GrainId, RoutingTableSnapshot>())[internalId] = snapshot;
+        return snapshot;
+    }
+
+    /// <summary>
+    /// Invalidates the cached routing-table snapshot for
+    /// <paramref name="internalId"/>. Must be called by every site that
+    /// issues <see cref="IBPlusInternalGrain.AcceptSplitAsync"/> against an
+    /// internal node — that is the only call shape capable of mutating an
+    /// existing internal node's children list. The method is a no-op when
+    /// the cache is unallocated or the entry is absent (e.g. the very
+    /// first split before any read traversed through the parent).
+    /// </summary>
+    private void InvalidateRoutingTable(GrainId internalId)
+    {
+        _routingTableCache?.Remove(internalId);
     }
 
     private async Task<byte[]?> TraverseForReadAsync(string key)
@@ -193,10 +276,8 @@ internal sealed partial class ShardRootGrain
 
         while (true)
         {
-            var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
-                ? existing
-                : ResolveInternalGrainSlow(currentId);
-            var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
+            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+            var (childId, childrenAreLeaves) = snapshot.Route(key);
 
             if (childrenAreLeaves)
             {
@@ -222,6 +303,7 @@ internal sealed partial class ShardRootGrain
                 ? existingParent
                 : ResolveInternalGrainSlow(parentId);
             splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
+            InvalidateRoutingTable(parentId);
         }
 
         return splitResult;
@@ -255,10 +337,8 @@ internal sealed partial class ShardRootGrain
 
             while (true)
             {
-                var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
-                    ? existing
-                    : ResolveInternalGrainSlow(currentId);
-                var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
+                var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+                var (childId, childrenAreLeaves) = snapshot.Route(key);
 
                 if (childrenAreLeaves)
                 {
@@ -284,6 +364,7 @@ internal sealed partial class ShardRootGrain
                     ? existingParent
                     : ResolveInternalGrainSlow(parentId);
                 splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
+                InvalidateRoutingTable(parentId);
             }
 
             return splitResult;
@@ -312,10 +393,8 @@ internal sealed partial class ShardRootGrain
 
             while (true)
             {
-                var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
-                    ? existing
-                    : ResolveInternalGrainSlow(currentId);
-                var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
+                var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+                var (childId, childrenAreLeaves) = snapshot.Route(key);
 
                 if (childrenAreLeaves)
                 {
@@ -349,6 +428,7 @@ internal sealed partial class ShardRootGrain
                     ? existingParent
                     : ResolveInternalGrainSlow(parentId);
                 splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
+                InvalidateRoutingTable(parentId);
             }
 
             return new GetOrSetResult { Split = splitResult };
@@ -377,10 +457,8 @@ internal sealed partial class ShardRootGrain
 
             while (true)
             {
-                var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
-                    ? existing
-                    : ResolveInternalGrainSlow(currentId);
-                var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
+                var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+                var (childId, childrenAreLeaves) = snapshot.Route(key);
 
                 if (childrenAreLeaves)
                 {
@@ -414,6 +492,7 @@ internal sealed partial class ShardRootGrain
                     ? existingParent
                     : ResolveInternalGrainSlow(parentId);
                 splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
+                InvalidateRoutingTable(parentId);
             }
 
             return new CasResult
@@ -435,10 +514,8 @@ internal sealed partial class ShardRootGrain
 
         while (true)
         {
-            var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
-                ? existing
-                : ResolveInternalGrainSlow(currentId);
-            var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
+            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+            var (childId, childrenAreLeaves) = snapshot.Route(key);
 
             if (childrenAreLeaves)
             {
@@ -460,10 +537,9 @@ internal sealed partial class ShardRootGrain
 
         while (true)
         {
-            var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
-                ? existing
-                : ResolveInternalGrainSlow(currentId);
-            var (childId, childrenAreLeaves) = await internalGrain.GetLeftmostChildWithMetadataAsync();
+            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+            var childId = snapshot.ChildIds[0];
+            var childrenAreLeaves = snapshot.ChildrenAreLeaves;
 
             if (childrenAreLeaves)
             {
@@ -485,10 +561,9 @@ internal sealed partial class ShardRootGrain
 
         while (true)
         {
-            var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
-                ? existing
-                : ResolveInternalGrainSlow(currentId);
-            var (childId, childrenAreLeaves) = await internalGrain.GetRightmostChildWithMetadataAsync();
+            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+            var childId = snapshot.ChildIds[snapshot.ChildIds.Length - 1];
+            var childrenAreLeaves = snapshot.ChildrenAreLeaves;
 
             if (childrenAreLeaves)
             {

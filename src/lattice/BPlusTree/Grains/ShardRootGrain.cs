@@ -782,8 +782,8 @@ internal sealed partial class ShardRootGrain(
 
             while (true)
             {
-                var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
-                var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
+                var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+                var (childId, childrenAreLeaves) = snapshot.Route(key);
 
                 if (childrenAreLeaves)
                 {
@@ -805,6 +805,7 @@ internal sealed partial class ShardRootGrain(
                 var parentId = path.Pop();
                 var parentGrain = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
                 splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
+                InvalidateRoutingTable(parentId);
             }
 
             return splitResult;

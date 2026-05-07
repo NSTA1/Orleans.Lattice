@@ -33,6 +33,7 @@ internal static class TypeAliases
     internal const string TreeRegistryEntry = "ol.tre";
     internal const string TreeSnapshotState = "ol.tss";
     internal const string SnapshotPhase = "ol.snp";
+    internal const string RoutingTableSnapshot = "ol.rts";
     internal const string SnapshotMode = "ol.snm";
     internal const string TreeMergeState = "ol.tms";
     internal const string HotShardMonitorState = "ol.hms";
