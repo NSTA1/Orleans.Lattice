@@ -12,8 +12,22 @@ internal sealed class BPlusInternalGrain(
     IGrainContext context,
     [PersistentState("internal", LatticeOptions.StorageProviderName)] IPersistentState<InternalNodeState> state,
     IGrainFactory grainFactory,
-    LatticeOptionsResolver optionsResolver) : IBPlusInternalGrain
+    LatticeOptionsResolver optionsResolver) : IBPlusInternalGrain, IGrainBase
 {
+    /// <summary>
+    /// Implements <see cref="IGrainBase.GrainContext"/> so the
+    /// <c>Orleans.GrainExtensions.GetGrainId(IAddressable)</c> extension can
+    /// resolve this grain's identity directly from the activation instance.
+    /// In production, callers receive a grain reference proxy whose identity
+    /// is intrinsic; this property is never reached. Test/bench harnesses
+    /// that hand an IGrainFactory mock real grain instances back to callers
+    /// (see Orleans.Lattice.Benchmark.Microbench) require this self-describing
+    /// shape — exactly the pattern <see cref="BPlusLeafGrain"/> already
+    /// follows. Adding <see cref="IGrainBase"/> here aligns the two grain
+    /// classes with no production-runtime impact.
+    /// </summary>
+    public IGrainContext GrainContext => context;
+
     private ResolvedLatticeOptions? _options;
     private ValueTask<ResolvedLatticeOptions> GetOptionsAsync() =>
         _options is not null

@@ -33,6 +33,27 @@ internal sealed partial class ShardRootGrain
     private GrainId _cachedLeafKey;
     private IBPlusLeafGrain? _cachedLeaf;
 
+    // Per-activation cache of the most recently resolved IBPlusInternalGrain
+    // reference, keyed by the internal node's GrainId. Eliminates the
+    // grainFactory.GetGrain<IBPlusInternalGrain>(currentId) materialisation
+    // on every traversal step through an internal node. Mirrors the
+    // _cachedLeaf shape directly — a single-slot LRU keyed by GrainId
+    // equality. Hit rate per traversal:
+    //   * depth-2 tree (root-internal + leaves): 100% after first miss,
+    //     since every traversal calls GetGrain<IBPlusInternalGrain>(rootId)
+    //     and the root is invariant for the activation's lifetime.
+    //   * depth-3+ tree: hits on the root slot for every traversal; level-1+
+    //     nodes flip through the slot on each call. A future cycle could
+    //     widen the slot to a 2-slot LRU (root + most-recent) if a
+    //     deeper-tree microbench shows level-1 misses dominating.
+    // Invalidation is implicit on the GrainId equality check, the same
+    // pattern that keeps _cachedLeaf safe across root promotions: any
+    // RootNodeId rotation produces a mismatched currentId on the next
+    // traversal, which routes through ResolveInternalGrainSlow to refresh
+    // the slot under the new id.
+    private GrainId _cachedInternalKey;
+    private IBPlusInternalGrain? _cachedInternal;
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private ILeafCacheGrain ResolveLeafCacheGrainSlow(GrainId leafId)
     {
@@ -49,6 +70,15 @@ internal sealed partial class ShardRootGrain
         _cachedLeafKey = leafId;
         _cachedLeaf = leaf;
         return leaf;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private IBPlusInternalGrain ResolveInternalGrainSlow(GrainId internalId)
+    {
+        var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(internalId);
+        _cachedInternalKey = internalId;
+        _cachedInternal = internalGrain;
+        return internalGrain;
     }
 
     private async Task<byte[]?> TraverseForReadAsync(string key)
@@ -163,7 +193,9 @@ internal sealed partial class ShardRootGrain
 
         while (true)
         {
-            var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+            var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
+                ? existing
+                : ResolveInternalGrainSlow(currentId);
             var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
 
             if (childrenAreLeaves)
@@ -186,7 +218,9 @@ internal sealed partial class ShardRootGrain
         while (splitResult is not null && path.Count > 0)
         {
             var parentId = path.Pop();
-            var parentGrain = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
+            var parentGrain = (_cachedInternal is { } existingParent && _cachedInternalKey.Equals(parentId))
+                ? existingParent
+                : ResolveInternalGrainSlow(parentId);
             splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
         }
 
@@ -221,7 +255,9 @@ internal sealed partial class ShardRootGrain
 
             while (true)
             {
-                var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+                var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
+                    ? existing
+                    : ResolveInternalGrainSlow(currentId);
                 var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
 
                 if (childrenAreLeaves)
@@ -244,7 +280,9 @@ internal sealed partial class ShardRootGrain
             while (splitResult is not null && path.Count > 0)
             {
                 var parentId = path.Pop();
-                var parentGrain = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
+                var parentGrain = (_cachedInternal is { } existingParent && _cachedInternalKey.Equals(parentId))
+                    ? existingParent
+                    : ResolveInternalGrainSlow(parentId);
                 splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
             }
 
@@ -274,7 +312,9 @@ internal sealed partial class ShardRootGrain
 
             while (true)
             {
-                var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+                var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
+                    ? existing
+                    : ResolveInternalGrainSlow(currentId);
                 var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
 
                 if (childrenAreLeaves)
@@ -305,7 +345,9 @@ internal sealed partial class ShardRootGrain
             while (splitResult is not null && path.Count > 0)
             {
                 var parentId = path.Pop();
-                var parentGrain = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
+                var parentGrain = (_cachedInternal is { } existingParent && _cachedInternalKey.Equals(parentId))
+                    ? existingParent
+                    : ResolveInternalGrainSlow(parentId);
                 splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
             }
 
@@ -335,7 +377,9 @@ internal sealed partial class ShardRootGrain
 
             while (true)
             {
-                var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+                var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
+                    ? existing
+                    : ResolveInternalGrainSlow(currentId);
                 var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
 
                 if (childrenAreLeaves)
@@ -366,7 +410,9 @@ internal sealed partial class ShardRootGrain
             while (splitResult is not null && path.Count > 0)
             {
                 var parentId = path.Pop();
-                var parentGrain = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
+                var parentGrain = (_cachedInternal is { } existingParent && _cachedInternalKey.Equals(parentId))
+                    ? existingParent
+                    : ResolveInternalGrainSlow(parentId);
                 splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
             }
 
@@ -389,7 +435,9 @@ internal sealed partial class ShardRootGrain
 
         while (true)
         {
-            var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+            var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
+                ? existing
+                : ResolveInternalGrainSlow(currentId);
             var (childId, childrenAreLeaves) = await internalGrain.RouteWithMetadataAsync(key);
 
             if (childrenAreLeaves)
@@ -412,7 +460,9 @@ internal sealed partial class ShardRootGrain
 
         while (true)
         {
-            var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+            var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
+                ? existing
+                : ResolveInternalGrainSlow(currentId);
             var (childId, childrenAreLeaves) = await internalGrain.GetLeftmostChildWithMetadataAsync();
 
             if (childrenAreLeaves)
@@ -435,7 +485,9 @@ internal sealed partial class ShardRootGrain
 
         while (true)
         {
-            var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
+            var internalGrain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(currentId))
+                ? existing
+                : ResolveInternalGrainSlow(currentId);
             var (childId, childrenAreLeaves) = await internalGrain.GetRightmostChildWithMetadataAsync();
 
             if (childrenAreLeaves)
