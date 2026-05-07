@@ -303,17 +303,32 @@ internal sealed partial class ShardRootGrain
         await existingLeaf.SetNextSiblingAsync(graft.NewLeaves[0].LeafId);
         await firstNewLeaf.SetPrevSiblingAsync(graft.ExistingRightmostLeafId);
 
+        // Hoisted out of the per-entry loop: a single Stack<GrainId> is reused
+        // across every entry in graft.NewLeaves via Clear() (which preserves
+        // the backing array). This eliminates ~152 B of per-entry transient
+        // allocation (24 B Stack header + ~128 B GrainId[4] backing on first
+        // Push) on the steady-state non-RootIsLeaf branch. The Stack is
+        // unused on the RootIsLeaf early-continue branch.
+        var path = new Stack<GrainId>();
+
         foreach (var entry in graft.NewLeaves)
         {
-            var splitResult = new SplitResult { PromotedKey = entry.SeparatorKey, NewSiblingId = entry.LeafId };
-
             if (state.State.RootIsLeaf)
             {
+                // Rare branch: only the very first entry of the very first
+                // graft on a flat-tree shard hits this; PromoteRootAsync
+                // persists the SplitResult via state.PendingPromotion, so
+                // the allocation is required here.
+                var splitResult = new SplitResult
+                {
+                    PromotedKey = entry.SeparatorKey,
+                    NewSiblingId = entry.LeafId,
+                };
                 await PromoteRootAsync(splitResult);
                 continue;
             }
 
-            var path = new Stack<GrainId>();
+            path.Clear();
             var currentId = state.State.RootNodeId!.Value;
 
             while (true)
@@ -327,18 +342,40 @@ internal sealed partial class ShardRootGrain
                 currentId = await node.GetRightmostChildAsync();
             }
 
-            SplitResult? pending = splitResult;
-            while (pending is not null && path.Count > 0)
+            // Track the pending promoted (key, child) as locals instead of
+            // boxing them in a SplitResult instance. The vast majority of
+            // entries trigger a leaf split that the parent internal absorbs
+            // without re-splitting, so pendingHasValue flips false on the
+            // first null return from AcceptSplitAsync. The class allocation
+            // is only paid in the very rare case where the root itself
+            // needs to split (caught by the `if (pendingHasValue)` tail).
+            var pendingKey = entry.SeparatorKey;
+            var pendingChild = entry.LeafId;
+            var pendingHasValue = true;
+            while (pendingHasValue && path.Count > 0)
             {
                 var parentId = path.Pop();
                 var parent = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
-                pending = await parent.AcceptSplitAsync(pending.PromotedKey, pending.NewSiblingId);
+                var bubble = await parent.AcceptSplitAsync(pendingKey, pendingChild);
                 InvalidateRoutingTable(parentId);
+                if (bubble is null)
+                {
+                    pendingHasValue = false;
+                }
+                else
+                {
+                    pendingKey = bubble.PromotedKey;
+                    pendingChild = bubble.NewSiblingId;
+                }
             }
 
-            if (pending is not null)
+            if (pendingHasValue)
             {
-                await PromoteRootAsync(pending);
+                await PromoteRootAsync(new SplitResult
+                {
+                    PromotedKey = pendingKey,
+                    NewSiblingId = pendingChild,
+                });
             }
         }
 
