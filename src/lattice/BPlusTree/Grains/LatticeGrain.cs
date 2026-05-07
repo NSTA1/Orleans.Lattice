@@ -217,7 +217,7 @@ internal sealed partial class LatticeGrain(
 
         foreach (var (shardIdx, bucket) in shardBuckets)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIdx}");
+            var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
             tasks.Add(FetchFromShardAsync(shard, bucket, result));
         }
 
@@ -469,7 +469,7 @@ internal sealed partial class LatticeGrain(
         var tasks = new List<Task>(shardBuckets.Count);
         foreach (var (shardIdx, bucket) in shardBuckets)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIdx}");
+            var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
             tasks.Add(WriteToShardAsync(shard, bucket));
         }
 
@@ -621,7 +621,7 @@ internal sealed partial class LatticeGrain(
         var tasks = new Task<int>[physicalShards.Count];
         for (int i = 0; i < physicalShards.Count; i++)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
+            var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
             tasks[i] = shard.DeleteRangeAsync(startInclusive, endExclusive);
         }
 
@@ -731,7 +731,7 @@ internal sealed partial class LatticeGrain(
             for (int i = 0; i < physicalShards.Count; i++)
             {
                 var physicalIdx = physicalShards[i];
-                var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalIdx}");
+                var shard = GetShardGrainByIndex(physicalTreeId, physicalIdx);
                 if (!ownedByShard.TryGetValue(physicalIdx, out var owned) || owned.Length == 0)
                 {
                     // Shard referenced by the map but owning no slots (pathological).
@@ -766,7 +766,7 @@ internal sealed partial class LatticeGrain(
         var tasks = new Task<int>[physicalShards.Count];
         for (int i = 0; i < physicalShards.Count; i++)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
+            var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
             tasks[i] = shard.CountAsync();
         }
         await Task.WhenAll(tasks);
@@ -917,7 +917,7 @@ internal sealed partial class LatticeGrain(
                 var fastTasks = new Task<int>[physicalShards.Count];
                 for (int i = 0; i < physicalShards.Count; i++)
                 {
-                    var sh = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
+                    var sh = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
                     fastTasks[i] = sh.CountAsync();
                 }
                 await Task.WhenAll(fastTasks);
@@ -937,7 +937,7 @@ internal sealed partial class LatticeGrain(
             for (int i = 0; i < physicalShards.Count; i++)
             {
                 var physicalIdx = physicalShards[i];
-                var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalIdx}");
+                var shard = GetShardGrainByIndex(physicalTreeId, physicalIdx);
                 if (!ownedByShard.TryGetValue(physicalIdx, out var owned) || owned.Length == 0)
                 {
                     tasks[i] = Task.FromResult(0);
@@ -1031,6 +1031,24 @@ internal sealed partial class LatticeGrain(
         _cachedShardIndex = shardIndex;
         _cachedShard = shard;
         return shard;
+    }
+
+    /// <summary>
+    /// Returns an <see cref="IShardRootGrain"/> reference for the given shard
+    /// index against the resolved physical tree id. Reuses the single-slot
+    /// per-activation cache populated by <see cref="GetShardGrainAsync"/>
+    /// (cycle 8) so multi-shard fanout sites — bulk batch, cursor, range
+    /// scan — that already have <c>physicalTreeId</c> and <c>shardIndex</c>
+    /// in hand do not pay the <c>GetGrain&lt;IShardRootGrain&gt;(string)</c>
+    /// materialisation cost on a repeat-shard hit. Cache invalidation is
+    /// shared with <see cref="GetShardGrainAsync"/>: <see cref="TryInvalidateStaleAlias"/>
+    /// and <see cref="InvalidateShardMap"/> both null the slot.
+    /// </summary>
+    private IShardRootGrain GetShardGrainByIndex(string physicalTreeId, int shardIndex)
+    {
+        return (_cachedShard is { } existing && _cachedShardIndex == shardIndex)
+            ? existing
+            : ResolveShardSlow(physicalTreeId, shardIndex);
     }
 
     /// <summary>
