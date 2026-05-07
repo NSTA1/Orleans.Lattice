@@ -27,15 +27,16 @@ internal sealed partial class LatticeGrain(
     private bool _monitorEnsured;
     private string? _physicalTreeId;
     private ShardMap? _shardMap;
-    // Per-activation single-slot cache of the most-recent resolved IShardRootGrain
-    // reference. A hit on GetShardGrainAsync skips the entire grain-reference
-    // materialisation pipeline (string interpolation + IdSpan byte-array alloc +
-    // GrainReference proxy alloc). The cache key is the int shard index; the
-    // physicalTreeId is implicitly invariant per activation because the
-    // invalidation hooks below null this field on the same conditions that
-    // null _physicalTreeId / _shardMap.
-    private int _cachedShardIndex = -1;
-    private IShardRootGrain? _cachedShard;
+    // Per-activation array-keyed cache of resolved IShardRootGrain references
+    // indexed by physical shard index. Replaces the cycle-8 single-slot LRU
+    // (cycle 11): the array form removes thrashing under multi-shard fanout
+    // (SetManyAsync, KeysAsync, EntriesAsync, DeleteRangeAsync) where
+    // consecutive GetGrain calls alternate between distinct shards. Allocated
+    // lazily on the first slow-path miss once _shardMap is set, sized to
+    // cover the largest physical shard index in the active map. Both
+    // invalidation hooks below null this field; the next slow-path call
+    // re-allocates against the fresh map.
+    private IShardRootGrain?[]? _cachedShards;
     private readonly PublishEventsGate _eventsGate = new();
 
     /// <summary>
@@ -1019,36 +1020,63 @@ internal sealed partial class LatticeGrain(
     {
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
         var shardIndex = shardMap.Resolve(key);
-        return (_cachedShard is { } existing && _cachedShardIndex == shardIndex)
-            ? existing
-            : ResolveShardSlow(physicalTreeId, shardIndex);
+        var cache = _cachedShards;
+        if (cache is not null && (uint)shardIndex < (uint)cache.Length && cache[shardIndex] is { } existing)
+            return existing;
+        return ResolveShardSlow(physicalTreeId, shardIndex);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private IShardRootGrain ResolveShardSlow(string physicalTreeId, int shardIndex)
     {
         var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
-        _cachedShardIndex = shardIndex;
-        _cachedShard = shard;
+        var cache = _cachedShards;
+        if (cache is null || shardIndex >= cache.Length)
+        {
+            // Lazily size the cache to cover the largest physical shard index
+            // in the active map. Callers (GetShardGrainAsync, GetShardGrainByIndex
+            // via the fanout sites) all reach this method only after
+            // GetRoutingAsync has populated _shardMap, so the map should be
+            // non-null in steady state. If a concurrent invalidation has nulled
+            // it, fall back to a minimum size of (shardIndex + 1) so we still
+            // cache this entry.
+            var map = _shardMap;
+            int size = shardIndex + 1;
+            if (map is not null)
+            {
+                var indices = map.GetPhysicalShardIndices();
+                if (indices.Count > 0)
+                {
+                    var top = indices[indices.Count - 1] + 1;
+                    if (top > size) size = top;
+                }
+            }
+            cache = new IShardRootGrain?[size];
+            _cachedShards = cache;
+        }
+        cache[shardIndex] = shard;
         return shard;
     }
 
     /// <summary>
     /// Returns an <see cref="IShardRootGrain"/> reference for the given shard
-    /// index against the resolved physical tree id. Reuses the single-slot
+    /// index against the resolved physical tree id. Reuses the array-keyed
     /// per-activation cache populated by <see cref="GetShardGrainAsync"/>
-    /// (cycle 8) so multi-shard fanout sites — bulk batch, cursor, range
-    /// scan — that already have <c>physicalTreeId</c> and <c>shardIndex</c>
-    /// in hand do not pay the <c>GetGrain&lt;IShardRootGrain&gt;(string)</c>
-    /// materialisation cost on a repeat-shard hit. Cache invalidation is
-    /// shared with <see cref="GetShardGrainAsync"/>: <see cref="TryInvalidateStaleAlias"/>
-    /// and <see cref="InvalidateShardMap"/> both null the slot.
+    /// (cycle 11) so multi-shard fanout sites — bulk batch, cursor, range
+    /// scan, k-way-merge — that already have <c>physicalTreeId</c> and
+    /// <c>shardIndex</c> in hand do not pay the
+    /// <c>GetGrain&lt;IShardRootGrain&gt;(string)</c> materialisation cost on
+    /// any repeat-shard hit, even when consecutive calls alternate across
+    /// distinct shards. Cache invalidation is shared with
+    /// <see cref="GetShardGrainAsync"/>: <see cref="TryInvalidateStaleAlias"/>
+    /// and <see cref="InvalidateShardMap"/> both null the array.
     /// </summary>
     private IShardRootGrain GetShardGrainByIndex(string physicalTreeId, int shardIndex)
     {
-        return (_cachedShard is { } existing && _cachedShardIndex == shardIndex)
-            ? existing
-            : ResolveShardSlow(physicalTreeId, shardIndex);
+        var cache = _cachedShards;
+        if (cache is not null && (uint)shardIndex < (uint)cache.Length && cache[shardIndex] is { } existing)
+            return existing;
+        return ResolveShardSlow(physicalTreeId, shardIndex);
     }
 
     /// <summary>
@@ -1106,8 +1134,7 @@ internal sealed partial class LatticeGrain(
         if (_physicalTreeId is null) return false;
         _physicalTreeId = null;
         _shardMap = null;
-        _cachedShard = null;
-        _cachedShardIndex = -1;
+        _cachedShards = null;
         return true;
     }
 
@@ -1121,8 +1148,7 @@ internal sealed partial class LatticeGrain(
     private bool InvalidateShardMap()
     {
         _shardMap = null;
-        _cachedShard = null;
-        _cachedShardIndex = -1;
+        _cachedShards = null;
         return true;
     }
 
