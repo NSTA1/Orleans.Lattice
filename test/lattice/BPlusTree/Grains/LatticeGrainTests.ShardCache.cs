@@ -60,18 +60,19 @@ public partial class LatticeGrainTests
         Assert.That(shardB, Is.Not.EqualTo(shardA),
             "test setup failure: could not find two keys hashing to different shards");
 
-        // Interleave the two keys; the cache holds only one slot, so each
-        // alternation between keyA and keyB causes a cache miss and a fresh
-        // materialisation. Two distinct shards × two materialisations each
-        // = 4 factory.GetGrain calls when interleaved this way.
+        // Cycle-11 contract: the cache is array-keyed by physical shard
+        // index, so each distinct shard is materialised exactly ONCE per
+        // activation regardless of call interleaving. Alternation between
+        // keyA and keyB no longer thrashes the cache — every call after the
+        // first per-shard miss is a hit.
         await grain.GetAsync(keyA);
         await grain.GetAsync(keyA); // cache hit on shardA
-        await grain.GetAsync(keyB); // cache miss, evicts shardA, caches shardB
+        await grain.GetAsync(keyB); // cache miss on shardB (different array slot, no eviction)
         await grain.GetAsync(keyB); // cache hit on shardB
-        await grain.GetAsync(keyA); // cache miss again (single-slot cache)
+        await grain.GetAsync(keyA); // cache hit on shardA (still cached)
 
-        // shardA materialised twice (initial + after eviction); shardB once.
-        factory.Received(2).GetGrain<IShardRootGrain>(
+        // shardA and shardB each materialised exactly once.
+        factory.Received(1).GetGrain<IShardRootGrain>(
             $"{treeId}/{shardA}", Arg.Any<string>());
         factory.Received(1).GetGrain<IShardRootGrain>(
             $"{treeId}/{shardB}", Arg.Any<string>());

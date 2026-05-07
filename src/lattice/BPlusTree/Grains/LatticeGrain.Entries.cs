@@ -78,9 +78,8 @@ internal sealed partial class LatticeGrain
         var initTasks = new Task[physicalShards.Count];
         for (int i = 0; i < physicalShards.Count; i++)
         {
-            var shardKey = $"{physicalTreeId}/{physicalShards[i]}";
             var sc = new EntriesCursor(
-                grainFactory.GetGrain<IShardRootGrain>(shardKey),
+                GetShardGrainByIndex(physicalTreeId, physicalShards[i]),
                 startInclusive, endExclusive, pageSize, reverse, usePrefetch, movedReported);
             cursors.Add(sc);
             initTasks[i] = sc.MoveNextAsync();
@@ -245,7 +244,7 @@ internal sealed partial class LatticeGrain
         foreach (var (owner, slotList) in byOwner)
         {
             var sortedSlots = ToSortedArray(slotList);
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{owner}");
+            var shard = GetShardGrainByIndex(physicalTreeId, owner);
             string? continuation = null;
             while (true)
             {
