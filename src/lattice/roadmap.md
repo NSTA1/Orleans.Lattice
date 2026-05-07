@@ -210,6 +210,19 @@ Associate tags with keys and query by tag. Implementable as a secondary Lattice 
 
 ---
 
+### 5 · F-055
+**Reliability / medium impact (precondition for replication R-103's continuous-reader contract)**
+
+Reader isolation during in-flight sagas. Today the consistency contract documented in [`docs/lattice/consistency.md`](../../docs/lattice/consistency.md) ("What Lattice does **not** guarantee" — *Reader isolation during in-flight sagas or range deletes*) explicitly warns that readers concurrent with `SetManyAtomicAsync` or `DeleteRangeAsync` may observe a partial view of the mutation, and recommends version-guarded reads (`GetWithVersionAsync` + `SetIfVersionAsync`) as the user-side workaround. F-055 closes this carve-out with a built-in primitive: per-key applies inside `AtomicWriteGrain.RunSagaAsync` (and the receiver-side `ExecuteApplyAsync` reused by the replication atomic-apply path) write a *prepared* row that is invisible to public reads (`GetAsync`, `GetManyAsync`, `ScanKeysAsync`, etc.); the saga's commit step flips every prepared row to *committed* atomically at the leaf, at which point the whole batch becomes visible. Readers observe either the pre-saga state for every key in the batch, or the post-saga state for every key — never a split.
+
+Surface impact: no change to public method signatures. Internal change: `BPlusLeafGrain` gains a per-key `PreparedValue?` slot keyed on `transactionId`, populated by the prepare phase and resolved by the commit phase; `GetAsync` reads filter out keys whose only state is a prepared row, falling through to the underlying committed value. Saga compensation rolls inherit the prepared/committed semantics, so a partial-apply rollback never makes the in-flight state observable.
+
+**Replication interaction.** Closes the same carve-out cross-cluster: replication's `ApplyManyAtomicAsync` seam (F-054 ✓) already routes per-key applies through `RunSagaAsync` on the receiver, so the prepared/committed visibility flip propagates to the receiver-side commit point with no additional work. Once F-055 ships, the replication package's R-103 chaos fixture can tighten its current "post-drain per-batch full-key" assertion to the originally-spec'd "continuous reader observes either zero or all keys at every poll" assertion (see the R-103 retrospective note in [`../lattice.replication/roadmap.md`](../lattice.replication/roadmap.md)). The R-104 `consistency.md` update is correspondingly narrowed: replicated batches arrive on every receiver as a unit (R-098 → R-103), but real-time reader isolation during the receiver-side saga commit window remains tracked here as F-055.
+
+Acceptance: a fixture writes `SetManyAtomicAsync` for a 16-key batch while a continuous reader polls every key at 10 ms cadence, asserts the reader observes either zero or all keys at every poll over the saga's lifetime; an equivalent fixture on the receiver side under `AtomicBatchDelivery=true` against `Orleans.Lattice.Replication`'s in-process two-cluster fixture, asserting the same invariant; an existing-test regression sweep confirms no public-API behaviour change and no perceptible read-path latency regression for non-saga reads.
+
+---
+
 ## 🛠 Audit Follow-up Fixes
 
 Reliability and hygiene fixes surfaced by the repository audit. Items tagged **Fix** here are distinct from feature work (`F-###`) — they address latent bugs or robustness gaps rather than adding new capability. The highest-severity audit items (data-loss / liveness) are already addressed: F-031 (atomic multi-key writes saga) and F-033 (stateful cursor grain) are both complete.

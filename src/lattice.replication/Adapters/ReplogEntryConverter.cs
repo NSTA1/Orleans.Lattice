@@ -4,8 +4,8 @@ namespace Orleans.Lattice.Replication.Adapters;
 
 /// <summary>
 /// Static helper translating between the public
-/// <see cref="LatticeMutation"/> shape (the core library''s
-/// observer-payload contract) and the replication package''s wire-shaped
+/// <see cref="LatticeMutation"/> shape (the core library's
+/// observer-payload contract) and the replication package's wire-shaped
 /// <see cref="ReplogEntry"/>. Used by the the dormant seam commit-log adapters
 /// (<see cref="ReplicationCommitLogWriter"/>,
 /// <see cref="ReplicationCommitLogReader"/>) so the core library can
@@ -71,6 +71,9 @@ internal static class ReplogEntryConverter
             DependencySummary = capturedFrontier,
             DeltaKind = mutation.DeltaKind,
             DeltaPayload = mutation.DeltaPayload,
+            AtomicBatchSize = mutation.AtomicBatchSize,
+            AtomicBatchIndex = mutation.AtomicBatchIndex,
+            TransactionId = mutation.TransactionId,
         };
     }
 
@@ -79,14 +82,15 @@ internal static class ReplogEntryConverter
     /// <see cref="LatticeMutation"/> shape. The reverse direction is
     /// strictly metadata-preserving: every field on
     /// <see cref="ReplogEntry"/> that has a matching slot on
-    /// <see cref="LatticeMutation"/> round-trips verbatim. The
+    /// <see cref="LatticeMutation"/> round-trips verbatim, including
+    /// the atomic-batch metadata (<see cref="LatticeMutation.TransactionId"/>, 
+    /// <see cref="LatticeMutation.AtomicBatchSize"/>, and 
+    /// <see cref="LatticeMutation.AtomicBatchIndex"/>) which the
+    /// replication wire format carries on every entry. The
     /// translation does not introduce a fresh
-    /// <see cref="MutationCategory"/> or <see cref="LatticeMutation.TransactionId"/>
-    /// — both default to their wire-compatible defaults
-    /// (<see cref="MutationCategory.User"/> and <see cref="System.Guid.Empty"/>)
-    /// because the replication wire format does not carry them today.
-    /// A future replication WAL extension that carries them will widen
-    /// this translation in the same change.
+    /// <see cref="MutationCategory"/> — it defaults to
+    /// <see cref="MutationCategory.User"/> because the replication
+    /// wire format does not carry the category today.
     /// </summary>
     public static LatticeMutation FromReplogEntry(in ReplogEntry entry)
     {
@@ -111,9 +115,11 @@ internal static class ReplogEntryConverter
             ExpiresAtTicks = entry.ExpiresAtTicks,
             OriginClusterId = entry.OriginClusterId,
             VectorClock = entry.VectorClock,
-            // TransactionId and Category are not on the replication wire
-            // today; leave at wire-compat defaults.
-            TransactionId = Guid.Empty,
+            TransactionId = entry.TransactionId,
+            AtomicBatchSize = entry.AtomicBatchSize,
+            AtomicBatchIndex = entry.AtomicBatchIndex,
+            // Category is not on the replication wire today; leave at
+            // wire-compat default.
             Category = MutationCategory.User,
             DeltaKind = entry.DeltaKind,
             DeltaPayload = entry.DeltaPayload,

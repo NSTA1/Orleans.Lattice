@@ -27,16 +27,61 @@ internal sealed class MultiSiteClusterFixture
 
     private static readonly ConcurrentDictionary<string, ReplicationMode> Modes = new();
 
+    /// <summary>
+    /// Per-cluster silo-side <see cref="LatticeReplicationOptions"/>
+    /// customisers. Keyed by the per-site cluster id so a single
+    /// post-configure type can route every silo to the chaos test's
+    /// requested overrides (e.g. <c>AtomicBatchDelivery=true</c>,
+    /// tightened orphan timeouts) without per-site configurator
+    /// duplication. The map is cleared in
+    /// <see cref="DisposeAsync"/> so consecutive chaos tests do not
+    /// leak overrides into the next fixture.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, Action<LatticeReplicationOptions>> SiloCustomizers = new();
+
     private readonly TestCluster[] _sites;
     private readonly IChangeFeed[] _changeFeeds;
     private readonly ReplicationApplier[] _appliers;
     private readonly ReplicationMode _mode;
+    private readonly Action<LatticeReplicationOptions>? _siloCustomizer;
+    private readonly Action<LatticeReplicationOptions>? _clientCustomizer;
 
     /// <summary>
     /// Creates the fixture. <paramref name="mode"/> is applied to every
     /// tree on every silo (chaos tests exercise a single tree per fixture).
     /// </summary>
-    public MultiSiteClusterFixture(ReplicationMode mode, int siteCount = 3)
+    /// <param name="mode">
+    /// Replication mode for every replicated tree on every silo.
+    /// </param>
+    /// <param name="siteCount">Number of independent silo clusters to spin up.</param>
+    /// <param name="configureSilo">
+    /// Optional silo-side customiser for every site's
+    /// <see cref="LatticeReplicationOptions"/>. Runs as a
+    /// post-configure after the cluster id has been mirrored from
+    /// <see cref="Orleans.Configuration.ClusterOptions.ClusterId"/>;
+    /// a chaos test that needs to opt into receiver-side
+    /// atomic-batch delivery, tighten the orphan-sweep timeout, or
+    /// flip any other replication option uses this hook.
+    /// </param>
+    /// <param name="configureClient">
+    /// Optional client-side customiser for the test-fixture
+    /// <see cref="ReplicationApplier"/>'s in-memory
+    /// <see cref="LatticeReplicationOptions"/>. Mirrors
+    /// <paramref name="configureSilo"/> for the manually-constructed
+    /// per-site applier the chaos delivery pump dispatches into; the
+    /// silo-side observer reads the silo-bound options via
+    /// <see cref="IOptionsMonitor{TOptions}.Get(string)"/>, but the
+    /// pump-side applier is constructed against this in-memory
+    /// monitor so the two halves of the chaos pipeline must be
+    /// configured symmetrically when receiver-side behaviour
+    /// (e.g. <see cref="LatticeReplicationOptions.AtomicBatchDelivery"/>)
+    /// is being exercised.
+    /// </param>
+    public MultiSiteClusterFixture(
+        ReplicationMode mode,
+        int siteCount = 3,
+        Action<LatticeReplicationOptions>? configureSilo = null,
+        Action<LatticeReplicationOptions>? configureClient = null)
     {
         if (siteCount < 2)
         {
@@ -48,6 +93,8 @@ internal sealed class MultiSiteClusterFixture
         _sites = new TestCluster[siteCount];
         _changeFeeds = new IChangeFeed[siteCount];
         _appliers = new ReplicationApplier[siteCount];
+        _siloCustomizer = configureSilo;
+        _clientCustomizer = configureClient;
     }
 
     /// <summary>Returns the cluster client for site <paramref name="index"/>.</summary>
@@ -65,6 +112,10 @@ internal sealed class MultiSiteClusterFixture
         for (var i = 0; i < SiteCount; i++)
         {
             Modes[ClusterIdFor(i)] = _mode;
+            if (_siloCustomizer is not null)
+            {
+                SiloCustomizers[ClusterIdFor(i)] = _siloCustomizer;
+            }
         }
 
         for (var i = 0; i < SiteCount; i++)
@@ -77,6 +128,7 @@ internal sealed class MultiSiteClusterFixture
                 ClusterId = ClusterIdFor(i),
                 ReplogPartitions = 1,
             };
+            _clientCustomizer?.Invoke(perSiteOptions);
             options.CurrentValue.Returns(perSiteOptions);
             options.Get(Arg.Any<string>()).Returns(perSiteOptions);
 
@@ -102,6 +154,7 @@ internal sealed class MultiSiteClusterFixture
         for (var i = 0; i < SiteCount; i++)
         {
             Modes.TryRemove(ClusterIdFor(i), out _);
+            SiloCustomizers.TryRemove(ClusterIdFor(i), out _);
         }
     }
 
@@ -132,6 +185,7 @@ internal sealed class MultiSiteClusterFixture
             siloBuilder.ConfigureServices(services =>
             {
                 services.AddSingleton<IPostConfigureOptions<LatticeReplicationOptions>, ChaosClusterIdPostConfigure>();
+                services.AddSingleton<IPostConfigureOptions<LatticeReplicationOptions>, ChaosCustomPostConfigure>();
                 services.AddSingleton<IReplicationModeResolver, ChaosModeResolver>();
             });
         }
@@ -148,6 +202,25 @@ internal sealed class MultiSiteClusterFixture
         public void PostConfigure(string? name, LatticeReplicationOptions options)
         {
             options.ClusterId = clusterOptions.Value.ClusterId;
+        }
+    }
+
+    /// <summary>
+    /// Applies the per-cluster silo-side customiser registered on the
+    /// fixture (if any). Runs as a separate post-configure so it
+    /// always observes the cluster id that
+    /// <see cref="ChaosClusterIdPostConfigure"/> mirrored — letting
+    /// the customiser fan out per cluster id without re-resolving
+    /// the cluster options itself.
+    /// </summary>
+    private sealed class ChaosCustomPostConfigure : IPostConfigureOptions<LatticeReplicationOptions>
+    {
+        public void PostConfigure(string? name, LatticeReplicationOptions options)
+        {
+            if (SiloCustomizers.TryGetValue(options.ClusterId, out var customizer))
+            {
+                customizer(options);
+            }
         }
     }
 
