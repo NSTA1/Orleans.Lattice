@@ -32,6 +32,10 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 ///   <item><c>BENCH_MICROBENCH_KEY_COUNT</c> &mdash; pre-seeded keyspace size (default 10 000).</item>
 ///   <item><c>BENCH_MICROBENCH_VALUE_BYTES</c> &mdash; payload size for writes (default 128).</item>
 ///   <item><c>BENCH_MICROBENCH_BULK_BATCH</c> &mdash; entries per <see cref="BulkLoad"/> invocation (default 1 000).</item>
+///   <item><c>BENCH_MICROBENCH_DEEPER_MAX_LEAF_KEYS</c> &mdash; <see cref="BuildDeeperTree"/> leaf fan-out cap (default 4).</item>
+///   <item><c>BENCH_MICROBENCH_DEEPER_MAX_INTERNAL_CHILDREN</c> &mdash; <see cref="BuildDeeperTree"/> internal fan-out cap (default 4).</item>
+///   <item><c>BENCH_MICROBENCH_DEEPER_KEY_COUNT</c> &mdash; <see cref="BuildDeeperTree"/> seeded keyspace (default 256, yields 3 internal levels at fan-out 4).</item>
+///   <item><c>BENCH_MICROBENCH_DEEPER_BULK_BATCH</c> &mdash; <see cref="BulkLoad_DeeperTree"/> batch size (default 32).</item>
 /// </list>
 /// </para>
 /// </summary>
@@ -100,6 +104,46 @@ public class LatticeMicroBenchmarks
     private List<KeyValuePair<string, byte[]>> _deepBulkBatch = null!;
     private readonly Dictionary<GrainId, IBPlusInternalGrain> _internalGrains = [];
     private int _deepWriteCursor;
+
+    // ===== Cycle 17 deeper-tree instrument: depth-3+ tree =====
+    // A fourth ILattice activation rooted at DeeperTreeName forces a tree
+    // with two or more internal levels above the leaves by pinning BOTH
+    // MaxLeafKeys AND MaxInternalChildren small. The default sizing
+    // (DeeperMaxLeafKeysDefault=4, DeeperMaxInternalChildrenDefault=4,
+    // DeeperKeyCountDefault=256) yields:
+    //   leaves        = ⌈256 / 4⌉ = 64 nodes
+    //   level-1 mid   = ⌈64  / 4⌉ = 16 nodes
+    //   level-2 mid   = ⌈16  / 4⌉ = 4  nodes
+    //   level-3 root  = ⌈4   / 4⌉ = 1  node
+    // → every traversal walks root → L2 → L1 → leaf, paying THREE
+    // grainFactory.GetGrain<IBPlusInternalGrain>(...) materialisations
+    // per op. The depth-2 DeepTree above pays one. This lifts the
+    // measurement above the BDN MemoryDiagnoser bucket-resolution floor
+    // for any optimisation targeting per-internal-hop allocations
+    // (cycle 14's routing-table cache, the still-deferred
+    // Task<RoutingTableSnapshot> cache-miss alloc, and any future
+    // internal-grain-ref multi-slot LRU widening).
+    //
+    // All four shape parameters are env-overridable so a future agent
+    // can author a depth-N variant by env file alone, without further
+    // edits to this bench-host file. The IBPlusInternalGrain factory
+    // routes in GlobalSetupCore already handle arbitrary internal-node
+    // GrainIds via GetOrCreateInternalGrain, so no additional wiring is
+    // needed.
+    private const string DeeperTreeName = "microbench-deeper";
+    private const int DeeperMaxLeafKeysDefault = 4;
+    private const int DeeperMaxInternalChildrenDefault = 4;
+    private const int DeeperKeyCountDefault = 256;
+    private const int DeeperBulkBatchDefault = 32;
+    private int _deeperMaxLeafKeys;
+    private int _deeperMaxInternalChildren;
+    private int _deeperKeyCount;
+    private int _deeperBulkBatch;
+    private ILattice _deeperLattice = null!;
+    private string[] _deeperKeys = null!;
+    private List<KeyValuePair<string, byte[]>> _deeperBulkBatchList = null!;
+    private int _deeperWriteCursor;
+    private int _deeperReadCursor;
 
     /// <summary>
     /// Wires up the mock Orleans seams, instantiates a single-shard
@@ -257,6 +301,7 @@ public class LatticeMicroBenchmarks
 
         BuildFanoutTree(keyCount, bulkBatch);
         BuildDeepTree();
+        BuildDeeperTree();
     }
 
     /// <summary>
@@ -510,6 +555,55 @@ public class LatticeMicroBenchmarks
     }
 
     /// <summary>
+    /// Single <see cref="ILattice.GetAsync(string, CancellationToken)"/>
+    /// against the depth-3+ deeper tree. Each invocation drives
+    /// <see cref="ShardRootGrain"/>'s read traversal through
+    /// <c>grainFactory.GetGrain&lt;IBPlusInternalGrain&gt;(internalId)</c>
+    /// at every level above the leaves — at default sizing
+    /// (<see cref="DeeperMaxLeafKeysDefault"/> = 4,
+    /// <see cref="DeeperMaxInternalChildrenDefault"/> = 4,
+    /// <see cref="DeeperKeyCountDefault"/> = 256), three internal-grain
+    /// hops per op. Lifts internal-hop alloc above the BDN MemoryDiagnoser
+    /// bucket-resolution floor for cycle-14+ optimisations targeting the
+    /// internal-grain-ref / routing-table-cache / RPC-elision paths that
+    /// the depth-2 deep tree could not resolve.
+    /// </summary>
+    [Benchmark(Description = "Point read deeper tree")]
+    public Task<byte[]?> PointRead_DeeperTree()
+    {
+        var i = unchecked(_deeperReadCursor++) & int.MaxValue;
+        var key = _deeperKeys[i % _deeperKeys.Length];
+        return _deeperLattice.GetAsync(key);
+    }
+
+    /// <summary>
+    /// Single <see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/>
+    /// against the depth-3+ deeper tree. Same per-op internal-hop count
+    /// as <see cref="PointRead_DeeperTree"/>; isolates the write-path
+    /// allocation profile (HLC tick, version vector advance, leaf
+    /// commit) over a multi-internal traversal.
+    /// </summary>
+    [Benchmark(Description = "Point write deeper tree")]
+    public Task PointWrite_DeeperTree()
+    {
+        var i = unchecked(_deeperWriteCursor++) & int.MaxValue;
+        var key = _deeperKeys[i % _deeperKeys.Length];
+        return _deeperLattice.SetAsync(key, _value);
+    }
+
+    /// <summary>
+    /// One <see cref="ILattice.SetManyAsync"/> invocation against the
+    /// depth-3+ deeper tree. The internal layers are walked once per
+    /// key in the batch, surfacing per-traversal internal allocations
+    /// at <c>batch_size × internal_levels</c> density.
+    /// </summary>
+    [Benchmark(Description = "Bulk load deeper tree")]
+    public Task BulkLoad_DeeperTree()
+    {
+        return _deeperLattice.SetManyAsync(_deeperBulkBatchList);
+    }
+
+    /// <summary>
     /// Builds a sibling <see cref="ILattice"/> activation rooted at
     /// <see cref="DeepTreeName"/> with <see cref="DeepMaxLeafKeys"/>
     /// pinned small enough that the seed phase forces a root split.
@@ -572,6 +666,87 @@ public class LatticeMicroBenchmarks
         {
             var k = "dbulk-" + i.ToString("D4", CultureInfo.InvariantCulture);
             _deepBulkBatch.Add(new(k, _value));
+        }
+    }
+
+    /// <summary>
+    /// Builds a sibling <see cref="ILattice"/> activation rooted at
+    /// <see cref="DeeperTreeName"/> with both
+    /// <see cref="TreeRegistryEntry.MaxLeafKeys"/> and
+    /// <see cref="TreeRegistryEntry.MaxInternalChildren"/> pinned small
+    /// (defaults 4 / 4 / 256-keys), forcing a tree with three internal
+    /// levels above the leaves:
+    /// <list type="bullet">
+    ///   <item>level 0 (leaves): ⌈KeyCount/MaxLeafKeys⌉ = 64 nodes</item>
+    ///   <item>level 1 (internal): ⌈64 / MaxInternalChildren⌉ = 16 nodes</item>
+    ///   <item>level 2 (internal): ⌈16 / MaxInternalChildren⌉ = 4 nodes</item>
+    ///   <item>level 3 (root, internal): ⌈4  / MaxInternalChildren⌉ = 1 node</item>
+    /// </list>
+    /// Every subsequent traversal for any key in the seeded range walks
+    /// root → L2 → L1 → leaf, paying THREE
+    /// <c>grainFactory.GetGrain&lt;IBPlusInternalGrain&gt;(internalId)</c>
+    /// materialisations per call. The depth-2 <see cref="BuildDeepTree"/>
+    /// pays one. All four shape parameters are env-overridable so a
+    /// future agent can author a depth-N variant by env file alone.
+    /// </summary>
+    private void BuildDeeperTree()
+    {
+        _deeperMaxLeafKeys = ReadIntEnv("BENCH_MICROBENCH_DEEPER_MAX_LEAF_KEYS", DeeperMaxLeafKeysDefault);
+        _deeperMaxInternalChildren = ReadIntEnv("BENCH_MICROBENCH_DEEPER_MAX_INTERNAL_CHILDREN", DeeperMaxInternalChildrenDefault);
+        _deeperKeyCount = ReadIntEnv("BENCH_MICROBENCH_DEEPER_KEY_COUNT", DeeperKeyCountDefault);
+        _deeperBulkBatch = ReadIntEnv("BENCH_MICROBENCH_DEEPER_BULK_BATCH", DeeperBulkBatchDefault);
+
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(DeeperTreeName);
+        registry.GetEntryAsync(DeeperTreeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = _deeperMaxLeafKeys,
+                MaxInternalChildren = _deeperMaxInternalChildren,
+                ShardCount = 1,
+            }));
+
+        var deeperContext = Substitute.For<IGrainContext>();
+        deeperContext.GrainId.Returns(GrainId.Create("lattice", DeeperTreeName));
+        var deeperSp = Substitute.For<IServiceProvider>();
+        var deeperLattice = new LatticeGrain(
+            deeperContext,
+            _grainFactory,
+            _optionsMonitor,
+            _optionsResolver,
+            deeperSp,
+            NullLogger<LatticeGrain>.Instance);
+        _grainFactory.GetGrain<ILattice>(DeeperTreeName).Returns(deeperLattice);
+        _deeperLattice = deeperLattice;
+
+        // Distinct keyspace from the single-shard / fanout / deep trees so the
+        // deeper-tree's seeded keys don't collide with theirs (the keyspaces
+        // share an IGrainFactory but the leaves are addressed by GUID, so
+        // collisions would only occur if we reused the leaf-id mapping;
+        // separate keys are still cleaner for diagnosis).
+        _deeperKeys = new string[_deeperKeyCount];
+        for (var i = 0; i < _deeperKeyCount; i++)
+        {
+            _deeperKeys[i] = "deeper-" + i.ToString("D6", CultureInfo.InvariantCulture);
+        }
+
+        // Seed all keys so the tree splits into a depth-3+ shape. The seed
+        // phase runs in [GlobalSetup] and is not part of any [Benchmark]
+        // op, so its cost does not affect measured allocations.
+        for (var i = 0; i < _deeperKeyCount; i++)
+        {
+            _deeperLattice.SetAsync(_deeperKeys[i], _value).GetAwaiter().GetResult();
+        }
+
+        // Pre-build the bulk batch with disjoint keys so BulkLoad_DeeperTree
+        // does not collide with the seeded keys (avoids triggering further
+        // splits inside the measured op). Distinct prefix from
+        // BuildDeepTree's "dbulk-" so the two trees' bulk batches do not
+        // share leaf addresses.
+        _deeperBulkBatchList = new List<KeyValuePair<string, byte[]>>(_deeperBulkBatch);
+        for (var i = 0; i < _deeperBulkBatch; i++)
+        {
+            var k = "deeperbulk-" + i.ToString("D6", CultureInfo.InvariantCulture);
+            _deeperBulkBatchList.Add(new(k, _value));
         }
     }
 

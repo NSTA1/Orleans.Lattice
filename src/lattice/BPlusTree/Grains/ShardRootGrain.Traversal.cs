@@ -508,20 +508,76 @@ internal sealed partial class ShardRootGrain
         }
     }
 
-    private async Task<GrainId> TraverseToLeafAsync(string key)
+    private ValueTask<GrainId> TraverseToLeafAsync(string key)
     {
+        // Sync fast path: every internal hop's routing snapshot is served
+        // out of _routingTableCache (a Dictionary<GrainId, ...> populated
+        // on first miss and only invalidated on AcceptSplitAsync). In the
+        // steady state — the workload that PointRead / GetWithVersion /
+        // Exists / BatchRead actually exercise after warmup — every
+        // GetRoutingTableSnapshotAsync call sync-completes via the
+        // ValueTask<RoutingTableSnapshot> ctor at line 137, and the entire
+        // traversal walks root → ... → leaf without yielding. Returning
+        // a sync-completed ValueTask<GrainId> from this loop avoids the
+        // async state-machine box and Task<GrainId> heap allocation that
+        // an `async Task<GrainId>` method would force on every caller —
+        // measurable on PointRead_DeeperTree, where the loop runs N
+        // times per call (N = internal-tree depth).
+        //
+        // Slow path: only taken when a routing snapshot's ValueTask has
+        // not sync-completed (cache miss → cross-grain
+        // GetRoutingTableAsync RPC). The pending ValueTask is forwarded
+        // to TraverseToLeafSlowAsync which awaits it, then resumes the
+        // remaining traversal steps in async form. Each subsequent step
+        // is a fresh GetRoutingTableSnapshotAsync, which may itself
+        // sync-complete (cache hit on the next level) or suspend again;
+        // the slow tail handles either uniformly.
         var currentId = state.State.RootNodeId!.Value;
-
         while (true)
         {
-            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+            var snapshotTask = GetRoutingTableSnapshotAsync(currentId);
+            if (!snapshotTask.IsCompletedSuccessfully)
+            {
+                return TraverseToLeafSlowAsync(currentId, key, snapshotTask);
+            }
+            var snapshot = snapshotTask.Result;
             var (childId, childrenAreLeaves) = snapshot.Route(key);
+            if (childrenAreLeaves)
+            {
+                return new ValueTask<GrainId>(childId);
+            }
+            currentId = childId;
+        }
+    }
 
+    private async ValueTask<GrainId> TraverseToLeafSlowAsync(
+        GrainId currentId,
+        string key,
+        ValueTask<RoutingTableSnapshot> pendingSnapshot)
+    {
+        // Resume from the snapshot fetch that did not sync-complete.
+        var snapshot = await pendingSnapshot;
+        var (childId, childrenAreLeaves) = snapshot.Route(key);
+        if (childrenAreLeaves)
+        {
+            return childId;
+        }
+        currentId = childId;
+
+        // Continue with the remainder of the traversal. Subsequent hops
+        // may sync-complete out of _routingTableCache (cache hits on
+        // already-warmed internal nodes); the await machinery elides
+        // suspension for any ValueTask whose IsCompletedSuccessfully is
+        // already true, so the slow tail pays at most one suspension
+        // per cache miss for the rest of the walk.
+        while (true)
+        {
+            snapshot = await GetRoutingTableSnapshotAsync(currentId);
+            (childId, childrenAreLeaves) = snapshot.Route(key);
             if (childrenAreLeaves)
             {
                 return childId;
             }
-
             currentId = childId;
         }
     }
