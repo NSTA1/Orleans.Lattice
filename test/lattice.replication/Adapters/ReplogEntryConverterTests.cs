@@ -14,6 +14,7 @@ public class ReplogEntryConverterTests
     [Test]
     public void ToReplogEntry_translates_Set_mutation_with_all_fields()
     {
+        var txId = Guid.NewGuid();
         var mutation = new LatticeMutation
         {
             TreeId = "tree-A",
@@ -26,7 +27,9 @@ public class ReplogEntryConverterTests
             ExpiresAtTicks = 12345L,
             OriginClusterId = null,
             VectorClock = null,
-            TransactionId = Guid.NewGuid(),
+            TransactionId = txId,
+            AtomicBatchSize = 7,
+            AtomicBatchIndex = 3,
             Category = MutationCategory.User,
             DeltaKind = "lww",
             DeltaPayload = new byte[] { 9, 9 },
@@ -48,6 +51,9 @@ public class ReplogEntryConverterTests
             Assert.That(entry.Mode, Is.EqualTo(ReplicationMode.LwwRegister));
             Assert.That(entry.DeltaKind, Is.EqualTo("lww"));
             Assert.That(entry.DeltaPayload, Is.EqualTo(new byte[] { 9, 9 }));
+            Assert.That(entry.TransactionId, Is.EqualTo(txId));
+            Assert.That(entry.AtomicBatchSize, Is.EqualTo(7));
+            Assert.That(entry.AtomicBatchIndex, Is.EqualTo(3));
         });
     }
 
@@ -146,8 +152,10 @@ public class ReplogEntryConverterTests
             Assert.That(roundTripped.OriginClusterId, Is.EqualTo(original.OriginClusterId));
             Assert.That(roundTripped.DeltaKind, Is.EqualTo(original.DeltaKind));
             Assert.That(roundTripped.DeltaPayload, Is.EqualTo(original.DeltaPayload));
-            // Wire-compat defaults — replication wire does not carry these today.
+            // TransactionId round-trips verbatim through the wire format
+            // (the original here did not set one, so it defaults to Empty).
             Assert.That(roundTripped.TransactionId, Is.EqualTo(Guid.Empty));
+            // Category is not on the replication wire today; defaults to User.
             Assert.That(roundTripped.Category, Is.EqualTo(MutationCategory.User));
         });
     }
@@ -172,6 +180,76 @@ public class ReplogEntryConverterTests
             Assert.That(roundTripped.Kind, Is.EqualTo(MutationKind.Delete));
             Assert.That(roundTripped.IsTombstone, Is.True);
             Assert.That(roundTripped.Key, Is.EqualTo("k"));
+        });
+    }
+
+    [Test]
+    public void ToReplogEntry_preserves_atomic_batch_metadata_round_trip()
+    {
+        // Producer-side atomic-batch stamping (LatticeAtomicBatchContext +
+        // BPlusLeafGrain.MutationObserver) writes AtomicBatchSize/Index and
+        // a shared TransactionId onto every per-key LatticeMutation in the
+        // batch. The converter is on the WAL read-back path
+        // (ReplogShardGrain.GetPageAsync) and the commit-log write path
+        // (ReplicationCommitLogWriter), so it must preserve all three slots
+        // verbatim in both directions — otherwise the receiver-side
+        // atomic-batch buffer gate (entry.AtomicBatchSize > 0) is unreachable
+        // for any cross-cluster atomic batch.
+        var txId = Guid.NewGuid();
+        var mutation = new LatticeMutation
+        {
+            TreeId = "tree-A",
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 0xFF },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            TransactionId = txId,
+            AtomicBatchSize = 5,
+            AtomicBatchIndex = 2,
+        };
+
+        var entry = ReplogEntryConverter.ToReplogEntry(mutation, ReplicationMode.LwwRegister, "cluster-A");
+        var roundTripped = ReplogEntryConverter.FromReplogEntry(entry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.TransactionId, Is.EqualTo(txId), "forward: TransactionId");
+            Assert.That(entry.AtomicBatchSize, Is.EqualTo(5), "forward: AtomicBatchSize");
+            Assert.That(entry.AtomicBatchIndex, Is.EqualTo(2), "forward: AtomicBatchIndex");
+            Assert.That(roundTripped.TransactionId, Is.EqualTo(txId), "reverse: TransactionId");
+            Assert.That(roundTripped.AtomicBatchSize, Is.EqualTo(5), "reverse: AtomicBatchSize");
+            Assert.That(roundTripped.AtomicBatchIndex, Is.EqualTo(2), "reverse: AtomicBatchIndex");
+        });
+    }
+
+    [Test]
+    public void ToReplogEntry_leaves_atomic_batch_metadata_at_defaults_for_non_atomic_writes()
+    {
+        // Non-atomic writes (the default SetAsync path) flow through the
+        // same converter; their AtomicBatchSize/Index/TransactionId slots
+        // must remain at their wire-compat defaults so the receiver-side
+        // gate (AtomicBatchSize > 0) routes them through the point-apply
+        // path rather than the buffered atomic-tx path.
+        var mutation = new LatticeMutation
+        {
+            TreeId = "tree-A",
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = Array.Empty<byte>(),
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+        };
+
+        var entry = ReplogEntryConverter.ToReplogEntry(mutation, ReplicationMode.LwwRegister, "cluster-A");
+        var roundTripped = ReplogEntryConverter.FromReplogEntry(entry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.AtomicBatchSize, Is.Zero);
+            Assert.That(entry.AtomicBatchIndex, Is.Zero);
+            Assert.That(entry.TransactionId, Is.EqualTo(Guid.Empty));
+            Assert.That(roundTripped.AtomicBatchSize, Is.Zero);
+            Assert.That(roundTripped.AtomicBatchIndex, Is.Zero);
+            Assert.That(roundTripped.TransactionId, Is.EqualTo(Guid.Empty));
         });
     }
 }
