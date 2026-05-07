@@ -1,4 +1,3 @@
-
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
@@ -17,6 +16,18 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// sequential RPCs during tree traversal.
     /// </summary>
     Task<(GrainId ChildId, bool ChildrenAreLeaves)> RouteWithMetadataAsync(string key);
+
+    /// <summary>
+    /// Returns a point-in-time snapshot of the full routing table —
+    /// separator keys, child identities, and the
+    /// <c>ChildrenAreLeaves</c> flag. The shard root caches this snapshot
+    /// per activation and uses it to perform key-to-child routing locally,
+    /// eliminating the per-traversal-step <see cref="RouteWithMetadataAsync"/>
+    /// cross-grain RPC. The snapshot becomes stale on the next
+    /// <see cref="AcceptSplitAsync"/> against this node; the shard root
+    /// invalidates its cache entry on every such call.
+    /// </summary>
+    Task<RoutingTableSnapshot> GetRoutingTableAsync();
 
     /// <summary>Returns the grain identity of the leftmost child.</summary>
     Task<GrainId> GetLeftmostChildAsync();

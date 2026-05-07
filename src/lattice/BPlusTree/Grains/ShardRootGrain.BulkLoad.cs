@@ -333,6 +333,7 @@ internal sealed partial class ShardRootGrain
                 var parentId = path.Pop();
                 var parent = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
                 pending = await parent.AcceptSplitAsync(pending.PromotedKey, pending.NewSiblingId);
+                InvalidateRoutingTable(parentId);
             }
 
             if (pending is not null)

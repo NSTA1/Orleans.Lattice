@@ -79,6 +79,13 @@ public class ShardRootGrainInternalGrainRefCacheTests
             .Returns(Task.FromResult((leafId, true)));
         internalRoot.GetRightmostChildWithMetadataAsync()
             .Returns(Task.FromResult((leafId, true)));
+        internalRoot.GetRoutingTableAsync()
+            .Returns(Task.FromResult(new RoutingTableSnapshot
+            {
+                SeparatorKeys = new string?[] { null },
+                ChildIds = new[] { leafId },
+                ChildrenAreLeaves = true,
+            }));
         internalRoot.AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>())
             .Returns(Task.FromResult<SplitResult?>(null));
         factory.GetGrain<IBPlusInternalGrain>(Arg.Any<GrainId>()).Returns(internalRoot);
@@ -199,14 +206,17 @@ public class ShardRootGrainInternalGrainRefCacheTests
     }
 
     [Test]
-    public async Task RootNodeId_rotation_back_to_previous_internal_re_resolves_after_eviction()
+    public async Task RootNodeId_rotation_back_to_previous_internal_resolves_each_root_once()
     {
-        // The cache is single-slot: the slot is overwritten on every miss.
-        // Round-tripping rootA -> rootB -> rootA must therefore resolve rootA
-        // twice (initial materialisation, then again after the rootB miss
-        // evicted it). This pins the eviction shape: there is no LRU or
-        // multi-slot cache hiding behind the field, only the most-recent
-        // resolution is retained.
+        // The per-activation routing-table cache (cycle-14) is keyed by the
+        // internal grain id, so each unique root is resolved exactly once
+        // across its lifetime in the activation. Round-tripping rootA -> rootB
+        // -> rootA must therefore resolve rootA only once total: the second
+        // visit hits the cached snapshot and bypasses the factory entirely.
+        // This is a behaviour upgrade over the cycle-13 single-slot reference
+        // cache (which would have re-resolved rootA after the rootB visit
+        // evicted its slot); the routing-table cache subsumes the reference
+        // cache for the read path.
         var rootA = GrainId.Create("internal", "internal-a");
         var rootB = GrainId.Create("internal", "internal-b");
         var h = CreateHarness(rootA);
@@ -217,7 +227,7 @@ public class ShardRootGrainInternalGrainRefCacheTests
         h.State.State.RootNodeId = rootA;
         await h.Grain.SetAsync("k3", [3]);
 
-        h.Factory.Received(2).GetGrain<IBPlusInternalGrain>(rootA);
+        h.Factory.Received(1).GetGrain<IBPlusInternalGrain>(rootA);
         h.Factory.Received(1).GetGrain<IBPlusInternalGrain>(rootB);
     }
 

@@ -64,6 +64,24 @@ internal sealed class BPlusInternalGrain(
     public Task<(GrainId ChildId, bool ChildrenAreLeaves)> RouteWithMetadataAsync(string key) =>
         Task.FromResult((state.State.Route(key), state.State.ChildrenAreLeaves));
 
+    public Task<RoutingTableSnapshot> GetRoutingTableAsync()
+    {
+        var children = state.State.Children;
+        var seps = new string?[children.Count];
+        var ids = new GrainId[children.Count];
+        for (int i = 0; i < children.Count; i++)
+        {
+            seps[i] = children[i].SeparatorKey;
+            ids[i] = children[i].ChildId;
+        }
+        return Task.FromResult(new RoutingTableSnapshot
+        {
+            SeparatorKeys = seps,
+            ChildIds = ids,
+            ChildrenAreLeaves = state.State.ChildrenAreLeaves,
+        });
+    }
+
     public Task<GrainId> GetLeftmostChildAsync() =>
         Task.FromResult(state.State.Children[0].ChildId);
 

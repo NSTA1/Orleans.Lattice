@@ -62,6 +62,13 @@ public class ShardRootGrainMergeManyTests
                 var childId = string.Compare(k, separator, StringComparison.Ordinal) < 0 ? leftId : rightId;
                 return (childId, true);
             });
+        root.GetRoutingTableAsync()
+            .Returns(Task.FromResult(new RoutingTableSnapshot
+            {
+                SeparatorKeys = new string?[] { null, separator },
+                ChildIds = new[] { leftId, rightId },
+                ChildrenAreLeaves = true,
+            }));
 
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<IBPlusInternalGrain>(rootId).Returns(root);
@@ -149,6 +156,13 @@ public class ShardRootGrainMergeManyTests
                     : rightId;
                 return (childId, true);
             });
+        root.GetRoutingTableAsync()
+            .Returns(Task.FromResult(new RoutingTableSnapshot
+            {
+                SeparatorKeys = new string?[] { null, sep1, sep2 },
+                ChildIds = new[] { leftId, midId, rightId },
+                ChildrenAreLeaves = true,
+            }));
 
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<IBPlusInternalGrain>(rootId).Returns(root);
@@ -322,7 +336,7 @@ public class ShardRootGrainMergeManyTests
         var leftId = GrainId.Create("leaf", "left");
         var rightId = GrainId.Create("leaf", "right");
 
-        // Build a bespoke harness where the first RouteWithMetadataAsync call
+        // Build a bespoke harness where the first GetRoutingTableAsync call
         // throws a transient IOException before settling into normal routing,
         // so we can verify the grouping phase absorbs it instead of failing
         // the whole batch.
@@ -340,17 +354,18 @@ public class ShardRootGrainMergeManyTests
         rightLeaf.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
             .Returns(Task.FromResult<SplitResult?>(null));
 
-        var callCount = 0;
+        var snapshot = new RoutingTableSnapshot
+        {
+            SeparatorKeys = new string?[] { null, "m" },
+            ChildIds = new[] { leftId, rightId },
+            ChildrenAreLeaves = true,
+        };
         var root = Substitute.For<IBPlusInternalGrain>();
-        root.RouteWithMetadataAsync(Arg.Any<string>())
-            .Returns(ci =>
-            {
-                callCount++;
-                if (callCount == 1) throw new IOException("transient");
-                var k = ci.Arg<string>();
-                var childId = string.Compare(k, "m", StringComparison.Ordinal) < 0 ? leftId : rightId;
-                return (childId, true);
-            });
+        // First call returns a faulted task; second and beyond return the snapshot.
+        root.GetRoutingTableAsync()
+            .Returns(
+                _ => Task.FromException<RoutingTableSnapshot>(new IOException("transient")),
+                _ => Task.FromResult(snapshot));
 
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<IBPlusInternalGrain>(rootId).Returns(root);
@@ -367,8 +382,7 @@ public class ShardRootGrainMergeManyTests
         // Retry absorbed the transient failure; grouping completed and the
         // leaf still received its batched merge.
         await leftLeaf.Received(1).MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>());
-        Assert.That(callCount, Is.GreaterThanOrEqualTo(2),
-            "The transient-throwing call should have been retried.");
+        await root.Received(2).GetRoutingTableAsync();
     }
 
     [Test]
