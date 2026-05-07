@@ -1031,15 +1031,17 @@ internal sealed partial class LatticeGrain(
     {
         var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
         var cache = _cachedShards;
-        if (cache is null || shardIndex >= cache.Length)
+        if (cache is null)
         {
-            // Lazily size the cache to cover the largest physical shard index
-            // in the active map. Callers (GetShardGrainAsync, GetShardGrainByIndex
-            // via the fanout sites) all reach this method only after
-            // GetRoutingAsync has populated _shardMap, so the map should be
-            // non-null in steady state. If a concurrent invalidation has nulled
-            // it, fall back to a minimum size of (shardIndex + 1) so we still
-            // cache this entry.
+            // First miss: lazily size the cache to cover the largest physical
+            // shard index in the active map. Every caller path reaches here
+            // only after GetRoutingAsync has populated _shardMap (single-key
+            // path: GetShardGrainAsync awaits routing first; fanout path:
+            // GetShardGrainByIndex is invoked from inside loops keyed by
+            // physicalShards, which itself comes from _shardMap). _shardMap
+            // therefore must be non-null on this path. The defensive
+            // `shardIndex + 1` floor is kept for crash-safety only — a
+            // null _shardMap would indicate a programming error elsewhere.
             var map = _shardMap;
             int size = shardIndex + 1;
             if (map is not null)
@@ -1052,6 +1054,20 @@ internal sealed partial class LatticeGrain(
                 }
             }
             cache = new IShardRootGrain?[size];
+            _cachedShards = cache;
+        }
+        else if (shardIndex >= cache.Length)
+        {
+            // Unreachable in steady state: the initial allocation is sized to
+            // cover every valid physical shard index in _shardMap, and the
+            // map is invariant per-activation (both invalidation hooks null
+            // _cachedShards alongside _shardMap, so a fresh map gets a fresh
+            // cache). A larger shardIndex therefore means the map has been
+            // mutated from under us — copy old entries forward into a grown
+            // array so we do not silently drop previously cached references.
+            var grown = new IShardRootGrain?[shardIndex + 1];
+            Array.Copy(cache, grown, cache.Length);
+            cache = grown;
             _cachedShards = cache;
         }
         cache[shardIndex] = shard;

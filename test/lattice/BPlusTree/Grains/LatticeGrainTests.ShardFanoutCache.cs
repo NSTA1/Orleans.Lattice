@@ -12,9 +12,12 @@ public partial class LatticeGrainTests
     // Cycle 10 extended the cycle-8 single-slot cache (populated by
     // GetShardGrainAsync on the single-key path) to the seven hot-path
     // bulk-fanout call sites in LatticeGrain via a new private helper
-    // GetShardGrainByIndex(physicalTreeId, shardIndex). The helper reads
-    // and writes the same _cachedShard / _cachedShardIndex fields, so
-    // these tests pin the observable contract:
+    // GetShardGrainByIndex(physicalTreeId, shardIndex). Cycle 11 promoted
+    // the single-slot _cachedShard/_cachedShardIndex fields to an array-
+    // keyed IShardRootGrain?[] _cachedShards indexed by physical shard
+    // index, removing the thrash on multi-shard fanout, and extended the
+    // helper to four further KeysAsync/EntriesAsync sites. These tests
+    // pin the observable contract:
     //
     //   1. Repeat-shard calls on a bulk-fanout path (e.g. SetManyAsync at
     //      ShardCount=1) materialise the IShardRootGrain reference exactly
@@ -23,16 +26,19 @@ public partial class LatticeGrainTests
     //      bulk-fanout path: a SetAsync that warms the cache makes a
     //      subsequent SetManyAsync to the same shard a cache hit.
     //   3. Multi-shard fanout (ShardCount > 1) materialises each shard
-    //      reference at least once, and the single-slot cache thrashing
-    //      between shards within a single fan-out call cannot regress
-    //      versus the pre-cycle-10 behaviour (each miss falls through to
-    //      ResolveShardSlow, exactly the prior code path).
+    //      reference exactly once across an entire fan-out call (cycle-11
+    //      array-keyed contract; cycle-10 single-slot would thrash here).
     //   4. DeleteRange (every-shard fanout) reuses the cached reference
     //      when the tree is sharded down to a single physical shard.
-    //   5. Stale-alias invalidation observed on a bulk-fanout path clears
+    //   5. KeysAsync / EntriesAsync open one cursor per physical shard at
+    //      scan start; under the array-keyed cache each shard is
+    //      materialised exactly once across the scan, and a warmed cache
+    //      from the single-key path eliminates the materialisation
+    //      entirely on the cursor-open call.
+    //   6. Stale-alias invalidation observed on a bulk-fanout path clears
     //      the shared cache, so the retry materialises under the new
     //      physical tree id.
-    //   6. Stale-shard-map invalidation observed on a bulk-fanout path
+    //   7. Stale-shard-map invalidation observed on a bulk-fanout path
     //      clears the shared cache, so the retry materialises the new
     //      physical shard.
 
@@ -127,9 +133,10 @@ public partial class LatticeGrainTests
         await grain.SetManyAsync(batch);
 
         // A single SetManyAsync over both shards must materialise each
-        // owner at least once. The single-slot cache thrashes between
-        // owners, but cannot regress: every miss falls through to
-        // ResolveShardSlow which is the pre-cycle-10 code path.
+        // owner at least once. (The companion test
+        // SetManyAsync_multi_shard_fanout_materialises_each_owner_exactly_once
+        // pins the cycle-11 array-keyed contract that the materialisation
+        // is exactly once per owner.)
         factory.Received().GetGrain<IShardRootGrain>(
             $"{treeId}/0", Arg.Any<string>());
         factory.Received().GetGrain<IShardRootGrain>(
@@ -248,5 +255,148 @@ public partial class LatticeGrainTests
         // bulk-path cache slot was cleared by InvalidateShardMap.
         factory.Received().GetGrain<IShardRootGrain>($"{treeId}/1", Arg.Any<string>());
         await shardRoot1.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+    }
+
+    [Test]
+    public async Task SetManyAsync_multi_shard_fanout_materialises_each_owner_exactly_once()
+    {
+        // Companion to SetManyAsync_multi_shard_fanout_materialises_each_owner.
+        // SetManyAsync buckets entries by slot internally, so within a SINGLE
+        // call even cycle-10 single-slot would materialise each owner once
+        // (the bucket-iteration order is deterministic). The cycle-11
+        // array-keyed cache strengthens the contract ACROSS calls: a second
+        // SetManyAsync to the same two-shard map must hit cache for both
+        // owners. Under cycle-10 single-slot, the second call would miss
+        // both slots (the slot was last set to whichever shard was
+        // materialised second) and re-materialise both. Two-call totals:
+        // cycle-10 = 4 materialisations; cycle-11 = 2.
+        const string treeId = "fanout-cache-multi-exactly-once";
+        var (grain, factory, registry) = CreateGrainWithRegistry(
+            treeId, shardCount: 2, virtualShardCount: 2);
+
+        var map = new ShardMap { Slots = [0, 1], Version = 1 };
+        registry.GetShardMapAsync(treeId).Returns(Task.FromResult<ShardMap?>(map));
+
+        var shardRoot0 = Substitute.For<IShardRootGrain>();
+        var shardRoot1 = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string>())
+            .Returns(shardRoot0);
+        factory.GetGrain<IShardRootGrain>($"{treeId}/1", Arg.Any<string>())
+            .Returns(shardRoot1);
+
+        // Find one key per slot against this 2-slot map. Use the keys
+        // verbatim in every batch so re-hashing through GetShardIndex
+        // produces a stable slot assignment.
+        string keyA = "alpha";
+        int slotA = LatticeGrain.GetShardIndex(keyA, 2);
+        string keyB = "beta";
+        int candidate = 0;
+        while (LatticeGrain.GetShardIndex(keyB, 2) == slotA && candidate < 2000)
+            keyB = $"beta-{candidate++}";
+        Assert.That(LatticeGrain.GetShardIndex(keyB, 2), Is.Not.EqualTo(slotA),
+            "test setup failure: could not find two keys routing to different virtual slots");
+
+        var batch = new List<KeyValuePair<string, byte[]>>
+        {
+            new(keyA, [1]),
+            new(keyB, [2]),
+        };
+
+        // Two consecutive multi-shard fanouts. Cycle-10 single-slot would
+        // re-materialise both shards on the second call (4 total); cycle-11
+        // array-keyed must hit the cache and skip both materialisations
+        // (2 total: one per shard for the lifetime of the activation).
+        await grain.SetManyAsync(batch);
+        await grain.SetManyAsync(batch);
+        await grain.SetManyAsync(batch);
+
+        factory.Received(1).GetGrain<IShardRootGrain>(
+            $"{treeId}/0", Arg.Any<string>());
+        factory.Received(1).GetGrain<IShardRootGrain>(
+            $"{treeId}/1", Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task KeysAsync_reuses_cached_shard_references_across_fanout()
+    {
+        // Pins the cycle-11 cursor-open cache contract for KeysAsync. The
+        // per-physical-shard cursor loop in LatticeGrain.Keys.cs:107 calls
+        // GetShardGrainByIndex for every physical shard at scan start. A
+        // second consecutive scan must hit the array-keyed cache for both
+        // shards: total 1 materialisation per shard across two scans.
+        const string treeId = "fanout-cache-keys-async";
+        var (grain, factory, registry) = CreateGrainWithRegistry(
+            treeId, shardCount: 2, virtualShardCount: 2);
+
+        var map = new ShardMap { Slots = [0, 1], Version = 1 };
+        registry.GetShardMapAsync(treeId).Returns(Task.FromResult<ShardMap?>(map));
+
+        var shardRoot0 = Substitute.For<IShardRootGrain>();
+        var shardRoot1 = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string>())
+            .Returns(shardRoot0);
+        factory.GetGrain<IShardRootGrain>($"{treeId}/1", Arg.Any<string>())
+            .Returns(shardRoot1);
+
+        // Stub both forward and reverse page fetches to terminate the scan
+        // immediately — empty page, HasMore=false. This is the minimum
+        // wiring needed for the cursor-open path to run end-to-end.
+        var emptyPage = new KeysPage { Keys = [], HasMore = false };
+        shardRoot0.GetSortedKeysBatchAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>())
+            .Returns(Task.FromResult(emptyPage));
+        shardRoot1.GetSortedKeysBatchAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>())
+            .Returns(Task.FromResult(emptyPage));
+
+        await foreach (var _ in grain.KeysAsync()) { }
+        await foreach (var _ in grain.KeysAsync()) { }
+
+        // Without the cycle-11 array-keyed cache at the cursor-open site,
+        // each scan would re-materialise both shards (4 calls total).
+        // With the cache: each shard is materialised exactly once across
+        // the lifetime of the grain activation.
+        factory.Received(1).GetGrain<IShardRootGrain>(
+            $"{treeId}/0", Arg.Any<string>());
+        factory.Received(1).GetGrain<IShardRootGrain>(
+            $"{treeId}/1", Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task EntriesAsync_reuses_cached_shard_references_across_fanout()
+    {
+        // Symmetric to KeysAsync_reuses_cached_shard_references_across_fanout.
+        // Pins the cycle-11 cursor-open cache contract for EntriesAsync at
+        // LatticeGrain.Entries.cs:82. Two consecutive scans must produce
+        // exactly one materialisation per physical shard.
+        const string treeId = "fanout-cache-entries-async";
+        var (grain, factory, registry) = CreateGrainWithRegistry(
+            treeId, shardCount: 2, virtualShardCount: 2);
+
+        var map = new ShardMap { Slots = [0, 1], Version = 1 };
+        registry.GetShardMapAsync(treeId).Returns(Task.FromResult<ShardMap?>(map));
+
+        var shardRoot0 = Substitute.For<IShardRootGrain>();
+        var shardRoot1 = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string>())
+            .Returns(shardRoot0);
+        factory.GetGrain<IShardRootGrain>($"{treeId}/1", Arg.Any<string>())
+            .Returns(shardRoot1);
+
+        var emptyPage = new EntriesPage { Entries = [], HasMore = false };
+        shardRoot0.GetSortedEntriesBatchAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>())
+            .Returns(Task.FromResult(emptyPage));
+        shardRoot1.GetSortedEntriesBatchAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>())
+            .Returns(Task.FromResult(emptyPage));
+
+        await foreach (var _ in grain.EntriesAsync()) { }
+        await foreach (var _ in grain.EntriesAsync()) { }
+
+        factory.Received(1).GetGrain<IShardRootGrain>(
+            $"{treeId}/0", Arg.Any<string>());
+        factory.Received(1).GetGrain<IShardRootGrain>(
+            $"{treeId}/1", Arg.Any<string>());
     }
 }
