@@ -339,7 +339,27 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
                     // Value-idempotent dedupe: if the receiver's last
                     // applied bytes for this key match the incoming
                     // entry's bytes, skip the apply. See _lastAppliedBytes.
-                    if (entry.Value is { } incomingBytes
+                    //
+                    // IMPORTANT: this dedupe is bypassed for atomic-batch
+                    // entries (AtomicBatchSize > 0). On the buffered-saga
+                    // path, applier.ApplyAsync returns *after* the entry is
+                    // staged in the per-tree IReplicationTxBufferGrain
+                    // (pending sibling arrival) but *before* any data-store
+                    // write. Recording bytes at that point and short-circuiting
+                    // future ships against them would skip a re-shipment that
+                    // the receiver still legitimately needs (e.g. if the saga
+                    // compensates and clears the staged tuple, or if a sibling
+                    // pump on a parallel edge needs to re-admit). Production
+                    // correctness for atomic batches is provided by the buffer's
+                    // own (origin, txid, index) admission dedupe and by
+                    // RecentApplyCache's causal-identity dedupe — both sound
+                    // on the staging path. The pump-level value-bytes dedupe
+                    // is only sound on the point-apply path (non-atomic writes,
+                    // where ApplyAsync returns after the data-store write) and
+                    // exists there to break the typed-CRDT ping-pong cycle
+                    // documented on _lastAppliedBytes.
+                    if (entry.AtomicBatchSize == 0
+                        && entry.Value is { } incomingBytes
                         && _lastAppliedBytes.TryGetValue((receiverIdx, entry.Key), out var lastBytes)
                         && BytesEqual(lastBytes, incomingBytes))
                     {
@@ -351,7 +371,7 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
                     }
 
                     await applier.ApplyAsync(entry, ct).ConfigureAwait(false);
-                    if (entry.Value is { } applied)
+                    if (entry.AtomicBatchSize == 0 && entry.Value is { } applied)
                     {
                         _lastAppliedBytes[(receiverIdx, entry.Key)] = applied;
                     }
