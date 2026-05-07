@@ -466,4 +466,108 @@ public class BPlusInternalGrainTests
 
         Assert.That(childId, Is.EqualTo(Child2));
     }
+
+    // --- GetRoutingTableAsync ---
+
+    [Test]
+    public async Task GetRoutingTableAsync_returns_snapshot_with_separators_and_children_in_parallel_arrays()
+    {
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+
+        var snapshot = await grain.GetRoutingTableAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.SeparatorKeys.Length, Is.EqualTo(2));
+            Assert.That(snapshot.ChildIds.Length, Is.EqualTo(2));
+            Assert.That(snapshot.SeparatorKeys[0], Is.Null, "Index 0 separator must always be null (leftmost catch-all).");
+            Assert.That(snapshot.SeparatorKeys[1], Is.EqualTo("fox"));
+            Assert.That(snapshot.ChildIds[0], Is.EqualTo(Child0));
+            Assert.That(snapshot.ChildIds[1], Is.EqualTo(Child1));
+        });
+    }
+
+    [Test]
+    public async Task GetRoutingTableAsync_propagates_children_are_leaves_true()
+    {
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+
+        var snapshot = await grain.GetRoutingTableAsync();
+
+        Assert.That(snapshot.ChildrenAreLeaves, Is.True);
+    }
+
+    [Test]
+    public async Task GetRoutingTableAsync_propagates_children_are_leaves_false()
+    {
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: false);
+
+        var snapshot = await grain.GetRoutingTableAsync();
+
+        Assert.That(snapshot.ChildrenAreLeaves, Is.False);
+    }
+
+    [Test]
+    public async Task GetRoutingTableAsync_reflects_accept_split_additions()
+    {
+        // Accept-split mutates Children; the next call to
+        // GetRoutingTableAsync must reflect the updated child list. This
+        // is the server-side half of the cycle-14 cache-invalidation
+        // contract: ShardRootGrain calls InvalidateRoutingTable on every
+        // AcceptSplitAsync, and the BPlusInternalGrain must in turn
+        // produce an up-to-date snapshot on the next fetch.
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+        await grain.AcceptSplitAsync("monkey", Child2);
+        await grain.AcceptSplitAsync("rabbit", Child3);
+
+        var snapshot = await grain.GetRoutingTableAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.SeparatorKeys, Is.EqualTo(new string?[] { null, "fox", "monkey", "rabbit" }));
+            Assert.That(snapshot.ChildIds, Is.EqualTo(new[] { Child0, Child1, Child2, Child3 }));
+        });
+    }
+
+    [Test]
+    public async Task GetRoutingTableAsync_local_route_matches_RouteWithMetadataAsync_for_all_keys()
+    {
+        // The cycle-14 routing-table cache calls
+        // RoutingTableSnapshot.Route locally instead of dispatching to
+        // RouteWithMetadataAsync. The two paths MUST agree on every key,
+        // otherwise a cache hit and a cache miss would route the same key
+        // to different children. This test verifies the contract for a
+        // 4-child internal node across boundary and interior keys.
+        var grain = CreateGrain();
+        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+        await grain.AcceptSplitAsync("monkey", Child2);
+        await grain.AcceptSplitAsync("rabbit", Child3);
+
+        var snapshot = await grain.GetRoutingTableAsync();
+        string[] probes =
+        [
+            "",            // empty
+            "ant",         // < first separator
+            "fox",         // exact match on first separator
+            "lion",        // between fox and monkey
+            "monkey",      // exact match on monkey
+            "penguin",     // between monkey and rabbit
+            "rabbit",      // exact match on rabbit
+            "zebra",       // > last separator
+            "fo",          // strict prefix of separator
+            "foxa",        // separator extension
+        ];
+
+        foreach (var key in probes)
+        {
+            var localChild = snapshot.Route(key).ChildId;
+            var serverChild = (await grain.RouteWithMetadataAsync(key)).ChildId;
+            Assert.That(localChild, Is.EqualTo(serverChild),
+                $"Local route disagreed with server route for key '{key}'.");
+        }
+    }
 }
