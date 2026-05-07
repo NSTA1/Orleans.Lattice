@@ -63,6 +63,20 @@ public class LatticeMicroBenchmarks
     private int _readCursor;
     private int _mixedCursor;
 
+    // ===== Cycle 11 fanout instrument: 4-physical-shard sibling tree =====
+    // A second ILattice activation rooted at FanoutTreeName routes through
+    // the same NSubstitute IGrainFactory but resolves to a TreeRegistryEntry
+    // whose ShardCount=4. This exercises the multi-shard fanout / cursor
+    // scatter-gather paths in LatticeGrain that the single-shard
+    // microbench cannot reach. Existing benchmarks are not modified.
+    private const string FanoutTreeName = "microbench-fanout";
+    private const int FanoutShardCount = 4;
+    private const int FanoutScanWindowKeys = 1_000;
+    private ILattice _fanoutLattice = null!;
+    private List<KeyValuePair<string, byte[]>> _fanoutBulkBatch = null!;
+    private string _fanoutScanStart = null!;
+    private string _fanoutScanEnd = null!;
+
     /// <summary>
     /// Wires up the mock Orleans seams, instantiates a single-shard
     /// <see cref="ILattice"/> tree backed by real grain instances for the
@@ -203,6 +217,8 @@ public class LatticeMicroBenchmarks
             var k = "bulk-" + i.ToString("D8", CultureInfo.InvariantCulture);
             _bulkBatch.Add(new(k, _value));
         }
+
+        BuildFanoutTree(keyCount, bulkBatch);
     }
 
     /// <summary>
@@ -326,6 +342,88 @@ public class LatticeMicroBenchmarks
             return _lattice.GetAsync(key);
         }
         return _lattice.SetAsync(key, _value);
+    }
+
+    /// <summary>
+    /// Builds a sibling <see cref="ILattice"/> activation rooted at
+    /// <see cref="FanoutTreeName"/> with <see cref="FanoutShardCount"/>
+    /// physical shards and pre-seeds a bounded scan window. The NSubstitute
+    /// most-specific-match rule lets us override <c>registry.GetEntryAsync</c>
+    /// and <c>_grainFactory.GetGrain&lt;ILattice&gt;</c> for the literal
+    /// <see cref="FanoutTreeName"/> without disturbing the catch-all routes
+    /// the single-shard <c>_lattice</c> uses.
+    /// </summary>
+    private void BuildFanoutTree(int keyCount, int bulkBatch)
+    {
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(FanoutTreeName);
+        registry.GetEntryAsync(FanoutTreeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = _maxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = FanoutShardCount,
+            }));
+
+        var fanoutContext = Substitute.For<IGrainContext>();
+        fanoutContext.GrainId.Returns(GrainId.Create("lattice", FanoutTreeName));
+        var fanoutSp = Substitute.For<IServiceProvider>();
+        var fanoutLattice = new LatticeGrain(
+            fanoutContext,
+            _grainFactory,
+            _optionsMonitor,
+            _optionsResolver,
+            fanoutSp,
+            NullLogger<LatticeGrain>.Instance);
+        _grainFactory.GetGrain<ILattice>(FanoutTreeName).Returns(fanoutLattice);
+        _fanoutLattice = fanoutLattice;
+
+        // Pre-seed the keyspace through the public surface so KeyScan has
+        // data to traverse across all 4 physical shards.
+        for (var i = 0; i < keyCount; i++)
+        {
+            _fanoutLattice.SetAsync(_keys[i], _value).GetAwaiter().GetResult();
+        }
+
+        // Pre-build a fanout-specific bulk batch with disjoint keys so
+        // SetMany_4Shards does not collide with the seeded keyspace.
+        _fanoutBulkBatch = new List<KeyValuePair<string, byte[]>>(bulkBatch);
+        for (var i = 0; i < bulkBatch; i++)
+        {
+            var k = "fbulk-" + i.ToString("D8", CultureInfo.InvariantCulture);
+            _fanoutBulkBatch.Add(new(k, _value));
+        }
+
+        // Scan window: first FanoutScanWindowKeys keys (or all of them if
+        // the keyspace is smaller). Append \u0000 to the upper bound so the
+        // half-open range [start, end) covers the inclusive lexicographic
+        // tail of the chosen suffix.
+        var window = Math.Min(FanoutScanWindowKeys, keyCount);
+        _fanoutScanStart = _keys[0];
+        _fanoutScanEnd = _keys[window - 1] + "\u0000";
+    }
+
+    /// <summary>
+    /// One <see cref="ILattice.SetManyAsync"/> invocation against the
+    /// 4-shard fanout tree. Exercises the bulk-fanout grain-reference cache.
+    /// </summary>
+    [Benchmark(Description = "SetMany 4 shards")]
+    public Task SetMany_4Shards()
+    {
+        return _fanoutLattice.SetManyAsync(_fanoutBulkBatch);
+    }
+
+    /// <summary>
+    /// Paginated key scan over the 4-shard fanout tree. Drains the
+    /// <see cref="ILattice.KeysAsync(string, string, bool, bool?, CancellationToken)"/>
+    /// async-enumerable so the per-shard cursor open + reconciliation paths
+    /// in LatticeGrain.Keys.cs are walked end-to-end.
+    /// </summary>
+    [Benchmark(Description = "Key scan 4 shards")]
+    public async Task KeyScan_PageOver4Shards()
+    {
+        await foreach (var _ in _fanoutLattice.KeysAsync(_fanoutScanStart, _fanoutScanEnd))
+        {
+        }
     }
 
     private static int ReadIntEnv(string name, int fallback)
