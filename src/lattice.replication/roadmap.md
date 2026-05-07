@@ -58,15 +58,15 @@ The phase structure below groups items thematically. This section is the canonic
 
 The replication library is functionally complete for an initial NuGet release — Phases 0 through 8 are shipped end-to-end. This section captures the release-readiness gates and known-limitation items operators should be aware of before the first published package.
 
-**Release-blocking for `1.0.0` GA** (ship as `1.0.0-preview` until these land):
+**Release-blocking for GA**:
 
 1. **R-046 — Standard transport security** `[deps: R-042 ✓]`
    The gRPC push transport ships `ConfigureChannel(...)` as the host-side hook for mTLS / `HttpHandler` policies, but the package has no opinionated secure default. Any cross-WAN or multi-tenant deployment is unsafe without a canonical mTLS posture and a bearer-token-with-rotation `HttpTransport` path. Single most adoption-relevant gap.
 
-2. **R-073 — Azure Table Storage `IWalStorageProvider`** `[deps: R-070 ✓, R-071 ✓]`
-   The only durable provider shipped today is `InMemoryWalStorageProvider`. R-070 / R-071 ship the seam, but a 1.0 GA tag without at least one batteries-included durable backend forces every adopter to write their own. The Azure Table Storage layout is already pinned by the WAL design doc and exactly matches the 100-entity / 4 MB transactional-batch defaults R-071 chose. Recommend shipping as a sibling package (`Orleans.Lattice.Replication.AzureTableStorage`) so the core replication library does not pull in an Azure dependency.
+2. **R-073 ✓ — Azure Table Storage `IWalStorageProvider`** `[deps: R-070 ✓, R-071 ✓]`
+   The only durable provider shipped today is `InMemoryWalStorageProvider`. R-070 / R-071 ship the seam, but a GA tag without at least one batteries-included durable backend forces every adopter to write their own. The Azure Table Storage layout is already pinned by the WAL design doc and exactly matches the 100-entity / 4 MB transactional-batch defaults R-071 chose. Recommend shipping as a sibling package (`Orleans.Lattice.Replication.AzureTableStorage`) so the core replication library does not pull in an Azure dependency.
 
-**Strongly recommended for 1.0.x** (operational polish — non-blocking, but materially improves operability):
+**Strongly recommended for GA** (operational polish — non-blocking, but materially improves operability):
 
 3. **R-065 — Back-pressure `IHealthCheck`** `[deps: R-064 ✓]`
    First-class Kubernetes / ASP.NET Core probe target. Cheap to land; large operational payoff once a fleet is live.
@@ -80,15 +80,13 @@ The replication library is functionally complete for an initial NuGet release �
 6. **R-077 — Trim-aware `GetEntryCountAsync`** `[deps: R-070 ✓]`
    Latent dashboard / `IHealthCheck` divergence: `GetEntryCountAsync` returns `_nextOffset`, which silently inflates monitoring once R-061's GC begins trimming in production. Cheap fix; pair with R-065 so health signals stay honest.
 
-**Known limitations to surface in the 1.0 release notes** — these are *not* gates, but users with the matching exposure should know:
+**Known limitations to surface in the pre-GA release notes** — these are *not* gates, but users with the matching exposure should know:
 
 - **Causal+ scope.** R-080 → R-088 deliver causal+ for the point-write, single-shard-per-mutation path. The full completeness wave (R-089 atomic multi-key writes, R-090 maintenance rewrites, R-091 shard-split / merge / saga shadow-forwards, R-092 tree-global producer VC, R-093 intra-cluster snapshot/restore) has shipped end-to-end alongside the matching core enablers (Core F-043 / F-044 / F-045 / F-046).
-- **Cross-cluster atomic visibility.** Causal+ is *strictly weaker than atomic visibility*: a remote reader concurrent with replication of a `SetManyAtomicAsync` may observe a partial view (some keys arrived and applied, others have not) until every entry in the batch finishes converging on that peer. Closing this gap is **Phase 9 (R-094 → R-104)**, gated on outstanding **Core F-054** (`ApplyManyAtomicAsync` source-HLC-preserving atomic apply seam) and shipped per-tree opt-in via `LatticeReplicationOptions.AtomicBatchDelivery` (default `false`). 1.0 will ship causal+-only for atomic batches; users who need atomic visibility cross-cluster should track Phase 9.
+- **Cross-cluster atomic visibility.** Replicated atomic batches authored via `SetManyAtomicAsync` arrive on every receiver as a unit when the per-tree `LatticeReplicationOptions.AtomicBatchDelivery` opt-in is enabled (default `false`) — the receiver buffers every key of the enclosing transaction until the whole batch is in hand and applies them under one saga, advancing the per-origin high-water-mark once at completion. Phase 9 (R-094 → R-104) is shipped end-to-end alongside the matching core enabler (Core F-054 `ApplyManyAtomicAsync`); see [../../docs/lattice.replication/atomic-batch-delivery.md](../../docs/lattice.replication/atomic-batch-delivery.md) for the contract, knobs, observability, and operator playbook. With the opt-in off, causal+ remains *strictly weaker than atomic visibility*: a remote reader concurrent with replication of a `SetManyAtomicAsync` may observe a partial view until the batch finishes converging on that peer. **Residual carve-out:** real-time receiver-side reader isolation inside the saga commit window — where a reader concurrent with the per-key sequential commit may observe a partial view — remains tracked as **core F-055**.
 - **Extended CRDT modes.** Of the three follow-on dispatch items, **R-034 (MV-Register) is unblocked** by the already-shipped Core F-039 and is the cheapest 1.1 win. **R-035 (OR-Map)** and **R-036 (RGA sequence)** remain gated on Core F-040 and F-041 respectively.
-- **WAL-as-sole-commit-point.** Out of scope for 1.0 by design — the v1 "WAL is a side-car of the leaf write" model is the supported configuration. The v2 forward-compat audit lives next to Core F-049d's acceptance criteria rather than as a separate replication-side item, because under F-049d's default flip the cleanest disposition is to *not register* `ReplicationMutationObserver` (no observer-WAL-write to short-circuit) rather than add a runtime gate.
-- **Performance follow-ons.** R-047 / R-043 / R-044 / R-045 / R-074 / R-075 / R-076 / R-078 close perf gaps documented in the WAL design doc's deferred-acceptance rows. None affect correctness; all are scheduled post-1.0.
+- **Performance follow-ons.** R-047 / R-043 / R-044 / R-045 / R-074 / R-075 / R-076 / R-078 close perf gaps documented in the WAL design doc's deferred-acceptance rows. None affect correctness; all are scheduled post-GA.
 
-**Suggested release sequencing.** Ship `1.0.0-preview1` today on the strength of the shipped surface; converge `1.0.0` GA on R-046 + R-073; schedule R-062 / R-065 / R-066 / R-077 for `1.0.x`; schedule R-034 in `1.1` (R-092 has shipped; R-034 unblocked, small).
 
 ### Critical path — unblock typed CRDT replication and the wire envelope
 
@@ -282,7 +280,7 @@ The R-080 → R-093 wave delivers causal+ for every write path the core library 
 56. **R-103 — End-to-end atomic visibility chaos verification** `[deps: R-098 ✓, R-099 ✓, R-100 ✓, R-101]`
     Closes the chaos test R-089's retrospective deferred. `[Category("Chaos")]` fixture covering sustained atomic-batch load under ack-loss / partition / silo restart, producer crash mid-saga draining via R-100, and snapshot-during-saga via R-102. Asserts on `apply.tx_completed{outcome}` for terminal disposition.
 
-57. **R-104 — Documentation + operator playbook** `[deps: R-098 ✓, R-099 ✓, R-100 ✓, R-101 ✓, R-102 ✓, R-103 ✓]`
+57. **R-104 ✓ shipped — Documentation + operator playbook** `[deps: R-098 ✓, R-099 ✓, R-100 ✓, R-101 ✓, R-102 ✓, R-103 ✓]`
     New `docs/lattice.replication/atomic-batch-delivery.md` covering the contract, knobs, latency / GC-pin trade-offs, and orphan-timeout operator playbook. Marks the cross-cluster atomic visibility carve-out closed in `docs/lattice/consistency.md` and `docs/lattice.replication/wal-causal-plus.md` §11; updates the R-089 retrospective in this roadmap.
 
 ### Extended CRDT modes (gated on outstanding core primitives)
@@ -315,7 +313,7 @@ Streams converge before R-080 (causal+ schema) → R-050 (snapshot/bootstrap), w
 | Causal+ schema + snapshot | R-080 ✓ → R-050 ✓ → R-051 ✓ → R-052 ✓ / R-053 ✓ → R-084 ✓ → R-088 ✓ |
 | Causal+ apply | R-081 ✓ → R-082 ✓ → (R-083 ✓, R-085 ✓, R-086 ✓, R-087 ✓ parallel) → R-088 ✓ |
 | Causal+ completeness | (R-089 ✓, R-090 ✓, R-091 ✓, R-092 ✓, R-093 ✓ — all shipped) |
-| Atomic visibility cross-cluster | R-094 ✓ → R-095 ✓ → R-096 ✓ → R-097 ✓ → R-098 ✓ → R-099 ✓ → (R-100 ✓, R-101 ✓, R-102 ✓) → R-103 ✓ → R-104 |
+| Atomic visibility cross-cluster | R-094 ✓ → R-095 ✓ → R-096 ✓ → R-097 ✓ → R-098 ✓ → R-099 ✓ → (R-100 ✓, R-101 ✓, R-102 ✓) → R-103 ✓ → R-104 ✓ |
 
 ---
 
@@ -664,7 +662,7 @@ The R-080 → R-088 wave delivers causal+ for the point-write, single-tree, sing
 
   **Receiver:** no change to R-082's dep-check; entries with identical VCs unblock together when their shared frontier is satisfied.
 
-  **Atomic visibility note:** all-or-none cross-replica visibility is strictly stronger than causal+. R-089 does not deliver it. Users who need atomic visibility cross-cluster need a future "transactional batch" delivery primitive — flagged as a separate follow-on if demand surfaces.
+  **Atomic visibility note:** all-or-none cross-replica visibility is strictly stronger than causal+. R-089 does not deliver it on its own — it ships the producer-side capture seam that the cross-cluster atomic-batch delivery wave (Phase 9, R-094 → R-104) builds on. Phase 9 ships the receiver-side staging buffer (LatticeReplicationOptions.AtomicBatchDelivery, default alse) that consumes the size / index slots stamped here and applies every batch under one saga; see [../../docs/lattice.replication/atomic-batch-delivery.md](../../docs/lattice.replication/atomic-batch-delivery.md). Real-time receiver-side reader isolation inside the saga commit window remains tracked as core F-055.
 
   **Test coverage:** a 5-key atomic set asserts identical VC across all five `ReplogEntry`s; a chaos fixture under arbitrary ack-loss / partition asserts a remote peer never observes a partial-set state where the writer's causal frontier said all five should be visible together.
 
@@ -844,7 +842,7 @@ The phase is a tightly-coupled wave: R-094 / R-095 ship the producer-side metada
   Excluded from inner-loop runs per repo convention; gated on CI / pre-PR runs.
 
   **Receiver-side coverage envelope.** The fixture pins the receiver-side cross-cluster atomic-batch delivery contract end-to-end via 11 chaos tests across 8 partial files: sustained load + partition (`SustainedLoad`); orphan recovery via simulated producer crash (`OrphanRecovery`); snapshot-during-saga blacklist + buffer bypass (`SnapshotDuringSaga`); buffer overflow with FIFO eviction (`BufferOverflow`); concurrent admission storm (`ConcurrentOverflow`); blacklist + orphan interaction (`BlacklistedOrphan`); snapshot replace-semantics across re-exports (`SnapshotReplaceSemantics`); histogram emission carve-out for `dlq_orphan` and `evicted_capacity` outcomes (`HistogramAndGaugeInvariants`); buffer-bytes gauge drain-to-zero (`HistogramAndGaugeInvariants`). Producer-side silo restart, receiver-side silo restart with staged transactions, and freshly-bootstrapping-peer end-to-end orchestration are pinned at the unit-test level by R-095's `AtomicWriteGrain` durability suite, R-101's 9 buffer-grain rehydration tests, and R-102's bootstrap-coordinator + snapshot-provider suites respectively; a future `R-103.5` chaos extension can lift these into a multi-silo / multi-site chaos pump if a production incident reveals the simulation-level coverage is insufficient.
-- [ ] **R-104 — Documentation + operator playbook** *(depends on R-098 ✓, R-099 ✓, R-100 ✓, R-101 ✓, R-102 ✓, R-103 ✓)*
+- [x] **R-104 ✓ shipped — Documentation + operator playbook** *(depends on R-098 ✓, R-099 ✓, R-100 ✓, R-101 ✓, R-102 ✓, R-103 ✓)*
   New `docs/lattice.replication/atomic-batch-delivery.md` covering:
   - The contract: per-tree opt-in semantics, atomic visibility guarantee, latency vs. visibility trade-off table.
   - Knobs: `AtomicBatchDelivery`, `AtomicBatchBufferMaxTransactions`, `AtomicBatchBufferMaxBytes`, `TxBufferOrphanTimeout`, `SnapshotSagaQuiesceTimeout` — defaults, recommended ranges per workload class, validator bounds.
