@@ -23,6 +23,16 @@ internal sealed partial class ShardRootGrain
     private GrainId _cachedLeafCacheKey;
     private ILeafCacheGrain? _cachedLeafCache;
 
+    // Per-activation cache of the most recently resolved IBPlusLeafGrain
+    // reference, keyed by leaf GrainId. Eliminates the
+    // grainFactory.GetGrain<IBPlusLeafGrain>(leafId) materialisation on
+    // every Set/Get/CAS/GetOrSet write-or-traversal call into the leaf.
+    // Same invalidation semantics as _cachedLeafCache above: implicit on
+    // leaf-id mismatch, so root-splits and multi-leaf rotations refresh
+    // the slot on the next call.
+    private GrainId _cachedLeafKey;
+    private IBPlusLeafGrain? _cachedLeaf;
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private ILeafCacheGrain ResolveLeafCacheGrainSlow(GrainId leafId)
     {
@@ -30,6 +40,15 @@ internal sealed partial class ShardRootGrain
         _cachedLeafCacheKey = leafId;
         _cachedLeafCache = cache;
         return cache;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private IBPlusLeafGrain ResolveLeafGrainSlow(GrainId leafId)
+    {
+        var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+        _cachedLeafKey = leafId;
+        _cachedLeaf = leaf;
+        return leaf;
     }
 
     private async Task<byte[]?> TraverseForReadAsync(string key)
@@ -62,7 +81,9 @@ internal sealed partial class ShardRootGrain
             leafId = await TraverseToLeafAsync(key);
         }
 
-        var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+        var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(leafId))
+            ? existing
+            : ResolveLeafGrainSlow(leafId);
         return await leaf.GetWithVersionAsync(key);
     }
 
@@ -128,7 +149,10 @@ internal sealed partial class ShardRootGrain
     {
         if (state.State.RootIsLeaf)
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
+            var rootLeafId = state.State.RootNodeId!.Value;
+            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
+                ? existing
+                : ResolveLeafGrainSlow(rootLeafId);
             return await leaf.SetAsync(key, value);
         }
 
@@ -154,7 +178,9 @@ internal sealed partial class ShardRootGrain
         }
 
         var leafId = path.Pop();
-        var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+        var leafGrain = (_cachedLeaf is { } existingLeaf && _cachedLeafKey.Equals(leafId))
+            ? existingLeaf
+            : ResolveLeafGrainSlow(leafId);
         var splitResult = await leafGrain.SetAsync(key, value);
 
         while (splitResult is not null && path.Count > 0)
@@ -181,7 +207,10 @@ internal sealed partial class ShardRootGrain
     {
         if (state.State.RootIsLeaf)
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
+            var rootLeafId = state.State.RootNodeId!.Value;
+            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
+                ? existing
+                : ResolveLeafGrainSlow(rootLeafId);
             return await leaf.SetAsync(key, value, expiresAtTicks);
         }
 
@@ -207,7 +236,9 @@ internal sealed partial class ShardRootGrain
             }
 
             var leafId = path.Pop();
-            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var leafGrain = (_cachedLeaf is { } existingLeaf && _cachedLeafKey.Equals(leafId))
+                ? existingLeaf
+                : ResolveLeafGrainSlow(leafId);
             var splitResult = await leafGrain.SetAsync(key, value, expiresAtTicks);
 
             while (splitResult is not null && path.Count > 0)
@@ -229,7 +260,10 @@ internal sealed partial class ShardRootGrain
     {
         if (state.State.RootIsLeaf)
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
+            var rootLeafId = state.State.RootNodeId!.Value;
+            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
+                ? existing
+                : ResolveLeafGrainSlow(rootLeafId);
             return await leaf.GetOrSetAsync(key, value);
         }
 
@@ -255,7 +289,9 @@ internal sealed partial class ShardRootGrain
             }
 
             var leafId = path.Pop();
-            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var leafGrain = (_cachedLeaf is { } existingLeaf && _cachedLeafKey.Equals(leafId))
+                ? existingLeaf
+                : ResolveLeafGrainSlow(leafId);
             var result = await leafGrain.GetOrSetAsync(key, value);
 
             // If the key was already live, no write occurred — no splits to propagate.
@@ -285,7 +321,10 @@ internal sealed partial class ShardRootGrain
     {
         if (state.State.RootIsLeaf)
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
+            var rootLeafId = state.State.RootNodeId!.Value;
+            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
+                ? existing
+                : ResolveLeafGrainSlow(rootLeafId);
             return await leaf.SetIfVersionAsync(key, value, expectedVersion);
         }
 
@@ -311,7 +350,9 @@ internal sealed partial class ShardRootGrain
             }
 
             var leafId = path.Pop();
-            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var leafGrain = (_cachedLeaf is { } existingLeaf && _cachedLeafKey.Equals(leafId))
+                ? existingLeaf
+                : ResolveLeafGrainSlow(leafId);
             var result = await leafGrain.SetIfVersionAsync(key, value, expectedVersion);
 
             // If CAS failed, no write occurred — no splits to propagate.
