@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Collections.Concurrent;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
@@ -7,7 +8,7 @@ namespace Orleans.Lattice.Replication;
 /// <summary>
 /// Per-<c>(silo, tree)</c> in-memory local vector clock cache used by
 /// the producer-side commit-time observer to stamp a tree-global
-/// vector clock onto every emitted <see cref="ReplogEntry"/> when the
+/// vector clock onto every emitted <see cref="WalRecord"/> when the
 /// caller has not supplied one via
 /// <see cref="LatticeVectorClockContext"/>.
 /// <para>
@@ -39,7 +40,7 @@ namespace Orleans.Lattice.Replication;
 ///   never advances this entry (the apply pipeline filters local-origin
 ///   entries before reaching <see cref="IReplicationHighWaterMarkGrain.TryAdvanceAsync"/>),
 ///   so the cache is the only seam that tracks it. Producers read this
-///   entry to stamp <see cref="ReplogEntry.VectorClock"/> on outbound
+///   entry to stamp <see cref="WalRecord.VectorClock"/> on outbound
 ///   entries.
 ///   </description></item>
 ///   <item><description>
@@ -95,7 +96,7 @@ internal sealed class LocalVectorClockCache(IGrainFactory grainFactory)
     /// <summary>
     /// Advances the local cluster's diagonal entry monotonically. Called
     /// from <see cref="ShardedReplogSink"/> after a successful WAL append
-    /// for an entry whose <see cref="ReplogEntry.OriginClusterId"/>
+    /// for an entry whose <see cref="WalRecord.OriginClusterId"/>
     /// matches the local cluster id. No-op when
     /// <paramref name="candidate"/> is less than or equal to the
     /// currently cached value (the advance is pointwise-max).
@@ -106,7 +107,7 @@ internal sealed class LocalVectorClockCache(IGrainFactory grainFactory)
     /// </param>
     /// <param name="candidate">
     /// The candidate HLC. Typically the just-appended entry's
-    /// <see cref="ReplogEntry.Timestamp"/>.
+    /// <see cref="WalRecord.Timestamp"/>.
     /// </param>
     public void AdvanceLocal(string treeId, string originClusterId, HybridLogicalClock candidate)
     {
@@ -134,7 +135,7 @@ internal sealed class LocalVectorClockCache(IGrainFactory grainFactory)
     /// </param>
     /// <param name="candidate">
     /// The candidate HLC. Typically the just-applied entry's
-    /// <see cref="ReplogEntry.Timestamp"/>.
+    /// <see cref="WalRecord.Timestamp"/>.
     /// </param>
     public void AdvanceForeign(string treeId, string originClusterId, HybridLogicalClock candidate)
     {

@@ -28,7 +28,7 @@ internal static class LatticeConstants
     /// prefix by name rather than hardcoding the string literal.
     /// </para>
     /// </summary>
-    public const string ReplogTreePrefix = "_lattice_replog_";
+    public const string WalTreePrefix = "_lattice_replog_";
 
     /// <summary>
     /// The tree ID of the internal registry tree that stores tree metadata

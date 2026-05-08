@@ -136,7 +136,7 @@ internal sealed class ReplicationDeadLetterGrain(
 
     /// <inheritdoc />
     public async Task<long> EnqueueAsync(
-        ReplogEntry entry,
+        WalRecord entry,
         string failureReason,
         int retryCount,
         string reasonTag,
@@ -279,7 +279,7 @@ internal sealed class ReplicationDeadLetterGrain(
     /// <c>_lattice_replog_</c> namespace so user trees cannot collide
     /// with it.
     /// </summary>
-    internal static string BackingTreeId(string treeId) => $"{LatticeConstants.ReplogTreePrefix}dlq_{treeId}";
+    internal static string BackingTreeId(string treeId) => $"{LatticeConstants.WalTreePrefix}dlq_{treeId}";
 
     /// <summary>
     /// Builds the system-tree key for the parked entry with the supplied
@@ -287,7 +287,7 @@ internal sealed class ReplicationDeadLetterGrain(
     /// to produce the <c>"e/" + 19-digit-id</c> row key in a single
     /// allocation, avoiding the intermediate <see cref="long.ToString(string, IFormatProvider)"/>
     /// + concat that an interpolated <c>$"e/{id:D19}"</c> would emit.
-    /// Called per <see cref="EnqueueAsync(ReplogEntry, string, int, CancellationToken)"/>
+    /// Called per <see cref="EnqueueAsync(WalRecord, string, int, CancellationToken)"/>
     /// (terminal failure path) and per FIFO eviction, so the saving is
     /// modest but non-zero.
     /// </summary>

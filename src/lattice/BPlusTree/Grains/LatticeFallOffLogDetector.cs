@@ -21,19 +21,16 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// <see cref="ICommitLogReader"/> is resolved lazily via
-/// <see cref="IServiceProvider"/> because the replication package
-/// (which registers the concrete adapter) is optional. When no
-/// reader is registered the detector returns
-/// <see cref="FallOffLogDecision.TailReplay"/> unconditionally — without
-/// a commit log there is no possibility of fall-off-log and the
-/// activation-time replay coordinator returns an empty slice anyway.
+/// <see cref="IServiceProvider"/>; <c>AddLattice</c> registers
+/// <see cref="WalCommitLogReader"/> as the in-core default, so the reader
+/// is always available at runtime.
 /// </para>
 /// </summary>
 internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILatticeFallOffLogDetector
 {
     private ICommitLogReader? _reader;
 
-    private ICommitLogReader? Reader => _reader ??= services.GetService<ICommitLogReader>();
+    private ICommitLogReader Reader => _reader ??= services.GetRequiredService<ICommitLogReader>();
 
     /// <inheritdoc />
     public async Task<FallOffLogDecision> ClassifyAsync(
@@ -58,13 +55,6 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         cancellationToken.ThrowIfCancellationRequested();
 
         var reader = Reader;
-        if (reader is null)
-        {
-            // No replication package registered — no commit log, no possibility
-            // of fall-off-log. The replay coordinator returns EmptySlice in
-            // this state, so a tail-replay decision is a vacuous no-op.
-            return FallOffLogDecision.TailReplay;
-        }
 
         var head = await reader.GetHeadOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
         var tail = await reader.GetTailOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);

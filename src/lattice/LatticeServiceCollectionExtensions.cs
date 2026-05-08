@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice;
 
@@ -15,6 +16,15 @@ public static class LatticeServiceCollectionExtensions
     /// that Lattice grains require. The <paramref name="configureStorage"/>
     /// delegate receives the <see cref="ISiloBuilder"/> and the provider
     /// name that must be used when registering storage.
+    /// <para>
+    /// Also registers the core write-ahead-log adapters
+    /// (<see cref="ICommitLogReader"/>, <see cref="ICommitLogWriter"/>)
+    /// and the in-memory <see cref="IWalStorageProvider"/> default so a
+    /// single-cluster host gets durable commit-log infrastructure with
+    /// no extra wiring. Hosts that need a different WAL backing store
+    /// call <see cref="AddWalStorage"/> with a custom factory before
+    /// (or after) <c>AddLattice</c>; the registration is idempotent.
+    /// </para>
     /// <para>Example:</para>
     /// <code>
     /// silo.AddLattice((silo, name) =&gt; silo.AddMemoryGrainStorage(name));
@@ -24,12 +34,24 @@ public static class LatticeServiceCollectionExtensions
         this ISiloBuilder builder,
         Action<ISiloBuilder, string> configureStorage)
     {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configureStorage);
+
         configureStorage(builder, LatticeOptions.StorageProviderName);
         builder.Services.AddSingleton<IValidateOptions<LatticeOptions>, LatticeOptionsValidator>();
         builder.Services.AddSingleton<LatticeOptionsResolver>();
         builder.Services.AddSingleton<MutationObserverDispatcher>();
-        builder.Services.AddSingleton<Orleans.Lattice.BPlusTree.Grains.ILatticeFallOffLogDetector,
-                                      Orleans.Lattice.BPlusTree.Grains.LatticeFallOffLogDetector>();
+        builder.Services.AddSingleton<ILatticeFallOffLogDetector, LatticeFallOffLogDetector>();
+
+        // Core WAL durability seams: in-memory provider as the singleton
+        // default (hosts replace via AddWalStorage), commit-log writer
+        // and reader, and a null-returning mode resolver. The replication
+        // package replaces the resolver via services.Replace(...) so per-
+        // tree mode resolution kicks in only when replication is added.
+        builder.AddWalStorage();
+        builder.Services.TryAddSingleton<ICommitLogWriter, WalCommitLogWriter>();
+        builder.Services.TryAddSingleton<ICommitLogReader, WalCommitLogReader>();
+        builder.Services.TryAddSingleton<ILatticeMergeModeResolver, DefaultLatticeMergeModeResolver>();
         return builder;
     }
 
@@ -67,10 +89,10 @@ public static class LatticeServiceCollectionExtensions
     /// the core-side seam consumed by single-cluster deployments under
     /// the WAL-as-sole-commit-point flip; the replication package builds
     /// on top of this registration via
-    /// <c>LatticeReplicationOptions.WalStorageProvider</c> for per-tree
+    /// <see cref="LatticeOptions.WalStorageProvider"/> for per-tree
     /// configurability. Idempotent: a previously-registered provider
-    /// (whether from a host-supplied factory or from
-    /// <c>AddLatticeReplication</c>) is preserved.
+    /// (whether from a host-supplied factory or from a downstream
+    /// <c>AddLattice*</c> call) is preserved.
     /// </summary>
     public static ISiloBuilder AddWalStorage(
         this ISiloBuilder builder,

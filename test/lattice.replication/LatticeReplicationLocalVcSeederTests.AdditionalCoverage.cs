@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
@@ -70,8 +71,8 @@ public partial class LatticeReplicationLocalVcSeederTests
         // iteration's per-leaf ThrowIfCancellationRequested must fire
         // before GetLiveRawEntriesAsync runs against leaf-1.
         var factory = Substitute.For<IGrainFactory>();
-        var resolver = Substitute.For<IReplicationModeResolver>();
-        resolver.Resolve(Arg.Any<string>()).Returns(ReplicationMode.LwwRegister);
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
         var shardCounts = Substitute.For<IShardCountProvider>();
         shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(1));
@@ -163,8 +164,8 @@ public partial class LatticeReplicationLocalVcSeederTests
         // GetLiveRawEntriesAsync without re-using the helper's
         // pre-canned shape.
         var factory = Substitute.For<IGrainFactory>();
-        var resolver = Substitute.For<IReplicationModeResolver>();
-        resolver.Resolve(Arg.Any<string>()).Returns(ReplicationMode.LwwRegister);
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
         var shardCounts = Substitute.For<IShardCountProvider>();
         shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(1));
@@ -322,11 +323,11 @@ public partial class LatticeReplicationLocalVcSeederTests
     // T-8 - Uniform behaviour across all replication modes
     // ==================================================================
 
-    [TestCase(ReplicationMode.LwwRegister)]
-    [TestCase(ReplicationMode.OrSet)]
-    [TestCase(ReplicationMode.PnCounter)]
-    [TestCase(ReplicationMode.VersionVector)]
-    public async Task SeedFromTreeAsync_seeds_uniformly_across_all_replication_modes(ReplicationMode mode)
+    [TestCase(LatticeMergeMode.LwwRegister)]
+    [TestCase(LatticeMergeMode.OrSet)]
+    [TestCase(LatticeMergeMode.PnCounter)]
+    [TestCase(LatticeMergeMode.VersionVector)]
+    public async Task SeedFromTreeAsync_seeds_uniformly_across_all_replication_modes(LatticeMergeMode mode)
     {
         // The seeder reads raw VC slots only; mode is consulted only
         // by the no-op gate (any non-null mode advances past the

@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
@@ -25,7 +26,7 @@ public class LatticeReplicationOptions
 
     /// <summary>
     /// Per-tree opt-in map. Each entry declares both that the named tree
-    /// participates in replication and which <see cref="ReplicationMode"/>
+    /// participates in replication and which <see cref="LatticeMergeMode"/>
     /// receivers should use to apply its captured entries. <c>null</c>
     /// (the default) and an empty map both mean "no trees are replicated";
     /// there is no implicit "all trees" wildcard. The producer cannot
@@ -39,7 +40,7 @@ public class LatticeReplicationOptions
     /// mutation against a tree outside this map never reaches the WAL.
     /// </para>
     /// </summary>
-    public IReadOnlyDictionary<string, ReplicationMode>? ReplicatedTrees { get; set; }
+    public IReadOnlyDictionary<string, LatticeMergeMode>? ReplicatedTrees { get; set; }
 
     /// <summary>
     /// Optional per-key filter evaluated on the producer side at commit
@@ -67,8 +68,8 @@ public class LatticeReplicationOptions
 
     /// <summary>
     /// Number of write-ahead-log partitions per replicated tree. Each
-    /// captured <see cref="ReplogEntry"/> is routed to a single
-    /// <c>IReplogShardGrain</c> activation keyed by
+    /// captured <see cref="WalRecord"/> is routed to a single
+    /// <c>IWalShardGrain</c> activation keyed by
     /// <c>{treeId}/{partition}</c>, where <c>partition</c> is a stable hash
     /// of the entry's key modulo this value. Defaults to <see cref="DefaultReplogPartitions"/>
     /// (a single per-tree WAL, sufficient for low-fan-in workloads); raise
@@ -289,7 +290,7 @@ public class LatticeReplicationOptions
     public IReadOnlyCollection<string>? ReplicationPeers { get; set; }
 
     /// <summary>
-    /// Maximum number of <see cref="ReplogEntry"/> records the
+    /// Maximum number of <see cref="WalRecord"/> records the
     /// per-<c>(tree, peer)</c> shipper grain drains from
     /// <see cref="IChangeFeed.Subscribe"/> and submits to
     /// <see cref="IReplicationTransport.SendAsync"/> in a single
@@ -301,11 +302,11 @@ public class LatticeReplicationOptions
     public int ShipBatchSize { get; set; } = DefaultShipBatchSize;
 
     /// <summary>
-    /// Maximum number of <see cref="ReplogEntry"/> records the
+    /// Maximum number of <see cref="WalRecord"/> records the
     /// per-<c>(tree, peer)</c> shipper grain reads per partition per
     /// pump tick when draining the WAL via the partition-resume
     /// hot path. The pump issues one
-    /// <see cref="Grains.IReplogShardGrain.ReadAsync"/> call per
+    /// <see cref="Grains.IWalShardGrain.ReadAsync"/> call per
     /// partition starting from each partition's saved resume cursor,
     /// merges the pages by <see cref="Primitives.HybridLogicalClock"/>
     /// ascending, and emits up to <see cref="ShipBatchSize"/> entries
@@ -462,161 +463,6 @@ public class LatticeReplicationOptions
     /// </summary>
     public bool ShipDoorbellEnabled { get; set; } = DefaultShipDoorbellEnabled;
 
-    /// <summary>
-    /// Per-tree opt-in for cross-cluster atomic-batch delivery. When
-    /// <see langword="true"/>, the receiver buffers entries that carry a
-    /// non-zero <c>AtomicBatchSize</c> until every sibling in the
-    /// enclosing transaction is in hand, then applies the whole batch
-    /// atomically — preserving cross-cluster atomic visibility for
-    /// writes authored via <c>SetManyAtomicAsync</c>. When
-    /// <see langword="false"/> (the default), the receiver ignores the
-    /// atomic-batch metadata and applies each entry as a point write,
-    /// so concurrent remote readers may observe a partial view of an
-    /// atomic batch until every entry finishes converging.
-    /// <para>
-    /// Producer-side stamping of <c>AtomicBatchSize</c> /
-    /// <c>AtomicBatchIndex</c> is unconditional (every emit carries the
-    /// metadata regardless of receiver-side opt-in), so flipping a peer
-    /// to opt-in does not require a producer restart or any wire-format
-    /// change. Symmetrically, flipping a peer back to
-    /// <see langword="false"/> immediately stops receiver-side
-    /// buffering.
-    /// </para>
-    /// <para>
-    /// Operators trade extra latency (the batch waits for its slowest
-    /// sibling) and a partially-buffered batch's GC pin against the
-    /// stronger visibility guarantee. Defaults to
-    /// <see cref="DefaultAtomicBatchDelivery"/>.
-    /// </para>
-    /// </summary>
-    public bool AtomicBatchDelivery { get; set; } = DefaultAtomicBatchDelivery;
-
-    /// <summary>
-    /// Maximum number of distinct in-flight atomic-batch transactions
-    /// the per-tree receiver-side staging buffer (<see cref="AtomicBatchDelivery"/>)
-    /// will admit before evicting the oldest partially-buffered
-    /// transaction to make room. Each in-flight batch is keyed by
-    /// <c>(originClusterId, transactionId)</c>; this cap therefore
-    /// bounds the cardinality of partially-completed transactions, not
-    /// the cardinality of buffered entries (a single transaction may
-    /// stage many entries before completing).
-    /// <para>
-    /// Eviction routes the displaced batch through the per-tree
-    /// dead-letter queue tagged
-    /// <see cref="LatticeReplicationMetrics.ReasonEvicted"/>; the
-    /// replication driver re-ships the original entries on the next
-    /// pump cycle because the per-origin high-water-mark was not
-    /// advanced past them. The cap therefore acts as a soft bound on
-    /// the receiver's working set rather than as a correctness
-    /// invariant.
-    /// </para>
-    /// <para>
-    /// Defaults to <see cref="DefaultAtomicBatchBufferMaxTransactions"/>;
-    /// the validator rejects values below 1.
-    /// </para>
-    /// </summary>
-    public int AtomicBatchBufferMaxTransactions { get; set; } = DefaultAtomicBatchBufferMaxTransactions;
-
-    /// <summary>
-    /// Maximum cumulative payload bytes the per-tree receiver-side
-    /// atomic-batch staging buffer will hold before evicting the
-    /// oldest partially-buffered transaction to make room. The byte
-    /// budget is approximate — payload size is read from the entry's
-    /// <see cref="ReplogEntry.Value"/> length plus a constant
-    /// per-entry overhead — and is the soft cap on the buffer's
-    /// memory footprint. A single entry larger than this cap is
-    /// admitted as-is rather than evicting the entire buffer; the
-    /// cap is guidance, not a per-entry hard limit.
-    /// <para>
-    /// Defaults to <see cref="DefaultAtomicBatchBufferMaxBytes"/>;
-    /// the validator rejects values below 1 MB to keep the cap
-    /// meaningfully larger than a typical single-entry payload.
-    /// </para>
-    /// </summary>
-    public long AtomicBatchBufferMaxBytes { get; set; } = DefaultAtomicBatchBufferMaxBytes;
-
-    /// <summary>
-    /// Maximum residency time of a partially-buffered atomic-batch
-    /// transaction on the per-tree receiver-side staging buffer
-    /// (<see cref="AtomicBatchDelivery"/>). The per-tree maintenance
-    /// grain sweeps stuck transactions on a half-cadence relative to
-    /// <see cref="MaintenanceGcInterval"/>; any transaction whose
-    /// oldest staged entry was admitted longer ago than this value
-    /// is evicted as an orphan: every staged entry is parked on the
-    /// per-tree dead-letter queue tagged
-    /// <see cref="LatticeReplicationMetrics.ReasonOrphanTransaction"/>,
-    /// the buffer's blocked-floor pin (the producer-side WAL
-    /// garbage-collection frontier published through
-    /// <see cref="ILatticeReplicationCursorRegistry"/>) is cleared so
-    /// the producer can resume trimming, and the per-origin
-    /// high-water-mark advances past the orphan's maximum HLC so
-    /// causal-stream progress resumes.
-    /// <para>
-    /// An orphan typically arises when a sibling entry was lost in
-    /// transit, the producer crashed mid-saga before emitting every
-    /// sibling, or the buffer was bumped against the per-tree
-    /// transaction-cap before the batch could complete (in which
-    /// case the cap-overflow path tagged <c>ReasonEvicted</c>
-    /// already drained the entry — the orphan-timeout path tagged
-    /// <c>ReasonOrphanTransaction</c> is the residual recovery for
-    /// the slow-arrival case). Operators recover individual orphan
-    /// entries via <c>ILatticeReplicationDeadLetters.ReplayAsync</c>;
-    /// the standard replay tooling routes the entry through the
-    /// canonical applier, bypassing the buffer.
-    /// </para>
-    /// <para>
-    /// Defaults to <see cref="DefaultTxBufferOrphanTimeout"/>; the
-    /// validator rejects zero or negative values at first-resolve
-    /// time. Sized so a routine slow-network re-delivery has time
-    /// to land its missing sibling before the sweep evicts the
-    /// transaction, while still bounding the producer-side GC pin
-    /// and the receiver-side buffer occupancy in the genuine
-    /// orphan case.
-    /// </para>
-    /// </summary>
-    public TimeSpan TxBufferOrphanTimeout { get; set; } = DefaultTxBufferOrphanTimeout;
-
-    /// <summary>
-    /// Producer-side wall-clock window during which
-    /// <see cref="ISnapshotProvider.ExportAsync"/> waits for any
-    /// atomic-batch saga that is currently mid-emission to finish
-    /// emitting every sibling before reading the producer's tree
-    /// state. Closes the snapshot/handoff hazard where a producer
-    /// running <c>SetManyAtomicAsync</c> concurrently with an
-    /// outbound snapshot would otherwise split the batch across the
-    /// snapshot / incremental boundary — some keys land in the
-    /// snapshot stream, others arrive on the post-snapshot
-    /// incremental stream where the receiver-side buffer
-    /// (<see cref="AtomicBatchDelivery"/>) cannot recognise them as
-    /// a complete batch.
-    /// <para>
-    /// The snapshot provider consults the registered
-    /// <see cref="IInFlightSagaTracker"/> for the set of saga
-    /// transaction ids currently in flight on this silo, polls for
-    /// completion until either the set drains or this timeout
-    /// elapses, and stamps any still-in-flight ids on
-    /// <see cref="SnapshotStream.SagaBlacklist"/>. The receiver
-    /// records the blacklist in
-    /// <see cref="Grains.BootstrapCoordinatorState.SagaBlacklist"/>
-    /// and registers it with the per-tree
-    /// <see cref="Grains.IReplicationTxBufferGrain"/> so subsequent
-    /// incremental entries carrying a blacklisted transaction id
-    /// bypass the staging buffer and are applied as point writes
-    /// directly. Atomic-visibility is degraded to causal+ for those
-    /// specific timed-out sagas; operators should raise the timeout
-    /// (or reduce snapshot concurrency) if the blacklist is
-    /// non-empty under steady-state load.
-    /// </para>
-    /// <para>
-    /// Defaults to <see cref="DefaultSnapshotSagaQuiesceTimeout"/>;
-    /// the validator rejects zero or negative values at first-resolve
-    /// time. A value of <see cref="TimeSpan.Zero"/> would force every
-    /// in-flight saga onto the blacklist, which is the worst-case
-    /// (degraded-causal+) outcome rather than the desired (atomic)
-    /// path; the validator surfaces it as a configuration error.
-    /// </para>
-    /// </summary>
-    public TimeSpan SnapshotSagaQuiesceTimeout { get; set; } = DefaultSnapshotSagaQuiesceTimeout;
 
     /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
@@ -796,53 +642,4 @@ public class LatticeReplicationOptions
     /// </summary>
     public const bool DefaultShipDoorbellEnabled = true;
 
-    /// <summary>
-    /// Default value for <see cref="AtomicBatchDelivery"/>: cross-cluster
-    /// atomic-batch delivery is disabled. Receivers ignore the
-    /// <c>AtomicBatchSize</c> / <c>AtomicBatchIndex</c> metadata and
-    /// apply each entry as a point write — preserving the historical
-    /// causal+ behaviour for hosts that have not opted in.
-    /// </summary>
-    public const bool DefaultAtomicBatchDelivery = false;
-
-    /// <summary>
-    /// Default value for <see cref="AtomicBatchBufferMaxTransactions"/>:
-    /// 512 distinct in-flight atomic-batch transactions per tree.
-    /// Sized so a sustained burst of atomic writes from a partition-
-    /// recovering peer can buffer several hundred concurrent batches
-    /// without escalating to the dead-letter queue, while keeping the
-    /// per-silo working set bounded.
-    /// </summary>
-    public const int DefaultAtomicBatchBufferMaxTransactions = 512;
-
-    /// <summary>
-    /// Default value for <see cref="AtomicBatchBufferMaxBytes"/>:
-    /// 64 MB of cumulative buffered-entry payload per tree. Sized
-    /// so the buffer's worst-case memory footprint is well below
-    /// typical silo heap limits while remaining large enough to
-    /// admit batches with KB-sized payloads at the
-    /// <see cref="DefaultAtomicBatchBufferMaxTransactions"/> default.
-    /// </summary>
-    public const long DefaultAtomicBatchBufferMaxBytes = 64L * 1024L * 1024L;
-
-    /// <summary>
-    /// Default value for <see cref="TxBufferOrphanTimeout"/>: 5
-    /// minutes. Sized so a routine slow-network re-delivery has time
-    /// to land its missing sibling without triggering an orphan
-    /// sweep, while still bounding the producer-side WAL GC pin and
-    /// the receiver-side buffer occupancy in the genuine orphan case
-    /// (producer crash mid-saga, lost-in-transit sibling).
-    /// </summary>
-    public static readonly TimeSpan DefaultTxBufferOrphanTimeout = TimeSpan.FromMinutes(5);
-
-    /// <summary>
-    /// Default value for <see cref="SnapshotSagaQuiesceTimeout"/>:
-    /// 30 seconds. Generous enough for a typical
-    /// <c>SetManyAtomicAsync</c> saga to complete every per-key
-    /// emit even under transient producer-side latency; tight
-    /// enough to keep <see cref="ISnapshotProvider.ExportAsync"/>
-    /// from blocking the bootstrap state machine for an
-    /// observably-long interval.
-    /// </summary>
-    public static readonly TimeSpan DefaultSnapshotSagaQuiesceTimeout = TimeSpan.FromSeconds(30);
 }

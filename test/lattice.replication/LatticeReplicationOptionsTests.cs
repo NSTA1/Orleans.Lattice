@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Replication.Tests;
@@ -41,10 +42,10 @@ public class LatticeReplicationOptionsTests
     public void Properties_are_settable()
     {
         Func<string, bool> filter = k => k.Length > 0;
-        var trees = new Dictionary<string, ReplicationMode>
+        var trees = new Dictionary<string, LatticeMergeMode>
         {
-            ["t1"] = ReplicationMode.LwwRegister,
-            ["t2"] = ReplicationMode.LwwRegister,
+            ["t1"] = LatticeMergeMode.LwwRegister,
+            ["t2"] = LatticeMergeMode.LwwRegister,
         };
         var opts = new LatticeReplicationOptions
         {
@@ -435,80 +436,5 @@ public class LatticeReplicationOptionsTests
     {
         var opts = new LatticeReplicationOptions { ShadowForwardDedupeCacheSize = 256 };
         Assert.That(opts.ShadowForwardDedupeCacheSize, Is.EqualTo(256));
-    }
-
-    [Test]
-    public void DefaultAtomicBatchDelivery_is_false() =>
-        Assert.That(LatticeReplicationOptions.DefaultAtomicBatchDelivery, Is.False);
-
-    [Test]
-    public void New_instance_has_default_atomic_batch_delivery()
-    {
-        var opts = new LatticeReplicationOptions();
-        Assert.That(opts.AtomicBatchDelivery, Is.EqualTo(LatticeReplicationOptions.DefaultAtomicBatchDelivery));
-    }
-
-    [Test]
-    public void AtomicBatchDelivery_is_settable()
-    {
-        var opts = new LatticeReplicationOptions { AtomicBatchDelivery = true };
-        Assert.That(opts.AtomicBatchDelivery, Is.True);
-    }
-
-    [Test]
-    public void DefaultAtomicBatchBufferMaxTransactions_is_512() =>
-        Assert.That(LatticeReplicationOptions.DefaultAtomicBatchBufferMaxTransactions, Is.EqualTo(512));
-
-    [Test]
-    public void New_instance_has_default_atomic_batch_buffer_max_transactions()
-    {
-        var opts = new LatticeReplicationOptions();
-        Assert.That(opts.AtomicBatchBufferMaxTransactions,
-            Is.EqualTo(LatticeReplicationOptions.DefaultAtomicBatchBufferMaxTransactions));
-    }
-
-    [Test]
-    public void AtomicBatchBufferMaxTransactions_is_settable()
-    {
-        var opts = new LatticeReplicationOptions { AtomicBatchBufferMaxTransactions = 1024 };
-        Assert.That(opts.AtomicBatchBufferMaxTransactions, Is.EqualTo(1024));
-    }
-
-    [Test]
-    public void DefaultAtomicBatchBufferMaxBytes_is_64MB() =>
-        Assert.That(LatticeReplicationOptions.DefaultAtomicBatchBufferMaxBytes, Is.EqualTo(64L * 1024L * 1024L));
-
-    [Test]
-    public void New_instance_has_default_atomic_batch_buffer_max_bytes()
-    {
-        var opts = new LatticeReplicationOptions();
-        Assert.That(opts.AtomicBatchBufferMaxBytes,
-            Is.EqualTo(LatticeReplicationOptions.DefaultAtomicBatchBufferMaxBytes));
-    }
-
-    [Test]
-    public void AtomicBatchBufferMaxBytes_is_settable()
-    {
-        var opts = new LatticeReplicationOptions { AtomicBatchBufferMaxBytes = 32L * 1024L * 1024L };
-        Assert.That(opts.AtomicBatchBufferMaxBytes, Is.EqualTo(32L * 1024L * 1024L));
-    }
-
-    [Test]
-    public void DefaultTxBufferOrphanTimeout_is_five_minutes() =>
-        Assert.That(LatticeReplicationOptions.DefaultTxBufferOrphanTimeout, Is.EqualTo(TimeSpan.FromMinutes(5)));
-
-    [Test]
-    public void New_instance_has_default_tx_buffer_orphan_timeout()
-    {
-        var opts = new LatticeReplicationOptions();
-        Assert.That(opts.TxBufferOrphanTimeout,
-            Is.EqualTo(LatticeReplicationOptions.DefaultTxBufferOrphanTimeout));
-    }
-
-    [Test]
-    public void TxBufferOrphanTimeout_is_settable()
-    {
-        var opts = new LatticeReplicationOptions { TxBufferOrphanTimeout = TimeSpan.FromMinutes(30) };
-        Assert.That(opts.TxBufferOrphanTimeout, Is.EqualTo(TimeSpan.FromMinutes(30)));
     }
 }

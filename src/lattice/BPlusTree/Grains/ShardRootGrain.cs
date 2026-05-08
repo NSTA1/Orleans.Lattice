@@ -595,6 +595,7 @@ internal sealed partial class ShardRootGrain(
         var deterministicId = DeterministicGuid(shardKey);
         var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
         await leafGrain.SetTreeIdAsync(TreeId);
+        await leafGrain.SetShardIndexAsync(MyShardIndex);
         state.State.RootNodeId = leafGrain.GetGrainId();
         state.State.RootIsLeaf = true;
         await state.WriteStateAsync();

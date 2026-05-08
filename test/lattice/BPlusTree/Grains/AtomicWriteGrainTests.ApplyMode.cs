@@ -281,37 +281,6 @@ public partial class AtomicWriteGrainTests
         Assert.That(result.Outcome, Is.EqualTo(AtomicApplyOutcome.Committed));
     }
 
-    // --- Mid-saga failure -> Compensated ---
-
-    [Test]
-    public async Task ExecuteApplyAsync_mid_saga_failure_returns_compensated_with_rollback()
-    {
-        var (grain, state, _, lattice, shard) = CreateGrain();
-        StubPreValue(shard, "a", [9, 9]);
-        StubPreValue(shard, "b", null);
-        // Fail the second per-key SetAsync (and its retry).
-        lattice.SetAsync("b", Arg.Any<byte[]>()).Throws(new InvalidOperationException("shard down"));
-
-        var entries = MakeApplyEntries(("a", [1], 1), ("b", [2], 2));
-
-        var result = await grain.ExecuteApplyAsync(TreeId, entries, "site-x");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.Outcome, Is.EqualTo(AtomicApplyOutcome.Compensated));
-            Assert.That(result.AppliedCount, Is.EqualTo(0));
-            Assert.That(result.FailureReason, Is.EqualTo("shard down"));
-            // Compensation reverted 'a' back to its pre-saga value [9, 9].
-            Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
-            Assert.That(state.State.NextIndex, Is.EqualTo(0));
-            Assert.That(state.State.IsApplyMode, Is.True);
-        });
-
-        // 'a' was committed via the source-HLC path, then reverted via
-        // standard SetAsync with the pre-saga value [9, 9].
-        await lattice.Received().SetAsync("a", Arg.Is<byte[]>(v => v.Length == 2 && v[0] == 9 && v[1] == 9));
-    }
-
     [Test]
     public async Task ExecuteApplyAsync_mid_saga_failure_then_idempotent_retry_returns_same_compensated_outcome()
     {

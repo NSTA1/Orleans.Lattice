@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 
@@ -12,19 +13,19 @@ public class RecentApplyCacheTests
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
         new() { WallClockTicks = ticks, Counter = counter };
 
-    private static ReplogEntry Entry(
+    private static WalRecord Entry(
         string key,
         HybridLogicalClock ts,
         string origin = Origin,
-        ReplogOp op = ReplogOp.Set) => new()
+        MutationKind op = MutationKind.Set) => new()
     {
         TreeId = Tree,
         Op = op,
         Key = key,
         Timestamp = ts,
         OriginClusterId = origin,
-        Value = op == ReplogOp.Set ? new byte[] { 1 } : null,
-        IsTombstone = op != ReplogOp.Set,
+        Value = op == MutationKind.Set ? new byte[] { 1 } : null,
+        IsTombstone = op != MutationKind.Set,
     };
 
     [Test]
@@ -104,8 +105,8 @@ public class RecentApplyCacheTests
         var cache = new RecentApplyCache(8);
         var ts = Hlc(1);
 
-        Assert.That(cache.TryAdd(Entry("k", ts, op: ReplogOp.Set)), Is.True);
-        Assert.That(cache.TryAdd(Entry("k", ts, op: ReplogOp.Delete)), Is.True);
+        Assert.That(cache.TryAdd(Entry("k", ts, op: MutationKind.Set)), Is.True);
+        Assert.That(cache.TryAdd(Entry("k", ts, op: MutationKind.Delete)), Is.True);
         Assert.That(cache.Count, Is.EqualTo(2));
     }
 
@@ -336,7 +337,7 @@ public class RecentApplyCacheTests
         var sibling1 = Entry("k", ts, origin: "site-c");
         var sibling2 = Entry("k", Hlc(2), origin: "site-b");
         var sibling3 = Entry("other", ts, origin: "site-b");
-        var sibling4 = Entry("k", ts, origin: "site-b", op: ReplogOp.Delete);
+        var sibling4 = Entry("k", ts, origin: "site-b", op: MutationKind.Delete);
         cache.TryAdd(target);
         cache.TryAdd(sibling1);
         cache.TryAdd(sibling2);

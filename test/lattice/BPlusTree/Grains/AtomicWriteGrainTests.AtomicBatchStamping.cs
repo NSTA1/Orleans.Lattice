@@ -149,47 +149,6 @@ public partial class AtomicWriteGrainTests
     }
 
     [Test]
-    public async Task CompensatePhase_observes_persisted_batch_size_with_per_key_index()
-    {
-        // Compensation rolls inherit the original prepare's index for
-        // each key — the LatticeAtomicBatchContext.With scope inside
-        // CompensatePhaseAsync stamps (Size, index = NextIndex-1) so
-        // the rolled-back per-key emit's LatticeMutation carries the
-        // identical AtomicBatchSize and the matching original
-        // AtomicBatchIndex.
-        var state = new FakePersistentState<AtomicWriteState>();
-        state.State.Phase = AtomicWritePhase.Compensate;
-        state.State.TreeId = TreeId;
-        state.State.Entries = MakeEntries(("a", [1]), ("b", [2]));
-        state.State.PreValues = new List<AtomicPreValue>
-        {
-            new() { Key = "a", Value = [9], Existed = true },
-            new() { Key = "b", Value = [9], Existed = true },
-        };
-        // NextIndex=2 => two committed writes to roll back: indices 1
-        // then 0 (compensation walks downward).
-        state.State.NextIndex = 2;
-        state.State.AtomicBatchSize = 2;
-        state.State.FailureMessage = "boom";
-
-        var (grain, _, _, lattice, _) = CreateGrain(state);
-        var observed = new List<(int Size, int Index)?>();
-        lattice.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>())
-            .Returns(_ =>
-            {
-                observed.Add(LatticeAtomicBatchContext.Current);
-                return Task.CompletedTask;
-            });
-
-        await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
-
-        Assert.That(observed, Has.Count.EqualTo(2));
-        // Compensation walks 1 -> 0 (downward).
-        Assert.That(observed[0], Is.EqualTo(((int Size, int Index)?)(2, 1)));
-        Assert.That(observed[1], Is.EqualTo(((int Size, int Index)?)(2, 0)));
-    }
-
-    [Test]
     public async Task ExecuteApplyAsync_captures_batch_size_from_apply_entries_count()
     {
         // Apply-mode parity with the local-saga capture: PrepareAsync

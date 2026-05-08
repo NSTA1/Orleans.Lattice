@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -67,16 +68,16 @@ public class LatticeReplicationGrpcServiceTests
         protected override Task WriteResponseHeadersAsyncCore(global::Grpc.Core.Metadata responseHeaders) => Task.CompletedTask;
     }
 
-    private static ReplogEntry MakeSet(string key, HybridLogicalClock hlc, string origin = "remote")
+    private static WalRecord MakeSet(string key, HybridLogicalClock hlc, string origin = "remote")
         => new()
         {
             TreeId = "tree",
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = key,
             Value = new byte[] { 1 },
             Timestamp = hlc,
             OriginClusterId = origin,
-            Mode = ReplicationMode.LwwRegister,
+            Mode = LatticeMergeMode.LwwRegister,
         };
 
     [Test]
@@ -130,7 +131,7 @@ public class LatticeReplicationGrpcServiceTests
             {
                 TreeName = string.Empty,
                 OriginClusterId = "x",
-                Entries = Array.Empty<ReplogEntry>(),
+                Entries = Array.Empty<WalRecord>(),
             },
         };
 
@@ -149,7 +150,7 @@ public class LatticeReplicationGrpcServiceTests
             {
                 TreeName = "tree",
                 OriginClusterId = string.Empty,
-                Entries = Array.Empty<ReplogEntry>(),
+                Entries = Array.Empty<WalRecord>(),
             },
         };
 
@@ -169,7 +170,7 @@ public class LatticeReplicationGrpcServiceTests
             {
                 TreeName = "tree",
                 OriginClusterId = "remote",
-                Entries = Array.Empty<ReplogEntry>(),
+                Entries = Array.Empty<WalRecord>(),
             },
         };
 
@@ -196,7 +197,7 @@ public class LatticeReplicationGrpcServiceTests
         // default-interface-method body, so we set ApplyBatchAsync up
         // explicitly with the aggregate result the optimised batch path
         // would have computed (max HWM across the three entries).
-        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = hlcHigh }));
 
         var svc = CreateService(applier, out _);
@@ -223,7 +224,7 @@ public class LatticeReplicationGrpcServiceTests
             Assert.That(ack.Value.HighestAppliedHlc, Is.EqualTo(hlcHigh));
         });
         await applier.Received(1).ApplyBatchAsync(
-            Arg.Is<IReadOnlyList<ReplogEntry>>(list => list.Count == 3),
+            Arg.Is<IReadOnlyList<WalRecord>>(list => list.Count == 3),
             Arg.Any<CancellationToken>());
     }
 
@@ -231,7 +232,7 @@ public class LatticeReplicationGrpcServiceTests
     public void Push_throws_rpc_exception_on_apply_failure()
     {
         var applier = Substitute.For<IReplicationApplier>();
-        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException<ApplyResult>(new InvalidOperationException("bang")));
 
         var svc = CreateService(applier, out _);
@@ -257,7 +258,7 @@ public class LatticeReplicationGrpcServiceTests
         // Honour the inbound cancellation token from the batch path so the
         // service's `catch (OperationCanceledException) when (...)` filter
         // re-throws the OCE instead of wrapping it as an RpcException.
-        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
                 callInfo.Arg<CancellationToken>().ThrowIfCancellationRequested();
@@ -351,7 +352,7 @@ public class LatticeReplicationGrpcServiceTests
     public async Task Push_stamps_receiver_side_blocked_floor_on_ack_from_registry()
     {
         var applier = Substitute.For<IReplicationApplier>();
-        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
 
         var registry = new InMemoryReplicationCursorRegistry();
@@ -393,7 +394,7 @@ public class LatticeReplicationGrpcServiceTests
     public async Task Push_omits_blocked_floor_on_ack_when_no_pin_registered()
     {
         var applier = Substitute.For<IReplicationApplier>();
-        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
 
         var registry = new InMemoryReplicationCursorRegistry();
@@ -406,7 +407,7 @@ public class LatticeReplicationGrpcServiceTests
             {
                 TreeName = "tree",
                 OriginClusterId = "remote",
-                Entries = Array.Empty<ReplogEntry>(),
+                Entries = Array.Empty<WalRecord>(),
             },
         };
 
@@ -426,7 +427,7 @@ public class LatticeReplicationGrpcServiceTests
     public async Task Push_blocked_floor_is_isolated_per_tree()
     {
         var applier = Substitute.For<IReplicationApplier>();
-        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
 
         var registry = new InMemoryReplicationCursorRegistry();
@@ -440,7 +441,7 @@ public class LatticeReplicationGrpcServiceTests
             {
                 TreeName = "tree-B",
                 OriginClusterId = "remote",
-                Entries = Array.Empty<ReplogEntry>(),
+                Entries = Array.Empty<WalRecord>(),
             },
         };
 

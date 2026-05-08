@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Primitives;
@@ -26,23 +27,23 @@ public class ChangeFeedTests
         return monitor;
     }
 
-    private static ReplogEntry Entry(string key, HybridLogicalClock ts, string origin = LocalCluster) => new()
+    private static WalRecord Entry(string key, HybridLogicalClock ts, string origin = LocalCluster) => new()
     {
         TreeId = Tree,
-        Op = ReplogOp.Set,
+        Op = MutationKind.Set,
         Key = key,
         Value = new byte[] { 1 },
         Timestamp = ts,
         OriginClusterId = origin,
     };
 
-    private static IReplogShardGrain Grain(params ReplogEntry[] entries)
+    private static IWalShardGrain Grain(params WalRecord[] entries)
     {
-        var grain = Substitute.For<IReplogShardGrain>();
-        var sequenced = new ReplogShardEntry[entries.Length];
+        var grain = Substitute.For<IWalShardGrain>();
+        var sequenced = new WalShardSequencedEntry[entries.Length];
         for (var i = 0; i < entries.Length; i++)
         {
-            sequenced[i] = new ReplogShardEntry { Sequence = i, Entry = entries[i] };
+            sequenced[i] = new WalShardSequencedEntry { Sequence = i, Entry = entries[i] };
         }
 
         grain.ReadAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
@@ -52,14 +53,14 @@ public class ChangeFeedTests
                 var max = (int)call[1];
                 if (from >= sequenced.Length)
                 {
-                    return Task.FromResult(ReplogShardPage.Empty(from));
+                    return Task.FromResult(WalShardPage.Empty(from));
                 }
 
                 var available = sequenced.Length - (int)from;
                 var take = Math.Min(max, available);
-                var page = new ReplogShardEntry[take];
+                var page = new WalShardSequencedEntry[take];
                 Array.Copy(sequenced, (int)from, page, 0, take);
-                return Task.FromResult(new ReplogShardPage
+                return Task.FromResult(new WalShardPage
                 {
                     Entries = page,
                     NextSequence = from + take,
@@ -75,9 +76,9 @@ public class ChangeFeedTests
         return (feed, factory);
     }
 
-    private static async Task<List<ReplogEntry>> CollectAsync(IAsyncEnumerable<ReplogEntry> source)
+    private static async Task<List<WalRecord>> CollectAsync(IAsyncEnumerable<WalRecord> source)
     {
-        var result = new List<ReplogEntry>();
+        var result = new List<WalRecord>();
         await foreach (var entry in source)
         {
             result.Add(entry);
@@ -103,7 +104,7 @@ public class ChangeFeedTests
     {
         var (feed, factory) = CreateFeed(partitions: 1);
         var empty = Grain();
-        factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(empty);
+        factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(empty);
 
         var entries = await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero));
 
@@ -118,7 +119,7 @@ public class ChangeFeedTests
             Entry("a", Hlc(1)),
             Entry("b", Hlc(5)),
             Entry("c", Hlc(10)));
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/0").Returns(grain);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
         var entries = await CollectAsync(feed.Subscribe(Tree, Hlc(5)));
 
@@ -130,7 +131,7 @@ public class ChangeFeedTests
     {
         var (feed, factory) = CreateFeed(partitions: 1);
         var grain = Grain(Entry("a", Hlc(1)), Entry("b", Hlc(2)));
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/0").Returns(grain);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
         var entries = await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero));
 
@@ -143,8 +144,8 @@ public class ChangeFeedTests
         var (feed, factory) = CreateFeed(partitions: 2);
         var p0 = Grain(Entry("p0a", Hlc(1)), Entry("p0b", Hlc(4)));
         var p1 = Grain(Entry("p1a", Hlc(2)), Entry("p1b", Hlc(3)));
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/0").Returns(p0);
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/1").Returns(p1);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(p0);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/1").Returns(p1);
 
         var entries = await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero));
 
@@ -156,13 +157,13 @@ public class ChangeFeedTests
     {
         var (feed, factory) = CreateFeed(partitions: 4);
         var empty = Grain();
-        factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(empty);
+        factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(empty);
 
         await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero));
 
         for (var p = 0; p < 4; p++)
         {
-            factory.Received(1).GetGrain<IReplogShardGrain>($"{Tree}/{p}");
+            factory.Received(1).GetGrain<IWalShardGrain>($"{Tree}/{p}");
         }
     }
 
@@ -173,7 +174,7 @@ public class ChangeFeedTests
         var grain = Grain(
             Entry("local", Hlc(1), origin: LocalCluster),
             Entry("remote", Hlc(2), origin: RemoteCluster));
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/0").Returns(grain);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
         var entries = await CollectAsync(
             feed.Subscribe(Tree, HybridLogicalClock.Zero, includeLocalOrigin: false));
@@ -188,7 +189,7 @@ public class ChangeFeedTests
         var grain = Grain(
             Entry("local", Hlc(1), origin: LocalCluster),
             Entry("remote", Hlc(2), origin: RemoteCluster));
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/0").Returns(grain);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
         var entries = await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero));
 
@@ -202,7 +203,7 @@ public class ChangeFeedTests
         var grain = Grain(
             Entry("a", Hlc(1), origin: RemoteCluster),
             Entry("b", Hlc(2), origin: "site-c"));
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/0").Returns(grain);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
         var entries = await CollectAsync(
             feed.Subscribe(Tree, HybridLogicalClock.Zero, includeLocalOrigin: false));
@@ -215,7 +216,7 @@ public class ChangeFeedTests
     {
         var (feed, factory) = CreateFeed(partitions: 1);
         var grain = Grain(Entry("nullorigin", Hlc(1)) with { OriginClusterId = null });
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/0").Returns(grain);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
         var entries = await CollectAsync(
             feed.Subscribe(Tree, HybridLogicalClock.Zero, includeLocalOrigin: false));
@@ -227,7 +228,7 @@ public class ChangeFeedTests
     public async Task Subscribe_pages_through_more_entries_than_page_size()
     {
         const int total = 600; // greater than the internal PageSize of 256.
-        var entries = new ReplogEntry[total];
+        var entries = new WalRecord[total];
         for (var i = 0; i < total; i++)
         {
             entries[i] = Entry($"k{i:D4}", Hlc(i + 1));
@@ -235,7 +236,7 @@ public class ChangeFeedTests
 
         var (feed, factory) = CreateFeed(partitions: 1);
         var grain = Grain(entries);
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/0").Returns(grain);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
         var result = await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero));
 
@@ -249,7 +250,7 @@ public class ChangeFeedTests
     {
         var (feed, factory) = CreateFeed(partitions: 1);
         var grain = Grain(Entry("a", Hlc(1)));
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/0").Returns(grain);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -263,12 +264,12 @@ public class ChangeFeedTests
     {
         var (feed, factory) = CreateFeed(partitions: 1);
         var empty = Grain();
-        factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(empty);
+        factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(empty);
 
         await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero));
 
-        factory.Received(1).GetGrain<IReplogShardGrain>($"{Tree}/0");
-        factory.DidNotReceive().GetGrain<IReplogShardGrain>($"{Tree}/1");
+        factory.Received(1).GetGrain<IWalShardGrain>($"{Tree}/0");
+        factory.DidNotReceive().GetGrain<IWalShardGrain>($"{Tree}/1");
     }
 
     [Test]
@@ -282,7 +283,7 @@ public class ChangeFeedTests
         });
         var factory = Substitute.For<IGrainFactory>();
         var empty = Grain();
-        factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(empty);
+        factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(empty);
         var feed = new ChangeFeed(factory, monitor);
 
         await CollectAsync(feed.Subscribe("alpha", HybridLogicalClock.Zero));

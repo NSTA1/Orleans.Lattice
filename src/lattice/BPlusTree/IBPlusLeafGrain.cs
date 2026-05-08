@@ -139,6 +139,56 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<string?> GetTreeIdAsync();
 
     /// <summary>
+    /// Persists the logical chain-shard index this leaf belongs to —
+    /// the <c>shardIndex</c> half of the owning
+    /// <c>ShardRootGrain</c>'s <c>{treeId}/{shardIndex}</c> grain key.
+    /// Called once by the shard root after creating the grain (next to
+    /// <see cref="SetTreeIdAsync"/>). Idempotent: subsequent calls are
+    /// no-ops once the slot has been seeded. The persisted value is
+    /// stamped onto every <see cref="LatticeMutation"/> the leaf
+    /// commits to the WAL and consulted at activation time to filter
+    /// out records authored by sibling chain shards sharing a WAL
+    /// partition.
+    /// </summary>
+    Task SetShardIndexAsync(int shardIndex);
+
+    /// <summary>
+    /// Persists the [<paramref name="lowKeyInclusive"/>,
+    /// <paramref name="highKeyExclusive"/>) ownership range for this
+    /// leaf. Called exactly once at sibling-birth time by
+    /// <c>CompleteSplitAsync</c> on the donor leaf — the donor stamps
+    /// the split key as the sibling's low and the donor's pre-split
+    /// high as the sibling's high. Idempotent: subsequent calls are
+    /// no-ops once <see cref="State.LeafNodeState.LowKeyInclusive"/>
+    /// has been seeded. The persisted bounds are consulted at
+    /// activation time by the WAL materialiser to filter out records
+    /// whose key falls outside this leaf's range (intra-shard
+    /// sibling-leaf fanout regression). A <see langword="null"/>
+    /// bound means "no constraint on that side" — used both for the
+    /// chain's leftmost leaf (low = null) and the chain's rightmost
+    /// leaf (high = null), and for legacy state shapes that
+    /// pre-date this slot.
+    /// </summary>
+    Task SetKeyRangeAsync(string? lowKeyInclusive, string? highKeyExclusive);
+
+    /// <summary>
+    /// Stamps an initial projection-checkpoint offset on a freshly
+    /// created leaf so its first activation can skip replaying WAL
+    /// entries that were already materialised into its
+    /// <see cref="State.LeafNodeState.Entries"/> at birth. Called by
+    /// <c>CompleteSplitAsync</c> on the donor leaf with the shard's
+    /// WAL head offset captured at split time, after the donor has
+    /// populated the sibling's entries via
+    /// <see cref="MergeEntriesAsync"/>. Routes through
+    /// <c>ILeafProjection.SetCheckpointOffsetAsync</c> so the
+    /// existing unresolved-prepare clamp is honoured; for a sibling
+    /// at birth there are no unresolved prepares so the clamp is a
+    /// no-op. Idempotent: a re-call with a smaller offset is a
+    /// no-op (the underlying seam enforces monotonic non-decrease).
+    /// </summary>
+    Task SetCheckpointOffsetHintAsync(long offset);
+
+    /// <summary>
     /// Returns a <see cref="StateDelta"/> containing all entries whose timestamp is
     /// newer than what <paramref name="sinceVersion"/> has seen.
     /// Returns an empty delta if the caller is already up to date.
@@ -234,4 +284,24 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// rebuild source of truth.
     /// </summary>
     Task<LeafProjectionDigest> GetProjectionDigestAsync();
+
+    /// <summary>
+    /// Applies the saga terminal mark for <paramref name="transactionId"/>
+    /// against this leaf's pending-transaction map. When
+    /// <paramref name="committed"/> is <c>true</c> every prepared mutation
+    /// recorded under the transaction is flipped into the visible
+    /// projection via LWW merge; when <c>false</c> every prepared mutation
+    /// is dropped. Idempotent — replaying the same terminal mark for a
+    /// leaf that holds no pending bucket under <paramref name="transactionId"/>
+    /// is a no-op (the dedup guarantee survives until activation
+    /// recycling, after which the WAL replay reseeds it).
+    /// <para>
+    /// Called by the saga coordinator's terminal-broadcast loop via
+    /// <see cref="IShardRootGrain.AppendTxTerminalAsync"/>; not intended
+    /// for direct user invocation.
+    /// </para>
+    /// </summary>
+    /// <param name="transactionId">The saga's transaction id stamped on every prepared mutation. Must not be <see cref="Guid.Empty"/>; the call is a no-op for that value.</param>
+    /// <param name="committed"><c>true</c> to flip pending mutations into the visible projection; <c>false</c> to drop them.</param>
+    Task ApplyTxTerminalAsync(Guid transactionId, bool committed);
 }

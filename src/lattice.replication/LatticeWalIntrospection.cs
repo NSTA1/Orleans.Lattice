@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
@@ -6,7 +7,7 @@ namespace Orleans.Lattice.Replication;
 
 /// <summary>
 /// Default <see cref="ILatticeWalIntrospection"/> implementation.
-/// Walks each <see cref="IReplogShardGrain"/> activation backing the
+/// Walks each <see cref="IWalShardGrain"/> activation backing the
 /// named tree, fetches the head entry of every shard, and returns
 /// the minimum timestamp across the heads.
 /// </summary>
@@ -37,10 +38,10 @@ internal sealed class LatticeWalIntrospection(
         // Fan out one ReadAsync(0, 1) per partition in parallel — for hosts
         // configured with a high partition count this turns N sequential
         // grain round-trips into a single concurrent batch.
-        var pageTasks = new Task<ReplogShardPage>[partitions];
+        var pageTasks = new Task<WalShardPage>[partitions];
         for (var partition = 0; partition < partitions; partition++)
         {
-            var grain = _grainFactory.GetGrain<IReplogShardGrain>($"{treeName}/{partition}");
+            var grain = _grainFactory.GetGrain<IWalShardGrain>($"{treeName}/{partition}");
             // ReadAsync(0, 1) returns the head entry of the shard
             // post-trim: GC trims a contiguous prefix and the next read
             // from sequence 0 yields the oldest entry that survived.

@@ -1,6 +1,6 @@
 # Replication apply seam (`IReplicationApplier`)
 
-`IReplicationApplier` is the public, in-process inbound seam over the per-tree apply pipeline. It installs a single `ReplogEntry` authored on a remote cluster onto the local tree while preserving the remote cluster's `HybridLogicalClock` and origin id end-to-end, and it filters re-delivery via a per-origin high-water-mark so at-least-once transports become at-most-once apply.
+`IReplicationApplier` is the public, in-process inbound seam over the per-tree apply pipeline. It installs a single `WalRecord` authored on a remote cluster onto the local tree while preserving the remote cluster's `HybridLogicalClock` and origin id end-to-end, and it filters re-delivery via a per-origin high-water-mark so at-least-once transports become at-most-once apply.
 
 The contract is deliberately neutral: there is no transport binding, no per-peer state, no ack envelope. It is the seam custom transports, integration tests, and the future inbound replication pipeline plug into.
 
@@ -12,11 +12,11 @@ The interface and result type live in `Orleans.Lattice.Replication`:
 public interface IReplicationApplier
 {
     Task<ApplyResult> ApplyAsync(
-        ReplogEntry entry,
+        WalRecord entry,
         CancellationToken cancellationToken = default);
 
     Task<ApplyResult> ApplyBatchAsync(
-        IReadOnlyList<ReplogEntry> entries,
+        IReadOnlyList<WalRecord> entries,
         CancellationToken cancellationToken = default);
 }
 
@@ -52,7 +52,7 @@ Range deletes bypass the HWM by design. Range applies are naturally idempotent a
 
 ### 3. Local-origin defence-in-depth
 
-A `ReplogEntry` whose `OriginClusterId` matches the local cluster id is rejected as a no-op (`Applied = false`). The outbound ship loop's origin filter already prevents this in steady state, but hand-built apply pipelines and tests can still hand the applier such an entry — surfacing it as an explicit rejection rather than silently merging it into the same cluster's state is the safer default.
+A `WalRecord` whose `OriginClusterId` matches the local cluster id is rejected as a no-op (`Applied = false`). The outbound ship loop's origin filter already prevents this in steady state, but hand-built apply pipelines and tests can still hand the applier such an entry — surfacing it as an explicit rejection rather than silently merging it into the same cluster's state is the safer default.
 
 ### 4. Shadow-forward dedupe cache
 
@@ -103,7 +103,7 @@ The per-origin high-water-mark is the explicit handoff contract for the bootstra
 
 ## Batch apply path
 
-Inbound transports deliver batches of `ReplogEntry` records, not single entries: a 256-entry gRPC push from a single producer is one network round-trip carrying 256 mutations. `ApplyBatchAsync` is the seam that lets the receiver process such a batch as one logical operation rather than 256 independent `ApplyAsync` calls — it collapses the per-entry per-origin HWM grain RPCs to one `GetAsync` + one `TryAdvanceAsync` per distinct origin per batch and drains the causal-apply buffer once at the end of the batch instead of after every successful apply.
+Inbound transports deliver batches of `WalRecord` records, not single entries: a 256-entry gRPC push from a single producer is one network round-trip carrying 256 mutations. `ApplyBatchAsync` is the seam that lets the receiver process such a batch as one logical operation rather than 256 independent `ApplyAsync` calls — it collapses the per-entry per-origin HWM grain RPCs to one `GetAsync` + one `TryAdvanceAsync` per distinct origin per batch and drains the causal-apply buffer once at the end of the batch instead of after every successful apply.
 
 The default-interface-method body provides backward-compatible semantics: it loops over `ApplyAsync` and aggregates the per-entry results, so any custom `IReplicationApplier` written before the batch seam existed continues to work without changes. The shipped `ReplicationApplier` overrides the batch path with the optimised implementation described below.
 
@@ -136,7 +136,7 @@ Per-entry failures inside the batch surface as `ApplyAsync`-equivalent exception
 
 ## Atomic batch apply
 
-When the receiver opts in via `LatticeReplicationOptions.AtomicBatchDelivery = true` and an inbound `ReplogEntry` carries a non-zero `AtomicBatchSize` (it is part of an enclosing source-side `SetManyAtomicAsync` transaction), the apply pipeline takes a different path: each entry is admitted to a per-tree staging buffer rather than applied directly. While the batch is incomplete the apply call returns `Applied = false` with the per-origin high-water-mark unchanged so the producer continues to re-ship until every sibling lands; the buffer dedupes wire-shape re-deliveries by `(origin, transactionId, index)`. When the admission completes the enclosing batch, the applier dispatches the whole batch atomically through the source-HLC-preserving `IReplicationApplyGrain.ApplyManyAtomicAsync` seam: every key commits or rolls back together, the per-origin HWM advances exactly once to the maximum HLC across the batch, and a failed saga (a `Compensated` outcome or a thrown non-cancellation exception) routes every entry to the per-tree dead-letter queue tagged `LatticeReplicationMetrics.ReasonAtomicApplyFailure` with the HWM left unchanged so the producer continues to re-ship until the DLQ is recovered.
+When the receiver opts in via `LatticeReplicationOptions.AtomicBatchDelivery = true` and an inbound `WalRecord` carries a non-zero `AtomicBatchSize` (it is part of an enclosing source-side `SetManyAtomicAsync` transaction), the apply pipeline takes a different path: each entry is admitted to a per-tree staging buffer rather than applied directly. While the batch is incomplete the apply call returns `Applied = false` with the per-origin high-water-mark unchanged so the producer continues to re-ship until every sibling lands; the buffer dedupes wire-shape re-deliveries by `(origin, transactionId, index)`. When the admission completes the enclosing batch, the applier dispatches the whole batch atomically through the source-HLC-preserving `IReplicationApplyGrain.ApplyManyAtomicAsync` seam: every key commits or rolls back together, the per-origin HWM advances exactly once to the maximum HLC across the batch, and a failed saga (a `Compensated` outcome or a thrown non-cancellation exception) routes every entry to the per-tree dead-letter queue tagged `LatticeReplicationMetrics.ReasonAtomicApplyFailure` with the HWM left unchanged so the producer continues to re-ship until the DLQ is recovered.
 
 The atomic-batch gate sits **after** the per-origin HWM dedup gate (so a re-delivery of an already-applied batch is not redundantly buffered) and **before** the shadow-forward dedupe cache (the buffer's `(origin, txid, index)` dedup is a stronger contract than the cache's `(origin, hlc, key, op)` tuple).
 
@@ -144,7 +144,7 @@ The atomic-batch gate sits **after** the per-origin HWM dedup gate (so a re-deli
 
 The applier rejects three producer-contract violations as defence-in-depth so a malformed or hostile producer cannot silently corrupt the receiver's state:
 
-- **DeleteRange-in-atomic-batch.** A `ReplogEntry` whose `Op = DeleteRange` and `AtomicBatchSize > 0` is rejected with `ArgumentException` *before* the range fast-path runs. Atomic batches must contain only Set/Delete entries; range deletes are emitted by the producer's `DeleteRangeAsync` surface, not `SetManyAtomicAsync`. The check is independent of the receiver-side opt-in because the violation is producer-shaped (no consistent saga key, no single-HLC commit point), not receiver-shaped.
+- **DeleteRange-in-atomic-batch.** A `WalRecord` whose `Op = DeleteRange` and `AtomicBatchSize > 0` is rejected with `ArgumentException` *before* the range fast-path runs. Atomic batches must contain only Set/Delete entries; range deletes are emitted by the producer's `DeleteRangeAsync` surface, not `SetManyAtomicAsync`. The check is independent of the receiver-side opt-in because the violation is producer-shaped (no consistent saga key, no single-HLC commit point), not receiver-shaped.
 - **Empty `Guid.Empty` `TransactionId` with `AtomicBatchSize > 0`.** Rejected with `ArgumentException` at the gate. The producer must stamp a non-empty transaction id on every entry of an atomic batch so the receiver-side saga can be keyed deterministically.
 - **`Set` with null `Value` inside a completed batch.** The saga-mapping seam (`MapStagedToAtomicApplyEntry`) rejects with `ArgumentException` so a partial batch never reaches the atomic-apply grain.
 
@@ -157,7 +157,7 @@ Two assertions guard against future refactors silently breaking the saga's all-o
 
 ### Idempotent retry
 
-The atomic-apply seam is itself idempotent on `ReplogEntry.TransactionId` — the underlying `AtomicWriteGrain` activation is keyed `(treeId, transactionId)` and replays its persisted saga state on re-entry. A producer that re-ships the batch after a transient receiver failure (transport timeout, DLQ enqueue throw, HWM-advance throw) observes the same terminal outcome on the second attempt. This is the recovery contract the `RouteAtomicBatchToDlqAsync` and HWM-advance failure paths rely on: neither path is "exactly-once" with respect to side effects, but the saga's `(treeId, transactionId)` keying makes the *outcome* exactly-once.
+The atomic-apply seam is itself idempotent on `WalRecord.TransactionId` — the underlying `AtomicWriteGrain` activation is keyed `(treeId, transactionId)` and replays its persisted saga state on re-entry. A producer that re-ships the batch after a transient receiver failure (transport timeout, DLQ enqueue throw, HWM-advance throw) observes the same terminal outcome on the second attempt. This is the recovery contract the `RouteAtomicBatchToDlqAsync` and HWM-advance failure paths rely on: neither path is "exactly-once" with respect to side effects, but the saga's `(treeId, transactionId)` keying makes the *outcome* exactly-once.
 
 ### Operator caveats
 

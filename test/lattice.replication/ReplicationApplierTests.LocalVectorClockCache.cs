@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
@@ -11,7 +12,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// <see cref="ReplicationApplier"/>. After a successful inbound apply
 /// that advances the per-origin high-water-mark grain, the applier
 /// mirrors the advance into the producer cache so a subsequent local
-/// emit's <see cref="ReplogEntry.VectorClock"/> reflects the foreign
+/// emit's <see cref="WalRecord.VectorClock"/> reflects the foreign
 /// progress. Dedup, range-delete, and apply-throw paths must not
 /// advance the cache.
 /// </summary>
@@ -55,10 +56,10 @@ public class ReplicationApplierLocalVectorClockCacheTests
         return (applier, apply, hwm, cache);
     }
 
-    private static ReplogEntry SetEntry(string key, HybridLogicalClock ts, string origin = RemoteCluster) => new()
+    private static WalRecord SetEntry(string key, HybridLogicalClock ts, string origin = RemoteCluster) => new()
     {
         TreeId = Tree,
-        Op = ReplogOp.Set,
+        Op = MutationKind.Set,
         Key = key,
         Value = new byte[] { 1 },
         Timestamp = ts,
@@ -143,7 +144,7 @@ public class ReplicationApplierLocalVectorClockCacheTests
     public async Task ApplyBatchAsync_advances_cache_once_per_origin_run()
     {
         var (applier, _, _, cache) = CreateApplier();
-        var entries = new List<ReplogEntry>
+        var entries = new List<WalRecord>
         {
             SetEntry("k1", Hlc(10), origin: RemoteCluster),
             SetEntry("k2", Hlc(20), origin: RemoteCluster),
@@ -174,10 +175,10 @@ public class ReplicationApplierLocalVectorClockCacheTests
         // remain at HLC.Zero for the origin.
         var (applier, _, _, cache) = CreateApplier();
 
-        await applier.ApplyAsync(new ReplogEntry
+        await applier.ApplyAsync(new WalRecord
         {
             TreeId = Tree,
-            Op = ReplogOp.DeleteRange,
+            Op = MutationKind.DeleteRange,
             Key = "a",
             EndExclusiveKey = "b",
             Timestamp = HybridLogicalClock.Zero,

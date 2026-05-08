@@ -317,7 +317,6 @@ public class LatticeOptions
     /// When <c>true</c>, Lattice publishes <see cref="LatticeTreeEvent"/> notifications
     /// on an Orleans stream (namespace <see cref="LatticeEventConstants.StreamNamespace"/>,
     /// snapshots, resizes, reshards, and tree-lifecycle transitions. Consumers
-    /// publishes are logged-and-swallowed and subscribers never receive
     /// events.
     /// </summary>
     public bool PublishEvents { get; set; } = DefaultPublishEvents;
@@ -433,6 +432,48 @@ public class LatticeOptions
     /// older than <see cref="LeafProjectionRetention"/>).
     /// </summary>
     public ProjectionRebuildPolicy ProjectionRebuildPolicy { get; set; } = ProjectionRebuildPolicy.SnapshotThenWal;
+
+    /// <summary>
+    /// Number of WAL partitions per tree. Each partition is an independent
+    /// per-shard append-only log; the foreground commit-log writer hashes
+    /// the mutation key modulo this value to pick the partition. Defaults
+    /// to <see cref="DefaultWalPartitions"/> (1) — the dominant
+    /// single-cluster shape. Increase to fan out WAL throughput across
+    /// independent grains when a single partition becomes the bottleneck.
+    /// </summary>
+    public int WalPartitions { get; set; } = DefaultWalPartitions;
+
+    /// <summary>Default value for <see cref="WalPartitions"/> (1).</summary>
+    public const int DefaultWalPartitions = 1;
+
+    /// <summary>
+    /// Maximum number of entries the WAL grain will batch into a single
+    /// storage flush. Defaults to <see cref="DefaultWalMaxBatchEntries"/>
+    /// (100). Lower values reduce flush latency at the cost of throughput.
+    /// </summary>
+    public int WalMaxBatchEntries { get; set; } = DefaultWalMaxBatchEntries;
+
+    /// <summary>Default value for <see cref="WalMaxBatchEntries"/> (100).</summary>
+    public const int DefaultWalMaxBatchEntries = 100;
+
+    /// <summary>
+    /// Maximum byte budget the WAL grain will accumulate into a single
+    /// storage flush. Defaults to <see cref="DefaultWalMaxBatchBytes"/>
+    /// (4 MiB). Reached whichever-first with <see cref="WalMaxBatchEntries"/>.
+    /// </summary>
+    public long WalMaxBatchBytes { get; set; } = DefaultWalMaxBatchBytes;
+
+    /// <summary>Default value for <see cref="WalMaxBatchBytes"/> (4 MiB).</summary>
+    public const long DefaultWalMaxBatchBytes = 4L * 1024 * 1024;
+
+    /// <summary>
+    /// Optional per-tree <see cref="IWalStorageProvider"/> resolver. When
+    /// supplied, takes precedence over the DI-registered default for the
+    /// matching tree id. <c>null</c> falls back to the singleton default
+    /// (<see cref="InMemoryWalStorageProvider"/> unless replaced by the
+    /// host).
+    /// </summary>
+    public Func<string, IWalStorageProvider>? WalStorageProvider { get; set; }
 
     /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.

@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
@@ -9,5 +10,5 @@ namespace Orleans.Lattice.Replication;
 internal sealed class NoOpReplogSink : IReplogSink
 {
     /// <inheritdoc />
-    public Task WriteAsync(ReplogEntry entry, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task WriteAsync(WalRecord entry, CancellationToken cancellationToken) => Task.CompletedTask;
 }

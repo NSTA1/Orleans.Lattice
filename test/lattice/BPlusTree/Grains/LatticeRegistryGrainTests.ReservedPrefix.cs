@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <summary>
 /// Reserved tree-name prefix guards. Ensures user-supplied tree IDs
 /// beginning with <see cref="LatticeConstants.SystemTreePrefix"/> (which
-/// subsumes <see cref="LatticeConstants.ReplogTreePrefix"/>) are rejected at
+/// subsumes <see cref="LatticeConstants.WalTreePrefix"/>) are rejected at
 /// the registry so downstream internal trees (the registry itself, the
 /// replication WAL) have a collision-free namespace.
 /// </summary>
@@ -85,7 +85,7 @@ public partial class LatticeRegistryGrainTests
     public void ReplogTreePrefix_is_subsumed_by_SystemTreePrefix()
     {
         Assert.That(
-            LatticeConstants.ReplogTreePrefix.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal),
+            LatticeConstants.WalTreePrefix.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal),
             Is.True);
     }
 }

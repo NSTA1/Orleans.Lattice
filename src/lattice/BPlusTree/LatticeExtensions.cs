@@ -213,16 +213,34 @@ public static class LatticeExtensions
     /// <param name="prefetch">Optional per-call override for shard prefetch; see <see cref="LatticeOptions.PrefetchKeysScan"/>.</param>
     /// <param name="maxAttempts">Optional per-call override for the reconnect budget; defaults to <see cref="DefaultScanReconnectAttempts"/>.</param>
     /// <param name="cancellationToken">Cancellation token; honoured between reconnects and during backoff.</param>
-    public static async IAsyncEnumerable<string> ScanKeysAsync(
+    public static IAsyncEnumerable<string> ScanKeysAsync(
         this ILattice lattice,
         string? startInclusive = null,
         string? endExclusive = null,
         bool reverse = false,
         bool? prefetch = null,
         int? maxAttempts = null,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default)
     {
+        // Eager argument validation. The async-iterator core method below
+        // defers any `throw` until first `MoveNextAsync` due to compiler
+        // state-machine semantics, so the null-guard must live in this
+        // non-async wrapper to surface synchronously the moment a caller
+        // invokes `ScanKeysAsync(...)` (e.g. via `.GetAsyncEnumerator()`
+        // without iterating).
         ArgumentNullException.ThrowIfNull(lattice);
+        return ScanKeysAsyncCore(lattice, startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken);
+    }
+
+    private static async IAsyncEnumerable<string> ScanKeysAsyncCore(
+        ILattice lattice,
+        string? startInclusive,
+        string? endExclusive,
+        bool reverse,
+        bool? prefetch,
+        int? maxAttempts,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         var budget = maxAttempts ?? DefaultScanReconnectAttempts;
         if (budget < 0) budget = 0;
 
@@ -296,16 +314,30 @@ public static class LatticeExtensions
     /// <param name="prefetch">Optional per-call override for shard prefetch; see <see cref="LatticeOptions.PrefetchEntriesScan"/>.</param>
     /// <param name="maxAttempts">Optional per-call override for the reconnect budget; defaults to <see cref="DefaultScanReconnectAttempts"/>.</param>
     /// <param name="cancellationToken">Cancellation token; honoured between reconnects and during backoff.</param>
-    public static async IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(
+    public static IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(
         this ILattice lattice,
         string? startInclusive = null,
         string? endExclusive = null,
         bool reverse = false,
         bool? prefetch = null,
         int? maxAttempts = null,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default)
     {
+        // See `ScanKeysAsync` for why the null-guard lives in a non-async
+        // wrapper rather than inside the iterator core.
         ArgumentNullException.ThrowIfNull(lattice);
+        return ScanEntriesAsyncCore(lattice, startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken);
+    }
+
+    private static async IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsyncCore(
+        ILattice lattice,
+        string? startInclusive,
+        string? endExclusive,
+        bool reverse,
+        bool? prefetch,
+        int? maxAttempts,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         var budget = maxAttempts ?? DefaultScanReconnectAttempts;
         if (budget < 0) budget = 0;
 

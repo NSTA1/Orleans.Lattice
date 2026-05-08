@@ -1,7 +1,8 @@
+using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// Inbound apply seam. Installs a single <see cref="ReplogEntry"/>
+/// Inbound apply seam. Installs a single <see cref="WalRecord"/>
 /// authored on a remote cluster onto the local tree, preserving the
 /// remote cluster's <see cref="Primitives.HybridLogicalClock"/> and
 /// origin id end-to-end.
@@ -37,12 +38,12 @@ public interface IReplicationApplier
     /// merged and where the per-origin high-water-mark stands after
     /// the call.
     /// </returns>
-    Task<ApplyResult> ApplyAsync(ReplogEntry entry, CancellationToken cancellationToken = default);
+    Task<ApplyResult> ApplyAsync(WalRecord entry, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Applies a batch of <see cref="ReplogEntry"/> records to the local
+    /// Applies a batch of <see cref="WalRecord"/> records to the local
     /// tree as a single logical operation. The default implementation
-    /// loops over <see cref="ApplyAsync(ReplogEntry, CancellationToken)"/>
+    /// loops over <see cref="ApplyAsync(WalRecord, CancellationToken)"/>
     /// and aggregates the per-entry results, preserving exact per-entry
     /// semantics for legacy implementations.
     /// <para>
@@ -79,7 +80,7 @@ public interface IReplicationApplier
     /// HWM across every distinct origin in the batch.
     /// </returns>
     async Task<ApplyResult> ApplyBatchAsync(
-        IReadOnlyList<ReplogEntry> entries,
+        IReadOnlyList<WalRecord> entries,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entries);

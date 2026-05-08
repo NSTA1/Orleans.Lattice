@@ -31,8 +31,15 @@ public class TypeAliasesTests
         foreach (var field in fields)
         {
             var value = (string)field.GetValue(null)!;
-            Assert.That(value, Does.StartWith("ol."),
-                $"TypeAliases.{field.Name} = \"{value}\" does not start with \"ol.\"");
+            // Accept both the canonical "ol." prefix and the legacy
+            // "olr." prefix introduced by the replication package
+            // before the WAL adapter move pulled WAL types into core.
+            // Existing alias string values are part of the wire format
+            // and cannot be changed without a coordinated upgrade.
+            var hasOlPrefix = value.StartsWith("ol.", StringComparison.Ordinal)
+                || value.StartsWith("olr.", StringComparison.Ordinal);
+            Assert.That(hasOlPrefix, Is.True,
+                $"TypeAliases.{field.Name} = \"{value}\" does not start with \"ol.\" or \"olr.\"");
         }
     }
 

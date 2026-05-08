@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -25,7 +26,7 @@ internal sealed class MultiSiteClusterFixture
     /// <summary>The cluster id assigned to site <paramref name="index"/>.</summary>
     public static string ClusterIdFor(int index) => $"site-{index}";
 
-    private static readonly ConcurrentDictionary<string, ReplicationMode> Modes = new();
+    private static readonly ConcurrentDictionary<string, LatticeMergeMode> Modes = new();
 
     /// <summary>
     /// Per-cluster silo-side <see cref="LatticeReplicationOptions"/>
@@ -42,7 +43,7 @@ internal sealed class MultiSiteClusterFixture
     private readonly TestCluster[] _sites;
     private readonly IChangeFeed[] _changeFeeds;
     private readonly ReplicationApplier[] _appliers;
-    private readonly ReplicationMode _mode;
+    private readonly LatticeMergeMode _mode;
     private readonly Action<LatticeReplicationOptions>? _siloCustomizer;
     private readonly Action<LatticeReplicationOptions>? _clientCustomizer;
 
@@ -78,7 +79,7 @@ internal sealed class MultiSiteClusterFixture
     /// is being exercised.
     /// </param>
     public MultiSiteClusterFixture(
-        ReplicationMode mode,
+        LatticeMergeMode mode,
         int siteCount = 3,
         Action<LatticeReplicationOptions>? configureSilo = null,
         Action<LatticeReplicationOptions>? configureClient = null)
@@ -186,7 +187,7 @@ internal sealed class MultiSiteClusterFixture
             {
                 services.AddSingleton<IPostConfigureOptions<LatticeReplicationOptions>, ChaosClusterIdPostConfigure>();
                 services.AddSingleton<IPostConfigureOptions<LatticeReplicationOptions>, ChaosCustomPostConfigure>();
-                services.AddSingleton<IReplicationModeResolver, ChaosModeResolver>();
+                services.AddSingleton<ILatticeMergeModeResolver, ChaosModeResolver>();
             });
         }
     }
@@ -229,9 +230,9 @@ internal sealed class MultiSiteClusterFixture
     /// the silo's own cluster id so a single configurator type works for
     /// every site.
     /// </summary>
-    private sealed class ChaosModeResolver(IOptionsMonitor<LatticeReplicationOptions> options) : IReplicationModeResolver
+    private sealed class ChaosModeResolver(IOptionsMonitor<LatticeReplicationOptions> options) : ILatticeMergeModeResolver
     {
-        public ReplicationMode? Resolve(string treeId)
+        public LatticeMergeMode? Resolve(string treeId)
         {
             var clusterId = options.CurrentValue.ClusterId;
             return Modes.TryGetValue(clusterId, out var mode) ? mode : null;

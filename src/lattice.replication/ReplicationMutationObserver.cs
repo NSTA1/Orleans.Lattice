@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
@@ -7,8 +8,8 @@ namespace Orleans.Lattice.Replication;
 /// <summary>
 /// <see cref="IMutationObserver"/> registered by the replication package.
 /// Captures every locally-originating mutation at commit time, builds a
-/// fully-formed <see cref="ReplogEntry"/> (op + key + value + HLC + origin
-/// + TTL + declared <see cref="ReplicationMode"/>), and forwards it to the
+/// fully-formed <see cref="WalRecord"/> (op + key + value + HLC + origin
+/// + TTL + declared <see cref="LatticeMergeMode"/>), and forwards it to the
 /// registered <see cref="IReplogSink"/> before the originating grain's
 /// write returns. Replaces the host-level outgoing-call filter used by the
 /// legacy <c>MultiSiteManufacturing</c> sample - capture is now atomic
@@ -33,8 +34,8 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// Trees opt in to replication explicitly via
 /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/>; the observer
-/// resolves the declared <see cref="ReplicationMode"/> through the
-/// registered <see cref="IReplicationModeResolver"/> and short-circuits
+/// resolves the declared <see cref="LatticeMergeMode"/> through the
+/// registered <see cref="ILatticeMergeModeResolver"/> and short-circuits
 /// before the sink is touched when the resolver returns <c>null</c>. The
 /// per-key filters (<see cref="LatticeReplicationOptions.KeyFilter"/>, 
 /// <see cref="LatticeReplicationOptions.KeyPrefixes"/>) layer on top of
@@ -60,9 +61,8 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
 {
     private readonly IReplogSink _sink;
     private readonly IOptionsMonitor<LatticeReplicationOptions> _options;
-    private readonly IReplicationModeResolver _modeResolver;
+    private readonly ILatticeMergeModeResolver _modeResolver;
     private readonly LocalVectorClockCache _localVectorClockCache;
-    private readonly IInFlightSagaTracker _sagaTracker;
     private readonly ConcurrentDictionary<string, CompiledFilter> _filters = new(StringComparer.Ordinal);
     private readonly Func<string, CompiledFilter> _factory;
     private readonly IDisposable? _changeSubscription;
@@ -70,20 +70,17 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
     public ReplicationMutationObserver(
         IReplogSink sink,
         IOptionsMonitor<LatticeReplicationOptions> options,
-        IReplicationModeResolver modeResolver,
-        LocalVectorClockCache localVectorClockCache,
-        IInFlightSagaTracker sagaTracker)
+        ILatticeMergeModeResolver modeResolver,
+        LocalVectorClockCache localVectorClockCache)
     {
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(modeResolver);
         ArgumentNullException.ThrowIfNull(localVectorClockCache);
-        ArgumentNullException.ThrowIfNull(sagaTracker);
         _sink = sink;
         _options = options;
         _modeResolver = modeResolver;
         _localVectorClockCache = localVectorClockCache;
-        _sagaTracker = sagaTracker;
         _factory = treeId => CompiledFilter.From(_options.Get(treeId));
 
         // Any options change invalidates every cached filter. ConfigureAll
@@ -98,44 +95,12 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
     {
         var op = mutation.Kind switch
         {
-            MutationKind.Set => ReplogOp.Set,
-            MutationKind.Delete => ReplogOp.Delete,
-            MutationKind.DeleteRange => ReplogOp.DeleteRange,
+            MutationKind.Set => MutationKind.Set,
+            MutationKind.Delete => MutationKind.Delete,
+            MutationKind.DeleteRange => MutationKind.DeleteRange,
             _ => throw new InvalidOperationException(
                 $"Unknown mutation kind: {mutation.Kind}"),
         };
-
-        // Producer-side atomic-batch saga tracking fires BEFORE the
-        // filter / mode-resolver / maintenance-skip early returns
-        // below. The tracker's count must remain a faithful proxy
-        // for "this many of the saga's keys are committed and
-        // visible in the producer's tree state" — and the producer
-        // commits every per-key write to its tree regardless of
-        // whether the per-key filter, the mode resolver, or the
-        // mutation category opts the entry out of replication. A
-        // saga whose siblings are filtered (key-prefix scoped to a
-        // sub-range), mode-resolved as null (tree not declared as
-        // replicated), or category-skipped at the per-emit level
-        // would otherwise leak rows in the tracker — the count
-        // would never reach BatchSize because some siblings short-
-        // circuit before reaching the bottom of this method. The
-        // snapshot quiesce path would then wait for a saga that
-        // never completes from the tracker's perspective and emit
-        // a spurious blacklist entry.
-        //
-        // Maintenance is the one exception: maintenance mutations
-        // are structural rewrites of state already authored by user
-        // writes, so a maintenance "saga" is not a user-authored
-        // atomic batch the snapshot needs to quiesce against. The
-        // tracker call is gated on (Category != Maintenance) so the
-        // maintenance-skip path below remains the single source of
-        // truth for the maintenance opt-out.
-        if (mutation.Category != MutationCategory.Maintenance
-            && mutation.AtomicBatchSize > 0
-            && mutation.TransactionId != Guid.Empty)
-        {
-            _sagaTracker.ObserveEmission(mutation.TreeId, mutation.TransactionId, mutation.AtomicBatchSize);
-        }
 
         // Maintenance-category mutations (resize / rebalance / compaction /
         // internal structural rewrite) are stamped with
@@ -210,7 +175,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
                 .ConfigureAwait(false);
         }
 
-        var entry = new ReplogEntry
+        var entry = new WalRecord
         {
             TreeId = mutation.TreeId,
             Op = op,
@@ -244,7 +209,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             DeltaPayload = mutation.DeltaPayload,
             // Atomic-batch metadata passthrough: mirror
             // LatticeMutation.AtomicBatchSize / AtomicBatchIndex onto
-            // the ReplogEntry verbatim. The slots are wire-shape-stable
+            // the WalRecord verbatim. The slots are wire-shape-stable
             // and flow through whatever the producer supplies; today
             // every emit defaults to 0/0 because the saga-wide
             // capture-once stamp inside AtomicWriteGrain is not yet
@@ -278,7 +243,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
     /// observer; invalidated whenever
     /// <see cref="IOptionsMonitor{TOptions}.OnChange(Action{TOptions, string})"/>
     /// fires. Tree-level opt-in is decided separately by the
-    /// <see cref="IReplicationModeResolver"/>.
+    /// <see cref="ILatticeMergeModeResolver"/>.
     /// </summary>
     private sealed class CompiledFilter
     {

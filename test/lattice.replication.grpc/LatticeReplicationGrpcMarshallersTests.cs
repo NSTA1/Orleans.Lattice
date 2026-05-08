@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Buffers;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
@@ -67,15 +68,15 @@ public class LatticeReplicationGrpcMarshallersTests
             OriginClusterId = "site-a",
             Entries = new[]
             {
-                new ReplogEntry
+                new WalRecord
                 {
                     TreeId = "tree",
-                    Op = ReplogOp.Set,
+                    Op = MutationKind.Set,
                     Key = "k",
                     Value = new byte[] { 1, 2, 3 },
                     Timestamp = new HybridLogicalClock { WallClockTicks = 42, Counter = 7 },
                     OriginClusterId = "site-a",
-                    Mode = ReplicationMode.LwwRegister,
+                    Mode = LatticeMergeMode.LwwRegister,
                 },
             },
         };

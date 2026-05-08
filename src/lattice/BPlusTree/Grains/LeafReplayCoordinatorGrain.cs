@@ -10,11 +10,8 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// Default <see cref="ILeafReplayCoordinatorGrain"/>. Activated per
 /// <c>{treeId}/{shardIndex}</c>. Forwards to the
-/// <see cref="ICommitLogReader"/> resolved from DI (registered by the
-/// <c>Orleans.Lattice.Replication</c> package). When the commit-log reader
-/// is absent — i.e. no replication package is registered — every method
-/// returns the empty / head-zero defaults so an activating leaf safely
-/// short-circuits its replay loop.
+/// <see cref="ICommitLogReader"/> resolved from DI, which is registered
+/// unconditionally by <c>AddLattice</c> via <see cref="WalCommitLogReader"/>.
 /// <para>
 /// V1 amortisation: the most recently served slice is cached in memory for
 /// a short window so two leaves on the same shard activating back-to-back
@@ -67,7 +64,7 @@ internal sealed class LeafReplayCoordinatorGrain(
 
         _treeId = treeId;
         _shardIndex = shardIndex;
-        _reader = context.ActivationServices.GetService<ICommitLogReader>();
+        _reader = context.ActivationServices.GetRequiredService<ICommitLogReader>();
     }
 
     public async Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceAsync(
@@ -91,10 +88,6 @@ internal sealed class LeafReplayCoordinatorGrain(
         }
 
         EnsureBindingsParsed();
-        if (_reader is null)
-        {
-            return EmptySlice;
-        }
 
         // V1 cache — serve from cache when the new range matches the
         // cached window byte-for-byte and the entry has not aged past
@@ -111,7 +104,7 @@ internal sealed class LeafReplayCoordinatorGrain(
         var collected = new List<CommitLogSliceEntry>();
         try
         {
-            await foreach (var (offset, mutation) in _reader.ReadAsync(
+            await foreach (var (offset, mutation) in _reader!.ReadAsync(
                 _treeId!, _shardIndex, fromOffsetExclusive, cancellationToken))
             {
                 if (offset > toOffsetInclusive)
@@ -150,21 +143,13 @@ internal sealed class LeafReplayCoordinatorGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
         EnsureBindingsParsed();
-        if (_reader is null)
-        {
-            return 0;
-        }
-        return await _reader.GetHeadOffsetAsync(_treeId!, _shardIndex, cancellationToken);
+        return await _reader!.GetHeadOffsetAsync(_treeId!, _shardIndex, cancellationToken);
     }
 
     public async Task<long> GetTailOffsetAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         EnsureBindingsParsed();
-        if (_reader is null)
-        {
-            return 0;
-        }
-        return await _reader.GetTailOffsetAsync(_treeId!, _shardIndex, cancellationToken);
+        return await _reader!.GetTailOffsetAsync(_treeId!, _shardIndex, cancellationToken);
     }
 }

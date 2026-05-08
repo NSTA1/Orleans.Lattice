@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -17,7 +18,7 @@ namespace Orleans.Lattice.Replication.Tests;
 public class ReplicationDriverActivationServiceTests
 {
     private static IOptionsMonitor<LatticeReplicationOptions> Monitor(
-        IReadOnlyDictionary<string, ReplicationMode>? trees,
+        IReadOnlyDictionary<string, LatticeMergeMode>? trees,
         IReadOnlyCollection<string>? peers = null)
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
@@ -35,7 +36,7 @@ public class ReplicationDriverActivationServiceTests
     private static (
         ReplicationDriverActivationService Service,
         IGrainFactory Factory) Create(
-            IReadOnlyDictionary<string, ReplicationMode>? trees,
+            IReadOnlyDictionary<string, LatticeMergeMode>? trees,
             IReadOnlyCollection<string>? peers = null,
             IGrainFactory? customFactory = null)
     {
@@ -81,7 +82,7 @@ public class ReplicationDriverActivationServiceTests
     [Test]
     public async Task ExecuteAsync_no_op_when_replicated_trees_empty()
     {
-        var (service, factory) = Create(trees: new Dictionary<string, ReplicationMode>());
+        var (service, factory) = Create(trees: new Dictionary<string, LatticeMergeMode>());
 
         await RunExecuteAsync(service, CancellationToken.None);
 
@@ -92,10 +93,10 @@ public class ReplicationDriverActivationServiceTests
     [Test]
     public async Task ExecuteAsync_activates_one_maintenance_grain_per_tree()
     {
-        var trees = new Dictionary<string, ReplicationMode>
+        var trees = new Dictionary<string, LatticeMergeMode>
         {
-            ["alpha"] = ReplicationMode.LwwRegister,
-            ["beta"] = ReplicationMode.LwwRegister,
+            ["alpha"] = LatticeMergeMode.LwwRegister,
+            ["beta"] = LatticeMergeMode.LwwRegister,
         };
         var factory = Substitute.For<IGrainFactory>();
         var alpha = Substitute.For<IReplicationMaintenanceGrain>();
@@ -113,9 +114,9 @@ public class ReplicationDriverActivationServiceTests
     [Test]
     public async Task ExecuteAsync_activates_one_shipper_per_tree_and_peer()
     {
-        var trees = new Dictionary<string, ReplicationMode>
+        var trees = new Dictionary<string, LatticeMergeMode>
         {
-            ["alpha"] = ReplicationMode.LwwRegister,
+            ["alpha"] = LatticeMergeMode.LwwRegister,
         };
         var peers = new[] { "site-b", "site-c" };
         var factory = Substitute.For<IGrainFactory>();
@@ -136,9 +137,9 @@ public class ReplicationDriverActivationServiceTests
     [Test]
     public async Task ExecuteAsync_skips_shippers_when_no_peers_configured()
     {
-        var trees = new Dictionary<string, ReplicationMode>
+        var trees = new Dictionary<string, LatticeMergeMode>
         {
-            ["alpha"] = ReplicationMode.LwwRegister,
+            ["alpha"] = LatticeMergeMode.LwwRegister,
         };
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<IReplicationMaintenanceGrain>(Arg.Any<string>())
@@ -153,9 +154,9 @@ public class ReplicationDriverActivationServiceTests
     [Test]
     public async Task ExecuteAsync_skips_empty_or_null_peer_entries()
     {
-        var trees = new Dictionary<string, ReplicationMode>
+        var trees = new Dictionary<string, LatticeMergeMode>
         {
-            ["alpha"] = ReplicationMode.LwwRegister,
+            ["alpha"] = LatticeMergeMode.LwwRegister,
         };
         var peers = new[] { "", "  ", "site-b", null! };
         var factory = Substitute.For<IGrainFactory>();
@@ -175,10 +176,10 @@ public class ReplicationDriverActivationServiceTests
     [Test]
     public async Task ExecuteAsync_isolates_per_grain_failures()
     {
-        var trees = new Dictionary<string, ReplicationMode>
+        var trees = new Dictionary<string, LatticeMergeMode>
         {
-            ["alpha"] = ReplicationMode.LwwRegister,
-            ["beta"] = ReplicationMode.LwwRegister,
+            ["alpha"] = LatticeMergeMode.LwwRegister,
+            ["beta"] = LatticeMergeMode.LwwRegister,
         };
         var factory = Substitute.For<IGrainFactory>();
         var alphaMaint = Substitute.For<IReplicationMaintenanceGrain>();
@@ -212,9 +213,9 @@ public class ReplicationDriverActivationServiceTests
         // the second attempt (after the inter-pass backoff) succeeds.
         // The retry loop must drive the activation to completion
         // rather than logging a single warning and giving up.
-        var trees = new Dictionary<string, ReplicationMode>
+        var trees = new Dictionary<string, LatticeMergeMode>
         {
-            ["alpha"] = ReplicationMode.LwwRegister,
+            ["alpha"] = LatticeMergeMode.LwwRegister,
         };
         var factory = Substitute.For<IGrainFactory>();
         var maint = Substitute.For<IReplicationMaintenanceGrain>();
@@ -252,10 +253,10 @@ public class ReplicationDriverActivationServiceTests
         // implementation that would slow the cluster's steady
         // state with redundant grain proxy calls and reminder
         // re-registrations.
-        var trees = new Dictionary<string, ReplicationMode>
+        var trees = new Dictionary<string, LatticeMergeMode>
         {
-            ["alpha"] = ReplicationMode.LwwRegister,
-            ["beta"] = ReplicationMode.LwwRegister,
+            ["alpha"] = LatticeMergeMode.LwwRegister,
+            ["beta"] = LatticeMergeMode.LwwRegister,
         };
         var factory = Substitute.For<IGrainFactory>();
         var alpha = Substitute.For<IReplicationMaintenanceGrain>();
@@ -281,9 +282,9 @@ public class ReplicationDriverActivationServiceTests
     [Test]
     public void ExecuteAsync_propagates_pre_cancelled_token()
     {
-        var trees = new Dictionary<string, ReplicationMode>
+        var trees = new Dictionary<string, LatticeMergeMode>
         {
-            ["alpha"] = ReplicationMode.LwwRegister,
+            ["alpha"] = LatticeMergeMode.LwwRegister,
         };
         var (service, _) = Create(trees);
         using var cts = new CancellationTokenSource();

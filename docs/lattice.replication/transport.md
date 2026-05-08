@@ -35,8 +35,8 @@ public readonly record struct ReplicationAck
 |---|---|
 | `TargetClusterId` | Stable identifier of the destination cluster. Implementations route the call by this value. Required: must be non-`null` and non-empty. |
 | `TreeName` | Name of the local tree this batch was drawn from. Receivers dispatch their per-tree apply pipeline on this id; the per-origin high-water-mark dedup key is `(TreeName, OriginClusterId)`. Required: must be non-`null` and non-empty. |
-| `OriginClusterId` | Stable identifier of the local (sending) cluster. Stamped on every captured `ReplogEntry` at commit time and surfaced on the batch so transports that frame entries themselves do not need to re-derive the origin from the payload. Required: must be non-`null` and non-empty. |
-| `Payload` | Opaque, framed batch payload. The byte layout is the responsibility of the binary-framing seam (typically Orleans-serializer-encoded `ReplogEntry` records inside a versioned envelope). Implementations treat this as a black box - they do not parse, peek into, or otherwise interpret the bytes. May be empty (heartbeat or keep-alive batch). |
+| `OriginClusterId` | Stable identifier of the local (sending) cluster. Stamped on every captured `WalRecord` at commit time and surfaced on the batch so transports that frame entries themselves do not need to re-derive the origin from the payload. Required: must be non-`null` and non-empty. |
+| `Payload` | Opaque, framed batch payload. The byte layout is the responsibility of the binary-framing seam (typically Orleans-serializer-encoded `WalRecord` records inside a versioned envelope). Implementations treat this as a black box - they do not parse, peek into, or otherwise interpret the bytes. May be empty (heartbeat or keep-alive batch). |
 
 | `ReplicationAck` member | Semantics |
 |---|---|
@@ -102,10 +102,10 @@ The canonical sender + receiver pair ships in the `Orleans.Lattice.Replication.G
 
 ## Metadata pass-through contract
 
-The transport stays dumb about the entries it carries. Specifically, every `IReplicationTransport` implementation must preserve the causal-plus metadata slots on every `ReplogEntry` verbatim across a round-trip:
+The transport stays dumb about the entries it carries. Specifically, every `IReplicationTransport` implementation must preserve the causal-plus metadata slots on every `WalRecord` verbatim across a round-trip:
 
-- `ReplogEntry.VectorClock` — the sparse `{originClusterId → HybridLogicalClock}` frontier captured at commit time.
-- `ReplogEntry.DependencySummary` — initially aliased one-to-one with `VectorClock`; reserved as a distinct slot so a future Bloom-filter-shaped summary can ship without re-numbering the wire format.
+- `WalRecord.VectorClock` — the sparse `{originClusterId → HybridLogicalClock}` frontier captured at commit time.
+- `WalRecord.DependencySummary` — initially aliased one-to-one with `VectorClock`; reserved as a distinct slot so a future Bloom-filter-shaped summary can ship without re-numbering the wire format.
 
 The transport must not reorder entries, mutate either slot, synthesise an empty frontier when the producer left the slot `null` (legacy peers and pre-causal-plus entries decode `null` and the receiver treats that as the empty frontier), or merge the two slots together. Any normalisation, summary derivation, or merge belongs in the producer / receiver, never in the wire layer.
 

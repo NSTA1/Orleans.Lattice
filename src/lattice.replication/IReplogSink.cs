@@ -1,10 +1,11 @@
+using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
 /// Sink for change-feed records captured at commit time. The default
 /// registration is a no-op so the rest of the replication pipeline can
 /// be wired up in isolation; later phases register a write-ahead-log
-/// implementation that durably persists every <see cref="ReplogEntry"/>
+/// implementation that durably persists every <see cref="WalRecord"/>
 /// before the originating grain's write returns.
 /// <para>
 /// Implementations are invoked synchronously inside the grain's
@@ -17,9 +18,9 @@ namespace Orleans.Lattice.Replication;
 internal interface IReplogSink
 {
     /// <summary>
-    /// Persists or forwards a captured <see cref="ReplogEntry"/>.
+    /// Persists or forwards a captured <see cref="WalRecord"/>.
     /// </summary>
     /// <param name="entry">The captured mutation record.</param>
     /// <param name="cancellationToken">Cancellation token propagated from the grain call.</param>
-    Task WriteAsync(ReplogEntry entry, CancellationToken cancellationToken);
+    Task WriteAsync(WalRecord entry, CancellationToken cancellationToken);
 }

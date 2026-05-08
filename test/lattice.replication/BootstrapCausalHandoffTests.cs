@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
@@ -31,7 +32,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </description></item>
 /// <item><description>
 /// the canonical applier consulting the full local vector clock for
-/// any entry carrying a non-empty <see cref="ReplogEntry.VectorClock"/>
+/// any entry carrying a non-empty <see cref="WalRecord.VectorClock"/>
 /// and parking unsatisfied entries in a per-tree FIFO buffer (see
 /// <c>ReplicationApplierTests.Causal</c>);
 /// </description></item>
@@ -75,7 +76,7 @@ public partial class BootstrapCausalHandoffTests
         return v;
     }
 
-    private static ReplogEntry SetEntry(
+    private static WalRecord SetEntry(
         string key,
         HybridLogicalClock ts,
         string origin,
@@ -83,7 +84,7 @@ public partial class BootstrapCausalHandoffTests
         byte[]? value = null) => new()
     {
         TreeId = Tree,
-        Op = ReplogOp.Set,
+        Op = MutationKind.Set,
         Key = key,
         Value = value ?? new byte[] { 1, 2, 3 },
         Timestamp = ts,
@@ -91,14 +92,14 @@ public partial class BootstrapCausalHandoffTests
         VectorClock = vc,
     };
 
-    private static ReplogEntry DeleteEntry(
+    private static WalRecord DeleteEntry(
         string key,
         HybridLogicalClock ts,
         string origin,
         VersionVector? vc = null) => new()
     {
         TreeId = Tree,
-        Op = ReplogOp.Delete,
+        Op = MutationKind.Delete,
         Key = key,
         Timestamp = ts,
         IsTombstone = true,
@@ -106,10 +107,10 @@ public partial class BootstrapCausalHandoffTests
         VectorClock = vc,
     };
 
-    private static ReplogEntry RangeDeleteEntry(string startInclusive, string endExclusive, string origin) => new()
+    private static WalRecord RangeDeleteEntry(string startInclusive, string endExclusive, string origin) => new()
     {
         TreeId = Tree,
-        Op = ReplogOp.DeleteRange,
+        Op = MutationKind.DeleteRange,
         Key = startInclusive,
         EndExclusiveKey = endExclusive,
         Timestamp = HybridLogicalClock.Zero,
@@ -127,14 +128,14 @@ public partial class BootstrapCausalHandoffTests
         public required IReplicationDeadLetterGrain Dlq { get; init; }
         public required Dictionary<string, HybridLogicalClock> HwmRows { get; init; }
         public required VersionVector LocalVc { get; init; }
-        public required List<(ReplogEntry Entry, string ReasonTag)> Parked { get; init; }
+        public required List<(WalRecord Entry, string ReasonTag)> Parked { get; init; }
     }
 
     private static HandoffHarness CreateHarness(LatticeReplicationOptions? options = null)
     {
         var rows = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
         var localVc = new VersionVector();
-        var parked = new List<(ReplogEntry, string)>();
+        var parked = new List<(WalRecord, string)>();
 
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
@@ -203,14 +204,14 @@ public partial class BootstrapCausalHandoffTests
             });
 
         dlq.EnqueueAsync(
-                Arg.Any<ReplogEntry>(),
+                Arg.Any<WalRecord>(),
                 Arg.Any<string>(),
                 Arg.Any<int>(),
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>())
             .Returns(call =>
             {
-                parked.Add(((ReplogEntry)call[0], (string)call[3]));
+                parked.Add(((WalRecord)call[0], (string)call[3]));
                 return Task.FromResult((long)parked.Count);
             });
 
@@ -235,7 +236,7 @@ public partial class BootstrapCausalHandoffTests
 
     /// <summary>
     /// Behaviour 1 (spec): incremental entries whose
-    /// <see cref="ReplogEntry.VectorClock"/> is dominated by the
+    /// <see cref="WalRecord.VectorClock"/> is dominated by the
     /// pinned frontier are HWM-deduplicated as
     /// already-applied-via-snapshot — no buffering, no re-merge. Pins
     /// the cross-origin VC-dominated case routes through the same fast

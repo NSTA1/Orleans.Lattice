@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication.Grains;
@@ -13,7 +14,7 @@ namespace Orleans.Lattice.Replication.Grains;
 /// <para>
 /// Grain key format: <c>{treeId}</c>. The receiver-side
 /// <see cref="IReplicationApplier"/> resolves the grain by the WAL
-/// entry's <see cref="ReplogEntry.TreeId"/> alone; the origin is
+/// entry's <see cref="WalRecord.TreeId"/> alone; the origin is
 /// passed as a method argument so a single grain activation handles
 /// every <c>(tree, origin)</c> pair for that tree.
 /// </para>

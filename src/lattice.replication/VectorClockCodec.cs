@@ -1,10 +1,11 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
 /// Internal helper for encoding and decoding the per-entry causal-plus
-/// frontier carried on <see cref="ReplogEntry.VectorClock"/>. The codec
+/// frontier carried on <see cref="WalRecord.VectorClock"/>. The codec
 /// supports both an <em>absolute</em> form (the full frontier as a
 /// stand-alone <see cref="VersionVector"/>) and a <em>delta</em> form
 /// (only the entries whose clock strictly advances against a named
@@ -36,7 +37,7 @@ internal static class VectorClockCodec
     /// Returns an absolute snapshot of <paramref name="current"/>. A
     /// <see langword="null"/> input is treated as the empty frontier
     /// and produces an empty (non-<see langword="null"/>) vector so
-    /// callers can write it into <see cref="ReplogEntry.VectorClock"/>
+    /// callers can write it into <see cref="WalRecord.VectorClock"/>
     /// without a null guard. The returned vector is a fresh instance
     /// independent of <paramref name="current"/>; subsequent advances
     /// to the input do not leak into the encoded snapshot.

@@ -85,7 +85,7 @@ internal sealed class ReplicationShipperGrain(
     /// so reuse is safe (no aliasing past the call). Bounded in size by
     /// <see cref="LatticeReplicationOptions.ShipBatchSize"/>.
     /// </summary>
-    private readonly List<ReplogEntry> _drainBuffer = new();
+    private readonly List<WalRecord> _drainBuffer = new();
 
     /// <summary>
     /// Activation-scoped framing buffer reused across pump ticks. Reset
@@ -134,12 +134,12 @@ internal sealed class ReplicationShipperGrain(
     //                           least one entry from partition p (used
     //                           to bound the cursor write to changed
     //                           partitions on ack).
-    private IReadOnlyList<ReplogShardEntry>?[] _partitionPages = Array.Empty<IReadOnlyList<ReplogShardEntry>?>();
+    private IReadOnlyList<WalShardSequencedEntry>?[] _partitionPages = Array.Empty<IReadOnlyList<WalShardSequencedEntry>?>();
     private int[] _partitionPageIndex = Array.Empty<int>();
     private long[] _partitionNextSeq = Array.Empty<long>();
     private long[] _partitionMaxReadSeq = Array.Empty<long>();
     private bool[] _partitionAdvanced = Array.Empty<bool>();
-    private IReplogShardGrain?[] _partitionGrainCache = Array.Empty<IReplogShardGrain?>();
+    private IWalShardGrain?[] _partitionGrainCache = Array.Empty<IWalShardGrain?>();
     private int _partitionCount;
 
     /// <summary>
@@ -426,14 +426,30 @@ internal sealed class ReplicationShipperGrain(
     /// Producer-side filter: applies <see cref="LatticeReplicationOptions.KeyFilter"/> /
     /// <see cref="LatticeReplicationOptions.KeyPrefixes"/> and the
     /// durable origin-based cycle-break (skip entries whose
-    /// <see cref="ReplogEntry.OriginClusterId"/> matches the peer's
-    /// own cluster id).
+    /// <see cref="WalRecord.OriginClusterId"/> matches the peer's
+    /// own cluster id). Also drops entries whose
+    /// <see cref="WalRecord.OriginClusterId"/> is null or empty - these
+    /// are durability-only WAL appends authored by the core
+    /// <c>ICommitLogWriter</c> path on the same per-tree shard the
+    /// replication observer ships from, and have no defined origin for
+    /// the receiver's per-origin high-water-mark dedup path. The
+    /// replication observer fires alongside the durability writer on
+    /// every commit and stamps a non-empty origin onto its own append,
+    /// so the corresponding stamped entry is what propagates to peers.
     /// </summary>
-    private bool ShouldShip(ReplogEntry entry, LatticeReplicationOptions options)
+    private bool ShouldShip(WalRecord entry, LatticeReplicationOptions options)
     {
+        // Skip durability-only entries with no replication origin. The
+        // receiver's per-origin HWM dedup path requires a non-empty
+        // OriginClusterId; shipping them would surface as ArgumentException
+        // and dead-letter every such entry on every pump tick.
+        if (string.IsNullOrEmpty(entry.OriginClusterId))
+        {
+            return false;
+        }
+
         // Cycle-break: don't ship a peer its own writes back.
-        if (entry.OriginClusterId is { } origin
-            && string.Equals(origin, _peerClusterId, StringComparison.Ordinal))
+        if (string.Equals(entry.OriginClusterId, _peerClusterId, StringComparison.Ordinal))
         {
             return false;
         }
@@ -716,7 +732,18 @@ internal sealed class ReplicationShipperGrain(
             // negligible cost (one comparison per entry); steady
             // state never matches because the partition cursor moves
             // strictly forward on ack.
-            if (winningEntry.Entry.Timestamp.CompareTo(state.State.Cursor) <= 0)
+            //
+            // Exception: DeleteRange entries intentionally carry
+            // HybridLogicalClock.Zero (see WalRecord.Timestamp docs)
+            // because a single range may produce many per-leaf HLCs
+            // that cannot be faithfully collapsed. Applying the HLC
+            // filter to a Zero-stamped entry would silently drop
+            // every DeleteRange write once any non-zero cursor has
+            // been observed. DeleteRange entries are tracked solely
+            // by partition sequence, which already prevents
+            // re-shipping in steady state.
+            if (winningEntry.Entry.Timestamp != HybridLogicalClock.Zero
+                && winningEntry.Entry.Timestamp.CompareTo(state.State.Cursor) <= 0)
             {
                 continue;
             }
@@ -731,11 +758,11 @@ internal sealed class ReplicationShipperGrain(
     }
 
     /// <summary>
-    /// Issues a <see cref="IReplogShardGrain.ReadAsync"/> against the
+    /// Issues a <see cref="IWalShardGrain.ReadAsync"/> against the
     /// requested partition starting at <see cref="_partitionNextSeq"/>,
     /// stores the page in the scratch arrays, and updates
     /// <see cref="_partitionNextSeq"/> to the page's
-    /// <see cref="ReplogShardPage.NextSequence"/>. An empty result
+    /// <see cref="WalShardPage.NextSequence"/>. An empty result
     /// leaves <see cref="_partitionPages"/> at <see langword="null"/>
     /// for that partition — the caller treats that as "drained this
     /// tick" and stops considering the partition for the rest of the
@@ -744,7 +771,7 @@ internal sealed class ReplicationShipperGrain(
     private async Task TryRefillPartitionAsync(int partition, int pageSize, CancellationToken cancellationToken)
     {
         var grain = _partitionGrainCache[partition] ??=
-            _grainFactory.GetGrain<IReplogShardGrain>($"{_treeName}/{partition}");
+            _grainFactory.GetGrain<IWalShardGrain>($"{_treeName}/{partition}");
         var page = await grain
             .ReadAsync(_partitionNextSeq[partition], pageSize, cancellationToken)
             ;

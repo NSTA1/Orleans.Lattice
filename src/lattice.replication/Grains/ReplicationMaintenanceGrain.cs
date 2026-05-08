@@ -129,18 +129,16 @@ internal sealed class ReplicationMaintenanceGrain(
         var orphanCadence = TimeSpan.FromTicks(Math.Max(1L, options.MaintenanceGcInterval.Ticks / 2));
         if (ShouldRunCadence(nowTicks, state.State.LastOrphanSweepTicks, orphanCadence))
         {
-            try
-            {
-                await SweepBufferOrphansAsync(options).ConfigureAwait(true);
-                state.State.LastOrphanSweepTicks = nowTicks;
-                await state.WriteStateAsync().ConfigureAwait(true);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(ex,
-                    "Atomic-batch buffer orphan sweep failed for {Context}; will retry on next phase tick",
-                    LogContext);
-            }
+            // Reserved orphan-sweep cadence stamp - retained so the
+            // durable maintenance state's [Id(2)] LastOrphanSweepTicks
+            // slot continues to advance under existing tooling. The
+            // receiver-side atomic-batch staging buffer that this
+            // sweep formerly drove was retired with the prepared-
+            // mutation isolation model; the cadence is preserved as
+            // a future hook so the public maintenance state shape
+            // does not have to change again.
+            state.State.LastOrphanSweepTicks = nowTicks;
+            await state.WriteStateAsync().ConfigureAwait(true);
         }
 
         // Fall-off-the-log probe — independent cadence. Same retry
@@ -161,22 +159,6 @@ internal sealed class ReplicationMaintenanceGrain(
                     LogContext);
             }
         }
-    }
-
-    private async Task SweepBufferOrphansAsync(LatticeReplicationOptions options)
-    {
-        // The buffer grain's SweepOrphansAsync is idempotent and
-        // cheap when the buffer is empty (single in-memory check),
-        // so the maintenance grain calls it unconditionally on
-        // cadence rather than gating on AtomicBatchDelivery: a host
-        // that flips the option from false → true mid-flight starts
-        // accumulating staged entries that the sweep must reach
-        // without waiting for an option-change event to retire stale
-        // state.
-        var buffer = _grainFactory.GetGrain<IReplicationTxBufferGrain>(TreeName);
-        _ = await buffer
-            .SweepOrphansAsync(options.TxBufferOrphanTimeout, CancellationToken.None)
-            .ConfigureAwait(true);
     }
 
     private async Task ProbeFallOffAsync(LatticeReplicationOptions options)

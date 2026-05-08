@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Text;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
@@ -7,14 +8,14 @@ using Orleans.Lattice.Replication;
 namespace Orleans.Lattice.Replication.Tests.Chaos;
 
 /// <summary>
-/// Convergence chaos test for the <see cref="ReplicationMode.OrSet"/>
+/// Convergence chaos test for the <see cref="LatticeMergeMode.OrSet"/>
 /// dispatch path. Three sites issue concurrent OR-Set adds against a
 /// single key while a partition isolates one site mid-workload; after
 /// the partition heals and the delivery pump drains, every site must
 /// observe exactly the union of every authored add.
 /// <para>
 /// The fixture configures the test tree with
-/// <c>ReplicationMode.OrSet</c> on every silo, so the producer side
+/// <c>LatticeMergeMode.OrSet</c> on every silo, so the producer side
 /// emits typed CRDT state on the WAL and the receiver routes
 /// through <see cref="ReplicationApplier"/>'s
 /// <c>ApplyStateMergeAsync&lt;OrSet&gt;</c> path under
@@ -233,7 +234,7 @@ public class OrSetConvergenceChaosTests
 
     private sealed class TestRunner : IAsyncDisposable
     {
-        public MultiSiteClusterFixture Fixture { get; } = new(ReplicationMode.OrSet, SiteCount);
+        public MultiSiteClusterFixture Fixture { get; } = new(LatticeMergeMode.OrSet, SiteCount);
         public ChaosDeliveryPump Pump { get; private set; } = null!;
 
         public async Task InitializeAsync()

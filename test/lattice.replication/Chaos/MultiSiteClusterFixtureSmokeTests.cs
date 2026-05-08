@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
@@ -25,14 +26,14 @@ public class MultiSiteClusterFixtureSmokeTests
     [Test]
     public async Task Site_change_feed_yields_locally_authored_lww_entry()
     {
-        var fixture = new MultiSiteClusterFixture(ReplicationMode.LwwRegister, siteCount: 2);
+        var fixture = new MultiSiteClusterFixture(LatticeMergeMode.LwwRegister, siteCount: 2);
         try
         {
             await fixture.InitializeAsync();
             var lattice = fixture.ClientOf(0).GetGrain<ILattice>("smoke-lww");
             await lattice.SetAsync("k", new byte[] { 1 });
 
-            var entries = new List<ReplogEntry>();
+            var entries = new List<WalRecord>();
             await foreach (var e in fixture.ChangeFeedOf(0).Subscribe("smoke-lww", HybridLogicalClock.Zero))
             {
                 entries.Add(e);
@@ -41,7 +42,7 @@ public class MultiSiteClusterFixtureSmokeTests
             Assert.That(entries, Is.Not.Empty,
                 "Producer-side WAL should have captured the SetAsync at commit time.");
             Assert.That(entries[0].OriginClusterId, Is.EqualTo(MultiSiteClusterFixture.ClusterIdFor(0)));
-            Assert.That(entries[0].Mode, Is.EqualTo(ReplicationMode.LwwRegister));
+            Assert.That(entries[0].Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
         }
         finally
         {
@@ -52,7 +53,7 @@ public class MultiSiteClusterFixtureSmokeTests
     [Test]
     public async Task Delivery_pump_ships_lww_entry_from_site_0_to_site_1()
     {
-        var fixture = new MultiSiteClusterFixture(ReplicationMode.LwwRegister, siteCount: 2);
+        var fixture = new MultiSiteClusterFixture(LatticeMergeMode.LwwRegister, siteCount: 2);
         ChaosDeliveryPump? pump = null;
         try
         {

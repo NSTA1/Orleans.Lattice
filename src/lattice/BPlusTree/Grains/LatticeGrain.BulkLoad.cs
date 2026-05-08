@@ -25,13 +25,22 @@ internal sealed partial class LatticeGrain
             shardBuckets[idx].Add(entry);
         }
 
+        // Fan out to *every* physical shard, including those whose bucket
+        // is empty. Each shard's own `RootNodeId is not null` guard inside
+        // `ShardRootGrain.BulkLoadAsync` fires before the empty-list
+        // short-circuit, so a shard that already contains data on this
+        // tree (from a prior `SetAsync` or earlier bulk load) rejects the
+        // call with `InvalidOperationException`. Skipping empty buckets
+        // would silently miss the case where pre-existing data lives on
+        // a shard that the current batch's keys do not partition into.
+        // Per the contract on `ILattice.BulkLoadAsync`, "Throws
+        // InvalidOperationException if any shard already contains data".
         var tasks = new List<Task>();
         foreach (var (shardIdx, bucket) in shardBuckets)
         {
-            if (bucket.Count == 0) continue;
-
             cancellationToken.ThrowIfCancellationRequested();
-            bucket.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
+            if (bucket.Count > 0)
+                bucket.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIdx}");
             tasks.Add(shard.BulkLoadAsync($"{operationId}-{shardIdx}", bucket));
         }

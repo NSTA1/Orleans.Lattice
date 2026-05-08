@@ -3,7 +3,7 @@
 > **Status:** partially shipped — the entry-schema seam is live as of the
 > first causal-plus delivery; receiver-side dep-check, GC predicate, and
 > snapshot cut-point remain forward-looking. The shipped pieces are the
-> two additive `[Id]` slots on `ReplogEntry` (`VectorClock`,
+> two additive `[Id]` slots on `WalRecord` (`VectorClock`,
 > `DependencySummary`), the producer-side stamping at the commit-time
 > mutation observer, the internal `VectorClockCodec`
 > (`EncodeAbsolute` / `EncodeDelta` / `DecodeDelta`), and a diagnostic
@@ -37,7 +37,7 @@ Each WAL entry is extended to carry causal metadata required for causal+ consist
 - `ValueOrDelta`
 - `OriginClusterId`
 - `SourceHlc` (Hybrid Logical Clock)
-- `Mode` (`ReplicationMode`)
+- `Mode` (`LatticeMergeMode`)
 
 ### 1.2 New fields (added for causal+)
 
@@ -70,7 +70,7 @@ A compact representation of the causal predecessors of this entry.
 
 #### AtomicBatchSize / AtomicBatchIndex
 
-Two purely additive `[Id]` slots on `ReplogEntry` (and the corresponding `LatticeMutation` slots on the observer-side surface) that carry the size and zero-based index of the enclosing atomic transaction.
+Two purely additive `[Id]` slots on `WalRecord` (and the corresponding `LatticeMutation` slots on the observer-side surface) that carry the size and zero-based index of the enclosing atomic transaction.
 
 - `AtomicBatchSize` — total number of entries in the enclosing atomic transaction. `0` for non-atomic single-key writes and non-atomic batches; `N` on every per-key emit produced by a `SetManyAtomicAsync` saga of size `N`, including compensation rolls.
 - `AtomicBatchIndex` — zero-based position of this entry within the enclosing batch; `0` for non-atomic writes. Within a batch the index covers `0..Size-1` exactly once each, derived deterministically from the saga's per-operation iteration order.
@@ -421,7 +421,7 @@ The intra-cluster snapshot/restore path (operator snapshots a tree, restores it 
 
 R-093 reconstructs that frontier from the values themselves. Core F-043 added `[Id(6)] LwwEntry.VectorClock` (default empty for legacy persisted state) and the core library preserves the slot end-to-end through every persistence / merge / snapshot / restore / bulk-load / compaction path with the same discipline F-036 applied to `OriginClusterId`. The replication package ships `IReplicationLocalVcSeeder.SeedFromTreeAsync(treeName, ct)`: walks every shard's leaf chain via `IShardRootGrain.GetLeftmostLeafIdAsync` → `IBPlusLeafGrain.GetLiveRawEntriesAsync` → `GetNextSiblingAsync` (the canonical leaf-walk pattern from `TreeSnapshotGrain.CopyShardAsync`), accumulates `frontier.MergeFrom(entry.VectorClock)` for every non-null VC slot (pointwise-max — the same accumulator R-082's bounded buffer uses), and seeds both halves of the local vector clock. The durable half goes to `IReplicationHighWaterMarkGrain.PinSnapshotAsync(HybridLogicalClock.Zero, frontier)` so receiver-side `GetVectorAsync` reads the reconstructed frontier across silo restarts; the in-memory half goes to `LocalVectorClockCache.AdvanceForeign(treeName, origin, hlc)` for every `(origin, hlc)` pair in the frontier, so the producer-side cache (R-092) does not require a fresh cold-start RPC after the seed. The pin uses `HybridLogicalClock.Zero` as the `asOfHlc` argument because intra-cluster restore has no snapshot timestamp — the frontier is the authoritative seed; the `asOfHlc` slot is preserved in the call shape only for symmetry with the cross-cluster path.
 
-Non-replicated trees (`IReplicationModeResolver.Resolve(treeName)` returns `null`) are a no-op: the seeder returns `LocalVcSeedReport { SeedApplied = false, EntriesScanned = 0, Frontier = null }` without consulting the tree. Empty trees pin an empty frontier — even an empty tree's HWM grain is consistent post-seed. Partial restores (where the operator restores a subset of values) seed correctly from the surviving subset because the pointwise-max accumulator handles missing-origin components as zero. The seeder is **not** automatic — restore tooling is host-defined and the seeder is a single-call public API the operator runs once per restored tree as a post-restore step, mutually exclusive with the cross-cluster bootstrap path per restore event.
+Non-replicated trees (`ILatticeMergeModeResolver.Resolve(treeName)` returns `null`) are a no-op: the seeder returns `LocalVcSeedReport { SeedApplied = false, EntriesScanned = 0, Frontier = null }` without consulting the tree. Empty trees pin an empty frontier — even an empty tree's HWM grain is consistent post-seed. Partial restores (where the operator restores a subset of values) seed correctly from the surviving subset because the pointwise-max accumulator handles missing-origin components as zero. The seeder is **not** automatic — restore tooling is host-defined and the seeder is a single-call public API the operator runs once per restored tree as a post-restore step, mutually exclusive with the cross-cluster bootstrap path per restore event.
 
 ---
 
@@ -430,7 +430,7 @@ Non-replicated trees (`IReplicationModeResolver.Resolve(treeName)` returns `null
 ### 13.1 Simplified causal+ entry sketch
 
 ```text
-message ReplogEntry {
+message WalRecord {
     Metadata metadata = 1;
 
     oneof operation {

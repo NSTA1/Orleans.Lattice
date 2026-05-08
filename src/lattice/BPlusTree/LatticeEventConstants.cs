@@ -128,4 +128,32 @@ public static class LatticeEventConstants
     /// set through <see cref="LatticeAtomicBatchContext"/>.
     /// </summary>
     internal const string AtomicBatchRequestContextKey = "ol.batch";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to flag the current logical
+    /// call as a saga prepare-phase write. When set to <c>true</c>, the
+    /// leaf grain's commit pipeline routes the mutation into the per-leaf
+    /// in-memory pending-transaction map (keyed by
+    /// <see cref="LatticeMutation.TransactionId"/>) rather than into the
+    /// visible projection; reads filter pending entries out of view. A
+    /// subsequent terminal <see cref="MutationKind.TxCommit"/> or
+    /// <see cref="MutationKind.TxAbort"/> mutation flips or drops the
+    /// pending entries on the leaf. Internal — set through
+    /// <see cref="LatticePreparedContext"/>.
+    /// </summary>
+    internal const string PreparedRequestContextKey = "ol.prep";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to communicate the WAL
+    /// offset of the mutation currently being driven through
+    /// <c>ILeafProjection.Apply</c>. The replay coordinator stamps the
+    /// offset before each Apply call so the leaf can record per-prepare
+    /// offsets in its pending-transaction map and clamp the projection
+    /// checkpoint back to <c>min(highest contiguous Apply'd offset,
+    /// (min unresolved prepare offset) - 1)</c> — preventing crash
+    /// recovery from advancing past an unresolved saga prepare and
+    /// silently losing its writes when the terminal mark eventually
+    /// arrives. Internal — set through <see cref="LatticeApplyOffsetContext"/>.
+    /// </summary>
+    internal const string ApplyOffsetRequestContextKey = "ol.aoff";
 }

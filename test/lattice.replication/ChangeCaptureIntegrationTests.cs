@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice;
 using Orleans.Lattice.Replication;
 
@@ -6,7 +7,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// <summary>
 /// Integration tests for the change-feed observer registered by
 /// <c>AddLatticeReplication</c>: every committed mutation must surface a
-/// fully-formed <see cref="ReplogEntry"/> on the registered
+/// fully-formed <see cref="WalRecord"/> on the registered
 /// <see cref="IReplogSink"/> before the originating grain call returns.
 /// </summary>
 [TestFixture]
@@ -39,7 +40,7 @@ public class ChangeCaptureIntegrationTests
         var entry = entries[^1];
         Assert.Multiple(() =>
         {
-            Assert.That(entry.Op, Is.EqualTo(ReplogOp.Set));
+            Assert.That(entry.Op, Is.EqualTo(MutationKind.Set));
             Assert.That(entry.Value, Is.EqualTo(new byte[] { 1, 2, 3 }));
             Assert.That(entry.IsTombstone, Is.False);
             Assert.That(entry.OriginClusterId, Is.EqualTo(TwoSiteClusterFixture.SiteAClusterId));
@@ -58,7 +59,7 @@ public class ChangeCaptureIntegrationTests
         await lattice.DeleteAsync("gone");
 
         var deletes = _fixture.SiteASink.Entries.Skip(beforeDelete)
-            .Where(e => e.TreeId == tree && e.Key == "gone" && e.Op == ReplogOp.Delete)
+            .Where(e => e.TreeId == tree && e.Key == "gone" && e.Op == MutationKind.Delete)
             .ToArray();
         Assert.That(deletes, Is.Not.Empty);
         Assert.Multiple(() =>
@@ -81,7 +82,7 @@ public class ChangeCaptureIntegrationTests
         await lattice.DeleteRangeAsync("a", "z");
 
         var ranges = _fixture.SiteASink.Entries.Skip(before)
-            .Where(e => e.TreeId == tree && e.Op == ReplogOp.DeleteRange)
+            .Where(e => e.TreeId == tree && e.Op == MutationKind.DeleteRange)
             .ToArray();
         Assert.That(ranges, Is.Not.Empty);
         Assert.Multiple(() =>
@@ -161,7 +162,7 @@ public class ChangeCaptureIntegrationTests
         }
 
         var deletes = _fixture.SiteASink.Entries.Skip(beforeDelete)
-            .Where(e => e.TreeId == tree && e.Key == "gone" && e.Op == ReplogOp.Delete)
+            .Where(e => e.TreeId == tree && e.Key == "gone" && e.Op == MutationKind.Delete)
             .ToArray();
         Assert.That(deletes, Is.Not.Empty);
         Assert.That(deletes[^1].OriginClusterId, Is.EqualTo(TwoSiteClusterFixture.SiteBClusterId));
@@ -182,7 +183,7 @@ public class ChangeCaptureIntegrationTests
         }
 
         var ranges = _fixture.SiteASink.Entries.Skip(before)
-            .Where(e => e.TreeId == tree && e.Op == ReplogOp.DeleteRange)
+            .Where(e => e.TreeId == tree && e.Op == MutationKind.DeleteRange)
             .ToArray();
         Assert.That(ranges, Is.Not.Empty);
         Assert.That(ranges[^1].OriginClusterId, Is.EqualTo(TwoSiteClusterFixture.SiteBClusterId));
@@ -287,7 +288,7 @@ public class ChangeCaptureIntegrationTests
         }
 
         var ranges = _fixture.SiteASink.Entries.Skip(before)
-            .Where(e => e.TreeId == tree && e.Op == ReplogOp.DeleteRange)
+            .Where(e => e.TreeId == tree && e.Op == MutationKind.DeleteRange)
             .ToArray();
         Assert.That(ranges, Is.Empty);
 

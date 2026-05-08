@@ -1,9 +1,10 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// Per-tree bounded FIFO buffer holding <see cref="ReplogEntry"/>
+/// Per-tree bounded FIFO buffer holding <see cref="WalRecord"/>
 /// records the receiver-side <see cref="ReplicationApplier"/> could
 /// not apply because their declared causal dependencies were not yet
 /// satisfied by the local vector clock. Drained on every successful
@@ -102,9 +103,9 @@ internal sealed class CausalApplyBuffer
     /// already parked is a no-op and reports
     /// <see cref="AddOutcome.Duplicate"/>.
     /// </summary>
-    public AddOutcome TryAdd(ReplogEntry entry, int maxEntries, long maxBytes, out List<ReplogEntry> evicted)
+    public AddOutcome TryAdd(WalRecord entry, int maxEntries, long maxBytes, out List<WalRecord> evicted)
     {
-        evicted = new List<ReplogEntry>();
+        evicted = new List<WalRecord>();
         var size = EstimateSize(entry);
         var key = EntryKey.From(entry);
         long evictedBytes = 0;
@@ -158,10 +159,10 @@ internal sealed class CausalApplyBuffer
     /// dependencies are dominated by <paramref name="localVc"/>.
     /// Iteration is FIFO so causally-earlier entries unblock first.
     /// </summary>
-    public List<ReplogEntry> DrainSatisfied(VersionVector localVc)
+    public List<WalRecord> DrainSatisfied(VersionVector localVc)
     {
         ArgumentNullException.ThrowIfNull(localVc);
-        var ready = new List<ReplogEntry>();
+        var ready = new List<WalRecord>();
         // Single auxiliary list for per-entry wait samples; bytes
         // accumulate into a scalar so there is no second list.
         // Allocated lazily on first drained entry.
@@ -219,7 +220,7 @@ internal sealed class CausalApplyBuffer
     /// authoritative dedup key for that component, and including it
     /// here would deadlock the diagonal.
     /// </summary>
-    public static bool DependenciesSatisfied(ReplogEntry entry, VersionVector localVc)
+    public static bool DependenciesSatisfied(WalRecord entry, VersionVector localVc)
     {
         ArgumentNullException.ThrowIfNull(localVc);
         var vc = entry.VectorClock;
@@ -244,7 +245,7 @@ internal sealed class CausalApplyBuffer
         return true;
     }
 
-    private static long EstimateSize(ReplogEntry entry)
+    private static long EstimateSize(WalRecord entry)
     {
         var keyLen = entry.Key?.Length ?? 0;
         var endLen = entry.EndExclusiveKey?.Length ?? 0;
@@ -252,16 +253,16 @@ internal sealed class CausalApplyBuffer
         return ((long)keyLen * 2L) + ((long)endLen * 2L) + valueLen + 128L;
     }
 
-    private readonly record struct BufferedEntry(ReplogEntry Entry, long SizeBytes, long ParkedAtTicks);
+    private readonly record struct BufferedEntry(WalRecord Entry, long SizeBytes, long ParkedAtTicks);
 
     private readonly record struct EntryKey(
         string TreeId,
         string OriginClusterId,
         HybridLogicalClock Timestamp,
         string Key,
-        ReplogOp Op)
+        MutationKind Op)
     {
-        public static EntryKey From(ReplogEntry entry) =>
+        public static EntryKey From(WalRecord entry) =>
             new(
                 entry.TreeId ?? string.Empty,
                 entry.OriginClusterId ?? string.Empty,

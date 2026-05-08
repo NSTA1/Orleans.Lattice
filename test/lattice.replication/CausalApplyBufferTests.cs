@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 
@@ -24,17 +25,17 @@ public class CausalApplyBufferTests
         return v;
     }
 
-    private static ReplogEntry Entry(
+    private static WalRecord Entry(
         string key,
         HybridLogicalClock ts,
         string origin = OriginB,
         VersionVector? vc = null,
         int valueSize = 1)
     {
-        return new ReplogEntry
+        return new WalRecord
         {
             TreeId = Tree,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = key,
             Value = new byte[valueSize],
             Timestamp = ts,

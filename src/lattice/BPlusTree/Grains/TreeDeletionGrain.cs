@@ -131,6 +131,17 @@ internal sealed class TreeDeletionGrain(
         state.State.ShardRetries = 0;
         await state.WriteStateAsync();
 
+        // Remove the tree from the registry so TreeExistsAsync immediately
+        // returns false. The reminder-driven CompletePurgeAsync path does
+        // the same (line 250-254) — keep the synchronous PurgeNowAsync path
+        // in lockstep so callers of the public PurgeTreeAsync API observe a
+        // fully purged tree on return.
+        if (!TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            await registry.UnregisterAsync(TreeId);
+        }
+
         await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);

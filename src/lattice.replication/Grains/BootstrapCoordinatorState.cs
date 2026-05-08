@@ -84,24 +84,4 @@ internal sealed class BootstrapCoordinatorState
     /// is never <see langword="null"/> at pin time.
     /// </summary>
     [Id(6)] public VersionVector CausalStableFrontier { get; set; } = new();
-
-    /// <summary>
-    /// Atomic-batch saga transaction ids that the producer-side
-    /// snapshot quiesce path
-    /// (<see cref="LatticeReplicationOptions.SnapshotSagaQuiesceTimeout"/>)
-    /// could not drain to completion before the snapshot's tree
-    /// scan began. Captured from
-    /// <see cref="SnapshotStream.SagaBlacklist"/> at
-    /// <see cref="LatticeBootstrapState.ApplyingSnapshot"/> time and
-    /// registered with the per-tree
-    /// <see cref="IReplicationTxBufferGrain"/> on transition to
-    /// <see cref="LatticeBootstrapState.IncrementalHandoff"/>;
-    /// subsequent incremental entries carrying a blacklisted
-    /// <see cref="ReplogEntry.TransactionId"/> bypass the staging
-    /// buffer and are applied as point writes directly. Wire-
-    /// compatibility: missing field on legacy persisted state
-    /// decodes to an empty list, matching the steady-state
-    /// no-blacklist case.
-    /// </summary>
-    [Id(7)] public List<Guid> SagaBlacklist { get; set; } = new();
 }

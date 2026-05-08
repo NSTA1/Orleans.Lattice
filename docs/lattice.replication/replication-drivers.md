@@ -54,9 +54,9 @@ only exits when every pending grain is active or the host's
 siloBuilder.AddLatticeReplication(opts =>
 {
     opts.ClusterId = "site-a";
-    opts.ReplicatedTrees = new Dictionary<string, ReplicationMode>
+    opts.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
     {
-        ["catalog"] = ReplicationMode.LwwRegister,
+        ["catalog"] = LatticeMergeMode.LwwRegister,
     };
     opts.ReplicationPeers = new[] { "site-b", "site-c" };
 });
@@ -140,7 +140,7 @@ the DLQ is unavailable.
 The shipper maintains two activation-scoped buffers reused across pump
 ticks:
 
-- `_drainBuffer` (`List<ReplogEntry>`) — cleared in place at the start
+- `_drainBuffer` (`List<WalRecord>`) — cleared in place at the start
   of every `PumpOnceAsync`. The encoder consumes the list synchronously
   inside `Encode`, so reuse is safe (no aliasing past the call).
 - `_writeBuffer` (`ArrayBufferWriter<byte>`) — reset via
@@ -157,7 +157,7 @@ modulo Orleans-internal serializer wrappers.
 ### Partition resume cursor
 
 The steady-state ship loop bypasses `IChangeFeed` and reads each WAL
-partition directly via `IReplogShardGrain.ReadAsync(fromSequence, …)`
+partition directly via `IWalShardGrain.ReadAsync(fromSequence, …)`
 starting at a durable per-partition resume cursor stored on
 `ReplicationShipperState.PartitionCursors`. Per pump tick the shipper
 fetches up to `ShipPartitionPageSize` (default 256) entries from each

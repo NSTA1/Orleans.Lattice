@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
@@ -86,7 +87,7 @@ internal static class LatticeReplicationGrpcMethodHolder
 /// <summary>
 /// Server-side gRPC service that receives <see cref="ReplicationBatchEnvelopeBox"/>
 /// payloads pushed by remote <see cref="GrpcPushTransport"/> instances,
-/// decodes the contained <see cref="ReplogEntry"/> records, and routes
+/// decodes the contained <see cref="WalRecord"/> records, and routes
 /// each entry through the receiver-side <see cref="IReplicationApplier"/>
 /// seam. Returns a single <see cref="ReplicationAck"/> per batch whose
 /// <see cref="ReplicationAck.HighestAppliedHlc"/> is the maximum
@@ -146,7 +147,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 "ReplicationBatchEnvelope.OriginClusterId must be non-empty."));
         }
 
-        var entries = request.Entries ?? Array.Empty<ReplogEntry>();
+        var entries = request.Entries;
 
         ApplyResult result;
         try

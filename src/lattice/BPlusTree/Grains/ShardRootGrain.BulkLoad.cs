@@ -46,6 +46,7 @@ internal sealed partial class ShardRootGrain
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
             var leafId = leaf.GetGrainId();
             await leaf.SetTreeIdAsync(TreeId);
+            await leaf.SetShardIndexAsync(MyShardIndex);
             await leaf.MergeEntriesAsync(batch);
 
             if (prevLeafId is not null)
@@ -107,6 +108,7 @@ internal sealed partial class ShardRootGrain
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
             var leafId = leaf.GetGrainId();
             await leaf.SetTreeIdAsync(TreeId);
+            await leaf.SetShardIndexAsync(MyShardIndex);
             await leaf.MergeEntriesAsync(batch);
 
             if (prevLeafId is not null)
@@ -266,6 +268,7 @@ internal sealed partial class ShardRootGrain
             var newLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
             var newId = newLeaf.GetGrainId();
             await newLeaf.SetTreeIdAsync(TreeId);
+            await newLeaf.SetShardIndexAsync(MyShardIndex);
             await newLeaf.MergeEntriesAsync(batch);
 
             if (prevNewLeafId is not null)

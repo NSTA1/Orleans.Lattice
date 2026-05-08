@@ -50,7 +50,3 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.replication.peer.bytes_behind` | gauge | `peer` | Per-peer bytes behind |
 | `orleans.lattice.replication.peer.last_contact_seconds` | gauge | `peer` | Per-peer last contact |
 | `orleans.lattice.replication.peer.consecutive_errors` | gauge | `peer` | Per-peer consecutive errors |
-| `orleans.lattice.replication.apply.tx_buffered` | gauge | `tree` | Atomic-batch buffer (transactions) |
-| `orleans.lattice.replication.apply.tx_buffer_bytes` | gauge | `tree` | Atomic-batch buffer (bytes) |
-| `orleans.lattice.replication.apply.tx_apply_duration_ms` | histogram (ms) | `tree`, `outcome` | Atomic-batch apply duration p50/p95/p99 |
-| `orleans.lattice.replication.apply.tx_completed` | counter | `tree`, `outcome` | Atomic-batch completion rate by outcome |

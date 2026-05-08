@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Hosting;
@@ -82,10 +83,10 @@ public class DeadLetterIntegrationTests
         }
     }
 
-    private static ReplogEntry MakeEntry(string key) => new()
+    private static WalRecord MakeEntry(string key) => new()
     {
         TreeId = TreeId,
-        Op = ReplogOp.Set,
+        Op = MutationKind.Set,
         Key = key,
         Value = new byte[] { 1, 2, 3 },
         Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
@@ -95,7 +96,7 @@ public class DeadLetterIntegrationTests
     private static IReplicationApplier AlwaysFailingInner(string message = "boom")
     {
         var inner = Substitute.For<IReplicationApplier>();
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ => throw new InvalidOperationException(message));
         return inner;
     }
@@ -150,7 +151,7 @@ public class DeadLetterIntegrationTests
     {
         var calls = 0;
         var inner = Substitute.For<IReplicationApplier>();
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ =>
             {
                 calls++;
@@ -211,7 +212,7 @@ public class DeadLetterIntegrationTests
         // received zero calls during the replay. The seam built its
         // own ReplicationApplier against _cluster.GrainFactory, so the
         // failing substitute is not on the replay path.
-        await failingInner.DidNotReceive().ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>());
+        await failingInner.DidNotReceive().ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>());
 
         var afterReplay = (await _inspector.ListAsync(TreeId, CancellationToken.None))
             .Where(e => e.EntryId == parked.EntryId)

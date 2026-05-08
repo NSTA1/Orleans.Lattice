@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Replication;
@@ -9,7 +10,7 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>
 /// without setting <see cref="LatticeReplicationOptions.ClusterId"/> sees a
 /// clear validation error rather than producing
-/// <see cref="ReplogEntry"/> records with no attributable origin.
+/// <see cref="WalRecord"/> records with no attributable origin.
 /// </summary>
 internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<LatticeReplicationOptions>
 {
@@ -35,7 +36,7 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
             return ValidateOptionsResult.Fail(
                 $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ReplogPartitions)} "
                 + $"must be at least 1 ({scope}). The captured change-feed sink routes every "
-                + $"{nameof(ReplogEntry)} to a single per-tree WAL grain keyed by "
+                + $"{nameof(WalRecord)} to a single per-tree WAL grain keyed by "
                 + "{treeId}/{partition}, where partition is hash(key) modulo this value; a value "
                 + "of zero or less leaves no partitions to route to.");
         }
@@ -104,24 +105,6 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "enough recent identity tuples that a sustained burst of shadow-forwarded duplicates "
                 + "cannot evict the cache faster than concurrent inbound deliveries race past the "
                 + "per-origin high-water-mark check.");
-        }
-
-        if (options.AtomicBatchBufferMaxTransactions < 1)
-        {
-            return ValidateOptionsResult.Fail(
-                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.AtomicBatchBufferMaxTransactions)} "
-                + $"must be at least 1 ({scope}). The per-tree atomic-batch staging buffer must permit "
-                + "at least one in-flight transaction; a zero cap would force every admitted entry to "
-                + "evict the same entry it just admitted.");
-        }
-
-        if (options.AtomicBatchBufferMaxBytes < 1L * 1024L * 1024L)
-        {
-            return ValidateOptionsResult.Fail(
-                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.AtomicBatchBufferMaxBytes)} "
-                + $"must be at least 1048576 (1 MB) ({scope}). The byte cap on the per-tree atomic-batch "
-                + "staging buffer must remain meaningfully larger than a typical single-entry payload "
-                + "so a partially-buffered batch cannot trigger eviction on its first entry.");
         }
 
         if (options.WalRetention is { } retention && retention <= TimeSpan.Zero)
@@ -228,27 +211,6 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + $"{nameof(ILatticeFallOffLogDetector)}.{nameof(ILatticeFallOffLogDetector.CheckAndTriggerAsync)} calls.");
         }
 
-        if (options.TxBufferOrphanTimeout <= TimeSpan.Zero)
-        {
-            return ValidateOptionsResult.Fail(
-                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.TxBufferOrphanTimeout)} "
-                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
-                + "A zero or negative orphan timeout would force the maintenance grain to evict every "
-                + "partially-buffered atomic-batch transaction on the very first sweep tick after admission, "
-                + "draining the buffer faster than batches can complete.");
-        }
-
-        if (options.SnapshotSagaQuiesceTimeout <= TimeSpan.Zero)
-        {
-            return ValidateOptionsResult.Fail(
-                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.SnapshotSagaQuiesceTimeout)} "
-                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
-                + "A zero or negative quiesce window would force every in-flight atomic-batch saga onto the "
-                + $"{nameof(SnapshotStream)}.{nameof(SnapshotStream.SagaBlacklist)} on every snapshot, "
-                + "permanently degrading cross-cluster atomic-batch visibility to causal+ for any saga that "
-                + "happens to be mid-emission when a snapshot is taken.");
-        }
-
         if (options.ReplicatedTrees is { } trees)
         {
             foreach (var kvp in trees)
@@ -267,11 +229,11 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                     return ValidateOptionsResult.Fail(
                         $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ReplicatedTrees)} "
                         + $"declares tree '{kvp.Key}' with an undefined "
-                        + $"{nameof(ReplicationMode)} value '{(int)kvp.Value}' ({scope}). "
-                        + $"Use one of {nameof(ReplicationMode.LwwRegister)}, "
-                        + $"{nameof(ReplicationMode.OrSet)}, "
-                        + $"{nameof(ReplicationMode.PnCounter)}, or "
-                        + $"{nameof(ReplicationMode.VersionVector)}.");
+                        + $"{nameof(LatticeMergeMode)} value '{(int)kvp.Value}' ({scope}). "
+                        + $"Use one of {nameof(LatticeMergeMode.LwwRegister)}, "
+                        + $"{nameof(LatticeMergeMode.OrSet)}, "
+                        + $"{nameof(LatticeMergeMode.PnCounter)}, or "
+                        + $"{nameof(LatticeMergeMode.VersionVector)}.");
                 }
             }
         }

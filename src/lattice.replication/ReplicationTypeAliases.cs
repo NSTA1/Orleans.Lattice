@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
@@ -10,25 +11,16 @@ namespace Orleans.Lattice.Replication;
 /// </summary>
 public static class ReplicationTypeAliases
 {
-    /// <summary>Alias for <see cref="ReplogEntry"/>.</summary>
-    internal const string ReplogEntry = "olr.re";
-
-    /// <summary>Alias for <see cref="ReplogOp"/>.</summary>
-    internal const string ReplogOp = "olr.ro";
-
-    /// <summary>Alias for <see cref="Replication.ReplicationMode"/>.</summary>
-    internal const string ReplicationMode = "olr.rm";
-
-    // Per-shard write-ahead-log types
-
-    /// <summary>Alias for the per-shard WAL grain interface.</summary>
-    internal const string IReplogShardGrain = "olr.gw";
-
-    /// <summary>Alias for a single sequenced entry returned from a WAL read.</summary>
-    internal const string ReplogShardEntry = "olr.we";
-
-    /// <summary>Alias for a paged WAL read result.</summary>
-    internal const string ReplogShardPage = "olr.wp";
+    // The WalRecord, LatticeMergeMode, IWalShardGrain,
+    // WalShardSequencedEntry, and WalShardPage aliases moved to the
+    // core Orleans.Lattice.TypeAliases table when the WAL adapters
+    // were promoted into the core library so single-cluster hosts
+    // could land durability without a hard reference on this package.
+    // The wire-format string values were preserved verbatim
+    // (olr.re, olr.rm, olr.gw, olr.we, olr.wp) so rolling
+    // upgrade peers continue to interoperate. The former WalOp enum
+    // (alias olr.ro) was collapsed into Orleans.Lattice.MutationKind
+    // during the same move; that alias slot is intentionally retired.
 
     // Per-origin high-water-mark types
 
@@ -106,14 +98,4 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for the per-tree maintenance grain persistent state class.</summary>
     internal const string ReplicationMaintenanceState = "olr.ms";
 
-    // Atomic-batch staging buffer (per-tree receiver-side hold-and-apply)
-
-    /// <summary>Alias for the per-tree atomic-batch staging buffer grain interface.</summary>
-    internal const string IReplicationTxBufferGrain = "olr.gt";
-
-    /// <summary>Alias for <see cref="Grains.TxStagedEntry"/>.</summary>
-    internal const string TxStagedEntry = "olr.te";
-
-    /// <summary>Alias for <see cref="Grains.TxBufferAdmissionResult"/>.</summary>
-    internal const string TxBufferAdmissionResult = "olr.tr";
 }

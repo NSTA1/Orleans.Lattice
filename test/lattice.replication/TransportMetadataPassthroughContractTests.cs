@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Buffers;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Primitives;
@@ -10,8 +11,8 @@ namespace Orleans.Lattice.Replication.Tests;
 /// Pins the R-086 transport contract: an
 /// <see cref="IReplicationTransport"/> implementation must preserve the
 /// causal-plus metadata slots
-/// (<see cref="ReplogEntry.VectorClock"/> and
-/// <see cref="ReplogEntry.DependencySummary"/>) verbatim across a
+/// (<see cref="WalRecord.VectorClock"/> and
+/// <see cref="WalRecord.DependencySummary"/>) verbatim across a
 /// round-trip. No reordering, no mutation, no synthesis. The transport
 /// stays dumb: any normalisation, summary derivation, or merge belongs
 /// in the producer / receiver, never in the wire layer.
@@ -43,7 +44,7 @@ public class TransportMetadataPassthroughContractTests
         return vc;
     }
 
-    private static ReplogEntry MakeEntry(
+    private static WalRecord MakeEntry(
         string key,
         long wallClock,
         VersionVector? vectorClock,
@@ -51,12 +52,12 @@ public class TransportMetadataPassthroughContractTests
         => new()
         {
             TreeId = "tree",
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = key,
             Value = new byte[] { 1, 2, 3 },
             Timestamp = new HybridLogicalClock { WallClockTicks = wallClock, Counter = 0 },
             OriginClusterId = "site-a",
-            Mode = ReplicationMode.LwwRegister,
+            Mode = LatticeMergeMode.LwwRegister,
             VectorClock = vectorClock,
             DependencySummary = dependencySummary,
         };

@@ -1,8 +1,9 @@
+using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
 /// Versioned, Orleans-serialisable wire envelope wrapping a batch of
-/// <see cref="ReplogEntry"/> records for cross-cluster replication
+/// <see cref="WalRecord"/> records for cross-cluster replication
 /// transport. The envelope is the canonical on-the-wire shape produced
 /// by <see cref="IReplicationBatchEncoder"/> implementations and stuffed
 /// into <see cref="ReplicationBatch.Payload"/> at dispatch time.
@@ -52,14 +53,14 @@ public readonly record struct ReplicationBatchEnvelope
     [Id(2)] public string OriginClusterId { get; init; }
 
     /// <summary>
-    /// The captured <see cref="ReplogEntry"/> records, in commit order.
+    /// The captured <see cref="WalRecord"/> records, in commit order.
     /// May be empty (heartbeat / keep-alive batch). Never
     /// <see langword="null"/> on a value produced by the canonical
     /// encoder; hand-constructed envelopes that leave this default
     /// decode as <see langword="null"/> after a round-trip and the
     /// canonical decoder treats that as an empty list.
     /// </summary>
-    [Id(3)] public IReadOnlyList<ReplogEntry> Entries { get; init; }
+    [Id(3)] public IReadOnlyList<WalRecord> Entries { get; init; }
 
     /// <summary>
     /// The current wire-format version stamped by the canonical
@@ -74,7 +75,7 @@ public readonly record struct ReplicationBatchEnvelope
     /// <summary>
     /// Diagnostic minor version stamped on the canonical wire format.
     /// Bumped when a strictly additive change ships - e.g. a new
-    /// <c>[Id]</c> slot on <see cref="ReplogEntry"/> that legacy peers
+    /// <c>[Id]</c> slot on <see cref="WalRecord"/> that legacy peers
     /// safely decode as null - so logs and traces can correlate the
     /// producer's exact envelope shape without inflating
     /// <see cref="CurrentVersion"/> (which is reserved for breaking

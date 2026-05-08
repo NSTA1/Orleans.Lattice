@@ -408,4 +408,47 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// (so a stale coordinator cannot wipe a newer operation's state).
     /// </summary>
     Task ClearShadowForwardAsync(string operationId);
+
+    // ==========================================================================
+    //  Saga prepare/commit-broadcast terminal-mark primitive
+    // ==========================================================================
+    //  Used by AtomicWriteGrain to broadcast a single linearization mark to
+    //  every WAL shard a SetManyAtomicAsync saga touched, after every
+    //  prepare-phase per-key write has appended (with IsPrepared=true) to
+    //  the per-shard WAL. Exactly one TxCommit (or TxAbort) per touched
+    //  shard, never per-key. Composes with shadow-forwarding so a shard
+    //  in a migration window mirrors the terminal mark to its destination
+    //  in the same call shape as a normal mutation.
+
+    /// <summary>
+    /// Appends a single saga-terminal mark to this shard's per-shard WAL
+    /// — a <see cref="MutationKind.TxCommit"/> when
+    /// <paramref name="committed"/> is <c>true</c>, otherwise a
+    /// <see cref="MutationKind.TxAbort"/>. The mark surfaces to every leaf
+    /// on this shard via the WAL replay path and flips (or drops) every
+    /// pending-transaction entry under the matching
+    /// <paramref name="transactionId"/>. Exactly one terminal mark per
+    /// touched shard per saga; the saga's commit-broadcast loop fans out
+    /// in parallel across every shard the prepare phase touched.
+    /// Idempotent: re-appending the same terminal mark on a shard that
+    /// has already seen one is a no-op via the leaf-side recently-terminal
+    /// dedup set.
+    /// </summary>
+    /// <param name="transactionId">
+    /// The saga's persisted transaction id (matching every
+    /// prepare-phase per-key emit's
+    /// <see cref="LatticeMutation.TransactionId"/>).
+    /// </param>
+    /// <param name="committed">
+    /// <c>true</c> to flip every pending-tx entry under the matching id
+    /// into the visible projection (<see cref="MutationKind.TxCommit"/>);
+    /// <c>false</c> to drop every pending-tx entry without it ever
+    /// becoming visible (<see cref="MutationKind.TxAbort"/>).
+    /// </param>
+    /// <param name="cancellationToken">
+    /// Cooperative cancellation for the WAL append. Cancellation does
+    /// not roll back a successfully-appended terminal mark — by then the
+    /// linearization decision has been published to the WAL.
+    /// </param>
+    Task AppendTxTerminalAsync(Guid transactionId, bool committed, CancellationToken cancellationToken = default);
 }

@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Buffers;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -248,7 +249,7 @@ public partial class ReplicationShipperGrainTests
     {
         public string ContentType => "application/x-test-order";
         public int CurrentWireVersion => 1;
-        public List<ReplogEntry> CapturedOrder { get; } = new();
+        public List<WalRecord> CapturedOrder { get; } = new();
 
         public void Encode(ReplicationBatchEnvelope envelope, System.Buffers.IBufferWriter<byte> writer)
         {

@@ -99,7 +99,7 @@ public readonly record struct LatticeMutation
     /// stamp it on a downstream wire envelope - must defensively snapshot
     /// the value (typically via <see cref="Primitives.VersionVector.Clone"/>);
     /// the replication package's built-in observer does this internally so
-    /// every emitted <c>ReplogEntry</c> is detached from later producer-side
+    /// every emitted <c>WalRecord</c> is detached from later producer-side
     /// advances.
     /// </remarks>
     [Id(9)] public Primitives.VersionVector? VectorClock { get; init; }
@@ -197,4 +197,40 @@ public readonly record struct LatticeMutation
     /// observers persisted before this field existed.
     /// </summary>
     [Id(15)] public int AtomicBatchIndex { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when this mutation is a saga prepare-phase write that
+    /// must route into the per-leaf pending-tx map rather than the
+    /// visible projection. Flipped to live state by a subsequent terminal
+    /// <see cref="MutationKind.TxCommit"/> mutation under the same
+    /// <see cref="TransactionId"/>; dropped by a terminal
+    /// <see cref="MutationKind.TxAbort"/>. Always <c>false</c> on
+    /// <see cref="MutationKind.TxCommit"/> and
+    /// <see cref="MutationKind.TxAbort"/> terminal-mark mutations
+    /// themselves. Defaults to <c>false</c> for wire compatibility with
+    /// observers persisted before this field existed.
+    /// </summary>
+    [Id(16)] public bool IsPrepared { get; init; }
+
+    /// <summary>
+    /// Logical chain-shard index that authored this mutation — i.e. the
+    /// <c>shardIndex</c> half of the originating
+    /// <c>ShardRootGrain</c>'s <c>{treeId}/{shardIndex}</c> grain key.
+    /// Stamped at commit time by the foreground commit path (the
+    /// per-key writer reads it from the leaf's persisted shard index;
+    /// the saga terminal writer reads it from the shard root's parsed
+    /// key). Used by activation-time WAL replay on the leaf to filter
+    /// out records authored by sibling chain shards that share a WAL
+    /// partition — without this slot a leaf in shard <c>5</c> reading
+    /// the same WAL partition as a leaf in shard <c>2</c> would absorb
+    /// the sibling shard's keys into its own projection on every
+    /// reactivation. Independent of <see cref="OriginClusterId"/> (which
+    /// identifies the originating cluster, not the originating shard).
+    /// Strictly additive on the wire: legacy peers and entries authored
+    /// before this slot existed decode as <c>0</c>, which a leaf with no
+    /// persisted <c>LeafNodeState.ShardIndex</c> (also a legacy state
+    /// shape) treats as "apply unconditionally" for back-compat with
+    /// the V1 single-shard layout.
+    /// </summary>
+    [Id(17)] public int ShardIndex { get; init; }
 }

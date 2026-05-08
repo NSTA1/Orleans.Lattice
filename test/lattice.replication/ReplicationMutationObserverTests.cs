@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice;
@@ -25,20 +26,20 @@ public class ReplicationMutationObserverTests
     /// <summary>
     /// Permissive resolver used by the unit tests that focus on
     /// per-key filters / origin stamping. Opts every tree id in to
-    /// <see cref="ReplicationMode.LwwRegister"/>; tests that exercise mode
+    /// <see cref="LatticeMergeMode.LwwRegister"/>; tests that exercise mode
     /// resolution itself construct an explicit resolver instead.
     /// </summary>
-    private sealed class AllowAllResolver : IReplicationModeResolver
+    private sealed class AllowAllResolver : ILatticeMergeModeResolver
     {
-        public ReplicationMode? Resolve(string treeId) => ReplicationMode.LwwRegister;
+        public LatticeMergeMode? Resolve(string treeId) => LatticeMergeMode.LwwRegister;
     }
 
-    private static IReplicationModeResolver AllowAll() => new AllowAllResolver();
+    private static ILatticeMergeModeResolver AllowAll() => new AllowAllResolver();
 
     private sealed class CapturingSink : IReplogSink
     {
-        public List<ReplogEntry> Entries { get; } = new();
-        public Task WriteAsync(ReplogEntry entry, CancellationToken cancellationToken)
+        public List<WalRecord> Entries { get; } = new();
+        public Task WriteAsync(WalRecord entry, CancellationToken cancellationToken)
         {
             Entries.Add(entry);
             return Task.CompletedTask;
@@ -49,7 +50,7 @@ public class ReplicationMutationObserverTests
     public async Task Set_mutation_emits_entry_with_value_and_local_origin()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
         var ts = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
 
         await observer.OnMutationAsync(new LatticeMutation
@@ -67,7 +68,7 @@ public class ReplicationMutationObserverTests
         Assert.Multiple(() =>
         {
             Assert.That(e.TreeId, Is.EqualTo(DefaultTree));
-            Assert.That(e.Op, Is.EqualTo(ReplogOp.Set));
+            Assert.That(e.Op, Is.EqualTo(MutationKind.Set));
             Assert.That(e.Key, Is.EqualTo("k"));
             Assert.That(e.EndExclusiveKey, Is.Null);
             Assert.That(e.Value, Is.EqualTo(new byte[] { 1, 2, 3 }));
@@ -75,7 +76,7 @@ public class ReplicationMutationObserverTests
             Assert.That(e.IsTombstone, Is.False);
             Assert.That(e.ExpiresAtTicks, Is.EqualTo(100L));
             Assert.That(e.OriginClusterId, Is.EqualTo("site-a"));
-            Assert.That(e.Mode, Is.EqualTo(ReplicationMode.LwwRegister));
+            Assert.That(e.Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
         });
     }
 
@@ -83,7 +84,7 @@ public class ReplicationMutationObserverTests
     public async Task Delete_mutation_emits_entry_with_tombstone_flag()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -96,12 +97,12 @@ public class ReplicationMutationObserverTests
         var e = sink.Entries.Single();
         Assert.Multiple(() =>
         {
-            Assert.That(e.Op, Is.EqualTo(ReplogOp.Delete));
+            Assert.That(e.Op, Is.EqualTo(MutationKind.Delete));
             Assert.That(e.Key, Is.EqualTo("gone"));
             Assert.That(e.IsTombstone, Is.True);
             Assert.That(e.Value, Is.Null);
             Assert.That(e.OriginClusterId, Is.EqualTo("site-a"));
-            Assert.That(e.Mode, Is.EqualTo(ReplicationMode.LwwRegister));
+            Assert.That(e.Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
         });
     }
 
@@ -109,7 +110,7 @@ public class ReplicationMutationObserverTests
     public async Task DeleteRange_mutation_emits_entry_with_end_exclusive_key()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -123,7 +124,7 @@ public class ReplicationMutationObserverTests
         var e = sink.Entries.Single();
         Assert.Multiple(() =>
         {
-            Assert.That(e.Op, Is.EqualTo(ReplogOp.DeleteRange));
+            Assert.That(e.Op, Is.EqualTo(MutationKind.DeleteRange));
             Assert.That(e.Key, Is.EqualTo("a"));
             Assert.That(e.EndExclusiveKey, Is.EqualTo("z"));
             Assert.That(e.IsTombstone, Is.True);
@@ -134,7 +135,7 @@ public class ReplicationMutationObserverTests
     public async Task Existing_origin_cluster_id_is_preserved_for_remote_replays()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -152,7 +153,7 @@ public class ReplicationMutationObserverTests
     public async Task Local_cluster_id_is_forwarded_verbatim_when_origin_unset()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-x"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-x"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -168,7 +169,7 @@ public class ReplicationMutationObserverTests
     [Test]
     public void Unknown_mutation_kind_throws_invalid_operation()
     {
-        var observer = new ReplicationMutationObserver(new CapturingSink(), Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(new CapturingSink(), Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         Assert.That(
             async () => await observer.OnMutationAsync(
@@ -181,7 +182,7 @@ public class ReplicationMutationObserverTests
     public async Task Sink_cancellation_token_is_forwarded()
     {
         var sink = Substitute.For<IReplogSink>();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
         using var cts = new CancellationTokenSource();
 
         await observer.OnMutationAsync(new LatticeMutation
@@ -192,7 +193,7 @@ public class ReplicationMutationObserverTests
             Value = Array.Empty<byte>(),
         }, cts.Token);
 
-        await sink.Received(1).WriteAsync(Arg.Any<ReplogEntry>(), cts.Token);
+        await sink.Received(1).WriteAsync(Arg.Any<WalRecord>(), cts.Token);
     }
 
     [Test]
@@ -200,7 +201,7 @@ public class ReplicationMutationObserverTests
     {
         await Task.CompletedTask;
         Assert.That(
-            () => new ReplicationMutationObserver(null!, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker()),
+            () => new ReplicationMutationObserver(null!, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>())),
             Throws.ArgumentNullException);
     }
 
@@ -209,7 +210,7 @@ public class ReplicationMutationObserverTests
     {
         await Task.CompletedTask;
         Assert.That(
-            () => new ReplicationMutationObserver(new CapturingSink(), null!, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker()),
+            () => new ReplicationMutationObserver(new CapturingSink(), null!, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>())),
             Throws.ArgumentNullException);
     }
 
@@ -218,7 +219,7 @@ public class ReplicationMutationObserverTests
     {
         await Task.CompletedTask;
         Assert.That(
-            () => new ReplicationMutationObserver(new CapturingSink(), Monitor("site-a"), null!, new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker()),
+            () => new ReplicationMutationObserver(new CapturingSink(), Monitor("site-a"), null!, new LocalVectorClockCache(Substitute.For<IGrainFactory>())),
             Throws.ArgumentNullException);
     }
 
@@ -230,10 +231,10 @@ public class ReplicationMutationObserverTests
     public async Task Mode_resolver_null_skips_mutation()
     {
         var sink = new CapturingSink();
-        var resolver = Substitute.For<IReplicationModeResolver>();
-        resolver.Resolve(Arg.Any<string>()).Returns((ReplicationMode?)null);
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns((LatticeMergeMode?)null);
 
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver, new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver, new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("undeclared", "k"), CancellationToken.None);
 
@@ -244,11 +245,11 @@ public class ReplicationMutationObserverTests
     public async Task Mode_resolver_value_is_stamped_on_entry()
     {
         var sink = new CapturingSink();
-        var resolver = Substitute.For<IReplicationModeResolver>();
-        resolver.Resolve("declared").Returns(ReplicationMode.LwwRegister);
-        resolver.Resolve("undeclared").Returns((ReplicationMode?)null);
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        resolver.Resolve("declared").Returns(LatticeMergeMode.LwwRegister);
+        resolver.Resolve("undeclared").Returns((LatticeMergeMode?)null);
 
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver, new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver, new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("declared", "k"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("undeclared", "k"), CancellationToken.None);
@@ -257,7 +258,7 @@ public class ReplicationMutationObserverTests
         {
             Assert.That(sink.Entries, Has.Count.EqualTo(1));
             Assert.That(sink.Entries[0].TreeId, Is.EqualTo("declared"));
-            Assert.That(sink.Entries[0].Mode, Is.EqualTo(ReplicationMode.LwwRegister));
+            Assert.That(sink.Entries[0].Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
         });
     }
 
@@ -265,10 +266,10 @@ public class ReplicationMutationObserverTests
     public async Task Mode_resolver_is_consulted_per_mutation()
     {
         var sink = new CapturingSink();
-        var resolver = Substitute.For<IReplicationModeResolver>();
-        resolver.Resolve(Arg.Any<string>()).Returns(ReplicationMode.LwwRegister);
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
 
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver, new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver, new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t", "k1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "k2"), CancellationToken.None);
@@ -288,7 +289,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyFilter = static k => k.StartsWith("ok/"),
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t", "ok/1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "skip/1"), CancellationToken.None);
@@ -304,7 +305,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyFilter = null,
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t", "anything"), CancellationToken.None);
 
@@ -319,7 +320,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyPrefixes = Array.Empty<string>(),
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t", "any"), CancellationToken.None);
 
@@ -334,7 +335,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { "a/", "b/" },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t", "a/1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "b/2"), CancellationToken.None);
@@ -353,7 +354,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { "Repl/" },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t", "repl/1"), CancellationToken.None);
 
@@ -369,7 +370,7 @@ public class ReplicationMutationObserverTests
             ClusterId = "site-a",
             KeyFilter = static k => k.EndsWith("-keep"),
             KeyPrefixes = new[] { "x/" },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t", "x/a-keep"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "x/a-drop"), CancellationToken.None);
@@ -401,7 +402,7 @@ public class ReplicationMutationObserverTests
         monitor.Get("vip").Returns(vip);
 
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("vip", "k"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("other", "k"), CancellationToken.None);
@@ -417,11 +418,11 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyFilter = static _ => false,
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t", "k"), CancellationToken.None);
 
-        await sink.DidNotReceive().WriteAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>());
+        await sink.DidNotReceive().WriteAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -432,7 +433,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { "a/" },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -467,7 +468,7 @@ public class ReplicationMutationObserverTests
         monitor.CurrentValue.Returns(opts);
         monitor.Get(Arg.Any<string>()).Returns(opts);
 
-        using var observer = new ReplicationMutationObserver(new CapturingSink(), monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        using var observer = new ReplicationMutationObserver(new CapturingSink(), monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t1", "k1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t1", "k2"), CancellationToken.None);
@@ -493,7 +494,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyFilter = _ => { calls++; return true; },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t", "k1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "k2"), CancellationToken.None);
@@ -534,7 +535,7 @@ public class ReplicationMutationObserverTests
         });
 
         var sink = new CapturingSink();
-        using var observer = new ReplicationMutationObserver(sink, monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        using var observer = new ReplicationMutationObserver(sink, monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t", "k"), CancellationToken.None);
         Assert.That(sink.Entries, Is.Empty, "Initial deny-all filter should suppress the write.");
@@ -565,7 +566,7 @@ public class ReplicationMutationObserverTests
         });
 
         var sink = new CapturingSink();
-        using var observer = new ReplicationMutationObserver(sink, monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        using var observer = new ReplicationMutationObserver(sink, monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t", "k1"), CancellationToken.None);
 
@@ -589,7 +590,7 @@ public class ReplicationMutationObserverTests
         monitor.Get(Arg.Any<string>()).Returns(new LatticeReplicationOptions { ClusterId = "x" });
         monitor.OnChange(Arg.Any<Action<LatticeReplicationOptions, string?>>()).Returns(subscription);
 
-        var observer = new ReplicationMutationObserver(new CapturingSink(), monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(new CapturingSink(), monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
         observer.Dispose();
 
         subscription.Received(1).Dispose();
@@ -603,7 +604,7 @@ public class ReplicationMutationObserverTests
         monitor.Get(Arg.Any<string>()).Returns(new LatticeReplicationOptions { ClusterId = "x" });
         monitor.OnChange(Arg.Any<Action<LatticeReplicationOptions, string?>>()).Returns((IDisposable?)null);
 
-        var observer = new ReplicationMutationObserver(new CapturingSink(), monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(new CapturingSink(), monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         Assert.DoesNotThrow(() => observer.Dispose());
         Assert.DoesNotThrow(() => observer.Dispose());
@@ -617,7 +618,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { null!, "ok/" },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t", "ok/1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "skip/1"), CancellationToken.None);
@@ -633,7 +634,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { (string)null!, null! },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(SetMutation("t", "anything"), CancellationToken.None);
 
@@ -656,7 +657,7 @@ public class ReplicationMutationObserverTests
     public async Task Vector_clock_from_mutation_is_stamped_on_emitted_entry()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
         var vc = new VersionVector();
         var ticked = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
         vc.Entries["site-a"] = ticked;
@@ -698,7 +699,7 @@ public class ReplicationMutationObserverTests
         // receiver's dep-check expects when no causal predecessors
         // have been declared.
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -725,7 +726,7 @@ public class ReplicationMutationObserverTests
     public async Task DeleteRange_carries_ambient_vector_clock_when_present()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
         var vc = new VersionVector();
         var ticked = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
         vc.Entries["site-a"] = ticked;
@@ -755,7 +756,7 @@ public class ReplicationMutationObserverTests
     public async Task Vector_clock_is_defensively_cloned_so_post_emit_mutation_does_not_leak()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
         var vc = new VersionVector();
         var atEmit = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
         vc.Entries["site-a"] = atEmit;
@@ -800,7 +801,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { "ok/" },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
         var vc = new VersionVector();
         vc.Tick("site-a");
 
@@ -841,7 +842,7 @@ public class ReplicationMutationObserverTests
             .Returns((IDisposable?)null);
 
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
         var vc1 = new VersionVector();
         var t1 = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
         vc1.Entries["site-a"] = t1;
@@ -892,7 +893,7 @@ public class ReplicationMutationObserverTests
     public async Task Delta_kind_and_payload_are_forwarded_verbatim_on_set()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
         var payload = new byte[] { 4, 5, 6 };
 
         await observer.OnMutationAsync(new LatticeMutation
@@ -917,7 +918,7 @@ public class ReplicationMutationObserverTests
     public async Task Delta_slots_are_null_on_emit_when_mutation_did_not_author_a_delta()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -939,7 +940,7 @@ public class ReplicationMutationObserverTests
     public async Task Delete_mutation_forwards_delta_kind_and_payload()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
         var payload = new byte[] { 1 };
 
         await observer.OnMutationAsync(new LatticeMutation
@@ -969,7 +970,7 @@ public class ReplicationMutationObserverTests
         // the reference verbatim. Pinned to keep the hot path
         // allocation-free for typed CRDT emits.
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
         var payload = new byte[] { 7 };
 
         await observer.OnMutationAsync(new LatticeMutation
@@ -993,7 +994,7 @@ public class ReplicationMutationObserverTests
     public async Task Maintenance_category_set_is_skipped()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1011,7 +1012,7 @@ public class ReplicationMutationObserverTests
     public async Task Maintenance_category_delete_is_skipped()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1029,7 +1030,7 @@ public class ReplicationMutationObserverTests
     public async Task Maintenance_category_delete_range_is_skipped()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1051,7 +1052,7 @@ public class ReplicationMutationObserverTests
         // with no explicit Category should default to MutationCategory.User
         // (the [Id(11)] default) and emit through the observer unchanged.
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1068,7 +1069,7 @@ public class ReplicationMutationObserverTests
     public async Task Explicit_user_category_is_emitted_to_sink()
     {
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1089,7 +1090,7 @@ public class ReplicationMutationObserverTests
         // A remote-origin maintenance emit is still Maintenance and still
         // skips the WAL.
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1109,10 +1110,10 @@ public class ReplicationMutationObserverTests
     {
         // The Maintenance gate runs before mode resolution so the resolver
         // is never consulted for a structural-maintenance emit.
-        var resolver = Substitute.For<IReplicationModeResolver>();
-        resolver.Resolve(Arg.Any<string>()).Returns(ReplicationMode.LwwRegister);
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
 
-        var observer = new ReplicationMutationObserver(new CapturingSink(), Monitor("site-a"), resolver, new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(new CapturingSink(), Monitor("site-a"), resolver, new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1138,7 +1139,7 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyFilter = _ => { calls++; return true; },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1162,7 +1163,7 @@ public class ReplicationMutationObserverTests
         // Pin the no-WriteAsync contract: a maintenance emit must not
         // touch the sink at all (no allocation, no awaitable).
         var sink = Substitute.For<IReplogSink>();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1173,7 +1174,7 @@ public class ReplicationMutationObserverTests
             Category = MutationCategory.Maintenance,
         }, CancellationToken.None);
 
-        await sink.DidNotReceive().WriteAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>());
+        await sink.DidNotReceive().WriteAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -1183,7 +1184,7 @@ public class ReplicationMutationObserverTests
         // emit followed by a user emit on the same observer instance
         // produces exactly one captured entry, and vice versa.
         var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()), new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
 
         await observer.OnMutationAsync(new LatticeMutation
         {

@@ -1,6 +1,6 @@
 # Change feed (`IChangeFeed`)
 
-`IChangeFeed` is the public, in-process subscriber API over the per-shard write-ahead log. It lets consumers — the outbound ship loop in later phases, custom transports, integration tests, and the future local materialiser — read every captured `ReplogEntry` for a tree without touching the primary state and without depending on transport-shaped acks.
+`IChangeFeed` is the public, in-process subscriber API over the per-shard write-ahead log. It lets consumers — the outbound ship loop in later phases, custom transports, integration tests, and the future local materialiser — read every captured `WalRecord` for a tree without touching the primary state and without depending on transport-shaped acks.
 
 The contract is deliberately neutral: there is no peer id, no per-call ack envelope, no notion of "live" vs. "snapshot" mode. It is the seam later phases plug into.
 
@@ -11,7 +11,7 @@ The interface lives in `Orleans.Lattice.Replication`:
 ```text
 public interface IChangeFeed
 {
-    IAsyncEnumerable<ReplogEntry> Subscribe(
+    IAsyncEnumerable<WalRecord> Subscribe(
         string treeName,
         HybridLogicalClock cursor,
         bool includeLocalOrigin = true,
@@ -21,7 +21,7 @@ public interface IChangeFeed
 
 | Parameter | Default | Semantics |
 |---|---|---|
-| `treeName` | required | Logical tree id whose change feed is being consumed. Only entries with `ReplogEntry.TreeId` equal to this value are yielded. |
+| `treeName` | required | Logical tree id whose change feed is being consumed. Only entries with `WalRecord.TreeId` equal to this value are yielded. |
 | `cursor` | required | Strict lower-bound timestamp. The feed yields entries with `entry.Timestamp > cursor`. Pass `HybridLogicalClock.Zero` to read from the start of the WAL. |
 | `includeLocalOrigin` | `true` | When `false`, entries whose `OriginClusterId` matches the local `LatticeReplicationOptions.ClusterId` are filtered out — the cycle-break used by remote shippers. Defaults to `true` because in-process consumers (e.g. a future local materialiser) need to observe local-origin mutations. |
 | `cancellationToken` | `default` | Observed between every page read and every yielded entry. |
@@ -51,7 +51,7 @@ Entries are yielded in `HybridLogicalClock` ascending order, merged across every
 
 ## Caveats
 
-- `DeleteRange` entries currently carry `HybridLogicalClock.Zero` (a known property of `ReplogEntry`). A non-`Zero` cursor therefore filters them out; this is fixed at the `ReplogEntry` layer in a later phase, not at the change-feed layer.
+- `DeleteRange` entries currently carry `HybridLogicalClock.Zero` (a known property of `WalRecord`). A non-`Zero` cursor therefore filters them out; this is fixed at the `WalRecord` layer in a later phase, not at the change-feed layer.
 - The current implementation merges by collecting filtered entries into a list and sorting them — `O(N log N)` in the number of entries that pass the cursor filter. Adequate for bootstrap and for the test surface this seam enables; the outbound shipper introduced in later phases will swap to a streaming k-way merge if the consumer count grows.
 
 ## Registration

@@ -69,10 +69,20 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Lazily resolves the commit-log writer from the activation's
     /// service provider. Returns <see langword="null"/> when no adapter
-    /// has been registered (the legacy-only commit path).
+    /// has been registered (the legacy-only commit path) <em>or</em>
+    /// while the leaf's <see cref="LeafNodeState.TreeId"/> is still
+    /// unset — a leaf created without going through
+    /// <see cref="ILattice"/> (e.g. a unit-test harness that grabs a
+    /// leaf grain by raw <see cref="Guid"/>) cannot dispatch to a WAL
+    /// shard whose grain key requires a non-empty tree id. Once
+    /// <see cref="SetTreeIdAsync"/> populates the tree id the
+    /// resolver returns the cached writer normally.
     /// </summary>
     private ICommitLogWriter? ResolveCommitLogWriter()
     {
+        if (string.IsNullOrEmpty(state.State.TreeId))
+            return null;
+
         if (_commitLogWriterResolved)
             return _commitLogWriter;
 

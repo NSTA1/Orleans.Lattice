@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Buffers;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Primitives;
@@ -27,24 +28,24 @@ public class OrleansBinaryReplicationBatchEncoderTests
         int wireVersion = ReplicationBatchEnvelope.CurrentVersion,
         string tree = "tree",
         string origin = "site-a",
-        IReadOnlyList<ReplogEntry>? entries = null)
+        IReadOnlyList<WalRecord>? entries = null)
         => new()
         {
             WireVersion = wireVersion,
             TreeName = tree,
             OriginClusterId = origin,
-            Entries = entries ?? Array.Empty<ReplogEntry>(),
+            Entries = entries ?? Array.Empty<WalRecord>(),
         };
 
-    private static ReplogEntry MakeEntry(string key = "k", byte b = 1) => new()
+    private static WalRecord MakeEntry(string key = "k", byte b = 1) => new()
     {
         TreeId = "tree",
-        Op = ReplogOp.Set,
+        Op = MutationKind.Set,
         Key = key,
         Value = new byte[] { b },
         Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
         OriginClusterId = "site-a",
-        Mode = ReplicationMode.LwwRegister,
+        Mode = LatticeMergeMode.LwwRegister,
     };
 
     /// <summary>
@@ -146,15 +147,15 @@ public class OrleansBinaryReplicationBatchEncoderTests
         vc.Entries["site-a"] = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
         vc.Entries["site-b"] = HybridLogicalClock.Tick(HybridLogicalClock.Tick(HybridLogicalClock.Zero));
 
-        var entry = new ReplogEntry
+        var entry = new WalRecord
         {
             TreeId = "tree",
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1 },
             Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
             OriginClusterId = "site-a",
-            Mode = ReplicationMode.LwwRegister,
+            Mode = LatticeMergeMode.LwwRegister,
             VectorClock = vc,
             DependencySummary = vc,
         };
@@ -249,7 +250,7 @@ public class OrleansBinaryReplicationBatchEncoderTests
             WireVersion = 1,
             TreeName = null!,
             OriginClusterId = "site-a",
-            Entries = Array.Empty<ReplogEntry>(),
+            Entries = Array.Empty<WalRecord>(),
         };
         var writer = new ArrayBufferWriter<byte>();
 
@@ -272,7 +273,7 @@ public class OrleansBinaryReplicationBatchEncoderTests
             WireVersion = 1,
             TreeName = "tree",
             OriginClusterId = null!,
-            Entries = Array.Empty<ReplogEntry>(),
+            Entries = Array.Empty<WalRecord>(),
         };
         var writer = new ArrayBufferWriter<byte>();
 
@@ -339,7 +340,7 @@ public class OrleansBinaryReplicationBatchEncoderTests
             WireVersion = 0,
             TreeName = "tree",
             OriginClusterId = "site-a",
-            Entries = Array.Empty<ReplogEntry>(),
+            Entries = Array.Empty<WalRecord>(),
         };
         var serializer = _services.GetRequiredService<Serializer<ReplicationBatchEnvelope>>();
         var bytes = serializer.SerializeToArray(envelope);
@@ -376,7 +377,7 @@ public class OrleansBinaryReplicationBatchEncoderTests
     [Test]
     public void Encode_then_decode_preserves_empty_entry_batch()
     {
-        var envelope = MakeEnvelope(entries: Array.Empty<ReplogEntry>());
+        var envelope = MakeEnvelope(entries: Array.Empty<WalRecord>());
 
         var bytes = Encode(envelope);
         var decoded = _encoder.Decode(bytes);
@@ -395,10 +396,10 @@ public class OrleansBinaryReplicationBatchEncoderTests
         // strings too - but a guarded floor makes the regression
         // detectable.
         var entries = Enumerable.Range(0, 50)
-            .Select(i => new ReplogEntry
+            .Select(i => new WalRecord
             {
                 TreeId = "tree",
-                Op = ReplogOp.Set,
+                Op = MutationKind.Set,
                 Key = $"key-{i:D4}",
                 Value = new byte[256],
                 Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),

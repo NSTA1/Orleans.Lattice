@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
@@ -50,15 +51,15 @@ public partial class LatticeReplicationLocalVcSeederTests
     private static (
         LatticeReplicationLocalVcSeeder Seeder,
         IGrainFactory Factory,
-        IReplicationModeResolver Resolver,
+        ILatticeMergeModeResolver Resolver,
         IShardCountProvider ShardCounts,
         LocalVectorClockCache Cache,
         IReplicationHighWaterMarkGrain HwmGrain) CreateSeeder(
-            ReplicationMode? mode = ReplicationMode.LwwRegister,
+            LatticeMergeMode? mode = LatticeMergeMode.LwwRegister,
             IReadOnlyList<IReadOnlyList<IReadOnlyList<LwwEntry>>>? shards = null)
     {
         var factory = Substitute.For<IGrainFactory>();
-        var resolver = Substitute.For<IReplicationModeResolver>();
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
         resolver.Resolve(Arg.Any<string>()).Returns(mode);
         var shardCounts = Substitute.For<IShardCountProvider>();
         shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -130,7 +131,7 @@ public partial class LatticeReplicationLocalVcSeederTests
             () => new LatticeReplicationLocalVcSeeder(
                 null!,
                 Substitute.For<IShardCountProvider>(),
-                Substitute.For<IReplicationModeResolver>(),
+                Substitute.For<ILatticeMergeModeResolver>(),
                 new LocalVectorClockCache(Substitute.For<IGrainFactory>())),
             Throws.InstanceOf<ArgumentNullException>());
     }
@@ -142,7 +143,7 @@ public partial class LatticeReplicationLocalVcSeederTests
             () => new LatticeReplicationLocalVcSeeder(
                 Substitute.For<IGrainFactory>(),
                 null!,
-                Substitute.For<IReplicationModeResolver>(),
+                Substitute.For<ILatticeMergeModeResolver>(),
                 new LocalVectorClockCache(Substitute.For<IGrainFactory>())),
             Throws.InstanceOf<ArgumentNullException>());
     }
@@ -166,7 +167,7 @@ public partial class LatticeReplicationLocalVcSeederTests
             () => new LatticeReplicationLocalVcSeeder(
                 Substitute.For<IGrainFactory>(),
                 Substitute.For<IShardCountProvider>(),
-                Substitute.For<IReplicationModeResolver>(),
+                Substitute.For<ILatticeMergeModeResolver>(),
                 null!),
             Throws.InstanceOf<ArgumentNullException>());
     }

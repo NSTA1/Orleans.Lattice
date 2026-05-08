@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
@@ -32,7 +33,7 @@ public readonly record struct ReplicationBatch
 
     /// <summary>
     /// Stable identifier of the local (sending) cluster. Stamped on every
-    /// captured <see cref="ReplogEntry"/> at commit time and surfaced here
+    /// captured <see cref="WalRecord"/> at commit time and surfaced here
     /// so transports that frame the entries themselves do not need to
     /// re-derive the origin from the payload. Required: must be
     /// non-<see langword="null"/> and non-empty.
@@ -42,7 +43,7 @@ public readonly record struct ReplicationBatch
     /// <summary>
     /// Opaque, framed batch payload. The byte layout is the responsibility
     /// of the binary-framing seam (typically Orleans-serializer-encoded
-    /// <see cref="ReplogEntry"/> records inside a versioned envelope), and
+    /// <see cref="WalRecord"/> records inside a versioned envelope), and
     /// the transport treats this as a black box: it does not parse, peek
     /// into, or otherwise interpret the bytes. May be empty (a heartbeat
     /// or keep-alive batch).

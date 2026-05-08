@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
@@ -222,7 +223,7 @@ public partial class ReplicationApplierTests
         // The third park evicted the first parked entry (k0) and routed
         // it to the DLQ with reason hlc_skew.
         await h.Dlq.Received(1).EnqueueAsync(
-            Arg.Is<ReplogEntry>(e => e.Key == "k0"),
+            Arg.Is<WalRecord>(e => e.Key == "k0"),
             Arg.Any<string>(),
             Arg.Any<int>(),
             LatticeReplicationMetrics.ReasonHlcSkew,
@@ -282,7 +283,7 @@ public partial class ReplicationApplierTests
         await h.Applier.ApplyAsync(satisfier);
 
         await h.Dlq.Received(1).EnqueueAsync(
-            Arg.Is<ReplogEntry>(e => e.Key == "k1"),
+            Arg.Is<WalRecord>(e => e.Key == "k1"),
             Arg.Any<string>(),
             Arg.Any<int>(),
             LatticeReplicationMetrics.ReasonSchema,

@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Collections.Concurrent;
 using Orleans.Lattice.Replication;
 
@@ -11,13 +12,13 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </summary>
 internal sealed class RecordingReplogSink : IReplogSink
 {
-    private readonly ConcurrentQueue<ReplogEntry> _entries = new();
+    private readonly ConcurrentQueue<WalRecord> _entries = new();
 
     /// <summary>Entries observed by <see cref="WriteAsync"/>, in arrival order.</summary>
-    public IReadOnlyCollection<ReplogEntry> Entries => _entries.ToArray();
+    public IReadOnlyCollection<WalRecord> Entries => _entries.ToArray();
 
     /// <inheritdoc />
-    public Task WriteAsync(ReplogEntry entry, CancellationToken cancellationToken)
+    public Task WriteAsync(WalRecord entry, CancellationToken cancellationToken)
     {
         _entries.Enqueue(entry);
         return Task.CompletedTask;

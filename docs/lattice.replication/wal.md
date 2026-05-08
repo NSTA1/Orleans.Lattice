@@ -2,11 +2,11 @@
 
 Every replicated mutation in `Orleans.Lattice.Replication` is committed to a per-shard write-ahead log before any downstream replication consumer observes it. The WAL is the single source of truth for replication: shipping, snapshotting, and recovery all read from the WAL — never from the primary tree.
 
-> This document covers the **replication-side** WAL surface — the per-shard sharded sink, the producer-side filters, the change-feed consumer model, and the `IReplogShardGrain` turn-safe batching protocol. For the cross-cutting WAL semantics shared with the core library (commit pipeline, durability boundary, recovery and rebuild, projection checkpoint, trim and GC), see [`../lattice/wal.md`](../lattice/wal.md). For the pluggable storage backend (in-memory vs Azure Table) see [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md).
+> This document covers the **replication-side** WAL surface — the per-shard sharded sink, the producer-side filters, the change-feed consumer model, and the `IWalShardGrain` turn-safe batching protocol. For the cross-cutting WAL semantics shared with the core library (commit pipeline, durability boundary, recovery and rebuild, projection checkpoint, trim and GC), see [`../lattice/wal.md`](../lattice/wal.md). For the pluggable storage backend (in-memory vs Azure Table) see [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md).
 
 ## Topology
 
-A WAL grain is keyed by `{treeId}/{partition}` and persists an append-only list of `ReplogShardEntry` records. Each entry has a dense, monotonically increasing `Sequence` (starts at 0 and increments by one per append) and the captured `ReplogEntry`.
+A WAL grain is keyed by `{treeId}/{partition}` and persists an append-only list of `WalShardSequencedEntry` records. Each entry has a dense, monotonically increasing `Sequence` (starts at 0 and increments by one per append) and the captured `WalRecord`.
 
 Routing of a mutation to a partition is deterministic and process-independent: a stable FNV-1a 32-bit hash of the entry's key, modulo `LatticeReplicationOptions.ReplogPartitions` (default `1`). A `null` key hashes as the empty string.
 
@@ -22,7 +22,7 @@ Routing of a mutation to a partition is deterministic and process-independent: a
               hash(key) % partitions
                        │
                        ▼
-   IReplogShardGrain "{treeId}/{partition}"
+   IWalShardGrain "{treeId}/{partition}"
                        │
                        ▼
                 IWalStorageProvider
@@ -41,7 +41,7 @@ siloBuilder.AddLatticeReplication(opts =>
 
 ## Producer-side filters
 
-Three options on `LatticeReplicationOptions` decide whether a mutation reaches the WAL at all. Filters run on the producer side at commit time, so a non-replicated mutation never touches a `ReplogShardGrain`:
+Three options on `LatticeReplicationOptions` decide whether a mutation reaches the WAL at all. Filters run on the producer side at commit time, so a non-replicated mutation never touches a `WalShardGrain`:
 
 | Option | Default | Semantics |
 |---|---|---|
@@ -71,22 +71,22 @@ There is intentionally no opt-in "best-effort" mode that would catch the excepti
 
 ## API
 
-`IReplogShardGrain` is internal to the replication package. Members:
+`IWalShardGrain` is internal to the replication package. Members:
 
 | Member | Purpose |
 |---|---|
-| `AppendAsync(ReplogEntry, CancellationToken)` | Append a captured mutation. Returns the assigned sequence number. |
-| `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`. Returns a `ReplogShardPage` with the entries and `NextSequence` cursor. |
+| `AppendAsync(WalRecord, CancellationToken)` | Append a captured mutation. Returns the assigned sequence number. |
+| `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`. Returns a `WalShardPage` with the entries and `NextSequence` cursor. |
 | `GetNextSequenceAsync(CancellationToken)` | Returns the sequence the next append will use. |
 | `GetEntryCountAsync(CancellationToken)` | Returns the total number of entries persisted. |
 
-`ReadAsync` validates: `fromSequence >= 0` and `maxEntries >= 1`. Out-of-range reads return `ReplogShardPage.Empty(fromSequence)` instead of throwing.
+`ReadAsync` validates: `fromSequence >= 0` and `maxEntries >= 1`. Out-of-range reads return `WalShardPage.Empty(fromSequence)` instead of throwing.
 
 ## Why a WAL grain rather than ship-time read
 
 This design fixes three sample-pipeline shortcuts called out in the [replication design](./replication-design.md):
 
-- **No ship-time value read.** The captured `ReplogEntry` already carries the value (or delta) at commit-time HLC; the ship loop never re-reads the primary.
+- **No ship-time value read.** The captured `WalRecord` already carries the value (or delta) at commit-time HLC; the ship loop never re-reads the primary.
 - **No host-level outgoing-call filter.** Capture happens grain-side via `IMutationObserver`, so the WAL append is atomic with the write rather than a best-effort post-write hook.
 - **No silent coalescing between append and ship.** Every mutation gets its own monotonic sequence number; a later overwrite cannot retroactively shadow an earlier WAL entry.
 
@@ -101,7 +101,7 @@ Direct grain access is the low-level entry point; in-process consumers should us
 
 ## Pluggable durability
 
-The replication WAL grain shape (`IReplogShardGrain`) is the WAL's **logical** contract; the **durability backend** is the same pluggable `IWalStorageProvider` seam the core library uses. See [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md) for the provider contract and the shipped in-memory / Azure Table implementations.
+The replication WAL grain shape (`IWalShardGrain`) is the WAL's **logical** contract; the **durability backend** is the same pluggable `IWalStorageProvider` seam the core library uses. See [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md) for the provider contract and the shipped in-memory / Azure Table implementations.
 
 `LatticeReplicationOptions` adds one replication-only override on top of that seam: a per-tree resolver delegate that lets a host pick a different provider per tree.
 
@@ -118,7 +118,7 @@ siloBuilder.AddLatticeReplication(opts =>
 
 When `LatticeReplicationOptions.WalStorageProvider` is `null` (the default), the WAL grain falls back to the DI-registered `IWalStorageProvider` singleton. `AddLatticeReplication` registers `InMemoryWalStorageProvider` as the default fallback; replace it by registering your own implementation before calling `AddLatticeReplication` (the registration uses `TryAddSingleton`, so a pre-registered singleton wins).
 
-The exchanged `WalEntry` carries the dense per-shard `Offset` and the captured `LatticeMutation`. The replication-only metadata that `ReplogEntry` carries (`Mode`, `DependencySummary`) is reconstructed at ship time inside `ReplogShardGrain.ReadAsync` via `IReplicationModeResolver` and the mutation's `VectorClock`, so the on-disk WAL stays storage-pluggable for both single-cluster and multi-cluster hosts.
+The exchanged `WalEntry` carries the dense per-shard `Offset` and the captured `LatticeMutation`. The replication-only metadata that `WalRecord` carries (`Mode`, `DependencySummary`) is reconstructed at ship time inside `WalShardGrain.ReadAsync` via `ILatticeMergeModeResolver` and the mutation's `VectorClock`, so the on-disk WAL stays storage-pluggable for both single-cluster and multi-cluster hosts.
 
 ## Turn-safe batching protocol
 

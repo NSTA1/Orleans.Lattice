@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Primitives;
@@ -33,17 +34,17 @@ public class ReplicationMutationObserverLocalVectorClockCacheTests
 
     private sealed class CapturingSink : IReplogSink
     {
-        public List<ReplogEntry> Entries { get; } = new();
-        public Task WriteAsync(ReplogEntry entry, CancellationToken cancellationToken)
+        public List<WalRecord> Entries { get; } = new();
+        public Task WriteAsync(WalRecord entry, CancellationToken cancellationToken)
         {
             Entries.Add(entry);
             return Task.CompletedTask;
         }
     }
 
-    private sealed class AllowAllResolver : IReplicationModeResolver
+    private sealed class AllowAllResolver : ILatticeMergeModeResolver
     {
-        public ReplicationMode? Resolve(string treeId) => ReplicationMode.LwwRegister;
+        public LatticeMergeMode? Resolve(string treeId) => LatticeMergeMode.LwwRegister;
     }
 
     private static (
@@ -58,7 +59,7 @@ public class ReplicationMutationObserverLocalVectorClockCacheTests
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(grain);
         grain.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(coldStartVector ?? new VersionVector());
         var cache = new LocalVectorClockCache(factory);
-        var observer = new ReplicationMutationObserver(sink, Monitor(LocalCluster), new AllowAllResolver(), cache, new InMemoryInFlightSagaTracker());
+        var observer = new ReplicationMutationObserver(sink, Monitor(LocalCluster), new AllowAllResolver(), cache);
         return (observer, sink, cache);
     }
 

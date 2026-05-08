@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
@@ -60,7 +61,7 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// <para>
 /// Legacy / range-delete entries with a <see langword="null"/>
-/// <see cref="ReplogEntry.VectorClock"/> are treated as the empty VC,
+/// <see cref="WalRecord.VectorClock"/> are treated as the empty VC,
 /// which is dominated by every non-<see langword="null"/> causal-stable
 /// frontier and therefore passes the causal-stable clause without
 /// blocking the existing HLC-shaped trim path.

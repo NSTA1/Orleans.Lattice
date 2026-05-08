@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication;
@@ -10,7 +11,7 @@ namespace Orleans.Lattice.Replication;
 /// fall-off-the-log condition.
 /// <para>
 /// Lives on the sender silo and walks each
-/// <c>IReplogShardGrain</c> activation backing the named tree;
+/// <c>IWalShardGrain</c> activation backing the named tree;
 /// returns the minimum timestamp across the per-shard heads, or
 /// <see langword="null"/> when every shard is empty (no WAL entries
 /// have been captured yet). The cost is one grain RPC per

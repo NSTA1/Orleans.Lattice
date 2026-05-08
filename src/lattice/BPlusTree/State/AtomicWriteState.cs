@@ -241,4 +241,23 @@ internal sealed class AtomicWriteState
     /// single-key non-saga writes).
     /// </summary>
     [Id(15)] public int AtomicBatchSize { get; set; }
+
+    /// <summary>
+    /// Distinct physical-shard indices the saga's prepare phase routed
+    /// per-key writes onto, captured during <see cref="AtomicWritePhase.Prepare"/>
+    /// against the routing snapshot resolved up-front via
+    /// <see cref="ILattice.GetRoutingAsync"/>. Drives the post-execute
+    /// terminal broadcast loop in
+    /// <see cref="Grains.AtomicWriteGrain"/>: one
+    /// <see cref="IShardRootGrain.AppendTxTerminalAsync(Guid, bool, CancellationToken)"/>
+    /// call per index — never per key — produces the saga's per-shard
+    /// linearization point. Persisted so a crash-resume re-broadcasts
+    /// terminals to the same shard set; the leaf-side
+    /// <c>_recentlyTerminal</c> dedup makes re-delivery idempotent.
+    /// Wire-compatible: missing field on legacy persisted state decodes
+    /// to an empty list, in which case the saga falls back to
+    /// re-resolving the touched-shard set from the persisted
+    /// <see cref="Entries"/> against a freshly fetched routing snapshot.
+    /// </summary>
+    [Id(16)] public List<int> TouchedShards { get; set; } = [];
 }
