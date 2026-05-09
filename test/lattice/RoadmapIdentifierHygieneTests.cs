@@ -48,7 +48,7 @@ public class RoadmapIdentifierHygieneTests
         var exemptFullPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             Path.GetFullPath(Path.Combine(
-                repoRoot, "docs", "lattice.replication", "wal-causal-plus.md")),
+                repoRoot, "docs", "lattice", "wal-causal-plus.md")),
         };
 
         var violations = new List<string>();

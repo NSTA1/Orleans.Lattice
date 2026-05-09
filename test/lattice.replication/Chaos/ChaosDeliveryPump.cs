@@ -340,24 +340,25 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
                     // applied bytes for this key match the incoming
                     // entry's bytes, skip the apply. See _lastAppliedBytes.
                     //
-                    // IMPORTANT: this dedupe is bypassed for atomic-batch
-                    // entries (AtomicBatchSize > 0). On the buffered-saga
-                    // path, applier.ApplyAsync returns *after* the entry is
-                    // staged in the per-tree IReplicationTxBufferGrain
-                    // (pending sibling arrival) but *before* any data-store
-                    // write. Recording bytes at that point and short-circuiting
-                    // future ships against them would skip a re-shipment that
-                    // the receiver still legitimately needs (e.g. if the saga
-                    // compensates and clears the staged tuple, or if a sibling
-                    // pump on a parallel edge needs to re-admit). Production
-                    // correctness for atomic batches is provided by the buffer's
-                    // own (origin, txid, index) admission dedupe and by
-                    // RecentApplyCache's causal-identity dedupe — both sound
-                    // on the staging path. The pump-level value-bytes dedupe
-                    // is only sound on the point-apply path (non-atomic writes,
-                    // where ApplyAsync returns after the data-store write) and
-                    // exists there to break the typed-CRDT ping-pong cycle
-                    // documented on _lastAppliedBytes.
+                    // The dedupe is bypassed for atomic-batch entries
+                    // (AtomicBatchSize > 0). The receiver-side staging
+                    // buffer that originally motivated this guard
+                    // (IReplicationTxBufferGrain) was retired by the
+                    // WAL repivot; current cross-cluster delivery ships
+                    // per-point writes and the producer-side wire metadata
+                    // (AtomicBatchSize/AtomicBatchIndex/TransactionId) is
+                    // preserved on every emit so a future host-facing
+                    // receiver-side primitive can re-introduce a buffered
+                    // path without changing the wire format. The bypass is
+                    // kept because (a) value-bytes dedupe on a write whose
+                    // apply path may yet acquire staging semantics is
+                    // unsafe, and (b) atomic-batch correctness on the
+                    // current point-apply path is provided by RecentApplyCache's
+                    // causal-identity dedupe and the per-origin HWM cursor.
+                    // The pump-level value-bytes dedupe is sound only on
+                    // the non-atomic point-apply path, where it breaks the
+                    // typed-CRDT ping-pong cycle documented on
+                    // _lastAppliedBytes.
                     if (entry.AtomicBatchSize == 0
                         && entry.Value is { } incomingBytes
                         && _lastAppliedBytes.TryGetValue((receiverIdx, entry.Key), out var lastBytes)

@@ -11,9 +11,11 @@ If you're looking for a different angle on the WAL:
   [`wal-storage-providers.md`](wal-storage-providers.md).
 - For how the in-memory projection is rebuilt from the WAL on activation see
   [`projection-rebuild.md`](projection-rebuild.md).
-- For the replication-side per-shard sharded sink, change feed, and outbound
-  ship loop that consume the same WAL see
+- For the replication-side overlay (per-shard sharded sink, producer-side
+  filters, and the `MutationCategory.Maintenance` skip) see
   [`../lattice.replication/wal.md`](../lattice.replication/wal.md).
+- For the causal+ entry-schema extension (vector clock + dependency
+  summary slots on `WalRecord`) see [`wal-causal-plus.md`](wal-causal-plus.md).
 
 ## What the WAL is
 
@@ -130,7 +132,161 @@ follow:
   same order that the local projection saw them. The WAL is the linearization
   point.
 
+## WAL grain API
+
+The per-shard WAL is owned by the internal `IWalShardGrain`, keyed
+`{treeId}/{partition}` where `partition` is `WalPartitionHash.Compute(key, partitions) %
+LatticeOptions.WalPartitions` (default `1`). The grain is in the core
+`Orleans.Lattice.BPlusTree.Grains` namespace and is the single producer-side
+entry point for foreground commits and the read-back source for the
+replication change feed.
+
+| Member | Purpose |
+|---|---|
+| `AppendAsync(WalRecord, CancellationToken)` | Append a captured mutation. Returns the assigned dense per-shard sequence number. |
+| `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`. Returns a `WalShardPage` with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1`; out-of-range reads return `WalShardPage.Empty(fromSequence)`. |
+| `GetNextSequenceAsync(CancellationToken)` | Returns the sequence the next append will use. |
+| `GetEntryCountAsync(CancellationToken)` | Returns the total number of entries persisted. |
+
+Saga terminal mutations (`MutationKind.TxCommit` / `TxAbort`) carry their
+shard index in `mutation.Key` as a base-10 invariant-culture string; the
+commit-log writer maps that shard index to a WAL partition by taking
+`shardIndex % WalPartitions`. When the shard count exceeds the partition
+count, multiple shards collapse onto the same WAL partition; receivers
+dedupe by `TransactionId`, so multiple terminal appends with the same id
+are idempotent on the apply side.
+
+## Origin cluster id stamping
+
+Every WAL record carries `OriginClusterId` so multi-site receivers can
+attribute the origin and break replication cycles. The stamp comes from
+two sources, applied in priority order at the producer-side
+`WalRecordConverter.ToWalRecord(...)` call site:
+
+1. **`mutation.OriginClusterId` wins when present.** A remote replay path
+   stamps the upstream cluster id onto the mutation before it reaches the
+   WAL writer; the converter preserves that value verbatim.
+2. **Fallback to the resolver-supplied local cluster id.** When the
+   mutation arrives with `OriginClusterId == null` — the foreground commit
+   path on a host where the replication observer has not yet stamped — the
+   writer asks `ILatticeOriginClusterIdResolver.Resolve(treeId)` for the
+   local id.
+
+`ILatticeOriginClusterIdResolver` is a public seam in
+`Orleans.Lattice.BPlusTree.Grains`. The core ships
+`DefaultLatticeOriginClusterIdResolver` (returns `string.Empty`) so a
+single-cluster host gets an empty stamp and downstream consumers ignore
+it. Hosts that register `Orleans.Lattice.Replication` get
+`ConfiguredLatticeOriginClusterIdResolver` swapped in via the same
+remove-then-`TryAdd` pattern that the replication package uses for
+`ILatticeMergeModeResolver`. The configured resolver reads
+`LatticeReplicationOptions.ClusterId` and caches the per-tree result with
+`IOptionsMonitor<T>.OnChange` invalidation, so the commit-time hot path is
+a single dictionary lookup.
+
+The same resolver is consulted on the read-back path
+(`WalShardGrain.ReadAsync`) so the change feed projects the same origin
+the producer recorded — required for the replication-side loop-prevention
+filter that drops batches whose `OriginClusterId` matches the local
+cluster.
+
+A user who needs to source the local cluster id from somewhere other
+than `LatticeReplicationOptions` (e.g. a control plane, environment
+variable, or per-tree feature flag) registers a custom
+`ILatticeOriginClusterIdResolver` before calling `AddLattice` /
+`AddLatticeReplication`; the package registrations use `TryAddSingleton`
+and the swap loop only removes the *default* registration, so a
+user-supplied resolver is preserved.
+
+## Turn-safe batching protocol
+
+The WAL grain's `AppendAsync` hot path implements a turn-safe batching
+protocol. Each call accumulates into an in-memory pending batch held on
+the grain instance; a single in-flight flush at a time fans the batch out
+to `IWalStorageProvider.AppendBatchAsync` and completes per-caller
+`TaskCompletionSource<long>` instances when the provider acknowledges
+durability.
+
+```text
+AppendAsync(entry)
+    │  assigns offset = _nextOffset++
+    │  appends WalEntry to _pendingBatch
+    │  parks a TCS in _pendingAcks
+    │  if no flush in flight → StartFlush()
+    ▼
+returns await tcs.Task    ◄── completes once provider acks the batch
+```
+
+Two batch limits are enforced at append time:
+
+| Option | Default | Trigger |
+|---|---|---|
+| `WalMaxBatchEntries` | `100` | Adding the new entry would push the pending count above the cap; the current batch is flushed first, then the new entry starts the next batch. |
+| `WalMaxBatchBytes` | `4 MB` | Adding the new entry's estimated serialised size would exceed the byte budget; same cutover. The size estimate is `key.Length * 2 + value.Length + 128` bytes — UTF-16 worst case for the key plus a constant envelope overhead. |
+
+Cutovers wait for the in-flight flush before the next batch can start,
+which provides natural back-pressure under burst load: a single shard
+cannot accumulate more than two batches' worth of pending state at any
+instant.
+
+### Activation recovery
+
+On grain activation, `OnActivateAsync` calls
+`IWalStorageProvider.GetHighestOffsetAsync` and sets `_nextOffset =
+highest + 1`. The persisted log is the single source of truth for the
+next-offset counter — the grain holds no Orleans grain state of its own.
+
+### Deactivation drain
+
+`OnDeactivateAsync` awaits any in-flight flush and then triggers (and
+awaits) a final flush of any remaining pending entries, so a graceful
+deactivation never leaves a caller observing a hung TCS.
+
+### Append-failure semantics
+
+A flush failure is fail-fast for every affected caller:
+
+1. The next-offset counter rolls back to the start of the failed batch
+   (`_nextOffset = batch[0].Offset`) so the dense-offset invariant against
+   the provider is preserved.
+2. Every TCS in the failed batch is faulted with the underlying storage
+   exception.
+3. Every TCS in the *currently-accumulating* pending batch is also faulted
+   — those entries had been assigned offsets above the now-rolled-back
+   gap, so their offsets are stale and the calls must restart fresh.
+4. The pending batch is reset; subsequent `AppendAsync` calls resume
+   cleanly from the rolled-back `_nextOffset`.
+
+This contract makes WAL-append failures observable inline at the
+originating writer rather than being silently coalesced into a later
+batch.
+
+> **Contributor note — synchronously-completing providers.** `FlushAsync`
+> starts with `await Task.Yield()` so the returned `Task` is observably
+> incomplete by the time `StartFlush` assigns it to `_inFlightFlush`.
+> Without that yield, an `IWalStorageProvider` whose `AppendBatchAsync`
+> returns a synchronously-completed task (the in-memory provider does
+> this) would run the entire flush body inline before the assignment
+> lands; the `finally { _inFlightFlush = null; }` would clear a field
+> that was not yet set, then `StartFlush`'s assignment would overwrite
+> `null` with the completed task — leaving `_inFlightFlush` permanently
+> non-null and every subsequent `AppendAsync` parked on its TCS forever.
+> Any future refactor of the flush loop must preserve this invariant.
+
+### What the protocol does *not* do yet
+
+- **Multiple in-flight batches.** The current implementation enforces a
+  single in-flight flush per shard. `WalMaxPendingBatches` is reserved
+  for a future change that lifts the cap; today it is validated (`>= 1`)
+  but not consumed by the grain.
+- **Exact-bytes accounting.** `WalMaxBatchBytes` is enforced against an
+  estimate (key UTF-16 worst case + value length + 128 byte envelope),
+  not the post-serialisation byte count. The estimate is conservative
+  for typical payloads; pathological keys or oversized envelopes can
+  drift either way. Documented as approximate in the option's XML doc.
+
 ## Recovery and rebuild
+
 
 When a leaf grain activates, it rebuilds its in-memory projection by replaying
 the WAL through `ILeafReplayCoordinatorGrain`. Two cases:
@@ -286,11 +442,22 @@ await registry.ReportCursorAsync(
 The registry takes a defensive clone of the supplied vector, so callers may
 continue to mutate their local frontier after the report returns.
 
-### Blocked-floor (TX-aware GC pin)
+### Blocked-floor (TX-aware GC pin) — vestigial
 
-The cross-cluster atomic-batch delivery path stages every entry of an
-in-flight `SetManyAtomicAsync` on the receiver until the whole batch arrives.
-While a batch is partially staged, the receiver has **not** acknowledged the
+> **Status — vestigial.** The receiver-side staging buffer that
+> originally drove this pin (`IReplicationTxBufferGrain`, the
+> `LatticeReplicationOptions.AtomicBatchDelivery` opt-in) was retired
+> by the WAL repivot. The pin is preserved on the GC predicate so a
+> future host-facing receiver-side atomic-batch primitive can be
+> re-introduced without a producer-side change; in the current shipped
+> surface no consumer reports a blocked-floor pin and the GC degrades
+> to the cursor / TTL clauses above. The remainder of this subsection
+> describes the predicate as it would behave under a future revival.
+
+Under such a hypothetical receiver, the cross-cluster atomic-batch
+delivery path would stage every entry of an in-flight
+`SetManyAtomicAsync` until the whole batch arrived. While a batch is
+partially staged, the receiver has **not** acknowledged the
 buffered entries through its per-origin high-water-mark — the producer's WAL
 is the authoritative re-ship source if the receiver's buffer state is lost
 (e.g. via the orphan-timeout eviction path). The GC must therefore not trim
@@ -431,6 +598,8 @@ The bundled Grafana dashboards consume these instruments directly; see
 - [`tombstone-compaction.md`](tombstone-compaction.md) — how reaped tombstones
   interact with WAL retention.
 - [`configuration.md`](configuration.md) — the full `LatticeOptions` surface.
+- [`wal-causal-plus.md`](wal-causal-plus.md) — causal+ entry-schema
+  extension (vector clock + dependency summary slots on `WalRecord`).
 - [`../lattice.replication/wal.md`](../lattice.replication/wal.md) — the
-  per-shard sharded sink and replication change feed that consume the same
-  WAL on the producer side.
+  replication-side overlay: per-shard sharded sink, producer-side filters,
+  and the `MutationCategory.Maintenance` skip.

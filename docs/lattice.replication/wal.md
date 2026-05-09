@@ -2,7 +2,7 @@
 
 Every replicated mutation in `Orleans.Lattice.Replication` is committed to a per-shard write-ahead log before any downstream replication consumer observes it. The WAL is the single source of truth for replication: shipping, snapshotting, and recovery all read from the WAL — never from the primary tree.
 
-> This document covers the **replication-side** WAL surface — the per-shard sharded sink, the producer-side filters, the change-feed consumer model, and the `IWalShardGrain` turn-safe batching protocol. For the cross-cutting WAL semantics shared with the core library (commit pipeline, durability boundary, recovery and rebuild, projection checkpoint, trim and GC), see [`../lattice/wal.md`](../lattice/wal.md). For the pluggable storage backend (in-memory vs Azure Table) see [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md).
+> This document is the **replication-side overlay** — the per-shard sharded sink, the producer-side filters, the change-feed consumer model, and the replication-only configuration knobs. The cross-cutting WAL semantics shared with the core library — the WAL grain API, the commit pipeline, the durability boundary, the turn-safe batching protocol, recovery and rebuild, projection checkpointing, trim and GC, and origin-cluster-id stamping — all live in [`../lattice/wal.md`](../lattice/wal.md). The pluggable storage backend (in-memory vs Azure Table) lives in [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md). The causal+ entry-schema extension (vector clock + dependency summary slots on `WalRecord`) lives in [`../lattice/wal-causal-plus.md`](../lattice/wal-causal-plus.md).
 
 ## Topology
 
@@ -28,6 +28,8 @@ Routing of a mutation to a partition is deterministic and process-independent: a
                 IWalStorageProvider
 ```
 
+For the `IWalShardGrain` API surface (`AppendAsync`, `ReadAsync`, `GetNextSequenceAsync`, `GetEntryCountAsync`) and the turn-safe batching protocol that backs every `AppendAsync` call, see [`../lattice/wal.md`](../lattice/wal.md).
+
 ## Configuration
 
 ```text
@@ -37,6 +39,9 @@ siloBuilder.AddLatticeReplication(opts =>
     opts.ReplogPartitions = 8; // default 1
 });
 ```
+
+`ClusterId` is also the value the producer-side `ILatticeOriginClusterIdResolver` returns when the replication package is registered — every WAL record stamped on this silo carries `OriginClusterId = "site-a"` unless the originating mutation already carried a non-null `OriginClusterId` from upstream. See [`../lattice/wal.md`](../lattice/wal.md) for the resolver contract.
+
 `ReplogPartitions` must be `>= 1`; the validator rejects lower values. The current implementation reads the partition count from `IOptionsMonitor<LatticeReplicationOptions>.CurrentValue`, so per-tree partition-count overrides are not honoured today.
 
 ## Producer-side filters
@@ -63,24 +68,13 @@ User-driven writes — `SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetIfVers
 
 The maintenance gate runs **before** mode resolution and per-key filters: a maintenance emit pays nothing more than a single enum compare on the commit-time hot path. The classification is also independent of `OriginClusterId` — a remote-origin maintenance emit (from a peer's apply path that itself ran under maintenance) is still `Maintenance` and still skips the WAL.
 
-## Failure semantics
+## Sink failure semantics
 
 WAL-append failures propagate. A failure inside `IReplogSink.WriteAsync` flows back out of the commit-time observer, and because the observer fires inside the originating grain's write path, the failure surfaces as the same exception the underlying storage provider threw — the calling `ILattice.SetAsync` / `DeleteAsync` / `DeleteRangeAsync` observes it. This guarantees that every committed mutation is also captured for replication.
 
 There is intentionally no opt-in "best-effort" mode that would catch the exception and let the primary write report success while silently dropping the change-feed record. Silent change-feed drops are exactly the hazard commit-time capture exists to remove; a host that wants different semantics for a specific tree should compose its own `IMutationObserver` rather than configure correctness away.
 
-## API
-
-`IWalShardGrain` is internal to the replication package. Members:
-
-| Member | Purpose |
-|---|---|
-| `AppendAsync(WalRecord, CancellationToken)` | Append a captured mutation. Returns the assigned sequence number. |
-| `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`. Returns a `WalShardPage` with the entries and `NextSequence` cursor. |
-| `GetNextSequenceAsync(CancellationToken)` | Returns the sequence the next append will use. |
-| `GetEntryCountAsync(CancellationToken)` | Returns the total number of entries persisted. |
-
-`ReadAsync` validates: `fromSequence >= 0` and `maxEntries >= 1`. Out-of-range reads return `WalShardPage.Empty(fromSequence)` instead of throwing.
+The append-time failure semantics inside the WAL grain itself (offset rollback, per-caller TCS faulting, drain-on-deactivation) live in the core [`../lattice/wal.md`](../lattice/wal.md) under "Turn-safe batching protocol".
 
 ## Why a WAL grain rather than ship-time read
 
@@ -90,16 +84,11 @@ This design fixes three sample-pipeline shortcuts called out in the [replication
 - **No host-level outgoing-call filter.** Capture happens grain-side via `IMutationObserver`, so the WAL append is atomic with the write rather than a best-effort post-write hook.
 - **No silent coalescing between append and ship.** Every mutation gets its own monotonic sequence number; a later overwrite cannot retroactively shadow an earlier WAL entry.
 
-## Testing
-
-- Unit tests against the grain (`ReplogShardGrainTests`) instantiate it with substituted `IGrainContext`/`IServiceProvider`/`IOptionsMonitor<LatticeReplicationOptions>` and an `InMemoryWalStorageProvider`, calling the internal `InitializeForTestingAsync` test seam to bypass Orleans activation.
-- Integration tests (`ReplogShardWalIntegrationTests`) bring up a single-silo `TestCluster` with `AddLattice` + `AddLatticeReplication` and assert that WAL entries appear after `ILattice.SetAsync` / `DeleteAsync`.
-
 ## Reading from the WAL
 
 Direct grain access is the low-level entry point; in-process consumers should use [`IChangeFeed`](./change-feed.md) instead. The change feed walks every WAL partition for a tree, filters by HLC cursor and origin, and merges the result in HLC ascending order — the seam the outbound shipper and the future local materialiser plug into.
 
-## Pluggable durability
+## Pluggable durability (replication-only override)
 
 The replication WAL grain shape (`IWalShardGrain`) is the WAL's **logical** contract; the **durability backend** is the same pluggable `IWalStorageProvider` seam the core library uses. See [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md) for the provider contract and the shipped in-memory / Azure Table implementations.
 
@@ -120,52 +109,8 @@ When `LatticeReplicationOptions.WalStorageProvider` is `null` (the default), the
 
 The exchanged `WalEntry` carries the dense per-shard `Offset` and the captured `LatticeMutation`. The replication-only metadata that `WalRecord` carries (`Mode`, `DependencySummary`) is reconstructed at ship time inside `WalShardGrain.ReadAsync` via `ILatticeMergeModeResolver` and the mutation's `VectorClock`, so the on-disk WAL stays storage-pluggable for both single-cluster and multi-cluster hosts.
 
-## Turn-safe batching protocol
+## Testing
 
-The WAL grain's `AppendAsync` hot path implements a turn-safe batching protocol. Each call accumulates into an in-memory pending batch held on the grain instance; a single in-flight flush at a time fans the batch out to `IWalStorageProvider.AppendBatchAsync` and completes per-caller `TaskCompletionSource<long>` instances when the provider acknowledges durability.
-
-```text
-AppendAsync(entry)
-    │  assigns offset = _nextOffset++
-    │  appends WalEntry to _pendingBatch
-    │  parks a TCS in _pendingAcks
-    │  if no flush in flight → StartFlush()
-    ▼
-returns await tcs.Task    ◄── completes once provider acks the batch
-```
-
-Two batch limits are enforced at append-time:
-
-| Option | Default | Trigger |
-|---|---|---|
-| `WalMaxBatchEntries` | `100` | Adding the new entry would push the pending count above the cap; the current batch is flushed first, then the new entry starts the next batch. |
-| `WalMaxBatchBytes` | `4 MB` | Adding the new entry's estimated serialised size would exceed the byte budget; same cutover. The size estimate is `key.Length * 2 + value.Length + 128` bytes — UTF-16 worst case for the key plus a constant envelope overhead. |
-
-Cutovers wait for the in-flight flush before the next batch can start, which provides natural back-pressure under burst load: a single shard cannot accumulate more than two batches' worth of pending state at any instant.
-
-### Activation recovery
-
-On grain activation, `OnActivateAsync` calls `IWalStorageProvider.GetHighestOffsetAsync` and sets `_nextOffset = highest + 1`. The persisted log is the single source of truth for the next-offset counter — the grain holds no Orleans grain state of its own.
-
-### Deactivation drain
-
-`OnDeactivateAsync` awaits any in-flight flush and then triggers (and awaits) a final flush of any remaining pending entries, so a graceful deactivation never leaves a caller observing a hung TCS.
-
-### Failure semantics
-
-A flush failure is fail-fast for every affected caller:
-
-1. The next-offset counter rolls back to the start of the failed batch (`_nextOffset = batch[0].Offset`) so the dense-offset invariant against the provider is preserved.
-2. Every TCS in the failed batch is faulted with the underlying storage exception.
-3. Every TCS in the *currently-accumulating* pending batch is also faulted — those entries had been assigned offsets above the now-rolled-back gap, so their offsets are stale and the calls must restart fresh.
-4. The pending batch is reset; subsequent `AppendAsync` calls resume cleanly from the rolled-back `_nextOffset`.
-
-This contract makes WAL append failures observable inline at the originating writer (the same path as the synchronous `IPersistentState`-backed implementation it replaced) rather than being silently coalesced into a later batch.
-
-> **Contributor note — synchronously-completing providers.** `FlushAsync` starts with `await Task.Yield()` so the returned `Task` is observably incomplete by the time `StartFlush` assigns it to `_inFlightFlush`. Without that yield, an `IWalStorageProvider` whose `AppendBatchAsync` returns a synchronously-completed task (the in-memory provider does this) would run the entire flush body inline before the assignment lands; the `finally { _inFlightFlush = null; }` would clear a field that was not yet set, then `StartFlush`'s assignment would overwrite `null` with the completed task — leaving `_inFlightFlush` permanently non-null and every subsequent `AppendAsync` parked on its TCS forever. Any future refactor of the flush loop must preserve this invariant.
-
-### What the protocol does *not* do yet
-
-- **Multiple in-flight batches.** The current implementation enforces a single in-flight flush per shard. `WalMaxPendingBatches` is reserved for a future change that lifts the cap; today it is validated (`>= 1`) but not consumed by the grain.
-- **Exact-bytes accounting.** `WalMaxBatchBytes` is enforced against an estimate (key UTF-16 worst case + value length + 128 byte envelope), not the post-serialisation byte count. The estimate is conservative for typical payloads; pathological keys or oversized envelopes can drift either way. Documented as approximate in the option's XML doc.
+- Unit tests against the grain (`ReplogShardGrainTests`) instantiate it with substituted `IGrainContext`/`IServiceProvider`/`IOptionsMonitor<LatticeReplicationOptions>` and an `InMemoryWalStorageProvider`, calling the internal `InitializeForTestingAsync` test seam to bypass Orleans activation.
+- Integration tests (`ReplogShardWalIntegrationTests`) bring up a single-silo `TestCluster` with `AddLattice` + `AddLatticeReplication` and assert that WAL entries appear after `ILattice.SetAsync` / `DeleteAsync`.
 

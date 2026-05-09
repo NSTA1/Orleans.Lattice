@@ -210,24 +210,27 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             // Atomic-batch metadata passthrough: mirror
             // LatticeMutation.AtomicBatchSize / AtomicBatchIndex onto
             // the WalRecord verbatim. The slots are wire-shape-stable
-            // and flow through whatever the producer supplies; today
-            // every emit defaults to 0/0 because the saga-wide
-            // capture-once stamp inside AtomicWriteGrain is not yet
-            // wired (a separate roadmap item). The observer is
-            // independent of that wiring - the slot copy is unconditional
-            // so a producer flipping the saga stamp on does not require
-            // an observer change.
+            // and flow through whatever the producer supplies. The
+            // saga-wide capture-once stamp inside AtomicWriteGrain is
+            // wired today, so saga emits carry (Size=N, Index=0..N-1);
+            // single-key writes outside a saga emit (0, 0) by default.
+            // No shipped receiver-side path consumes the slots — every
+            // entry applies as a point write — but the slots are
+            // preserved on the wire as observability metadata for a
+            // future host-facing receiver-side primitive.
             AtomicBatchSize = mutation.AtomicBatchSize,
             AtomicBatchIndex = mutation.AtomicBatchIndex,
             // Atomic-batch sibling-membership key passthrough: mirror
-            // LatticeMutation.TransactionId (the existing core saga
-            // identity captured by AtomicWriteGrain) onto the wire so
-            // a receiver with AtomicBatchDelivery enabled can key its
-            // staging buffer by (originClusterId, transactionId). For
-            // non-saga writes the value is whatever the producer-side
-            // ambient LatticeTransactionContext supplied (Guid.Empty
-            // by default), which the receiver treats identically to a
-            // legacy peer.
+            // LatticeMutation.TransactionId (the saga identity
+            // captured by AtomicWriteGrain) onto the wire so a future
+            // host-facing receiver-side atomic-batch primitive can key
+            // a staging buffer by (originClusterId, transactionId). The
+            // current shipped surface has no such consumer (the
+            // receiver-side staging buffer was retired by the WAL
+            // repivot); the slot is preserved as observability
+            // metadata. For non-saga writes the value is whatever the
+            // producer-side ambient LatticeTransactionContext supplied
+            // (Guid.Empty by default).
             TransactionId = mutation.TransactionId,
         };
 

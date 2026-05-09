@@ -26,6 +26,7 @@ Every Lattice instrument carries a consistent set of low-cardinality tags:
 | `tree` | every instrument | Logical tree id (`ILattice.TreeId`) |
 | `shard` | shard-level instruments only | Physical shard index as an `int` |
 | `operation` | `orleans.lattice.leaf.scan.duration` only | `keys` or `entries` |
+| `step` | `orleans.lattice.leaf.commit.duration` only | `wal`, `apply`, or `observer` |
 | `outcome` | `orleans.lattice.atomic_write.completed` | `committed`, `compensated`, or `failed` |
 | `kind` | `orleans.lattice.coordinator.completed`, `orleans.lattice.tree.lifecycle`, `orleans.lattice.events.published` | Discriminator — see each instrument below |
 | `reason` | `orleans.lattice.events.dropped` | `missing_provider` or `publish_error` |
@@ -53,6 +54,7 @@ drives autonomic splitting.
 | Name | Kind | Unit | Description |
 |---|---|---|---|
 | `orleans.lattice.leaf.write.duration` | `Histogram<double>` | `ms` | Duration of `IPersistentState.WriteStateAsync` calls from a leaf grain — i.e. storage-provider write latency. |
+| `orleans.lattice.leaf.commit.duration` | `Histogram<double>` | `ms` | Per-step latency on the `BPlusLeafGrain` commit path. Tagged `step=wal` (commit-log-writer append), `step=apply` (in-memory projection apply + state persist), or `step=observer` (`IMutationObserver` fan-out). Emitted from every commit-path code path (single-key `SetAsync` / `DeleteAsync`, batched `MergeManyAsync`, prepared-write commit) so operators can attribute latency between durability, projection, and observer overhead independently. |
 | `orleans.lattice.leaf.scan.duration` | `Histogram<double>` | `ms` | Duration of leaf-level range scans. Tagged `operation=keys` (from `GetKeysAsync`) or `operation=entries` (from `GetEntriesAsync`). |
 | `orleans.lattice.leaf.compaction.duration` | `Histogram<double>` | `ms` | Duration of `CompactTombstonesAsync` on a single leaf. |
 | `orleans.lattice.leaf.tombstones.reaped` | `Counter<long>` | `{tombstone}` | Tombstones (from explicit `DeleteAsync` / `DeleteRangeAsync`) permanently removed by compaction. |

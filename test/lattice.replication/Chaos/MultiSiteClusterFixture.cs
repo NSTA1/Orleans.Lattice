@@ -32,9 +32,9 @@ internal sealed class MultiSiteClusterFixture
     /// Per-cluster silo-side <see cref="LatticeReplicationOptions"/>
     /// customisers. Keyed by the per-site cluster id so a single
     /// post-configure type can route every silo to the chaos test's
-    /// requested overrides (e.g. <c>AtomicBatchDelivery=true</c>,
-    /// tightened orphan timeouts) without per-site configurator
-    /// duplication. The map is cleared in
+    /// requested overrides (e.g. tightened orphan timeouts, custom
+    /// dead-letter routing) without per-site configurator duplication.
+    /// The map is cleared in
     /// <see cref="DisposeAsync"/> so consecutive chaos tests do not
     /// leak overrides into the next fixture.
     /// </summary>
@@ -60,9 +60,8 @@ internal sealed class MultiSiteClusterFixture
     /// <see cref="LatticeReplicationOptions"/>. Runs as a
     /// post-configure after the cluster id has been mirrored from
     /// <see cref="Orleans.Configuration.ClusterOptions.ClusterId"/>;
-    /// a chaos test that needs to opt into receiver-side
-    /// atomic-batch delivery, tighten the orphan-sweep timeout, or
-    /// flip any other replication option uses this hook.
+    /// a chaos test that needs to tighten the orphan-sweep timeout
+    /// or flip any other replication option uses this hook.
     /// </param>
     /// <param name="configureClient">
     /// Optional client-side customiser for the test-fixture
@@ -74,9 +73,8 @@ internal sealed class MultiSiteClusterFixture
     /// <see cref="IOptionsMonitor{TOptions}.Get(string)"/>, but the
     /// pump-side applier is constructed against this in-memory
     /// monitor so the two halves of the chaos pipeline must be
-    /// configured symmetrically when receiver-side behaviour
-    /// (e.g. <see cref="LatticeReplicationOptions.AtomicBatchDelivery"/>)
-    /// is being exercised.
+    /// configured symmetrically when receiver-side behaviour is
+    /// being exercised.
     /// </param>
     public MultiSiteClusterFixture(
         LatticeMergeMode mode,
