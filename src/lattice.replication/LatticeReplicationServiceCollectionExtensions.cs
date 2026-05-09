@@ -103,6 +103,23 @@ public static class LatticeReplicationServiceCollectionExtensions
         }
         builder.Services.TryAddSingleton<ILatticeMergeModeResolver, ConfiguredLatticeMergeModeResolver>();
 
+        // Same swap protocol for the per-tree origin-cluster-id resolver:
+        // remove the core's DefaultLatticeOriginClusterIdResolver (returns
+        // string.Empty) when present, then TryAdd the configured resolver
+        // that reads LatticeReplicationOptions.ClusterId. A user-supplied
+        // resolver registered before this call is left untouched (TryAdd
+        // is a no-op).
+        for (var i = builder.Services.Count - 1; i >= 0; i--)
+        {
+            var d = builder.Services[i];
+            if (d.ServiceType == typeof(ILatticeOriginClusterIdResolver)
+                && d.ImplementationType == typeof(DefaultLatticeOriginClusterIdResolver))
+            {
+                builder.Services.RemoveAt(i);
+            }
+        }
+        builder.Services.TryAddSingleton<ILatticeOriginClusterIdResolver, ConfiguredLatticeOriginClusterIdResolver>();
+
         builder.Services.TryAddSingleton<IReplicationBatchEncoder, OrleansBinaryReplicationBatchEncoder>();
         builder.Services.TryAddSingleton<ILatticeReplicationCursorRegistry, InMemoryReplicationCursorRegistry>();
         builder.Services.TryAddSingleton<ILeafCursorReporter, LeafCursorReporter>();

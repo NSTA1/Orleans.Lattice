@@ -29,7 +29,7 @@ public class WalShardGrainTests
         var grainContext = Substitute.For<IGrainContext>();
         var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver());
+        var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver(), CreatePermissiveClusterIdResolver());
         await grain.InitializeForTestingAsync(TreeId, ShardIndex, provider, options, CancellationToken.None);
         return grain;
     }
@@ -53,6 +53,18 @@ public class WalShardGrainTests
     {
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
         resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
+        return resolver;
+    }
+
+    /// <summary>
+    /// Permissive <see cref="ILatticeOriginClusterIdResolver"/> stub that
+    /// returns <see cref="string.Empty"/> for every tree. Tests that
+    /// exercise per-tree cluster-id stamping supply their own.
+    /// </summary>
+    private static ILatticeOriginClusterIdResolver CreatePermissiveClusterIdResolver()
+    {
+        var resolver = Substitute.For<ILatticeOriginClusterIdResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns(string.Empty);
         return resolver;
     }
 
@@ -514,7 +526,7 @@ public class WalShardGrainTests
         var grainContext = Substitute.For<IGrainContext>();
         var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver());
+        var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver(), CreatePermissiveClusterIdResolver());
 
         Assert.That(
             async () => await grain.InitializeForTestingAsync(null!, 0, new InMemoryWalStorageProvider(), null, CancellationToken.None),
@@ -527,7 +539,7 @@ public class WalShardGrainTests
         var grainContext = Substitute.For<IGrainContext>();
         var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver());
+        var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver(), CreatePermissiveClusterIdResolver());
 
         Assert.That(
             async () => await grain.InitializeForTestingAsync(TreeId, 0, null!, null, CancellationToken.None),

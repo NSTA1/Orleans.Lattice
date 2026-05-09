@@ -36,7 +36,8 @@ internal sealed class WalShardGrain(
     IGrainContext context,
     IServiceProvider services,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
-    ILatticeMergeModeResolver modeResolver) : IWalShardGrain, IGrainBase
+    ILatticeMergeModeResolver modeResolver,
+    ILatticeOriginClusterIdResolver clusterIdResolver) : IWalShardGrain, IGrainBase
 {
     /// <summary>Per-entry serialised-size estimate overhead in bytes (envelope + HLC + origin id + slot tags).</summary>
     private const int EntrySizeOverhead = 128;
@@ -202,7 +203,17 @@ internal sealed class WalShardGrain(
             // registered). Single-cluster hosts have no cluster id, so
             // the converter receives an empty string and the resulting
             // record's OriginClusterId is empty too.
-            var entry = WalRecordConverter.ToWalRecord(walEntry.Mutation, mode, originClusterId: "");
+            // The mutation's own OriginClusterId wins when present (a
+            // remote-replay path stamped it before reaching the WAL).
+            // When it is null — i.e. a foreground commit on a host
+            // where the replication observer has not yet stamped — the
+            // resolver supplies the local cluster id. Single-cluster
+            // hosts get string.Empty from the default resolver and the
+            // resulting record's OriginClusterId is empty.
+            var entry = WalRecordConverter.ToWalRecord(
+                walEntry.Mutation,
+                mode,
+                originClusterId: clusterIdResolver.Resolve(walEntry.Mutation.TreeId));
             collected.Add(new WalShardSequencedEntry { Sequence = walEntry.Offset, Entry = entry });
             if (collected.Count >= maxEntries)
             {

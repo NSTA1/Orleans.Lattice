@@ -52,6 +52,12 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.TryAddSingleton<ICommitLogWriter, WalCommitLogWriter>();
         builder.Services.TryAddSingleton<ICommitLogReader, WalCommitLogReader>();
         builder.Services.TryAddSingleton<ILatticeMergeModeResolver, DefaultLatticeMergeModeResolver>();
+        // Single-cluster default for the per-tree origin-cluster-id resolver.
+        // Returns string.Empty for every tree so the WAL writer stamps an
+        // empty OriginClusterId on locally-authored records. The replication
+        // package replaces this with ConfiguredLatticeOriginClusterIdResolver
+        // (reads LatticeReplicationOptions.ClusterId) via services.Replace(...).
+        builder.Services.TryAddSingleton<ILatticeOriginClusterIdResolver, DefaultLatticeOriginClusterIdResolver>();
         return builder;
     }
 

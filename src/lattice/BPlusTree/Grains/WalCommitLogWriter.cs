@@ -28,7 +28,8 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed class WalCommitLogWriter(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> options,
-    ILatticeMergeModeResolver modeResolver) : ICommitLogWriter
+    ILatticeMergeModeResolver modeResolver,
+    ILatticeOriginClusterIdResolver clusterIdResolver) : ICommitLogWriter
 {
     /// <inheritdoc />
     public async Task<long> AppendAsync(LatticeMutation mutation, CancellationToken cancellationToken = default)
@@ -47,11 +48,18 @@ internal sealed class WalCommitLogWriter(
         // mode-resolver fake.
         var mode = modeResolver.Resolve(mutation.TreeId) ?? LatticeMergeMode.LwwRegister;
 
-        // The origin cluster id is stamped upstream on the mutation by
-        // the replication observer (when registered). Single-cluster
-        // hosts have no cluster id, so the converter receives an empty
-        // string and the resulting record's OriginClusterId is empty.
-        var entry = WalRecordConverter.ToWalRecord(mutation, mode, originClusterId: "");
+        // The mutation's own OriginClusterId wins when present (a
+        // remote-replay path stamps it before reaching the WAL). When
+        // it is null — the foreground single-cluster commit path — the
+        // resolver supplies the local cluster id so multi-site hosts
+        // record "this WAL entry was authored locally by <cluster-id>"
+        // without threading the cluster id through every call site.
+        // Single-cluster hosts get string.Empty from the default
+        // resolver and the resulting record's OriginClusterId is empty.
+        var entry = WalRecordConverter.ToWalRecord(
+            mutation,
+            mode,
+            originClusterId: clusterIdResolver.Resolve(mutation.TreeId));
 
         // Saga terminal marks (TxCommit / TxAbort) have no natural
         // user key — the spec mandates one terminal append per WAL
