@@ -319,6 +319,18 @@ if (packageReplicationConfigured)
     // populates the replog, so a change-feed subscriber never sees
     // foreign-origin entries.
     builder.Services.AddBaselineReplicationApplierDecorator();
+
+    // Inbound counterpart to AddChaosReplicationTransportDecorator
+    // above: when the operator-driven IReplicationDisconnectGrain
+    // flag is set, the package's gRPC Push handler will see the
+    // applier throw, rethrow as StatusCode.Internal to the peer, and
+    // the peer's transport will not advance its per-peer cursor.
+    // Without this, the local "Disconnect" button only halved the
+    // cut: outbound from this cluster paused but inbound from the
+    // peer kept arriving and applying. Must be the OUTERMOST applier
+    // decorator so the gate fires before BaselineReplicationApplier
+    // fans an entry out to the dashboard.
+    builder.Services.AddChaosReplicationApplierDecorator();
 }
 
 // OpenTelemetry: export the orleans.lattice and orleans.lattice.replication

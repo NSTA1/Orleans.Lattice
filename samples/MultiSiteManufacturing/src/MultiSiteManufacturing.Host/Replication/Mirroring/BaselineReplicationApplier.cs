@@ -51,6 +51,17 @@ namespace MultiSiteManufacturing.Host.Replication;
 /// the package's apply pipeline (which would surface as a 500 on the
 /// inbound gRPC <c>Push</c> RPC and stall replication).
 /// </para>
+/// <para>
+/// <b>Layering with chaos gating.</b> When the chaos
+/// <c>ReplicationDisconnect</c> preset is active, the sibling
+/// <see cref="ChaosReplicationApplier"/> decorator is registered as
+/// the <i>outer</i> applier layer (see
+/// <see cref="ChaosReplicationApplierRegistrationExtensions.AddChaosReplicationApplierDecorator"/>);
+/// it throws before this decorator runs, so the dashboard does not
+/// receive a fact-replicated event for an entry that was actually
+/// rejected to the peer. This decorator therefore only ever sees
+/// entries that the chaos gate has already let through.
+/// </para>
 /// </remarks>
 internal sealed class BaselineReplicationApplier(
     IReplicationApplier inner,
