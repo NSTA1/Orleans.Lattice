@@ -15,6 +15,10 @@ public partial class LeafCacheGrainTests
     {
         var leafMock = Substitute.For<IBPlusLeafGrain>();
         leafMock.GetTreeIdAsync().Returns("test-tree");
+        // Default the saga pending-key probe to "no pending keys" so cache
+        // tests that don't explicitly exercise saga isolation aren't
+        // perturbed by the cache's per-refresh pending-key snapshot.
+        leafMock.GetPendingKeysAsync().Returns(new List<string>());
 
         var context = Substitute.For<IGrainContext>();
         // The cache grain key is the string form of the primary leaf's GrainId.

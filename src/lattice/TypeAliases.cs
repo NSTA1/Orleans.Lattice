@@ -76,6 +76,8 @@ internal static class TypeAliases
     internal const string AtomicWriteState = "ol.aws";
     internal const string AtomicWritePhase = "ol.awp";
     internal const string AtomicPreValue = "ol.apv";
+    internal const string TxRegistryState = "ol.txr";
+    internal const string TxStatus = "ol.txo";
 
     // Stateful cursor / iterator
     internal const string LatticeCursorKind = "ol.lck";
@@ -125,6 +127,7 @@ internal static class TypeAliases
     internal const string ILatticeStats = "ol.gls";
     internal const string IReplicationApplyGrain = "ol.gra";
     internal const string ILeafReplayCoordinatorGrain = "ol.grc";
+    internal const string ITxRegistryGrain = "ol.gxr";
 
     // Replication apply DTO (batch path)
     internal const string ApplyMergeItem = "ol.ami";

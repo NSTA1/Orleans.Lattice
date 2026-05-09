@@ -730,14 +730,17 @@ internal sealed class AtomicWriteGrain(
             // and harmful (a non-prepared rollback write would land
             // as a fresh visible entry that subsequently overlays
             // the pre-saga state once the abort terminal drops the
-            // pending bucket on the same leaf). The abort terminal
-            // mark is the per-shard linearization point on the
-            // rollback side: every leaf on every touched shard
-            // observes either the pre-saga state for every key or -
-            // briefly, between Apply'ing the prepares and Apply'ing
-            // the terminal - the post-prepare bucketed state, which
-            // is invisible to readers via the prepared-mutation
-            // read-path filter.
+            // pending bucket on the same leaf).
+            //
+            // Strict per-tree atomic-visibility: record the abort
+            // decision in the per-tree TxRegistry BEFORE fanning out
+            // the per-leaf abort terminals. This is the single
+            // tree-wide linearization point on the rollback side -
+            // any leaf serving a read against this saga's pending
+            // bucket between this call and the terminal fan-out
+            // resolves to the pre-saga value via the registry, so
+            // readers never observe a partial rollback.
+            await RecordTerminalDecisionAsync(committed: false);
             await BroadcastTerminalsAsync(committed: false);
             await CompleteSagaAsync(success: false);
             throw new InvalidOperationException(
@@ -747,17 +750,53 @@ internal sealed class AtomicWriteGrain(
 
         if (state.State.Phase == AtomicWritePhase.Execute && state.State.NextIndex >= state.State.Entries.Count)
         {
-            // Every prepare-phase write succeeded — broadcast the
-            // commit terminal to every touched shard before flipping
-            // the saga to Completed. A crash between the broadcast
-            // start and the Completed flip leaves the saga in
-            // Execute (NextIndex == Entries.Count); reminder-driven
-            // re-entry observes the post-loop condition, re-runs the
-            // broadcast (idempotent via the leaf-side recently-
-            // terminal dedup), and proceeds to CompleteSagaAsync.
+            // Every prepare-phase write succeeded.
+            //
+            // Strict per-tree atomic-visibility: record the commit
+            // decision in the per-tree TxRegistry BEFORE fanning out
+            // the per-leaf commit terminals. This is the single
+            // tree-wide linearization point on the commit side - any
+            // leaf serving a read against this saga's pending bucket
+            // between this call and the terminal fan-out resolves to
+            // the prepared (post-saga) value via the registry, so
+            // readers never observe a partial commit.
+            //
+            // A crash between the registry write and the Completed
+            // flip leaves the saga in Execute (NextIndex ==
+            // Entries.Count); reminder-driven re-entry observes the
+            // post-loop condition, re-runs the registry write
+            // (idempotent), re-runs the broadcast (idempotent via
+            // the leaf-side recently-terminal dedup), and proceeds
+            // to CompleteSagaAsync.
+            await RecordTerminalDecisionAsync(committed: true);
             await BroadcastTerminalsAsync(committed: true);
             await CompleteSagaAsync(success: true);
         }
+    }
+
+    /// <summary>
+    /// Records the saga's terminal commit/abort decision on the per-tree
+    /// <see cref="ITxRegistryGrain"/> before the per-leaf terminal
+    /// fan-out begins. The registry write is the single tree-wide
+    /// linearization point that delivers strict atomic-visibility:
+    /// every leaf reader that sees the saga in its pending bucket
+    /// dials back through the registry to resolve the read against the
+    /// already-recorded outcome, so the post-fan-out window in which
+    /// some leaves have flipped and others have not is invisible to
+    /// readers. Idempotent - reminder-driven re-entry after a crash
+    /// between the registry write and the saga's Completed flip is
+    /// safe because both <c>MarkCommittedAsync</c> and
+    /// <c>MarkAbortedAsync</c> treat repeated same-outcome calls as
+    /// no-ops.
+    /// </summary>
+    private Task RecordTerminalDecisionAsync(bool committed)
+    {
+        var txid = state.State.TransactionId;
+        if (txid == Guid.Empty) return Task.CompletedTask;
+        var registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
+        return committed
+            ? registry.MarkCommittedAsync(txid)
+            : registry.MarkAbortedAsync(txid);
     }
 
     /// <summary>
@@ -922,6 +961,29 @@ internal sealed class AtomicWriteGrain(
         if (success)
         {
             await PublishCompletedEventAsync();
+        }
+
+        // Strict per-tree atomic-visibility cleanup: every touched leaf
+        // has now applied its terminal (and therefore drained its
+        // pending-tx bucket for this saga), so no leaf will ever
+        // consult the registry for this txid again. Forget the
+        // decision so the registry's persisted footprint stays
+        // bounded by in-flight + recently-completed sagas. Best-effort:
+        // a transient failure here leaves a tombstone behind that the
+        // next saga on the same tree will eventually amortise; it is
+        // not worth a retry loop on the saga critical path.
+        try
+        {
+            var txid = state.State.TransactionId;
+            if (txid != Guid.Empty)
+            {
+                var registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
+                await registry.ForgetAsync(txid);
+            }
+        }
+        catch
+        {
+            // Swallow - registry GC is non-critical.
         }
 
         this.DeactivateOnIdle();

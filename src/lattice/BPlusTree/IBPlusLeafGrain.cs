@@ -196,6 +196,24 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion);
 
     /// <summary>
+    /// Returns the set of keys that currently have a pending-tx mutation
+    /// on this leaf (the saga has prepared a write but the registry has
+    /// not yet recorded a terminal decision, OR the terminal has been
+    /// recorded but the leaf has not yet drained the pending bucket).
+    /// Returns an empty list when the leaf has no pending-tx activity.
+    /// <para>
+    /// Used by <see cref="ILeafCacheGrain"/> to identify keys whose
+    /// cached <see cref="LwwValue{T}"/> may differ from the strict
+    /// atomic-visibility outcome — those reads bypass the cache and
+    /// dial back to the primary leaf, whose read paths consult the
+    /// per-tree <see cref="ITxRegistryGrain"/> for the recorded saga
+    /// outcome. Lightweight: returns the in-memory pending-key set
+    /// without touching persistent state or doing any merge work.
+    /// </para>
+    /// </summary>
+    Task<List<string>> GetPendingKeysAsync();
+
+    /// <summary>
     /// Returns a <see cref="StateDelta"/> containing only the entries whose
     /// virtual slot is in <paramref name="sortedMovedSlots"/> and whose
     /// timestamp is newer than what <paramref name="sinceVersion"/> has seen.

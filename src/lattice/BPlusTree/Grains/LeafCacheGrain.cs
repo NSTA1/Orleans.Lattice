@@ -33,6 +33,22 @@ internal sealed class LeafCacheGrain(
     private string? _treeId;
 
     /// <summary>
+    /// Keys this cache currently knows are covered by a pending-tx
+    /// prepare on the primary leaf. Refreshed whenever we take the
+    /// cross-grain refresh path in <see cref="RefreshAsync"/> by
+    /// calling <see cref="IBPlusLeafGrain.GetPendingKeysAsync"/>.
+    /// Reads that hit a key in this set are delegated to the primary
+    /// leaf so the per-tree <see cref="ITxRegistryGrain"/> can apply
+    /// the strict atomic-visibility verdict; the cache cannot make
+    /// that decision itself because <see cref="_cache"/> only holds
+    /// committed (post-merge) state. Empty in steady state — the vast
+    /// majority of keys are never covered by an in-flight saga, so the
+    /// per-read <see cref="HashSet{T}.Contains"/> probe is O(1) and
+    /// allocation-free.
+    /// </summary>
+    private readonly HashSet<string> _pendingKeys = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// Cached resolved <see cref="GrainId"/> of the primary leaf. The
     /// activation key is immutable for the activation's lifetime, so the
     /// parsed value is invariant — caching it avoids re-running
@@ -68,6 +84,19 @@ internal sealed class LeafCacheGrain(
         // delta without scanning entries.
         await RefreshAsync();
 
+        // Strict atomic-visibility delegation: if this key is covered by
+        // a pending-tx prepare on the primary, the cache has no way to
+        // decide whether to surface the prepared value, hide the key,
+        // or fall through to the pre-saga value — only the per-tree
+        // TxRegistry holds the recorded outcome, and only the primary
+        // leaf's read path consults it. Delegate so the saga's
+        // linearization point applies uniformly across cache and leaf.
+        if (_pendingKeys.Contains(key))
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
+            return await leaf.GetAsync(key);
+        }
+
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         if (_cache.TryGetValue(key, out var cached) && !cached.IsTombstone
             && !cached.IsExpired(nowTicks))
@@ -83,6 +112,14 @@ internal sealed class LeafCacheGrain(
     public async Task<bool> ExistsAsync(string key)
     {
         await RefreshAsync();
+
+        // See GetAsync for the delegation rationale.
+        if (_pendingKeys.Contains(key))
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
+            return await leaf.ExistsAsync(key);
+        }
+
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var hit = _cache.TryGetValue(key, out var cached) && !cached.IsTombstone
             && !cached.IsExpired(nowTicks);
@@ -94,11 +131,54 @@ internal sealed class LeafCacheGrain(
     {
         await RefreshAsync();
 
+        // Partition the request into pending and non-pending keys. The
+        // pending subset rounds-trips to the primary leaf so the
+        // TxRegistry-driven verdict applies; the remainder is served
+        // from _cache as before. In the steady state (_pendingKeys
+        // empty) the partition collapses to a no-op and the legacy
+        // cache path runs unchanged.
+        List<string>? delegated = null;
+        if (_pendingKeys.Count > 0)
+        {
+            foreach (var key in keys)
+            {
+                if (_pendingKeys.Contains(key))
+                {
+                    delegated ??= new List<string>();
+                    delegated.Add(key);
+                }
+            }
+        }
+
+        Dictionary<string, byte[]>? delegatedResult = null;
+        if (delegated is not null)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
+            delegatedResult = await leaf.GetManyAsync(delegated);
+        }
+
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var result = new Dictionary<string, byte[]>(keys.Count);
         var hits = 0;
+        var cacheLookups = 0;
         foreach (var key in keys)
         {
+            if (delegatedResult is not null && delegatedResult.TryGetValue(key, out var delegatedValue))
+            {
+                result[key] = delegatedValue;
+                continue;
+            }
+            // Skip cache scoring for delegated keys — they were not
+            // served from this cache, so they should not count as a
+            // hit or a miss against this cache's metrics. Use the
+            // O(1) HashSet membership check on _pendingKeys rather
+            // than O(n) List.Contains over `delegated` — `delegated`
+            // is by construction a subset of `_pendingKeys`, so the
+            // two predicates are equivalent for this branch.
+            if (_pendingKeys.Contains(key))
+                continue;
+
+            cacheLookups++;
             if (_cache.TryGetValue(key, out var cached) && !cached.IsTombstone
                 && !cached.IsExpired(nowTicks))
             {
@@ -108,7 +188,7 @@ internal sealed class LeafCacheGrain(
         }
         var tag = CacheTreeTag();
         if (hits > 0) LatticeMetrics.CacheHits.Add(hits, tag);
-        var misses = keys.Count - hits;
+        var misses = cacheLookups - hits;
         if (misses > 0) LatticeMetrics.CacheMisses.Add(misses, tag);
         return result;
     }
@@ -118,36 +198,89 @@ internal sealed class LeafCacheGrain(
 
     private async Task RefreshAsync()
     {
-        // Check TTL: skip refresh if the cache was populated recently enough.
-        var ttl = await GetCacheTtlAsync();
-        if (ttl > TimeSpan.Zero && _lastRefreshTicks > 0)
+        var primaryId = PrimaryLeafId;
+
+        // Same-silo revision-cookie short-circuit. When the primary
+        // leaf is activated on this silo, every state-advancing
+        // operation on it (Set / Delete / saga prepare / saga
+        // terminal) bumps a process-wide cookie published via
+        // BPlusLeafGrain.LeafRevisionRegistry. We check the cookie
+        // BEFORE the TTL gate because saga-pending visibility relies
+        // on every cache observing every revision change promptly:
+        // if a saga's terminal mark drains the leaf's _pendingTx and
+        // bumps the revision, the cache MUST refresh on the next read
+        // even if its TTL has not yet elapsed — otherwise the cache
+        // continues serving the pre-saga value from _cache while a
+        // sibling cache (whose own leaf drained earlier in the same
+        // window) has already merged the post-saga value, producing
+        // a split observation across leaves that the lattice-level
+        // double-checked TxRegistry snapshot retry cannot detect
+        // (because the cache short-circuits the leaf RPC entirely).
+        if (_lastSeenPrimaryRevision > 0
+            && BPlusLeafGrain.TryGetLeafRevision(primaryId, out var sameSiloRev))
         {
-            var elapsed = Environment.TickCount64 - _lastRefreshTicks;
-            if (elapsed < (long)ttl.TotalMilliseconds)
-                return;
+            if (sameSiloRev == _lastSeenPrimaryRevision)
+                return; // provably fresh; nothing has changed on the primary.
+            // Revision changed: skip the TTL gate. The revision is the
+            // source of truth on same-silo; the TTL exists only as a
+            // bandwidth bound for cross-silo where we cannot make a
+            // direct equality check.
+        }
+        else
+        {
+            // First refresh on this cache OR the primary leaf is on
+            // another silo (no revision cookie published locally).
+            // Fall back to the TTL gate to cap cross-silo RPC traffic
+            // at the cost of bounded staleness — the cross-silo case
+            // already has a separate non-linearizable-scan window
+            // bounded by network round-trip time.
+            var ttl = await GetCacheTtlAsync();
+            if (ttl > TimeSpan.Zero && _lastRefreshTicks > 0)
+            {
+                var elapsed = Environment.TickCount64 - _lastRefreshTicks;
+                if (elapsed < (long)ttl.TotalMilliseconds)
+                    return;
+            }
         }
 
-        // Same-silo revision-cookie fast path. When the primary leaf
-        // grain is activated on this silo, every state-advancing
-        // operation on it bumps a process-wide cookie published via
-        // BPlusLeafGrain.LeafRevisionRegistry. If the cookie has not
-        // advanced since our last successful refresh, no observable
-        // state has changed on the primary and a cross-grain
-        // GetDeltaSinceAsync call would return the singleton empty
-        // delta — so we elide the entire cross-grain call. Cross-silo
-        // primaries do not populate this silo's registry, so
-        // TryGetLeafRevision returns false and we fall through to the
-        // existing cross-grain refresh path; correctness is preserved
-        // by construction in multi-silo deployments.
-        var primaryId = PrimaryLeafId;
-        if (_lastSeenPrimaryRevision > 0
-            && BPlusLeafGrain.TryGetLeafRevision(primaryId, out var rev)
-            && rev == _lastSeenPrimaryRevision)
-        {
-            return;
-        }
+        // Capture the revision cookie BEFORE issuing GetDeltaSinceAsync.
+        // The cookie is monotonically increasing on every leaf state
+        // change; recording it BEFORE the cross-grain RPC means
+        // _lastSeenPrimaryRevision is a sound lower bound on the state
+        // our forthcoming refresh will reflect. Capturing AFTER the
+        // RPC returns leaves a window where the leaf can advance
+        // between the delta's wall-clock observation moment and the
+        // cookie read — the cache would then record a cookie that
+        // matches the leaf's NEW state while _cache and _pendingKeys
+        // only reflect the older state, and the same-silo fast path
+        // would short-circuit indefinitely without observing the
+        // missed advance. The cost of capturing early is at worst one
+        // extra refresh per phantom advance, which is bounded by leaf
+        // state-bumping cadence.
+        var preFetchRevision = BPlusLeafGrain.TryGetLeafRevision(primaryId, out var preRev)
+            ? preRev
+            : 0L;
 
         var primaryLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(primaryId);
+
+        // Refresh the pending-key set BEFORE fetching the delta. The
+        // ordering matters: a saga drain (TxCommit/TxAbort) between
+        // these two RPCs flips a leaf from "_pendingTx[txX]={K},
+        // Entries[K]=pre" to "_pendingTx empty, Entries[K]=post". If
+        // we fetched delta first, we could observe (pendingKeys=
+        // empty, delta=pre) — the cache would then serve _cache[K]=
+        // pre directly without delegating to the leaf, violating
+        // strict per-tree atomic visibility against sibling caches
+        // whose leaf drained in a different fan-out window. Fetching
+        // pending first means the worst-case observation is
+        // (pendingKeys=[K], delta=post): the cache delegates K to the
+        // leaf (which is post-drain, returns Entries=post) and the
+        // sibling caches' post values are consistent. Under-claiming
+        // a key as pending is a correctness-preserving over-
+        // approximation; over-claiming a key as fully cached is the
+        // bug we are avoiding.
+        var pendingKeys = await primaryLeaf.GetPendingKeysAsync();
+
         var delta = await primaryLeaf.GetDeltaSinceAsync(_version);
 
         // If the primary leaf has been split, prune any cached entries that
@@ -169,14 +302,20 @@ internal sealed class LeafCacheGrain(
             }
         }
 
-        // After the cross-grain refresh succeeded, snapshot the cookie
-        // so subsequent same-silo reads can short-circuit. If the
-        // cookie is absent (cross-silo primary), record 0 so the
-        // condition above stays false and we keep RPC'ing — same
-        // behaviour as today.
-        _lastSeenPrimaryRevision = BPlusLeafGrain.TryGetLeafRevision(primaryId, out var observedRev)
-            ? observedRev
-            : 0L;
+        // Stamp the pre-fetch cookie so subsequent same-silo reads can
+        // short-circuit when no further state has accumulated. If the
+        // cookie was absent (cross-silo primary), preFetchRevision is
+        // 0 and the fast-path guard `_lastSeenPrimaryRevision > 0`
+        // keeps us on the cross-grain refresh path — same behaviour as
+        // before this fix.
+        _lastSeenPrimaryRevision = preFetchRevision;
+
+        _pendingKeys.Clear();
+        if (pendingKeys is { Count: > 0 })
+        {
+            foreach (var k in pendingKeys)
+                _pendingKeys.Add(k);
+        }
 
         if (delta.IsEmpty)
             return;

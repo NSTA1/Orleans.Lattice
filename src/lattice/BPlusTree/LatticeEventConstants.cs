@@ -156,4 +156,18 @@ public static class LatticeEventConstants
     /// arrives. Internal — set through <see cref="LatticeApplyOffsetContext"/>.
     /// </summary>
     internal const string ApplyOffsetRequestContextKey = "ol.aoff";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry a per-scan
+    /// snapshot of <see cref="BPlusTree.ITxRegistryGrain"/> decisions
+    /// from a lattice-level read fan-out down into every per-shard
+    /// leaf participating in the scan. When set, leaf read paths use
+    /// the pre-fetched snapshot in place of an independent
+    /// <c>GetStatusManyAsync</c> RPC, ensuring every leaf in the same
+    /// scan applies the same registry decision view (linearizable scan
+    /// over the registry's <c>InFlight</c>→<c>Committed</c>
+    /// transition). Internal — set through
+    /// <see cref="LatticeRegistrySnapshotContext"/>.
+    /// </summary>
+    internal const string RegistrySnapshotRequestContextKey = "ol.txregsnap";
 }
