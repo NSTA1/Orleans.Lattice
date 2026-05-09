@@ -6,7 +6,6 @@ using MultiSiteManufacturing.Host.Lattice;
 using MultiSiteManufacturing.Host.Replication;
 using MultiSiteManufacturing.Tests.Federation;
 using Orleans.Lattice;
-using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 using static MultiSiteManufacturing.Tests.Federation.FactFixtures;

@@ -4,7 +4,6 @@ using OpenTelemetry.Metrics;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using Orleans.Lattice;
-using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grpc;
 using Microsoft.AspNetCore.Server.Kestrel.Core;

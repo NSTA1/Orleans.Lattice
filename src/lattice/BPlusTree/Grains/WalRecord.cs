@@ -1,6 +1,6 @@
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.BPlusTree.Grains;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// A single change-feed record captured at commit time by the replication

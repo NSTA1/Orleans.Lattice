@@ -4,7 +4,6 @@ using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Lattice;
 using Orleans.Lattice;
-using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Replication;
 
 namespace MultiSiteManufacturing.Host.Replication;

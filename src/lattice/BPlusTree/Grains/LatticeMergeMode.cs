@@ -1,6 +1,6 @@
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.BPlusTree.Grains;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Declared convergence rule for a tree. Authored once at configuration

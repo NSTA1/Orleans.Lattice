@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.BPlusTree.Grains;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Producer-side seam that resolves the declared <see cref="LatticeMergeMode"/>
