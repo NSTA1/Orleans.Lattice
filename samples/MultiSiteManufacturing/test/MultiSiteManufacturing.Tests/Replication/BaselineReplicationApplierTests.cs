@@ -5,6 +5,8 @@ using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Lattice;
 using MultiSiteManufacturing.Host.Replication;
 using MultiSiteManufacturing.Tests.Federation;
+using Orleans.Lattice;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 using static MultiSiteManufacturing.Tests.Federation.FactFixtures;
@@ -45,10 +47,10 @@ public sealed class BaselineReplicationApplierTests
     {
         public int ApplyCalls { get; private set; }
         public int BatchCalls { get; private set; }
-        public ReplogEntry? LastEntry { get; private set; }
-        public IReadOnlyList<ReplogEntry>? LastBatch { get; private set; }
+        public WalRecord? LastEntry { get; private set; }
+        public IReadOnlyList<WalRecord>? LastBatch { get; private set; }
 
-        public Task<ApplyResult> ApplyAsync(ReplogEntry entry, CancellationToken cancellationToken = default)
+        public Task<ApplyResult> ApplyAsync(WalRecord entry, CancellationToken cancellationToken = default)
         {
             ApplyCalls++;
             LastEntry = entry;
@@ -56,7 +58,7 @@ public sealed class BaselineReplicationApplierTests
         }
 
         public Task<ApplyResult> ApplyBatchAsync(
-            IReadOnlyList<ReplogEntry> entries,
+            IReadOnlyList<WalRecord> entries,
             CancellationToken cancellationToken = default)
         {
             BatchCalls++;
@@ -93,20 +95,20 @@ public sealed class BaselineReplicationApplierTests
         return (decorator, inner, baseline, router, replicated, crdtStore, crdtChanged);
     }
 
-    private static ReplogEntry FactEntry(Fact fact, string treeId = LatticeFactBackend.FactTreeId)
+    private static WalRecord FactEntry(Fact fact, string treeId = LatticeFactBackend.FactTreeId)
     {
         var payload = FactJsonCodec.Encode(fact);
-        return new ReplogEntry
+        return new WalRecord
         {
             TreeId = treeId,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = $"{fact.Serial.Value}/{fact.Hlc.WallClockTicks:D20}/{fact.Hlc.Counter:D10}/{fact.FactId:N}",
             Value = payload,
             Timestamp = fact.Hlc,
             IsTombstone = false,
             ExpiresAtTicks = 0,
             OriginClusterId = "us",
-            Mode = ReplicationMode.LwwRegister,
+            Mode = LatticeMergeMode.LwwRegister,
         };
     }
 
@@ -188,7 +190,7 @@ public sealed class BaselineReplicationApplierTests
             new ApplyResult { Applied = true, HighWaterMark = fact.Hlc });
 
         var tombstoneEntry = FactEntry(fact) with { IsTombstone = true };
-        var deleteEntry = FactEntry(fact) with { Op = ReplogOp.Delete, Value = null };
+        var deleteEntry = FactEntry(fact) with { Op = MutationKind.Delete, Value = null };
 
         await decorator.ApplyAsync(tombstoneEntry, CancellationToken.None);
         await decorator.ApplyAsync(deleteEntry, CancellationToken.None);
@@ -209,15 +211,15 @@ public sealed class BaselineReplicationApplierTests
         // the inbound gRPC Push and stall replication).
         var (decorator, _, _, _, replicated, _, _) = Build(
             new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero });
-        var entry = new ReplogEntry
+        var entry = new WalRecord
         {
             TreeId = LatticeFactBackend.FactTreeId,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = "bad-key",
             Value = new byte[] { 0x7b, 0x99, 0x00 }, // "{" + invalid UTF-8
             Timestamp = HybridLogicalClock.Zero,
             OriginClusterId = "us",
-            Mode = ReplicationMode.LwwRegister,
+            Mode = LatticeMergeMode.LwwRegister,
         };
 
         Assert.DoesNotThrowAsync(async () => await decorator.ApplyAsync(entry, CancellationToken.None));
@@ -285,15 +287,15 @@ public sealed class BaselineReplicationApplierTests
         var serial = new PartSerialNumber("HPT-BLD-S1-2028-99100");
         var (decorator, _, _, _, replicated, _, crdtChanged) = Build(
             new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero });
-        var entry = new ReplogEntry
+        var entry = new WalRecord
         {
             TreeId = PartCrdtStore.LabelsTreeId,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = serial.Value,
             Value = new byte[] { 0x01 }, // payload shape is opaque to the decorator
             Timestamp = HybridLogicalClock.Zero,
             OriginClusterId = "eu",
-            Mode = ReplicationMode.OrSet,
+            Mode = LatticeMergeMode.OrSet,
         };
 
         await decorator.ApplyAsync(entry, CancellationToken.None);
@@ -315,15 +317,15 @@ public sealed class BaselineReplicationApplierTests
         // must skip them rather than firing a no-op refresh.
         var (decorator, _, _, _, _, _, crdtChanged) = Build(
             new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero });
-        var entry = new ReplogEntry
+        var entry = new WalRecord
         {
             TreeId = PartCrdtStore.LabelsTreeId,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = "shadow/b/HPT-BLD-S1-2028-99101",
             Value = new byte[] { 0x01 },
             Timestamp = HybridLogicalClock.Zero,
             OriginClusterId = "eu",
-            Mode = ReplicationMode.OrSet,
+            Mode = LatticeMergeMode.OrSet,
         };
 
         await decorator.ApplyAsync(entry, CancellationToken.None);
@@ -340,15 +342,15 @@ public sealed class BaselineReplicationApplierTests
         var serial = new PartSerialNumber("HPT-BLD-S1-2028-99102");
         var (decorator, _, _, _, _, _, crdtChanged) = Build(
             new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero });
-        var entry = new ReplogEntry
+        var entry = new WalRecord
         {
             TreeId = PartCrdtStore.LabelsTreeId,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = serial.Value,
             Value = new byte[] { 0x01 },
             Timestamp = HybridLogicalClock.Zero,
             OriginClusterId = "eu",
-            Mode = ReplicationMode.OrSet,
+            Mode = LatticeMergeMode.OrSet,
         };
 
         await decorator.ApplyAsync(entry, CancellationToken.None);
@@ -364,16 +366,16 @@ public sealed class BaselineReplicationApplierTests
         // GetLabelsAsync would return for any user-visible serial.
         var (decorator, _, _, _, _, _, crdtChanged) = Build(
             new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero });
-        var entry = new ReplogEntry
+        var entry = new WalRecord
         {
             TreeId = PartCrdtStore.LabelsTreeId,
-            Op = ReplogOp.Delete,
+            Op = MutationKind.Delete,
             Key = "HPT-BLD-S1-2028-99103",
             Value = null,
             IsTombstone = true,
             Timestamp = HybridLogicalClock.Zero,
             OriginClusterId = "eu",
-            Mode = ReplicationMode.OrSet,
+            Mode = LatticeMergeMode.OrSet,
         };
 
         await decorator.ApplyAsync(entry, CancellationToken.None);

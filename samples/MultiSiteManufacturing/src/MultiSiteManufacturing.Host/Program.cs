@@ -4,6 +4,7 @@ using OpenTelemetry.Metrics;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using Orleans.Lattice;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grpc;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -246,25 +247,25 @@ builder.Host.UseOrleans(silo =>
             silo.AddLatticeReplication(opts =>
             {
                 opts.ClusterId = clusterName;
-                opts.ReplicatedTrees = new Dictionary<string, ReplicationMode>(StringComparer.Ordinal)
+                opts.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
                 {
                     // The primary HLC-ordered fact log. Every domain
                     // event lands here; the Compliance fold reads
                     // from it; cross-cluster replication keeps both
                     // regions converged on the same fold result.
-                    [LatticeFactBackend.FactTreeId] = ReplicationMode.LwwRegister,
+                    [LatticeFactBackend.FactTreeId] = LatticeMergeMode.LwwRegister,
                     // Secondary index keyed by {site}/{HLC}/{serial}
                     // for the "Inventory By Activity" tab. Same
                     // shipping mode as the fact tree — entries are
                     // append-only LWW writes.
-                    [SiteActivityIndex.TreeId] = ReplicationMode.LwwRegister,
+                    [SiteActivityIndex.TreeId] = LatticeMergeMode.LwwRegister,
                     // Per-serial OR-Set of process labels. Typed
                     // CRDT delta shipping: the package transmits
                     // add/remove/merge operations rather than raw
                     // byte values, which is the reason this tree is
                     // a separate replicated surface from the
                     // cluster-local operator-LWW tree.
-                    [PartCrdtStore.LabelsTreeId] = ReplicationMode.OrSet,
+                    [PartCrdtStore.LabelsTreeId] = LatticeMergeMode.OrSet,
                 };
                 opts.ReplicationPeers = new[] { packagePeerClusterId! };
             });
