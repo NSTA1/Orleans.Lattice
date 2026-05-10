@@ -2,7 +2,7 @@
 
 `IReplicationApplier` is the public, in-process inbound seam over the per-tree apply pipeline. It installs a single `WalRecord` authored on a remote cluster onto the local tree while preserving the remote cluster's `HybridLogicalClock` and origin id end-to-end, and it filters re-delivery via a per-origin high-water-mark so at-least-once transports become at-most-once apply.
 
-The contract is deliberately neutral: there is no transport binding, no per-peer state, no ack envelope. It is the seam custom transports, integration tests, and the future inbound replication pipeline plug into.
+The contract is deliberately neutral: there is no transport binding, no per-peer state, no ack envelope. It is the seam custom transports and integration tests plug into.
 
 ## API
 
@@ -134,48 +134,79 @@ Every classification the per-entry path produces survives the batch path:
 
 Per-entry failures inside the batch surface as `ApplyAsync`-equivalent exceptions. The `LatticeReplicationGrpcService.Push` receiver wraps the batch call in a transport-level exception so the sender's backoff/retry loop kicks in for the whole batch — partial-batch acceptance is not a guarantee the seam offers. A `DeadLetterTrackingReplicationApplier` decorator detects retry history on any entry in the batch and falls back to per-entry routing so its DLQ accounting is exact.
 
-## Atomic batch apply — retired (design context)
+## Cross-cluster atomic visibility — receiver seam
 
-> **Status — retired.** The receiver-side staging buffer
-> (`IReplicationTxBufferGrain` / `ReplicationTxBufferGrain`) and the
-> per-tree `LatticeReplicationOptions.AtomicBatchDelivery` opt-in that
-> originally drove this section's "admit, stage, then dispatch under
-> one saga" path were retired by the WAL repivot. The `apply.batch.*`
-> metric prefix and the receiver-side atomic-batch encoder/decoder are
-> gone.
+`SetManyAtomicAsync` sagas authored on the source cluster ride the
+standard WAL replication transport: every prepared per-key write
+emits a `Set` / `Delete` `WalRecord` with `IsPrepared = true` and a
+non-empty `TransactionId`, and the saga's terminal phase emits one
+`TxCommit` (or `TxAbort`) `WalRecord` per touched shard. The shipper
+preserves these records verbatim; the receiver seam interprets them
+through three additional internal hops on `IReplicationApplyGrain`:
+
+| Method | Wire trigger | Receiver behaviour |
+|---|---|---|
+| `ApplyPreparedSetAsync` | `Op == Set` && `IsPrepared == true` | Stages the write under the saga's `TransactionId` in the destination leaf's per-tx pending bucket. The visible projection is unchanged - public readers (`GetAsync`, `KeysAsync`, etc.) do not observe the prepared entry. |
+| `ApplyPreparedDeleteAsync` | `Op == Delete` && `IsPrepared == true` | Stages a tombstone under the saga's `TransactionId` in the same pending bucket. The pre-saga value remains visible to public readers until the terminal arrives. |
+| `ApplyTxTerminalAsync` | `Op == TxCommit` or `Op == TxAbort` | Marks the per-tree `ITxRegistry` entry (LWW-resolved on `(committed, terminalHlc)` so a duplicate or abort-after-commit terminal is a no-op), then fans out the terminal to every leaf on the named shard. On commit, every pending entry under the `TransactionId` flips into the visible projection in a single linearization point on that shard; on abort, the pending entries are dropped. |
+
+The transport-level filter (`ShouldShip`) explicitly bypasses
+per-tree `KeyFilter` and `KeyPrefixes` for `TxCommit` and `TxAbort`
+records: a saga whose prepared keys passed the filter must have its
+terminal delivered or the receiver-side pending bucket leaks. The
+empty-origin guard and the cycle-break filter still run before the
+bypass, so a malformed or self-loopback terminal is still rejected.
+
+Public readers therefore observe the receiver-side same-cluster
+atomic-visibility property end-to-end: at every point in time,
+either every key the saga prepared on the receiver is at its
+post-saga value (after the commit terminal applies) or none of them
+is (during the prepare window or after an abort). The HLC the
+visible value carries is the source cluster's HLC verbatim - the
+receiver's wall-clock progression does not bump it - so transitive
+LWW resolution (A -> B -> C with A's HLC intact) holds across saga
+output identically to single-key cross-cluster writes.
+
+> **Status — shipped (receiver-side seam).** The wire format
+> additions (`IsPrepared` slot, `TxCommit` / `TxAbort` op codes,
+> `TransactionId` propagation through the change feed) and the
+> receiver-side `ApplyPreparedSetAsync` / `ApplyPreparedDeleteAsync`
+> / `ApplyTxTerminalAsync` apply hops are in tree as of the universal
+> "universal reader isolation" work-in-progress. The retired surface
+> below (`AtomicBatchDelivery`, `IReplicationTxBufferGrain`,
+> `apply.batch.*` metrics, the receiver-side atomic-batch
+> encoder/decoder) was retired by the same change set - the WAL
+> repivot routes every saga write through the same point-apply seam
+> as a non-saga write, with the `IsPrepared` flag selecting the
+> staging behaviour.
 
 What ships today:
 
-- `WalRecord.AtomicBatchSize`, `AtomicBatchIndex`, and `TransactionId`
-  remain on the wire (additive `[Id]` slots) so a future receiver-side
-  primitive can re-enable batch-aware apply without a producer-side
-  change. No shipped code path consumes them on the receiver — every
-  inbound entry applies as a point write through `ApplyAsync`
-  regardless of `AtomicBatchSize`.
+- `WalRecord.AtomicBatchSize`, `AtomicBatchIndex`, `TransactionId`,
+  and `IsPrepared` are preserved on the wire end-to-end. The
+  receiver consumes `TransactionId` and `IsPrepared` to drive the
+  prepared/terminal staging path; `AtomicBatchSize` and
+  `AtomicBatchIndex` remain reserved for future receiver-side batch
+  optimisations.
 - `IReplicationApplyGrain.ApplyManyAtomicAsync` remains in the core
   library (alongside the `AtomicApplyEntry` / `AtomicApplyResult` /
   `AtomicApplyOutcome` value types) because the **local**
   `SetManyAtomicAsync` saga uses the same source-HLC-preserving
-  merge seam — it is **not** the cross-cluster atomic-apply entry
-  point and it is `internal` to `Orleans.Lattice`. Host code cannot
-  call it; the auto-ship-loop does not drive it. Cross-cluster atomic
-  visibility is therefore **not currently exposed**: a remote reader
-  observing replication of a `SetManyAtomicAsync` batch may see a
-  partial view per-key until every entry has converged under LWW.
-- Local single-tree atomic visibility (within one cluster) is shipped
-  end-to-end via the per-tree `ITxRegistryGrain` linearization point;
-  see [Atomic Writes](../lattice/atomic-writes.md) for the protocol
+  merge seam - it is `internal` to `Orleans.Lattice` and not driven
+  by the cross-cluster auto-ship loop. Cross-cluster atomic
+  visibility is now provided by the per-key prepared/terminal apply
+  hops described above; `ApplyManyAtomicAsync` is the local
+  source-cluster saga's apply seam, not the receiver's.
+- Local single-tree atomic visibility (within one cluster) is
+  shipped end-to-end via the per-tree `ITxRegistryGrain`
+  linearization point; see
+  [Atomic Writes](../lattice/atomic-writes.md) for the protocol
   and [Consistency](../lattice/consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster)
-  for the read-path dial-back.
-- The producer-side per-key WAL filter shipped instead. Hosts that need
-  to bound the change-feed at commit time configure `ReplicatedTrees`,
-  `KeyFilter`, or `KeyPrefixes` on `LatticeReplicationOptions` — see
-  [`wal.md`](wal.md).
-
-Cross-cluster atomic visibility therefore remains a known carve-out: a
-remote reader concurrent with replication of a local
-`SetManyAtomicAsync` may observe a partial view (some keys updated,
-some not) until every entry in the batch finishes converging on that
-peer. The carve-out is documented in
-[`../lattice/consistency.md`](../lattice/consistency.md) and in §14 of
-[`../lattice/wal-causal-plus.md`](../lattice/wal-causal-plus.md).
+  for the read-path dial-back. The cross-cluster receiver seam
+  reuses the same registry grain.
+- The producer-side per-key WAL filter shipped earlier. Hosts that
+  need to bound the change feed at commit time configure
+  `ReplicatedTrees`, `KeyFilter`, or `KeyPrefixes` on
+  `LatticeReplicationOptions` - see [`wal.md`](wal.md). `TxCommit`
+  and `TxAbort` records are exempt from the per-key filter as
+  described above.

@@ -129,6 +129,9 @@ internal sealed partial class BPlusLeafGrain(
         return state.State.Clock;
     }
 
+    /// <inheritdoc />
+    public Task<HybridLogicalClock> GetClockAsync() => Task.FromResult(state.State.Clock);
+
     public Task<byte[]?> GetAsync(string key)
     {
         // Strict atomic-visibility: a key with a pending-tx entry

@@ -161,6 +161,28 @@ internal sealed partial class ReplicationApplier(
                 return new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero };
             }
 
+            // Saga terminal-mark records (TxCommit / TxAbort) are
+            // saga-id-keyed and idempotent on the receiver
+            // (per-tree TxRegistry repeat-same-outcome no-op + per-leaf
+            // _recentlyTerminal HashSet dedup). They bypass the
+            // per-origin HWM check, the shadow-forward dedup cache, and
+            // the causal-buffer parking path: those primitives are
+            // per-key data-flow dedup primitives and have no defined
+            // semantics on saga linearization records. The receiver-side
+            // ApplyTxTerminalAsync routes the mark through the per-tree
+            // ITxRegistryGrain (the linearization point readers dial
+            // back through) and the addressed shard's
+            // AppendTxTerminalAsync under a LatticeHlcOverrideContext
+            // so the receiver's local WAL append re-stamps the source
+            // cluster's terminal HLC verbatim — preserving the
+            // cross-cluster ordering invariant on receiver replays.
+            if (entry.Op is MutationKind.TxCommit or MutationKind.TxAbort)
+            {
+                await ApplyTxTerminalCoreAsync(entry, cancellationToken);
+                outcome = LatticeReplicationMetrics.OutcomeSuccess;
+                return new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero };
+            }
+
             var hwmGrain = GetHwmGrain(entry.TreeId);
             var hwm = await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
             if (entry.Timestamp <= hwm)
@@ -427,6 +449,21 @@ internal sealed partial class ReplicationApplier(
     private Task ApplyPointAsync(WalRecord entry)
     {
         var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
+
+        // Saga prepare-phase entries (IsPrepared==true) route through
+        // the prepared-apply seam so the receiver leaf parks them in
+        // its per-tx pending bucket rather than flipping the visible
+        // projection. The terminal record arriving subsequently via
+        // ApplyTxTerminalAsync is the per-shard linearization point
+        // that flips pending into visible (or drops on abort). Only
+        // LwwRegister mode is supported — the saga surface
+        // (SetManyAtomicAsync) emits only Set/Delete in that mode;
+        // CRDT modes have no saga-prepared shape on the wire.
+        if (entry.IsPrepared && entry.Op is MutationKind.Set or MutationKind.Delete)
+        {
+            return ApplyPreparedPointAsync(apply, entry);
+        }
+
         return entry.Op switch
         {
             MutationKind.Set when entry.Value is null
@@ -469,6 +506,111 @@ internal sealed partial class ReplicationApplier(
             _ => throw new InvalidOperationException(
                 $"Unsupported point-apply op {entry.Op} for entry on tree '{entry.TreeId}'."),
         };
+    }
+
+    /// <summary>
+    /// Routes an inbound saga prepare-phase entry through the
+    /// receiver-side <see cref="IReplicationApplyGrain.ApplyPreparedSetAsync"/>
+    /// or <see cref="IReplicationApplyGrain.ApplyPreparedDeleteAsync"/>
+    /// seam. The seam wraps the per-key write in the same ambient
+    /// context stack the source saga's prepare step would have produced
+    /// (<see cref="LatticePreparedContext"/>, 
+    /// <see cref="LatticeOriginContext"/>, <see cref="LatticeVectorClockContext"/>, 
+    /// <see cref="LatticeHlcOverrideContext"/>, 
+    /// <see cref="LatticeAtomicBatchContext"/>, and the request-scope
+    /// transaction id) so the receiver leaf routes the entry into its
+    /// per-tx pending bucket instead of the visible projection.
+    /// </summary>
+    private static Task ApplyPreparedPointAsync(IReplicationApplyGrain apply, WalRecord entry)
+    {
+        if (entry.TransactionId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                $"WalRecord on tree '{entry.TreeId}' carries IsPrepared=true but TransactionId=Guid.Empty; "
+                + "saga prepare-phase entries must stamp the saga's transaction id so the receiver can "
+                + "route the entry into the correct per-leaf pending-tx bucket.",
+                nameof(entry));
+        }
+
+        if (entry.Op == MutationKind.Set)
+        {
+            if (entry.Value is null)
+            {
+                throw new ArgumentException(
+                    "WalRecord.Value must be non-null for prepared MutationKind.Set.",
+                    nameof(entry));
+            }
+
+            return apply.ApplyPreparedSetAsync(
+                entry.Key,
+                entry.Value,
+                entry.Timestamp,
+                entry.OriginClusterId!,
+                sourceVectorClock: null,
+                entry.ExpiresAtTicks,
+                entry.TransactionId,
+                entry.AtomicBatchSize,
+                entry.AtomicBatchIndex);
+        }
+
+        return apply.ApplyPreparedDeleteAsync(
+            entry.Key,
+            entry.Timestamp,
+            entry.OriginClusterId!,
+            sourceVectorClock: null,
+            entry.TransactionId,
+            entry.AtomicBatchSize,
+            entry.AtomicBatchIndex);
+    }
+
+    /// <summary>
+    /// Routes an inbound saga terminal-mark record (TxCommit / TxAbort)
+    /// through the receiver-side
+    /// <see cref="IReplicationApplyGrain.ApplyTxTerminalAsync"/> seam.
+    /// Resolves the source-side shard index from the typed
+    /// <see cref="WalRecord.ShardIndex"/> slot, falling back to parsing
+    /// <see cref="WalRecord.Key"/> for back-compat with pre-Option A WAL
+    /// records authored before the typed slot was introduced.
+    /// </summary>
+    private Task ApplyTxTerminalCoreAsync(WalRecord entry, CancellationToken cancellationToken)
+    {
+        var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
+        var committed = entry.Op == MutationKind.TxCommit;
+
+        int shardIndex;
+        if (entry.ShardIndex > 0)
+        {
+            shardIndex = entry.ShardIndex;
+        }
+        else if (!string.IsNullOrEmpty(entry.Key)
+            && int.TryParse(entry.Key, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            && parsed >= 0)
+        {
+            shardIndex = parsed;
+        }
+        else
+        {
+            throw new ArgumentException(
+                $"WalRecord.Op={entry.Op} on tree '{entry.TreeId}' must carry a positive ShardIndex slot or a "
+                + $"non-negative numeric Key (got Key='{entry.Key}', ShardIndex={entry.ShardIndex}).",
+                nameof(entry));
+        }
+
+        if (entry.TransactionId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                $"WalRecord.Op={entry.Op} on tree '{entry.TreeId}' must carry a non-empty TransactionId so the "
+                + "receiver can address the saga's per-tree TxRegistry mark.",
+                nameof(entry));
+        }
+
+        return apply.ApplyTxTerminalAsync(
+            entry.TransactionId,
+            committed,
+            shardIndex,
+            entry.Timestamp,
+            entry.OriginClusterId!,
+            cancellationToken);
     }
 
     /// <summary>

@@ -454,6 +454,21 @@ internal sealed class ReplicationShipperGrain(
             return false;
         }
 
+        // Saga terminal-mark records carry Key=ShardIndex.ToString()
+        // (an internal shard-routing token, not a user key) and never
+        // match a user-supplied KeyFilter / KeyPrefixes filter. Bypass
+        // those filters for terminals so cross-cluster atomic
+        // visibility delivers the linearization point even on trees
+        // with restrictive key filters. The receiver-side
+        // ApplyTxTerminalAsync is idempotent on duplicate delivery
+        // (per-leaf _recentlyTerminal HashSet + registry
+        // repeat-same-outcome no-op), so shipping every terminal that
+        // applies to this peer is safe.
+        if (entry.Op is MutationKind.TxCommit or MutationKind.TxAbort)
+        {
+            return true;
+        }
+
         if (options.KeyFilter is { } filter)
         {
             if (entry.Key is null || !filter(entry.Key))

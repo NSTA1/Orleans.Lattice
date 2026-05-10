@@ -322,4 +322,21 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <param name="transactionId">The saga's transaction id stamped on every prepared mutation. Must not be <see cref="Guid.Empty"/>; the call is a no-op for that value.</param>
     /// <param name="committed"><c>true</c> to flip pending mutations into the visible projection; <c>false</c> to drop them.</param>
     Task ApplyTxTerminalAsync(Guid transactionId, bool committed);
+
+    /// <summary>
+    /// Returns the leaf's current
+    /// <see cref="Primitives.HybridLogicalClock"/>. Used by
+    /// <see cref="IShardRootGrain.AppendTxTerminalAsync"/> to compute a
+    /// terminal-mark HLC strictly greater than every prepare's stamp in
+    /// the saga, so cross-cluster receivers — which merge inbound
+    /// records by HLC across WAL partitions — observe the saga's
+    /// prepared writes <em>before</em> the terminal mark and never
+    /// flush an empty pending bucket on a too-early terminal arrival.
+    /// <para>
+    /// Read-only accessor: does not advance the leaf's clock and does
+    /// not touch persistent state. Cheap on the steady-state hot path
+    /// (a single in-memory field read).
+    /// </para>
+    /// </summary>
+    Task<HybridLogicalClock> GetClockAsync();
 }
