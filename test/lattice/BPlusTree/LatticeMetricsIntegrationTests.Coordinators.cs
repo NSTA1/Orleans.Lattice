@@ -28,7 +28,7 @@ public class LatticeMetricsCoordinatorIntegrationTests
     private sealed class Recorder : IDisposable
     {
         private readonly MeterListener _listener;
-        private readonly List<(string Name, long Value, KeyValuePair<string, object?>[] Tags)> _records = new();
+        private readonly List<(string Name, double Value, KeyValuePair<string, object?>[] Tags)> _records = new();
         private readonly object _gate = new();
 
         public Recorder()
@@ -45,6 +45,14 @@ public class LatticeMetricsCoordinatorIntegrationTests
             {
                 lock (_gate) _records.Add((inst.Name, v, tags.ToArray()));
             });
+            _listener.SetMeasurementEventCallback<int>((inst, v, tags, _) =>
+            {
+                lock (_gate) _records.Add((inst.Name, v, tags.ToArray()));
+            });
+            _listener.SetMeasurementEventCallback<double>((inst, v, tags, _) =>
+            {
+                lock (_gate) _records.Add((inst.Name, v, tags.ToArray()));
+            });
             _listener.Start();
         }
 
@@ -58,7 +66,7 @@ public class LatticeMetricsCoordinatorIntegrationTests
                     if (r.Name != name) continue;
                     if (!r.Tags.Any(t => t.Key == LatticeMetrics.TagTree && (t.Value as string) == treeId)) continue;
                     if (!r.Tags.Any(t => t.Key == tagKey && (t.Value as string) == tagValue)) continue;
-                    total += r.Value;
+                    total += (long)r.Value;
                 }
                 return total;
             }
@@ -73,9 +81,32 @@ public class LatticeMetricsCoordinatorIntegrationTests
                 {
                     if (r.Name != name) continue;
                     if (!r.Tags.Any(t => t.Key == LatticeMetrics.TagTree && (t.Value as string) == treeId)) continue;
-                    total += r.Value;
+                    total += (long)r.Value;
                 }
                 return total;
+            }
+        }
+
+        /// <summary>
+        /// Returns the value of every measurement matching <paramref name="name"/>
+        /// + <paramref name="treeId"/> + <c>outcome=<paramref name="outcome"/></c>,
+        /// as the original <see cref="double"/>. Used to assert
+        /// histogram measurements (where casting a sub-millisecond
+        /// duration to <see cref="long"/> would discard the signal).
+        /// </summary>
+        public IReadOnlyList<double> ValuesWhereOutcome(string name, string outcome, string treeId)
+        {
+            lock (_gate)
+            {
+                var results = new List<double>();
+                foreach (var r in _records)
+                {
+                    if (r.Name != name) continue;
+                    if (!r.Tags.Any(t => t.Key == LatticeMetrics.TagTree && (t.Value as string) == treeId)) continue;
+                    if (!r.Tags.Any(t => t.Key == LatticeMetrics.TagOutcome && (t.Value as string) == outcome)) continue;
+                    results.Add(r.Value);
+                }
+                return results;
             }
         }
 
@@ -102,6 +133,56 @@ public class LatticeMetricsCoordinatorIntegrationTests
             "orleans.lattice.atomic_write.completed",
             LatticeMetrics.TagOutcome, "committed", treeId);
         Assert.That(committed, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task SetManyAtomicAsync_emits_atomic_write_duration_histogram()
+    {
+        using var recorder = new Recorder();
+        var treeId = $"metrics-atomic-duration-{Guid.NewGuid():N}";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+
+        await tree.SetManyAtomicAsync(new List<KeyValuePair<string, byte[]>>
+        {
+            new("a", Encoding.UTF8.GetBytes("1")),
+            new("b", Encoding.UTF8.GetBytes("2")),
+        });
+
+        var durations = recorder.ValuesWhereOutcome(
+            "orleans.lattice.atomic_write.duration", "committed", treeId);
+        Assert.Multiple(() =>
+        {
+            Assert.That(durations, Has.Count.EqualTo(1),
+                "exactly one duration measurement per terminal saga transition");
+            Assert.That(durations[0], Is.GreaterThanOrEqualTo(0d),
+                "saga duration is computed from a persisted UTC tick captured on Prepare; never negative");
+        });
+    }
+
+    [Test]
+    public async Task SetManyAtomicAsync_emits_atomic_write_batch_size_histogram()
+    {
+        using var recorder = new Recorder();
+        var treeId = $"metrics-atomic-batchsize-{Guid.NewGuid():N}";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("a", Encoding.UTF8.GetBytes("1")),
+            new("b", Encoding.UTF8.GetBytes("2")),
+            new("c", Encoding.UTF8.GetBytes("3")),
+        };
+        await tree.SetManyAtomicAsync(entries);
+
+        var sizes = recorder.ValuesWhereOutcome(
+            "orleans.lattice.atomic_write.batch_size", "committed", treeId);
+        Assert.Multiple(() =>
+        {
+            Assert.That(sizes, Has.Count.EqualTo(1),
+                "exactly one batch-size measurement per terminal saga transition");
+            Assert.That(sizes[0], Is.EqualTo(entries.Count),
+                "histogram value matches the entry count of the executed saga");
+        });
     }
 
     [Test]

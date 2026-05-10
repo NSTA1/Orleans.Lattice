@@ -208,6 +208,43 @@ public static class LatticeMetrics
             description: "Terminal transitions of SetManyAtomicAsync sagas, tagged by outcome.");
 
     /// <summary>
+    /// Histogram of end-to-end <c>SetManyAtomicAsync</c> saga durations,
+    /// recorded once per terminal transition of an <c>AtomicWriteGrain</c>
+    /// saga next to <see cref="AtomicWriteCompleted"/>. The duration is
+    /// measured from the wall-clock time the saga's first
+    /// <c>AtomicWritePhase.Prepare</c> ran (persisted on the saga state
+    /// so it survives a silo crash) to the time the saga reached
+    /// <c>AtomicWritePhase.Completed</c>. Tagged with <see cref="TagOutcome"/>
+    /// = <c>committed</c>, <c>compensated</c>, or <c>failed</c> so operators
+    /// can plot rollback-path latency separately from happy-path latency.
+    /// <para>
+    /// Combine with <see cref="AtomicWriteBatchSize"/> when building dashboards:
+    /// duration is meaningful only relative to the size of the batch that
+    /// produced it. A duration spike with a constant batch-size distribution
+    /// is a regression; a duration spike accompanied by a batch-size spike is
+    /// a workload change.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> AtomicWriteDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.atomic_write.duration", unit: "ms",
+            description: "End-to-end SetManyAtomicAsync saga duration, tagged by outcome.");
+
+    /// <summary>
+    /// Histogram of saga batch sizes, recorded once per terminal transition of
+    /// an <c>AtomicWriteGrain</c> saga next to <see cref="AtomicWriteCompleted"/>.
+    /// The value is the entry count submitted to <c>SetManyAtomicAsync</c>
+    /// (or the per-entry list length on apply-mode sagas). Tagged with
+    /// <see cref="TagOutcome"/> = <c>committed</c>, <c>compensated</c>, or
+    /// <c>failed</c>. Lets operators interpret <see cref="AtomicWriteDuration"/>
+    /// in context — a 10-entry batch and a 1000-entry batch both appear as one
+    /// data point on the duration histogram, and only the batch-size histogram
+    /// disambiguates them.
+    /// </summary>
+    public static readonly Histogram<int> AtomicWriteBatchSize =
+        Meter.CreateHistogram<int>("orleans.lattice.atomic_write.batch_size", unit: "{entry}",
+            description: "Entry count of each SetManyAtomicAsync saga, tagged by outcome.");
+
+    /// <summary>
     /// Counter incremented once per successful coordinator-grain completion.
     /// Tagged with <see cref="TagKind"/> = <c>snapshot</c>, <c>resize</c>,
     /// <c>reshard</c>, <c>merge</c>, or <c>compaction</c>.

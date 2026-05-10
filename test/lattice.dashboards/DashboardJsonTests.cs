@@ -171,6 +171,7 @@ public sealed class DashboardJsonTests
     [TestCase(LatticeDashboardKind.Overview, "orleans.lattice")]
     [TestCase(LatticeDashboardKind.CommitPath, "orleans.lattice")]
     [TestCase(LatticeDashboardKind.Replication, "orleans.lattice.replication")]
+    [TestCase(LatticeDashboardKind.AtomicWrites, "orleans.lattice")]
     public void Every_metric_token_referenced_in_dashboard_resolves_to_a_known_instrument(
         LatticeDashboardKind kind, string expectedMeter)
     {

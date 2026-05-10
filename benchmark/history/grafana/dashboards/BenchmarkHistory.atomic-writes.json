@@ -1,0 +1,483 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Headline KPIs",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "id": 1,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "SetManyAtomic ops/sec",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "x": 0, "y": 1, "w": 6, "h": 5 },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ops",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 500 },
+              { "color": "green", "value": 2000 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "background",
+        "justifyMode": "auto",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "bench_microbench_set_many_atomic_per_second{scenario=\"microbench\"}",
+          "legendFormat": "{{scenario}} @ {{git_sha}}",
+          "refId": "A",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "SetManyAtomic p99 (ns)",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "x": 6, "y": 1, "w": 6, "h": 5 },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ns",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1000000 },
+              { "color": "red", "value": 5000000 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "background",
+        "justifyMode": "auto",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "bench_microbench_set_many_atomic_p99_ns{scenario=\"microbench\"}",
+          "legendFormat": "{{scenario}} @ {{git_sha}}",
+          "refId": "A",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "SetManyAtomic mean (ns)",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "x": 12, "y": 1, "w": 6, "h": 5 },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ns",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 500000 },
+              { "color": "red", "value": 2000000 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "background",
+        "justifyMode": "auto",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "bench_microbench_set_many_atomic_mean_ns{scenario=\"microbench\"}",
+          "legendFormat": "{{scenario}} @ {{git_sha}}",
+          "refId": "A",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "SetManyAtomic alloc/op (B)",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "x": 18, "y": 1, "w": 6, "h": 5 },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 4096 },
+              { "color": "red", "value": 16384 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "background",
+        "justifyMode": "auto",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "bench_microbench_set_many_atomic_alloc_b{scenario=\"microbench\"}",
+          "legendFormat": "{{scenario}} @ {{git_sha}}",
+          "refId": "A",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Saga health (cluster-side, last value)",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 6, "w": 24, "h": 1 },
+      "id": 6,
+      "panels": []
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Saga failure rate (last value)",
+      "description": "Fraction of terminal SetManyAtomicAsync sagas that did NOT commit (failed + compensated) over the latest non-empty sample. Sourced from the live cluster's Prometheus scrape forwarded to VictoriaMetrics. Threshold lines at 1% (yellow) and 5% (red).",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "x": 0, "y": 7, "w": 12, "h": 6 },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "background",
+        "justifyMode": "auto",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "sum(rate(orleans_lattice_atomic_write_completed_total{outcome=~\"failed|compensated\"}[5m])) / clamp_min(sum(rate(orleans_lattice_atomic_write_completed_total[5m])), 1e-12)",
+          "legendFormat": "non-committed",
+          "refId": "A",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Saga failure rate (trend)",
+      "description": "Saga failure rate trended over time. The threshold-style line markers at 1% / 5% match the headline tile.",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "x": 12, "y": 7, "w": 12, "h": 6 },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "showPoints": "auto",
+            "thresholdsStyle": { "mode": "line+area" }
+          }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "sum(rate(orleans_lattice_atomic_write_completed_total{outcome=\"failed\"}[5m])) / clamp_min(sum(rate(orleans_lattice_atomic_write_completed_total[5m])), 1e-12)",
+          "legendFormat": "failed",
+          "refId": "FAIL"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "sum(rate(orleans_lattice_atomic_write_completed_total{outcome=\"compensated\"}[5m])) / clamp_min(sum(rate(orleans_lattice_atomic_write_completed_total[5m])), 1e-12)",
+          "legendFormat": "compensated",
+          "refId": "COMP"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "sum(rate(orleans_lattice_atomic_write_completed_total{outcome=~\"failed|compensated\"}[5m])) / clamp_min(sum(rate(orleans_lattice_atomic_write_completed_total[5m])), 1e-12)",
+          "legendFormat": "non-committed",
+          "refId": "TOTAL"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Trends across runs",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 13, "w": 24, "h": 1 },
+      "id": 9,
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "BenchmarkDotNet (set_many_atomic_*)",
+      "description": "Every microbench scalar metric whose name starts with bench_microbench_set_many_atomic_, trended across runs.",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "custom": {
+            "drawStyle": "points",
+            "pointSize": 7,
+            "showPoints": "always",
+            "lineInterpolation": "linear",
+            "spanNulls": true
+          }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "{__name__=~\"bench_microbench_set_many_atomic_.*\",scenario=\"microbench\"}",
+          "legendFormat": "{{__name__}} | {{scenario}} | {{git_sha}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Per-run history (hover bars for run_id and git_sha)",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 22, "w": 24, "h": 1 },
+      "id": 11,
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "barchart",
+      "title": "SetManyAtomic ops/sec - per-run history",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "x": 0, "y": 23, "w": 12, "h": 7 },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ops",
+          "decimals": 0,
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": -45,
+        "xTickLabelSpacing": 100,
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "hidden", "placement": "bottom", "showLegend": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "bench_microbench_set_many_atomic_per_second{scenario=\"microbench\"}",
+          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "barchart",
+      "title": "SetManyAtomic p99 (ns) - per-run history",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "x": 12, "y": 23, "w": 12, "h": 7 },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ns",
+          "decimals": 0,
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": -45,
+        "xTickLabelSpacing": 100,
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "hidden", "placement": "bottom", "showLegend": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "bench_microbench_set_many_atomic_p99_ns{scenario=\"microbench\"}",
+          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "barchart",
+      "title": "SetManyAtomic mean (ns) - per-run history",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "x": 0, "y": 30, "w": 12, "h": 7 },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ns",
+          "decimals": 0,
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": -45,
+        "xTickLabelSpacing": 100,
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "hidden", "placement": "bottom", "showLegend": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "bench_microbench_set_many_atomic_mean_ns{scenario=\"microbench\"}",
+          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "barchart",
+      "title": "SetManyAtomic alloc/op (B) - per-run history",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "x": 12, "y": 30, "w": 12, "h": 7 },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 0,
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": -45,
+        "xTickLabelSpacing": 100,
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "hidden", "placement": "bottom", "showLegend": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "bench_microbench_set_many_atomic_alloc_b{scenario=\"microbench\"}",
+          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "orleans-lattice",
+    "benchmark-history",
+    "atomic-writes"
+  ],
+  "templating": { "list": [] },
+  "time": { "from": "now-90d", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Performance: Atomic Writes",
+  "uid": "lat-hist-atomic-writes",
+  "version": 1,
+  "weekStart": "",
+  "description": "ILattice atomic-write saga (SetManyAtomicAsync) micro-benchmark + cluster-side saga health (failure rate, compensation rate)."
+}

@@ -36,7 +36,15 @@ resultsPath ??= Environment.GetEnvironmentVariable("BENCH_RESULTS_PATH");
 if (string.IsNullOrWhiteSpace(resultsPath))
 {
     var runId = DateTime.UtcNow.ToString("yyyy-MM-ddTHH-mm-ssZ");
-    resultsPath = Path.Combine(".run", "microbench", runId, "results.json");
+    // Default fallback: write into the canonical benchmark/.run/microbench
+    // tree that benchmark.ps1 (and .gitignore) both target. Resolved
+    // relative to the benchmark project root (walking up from the
+    // executing assembly) rather than the current working directory, so
+    // ad-hoc `dotnet run --project ...` invocations from the repo root
+    // don't drop a sibling `.run/` directory outside the gitignored area.
+    var projectRoot = LocateBenchmarkRoot()
+        ?? Path.GetFullPath("benchmark");
+    resultsPath = Path.Combine(projectRoot, ".run", "microbench", runId, "results.json");
 }
 resultsPath = Path.GetFullPath(resultsPath);
 
@@ -63,3 +71,32 @@ if (!string.IsNullOrWhiteSpace(filterRaw))
 
 var summary = BenchmarkRunner.Run<LatticeMicroBenchmarks>(config);
 return summary.HasCriticalValidationErrors ? 1 : 0;
+
+// Local-function helper for the top-level fallback path resolution above.
+// Walks upward from AppContext.BaseDirectory looking for the canonical
+// `benchmark/` folder shipped at the repo root. Returns its full path,
+// or null if not found (which only happens when the assembly has been
+// published or moved out of the source tree, in which case the caller
+// falls back to a CWD-relative path). Keeps ad-hoc `dotnet run --project
+// benchmark/host/Bench.Microbench` invocations writing into the same
+// gitignored `benchmark/.run/microbench/` location that benchmark.ps1
+// uses, instead of dropping a sibling `.run/` at the repo root.
+static string? LocateBenchmarkRoot()
+{
+    // BaseDirectory points at .../benchmark/host/Bench.Microbench/bin/<config>/<tfm>/.
+    // Walk up looking for a directory whose name is exactly "benchmark"
+    // and whose parent contains a sibling "src" folder (the repo
+    // structure). The walk has a small upper bound so a misplaced
+    // assembly cannot loop indefinitely.
+    var dir = new DirectoryInfo(AppContext.BaseDirectory);
+    for (var i = 0; i < 16 && dir is not null; i++, dir = dir.Parent)
+    {
+        if (string.Equals(dir.Name, "benchmark", StringComparison.OrdinalIgnoreCase)
+            && dir.Parent is { } parent
+            && Directory.Exists(Path.Combine(parent.FullName, "src")))
+        {
+            return dir.FullName;
+        }
+    }
+    return null;
+}

@@ -19,7 +19,9 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.leaf.commit.duration` | histogram (ms) | `tree`, `step` | CommitPath | Commit-step latency p50/p95/p99 |
 | `orleans.lattice.cache.hits` | counter | `tree` | Overview | Cache hit ratio |
 | `orleans.lattice.cache.misses` | counter | `tree` | Overview | Cache hit ratio |
-| `orleans.lattice.atomic_write.completed` | counter | `tree`, `outcome` | Overview | Atomic write outcomes |
+| `orleans.lattice.atomic_write.completed` | counter | `tree`, `outcome` | Overview, AtomicWrites | Atomic write outcomes (rate); per-tree committed throughput; saga failure rate (failed + compensated / total); range-window non-committed saga count |
+| `orleans.lattice.atomic_write.duration` | histogram (ms) | `tree`, `outcome` | Overview, AtomicWrites | Saga duration p50/p95/p99; saga duration p95 by outcome |
+| `orleans.lattice.atomic_write.batch_size` | histogram (`{entry}`) | `tree`, `outcome` | Overview, AtomicWrites | Batch size p50/p95/p99; batch size p95 by outcome |
 | `orleans.lattice.coordinator.completed` | counter | `tree`, `kind` | Overview | Coordinator completions |
 | `orleans.lattice.tree.lifecycle` | counter | `tree`, `kind` | Overview | Tree lifecycle events (annotation + stat) |
 | `orleans.lattice.events.published` | counter | `tree`, `kind` | Overview | Events published |

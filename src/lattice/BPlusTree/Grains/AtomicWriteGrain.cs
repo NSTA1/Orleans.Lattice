@@ -503,6 +503,19 @@ internal sealed class AtomicWriteGrain(
             state.State.AtomicBatchSize = entries.Count;
         }
 
+        // Saga start tick capture-once. Stamps the wall-clock UTC tick
+        // on the first PrepareAsync entry so the
+        // orleans.lattice.atomic_write.duration histogram emitted on
+        // CompleteSagaAsync reflects true end-to-end saga cost,
+        // including any time spent suspended across silo restarts.
+        // Zero is the "never captured" sentinel; a reminder-driven
+        // replay that finds a non-zero value preserves the original
+        // start tick rather than restamping it.
+        if (state.State.SagaStartedAtTicks == 0)
+        {
+            state.State.SagaStartedAtTicks = DateTimeOffset.UtcNow.UtcTicks;
+        }
+
         var lattice = grainFactory.GetGrain<ILattice>(treeId);
         var routing = await lattice.GetRoutingAsync();
         var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
@@ -951,6 +964,33 @@ internal sealed class AtomicWriteGrain(
             ? "committed"
             : (state.State.FailureMessage is not null ? "failed" : "compensated");
         LatticeMetrics.AtomicWriteCompleted.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
+
+        // End-to-end saga duration and batch size, paired histograms tagged
+        // by the same {tree, outcome} dimensions as AtomicWriteCompleted so
+        // operators can pivot from "how many sagas committed?" to "how long
+        // did they take?" and "how big were they?" on the same dashboard.
+        // SagaStartedAtTicks is captured once on the first PrepareAsync and
+        // persisted across reminder-driven recovery, so the recorded ms
+        // reflects true wall-clock cost (including any time the saga was
+        // suspended across silo restarts). A legacy persisted state with a
+        // missing Id-17 slot decodes SagaStartedAtTicks to 0; the duration
+        // record is suppressed in that case rather than emit a misleadingly
+        // huge "ticks since 0001-01-01" value.
+        if (state.State.SagaStartedAtTicks > 0)
+        {
+            var elapsedMs = (DateTimeOffset.UtcNow.UtcTicks - state.State.SagaStartedAtTicks)
+                / (double)TimeSpan.TicksPerMillisecond;
+            LatticeMetrics.AtomicWriteDuration.Record(elapsedMs,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
+        }
+
+        var batchSize = state.State.IsApplyMode
+            ? state.State.ApplyEntries.Count
+            : state.State.Entries.Count;
+        LatticeMetrics.AtomicWriteBatchSize.Record(batchSize,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
 

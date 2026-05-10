@@ -260,4 +260,20 @@ internal sealed class AtomicWriteState
     /// <see cref="Entries"/> against a freshly fetched routing snapshot.
     /// </summary>
     [Id(16)] public List<int> TouchedShards { get; set; } = [];
+
+    /// <summary>
+    /// Wall-clock tick (UTC) at which the saga first entered
+    /// <see cref="AtomicWritePhase.Prepare"/>, captured once on the
+    /// initial Prepare call and persisted across reminder-driven
+    /// recovery so the end-to-end saga duration recorded by
+    /// <c>orleans.lattice.atomic_write.duration</c> on
+    /// <see cref="AtomicWritePhase.Completed"/> reflects the true
+    /// wall-clock cost (including any time the saga was suspended
+    /// across silo restarts), not just the time since the most recent
+    /// activation. Wire-compatible: missing field on legacy persisted
+    /// state decodes to <c>0</c>, in which case
+    /// <see cref="Grains.AtomicWriteGrain"/> stamps the current tick
+    /// on the next Prepare entry as a best-effort fallback.
+    /// </summary>
+    [Id(17)] public long SagaStartedAtTicks { get; set; }
 }

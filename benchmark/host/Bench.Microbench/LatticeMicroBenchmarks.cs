@@ -6,6 +6,8 @@ using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Runtime;
+using Orleans.Timers;
 
 namespace Orleans.Lattice.Benchmark.Microbench;
 
@@ -36,6 +38,7 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 ///   <item><c>BENCH_MICROBENCH_DEEPER_MAX_INTERNAL_CHILDREN</c> &mdash; <see cref="BuildDeeperTree"/> internal fan-out cap (default 4).</item>
 ///   <item><c>BENCH_MICROBENCH_DEEPER_KEY_COUNT</c> &mdash; <see cref="BuildDeeperTree"/> seeded keyspace (default 256, yields 3 internal levels at fan-out 4).</item>
 ///   <item><c>BENCH_MICROBENCH_DEEPER_BULK_BATCH</c> &mdash; <see cref="BulkLoad_DeeperTree"/> batch size (default 32).</item>
+///   <item><c>BENCH_MICROBENCH_ATOMIC_BATCH</c> &mdash; <see cref="SetManyAtomic"/> entries per saga (default 16).</item>
 /// </list>
 /// </para>
 /// </summary>
@@ -145,6 +148,34 @@ public class LatticeMicroBenchmarks
     private int _deeperWriteCursor;
     private int _deeperReadCursor;
 
+    // ===== Atomic-write instrument: SetManyAtomicAsync saga =====
+    // A fifth ILattice activation rooted at AtomicTreeName drives the
+    // SetManyAtomicAsync saga end-to-end through a real AtomicWriteGrain
+    // and TxRegistryGrain. The saga vertical exercises far more code than
+    // the plain SetMany_4Shards bench:
+    //   1. AtomicWriteGrain.PrepareAsync persists per-key pre-values via
+    //      IShardRootGrain.GetRawEntryAsync.
+    //   2. AtomicWriteGrain.ExecutePhaseAsync issues per-key SetAsync
+    //      under LatticePreparedContext + LatticeAtomicBatchContext.
+    //   3. AtomicWriteGrain.BroadcastTerminalsAsync notifies every
+    //      touched shard via IShardRootGrain.AppendTxTerminalAsync and
+    //      records the global commit decision via ITxRegistryGrain.
+    //   4. AtomicWriteGrain.CompleteSagaAsync emits the
+    //      orleans.lattice.atomic_write.{completed,duration,batch_size}
+    //      instruments — the operator-visible signal for sustained
+    //      atomic-write throughput.
+    // Every saga mints a fresh operationId, so each [Benchmark] iteration
+    // creates a brand-new AtomicWriteGrain (and persisted state). The
+    // sustained ops/s figure surfaced by HarnessJsonExporter as
+    // microbench_set_many_atomic_per_second is the headline number.
+    private const string AtomicTreeName = "microbench-atomic";
+    private const int AtomicBatchDefault = 16;
+    private ILattice _atomicLattice = null!;
+    private List<KeyValuePair<string, byte[]>> _atomicBatch = null!;
+    private readonly Dictionary<string, IAtomicWriteGrain> _atomicSagas = [];
+    private readonly Dictionary<string, ITxRegistryGrain> _txRegistries = [];
+    private IReminderRegistry _atomicReminderRegistry = null!;
+
     /// <summary>
     /// Wires up the mock Orleans seams, instantiates a single-shard
     /// <see cref="ILattice"/> tree backed by real grain instances for the
@@ -219,6 +250,28 @@ public class LatticeMicroBenchmarks
             .Returns(c => GetOrCreateInternalGrain(GrainId.Create("internal", c.ArgAt<Guid>(0).ToString("N"))));
         _grainFactory.GetGrain<IBPlusInternalGrain>(Arg.Any<GrainId>())
             .Returns(c => GetOrCreateInternalGrain(c.ArgAt<GrainId>(0)));
+
+        // Atomic-write saga routes: a real AtomicWriteGrain per saga key
+        // ({treeId}/{operationId}) and a real TxRegistryGrain per tree.
+        // The IReminderRegistry seam is mocked: RegisterOrUpdateReminder
+        // and UnregisterReminder return Task.CompletedTask, GetReminder
+        // returns null. That short-circuits the keepalive-reminder
+        // bookkeeping which is irrelevant under the synchronous bench
+        // harness (there is no scheduler that could fire it anyway).
+        _atomicReminderRegistry = Substitute.For<IReminderRegistry>();
+        _atomicReminderRegistry
+            .RegisterOrUpdateReminder(Arg.Any<GrainId>(), Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>())
+            .Returns(Task.FromResult(Substitute.For<IGrainReminder>()));
+        _atomicReminderRegistry
+            .GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
+            .Returns(Task.FromResult<IGrainReminder?>(null));
+        _atomicReminderRegistry
+            .UnregisterReminder(Arg.Any<GrainId>(), Arg.Any<IGrainReminder>())
+            .Returns(Task.FromResult(true));
+        _grainFactory.GetGrain<IAtomicWriteGrain>(Arg.Any<string>())
+            .Returns(c => GetOrCreateAtomicSaga(c.ArgAt<string>(0)));
+        _grainFactory.GetGrain<ITxRegistryGrain>(Arg.Any<string>())
+            .Returns(c => GetOrCreateTxRegistry(c.ArgAt<string>(0)));
 
         // Registry: an in-memory NSubstitute stub returning a fixed structural
         // pin so LatticeOptionsResolver resolves the same shape for every
@@ -302,6 +355,7 @@ public class LatticeMicroBenchmarks
         BuildFanoutTree(keyCount, bulkBatch);
         BuildDeepTree();
         BuildDeeperTree();
+        BuildAtomicTree();
     }
 
     /// <summary>
@@ -341,9 +395,8 @@ public class LatticeMicroBenchmarks
     /// Lazily constructs and caches a real <see cref="LeafCacheGrain"/> for
     /// the given leaf-id string. The cache grain reads from its primary leaf
     /// via the factory using the GrainId parsed out of its own context key,
-    /// so we set the context's GrainId.Key to the leaf-id string we were
-    /// asked for. The factory then routes back to the corresponding cached
-    /// real <see cref="BPlusLeafGrain"/>.
+    /// so we set the context's GrainId.Key to the leaf-id string to the leaf-id
+    /// string.
     /// </summary>
     private ILeafCacheGrain GetOrCreateLeafCache(string leafIdString)
     {
@@ -373,6 +426,51 @@ public class LatticeMicroBenchmarks
         var grain = new BPlusInternalGrain(ctx, state, _grainFactory, _optionsResolver);
         _internalGrains[id] = grain;
         return grain;
+    }
+
+    /// <summary>
+    /// Lazily constructs and caches a real <see cref="AtomicWriteGrain"/>
+    /// for the composite saga key (<c>{treeId}/{operationId}</c>).
+    /// Each <see cref="ILattice.SetManyAtomicAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>
+    /// invocation mints a fresh operationId, so a new saga grain is
+    /// constructed per benchmark iteration. The dictionary retains
+    /// completed sagas in memory through GlobalCleanup; their
+    /// AtomicWriteState is small (entry list + pre-values) and doesn't
+    /// dominate the measured allocation profile.
+    /// </summary>
+    private IAtomicWriteGrain GetOrCreateAtomicSaga(string key)
+    {
+        if (_atomicSagas.TryGetValue(key, out var existing)) return existing;
+        var ctx = Substitute.For<IGrainContext>();
+        ctx.GrainId.Returns(GrainId.Create("atomic-write", key));
+        var sagaState = new FakePersistentState<AtomicWriteState>();
+        var saga = new AtomicWriteGrain(
+            ctx,
+            _grainFactory,
+            _atomicReminderRegistry,
+            _optionsMonitor,
+            NullLogger<AtomicWriteGrain>.Instance,
+            sagaState);
+        _atomicSagas[key] = saga;
+        return saga;
+    }
+
+    /// <summary>
+    /// Lazily constructs and caches a real <see cref="TxRegistryGrain"/>
+    /// for the given tree id. Used by <see cref="AtomicWriteGrain"/>'s
+    /// terminal-broadcast phase to record the global commit/abort
+    /// decision and by <see cref="BPlusLeafGrain"/>'s pending-tx readers
+    /// for fence resolution. Per-tree singleton.
+    /// </summary>
+    private ITxRegistryGrain GetOrCreateTxRegistry(string treeId)
+    {
+        if (_txRegistries.TryGetValue(treeId, out var existing)) return existing;
+        var ctx = Substitute.For<IGrainContext>();
+        ctx.GrainId.Returns(GrainId.Create("tx-registry", treeId));
+        var registryState = new FakePersistentState<TxRegistryState>();
+        var registry = new TxRegistryGrain(ctx, registryState);
+        _txRegistries[treeId] = registry;
+        return registry;
     }
 
     /// <summary>
@@ -604,6 +702,35 @@ public class LatticeMicroBenchmarks
     }
 
     /// <summary>
+    /// One <see cref="ILattice.SetManyAtomicAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>
+    /// invocation against a single-shard atomic-write tree. Each
+    /// iteration mints a fresh operationId and drives a brand-new
+    /// <see cref="AtomicWriteGrain"/> end-to-end:
+    /// Prepare (per-key pre-value capture) →
+    /// Execute (per-key SetAsync under
+    /// <see cref="LatticeAtomicBatchContext"/>) →
+    /// BroadcastTerminals (per-shard
+    /// <see cref="IShardRootGrain.AppendTxTerminalAsync"/> +
+    /// <see cref="ITxRegistryGrain.MarkCommittedAsync"/>) →
+    /// Complete (records
+    /// <see cref="LatticeMetrics.AtomicWriteCompleted"/>,
+    /// <see cref="LatticeMetrics.AtomicWriteDuration"/>, and
+    /// <see cref="LatticeMetrics.AtomicWriteBatchSize"/>).
+    /// <para>
+    /// The harness reports sustained atomic-write ops/s as
+    /// <c>microbench_set_many_atomic_per_second</c> in
+    /// <c>results.json</c>. Tunable via
+    /// <c>BENCH_MICROBENCH_ATOMIC_BATCH</c> (default
+    /// <see cref="AtomicBatchDefault"/> = 16 entries per saga).
+    /// </para>
+    /// </summary>
+    [Benchmark(Description = "SetMany atomic")]
+    public Task SetManyAtomic()
+    {
+        return _atomicLattice.SetManyAtomicAsync(_atomicBatch);
+    }
+
+    /// <summary>
     /// Builds a sibling <see cref="ILattice"/> activation rooted at
     /// <see cref="DeepTreeName"/> with <see cref="DeepMaxLeafKeys"/>
     /// pinned small enough that the seed phase forces a root split.
@@ -729,7 +856,7 @@ public class LatticeMicroBenchmarks
             _deeperKeys[i] = "deeper-" + i.ToString("D6", CultureInfo.InvariantCulture);
         }
 
-        // Seed all keys so the tree splits into a depth-3+ shape. The seed
+        // Seed all keys so the tree splits into the target shape. The seed
         // phase runs in [GlobalSetup] and is not part of any [Benchmark]
         // op, so its cost does not affect measured allocations.
         for (var i = 0; i < _deeperKeyCount; i++)
@@ -738,10 +865,8 @@ public class LatticeMicroBenchmarks
         }
 
         // Pre-build the bulk batch with disjoint keys so BulkLoad_DeeperTree
-        // does not collide with the seeded keys (avoids triggering further
-        // splits inside the measured op). Distinct prefix from
-        // BuildDeepTree's "dbulk-" so the two trees' bulk batches do not
-        // share leaf addresses.
+        // does not collide with the seeded keys (avoids triggering a
+        // further internal-node split inside the measured op).
         _deeperBulkBatchList = new List<KeyValuePair<string, byte[]>>(_deeperBulkBatch);
         for (var i = 0; i < _deeperBulkBatch; i++)
         {
@@ -750,11 +875,72 @@ public class LatticeMicroBenchmarks
         }
     }
 
+    /// <summary>
+    /// Builds a sibling <see cref="ILattice"/> activation rooted at
+    /// <see cref="AtomicTreeName"/> as a single-shard, root-is-leaf tree
+    /// dedicated to <see cref="ILattice.SetManyAtomicAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>
+    /// measurement. The keyspace ("atomic-NNNNNNNN") is disjoint from the
+    /// other benchmark trees so saga writes don't collide with their
+    /// pre-seeded data. Pre-seeds the keys once so the saga's
+    /// per-key SetAsync calls overwrite existing entries (LWW) instead
+    /// of triggering a leaf split mid-iteration.
+    /// </summary>
+    private void BuildAtomicTree()
+    {
+        var atomicBatchSize = ReadIntEnv("BENCH_MICROBENCH_ATOMIC_BATCH", AtomicBatchDefault);
+
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(AtomicTreeName);
+        registry.GetEntryAsync(AtomicTreeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = _maxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = 1,
+            }));
+
+        var atomicContext = Substitute.For<IGrainContext>();
+        atomicContext.GrainId.Returns(GrainId.Create("lattice", AtomicTreeName));
+        var atomicSp = Substitute.For<IServiceProvider>();
+        var atomicLattice = new LatticeGrain(
+            atomicContext,
+            _grainFactory,
+            _optionsMonitor,
+            _optionsResolver,
+            atomicSp,
+            NullLogger<LatticeGrain>.Instance);
+        _grainFactory.GetGrain<ILattice>(AtomicTreeName).Returns(atomicLattice);
+        _atomicLattice = atomicLattice;
+
+        // Pre-build the saga batch with disjoint keys ("atomic-NNNNNNNN")
+        // so the saga writes against this tree don't collide with the
+        // single-shard / fanout / deep / deeper trees' keyspaces.
+        _atomicBatch = new List<KeyValuePair<string, byte[]>>(atomicBatchSize);
+        for (var i = 0; i < atomicBatchSize; i++)
+        {
+            var k = "atomic-" + i.ToString("D8", CultureInfo.InvariantCulture);
+            _atomicBatch.Add(new(k, _value));
+        }
+
+        // Pre-seed the same keys so the first benchmarked saga overwrites
+        // existing leaf entries rather than triggering a leaf split (the
+        // single-shard tree is sized to accommodate the whole batch, but
+        // pre-seeding still removes one-time leaf-create allocations from
+        // the steady-state measurement).
+        for (var i = 0; i < atomicBatchSize; i++)
+        {
+            _atomicLattice.SetAsync(_atomicBatch[i].Key, _value).GetAwaiter().GetResult();
+        }
+    }
+
     private static int ReadIntEnv(string name, int fallback)
     {
-        var raw = Environment.GetEnvironmentVariable(name);
-        return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) && v > 0
-            ? v
-            : fallback;
+        var value = Environment.GetEnvironmentVariable(name);
+        if (string.IsNullOrEmpty(value)) return fallback;
+        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result))
+        {
+            return result;
+        }
+        Console.Error.WriteLine($"[microbench] invalid {name} value: {value}");
+        return fallback;
     }
 }
