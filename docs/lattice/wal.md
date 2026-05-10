@@ -447,12 +447,19 @@ continue to mutate their local frontier after the report returns.
 > **Status — vestigial.** The receiver-side staging buffer that
 > originally drove this pin (`IReplicationTxBufferGrain`, the
 > `LatticeReplicationOptions.AtomicBatchDelivery` opt-in) was retired
-> by the WAL repivot. The pin is preserved on the GC predicate so a
-> future host-facing receiver-side atomic-batch primitive can be
-> re-introduced without a producer-side change; in the current shipped
-> surface no consumer reports a blocked-floor pin and the GC degrades
-> to the cursor / TTL clauses above. The remainder of this subsection
-> describes the predicate as it would behave under a future revival.
+> by the WAL repivot. The shipped cross-cluster atomic-visibility path
+> ([Consistency: Atomic visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster))
+> uses per-key prepared mutations and a per-shard `TxCommit` /
+> `TxAbort` terminal mark that ride the standard WAL → replication
+> transport — every prepared entry is durably anchored on the
+> producer's WAL exactly like a non-saga write, so the receiver
+> rebuilds its per-tx pending bucket deterministically from WAL
+> replay without a separate blocked-floor signal. The pin is therefore
+> preserved on the GC predicate as defence-in-depth for any future
+> consumer that does report a blocked-floor; in the current shipped
+> surface no consumer reports one and the GC degrades to the cursor /
+> TTL clauses above. The remainder of this subsection describes the
+> predicate as it would behave under such a future consumer.
 
 Under such a hypothetical receiver, the cross-cluster atomic-batch
 delivery path would stage every entry of an in-flight

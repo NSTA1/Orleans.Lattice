@@ -667,31 +667,47 @@ start = 124;
 
 ## 14. Cross-cluster atomic-batch delivery — retired (design context)
 
-> **Status — retired (design context only).** The receiver-side
-> staging buffer (`IReplicationTxBufferGrain` /
-> `ReplicationTxBufferGrain`) and the producer-side
-> `LatticeReplicationOptions.AtomicBatchDelivery` opt-in were retired
-> by the WAL repivot. The `apply.batch.*` metric prefix and the
-> receiver-side atomic-batch encoder/decoder are gone. The shipped
-> replacement is the per-key WAL filter: producers bound the
-> change-feed by per-key range (`KeyFilter`, `KeyPrefixes`,
-> `ReplicatedTrees`) and receivers apply every inbound entry as a
-> point write that converges per-key under causal+/LWW.
+> **Status — retired in shape, the guarantee ships via a different
+> primitive.** The receiver-side staging buffer
+> (`IReplicationTxBufferGrain` / `ReplicationTxBufferGrain`) and the
+> producer-side `LatticeReplicationOptions.AtomicBatchDelivery` opt-in
+> were retired by the WAL repivot. The `apply.batch.*` metric prefix
+> and the receiver-side atomic-batch encoder/decoder are gone.
+>
+> **The cross-cluster atomic-visibility guarantee itself, however,
+> ships universally** through a different primitive: an additive
+> `IsPrepared` slot on `LatticeMutation`, per-shard `TxCommit` /
+> `TxAbort` terminal mutations, and the per-tree `ITxRegistryGrain`
+> linearization point that every read path consults — local *and*
+> remote. Saga prepare writes ride the standard per-key WAL →
+> replication transport carrying `IsPrepared=true` and the saga's
+> `TransactionId`; the per-shard terminal mark ships as a single
+> record exempt from the producer-side per-key filter. Receiver-side
+> hops (`IReplicationApplyGrain.ApplyPreparedSetAsync` /
+> `ApplyPreparedDeleteAsync` / `ApplyTxTerminalAsync`) route prepared
+> entries into the receiver leaf's per-tx pending bucket and flip
+> visibility under the source HLC verbatim. The shipped surface
+> therefore delivers the same all-or-nothing window on every replicated
+> tree as on the source: a remote reader concurrent with replication
+> of a `SetManyAtomicAsync` observes either zero or all of the saga's
+> keys, never a partial view. See
+> [Consistency: Atomic visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster).
 >
 > The in-package primitive `IReplicationApplyGrain.ApplyManyAtomicAsync`
 > remains in the core library because the **local** saga path uses the
 > same source-HLC-preserving merge seam, but the interface is `internal`
 > — it is not host-callable today and the auto-ship-loop does not
-> drive it. The `AtomicBatchSize` / `AtomicBatchIndex` /
-> `TransactionId` slots remain additive on `WalRecord` so a future
-> host-facing receiver-side primitive can re-enable batch-aware apply
-> without a producer-side change. This section is preserved as
-> historical design context.
+> drive it. The `AtomicBatchSize` / `AtomicBatchIndex` slots remain
+> additive on `WalRecord` and are reserved for future receiver-side
+> batch optimisations; the `TransactionId` slot is consumed by the
+> shipped prepared/terminal apply path described above. This section
+> is preserved as historical design context for the buffered-batch
+> approach that **did not** ship.
 
-Causal+ pins the dependency graph: a remote peer never observes a state that violates the writer's causal frontier. It is **strictly weaker than atomic visibility**: a remote reader concurrent with replication of a `SetManyAtomicAsync` may observe a partial view (some keys arrived and applied, others have not) until every entry in the batch finishes converging on that peer. In the shipped surface this carve-out is permanent until a future primitive re-introduces receiver-side atomic-batch delivery on the existing `(originClusterId, transactionId)` slot pair.
+Causal+ pins the dependency graph: a remote peer never observes a state that violates the writer's causal frontier. The shipped WAL replication is **stronger than causal+ for `SetManyAtomicAsync`** — the additive `IsPrepared` slot, the per-shard terminal-mark records, and the receiver-side `ITxRegistryGrain` consultation together deliver strict atomic visibility on top of the causal+ ordering, so a remote reader concurrent with replication observes either zero or all of the saga's keys (see status note above and [`consistency.md`](consistency.md)). The retired buffered-batch design described below was an earlier attempt to close the same gap on the inbound apply boundary; the shipped path closes it through per-key prepared mutations + a single per-shard terminal mark instead.
 
 The retired design (preserved here for reference) closed the inbound apply boundary half of that gap with a per-tree opt-in, `LatticeReplicationOptions.AtomicBatchDelivery`. With the opt-in on, the receiver buffered every entry of an enclosing atomic transaction (keyed by the producer-stamped `(originClusterId, transactionId)` pair, with the batch's total size carried on the additive `AtomicBatchSize` slot) until every sibling was in hand, then applied the whole batch under one saga via `IReplicationApplyGrain.ApplyManyAtomicAsync` — preserving each entry's source-side `(Timestamp, OriginClusterId, VectorClock, ExpiresAtTicks)` verbatim through nested ambient context scopes. The per-origin high-water-mark advanced once at saga commit, to the maximum HLC across the batch, so a concurrent reader of the high-water-mark never observed an intermediate value.
 
 The producer-side WAL-GC pin documented in §7.3 (the strict-less `entry.Timestamp < blocked_floor` clause) was what kept a producer from trimming past a partially-staged batch on a downstream peer. With the receiver-side staging buffer retired the pin is vestigial in the shipped surface, but it is intentionally preserved on the GC predicate so a future revival of receiver-side delivery does not re-introduce a producer-side trim hazard.
 
-**Carve-out.** Real-time reader isolation **inside** any future receiver-side saga commit window — where a reader concurrent with the saga's per-key sequential commits to leaf grains may observe a partial view — would remain an open carve-out, identical in shape to the equivalent local-saga reader-isolation carve-out documented in [`consistency.md`](consistency.md). Applications that need strict reader isolation under concurrent atomic apply should layer `GetWithVersionAsync` + `SetIfVersionAsync` on top, exactly as for local sagas.
+**Carve-out (closed by the shipped path).** The buffered-batch design above noted that real-time reader isolation **inside** any receiver-side saga commit window — where a reader concurrent with the saga's per-key sequential commits to leaf grains might observe a partial view — would remain an open carve-out under that approach. The shipped per-key prepared / per-shard terminal-mark path closes that carve-out: receiver leaves stage prepared writes in the per-tx pending bucket (invisible to readers), the per-tree `ITxRegistryGrain` is the single linearization point for the saga's outcome, and every read path on the receiver consults it — so a remote reader sees either zero or all of the saga's keys, never an intermediate per-key state. Applications still wanting deeper invariants (e.g. cross-saga ordering across overlapping batches) should layer `GetWithVersionAsync` + `SetIfVersionAsync` on top, identical to the local-cluster pattern.

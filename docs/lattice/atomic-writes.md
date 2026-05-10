@@ -15,9 +15,13 @@ This section describes the **atomicity** contract of the saga. For the
 reader-visibility model — the per-tree `ITxRegistryGrain` linearization
 point and how each read path consults it — see
 [Consistency: Atomic visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster).
-The atomicity guarantee is scoped to a **single tree on the local
-cluster**; cross-cluster atomic-batch shipping is not currently
-exposed (see Consistency for details).
+The atomicity guarantee is **universal**: it holds within a single
+tree on the local cluster *and* across every cluster the tree
+replicates to. Receiver-side replication routes prepared writes and
+the per-shard terminal mark through the same `ITxRegistryGrain`
+linearization point used locally, so a remote reader concurrent with
+replication of a `SetManyAtomicAsync` observes either zero or all of
+the saga's keys — never a partial view (see Consistency for details).
 
 Given a batch `[(k₀, v₀), (k₁, v₁), …, (kₙ₋₁, vₙ₋₁)]`, a successful
 `SetManyAtomicAsync` call guarantees:
@@ -338,14 +342,19 @@ mutations belong to the same enclosing batch and reason about
 batch-level invariants without coordinating with the producer. They
 are *not* the atomicity primitive: tree-wide atomic visibility is
 delivered by the per-tree `ITxRegistryGrain` + per-leaf pending-tx
-mechanism described above. **Cross-cluster atomic-batch delivery is
-not currently exposed:** the receiver-side staging buffer
-(`IReplicationTxBufferGrain`) was retired and the in-package atomic-apply
-primitive (`IReplicationApplyGrain.ApplyManyAtomicAsync`) is `internal`
-— used by the local saga only, not host-callable. The wire slots are
-preserved on every emitted `WalRecord` so a future receiver-side
-primitive can re-enable batch-aware apply without a producer-side
-change. See
+mechanism described above. **Cross-cluster atomic visibility ships
+universally** through the same primitive: prepared writes ride the
+standard per-key WAL → replication transport carrying an additive
+`IsPrepared` slot and the saga's `TransactionId`, the per-shard
+`TxCommit` / `TxAbort` terminal mark ships as a single record exempt
+from the producer-side per-key filter, and on the receiver
+`IReplicationApplyGrain.ApplyPreparedSetAsync` /
+`ApplyPreparedDeleteAsync` route each prepared entry into the local
+leaf's per-tx pending bucket, with `ApplyTxTerminalAsync` flipping
+visibility under the source HLC after marking the receiver's
+`ITxRegistryGrain`. The `AtomicBatchSize` and `AtomicBatchIndex`
+slots remain reserved for future receiver-side batch optimisations
+but are not consumed by the current apply path. See
 [Consistency: Atomic visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster).
 
 ## Related

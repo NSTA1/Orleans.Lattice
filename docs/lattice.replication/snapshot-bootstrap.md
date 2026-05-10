@@ -240,17 +240,29 @@ _ = state;
 > exporting a snapshot and no longer carries blacklist tokens across
 > the snapshot-to-incremental boundary.
 
-What ships today: a snapshot export reads the producer's tree state at
-the moment `ExportAsync` is invoked. A snapshot taken concurrent with a
-local `SetManyAtomicAsync` saga may capture some keys of the saga and
-not others; the receiver's incremental phase converges the missing keys
-under causal+ as the producer ships them. A bootstrapping peer may
-therefore observe a partial-saga view between the snapshot apply and
-the moment the incremental phase catches up, identical to the
-single-cluster causal+ carve-out documented in
-[`../lattice/consistency.md`](../lattice/consistency.md).
+What ships today: a snapshot export reads the producer's committed
+tree state at the moment `ExportAsync` is invoked. The snapshot
+captures only the per-leaf `Entries` projection — the per-tx pending
+bucket that holds an in-flight saga's prepared writes is **not**
+exported, because prepared entries are deliberately invisible to
+readers and to the snapshot exporter. After bootstrap apply, the
+incremental WAL replay drives the receiver-side prepared / terminal
+apply hops described in
+[`replication-apply.md`](replication-apply.md), which populate the
+receiver's pending bucket and flip visibility through the per-tree
+`ITxRegistryGrain` linearization point. Steady-state cross-cluster
+atomic visibility therefore holds across the bootstrap-to-incremental
+boundary: no in-flight saga's keys appear in the snapshot, and any
+saga that commits before the receiver's incremental cursor reaches its
+terminal mark stays invisible until that mark is replayed locally.
 
-Hosts that need cross-cluster atomic visibility around bootstrap should
-quiesce writes on the producer for the duration of the export; the
-library no longer offers an opt-in for the integrated saga-aware
-quiesce path.
+The remaining narrow window: a saga whose **terminal mark on the
+producer** lands during the export window may have its `Entries`
+captured for some leaves (those exported after the terminal flip)
+but not others (those exported before). The receiver's incremental
+phase converges the missing keys under causal+/LWW as the producer
+ships them, but a bootstrapping reader may briefly observe a partial
+view across that specific commit-during-export window. Hosts that
+need strict atomic visibility across the bootstrap boundary itself
+should quiesce writes on the producer for the duration of the
+export.

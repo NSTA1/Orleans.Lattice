@@ -222,26 +222,30 @@ for any key sitting in a leaf's pending-tx bucket. Concretely:
   `GetManyAsync` / `CountAsync` if tree-wide atomic visibility across
   a known key set is required.
 
-**Cross-cluster atomic-batch shipping is not currently exposed.** The
-replication package's automatic per-mutation ship-loop ships
-individual point writes that converge per-key under causal+/LWW (see
-[`wal-causal-plus.md`](wal-causal-plus.md)); the receiver-side
-staging buffer (`IReplicationTxBufferGrain`) that originally drove
-batch-aware delivery was retired by the WAL repivot, and the
-in-package atomic-apply primitive
-(`IReplicationApplyGrain.ApplyManyAtomicAsync`) is `internal` to
-`Orleans.Lattice` — used by the local saga path only, not host-callable.
-Producer-side wire metadata (`AtomicBatchSize`, `AtomicBatchIndex`,
-`TransactionId`) is preserved on every emitted `WalRecord` so a future
-receiver-side primitive can re-enable batch-aware apply without a
-producer-side change. Today, a remote reader observing replication of
-a `SetManyAtomicAsync` batch may see a partial view per-key until
-every entry has converged under LWW.
+**Cross-cluster atomic visibility ships universally.** Saga prepare
+writes flow through the standard per-key WAL → replication transport
+carrying an additive `IsPrepared` slot and the saga's `TransactionId`;
+each terminal mark (`TxCommit` / `TxAbort`) ships as a single per-shard
+record exempt from the producer-side `KeyFilter` / `KeyPrefixes`
+filters. On the receiver, `IReplicationApplyGrain.ApplyPreparedSetAsync`
+/ `ApplyPreparedDeleteAsync` route each prepared entry into the local
+leaf's per-tx pending bucket under the source HLC verbatim, and
+`ApplyTxTerminalAsync` (a) marks the per-tree `ITxRegistryGrain` as
+the linearization point for the saga's outcome, then (b) drives the
+per-shard terminal-mark primitive that flips every receiver leaf's
+pending bucket into the visible projection. Receiver-side reads
+consult the same `ITxRegistryGrain` they consult locally, so a remote
+reader concurrent with replication of a `SetManyAtomicAsync` observes
+either zero or all of the saga's keys — never a partial view.
 
 Once `SetManyAtomicAsync` returns without throwing, every key in the
-batch holds its target value across the **local** tree, with no
+batch holds its target value across the local tree with no
 intermediate partial-visibility window observable to any reader at any
-silo in that cluster.
+silo in that cluster. As the saga's WAL records propagate to each
+peer, the same all-or-nothing window holds on every remote tree:
+prepared entries are invisible until the terminal mark arrives, and
+the terminal flip is atomic per-leaf and registry-coordinated
+tree-wide.
 
 ---
 
@@ -263,21 +267,6 @@ silo in that cluster.
   (e.g. `MergeAsync`, `SnapshotAsync`) are not atomic across the tree
   boundary; they are LWW-convergent on the destination but readers of
   both trees may observe the in-flight state.
-- **Automatic cross-cluster atomic-batch shipping.** The replication
-  package's automatic per-mutation ship-loop ships individual point
-  writes that converge across clusters under **causal+ consistency**
-  (see [`wal-causal-plus.md`](wal-causal-plus.md)) — a remote peer
-  never observes a state that violates the writer's causal frontier.
-  Cross-cluster *atomic-batch* visibility is **not currently exposed**:
-  the receiver-side staging buffer was retired by the WAL repivot, and
-  the in-package atomic-apply primitive
-  (`IReplicationApplyGrain.ApplyManyAtomicAsync`) is `internal`. A
-  remote reader observing replication of a `SetManyAtomicAsync` batch
-  may see a partial view per-key until every entry has converged
-  under LWW. Producer-side wire metadata
-  (`AtomicBatchSize`, `AtomicBatchIndex`, `TransactionId`) is preserved
-  so a future receiver-side primitive can re-enable batch-aware apply
-  without producer change.
 - **Cross-tree causality.** The causal+ guarantees shipped in the
   replication package are scoped to single-tree writes; a multi-tree
   operation (e.g. one saga touching two `ILattice` trees, or a merge
