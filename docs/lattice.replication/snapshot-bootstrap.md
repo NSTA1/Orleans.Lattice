@@ -225,22 +225,9 @@ LatticeBootstrapState state = await client.ServiceProvider
 _ = state;
 ```
 
-## Snapshot-time saga quiesce — retired
+## Snapshot and in-flight atomic visibility
 
-> **Status — retired.** The producer-side
-> `LatticeSnapshotProvider.ExportAsync` saga-quiesce poll loop, the
-> `LatticeReplicationOptions.SnapshotSagaQuiesceTimeout` option, the
-> `SnapshotStream.SagaBlacklist` slot, the receiver-side
-> `BootstrapCoordinatorState.SagaBlacklist` capture, the
-> `IReplicationTxBufferGrain.RegisterBlacklistedTransactionsAsync`
-> registration step, and the `IInFlightSagaTracker` /
-> `InMemoryInFlightSagaTracker` types were retired by the WAL repivot
-> alongside the receiver-side staging buffer they coordinated with.
-> The bootstrap state machine no longer drains in-flight sagas before
-> exporting a snapshot and no longer carries blacklist tokens across
-> the snapshot-to-incremental boundary.
-
-What ships today: a snapshot export reads the producer's committed
+A snapshot export reads the producer's committed
 tree state at the moment `ExportAsync` is invoked. The snapshot
 captures only the per-leaf `Entries` projection — the per-tx pending
 bucket that holds an in-flight saga's prepared writes is **not**

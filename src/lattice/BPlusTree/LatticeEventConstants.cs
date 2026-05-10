@@ -106,10 +106,13 @@ public static class LatticeEventConstants
     /// clock past the override via
     /// <see cref="Primitives.HybridLogicalClock.Merge(Primitives.HybridLogicalClock, Primitives.HybridLogicalClock)"/>
     /// to preserve local monotonicity for any subsequent foreground
-    /// tick. The single supported authoring path is the receiver-side
-    /// cross-cluster atomic-batch apply seam
-    /// (<c>IReplicationApplyGrain.ApplyManyAtomicAsync</c>). Internal —
-    /// set through <see cref="LatticeHlcOverrideContext"/>.
+    /// tick. The supported authoring paths are the receiver-side
+    /// cross-cluster atomic-visibility apply seam
+    /// (<see cref="IReplicationApplyGrain.ApplyPreparedSetAsync"/> /
+    /// <see cref="IReplicationApplyGrain.ApplyPreparedDeleteAsync"/>)
+    /// and the per-entry merge apply seam
+    /// (<see cref="IReplicationApplyGrain.ApplyMergeManyAsync"/>).
+    /// Internal — set through <see cref="LatticeHlcOverrideContext"/>.
     /// </summary>
     internal const string HlcOverrideRequestContextKey = "ol.hlc";
 

@@ -157,9 +157,4 @@ internal static class TypeAliases
     internal const string IWalShardGrain = "olr.gw";
     internal const string WalShardSequencedEntry = "olr.we";
     internal const string WalShardPage = "olr.wp";
-
-    // Cross-cluster atomic-batch apply DTOs (source-HLC-preserving apply seam)
-    internal const string AtomicApplyEntry = "ol.aae";
-    internal const string AtomicApplyResult = "ol.aar";
-    internal const string AtomicApplyOutcome = "ol.aao";
 }

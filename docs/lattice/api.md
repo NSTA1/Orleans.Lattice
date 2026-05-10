@@ -635,9 +635,6 @@ Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Nev
 | `ShardCountResult` | `ol.scr` | internal | Per-shard count plus the set of virtual slots the shard observed in its `MovedAwaySlots` table during the count. Used by `IShardRootGrain.CountWithMovedAwayAsync` to coordinate strongly-consistent scans during shard splits. |
 | `LeafProjectionDigest` | `ol.lpd` | public | `readonly record struct` returned by `ILattice.GetLeafProjectionDigestAsync`. Carries the XxHash128 hash bytes (16 bytes), entry count (live + tombstoned), and summed projection-checkpoint offset of a shard's leaf chain. See [Projection Rebuild](projection-rebuild.md). |
 | `ProjectionRebuildPolicy` | — | public | Enum: `SnapshotThenWal` (default), `FullRebuildFromWal`, `Fail`. Selects the activation-time recovery strategy when a leaf falls off the WAL. See [Configuration](configuration.md#projectionrebuildpolicy). |
-| `AtomicApplyEntry` | `ol.aae` | internal | `readonly record struct` carrying the per-entry source metadata (Key, Value, Timestamp, ExpiresAtTicks, VectorClock, IsTombstone) for the source-HLC-preserving multi-key atomic apply seam on `IReplicationApplyGrain.ApplyManyAtomicAsync`. |
-| `AtomicApplyResult` | `ol.aar` | internal | `readonly record struct` carrying the saga's terminal outcome from `IReplicationApplyGrain.ApplyManyAtomicAsync` (`Outcome`, `AppliedCount`, `FailureReason`). |
-| `AtomicApplyOutcome` | `ol.aao` | internal | Enum: `Committed`, `Compensated`. Surfaces saga commit-vs-rollback through `AtomicApplyResult` rather than via thrown exceptions. |
 
 ## Internal Grain Access Control
 

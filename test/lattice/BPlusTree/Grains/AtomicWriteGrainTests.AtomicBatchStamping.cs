@@ -147,42 +147,4 @@ public partial class AtomicWriteGrainTests
 
         Assert.That(state.State.AtomicBatchSize, Is.EqualTo(7));
     }
-
-    [Test]
-    public async Task ExecuteApplyAsync_captures_batch_size_from_apply_entries_count()
-    {
-        // Apply-mode parity with the local-saga capture: PrepareAsync
-        // is called with derivedEntries projected from applyEntries, so
-        // derivedEntries.Count == applyEntries.Count and the persisted
-        // AtomicBatchSize reflects the true sibling count of the
-        // cross-cluster atomic batch. Pin the invariant directly so a
-        // future refactor that changes the projection cannot silently
-        // drift the size.
-        var (grain, state, _, lattice, _) = CreateGrain();
-        lattice.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.CompletedTask);
-
-        var applyEntries = MakeApplyEntries(
-            ("a", [1], 100),
-            ("b", [2], 101),
-            ("c", [3], 102),
-            ("d", [4], 103));
-
-        var observed = new List<(int Size, int Index)?>();
-        lattice.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>())
-            .Returns(_ =>
-            {
-                observed.Add(LatticeAtomicBatchContext.Current);
-                return Task.CompletedTask;
-            });
-
-        var result = await grain.ExecuteApplyAsync(TreeId, applyEntries, "site-x");
-
-        Assert.That(result.Outcome, Is.EqualTo(AtomicApplyOutcome.Committed));
-        Assert.That(state.State.AtomicBatchSize, Is.EqualTo(4));
-        Assert.That(observed, Has.Count.EqualTo(4));
-        Assert.That(observed[0], Is.EqualTo(((int Size, int Index)?)(4, 0)));
-        Assert.That(observed[1], Is.EqualTo(((int Size, int Index)?)(4, 1)));
-        Assert.That(observed[2], Is.EqualTo(((int Size, int Index)?)(4, 2)));
-        Assert.That(observed[3], Is.EqualTo(((int Size, int Index)?)(4, 3)));
-    }
 }

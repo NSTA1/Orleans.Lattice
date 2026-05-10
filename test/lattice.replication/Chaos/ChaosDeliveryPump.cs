@@ -341,23 +341,21 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
                     // entry's bytes, skip the apply. See _lastAppliedBytes.
                     //
                     // The dedupe is bypassed for atomic-batch entries
-                    // (AtomicBatchSize > 0). The receiver-side staging
-                    // buffer that originally motivated this guard
-                    // (IReplicationTxBufferGrain) was retired by the
-                    // WAL repivot; current cross-cluster delivery ships
-                    // per-point writes and the producer-side wire metadata
+                    // (AtomicBatchSize > 0). The atomic-batch wire metadata
                     // (AtomicBatchSize/AtomicBatchIndex/TransactionId) is
-                    // preserved on every emit so a future host-facing
-                    // receiver-side primitive can re-introduce a buffered
-                    // path without changing the wire format. The bypass is
-                    // kept because (a) value-bytes dedupe on a write whose
-                    // apply path may yet acquire staging semantics is
-                    // unsafe, and (b) atomic-batch correctness on the
-                    // current point-apply path is provided by RecentApplyCache's
-                    // causal-identity dedupe and the per-origin HWM cursor.
-                    // The pump-level value-bytes dedupe is sound only on
-                    // the non-atomic point-apply path, where it breaks the
-                    // typed-CRDT ping-pong cycle documented on
+                    // preserved on every emit so the receiver-side
+                    // prepared-Set / prepared-Delete / terminal-mark
+                    // primitive can route Set/Delete entries through the
+                    // per-tx pending bucket. The bypass is kept because
+                    // (a) value-bytes dedupe on a write whose apply path
+                    // routes through the pending bucket would short-circuit
+                    // before the terminal mark fires, and (b) atomic-batch
+                    // correctness on the current apply path is provided by
+                    // RecentApplyCache's causal-identity dedupe and the
+                    // per-origin HWM cursor. The pump-level value-bytes
+                    // dedupe is sound only on the non-atomic point-apply
+                    // path, where it breaks the typed-CRDT ping-pong cycle
+                    // documented on
                     // _lastAppliedBytes.
                     if (entry.AtomicBatchSize == 0
                         && entry.Value is { } incomingBytes

@@ -14,7 +14,7 @@
 > replication-side per-shard WAL overlay) and [`wal.md`](wal.md) (the
 > cross-cutting WAL contract).
 
-This document defines the causal+-ready Write-Ahead Log (WAL) for `Orleans.Lattice.Replication`. It extends the existing WAL design without breaking any of its invariants:
+This document defines the causal+-ready Write-Ahead Log (WAL) for `Orleans.Lattice`. It extends the existing WAL design without breaking any of its invariants:
 
 - Append-then-apply remains the commit point.
 - Per-shard monotonic offsets remain the ordering backbone.
@@ -77,8 +77,7 @@ Two purely additive `[Id]` slots on `WalRecord` (and the corresponding `LatticeM
 - `AtomicBatchIndex` — zero-based position of this entry within the enclosing batch; `0` for non-atomic writes. Within a batch the index covers `0..Size-1` exactly once each, derived deterministically from the saga's per-operation iteration order.
 - Sibling membership is keyed by the existing `TransactionId` slot (Core F-044). The receiver detects a complete batch by counting siblings that share an `(originClusterId, transactionId)` against the declared `Size`.
 - There is deliberately **no** separate "commit marker" entry. A partially-shipped batch that loses a sibling surfaces as the orphan-timeout case the receiver-side staging buffer already handles, not an indefinite stall waiting on a commit row that never arrives.
-- Strictly additive on the wire: legacy peers and entries authored before these slots existed decode both fields as `0`. The slots remain on `WalRecord` as additive metadata; no shipped receiver-side path consumes them today (see §14 for the design context).
-- **Status — observability metadata only.** The receiver-side staging buffer (`IReplicationTxBufferGrain`) and the producer-side `LatticeReplicationOptions.AtomicBatchDelivery` opt-in that originally consumed these slots were retired by the WAL repivot. The slots are preserved on the wire as observability metadata about the saga's shape (a downstream change-feed consumer, audit log, or mutation-observer pipeline can correlate sibling mutations by `TransactionId` and reason about batch-level invariants without coordinating with the producer). A future host-facing receiver-side atomic-batch primitive could re-consume them without a producer-side change. In the current shipped surface every inbound entry is applied as a point write regardless of `AtomicBatchSize`; tree-wide atomic visibility is delivered locally by the per-tree `ITxRegistryGrain` (see [`atomic-writes.md`](atomic-writes.md)).
+- Strictly additive on the wire: legacy peers and entries authored before these slots existed decode both fields as `0`. The slots remain on `WalRecord` as additive metadata; no shipped receiver-side path consumes them today.
 
 **Performance note:**
 
@@ -260,31 +259,6 @@ An entry is GC-eligible when:
 - Cache the computed `causal_stable` frontier and recompute only on **ack updates**, not per entry.
 
 The predicate must consult **every** change-feed consumer's VC — including any future local materialiser — not just remote peers. A lagging consumer must pin the log identically regardless of whether it is remote or in-process.
-
-### 7.3 Blocked-floor (TX-aware GC pin)
-
-The receiver-side staging buffer that originally consumed `AtomicBatchSize` / `AtomicBatchIndex` (`IReplicationTxBufferGrain`, the `LatticeReplicationOptions.AtomicBatchDelivery` opt-in) was retired by the WAL repivot — the receiver now applies every inbound entry as a point write, and the producer-side WAL filter shipped instead bounds the change-feed by per-key range rather than by saga membership. **The GC pin described below is vestigial in the shipped surface and is documented as historical design context only.** The blocked-floor predicate is preserved on the GC predicate so a future host-facing receiver-side primitive (consuming the same `(originClusterId, transactionId)` wire slots) could be re-introduced without a producer-side change; in the current shipped surface no consumer reports a pin and the predicate degrades to the §7.2 form on every GC pass. See §14 for the design-context retention rationale.
-
-The predicate widens to AND in a **strict-less** clause:
-
-```text
-entry.Timestamp < blocked_floor
-```
-
-where `blocked_floor = min(BlockedAtHlc across reporting consumers)`.
-
-A consumer with a partially-staged batch reports the lowest staged HLC `t` via the blocked-floor overload of `ReportCursorAsync`. The overload accepts `cursor = HybridLogicalClock.Zero` so the applier can register a pin without contributing to the `min(cursor)` branch — `GetMinCursorAsync` skips Zero-cursor consumers symmetrically. Pin updates use **replace semantics**, not monotonic merge: as the buffer admits new transactions the lowest staged HLC can drop, and the registry must reflect the new pin so the GC stops trimming further forward. Reporting `blockedAtHlc: null` releases the pin entirely (used when the buffer drains).
-
-The strict-less comparison is load-bearing: an entry whose `Timestamp` exactly equals the blocked-floor must remain in the WAL because that entry is itself the lowest-staged entry on at least one receiver. A `<=` clause would silently trim it and the receiver could never recover from a buffer loss at that HLC.
-
-Consumers that do not call the blocked-floor overload contribute `null` to the floor and are excluded from `min(...)`. When **no** consumer reports a pin, `blocked_floor` is `null` and the predicate degrades to the §7.2 form above. Backwards-compatible by construction: pre-Phase-9 receivers never stamp a pin and never block the producer GC.
-
-**Cross-cluster propagation.** The receiver-side gRPC server stamps the locally-computed `blocked_floor` onto every outbound `ReplicationAck.BlockedAtHlc` (a new `[Id]` slot on the ack envelope). The producer-side shipper grain reads the slot from each ack and republishes it via `IReplicationCursorRegistry.ReportCursorAsync` under the consumer key `shipper:peer-blocked-floor:{peerId}`. The producer's WAL GC then AND-s the same strict-less clause from §7.3 into its own trim predicate using the per-peer pin, so a partially-staged batch on **any** downstream peer pins the producer's WAL identically to a partially-staged batch on a local in-process consumer. The propagation channel is wire-additive — the new `[Id]` slot on `ReplicationAck` decodes as `null` on legacy producers, which then degrade transparently to the §7.2 frontier without any pinning behaviour.
-
-**Performance note:**
-
-- The blocked-floor is cached behind the same per-tree generation counter as the causal-stable frontier; recompute only on ack / pin updates, not per entry.
-- Surfaces on `ReplicationGcReport.BlockedFloor` for dashboards and operator playbooks.
 
 ---
 
@@ -662,52 +636,3 @@ start = 124;
 - The above example uses an idealised entry sketch for clarity.
 - Actual implementation details may vary, e.g., use of forward deltas or batch encapsulation.
 - Focus on the causal relationships and VC/DS semantics.
-
----
-
-## 14. Cross-cluster atomic-batch delivery — retired (design context)
-
-> **Status — retired in shape, the guarantee ships via a different
-> primitive.** The receiver-side staging buffer
-> (`IReplicationTxBufferGrain` / `ReplicationTxBufferGrain`) and the
-> producer-side `LatticeReplicationOptions.AtomicBatchDelivery` opt-in
-> were retired by the WAL repivot. The `apply.batch.*` metric prefix
-> and the receiver-side atomic-batch encoder/decoder are gone.
->
-> **The cross-cluster atomic-visibility guarantee itself, however,
-> ships universally** through a different primitive: an additive
-> `IsPrepared` slot on `LatticeMutation`, per-shard `TxCommit` /
-> `TxAbort` terminal mutations, and the per-tree `ITxRegistryGrain`
-> linearization point that every read path consults — local *and*
-> remote. Saga prepare writes ride the standard per-key WAL →
-> replication transport carrying `IsPrepared=true` and the saga's
-> `TransactionId`; the per-shard terminal mark ships as a single
-> record exempt from the producer-side per-key filter. Receiver-side
-> hops (`IReplicationApplyGrain.ApplyPreparedSetAsync` /
-> `ApplyPreparedDeleteAsync` / `ApplyTxTerminalAsync`) route prepared
-> entries into the receiver leaf's per-tx pending bucket and flip
-> visibility under the source HLC verbatim. The shipped surface
-> therefore delivers the same all-or-nothing window on every replicated
-> tree as on the source: a remote reader concurrent with replication
-> of a `SetManyAtomicAsync` observes either zero or all of the saga's
-> keys, never a partial view. See
-> [Consistency: Atomic visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster).
->
-> The in-package primitive `IReplicationApplyGrain.ApplyManyAtomicAsync`
-> remains in the core library because the **local** saga path uses the
-> same source-HLC-preserving merge seam, but the interface is `internal`
-> — it is not host-callable today and the auto-ship-loop does not
-> drive it. The `AtomicBatchSize` / `AtomicBatchIndex` slots remain
-> additive on `WalRecord` and are reserved for future receiver-side
-> batch optimisations; the `TransactionId` slot is consumed by the
-> shipped prepared/terminal apply path described above. This section
-> is preserved as historical design context for the buffered-batch
-> approach that **did not** ship.
-
-Causal+ pins the dependency graph: a remote peer never observes a state that violates the writer's causal frontier. The shipped WAL replication is **stronger than causal+ for `SetManyAtomicAsync`** — the additive `IsPrepared` slot, the per-shard terminal-mark records, and the receiver-side `ITxRegistryGrain` consultation together deliver strict atomic visibility on top of the causal+ ordering, so a remote reader concurrent with replication observes either zero or all of the saga's keys (see status note above and [`consistency.md`](consistency.md)). The retired buffered-batch design described below was an earlier attempt to close the same gap on the inbound apply boundary; the shipped path closes it through per-key prepared mutations + a single per-shard terminal mark instead.
-
-The retired design (preserved here for reference) closed the inbound apply boundary half of that gap with a per-tree opt-in, `LatticeReplicationOptions.AtomicBatchDelivery`. With the opt-in on, the receiver buffered every entry of an enclosing atomic transaction (keyed by the producer-stamped `(originClusterId, transactionId)` pair, with the batch's total size carried on the additive `AtomicBatchSize` slot) until every sibling was in hand, then applied the whole batch under one saga via `IReplicationApplyGrain.ApplyManyAtomicAsync` — preserving each entry's source-side `(Timestamp, OriginClusterId, VectorClock, ExpiresAtTicks)` verbatim through nested ambient context scopes. The per-origin high-water-mark advanced once at saga commit, to the maximum HLC across the batch, so a concurrent reader of the high-water-mark never observed an intermediate value.
-
-The producer-side WAL-GC pin documented in §7.3 (the strict-less `entry.Timestamp < blocked_floor` clause) was what kept a producer from trimming past a partially-staged batch on a downstream peer. With the receiver-side staging buffer retired the pin is vestigial in the shipped surface, but it is intentionally preserved on the GC predicate so a future revival of receiver-side delivery does not re-introduce a producer-side trim hazard.
-
-**Carve-out (closed by the shipped path).** The buffered-batch design above noted that real-time reader isolation **inside** any receiver-side saga commit window — where a reader concurrent with the saga's per-key sequential commits to leaf grains might observe a partial view — would remain an open carve-out under that approach. The shipped per-key prepared / per-shard terminal-mark path closes that carve-out: receiver leaves stage prepared writes in the per-tx pending bucket (invisible to readers), the per-tree `ITxRegistryGrain` is the single linearization point for the saga's outcome, and every read path on the receiver consults it — so a remote reader sees either zero or all of the saga's keys, never an intermediate per-key state. Applications still wanting deeper invariants (e.g. cross-saga ordering across overlapping batches) should layer `GetWithVersionAsync` + `SetIfVersionAsync` on top, identical to the local-cluster pattern.

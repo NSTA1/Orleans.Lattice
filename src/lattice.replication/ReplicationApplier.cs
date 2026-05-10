@@ -139,13 +139,12 @@ internal sealed partial class ReplicationApplier(
                 // ArgumentException so the producer fails fast rather
                 // than the receiver silently applying a non-atomic range
                 // delete that carries an unfulfilled atomic-batch
-                // promise. The check is unconditional (the
-                // receiver-side AtomicBatchDelivery opt-in that this
-                // check used to gate against was retired by the WAL
-                // repivot) because the violation is producer-shaped,
-                // not receiver-shaped — the wire slot remains additive
-                // on every WalRecord so a future receiver-side
-                // primitive can re-consume it.
+                // promise. The violation is producer-shaped, not
+                // receiver-shaped — the wire slot remains additive on
+                // every WalRecord so the receiver-side prepared-Set /
+                // prepared-Delete primitive can route Set/Delete entries
+                // through the per-tx pending bucket while DeleteRange
+                // entries are explicitly rejected here.
                 if (entry.AtomicBatchSize > 0)
                 {
                     throw new ArgumentException(

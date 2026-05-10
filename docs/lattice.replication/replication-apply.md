@@ -167,19 +167,6 @@ receiver's wall-clock progression does not bump it - so transitive
 LWW resolution (A -> B -> C with A's HLC intact) holds across saga
 output identically to single-key cross-cluster writes.
 
-> **Status — shipped (receiver-side seam).** The wire format
-> additions (`IsPrepared` slot, `TxCommit` / `TxAbort` op codes,
-> `TransactionId` propagation through the change feed) and the
-> receiver-side `ApplyPreparedSetAsync` / `ApplyPreparedDeleteAsync`
-> / `ApplyTxTerminalAsync` apply hops are in tree as of the universal
-> "universal reader isolation" work-in-progress. The retired surface
-> below (`AtomicBatchDelivery`, `IReplicationTxBufferGrain`,
-> `apply.batch.*` metrics, the receiver-side atomic-batch
-> encoder/decoder) was retired by the same change set - the WAL
-> repivot routes every saga write through the same point-apply seam
-> as a non-saga write, with the `IsPrepared` flag selecting the
-> staging behaviour.
-
 What ships today:
 
 - `WalRecord.AtomicBatchSize`, `AtomicBatchIndex`, `TransactionId`,
@@ -188,15 +175,13 @@ What ships today:
   prepared/terminal staging path; `AtomicBatchSize` and
   `AtomicBatchIndex` remain reserved for future receiver-side batch
   optimisations.
-- `IReplicationApplyGrain.ApplyManyAtomicAsync` remains in the core
-  library (alongside the `AtomicApplyEntry` / `AtomicApplyResult` /
-  `AtomicApplyOutcome` value types) because the **local**
-  `SetManyAtomicAsync` saga uses the same source-HLC-preserving
-  merge seam - it is `internal` to `Orleans.Lattice` and not driven
-  by the cross-cluster auto-ship loop. Cross-cluster atomic
-  visibility is now provided by the per-key prepared/terminal apply
-  hops described above; `ApplyManyAtomicAsync` is the local
-  source-cluster saga's apply seam, not the receiver's.
+- The receiver-side multi-key atomic apply seam (and its associated
+  `Atomic` + `Apply` value types) was deleted by the universal-
+  visibility ship. Cross-cluster atomic visibility is provided
+  exclusively by the per-key prepared / per-shard terminal-mark apply
+  hops described above; the local `SetManyAtomicAsync` saga inside
+  `Orleans.Lattice` uses the same point-apply seam as a non-saga
+  write, with the `IsPrepared` flag selecting the staging behaviour.
 - Local single-tree atomic visibility (within one cluster) is
   shipped end-to-end via the per-tree `ITxRegistryGrain`
   linearization point; see
