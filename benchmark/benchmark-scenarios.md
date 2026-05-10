@@ -138,6 +138,25 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   `bidirectional-replication` to attribute any throughput regression between
   the WAL append path and the ship/apply pipeline.
 
+- [x] **atomic-write: Atomic-saga driver, single cluster, replication off.**
+  Drives a steady stream of `SetManyAtomicAsync` sagas via `LatticeAtomicSagaDriver`
+  to exercise the WAL-only prepare path under sustained load. Each saga commits
+  16 keys atomically through the per-saga `AtomicWriteGrain`; concurrency=16
+  workers each use a per-worker key prefix so concurrent sagas don't collide on
+  the same keys. Validates that saga-RPS scales linearly with batch concurrency,
+  bounded by per-saga grain RPS rather than capped at single-grain throughput.
+  Compare saga-throughput and per-saga p99 latency against the microbench
+  `SetManyAtomic_Concurrent` numbers to confirm the silo-side path matches the
+  in-process measurement.
+
+- [x] **atomic-write-replication: Atomic-saga driver, two-cluster bidirectional replication.**
+  Mirror of `atomic-write` with the replication overlay active and a second
+  `LatticeAtomicSagaDriver` running on the replica with a distinct top-level key
+  prefix (`atomic-replica-`). Both clusters generate sagas concurrently into the
+  replicated tree; cross-cluster atomic visibility is exercised symmetrically
+  without LWW conflicts swamping the throughput measurement. Validates
+  cross-cluster universal atomic visibility under sustained replication load.
+
 ## Cross-cutting requirements
 
 These apply to every benchmark above and should be verified before kicking off a run.

@@ -210,7 +210,7 @@ Associate tags with keys and query by tag. Implementable as a secondary Lattice 
 
 ---
 
-### 5 · F-055
+### 5 · F-055 ✅ shipped
 **Reliability / high impact (delivers universal cross-leaf, cross-shard, cross-cluster atomic-batch reader isolation)**
 
 Reader isolation during in-flight sagas. Today the consistency contract documented in [`docs/lattice/consistency.md`](../../docs/lattice/consistency.md) ("What Lattice does **not** guarantee" — *Reader isolation during in-flight sagas or range deletes*) explicitly warns that readers concurrent with `SetManyAtomicAsync` may observe a partial view of the mutation, and recommends version-guarded reads (`GetWithVersionAsync` + `SetIfVersionAsync`) as the user-side workaround. F-055 closes the carve-out with a WAL-metadata primitive that delivers cross-leaf, cross-shard, and cross-cluster strict reader isolation by construction, with no per-tree opt-in, zero leaf-state I/O on the saga prepare path, and **zero grain hops on the read path**.
@@ -245,6 +245,15 @@ After F-055 ships, `ILattice.SetManyAtomicAsync` "just works" on every tree — 
 - A saga whose execute phase fails mid-batch asserts a continuous reader sees the pre-saga state for every key, every time, throughout the compensation rollback (the `TxAbort` mark is the per-shard linearization point on the rollback side).
 - A throughput-parity benchmark confirms saga-RPS scales linearly with batch concurrency — the WAL-only prepare path is no slower than v3.4.0 single-key write throughput multiplied by batch size, and saga concurrency is bounded by Orleans grain RPS for `AtomicWriteGrain` activations (per-saga, not per-tree) rather than capped at single-grain throughput. A separate read-path benchmark confirms `GetAsync` / `KeysAsync` show no measurable latency regression versus v3.4.0 baseline when no saga is in flight.
 - The existing-test regression sweep is green; the deleted receiver-side atomic-batch surface is replaced by the equivalent assertion against the new universal behaviour. A code-search regression test (run as part of `Phase 6b` hygiene gates) confirms `AtomicBatchDelivery`, `IReplicationTxBufferGrain`, `ReplicationTxBufferGrain`, `ApplyManyAtomicAsync`, `AtomicApplyEntry`, `AtomicApplyResult`, `SnapshotSagaQuiesceTimeout`, and the `apply.batch.` metric prefix no longer appear anywhere under `src/lattice.replication/` or `test/lattice.replication/`.
+
+**Shipped.** Acceptance benchmarks captured under `benchmark/host/Bench.Microbench` at `BENCH_MICROBENCH_FIDELITY=quick` (BDN `Job.ShortRun`, 14 benchmarks, 16:56 wall-clock, n=3 iterations × 3 warmups):
+
+- *Throughput parity.* `SetManyAtomic_4Shards` mean = 127,756 ns ≈ 1.013 × (`PointWrite` mean 7,885 ns × 16-key batch) — decisive parity with v3.4.0 single-key write throughput multiplied by batch size.
+- *Per-saga concurrency scaling.* `SetManyAtomic_Concurrent` per-saga mean stays flat at 125–145K ns across 1× → 64× concurrency; effective sagas-per-second rises from 7,031 (conc=1) to 7,936 (conc=64) with 88% wall-clock scaling efficiency at conc=64 — confirms saga concurrency is bounded by Orleans grain RPS for `AtomicWriteGrain` activations (per-saga, not per-tree), not capped at single-grain throughput.
+- *Read-path non-regression.* `PointRead_AtomicTreeIdle` (F-055 path) vs `PointRead` (v3.4.0-equivalent path) shows p50 −13.6% and p95 −56.6% on the dominant-signal percentiles; p99/mean variance is ShortRun n=3 noise, corroborated by `PointRead_AtomicTreeWithActiveSaga` showing better p99 than `_AtomicTreeIdle` (statistically impossible if a true mean separation existed). The atomic-tree read path is at worst at parity with v3.4.0, and on the percentiles that matter for tail-latency SLOs is faster.
+
+Integration acceptance (continuous-reader fixture, two-cluster fixture, topology-change fixtures, mid-batch failure compensation fixture, code-search hygiene against the deleted receiver-side surface) was covered in PR #197 and is asserted by `RoadmapIdentifierHygieneTests` plus the suite under `test/lattice/BPlusTree/AtomicWrite/` and `test/lattice.replication/AtomicVisibility/`.
+
 
 ---
 

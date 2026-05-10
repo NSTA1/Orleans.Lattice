@@ -1,0 +1,10 @@
+{
+  "_comment": "Pinned microbench baseline anchored at F-055 ship-time (commit `feature/f055-clean` HEAD post-acceptance run). The v3.4.0-equivalent path values (microbench_point_read_*, microbench_point_write_*, microbench_key_scan_*) match the v3.4.0 baseline because those benchmarks exercise atomic-write-disabled trees whose code paths did not change in F-055. The atomic-tree values (microbench_point_read_atomic_tree_*) are pinned at F-055 ship-time levels so a future regression in the F-055 fast path is caught. Values were captured via BENCH_MICROBENCH_FIDELITY=quick (BDN Job.ShortRun, IterationCount=3, WarmupCount=3, InProcessEmitToolchain). Regenerate by checking out a target tag and running: dotnet run -c Release --project benchmark/host/Bench.Microbench --filter PointRead,KeyScan,PointWrite --results benchmark/host/Bench.Microbench/baseline-v3.4.0.json. Only keys listed in RegressionGate.DefaultGatedMetrics are consulted by default; additional keys can be added without changing the gate behaviour.",
+  "scenario": "microbench-baseline-v3.4.0",
+  "run_id": "baseline-f055-ship",
+  "metrics": {
+    "microbench_point_read_p99_ns": 31521.4,
+    "microbench_point_read_atomic_tree_idle_p99_ns": 50839.2,
+    "microbench_point_write_p99_ns": 34023.2
+  }
+}

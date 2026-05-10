@@ -156,6 +156,19 @@ if (telemetrySink == "lattice" || replicationEnabled)
     builder.Services.AddLatticeWriteDriver(builder.Configuration.GetSection("WriteDriver"));
 }
 
+// ─── Atomic-saga driver (optional) ─────────────────────────────────────────────
+//
+// When AtomicSagaDriver:Enabled=true, registers a hosted service that issues
+// SetManyAtomicAsync sagas at a configured rate. Used by the atomic-write benchmark
+// scenarios (single-cluster and bidirectional-replication variants) so we can measure
+// saga throughput, fan-out latency, and (with replication) cross-cluster atomic
+// visibility behaviour. Activates whenever Lattice itself is registered, gated at
+// runtime by AtomicSagaDriver:Enabled.
+if (telemetrySink == "lattice" || replicationEnabled)
+{
+    builder.Services.AddLatticeAtomicSagaDriver(builder.Configuration.GetSection("AtomicSagaDriver"));
+}
+
 builder.Host.UseOrleans(silo =>
 {
     silo.Configure<ClusterOptions>(opts =>
@@ -232,9 +245,9 @@ builder.Host.UseOrleans(silo =>
             // default "vehicle-fleet"); LwwRegister is the right mode for current-state-by-vehicle-id
             // (each key holds the last reported telemetry, last-writer-wins is the natural merge).
             var treeId = builder.Configuration["LatticeSink:TreeId"] ?? "vehicle-fleet";
-            opts.ReplicatedTrees = new Dictionary<string, ReplicationMode>
+            opts.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
             {
-                [treeId] = ReplicationMode.LwwRegister,
+                [treeId] = LatticeMergeMode.LwwRegister,
             };
 
             // replication-key-filter — per-key prefix filter. When Replication:KeyPrefixes is set the observer
@@ -356,6 +369,7 @@ builder.Services
         .AddMeter(LatticeSinkMetrics.MeterName)
         .AddMeter(LatticeReadDriverMetrics.MeterName)
         .AddMeter(LatticeWriteDriverMetrics.MeterName)
+        .AddMeter(LatticeAtomicSagaDriverMetrics.MeterName)
         .AddView(instrument =>
         {
             // Apply finer latency buckets to every double-valued histogram emitted by the
@@ -366,7 +380,8 @@ builder.Services
                 meterName == "orleans.lattice.replication" ||
                 meterName == LatticeSinkMetrics.MeterName ||
                 meterName == LatticeReadDriverMetrics.MeterName ||
-                meterName == LatticeWriteDriverMetrics.MeterName;
+                meterName == LatticeWriteDriverMetrics.MeterName ||
+                meterName == LatticeAtomicSagaDriverMetrics.MeterName;
             if (!isOurMeter || instrument is not System.Diagnostics.Metrics.Histogram<double>)
             {
                 return null;

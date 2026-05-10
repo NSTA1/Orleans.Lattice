@@ -38,4 +38,14 @@
     <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.3" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Pinned microbench baseline consumed by RegressionGate when BENCH_BASELINE_PATH
+         is unset. CopyToOutputDirectory ensures the file is copied next to the
+         assembly so `dotnet run` invocations find it without the caller having to
+         point at the source-tree path. -->
+    <None Update="baseline-v3.4.0.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

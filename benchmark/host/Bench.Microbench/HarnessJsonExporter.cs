@@ -46,6 +46,28 @@ internal sealed class HarnessJsonExporter : IExporter
         foreach (var report in summary.Reports)
         {
             var slug = ToSlug(report.BenchmarkCase.Descriptor.WorkloadMethod.Name);
+            // Append a stable parameter discriminator so [Arguments(N)]-parameterized
+            // benchmarks (e.g. SetManyAtomic_Concurrent over 1/4/16/64) emit one
+            // metric key per parameterization rather than collapsing onto the same key
+            // and clobbering each other on every iteration. Single-parameter runs add
+            // "_<value>"; multi-parameter runs add "_<name><value>" pairs separated by
+            // underscores. Parameter values are slugged with the same lower_snake_case
+            // rule used for method names so the resulting keys remain greppable.
+            var parameters = report.BenchmarkCase.Parameters;
+            if (parameters is { Count: > 0 })
+            {
+                var sb = new StringBuilder(slug);
+                foreach (var item in parameters.Items)
+                {
+                    sb.Append('_');
+                    if (parameters.Count > 1)
+                    {
+                        sb.Append(ToSlug(item.Name));
+                    }
+                    sb.Append(ToSlug(Convert.ToString(item.Value, CultureInfo.InvariantCulture) ?? string.Empty));
+                }
+                slug = sb.ToString();
+            }
 
             // Pull the workload-only measurements (skip Pilot/Warmup/etc.) and
             // normalise to nanoseconds-per-operation.

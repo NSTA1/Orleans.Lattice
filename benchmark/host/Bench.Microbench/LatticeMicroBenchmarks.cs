@@ -6,6 +6,7 @@ using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
 using Orleans.Timers;
 
@@ -175,6 +176,33 @@ public class LatticeMicroBenchmarks
     private readonly Dictionary<string, IAtomicWriteGrain> _atomicSagas = [];
     private readonly Dictionary<string, ITxRegistryGrain> _txRegistries = [];
     private IReminderRegistry _atomicReminderRegistry = null!;
+
+    // ===== F-055 acceptance instruments: 4-shard atomic, concurrent atomic, read-under-saga =====
+    // The single-shard SetManyAtomic above measures the saga-vertical cost on the
+    // best-case topology (one shard, one terminal-broadcast target). F-055's
+    // acceptance text additionally requires:
+    //   (a) saga-RPS scales linearly with batch concurrency — measured by
+    //       SetManyAtomic_Concurrent over [Arguments(1, 4, 16, 64)]; the per-saga
+    //       grain RPS bound (rather than per-tree) means N independent sagas
+    //       should achieve ~N× the throughput up to the activation budget.
+    //   (b) the WAL-only prepare path is no slower than v3.4.0 single-key write
+    //       throughput multiplied by batch size — measured by the per-second
+    //       slug ratio between SetManyAtomic and PointWrite.
+    //   (c) GetAsync shows no measurable latency regression versus v3.4.0
+    //       baseline when no saga is in flight — measured by
+    //       PointRead_AtomicTreeIdle, which routes through the same atomic-write
+    //       code path but with empty per-leaf pending-tx buckets.
+    // The 4-shard variant additionally exercises the multi-terminal-broadcast
+    // fan-out path that the single-shard tree cannot reach.
+    private const string AtomicFanoutTreeName = "microbench-atomic-fanout";
+    private const int AtomicFanoutShardCount = 4;
+    private const int AtomicConcurrentSagaCount = 64;
+    private ILattice _atomicFanoutLattice = null!;
+    private List<KeyValuePair<string, byte[]>> _atomicFanoutBatch = null!;
+    private List<KeyValuePair<string, byte[]>>[] _atomicConcurrentBatches = null!;
+    private string[] _atomicReadKeys = null!;
+    private int _atomicReadCursor;
+    private Guid _atomicPendingTxId;
 
     /// <summary>
     /// Wires up the mock Orleans seams, instantiates a single-shard
@@ -356,6 +384,9 @@ public class LatticeMicroBenchmarks
         BuildDeepTree();
         BuildDeeperTree();
         BuildAtomicTree();
+        BuildAtomicFanoutTree();
+        BuildAtomicConcurrentBatches();
+        BuildAtomicReadFixture();
     }
 
     /// <summary>
@@ -412,7 +443,7 @@ public class LatticeMicroBenchmarks
     }
 
     /// <summary>
-    /// Lazily constructs and caches a real <see cref="BPlusInternalGrain"/>
+    /// Lazily constructs and caches a real <see cref="BPlusInternalGrain"""
     /// for the given <see cref="GrainId"/>. Used by the deep-tree benchmarks
     /// that force a depth-2 tree shape (single internal root + multiple
     /// leaves). Mirrors the leaf / shard / leaf-cache constructors above.
@@ -612,7 +643,7 @@ public class LatticeMicroBenchmarks
 
     /// <summary>
     /// Paginated key scan over the 4-shard fanout tree. Drains the
-    /// <see cref="ILattice.KeysAsync(string, string, bool, bool?, CancellationToken)"/>
+    /// <see cref="ILattice.KeysAsync(string, string, bool, bool?, CancellationToken)"""
     /// async-enumerable so the per-shard cursor open + reconciliation paths
     /// in LatticeGrain.Keys.cs are walked end-to-end.
     /// </summary>
@@ -728,6 +759,93 @@ public class LatticeMicroBenchmarks
     public Task SetManyAtomic()
     {
         return _atomicLattice.SetManyAtomicAsync(_atomicBatch);
+    }
+
+    /// <summary>
+    /// One <see cref="ILattice.SetManyAtomicAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>
+    /// invocation against a four-shard atomic-write tree. Exercises the
+    /// multi-shard terminal-broadcast fan-out path that the single-shard
+    /// <see cref="SetManyAtomic"/> bench cannot reach: every saga issues
+    /// <c>ShardCount</c> distinct
+    /// <see cref="IShardRootGrain.AppendTxTerminalAsync"/> calls in the
+    /// terminal phase, and the per-key Execute fan-out under
+    /// <see cref="LatticeAtomicBatchContext"/> walks shards in proportion
+    /// to key entropy. Surfaced as
+    /// <c>microbench_set_many_atomic_4_shards_per_second</c>.
+    /// </summary>
+    [Benchmark(Description = "SetMany atomic 4 shards")]
+    public Task SetManyAtomic_4Shards()
+    {
+        return _atomicFanoutLattice.SetManyAtomicAsync(_atomicFanoutBatch);
+    }
+
+    /// <summary>
+    /// Drives <paramref name="concurrency"/> independent sagas concurrently
+    /// against the single-shard atomic-write tree, awaiting all in
+    /// parallel via <see cref="Task.WhenAll(IEnumerable{Task})"/>. Each
+    /// saga uses a disjoint key partition so they don't abort each other.
+    /// Per F-055 acceptance: saga-RPS should scale roughly linearly with
+    /// <paramref name="concurrency"/> up to the per-saga
+    /// <see cref="IAtomicWriteGrain"/> activation budget, validating that
+    /// concurrency is bounded by Orleans grain RPS (per-saga, not
+    /// per-tree) rather than capped at single-grain throughput.
+    /// </summary>
+    [Benchmark(Description = "SetMany atomic concurrent")]
+    [Arguments(1)]
+    [Arguments(4)]
+    [Arguments(16)]
+    [Arguments(64)]
+    public Task SetManyAtomic_Concurrent(int concurrency)
+    {
+        if (concurrency == 1)
+        {
+            return _atomicLattice.SetManyAtomicAsync(_atomicConcurrentBatches[0]);
+        }
+        var tasks = new Task[concurrency];
+        for (var i = 0; i < concurrency; i++)
+        {
+            tasks[i] = _atomicLattice.SetManyAtomicAsync(_atomicConcurrentBatches[i]);
+        }
+        return Task.WhenAll(tasks);
+    }
+
+    /// <summary>
+    /// Single <see cref="ILattice.GetAsync(string, CancellationToken)"/>
+    /// against the single-shard atomic-write tree with no saga in flight.
+    /// Validates F-055 acceptance: GetAsync shows no measurable latency
+    /// regression versus v3.4.0 baseline when no saga is in flight. The
+    /// atomic tree's leaves carry the same projection-cache + pending-tx
+    /// structures the saga path populates, but the steady state has
+    /// empty <c>_pendingTx</c> buckets — this benchmark confirms the
+    /// read fast-path skips the empty-bucket consultation cleanly.
+    /// </summary>
+    [Benchmark(Description = "Point read atomic tree (idle)")]
+    public Task<byte[]?> PointRead_AtomicTreeIdle()
+    {
+        var i = unchecked(_atomicReadCursor++) & int.MaxValue;
+        var key = _atomicReadKeys[i % _atomicReadKeys.Length];
+        return _atomicLattice.GetAsync(key);
+    }
+
+    /// <summary>
+    /// Single <see cref="ILattice.GetAsync(string, CancellationToken)"/>
+    /// against the single-shard atomic-write tree while a long-lived
+    /// saga holds prepared mutations on a disjoint key set. Validates
+    /// that an in-flight saga on one key partition does not regress
+    /// reads against the rest of the tree — the per-leaf pending-tx
+    /// consultation is keyed and short-circuits when the read key has
+    /// no entry in <c>_pendingTx</c>. The pending mutations are
+    /// installed in <see cref="GlobalSetup"/> via
+    /// <see cref="IReplicationApplyGrain.ApplyPreparedSetAsync"/> on a
+    /// synthetic transaction id; no terminal mark is ever broadcast,
+    /// so the saga remains active for every benchmark iteration.
+    /// </summary>
+    [Benchmark(Description = "Point read atomic tree (saga active)")]
+    public Task<byte[]?> PointRead_AtomicTreeWithActiveSaga()
+    {
+        var i = unchecked(_atomicReadCursor++) & int.MaxValue;
+        var key = _atomicReadKeys[i % _atomicReadKeys.Length];
+        return _atomicLattice.GetAsync(key);
     }
 
     /// <summary>
@@ -911,24 +1029,177 @@ public class LatticeMicroBenchmarks
         _grainFactory.GetGrain<ILattice>(AtomicTreeName).Returns(atomicLattice);
         _atomicLattice = atomicLattice;
 
-        // Pre-build the saga batch with disjoint keys ("atomic-NNNNNNNN")
-        // so the saga writes against this tree don't collide with the
-        // single-shard / fanout / deep / deeper trees' keyspaces.
+        // Pre-build the saga batch with disjoint keys so the saga's per-key
+        // Execute fan-out walks all four physical shards (the shard-routing
+        // function is content-hashed on the key, and a multiplicative-prefix
+        // entropy distributes 16 keys across >= 2 shards with high probability).
         _atomicBatch = new List<KeyValuePair<string, byte[]>>(atomicBatchSize);
         for (var i = 0; i < atomicBatchSize; i++)
         {
-            var k = "atomic-" + i.ToString("D8", CultureInfo.InvariantCulture);
+            var k = "atomic-" + ((i * 257) & 0xFFFF).ToString("X4", CultureInfo.InvariantCulture)
+                + "-" + i.ToString("D8", CultureInfo.InvariantCulture);
             _atomicBatch.Add(new(k, _value));
         }
 
         // Pre-seed the same keys so the first benchmarked saga overwrites
-        // existing leaf entries rather than triggering a leaf split (the
-        // single-shard tree is sized to accommodate the whole batch, but
-        // pre-seeding still removes one-time leaf-create allocations from
-        // the steady-state measurement).
+        // existing leaf entries rather than triggering a leaf split.
         for (var i = 0; i < atomicBatchSize; i++)
         {
             _atomicLattice.SetAsync(_atomicBatch[i].Key, _value).GetAwaiter().GetResult();
+        }
+    }
+
+    /// <summary>
+    /// Builds a sibling <see cref="ILattice"/> activation rooted at
+    /// <see cref="AtomicFanoutTreeName"/> with <see cref="AtomicFanoutShardCount"/>
+    /// physical shards. Each shard is a single-shard, root-is-leaf tree
+    /// dedicated to <see cref="ILattice.SetManyAtomicAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>
+    /// measurement. The keyspaces ("atomic-NNNNNNNN") are disjoint from the
+    /// other benchmark trees so concurrent saga writes don't collide with
+    /// their pre-seeded data. Pre-seeds the keys once so the sagas'
+    /// per-key SetAsync calls overwrite existing entries (LWW) instead
+    /// of triggering a leaf split mid-iteration.
+    /// </summary>
+    private void BuildAtomicFanoutTree()
+    {
+        var atomicBatchSize = ReadIntEnv("BENCH_MICROBENCH_ATOMIC_BATCH", AtomicBatchDefault);
+
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(AtomicFanoutTreeName);
+        registry.GetEntryAsync(AtomicFanoutTreeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = _maxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = AtomicFanoutShardCount,
+            }));
+
+        var atomicFanoutContext = Substitute.For<IGrainContext>();
+        atomicFanoutContext.GrainId.Returns(GrainId.Create("lattice", AtomicFanoutTreeName));
+        var atomicFanoutSp = Substitute.For<IServiceProvider>();
+        var atomicFanoutLattice = new LatticeGrain(
+            atomicFanoutContext,
+            _grainFactory,
+            _optionsMonitor,
+            _optionsResolver,
+            atomicFanoutSp,
+            NullLogger<LatticeGrain>.Instance);
+        _grainFactory.GetGrain<ILattice>(AtomicFanoutTreeName).Returns(atomicFanoutLattice);
+        _atomicFanoutLattice = atomicFanoutLattice;
+
+        // Pre-build the fanout-specific batch with shard-spreading keys so
+        // the saga's per-key Execute fan-out walks all four physical shards
+        // (the shard-routing function is content-hashed on the key, and
+        // a multiplicative-prefix entropy distributes 16 keys across >= 2
+        // shards with high probability).
+        _atomicFanoutBatch = new List<KeyValuePair<string, byte[]>>(atomicBatchSize);
+        for (var i = 0; i < atomicBatchSize; i++)
+        {
+            var k = "atomic-fan-" + ((i * 257) & 0xFFFF).ToString("X4", CultureInfo.InvariantCulture)
+                + "-" + i.ToString("D8", CultureInfo.InvariantCulture);
+            _atomicFanoutBatch.Add(new(k, _value));
+        }
+
+        // Pre-seed the same keys so the first benchmarked saga overwrites
+        // existing leaf entries rather than triggering a leaf split.
+        for (var i = 0; i < atomicBatchSize; i++)
+        {
+            _atomicFanoutLattice.SetAsync(_atomicFanoutBatch[i].Key, _value).GetAwaiter().GetResult();
+        }
+    }
+
+    /// <summary>
+    /// Builds <see cref="AtomicConcurrentSagaCount"/> disjoint
+    /// <see cref="ILattice.SetManyAtomicAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>
+    /// batches against the single-shard atomic tree. Concurrent sagas
+    /// must use disjoint key sets, otherwise the registry-side
+    /// linearisation aborts the second saga to commit (LWW on prepared
+    /// values is undefined for overlapping keys), which would distort
+    /// the throughput measurement. Each batch holds
+    /// <c>BENCH_MICROBENCH_ATOMIC_BATCH</c> entries.
+    /// </summary>
+    private void BuildAtomicConcurrentBatches()
+    {
+        var atomicBatchSize = ReadIntEnv("BENCH_MICROBENCH_ATOMIC_BATCH", AtomicBatchDefault);
+
+        _atomicConcurrentBatches = new List<KeyValuePair<string, byte[]>>[AtomicConcurrentSagaCount];
+        for (var i = 0; i < AtomicConcurrentSagaCount; i++)
+        {
+            var batch = new List<KeyValuePair<string, byte[]>>(atomicBatchSize);
+            for (var j = 0; j < atomicBatchSize; j++)
+            {
+                var k = "atomic-conc-"
+                    + i.ToString("D2", CultureInfo.InvariantCulture) + "-"
+                    + j.ToString("D8", CultureInfo.InvariantCulture);
+                batch.Add(new(k, _value));
+            }
+            _atomicConcurrentBatches[i] = batch;
+
+            // Pre-seed every concurrent saga's keys against the single-shard
+            // atomic tree so concurrent sagas never trigger a leaf split
+            // mid-iteration. Without pre-seeding, the first concurrent run
+            // would pay one-time leaf-create allocations that distort the
+            // steady-state measurement.
+            for (var j = 0; j < atomicBatchSize; j++)
+            {
+                _atomicLattice.SetAsync(batch[j].Key, _value).GetAwaiter().GetResult();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Builds the read-path fixture for
+    /// <see cref="PointRead_AtomicTreeIdle"/> and
+    /// <see cref="PointRead_AtomicTreeWithActiveSaga"/>. Pre-seeds a
+    /// dedicated key range ("atomic-read-NNNNNNNN") on the single-shard
+    /// atomic tree so the read benchmarks rotate over keys distinct
+    /// from any saga keyspace, then installs a long-lived pending
+    /// mutation on a separate "saga-pending-NNN" key set via
+    /// <see cref="IReplicationApplyGrain.ApplyPreparedSetAsync"/> under
+    /// a synthetic transaction id. No terminal mark is ever broadcast,
+    /// so the leaf's <c>_pendingTx</c> bucket stays non-empty across
+    /// every <see cref="PointRead_AtomicTreeWithActiveSaga"/> iteration
+    /// — the read path's "is there a pending entry for this key?"
+    /// short-circuit is exercised continuously.
+    /// </summary>
+    private void BuildAtomicReadFixture()
+    {
+        const int ReadKeyCount = 1024;
+        _atomicReadKeys = new string[ReadKeyCount];
+        for (var i = 0; i < ReadKeyCount; i++)
+        {
+            _atomicReadKeys[i] = "atomic-read-" + i.ToString("D8", CultureInfo.InvariantCulture);
+        }
+
+        // Pre-seed read keys on the atomic tree so PointRead_AtomicTreeIdle
+        // resolves through the visible projection (not a cache miss).
+        for (var i = 0; i < ReadKeyCount; i++)
+        {
+            _atomicLattice.SetAsync(_atomicReadKeys[i], _value).GetAwaiter().GetResult();
+        }
+
+        // Install a long-lived pending mutation on a disjoint key set so
+        // the leaf's per-tx pending bucket stays non-empty for every
+        // PointRead_AtomicTreeWithActiveSaga iteration. The receiver-side
+        // ApplyPreparedSetAsync surface routes the entry into _pendingTx
+        // without driving a saga coordinator (no AtomicWriteGrain, no
+        // TxRegistryGrain mark), so the saga "stays open" indefinitely.
+        _atomicPendingTxId = Guid.NewGuid();
+        var applyGrain = (IReplicationApplyGrain)_atomicLattice;
+        const int PendingKeyCount = 8;
+        for (var i = 0; i < PendingKeyCount; i++)
+        {
+            var key = "atomic-pending-" + i.ToString("D4", CultureInfo.InvariantCulture);
+            var hlc = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+            applyGrain.ApplyPreparedSetAsync(
+                key,
+                _value,
+                hlc,
+                originClusterId: "microbench-source",
+                sourceVectorClock: null,
+                expiresAtTicks: 0,
+                transactionId: _atomicPendingTxId,
+                atomicBatchSize: PendingKeyCount,
+                atomicBatchIndex: i).GetAwaiter().GetResult();
         }
     }
 
