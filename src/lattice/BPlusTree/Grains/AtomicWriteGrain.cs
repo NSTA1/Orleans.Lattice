@@ -50,6 +50,21 @@ internal sealed class AtomicWriteGrain(
     private const int MaxRetriesPerStep = 1;
 
     /// <summary>
+    /// Maximum attempt budget for grain calls that may face a stale-routing
+    /// throw during a saga that overlaps a topology change (shard split,
+    /// online resize, or reshard). Four attempts cover the worst observed
+    /// CI-fixture scenario: a reshard targeting 8 shards from 4 produces up
+    /// to four sequential ShardMap/alias swaps a single saga can race
+    /// through end-to-end, and each swap retires one stale-routing throw.
+    /// A single-shot retry was insufficient — it allowed
+    /// <c>StaleShardRoutingException</c> from a second consecutive split
+    /// commit (or <c>StaleTreeRoutingException</c> from an alias swap that
+    /// landed between the prepare and the retry) to escape the saga and
+    /// fail the chaos test.
+    /// </summary>
+    private const int MaxStaleRoutingRetries = 4;
+
+    /// <summary>
     /// Composite grain key (<c>{treeId}/{operationId}</c>); used for logging.
     /// </summary>
     private string OperationKey => GrainContext.GrainId.Key.ToString()!;
@@ -324,17 +339,36 @@ internal sealed class AtomicWriteGrain(
 
         foreach (var entry in entries)
         {
-            LwwEntry? raw;
-            try
+            LwwEntry? raw = null;
+            // Bounded retry for sequential topology changes (split commit
+            // followed by another split commit, or an alias swap that
+            // lands between attempts during an online reshard / resize).
+            // Refreshes routing once per stale-routing throw via the
+            // public ILattice.GetRoutingAsync hook before re-issuing the
+            // direct IShardRootGrain call. A single-shot retry was
+            // insufficient under reshard storms — see
+            // ReshardTopologyTests.Continuous_reader_observes_zero_or_all
+            // _keys_through_mid_saga_reshard which exercises this path
+            // with a 4-to-8 reshard.
+            for (int attempt = 0; attempt < MaxStaleRoutingRetries; attempt++)
             {
-                raw = await GetShardForKey(routing, entry.Key).GetRawEntryAsync(entry.Key);
-            }
-            catch (StaleShardRoutingException)
-            {
-                // Adaptive shard split has remapped virtual slots; refresh
-                // routing and retry this key once.
-                routing = await lattice.GetRoutingAsync();
-                raw = await GetShardForKey(routing, entry.Key).GetRawEntryAsync(entry.Key);
+                try
+                {
+                    raw = await GetShardForKey(routing, entry.Key).GetRawEntryAsync(entry.Key);
+                    break;
+                }
+                catch (StaleShardRoutingException) when (attempt + 1 < MaxStaleRoutingRetries)
+                {
+                    // Adaptive shard split has remapped virtual slots; refresh
+                    // routing and retry.
+                    routing = await lattice.GetRoutingAsync();
+                }
+                catch (StaleTreeRoutingException) when (attempt + 1 < MaxStaleRoutingRetries)
+                {
+                    // Tree alias was swapped mid-saga (online resize / reshard);
+                    // refresh routing and retry against the new physical tree.
+                    routing = await lattice.GetRoutingAsync();
+                }
             }
 
             // LwwEntry fields are flat (Value/Timestamp/IsTombstone/ExpiresAtTicks).
@@ -424,9 +458,11 @@ internal sealed class AtomicWriteGrain(
         // slot was never populated. Persist the reconstruction so a
         // subsequent crash-resume can skip the rebuild.
         var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
+        string? physicalTreeId = null;
         if (state.State.TouchedShards.Count == 0 && state.State.Entries.Count > 0)
         {
             var routing = await lattice.GetRoutingAsync();
+            physicalTreeId = routing.PhysicalTreeId;
             var touched = new HashSet<int>();
             foreach (var entry in state.State.Entries)
             {
@@ -445,10 +481,17 @@ internal sealed class AtomicWriteGrain(
             return;
         }
 
-        // Resolve the physical-tree id once for the broadcast pass.
-        // The retry path inside MarkOneShardAsync re-resolves on a
-        // stale-routing throw.
-        var physicalTreeId = (await lattice.GetRoutingAsync()).PhysicalTreeId;
+        // Seed the broadcast pass with the logical tree id as the
+        // physical tree id. Under steady state (no online resize in
+        // flight) logical and physical coincide, so the first attempt
+        // succeeds and we save an RPC. If a resize alias-swap has
+        // landed between prepare and broadcast, the first per-shard
+        // call throws StaleTreeRoutingException and MarkOneShardAsync's
+        // retry loop refreshes routing against the new physical tree —
+        // amortised across the per-shard fan-out. When we just had to
+        // reconstruct the touched-shard set above we already have a
+        // fresh routing snapshot in hand and reuse it.
+        physicalTreeId ??= state.State.TreeId;
 
         var pending = new List<Task>(state.State.TouchedShards.Count);
         foreach (var shardIndex in state.State.TouchedShards)
@@ -460,36 +503,48 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
-    /// Per-shard terminal append with one-shot routing-refresh retry.
+    /// Per-shard terminal append with bounded routing-refresh retry.
     /// Encapsulates the stale-routing recovery so the
     /// <see cref="BroadcastTerminalsAsync(bool)"/> fan-out body stays
-    /// linear.
+    /// linear. Catches both <see cref="StaleShardRoutingException"/>
+    /// (a slot moved between prepare and broadcast) and
+    /// <see cref="StaleTreeRoutingException"/> (the tree's physical
+    /// alias was swapped, e.g. online resize) and retries the call
+    /// against a freshly-resolved owner up to
+    /// <see cref="MaxStaleRoutingRetries"/> times. A single-shot retry
+    /// was insufficient under reshard storms where two or more
+    /// sequential ShardMap swaps can land between the prepare and
+    /// broadcast windows.
     /// </summary>
     private async Task MarkOneShardAsync(string physicalTreeId, int shardIndex, Guid transactionId, bool committed)
     {
-        var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
-        try
+        for (int attempt = 0; attempt < MaxStaleRoutingRetries; attempt++)
         {
-            await shard.AppendTxTerminalAsync(transactionId, committed);
-            return;
-        }
-        catch (StaleShardRoutingException)
-        {
-            // Slot ownership moved between prepare and broadcast
-            // (adaptive shard split). Refresh routing under the same
-            // logical tree id and retry once against the new owner.
-        }
-        catch (StaleTreeRoutingException)
-        {
-            // Tree alias swapped mid-saga (online resize). Refresh
-            // routing under the same logical tree id and retry once
-            // against the new physical tree.
-        }
+            try
+            {
+                var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+                await shard.AppendTxTerminalAsync(transactionId, committed);
+                return;
+            }
+            catch (StaleShardRoutingException) when (attempt + 1 < MaxStaleRoutingRetries)
+            {
+                // Slot ownership moved (adaptive shard split). Refresh
+                // routing under the same logical tree id and retry against
+                // the new owner; AppendTxTerminalAsync is shard-keyed so
+                // the refreshed call may resolve to a different physical
+                // tree id under online resize.
+            }
+            catch (StaleTreeRoutingException) when (attempt + 1 < MaxStaleRoutingRetries)
+            {
+                // Tree alias swapped mid-saga (online resize). Refresh
+                // routing under the same logical tree id and retry once
+                // against the new physical tree.
+            }
 
-        var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
-        var refreshed = await lattice.GetRoutingAsync();
-        var refreshedShard = grainFactory.GetGrain<IShardRootGrain>($"{refreshed.PhysicalTreeId}/{shardIndex}");
-        await refreshedShard.AppendTxTerminalAsync(transactionId, committed);
+            var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
+            var refreshed = await lattice.GetRoutingAsync();
+            physicalTreeId = refreshed.PhysicalTreeId;
+        }
     }
 
     /// <summary>

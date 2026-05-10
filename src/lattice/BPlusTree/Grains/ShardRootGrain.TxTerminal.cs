@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -189,13 +190,42 @@ internal sealed partial class ShardRootGrain
         // shadow-forward call mirrors the entire AppendTxTerminalAsync
         // shape onto the destination shard, which independently
         // appends its own WAL terminal + fans out on its own chain.
+        //
+        // Two shadow-forward channels run in parallel:
+        //   (a) ForwardShadowAsync targets state.State.ShadowForward,
+        //       i.e. the resize / online-merge destination tree (a
+        //       different physical tree id, same shard index). Active
+        //       only when this shard is participating in a tree-wide
+        //       rewrite.
+        //   (b) ForwardSplitTerminalAsync targets state.State.SplitInProgress,
+        //       i.e. the destination shard of an in-flight shard split
+        //       (same physical tree, different shard index). Active
+        //       only when the saga's prepare-phase writes also
+        //       shadow-forwarded into the destination via
+        //       ForwardLocalWriteToShadowIfNeededAsync (which routes
+        //       prepared writes through SetAsync so the destination
+        //       leaf buckets the value into its own _pendingTx[txid]).
+        //       Without (b), a saga whose prepare straddles a shard
+        //       split would leave the destination's pending-tx bucket
+        //       orphaned forever once AtomicWriteGrain calls
+        //       ITxRegistryGrain.ForgetAsync — readers routing to the
+        //       destination after the swap would consult the registry,
+        //       see TxStatus.InFlight (the registry's default for
+        //       forgotten ids), hide the pending entry, and surface
+        //       the destination's pre-saga Entries indefinitely. The
+        //       chaos test
+        //       ShardSplitTopologyTests.Continuous_reader_observes_zero
+        //       _or_all_keys_through_mid_saga_shard_split exercises
+        //       this path.
         var leafFanOut = BroadcastTerminalToLeavesAsync(targetLeaves, transactionId, committed, cancellationToken);
 
         var shadowForward = ForwardShadowAsync(
             (transactionId, committed, cancellationToken),
             static (target, state) => target.AppendTxTerminalAsync(state.transactionId, state.committed, state.cancellationToken));
 
-        await Task.WhenAll(leafFanOut, shadowForward);
+        var splitShadowForward = ForwardSplitTerminalAsync(transactionId, committed, cancellationToken);
+
+        await Task.WhenAll(leafFanOut, shadowForward, splitShadowForward);
     }
 
     /// <summary>
@@ -294,5 +324,48 @@ internal sealed partial class ShardRootGrain
             pending[i] = leaves[i].ApplyTxTerminalAsync(transactionId, committed);
 
         await Task.WhenAll(pending);
+    }
+
+    /// <summary>
+    /// Mirrors <see cref="AppendTxTerminalAsync(Guid, bool, CancellationToken)"/>
+    /// onto the destination shard of an in-flight shard split, when one
+    /// is active and this shard is the source. The destination shard
+    /// independently consumes its own per-saga affected-leaves map
+    /// (populated by <see cref="ForwardLocalWriteToShadowIfNeededAsync"/>'s
+    /// prepared-write branch via <see cref="SetAsync"/>), appends its
+    /// own per-shard WAL terminal entry, and fans the terminal RPC out
+    /// to its own affected-leaves subset. Idempotent: a terminal that
+    /// arrives via both this path and a subsequent stale-routing retry
+    /// from <see cref="AtomicWriteGrain"/> deduplicates inside each
+    /// leaf's <c>_recentlyTerminal</c> set. No-op when this shard has
+    /// no active split, when the split is past the swap-and-reject
+    /// boundary, or when the destination shard equals this shard
+    /// (a defensive check against pathological configuration).
+    /// </summary>
+    private Task ForwardSplitTerminalAsync(Guid transactionId, bool committed, CancellationToken cancellationToken)
+    {
+        var sip = state.State.SplitInProgress;
+        if (sip is null)
+            return Task.CompletedTask;
+        // Mirror the same active-window predicate as
+        // ForwardLocalWriteToShadowIfNeededAsync: BeginShadowWrite,
+        // Drain, and Swap accept terminal forwards because the
+        // destination's pending-tx buckets are populated during those
+        // phases. Reject and Complete are post-swap — by then the
+        // destination is the authoritative owner and AtomicWriteGrain's
+        // stale-routing retry loop has re-routed the terminal to
+        // the destination's own AppendTxTerminalAsync via the public
+        // ILattice path, making the source-side forward redundant.
+        if (sip.Phase != ShardSplitPhase.BeginShadowWrite
+            && sip.Phase != ShardSplitPhase.Drain
+            && sip.Phase != ShardSplitPhase.Swap)
+        {
+            return Task.CompletedTask;
+        }
+        if (sip.ShadowTargetShardIndex == MyShardIndex)
+            return Task.CompletedTask;
+
+        var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{sip.ShadowTargetShardIndex}");
+        return target.AppendTxTerminalAsync(transactionId, committed, cancellationToken);
     }
 }
