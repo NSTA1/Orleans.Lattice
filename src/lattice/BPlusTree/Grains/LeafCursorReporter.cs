@@ -1,20 +1,20 @@
-using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.Replication.Adapters;
+namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Adapter that forwards <see cref="ILeafCursorReporter"/> calls from the
-/// core <see cref="BPlusLeafGrain"/> hot path to the replication
-/// package's <see cref="ILatticeReplicationCursorRegistry"/>. Registered
-/// in DI by <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>
-/// so a host that adds replication automatically promotes every leaf
-/// grain to a first-class WAL consumer, while a host without replication
-/// leaves the registration absent and the leaf grain skips the report
-/// path entirely.
+/// Default <see cref="ILeafCursorReporter"/> implementation that forwards
+/// every report and unregister to the silo-registered
+/// <see cref="IWalCursorRegistry"/>. Wired up by
+/// <see cref="LatticeServiceCollectionExtensions.AddWalCursorRegistry"/>
+/// so a host that opts into the cursor registry automatically promotes
+/// every leaf grain to a first-class WAL consumer; a host without the
+/// registry leaves the registration absent and the leaf grain skips the
+/// report path entirely (the partial <c>BPlusLeafGrain.CursorRegistry</c>
+/// resolves the reporter as a nullable service and no-ops when null).
 /// </summary>
 internal sealed class LeafCursorReporter(
-    ILatticeReplicationCursorRegistry registry) : ILeafCursorReporter
+    IWalCursorRegistry registry) : ILeafCursorReporter
 {
     /// <inheritdoc />
     public Task ReportAsync(

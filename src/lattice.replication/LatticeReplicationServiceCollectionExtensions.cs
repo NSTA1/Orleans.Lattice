@@ -121,9 +121,14 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeOriginClusterIdResolver, ConfiguredLatticeOriginClusterIdResolver>();
 
         builder.Services.TryAddSingleton<IReplicationBatchEncoder, OrleansBinaryReplicationBatchEncoder>();
-        builder.Services.TryAddSingleton<ILatticeReplicationCursorRegistry, InMemoryReplicationCursorRegistry>();
-        builder.Services.TryAddSingleton<ILeafCursorReporter, LeafCursorReporter>();
-        builder.Services.TryAddSingleton<ILatticeReplicationGc, LatticeReplicationGc>();
+        // The cursor registry, leaf-cursor reporter, and WAL GC are core
+        // seams (formerly in this package, promoted in v3.5.0). Calling
+        // AddWalCursorRegistry registers the in-memory default plus the
+        // leaf-as-materialiser reporter; AddLatticeWalGc registers the
+        // GC. Both extension calls are idempotent — a host that already
+        // wired them up directly is unaffected.
+        builder.AddWalCursorRegistry();
+        builder.AddLatticeWalGc();
         builder.Services.TryAddSingleton<ReplicationPeerStats>();
         // Producer-side per-(silo, tree) local vector clock cache.
         // Read by ReplicationMutationObserver to stamp every emit's
@@ -244,6 +249,11 @@ public static class LatticeReplicationServiceCollectionExtensions
             if (rep.WalStorageProvider is not null && options.WalStorageProvider is null)
             {
                 options.WalStorageProvider = rep.WalStorageProvider;
+            }
+
+            if (rep.WalRetention is not null && options.WalRetention is null)
+            {
+                options.WalRetention = rep.WalRetention;
             }
         }
     }

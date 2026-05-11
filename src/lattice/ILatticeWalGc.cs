@@ -1,10 +1,10 @@
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// WAL garbage collector seam. Trims per-shard write-ahead logs by
 /// computing a safe trim point from the registered consumer cursors
-/// (<see cref="ILatticeReplicationCursorRegistry"/>) and the optional
-/// <see cref="LatticeReplicationOptions.WalRetention"/> wall-clock
+/// (<see cref="IWalCursorRegistry"/>) and the optional
+/// <see cref="LatticeOptions.WalRetention"/> wall-clock
 /// hard ceiling, then invoking <see cref="IWalStorageProvider.TrimAsync"/>
 /// on every partition whose head is eligible.
 /// <para>
@@ -16,17 +16,17 @@ namespace Orleans.Lattice.Replication;
 /// calls (which are idempotent by contract).
 /// </para>
 /// </summary>
-public interface ILatticeReplicationGc
+public interface ILatticeWalGc
 {
     /// <summary>
     /// Runs a single GC pass against <paramref name="treeName"/>'s
-    /// per-shard WALs. The returned <see cref="ReplicationGcReport"/>
+    /// per-shard WALs. The returned <see cref="LatticeWalGcReport"/>
     /// describes the safe trim threshold the run computed and the
     /// number of entries actually trimmed per shard.
     /// </summary>
     /// <param name="treeName">Logical tree id to garbage-collect. Must not be <see langword="null"/> or whitespace.</param>
     /// <param name="cancellationToken">Cancellation token observed between every shard scan and every storage call.</param>
-    Task<ReplicationGcReport> RunOnceAsync(
+    Task<LatticeWalGcReport> RunOnceAsync(
         string treeName,
         CancellationToken cancellationToken = default);
 }

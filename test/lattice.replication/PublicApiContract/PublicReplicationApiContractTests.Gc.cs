@@ -4,28 +4,24 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.Replication.Tests.PublicApiContract;
 
 /// <summary>
-/// Pins the <see cref="ILatticeReplicationGc"/> public contract: the
-/// silo's default registration is <see cref="LatticeReplicationGc"/>,
-/// <see cref="ILatticeReplicationGc.RunOnceAsync"/> returns a
-/// <see cref="ReplicationGcReport"/> populated with the requested tree
-/// name, a non-negative <see cref="ReplicationGcReport.ShardsScanned"/>
-/// count, and a non-negative
-/// <see cref="ReplicationGcReport.EntriesTrimmed"/> total.
+/// Pins the replication-side overlay of the
+/// <see cref="ILatticeWalGc"/> public contract:
+/// <see cref="ILatticeWalGc.RunOnceAsync"/> returns a
+/// <see cref="LatticeWalGcReport"/> populated with the requested tree
+/// name, non-negative shard / entry counters, and a non-<see langword="null"/>
+/// <see cref="LatticeWalGcReport.MinCursor"/> after the shipper has
+/// reported.
+/// <para>
+/// The default DI registration assertion lives in the core
+/// <c>PublicApiContractTests.WalGc</c> partial because the type is
+/// declared in <c>Orleans.Lattice</c>; this partial covers the
+/// replication-driven traffic on top of it.
+/// </para>
 /// </summary>
 public partial class PublicReplicationApiContractTests
 {
     [Test]
-    public void ILatticeReplicationGc_default_registration_is_lattice_replication_gc()
-    {
-        var gc = PublicReplicationApiClusterFixture
-            .ServicesFor(PublicReplicationApiClusterFixture.SiteAClusterId)
-            .GetRequiredService<ILatticeReplicationGc>();
-
-        Assert.That(gc, Is.InstanceOf<LatticeReplicationGc>());
-    }
-
-    [Test]
-    public async Task ILatticeReplicationGc_run_once_returns_report_with_tree_name_and_non_negative_counters()
+    public async Task ILatticeWalGc_run_once_returns_report_with_tree_name_and_non_negative_counters()
     {
         var treeId = NextTreeId("gc-run");
         var treeOnA = await CreateReplicatedTreeAsync(treeId);
@@ -38,7 +34,7 @@ public partial class PublicReplicationApiContractTests
 
         var gc = PublicReplicationApiClusterFixture
             .ServicesFor(PublicReplicationApiClusterFixture.SiteAClusterId)
-            .GetRequiredService<ILatticeReplicationGc>();
+            .GetRequiredService<ILatticeWalGc>();
 
         var report = await gc.RunOnceAsync(treeId);
 
@@ -51,7 +47,7 @@ public partial class PublicReplicationApiContractTests
     }
 
     [Test]
-    public async Task ILatticeReplicationGc_run_once_min_cursor_is_non_null_after_consumer_reports()
+    public async Task ILatticeWalGc_run_once_min_cursor_is_non_null_after_consumer_reports()
     {
         var treeId = NextTreeId("gc-min-cursor");
         var treeOnA = await CreateReplicatedTreeAsync(treeId);
@@ -64,12 +60,12 @@ public partial class PublicReplicationApiContractTests
 
         var gc = PublicReplicationApiClusterFixture
             .ServicesFor(PublicReplicationApiClusterFixture.SiteAClusterId)
-            .GetRequiredService<ILatticeReplicationGc>();
+            .GetRequiredService<ILatticeWalGc>();
 
         // The shipper's cursor reports flow through the leaf cursor
         // reporter on a delay; poll until at least one report has
         // landed, then assert MinCursor is non-null.
-        ReplicationGcReport report = default;
+        LatticeWalGcReport report = default;
         await PublicReplicationApiClusterFixture.WaitForConvergenceAsync(
             async () =>
             {

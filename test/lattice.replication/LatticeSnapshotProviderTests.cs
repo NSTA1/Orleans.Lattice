@@ -32,7 +32,7 @@ public class LatticeSnapshotProviderTests
         await _cluster.DeployAsync();
         _provider = new LatticeSnapshotProvider(
             _cluster.Client,
-            new InMemoryReplicationCursorRegistry(),
+            new InMemoryWalCursorRegistry(),
             LatticeSnapshotProviderUnitTests.TestOptions());
     }
 

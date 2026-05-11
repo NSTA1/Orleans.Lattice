@@ -56,7 +56,7 @@ public readonly record struct ReplicationAck
     /// pre-Phase-9 and never stamped the slot at all).
     /// <para>
     /// On a positive ack the sender publishes this value to its local
-    /// <see cref="ILatticeReplicationCursorRegistry"/> under a
+    /// <see cref="IWalCursorRegistry"/> under a
     /// peer-specific consumer id so the producer-side WAL GC AND-s
     /// the strict-less <c>entry.Timestamp &lt; blockedFloor</c>
     /// clause into its trim predicate. This is the cross-cluster

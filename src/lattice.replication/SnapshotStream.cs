@@ -36,7 +36,7 @@ public sealed class SnapshotStream
     /// snapshot was produced — the pointwise minimum
     /// <see cref="VersionVector"/> across every consumer that has
     /// reported a vector through
-    /// <see cref="ILatticeReplicationCursorRegistry.GetCausalStableAsync"/>.
+    /// <see cref="IWalCursorRegistry.GetCausalStableAsync"/>.
     /// Receivers pin this on
     /// <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
     /// before draining <see cref="Entries"/>, so the causal dependency

@@ -34,7 +34,7 @@ internal sealed class ReplicationShipperGrain(
     IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
     IReplicationTransport transport,
     IReplicationBatchEncoder encoder,
-    ILatticeReplicationCursorRegistry cursorRegistry,
+    IWalCursorRegistry cursorRegistry,
     IGrainFactory grainFactory,
     [PersistentState("replication-shipper", LatticeOptions.StorageProviderName)]
     IPersistentState<ReplicationShipperState> state,
@@ -48,7 +48,7 @@ internal sealed class ReplicationShipperGrain(
         transport ?? throw new ArgumentNullException(nameof(transport));
     private readonly IReplicationBatchEncoder _encoder =
         encoder ?? throw new ArgumentNullException(nameof(encoder));
-    private readonly ILatticeReplicationCursorRegistry _cursorRegistry =
+    private readonly IWalCursorRegistry _cursorRegistry =
         cursorRegistry ?? throw new ArgumentNullException(nameof(cursorRegistry));
     private readonly IGrainFactory _grainFactory =
         grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
@@ -155,7 +155,7 @@ internal sealed class ReplicationShipperGrain(
     /// <summary>
     /// Highest HLC reported to the registry (i.e. successfully
     /// persisted in a previous flush). Used to suppress redundant
-    /// <see cref="ILatticeReplicationCursorRegistry.ReportCursorAsync"/>
+    /// <see cref="IWalCursorRegistry.ReportCursorAsync"/>
     /// calls when a flush did not actually advance the durable cursor
     /// (e.g. only partition cursors changed since the last flush).
     /// </summary>
@@ -957,7 +957,7 @@ internal sealed class ReplicationShipperGrain(
     /// <see cref="_peerBlockedFloorLast"/>, this lets the helper skip
     /// duplicate reports (the registry already enforces
     /// replace-semantics, but the per-tree semaphore inside
-    /// <see cref="InMemoryReplicationCursorRegistry"/> still costs a
+    /// <see cref="InMemoryWalCursorRegistry"/> still costs a
     /// Wait/Release pair per call we can avoid).
     /// </summary>
     private bool _peerBlockedFloorReported;

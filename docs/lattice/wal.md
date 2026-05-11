@@ -327,17 +327,18 @@ already-pending advance.
 ## Trim and GC
 
 The WAL grows monotonically and must be trimmed. Trim is driven by
-`ILatticeReplicationGc`, a per-tree single-pass collector that advances the
+`ILatticeWalGc`, a per-tree single-pass collector that advances the
 per-shard trim watermark to the largest contiguous prefix that **every**
 registered consumer has already acknowledged.
 
-The collector ships in `Orleans.Lattice.Replication` because it was originally
-authored to reclaim space behind the change-feed shipper, but the predicate is
-expressed against `min(cursor across registered consumers)` — not `min(cursor
-across remote peers)` — so the local in-memory projection (the materialiser
-that rebuilds the leaf state from the WAL on activation) is just another
-consumer. A lagging materialiser pins the log exactly the same way a lagging
-remote peer does.
+The collector ships in `Orleans.Lattice` so single-cluster deployments
+that never call `AddLatticeReplication(...)` still get durable WAL
+maintenance. The predicate is expressed against `min(cursor across
+registered consumers)` — not `min(cursor across remote peers)` — so the
+local in-memory projection (the materialiser that rebuilds the leaf
+state from the WAL on activation) is just another consumer. A lagging
+materialiser pins the log exactly the same way a lagging remote peer
+does.
 
 ### Predicate
 
@@ -363,17 +364,18 @@ stale or mis-configured causal-stable computation cannot cause the GC to
 over-trim past a consumer that is still pinning the HLC half.
 
 `minCursor` is the minimum HLC across all `(treeName, consumerId)` entries
-published to the `ILatticeReplicationCursorRegistry`. The cursor branch is
+published to the `IWalCursorRegistry`. The cursor branch is
 gated on `minCursor > HybridLogicalClock.Zero` so range-delete entries (which
 carry `HybridLogicalClock.Zero` by design) are never trimmed under an unset /
 zero cursor.
 
 `ttlCeiling` is the hard ceiling configured by
-`LatticeReplicationOptions.WalRetention`. When set, a lagging consumer that
-pins the log past the ceiling is intentionally allowed to "fall off the log"
-so disk usage stays bounded; that consumer detects the gap on its next read
-and re-bootstraps via the fall-off-log path described in
-[`projection-rebuild.md`](projection-rebuild.md).
+`LatticeOptions.WalRetention` (mirrored from
+`LatticeReplicationOptions.WalRetention` on replicated trees). When set,
+a lagging consumer that pins the log past the ceiling is intentionally
+allowed to "fall off the log" so disk usage stays bounded; that consumer
+detects the gap on its next read and re-bootstraps via the fall-off-log
+path described in [`projection-rebuild.md`](projection-rebuild.md).
 
 The scan is conservative: the first non-eligible entry per shard stops the
 walk for that shard. WAL offsets are dense and append-only but HLC
@@ -404,10 +406,11 @@ await registry.ReportCursorAsync(
 await registry.UnregisterAsync("orders", "peer:site-b", cancellationToken);
 ```
 
-The default `InMemoryReplicationCursorRegistry` is process-local and loses
+The default `InMemoryWalCursorRegistry` is process-local and loses
 its state on silo restart. A host that needs cross-restart durability
-registers its own `ILatticeReplicationCursorRegistry` implementation via DI
-before calling `AddLatticeReplication(...)`.
+registers its own `IWalCursorRegistry` implementation via DI
+before calling `AddWalCursorRegistry(...)` (or `AddLatticeReplication(...)`,
+which calls it transitively).
 
 ### Causal-stable frontier
 
@@ -444,14 +447,14 @@ continue to mutate their local frontier after the report returns.
 
 ### Scheduling
 
-`ILatticeReplicationGc.RunOnceAsync(treeName)` is a single-pass GC invocation.
+`ILatticeWalGc.RunOnceAsync(treeName)` is a single-pass GC invocation.
 The library does **not** install a background timer — the host owns the
 cadence so it can integrate with whatever scheduling infrastructure it
 already uses (Orleans reminders, hosted services, external schedulers). A
 typical inner-loop period is 30 to 60 seconds per replicated tree.
 
 ```text
-ReplicationGcReport report = await gc.RunOnceAsync(
+LatticeWalGcReport report = await gc.RunOnceAsync(
     treeName: "orders",
     cancellationToken: cancellationToken);
 
@@ -465,11 +468,11 @@ ReplicationGcReport report = await gc.RunOnceAsync(
 
 ### Metrics
 
-The GC publishes one counter on the `orleans.lattice.replication` meter:
+The GC publishes one counter on the `orleans.lattice` meter:
 
 | Instrument | Tags | Description |
 |---|---|---|
-| `orleans.lattice.replication.wal.entries_trimmed` | `tree` | Total WAL entries removed by a GC pass. Incremented only when the pass trimmed at least one entry. |
+| `orleans.lattice.wal.entries_trimmed` | `tree` | Total WAL entries removed by a GC pass. Incremented only when the pass trimmed at least one entry. |
 
 ## Relationship to replication
 

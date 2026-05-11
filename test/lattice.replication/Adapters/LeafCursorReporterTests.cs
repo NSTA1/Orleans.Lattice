@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Replication.Tests.Adapters;
 /// <summary>
 /// Unit tests for <see cref="LeafCursorReporter"/>: confirms the
 /// adapter registered by the leaf cursor-registry integration forwards every call verbatim to the
-/// underlying <see cref="ILatticeReplicationCursorRegistry"/>.
+/// underlying <see cref="IWalCursorRegistry"/>.
 /// </summary>
 [TestFixture]
 public class LeafCursorReporterTests
@@ -16,7 +16,7 @@ public class LeafCursorReporterTests
     [Test]
     public async Task ReportAsync_forwards_to_registry()
     {
-        var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var registry = Substitute.For<IWalCursorRegistry>();
         var reporter = new LeafCursorReporter(registry);
         var cursor = new HybridLogicalClock { WallClockTicks = 12345, Counter = 0 };
         using var cts = new CancellationTokenSource();
@@ -29,7 +29,7 @@ public class LeafCursorReporterTests
     [Test]
     public async Task UnregisterAsync_forwards_to_registry()
     {
-        var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var registry = Substitute.For<IWalCursorRegistry>();
         var reporter = new LeafCursorReporter(registry);
         using var cts = new CancellationTokenSource();
 
@@ -41,7 +41,7 @@ public class LeafCursorReporterTests
     [Test]
     public void ReportAsync_propagates_registry_exceptions()
     {
-        var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var registry = Substitute.For<IWalCursorRegistry>();
         registry.ReportCursorAsync(
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(_ => Task.FromException(new InvalidOperationException("registry failure")));
@@ -59,7 +59,7 @@ public class LeafCursorReporterTests
         // adapter's snapshot+filter+unregister path against a working
         // implementation rather than a mock with hand-crafted return
         // values.
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         var hlc = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 };
         await registry.ReportCursorAsync("tree-a", "_lattice_materialiser_tree-a_leaf-1", hlc, default);
         await registry.ReportCursorAsync("tree-a", "_lattice_materialiser_tree-a_leaf-2", hlc, default);
@@ -84,7 +84,7 @@ public class LeafCursorReporterTests
     [Test]
     public async Task UnregisterTreeAsync_is_no_op_for_unknown_tree()
     {
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         var reporter = new LeafCursorReporter(registry);
 
         Assert.DoesNotThrowAsync(async () => await reporter.UnregisterTreeAsync("never-seen", default));
@@ -98,7 +98,7 @@ public class LeafCursorReporterTests
         // "_lattice_materialiser_tree-a" - the adapter must filter on
         // the full "{prefix}{treeName}_" boundary so a sibling tree
         // is not accidentally swept.
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         var hlc = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 };
         await registry.ReportCursorAsync("tree-a", "_lattice_materialiser_tree-a_leaf-1", hlc, default);
         await registry.ReportCursorAsync("tree-a-suffix", "_lattice_materialiser_tree-a-suffix_leaf-1", hlc, default);

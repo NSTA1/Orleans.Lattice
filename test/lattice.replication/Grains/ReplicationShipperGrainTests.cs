@@ -182,7 +182,7 @@ public partial class ReplicationShipperGrainTests
         StubReplogShardGrain Feed,
         IReplicationTransport Transport,
         TestEncoder Encoder,
-        ILatticeReplicationCursorRegistry Registry,
+        IWalCursorRegistry Registry,
         LatticeReplicationOptions Options) Create(
             LatticeReplicationOptions? options = null,
             ReplicationShipperState? seedState = null,
@@ -199,7 +199,7 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
         var encoder = new TestEncoder();
-        var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var registry = Substitute.For<IWalCursorRegistry>();
         var fakeState = new FakePersistentState<ReplicationShipperState>();
         if (seedState is not null)
         {
@@ -222,7 +222,7 @@ public partial class ReplicationShipperGrainTests
         IOptionsMonitor<LatticeReplicationOptions>? monitor = null,
         IReplicationTransport? transport = null,
         IReplicationBatchEncoder? encoder = null,
-        ILatticeReplicationCursorRegistry? registry = null,
+        IWalCursorRegistry? registry = null,
         IGrainFactory? grainFactory = null,
         IPersistentState<ReplicationShipperState>? state = null,
         ReplicationPeerStats? peerStats = null)
@@ -233,7 +233,7 @@ public partial class ReplicationShipperGrainTests
             monitor ?? Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
             transport ?? Substitute.For<IReplicationTransport>(),
             encoder ?? Substitute.For<IReplicationBatchEncoder>(),
-            registry ?? Substitute.For<ILatticeReplicationCursorRegistry>(),
+            registry ?? Substitute.For<IWalCursorRegistry>(),
             grainFactory ?? Substitute.For<IGrainFactory>(),
             state ?? new FakePersistentState<ReplicationShipperState>(),
             peerStats ?? new ReplicationPeerStats());
@@ -256,7 +256,7 @@ public partial class ReplicationShipperGrainTests
                 null!,
                 Substitute.For<IReplicationTransport>(),
                 Substitute.For<IReplicationBatchEncoder>(),
-                Substitute.For<ILatticeReplicationCursorRegistry>(),
+                Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
                 new ReplicationPeerStats()),
@@ -274,7 +274,7 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 null!,
                 Substitute.For<IReplicationBatchEncoder>(),
-                Substitute.For<ILatticeReplicationCursorRegistry>(),
+                Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
                 new ReplicationPeerStats()),
@@ -292,7 +292,7 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 Substitute.For<IReplicationTransport>(),
                 null!,
-                Substitute.For<ILatticeReplicationCursorRegistry>(),
+                Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
                 new ReplicationPeerStats()),
@@ -328,7 +328,7 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 Substitute.For<IReplicationTransport>(),
                 Substitute.For<IReplicationBatchEncoder>(),
-                Substitute.For<ILatticeReplicationCursorRegistry>(),
+                Substitute.For<IWalCursorRegistry>(),
                 null!,
                 new FakePersistentState<ReplicationShipperState>(),
                 new ReplicationPeerStats()),
@@ -999,7 +999,7 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
         var encoder = new CapturingEncoder();
-        var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var registry = Substitute.For<IWalCursorRegistry>();
         var fakeState = new FakePersistentState<ReplicationShipperState>();
         var factory = BuildGrainFactory(null, new[] { feed }, Tree);
         var grain = new ReplicationShipperGrain(
@@ -1104,7 +1104,7 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
         var encoder = new TestEncoder();
-        var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var registry = Substitute.For<IWalCursorRegistry>();
         var fakeState = new FakePersistentState<ReplicationShipperState>();
         var factory = BuildGrainFactory(null, new[] { feed }, Tree);
         var stats = new ReplicationPeerStats();

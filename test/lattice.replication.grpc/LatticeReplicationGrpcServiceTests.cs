@@ -15,12 +15,12 @@ public class LatticeReplicationGrpcServiceTests
 {
     private static LatticeReplicationGrpcService CreateService(IReplicationApplier applier, out LatticeReplicationGrpcMethod method)
     {
-        return CreateService(applier, new InMemoryReplicationCursorRegistry(), out method);
+        return CreateService(applier, new InMemoryWalCursorRegistry(), out method);
     }
 
     private static LatticeReplicationGrpcService CreateService(
         IReplicationApplier applier,
-        ILatticeReplicationCursorRegistry cursorRegistry,
+        IWalCursorRegistry cursorRegistry,
         out LatticeReplicationGrpcMethod method)
     {
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
@@ -84,7 +84,7 @@ public class LatticeReplicationGrpcServiceTests
     public void Constructor_throws_when_method_null()
     {
         Assert.That(
-            () => new LatticeReplicationGrpcService(null!, Substitute.For<IReplicationApplier>(), new InMemoryReplicationCursorRegistry(), NullLogger<LatticeReplicationGrpcService>.Instance),
+            () => new LatticeReplicationGrpcService(null!, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NullLogger<LatticeReplicationGrpcService>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -96,7 +96,7 @@ public class LatticeReplicationGrpcServiceTests
         var method = new LatticeReplicationGrpcMethod(encoder, sp.GetRequiredService<Serializer<ReplicationAck>>());
 
         Assert.That(
-            () => new LatticeReplicationGrpcService(method, null!, new InMemoryReplicationCursorRegistry(), NullLogger<LatticeReplicationGrpcService>.Instance),
+            () => new LatticeReplicationGrpcService(method, null!, new InMemoryWalCursorRegistry(), NullLogger<LatticeReplicationGrpcService>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -108,7 +108,7 @@ public class LatticeReplicationGrpcServiceTests
         var method = new LatticeReplicationGrpcMethod(encoder, sp.GetRequiredService<Serializer<ReplicationAck>>());
 
         Assert.That(
-            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryReplicationCursorRegistry(), null!),
+            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), null!),
             Throws.ArgumentNullException);
     }
 
@@ -355,7 +355,7 @@ public class LatticeReplicationGrpcServiceTests
         applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         // Pre-pin a buffer floor on the receiver side as if a partial
         // atomic batch were staged. The HLC=Zero cursor uses the
         // blocked-floor overload that the applier publishes on every
@@ -397,7 +397,7 @@ public class LatticeReplicationGrpcServiceTests
         applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         // No reports issued.
 
         var svc = CreateService(applier, registry, out _);
@@ -430,7 +430,7 @@ public class LatticeReplicationGrpcServiceTests
         applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         var floorA = new HybridLogicalClock { WallClockTicks = 500, Counter = 0 };
         await registry.ReportCursorAsync("tree-A", "applier:atomic-batch", HybridLogicalClock.Zero, blockedAtHlc: floorA);
 

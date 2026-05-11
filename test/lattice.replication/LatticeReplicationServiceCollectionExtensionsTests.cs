@@ -435,8 +435,8 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         builder.AddLatticeReplication(_ => { });
 
         var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<ILatticeReplicationCursorRegistry>();
-        Assert.That(registry, Is.InstanceOf<InMemoryReplicationCursorRegistry>());
+        var registry = provider.GetRequiredService<IWalCursorRegistry>();
+        Assert.That(registry, Is.InstanceOf<InMemoryWalCursorRegistry>());
     }
 
     [Test]
@@ -449,8 +449,8 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         builder.AddLatticeReplication(_ => { });
 
         var provider = services.BuildServiceProvider();
-        var first = provider.GetRequiredService<ILatticeReplicationCursorRegistry>();
-        var second = provider.GetRequiredService<ILatticeReplicationCursorRegistry>();
+        var first = provider.GetRequiredService<IWalCursorRegistry>();
+        var second = provider.GetRequiredService<IWalCursorRegistry>();
         Assert.That(first, Is.SameAs(second));
     }
 
@@ -458,15 +458,15 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     public void AddLatticeReplication_does_not_overwrite_pre_registered_cursor_registry()
     {
         var services = new ServiceCollection();
-        var custom = Substitute.For<ILatticeReplicationCursorRegistry>();
-        services.AddSingleton<ILatticeReplicationCursorRegistry>(custom);
+        var custom = Substitute.For<IWalCursorRegistry>();
+        services.AddSingleton<IWalCursorRegistry>(custom);
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
         builder.AddLatticeReplication(_ => { });
 
         var provider = services.BuildServiceProvider();
-        Assert.That(provider.GetRequiredService<ILatticeReplicationCursorRegistry>(), Is.SameAs(custom));
+        Assert.That(provider.GetRequiredService<IWalCursorRegistry>(), Is.SameAs(custom));
     }
 
     [Test]
@@ -479,8 +479,8 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         builder.AddLatticeReplication(_ => { });
 
         var provider = services.BuildServiceProvider();
-        var gc = provider.GetRequiredService<ILatticeReplicationGc>();
-        Assert.That(gc, Is.InstanceOf<LatticeReplicationGc>());
+        var gc = provider.GetRequiredService<ILatticeWalGc>();
+        Assert.That(gc, Is.InstanceOf<LatticeWalGc>());
     }
 
     [Test]
@@ -493,8 +493,8 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         builder.AddLatticeReplication(_ => { });
 
         var provider = services.BuildServiceProvider();
-        var first = provider.GetRequiredService<ILatticeReplicationGc>();
-        var second = provider.GetRequiredService<ILatticeReplicationGc>();
+        var first = provider.GetRequiredService<ILatticeWalGc>();
+        var second = provider.GetRequiredService<ILatticeWalGc>();
         Assert.That(first, Is.SameAs(second));
     }
 
@@ -502,15 +502,15 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     public void AddLatticeReplication_does_not_overwrite_pre_registered_gc()
     {
         var services = new ServiceCollection();
-        var custom = Substitute.For<ILatticeReplicationGc>();
-        services.AddSingleton<ILatticeReplicationGc>(custom);
+        var custom = Substitute.For<ILatticeWalGc>();
+        services.AddSingleton<ILatticeWalGc>(custom);
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
         builder.AddLatticeReplication(_ => { });
 
         var provider = services.BuildServiceProvider();
-        Assert.That(provider.GetRequiredService<ILatticeReplicationGc>(), Is.SameAs(custom));
+        Assert.That(provider.GetRequiredService<ILatticeWalGc>(), Is.SameAs(custom));
     }
 
     [Test]

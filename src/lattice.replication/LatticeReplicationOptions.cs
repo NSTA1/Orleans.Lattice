@@ -208,7 +208,7 @@ public class LatticeReplicationOptions
     /// <summary>
     /// Optional wall-clock hard ceiling for WAL retention. When set,
     /// the WAL garbage collector
-    /// (<see cref="ILatticeReplicationGc"/>) trims entries whose
+    /// (<see cref="ILatticeWalGc"/>) trims entries whose
     /// <see cref="HybridLogicalClock.WallClockTicks"/> is older than
     /// <c>now - WalRetention</c> regardless of consumer cursor
     /// position - bounding worst-case disk usage even when a
@@ -347,7 +347,7 @@ public class LatticeReplicationOptions
     /// <para>
     /// <strong>GC interaction.</strong> The WAL GC consumes the cursor
     /// reported via
-    /// <see cref="ILatticeReplicationCursorRegistry.ReportCursorAsync"/>;
+    /// <see cref="IWalCursorRegistry.ReportCursorAsync"/>;
     /// the shipper calls that strictly <em>after</em> the durable
     /// <c>WriteStateAsync</c> completes, so the trim frontier never
     /// exceeds the durably-recoverable cursor regardless of this
@@ -429,7 +429,7 @@ public class LatticeReplicationOptions
 
     /// <summary>
     /// Cadence at which the per-tree maintenance grain calls
-    /// <see cref="ILatticeReplicationGc.RunOnceAsync"/> to trim the
+    /// <see cref="ILatticeWalGc.RunOnceAsync"/> to trim the
     /// WAL by min-acked cursor. Defaults to
     /// <see cref="DefaultMaintenanceGcInterval"/>. Must be strictly
     /// greater than <see cref="TimeSpan.Zero"/>.

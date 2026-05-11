@@ -1,9 +1,9 @@
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
-/// Default in-memory <see cref="ILatticeReplicationCursorRegistry"/>
+/// Default in-memory <see cref="IWalCursorRegistry"/>
 /// implementation. Per-tree state is held in a dictionary protected by
 /// a single lock; concurrent reports against different trees are
 /// serialised through it but never block durable I/O so the lock is
@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Replication;
 /// predicate trims past it; until then,
 /// <see cref="GetMinCursorAsync"/> returns <see langword="null"/> and
 /// the GC trims only by the optional
-/// <see cref="LatticeReplicationOptions.WalRetention"/> hard ceiling.
+/// <see cref="LatticeOptions.WalRetention"/> hard ceiling.
 /// This matches the "fall-off-the-log" detection seam later phases use
 /// to trigger auto-bootstrap.
 /// </para>
@@ -28,7 +28,7 @@ namespace Orleans.Lattice.Replication;
 /// consumer reports or unregisters.
 /// </para>
 /// </summary>
-public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCursorRegistry
+public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, TreeState> _byTree = new(StringComparer.Ordinal);
@@ -179,24 +179,44 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
                     nextBlockedAtHlc = blockedAtHlc;
                 }
 
-                state.PerConsumer[consumerId] = new ReplicationCursorSnapshot(
+                // Decide whether the report changed anything observable
+                // BEFORE writing back so a no-op re-report (same cursor,
+                // no new vector, no blocked-floor delta) preserves the
+                // memoised causal-stable / blocked-floor caches. The
+                // alternative — invalidating unconditionally — paid an
+                // O(consumers) recompute on the next GC pass for every
+                // idempotent ping the leaf reporter coalesces.
+                var cursorAdvanced = advancedCursor > existing.Cursor;
+                var vectorReported = defensiveClone is not null;
+                var blockedFloorChanged = blockedAtHlcSpecified
+                    && !Nullable.Equals(nextBlockedAtHlc, existing.BlockedAtHlc);
+                var shouldInvalidate = cursorAdvanced || vectorReported || blockedFloorChanged;
+
+                state.PerConsumer[consumerId] = new WalCursorSnapshot(
                     consumerId,
                     advancedCursor,
                     nowTicks,
                     mergedVector,
                     nextBlockedAtHlc);
+
+                if (shouldInvalidate)
+                {
+                    state.InvalidateCaches();
+                }
             }
             else
             {
-                state.PerConsumer[consumerId] = new ReplicationCursorSnapshot(
+                state.PerConsumer[consumerId] = new WalCursorSnapshot(
                     consumerId,
                     cursor,
                     nowTicks,
                     defensiveClone,
                     blockedAtHlcSpecified ? blockedAtHlc : null);
-            }
 
-            state.InvalidateCaches();
+                // A new consumer always affects the meet — its absence
+                // was the previous floor. Invalidate unconditionally.
+                state.InvalidateCaches();
+            }
         }
 
         return Task.CompletedTask;
@@ -323,7 +343,7 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<ReplicationCursorSnapshot>> SnapshotAsync(
+    public Task<IReadOnlyList<WalCursorSnapshot>> SnapshotAsync(
         string treeName,
         CancellationToken cancellationToken = default)
     {
@@ -334,10 +354,10 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
         {
             if (!_byTree.TryGetValue(treeName, out var state) || state.PerConsumer.Count == 0)
             {
-                return Task.FromResult<IReadOnlyList<ReplicationCursorSnapshot>>(Array.Empty<ReplicationCursorSnapshot>());
+                return Task.FromResult<IReadOnlyList<WalCursorSnapshot>>(Array.Empty<WalCursorSnapshot>());
             }
 
-            var copy = new ReplicationCursorSnapshot[state.PerConsumer.Count];
+            var copy = new WalCursorSnapshot[state.PerConsumer.Count];
             var i = 0;
             foreach (var snapshot in state.PerConsumer.Values)
             {
@@ -345,7 +365,7 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
                 // the registry's internal copy.
                 copy[i++] = snapshot with { Vector = snapshot.Vector?.Clone() };
             }
-            return Task.FromResult<IReadOnlyList<ReplicationCursorSnapshot>>(copy);
+            return Task.FromResult<IReadOnlyList<WalCursorSnapshot>>(copy);
         }
     }
 
@@ -358,7 +378,7 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
     /// Consumers reporting HLC-only are skipped entirely. Returns
     /// <see langword="null"/> when no consumer has reported a vector.
     /// </summary>
-    private static VersionVector? ComputeCausalStable(IEnumerable<ReplicationCursorSnapshot> snapshots)
+    private static VersionVector? ComputeCausalStable(IEnumerable<WalCursorSnapshot> snapshots)
     {
         VersionVector? meet = null;
         var reportingCount = 0;
@@ -404,7 +424,7 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
     /// skipped. Returns <see langword="null"/> when no consumer
     /// currently reports a buffer pin.
     /// </summary>
-    private static HybridLogicalClock? ComputeBlockedFloor(IEnumerable<ReplicationCursorSnapshot> snapshots)
+    private static HybridLogicalClock? ComputeBlockedFloor(IEnumerable<WalCursorSnapshot> snapshots)
     {
         HybridLogicalClock? min = null;
         foreach (var snapshot in snapshots)
@@ -430,7 +450,7 @@ public sealed class InMemoryReplicationCursorRegistry : ILatticeReplicationCurso
     /// </summary>
     private sealed class TreeState
     {
-        public Dictionary<string, ReplicationCursorSnapshot> PerConsumer { get; } =
+        public Dictionary<string, WalCursorSnapshot> PerConsumer { get; } =
             new(StringComparer.Ordinal);
 
         public bool HasCachedCausalStable { get; set; }

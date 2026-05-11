@@ -50,6 +50,16 @@ public sealed class PublicApiContractClusterFixture
     /// </summary>
     public static readonly ConcurrentQueue<LatticeMutation> CapturedMutations = new();
 
+    /// <summary>
+    /// Captured silo-side <see cref="IServiceProvider"/> populated by
+    /// <see cref="SiloServiceProviderCapture"/> as soon as the silo's
+    /// DI graph is built. Tests that need to resolve silo-scoped
+    /// singletons (for example <see cref="IWalCursorRegistry"/>,
+    /// <see cref="ILatticeWalGc"/>) read this property after the
+    /// fixture has initialised. Reset on cluster restart.
+    /// </summary>
+    public static IServiceProvider? SiloServices { get; private set; }
+
     /// <summary>The currently-active test cluster.</summary>
     public TestCluster Cluster { get; private set; } = null!;
 
@@ -142,6 +152,16 @@ public sealed class PublicApiContractClusterFixture
             // and our shared instance becomes the resolved one.
             siloBuilder.AddWalStorage(_ => WalProvider);
 
+            // Single-cluster core WAL maintenance seams: the
+            // cursor registry pins the per-shard WAL GC against the
+            // slowest active consumer (leaf-as-materialiser by
+            // default) and the GC trims partitions through to that
+            // floor. Both are TryAddSingleton-idempotent so a host
+            // that opts into replication later picks up the
+            // replication-overlaid behaviour without conflict.
+            siloBuilder.AddWalCursorRegistry();
+            siloBuilder.AddLatticeWalGc();
+
             // Use a process-scope in-memory grain storage provider so
             // ShardRootGrain topology (RootNodeId, RootIsLeaf, internal-
             // node ids) survives RestartClusterAsync. The Orleans-shipped
@@ -162,6 +182,14 @@ public sealed class PublicApiContractClusterFixture
             // In-fixture mutation observer so observer tests do not need
             // their own dedicated cluster.
             siloBuilder.Services.AddSingleton<IMutationObserver, CapturingMutationObserver>();
+
+            // Captures the silo-side IServiceProvider into the static
+            // SiloServices property as soon as the DI graph is built,
+            // so tests can resolve silo singletons (IWalCursorRegistry,
+            // ILatticeWalGc, etc.) without rebuilding a parallel container.
+            siloBuilder.Services.AddSingleton<SiloServiceProviderCapture>();
+            siloBuilder.Services.AddHostedService(sp =>
+                sp.GetRequiredService<SiloServiceProviderCapture>());
         }
     }
 
@@ -185,5 +213,23 @@ public sealed class PublicApiContractClusterFixture
             CapturedMutations.Enqueue(mutation);
             return Task.CompletedTask;
         }
+    }
+
+    /// <summary>
+    /// Tiny hosted-service-shaped singleton whose only job is to copy
+    /// the silo-side <see cref="IServiceProvider"/> it was constructed
+    /// with into <see cref="SiloServices"/> as soon as the silo starts.
+    /// Lets tests resolve silo-scoped singletons through the fixture
+    /// without spinning up a parallel DI container.
+    /// </summary>
+    internal sealed class SiloServiceProviderCapture(IServiceProvider services) : Microsoft.Extensions.Hosting.IHostedService
+    {
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            SiloServices = services;
+            return Task.CompletedTask;
+        }
+
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

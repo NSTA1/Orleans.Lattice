@@ -320,7 +320,6 @@ public class LatticeOptions
     /// events.
     /// </summary>
     public bool PublishEvents { get; set; } = DefaultPublishEvents;
-
     /// <summary>Default value for <see cref="PublishEvents"/> (<c>false</c>).</summary>
     public const bool DefaultPublishEvents = false;
 
@@ -474,6 +473,24 @@ public class LatticeOptions
     /// host).
     /// </summary>
     public Func<string, IWalStorageProvider>? WalStorageProvider { get; set; }
+
+    /// <summary>
+    /// Optional wall-clock hard ceiling for WAL retention. When set, the
+    /// WAL garbage collector (<see cref="ILatticeWalGc"/>) trims entries
+    /// whose <see cref="Orleans.Lattice.Primitives.HybridLogicalClock.WallClockTicks"/>
+    /// is older than <c>now - WalRetention</c> regardless of consumer
+    /// cursor position — bounding worst-case disk usage even when a
+    /// registered consumer is hopelessly behind. The lagging consumer
+    /// then "falls off the log" on its next read, surfacing the gap to
+    /// the auto-bootstrap trigger (replication-side concern).
+    /// <para>
+    /// <see langword="null"/> (the default) disables the ceiling: the GC
+    /// predicate is purely <c>min(consumer cursors)</c>, and a lagging
+    /// consumer pins the WAL until it catches up. When set, the value
+    /// must be strictly greater than <see cref="TimeSpan.Zero"/>.
+    /// </para>
+    /// </summary>
+    public TimeSpan? WalRetention { get; set; }
 
     /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.

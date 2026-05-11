@@ -20,7 +20,7 @@ internal sealed class ReplicationMaintenanceGrain(
     IReminderRegistry reminderRegistry,
     ILogger<ReplicationMaintenanceGrain> logger,
     IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
-    ILatticeReplicationGc gc,
+    ILatticeWalGc gc,
     ILatticeFallOffLogDetector fallOffDetector,
     ILatticeWalIntrospection walIntrospection,
     IGrainFactory grainFactory,
@@ -31,7 +31,7 @@ internal sealed class ReplicationMaintenanceGrain(
 {
     private readonly IOptionsMonitor<LatticeReplicationOptions> _optionsMonitor =
         optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
-    private readonly ILatticeReplicationGc _gc =
+    private readonly ILatticeWalGc _gc =
         gc ?? throw new ArgumentNullException(nameof(gc));
     private readonly ILatticeFallOffLogDetector _fallOffDetector =
         fallOffDetector ?? throw new ArgumentNullException(nameof(fallOffDetector));
