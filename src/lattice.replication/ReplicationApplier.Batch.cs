@@ -142,7 +142,7 @@ internal sealed partial class ReplicationApplier
             for (var k = startInclusive; k < endExclusive; k++)
             {
                 var startTs = Stopwatch.GetTimestamp();
-                RecordApplyDuration(treeId, startTs, LatticeReplicationMetrics.OutcomeDedup);
+                RecordApplyDuration(treeId, origin!, startTs, LatticeReplicationMetrics.OutcomeDedup);
             }
             return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
         }
@@ -232,7 +232,7 @@ internal sealed partial class ReplicationApplier
                 // FIFO eviction.
                 foreach (var (deferredIdx, deferredStartTs) in dispatchApplies)
                 {
-                    RecordApplyDuration(treeId, deferredStartTs, LatticeReplicationMetrics.OutcomeFailure);
+                    RecordApplyDuration(treeId, origin!, deferredStartTs, LatticeReplicationMetrics.OutcomeFailure);
                     dedupeCache.Remove(entries[deferredIdx]);
                 }
                 throw;
@@ -246,7 +246,7 @@ internal sealed partial class ReplicationApplier
                 var deferredEntry = entries[deferredIdx];
                 RecordApplyLag(deferredEntry);
                 RecordFifoState(deferredEntry);
-                RecordApplyDuration(treeId, deferredStartTs, LatticeReplicationMetrics.OutcomeSuccess);
+                RecordApplyDuration(treeId, origin!, deferredStartTs, LatticeReplicationMetrics.OutcomeSuccess);
 
                 if (deferredEntry.Timestamp.CompareTo(runningHwm) > 0)
                 {
@@ -434,7 +434,7 @@ internal sealed partial class ReplicationApplier
                 {
                     foreach (var (deferredIdx, deferredStartTs) in pendingApplies)
                     {
-                        RecordApplyDuration(treeId, deferredStartTs, LatticeReplicationMetrics.OutcomeFailure);
+                        RecordApplyDuration(treeId, origin!, deferredStartTs, LatticeReplicationMetrics.OutcomeFailure);
                         dedupeCache.Remove(entries[deferredIdx]);
                     }
                     pendingItems = null;
@@ -446,7 +446,7 @@ internal sealed partial class ReplicationApplier
             {
                 if (!deferred)
                 {
-                    RecordApplyDuration(treeId, startTs, outcome);
+                    RecordApplyDuration(treeId, origin!, startTs, outcome);
                 }
             }
         }

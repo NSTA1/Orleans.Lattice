@@ -293,7 +293,7 @@ internal sealed partial class ReplicationApplier(
         }
         finally
         {
-            RecordApplyDuration(entry.TreeId, startTimestamp, outcome);
+            RecordApplyDuration(entry.TreeId, entry.OriginClusterId ?? string.Empty, startTimestamp, outcome);
         }
     }
 
@@ -302,10 +302,17 @@ internal sealed partial class ReplicationApplier(
     /// histogram. Skipped when <paramref name="treeId"/> is empty so a
     /// validation throw on the tree-id guard does not publish a histogram
     /// sample with an empty <c>tree</c> tag (which would be unusable for
-    /// per-tree alerting). The duration is read via
-    /// <see cref="Stopwatch.GetElapsedTime(long)"/>, which is allocation-free.
+    /// per-tree alerting). The <paramref name="peerOriginClusterId"/> is
+    /// emitted on the <see cref="LatticeReplicationMetrics.TagPeer"/>
+    /// dimension so per-source-peer break-down is honoured by the
+    /// instrument's documented schema; an empty value (e.g. when the
+    /// origin guard threw before any apply work happened) is emitted
+    /// verbatim rather than skipped so the histogram still records the
+    /// failure outcome and operators get a stable cardinality. The
+    /// duration is read via <see cref="Stopwatch.GetElapsedTime(long)"/>,
+    /// which is allocation-free.
     /// </summary>
-    private static void RecordApplyDuration(string treeId, long startTimestamp, string outcome)
+    private static void RecordApplyDuration(string treeId, string peerOriginClusterId, long startTimestamp, string outcome)
     {
         if (string.IsNullOrEmpty(treeId))
         {
@@ -316,6 +323,7 @@ internal sealed partial class ReplicationApplier(
         LatticeReplicationMetrics.ApplyDuration.Record(
             elapsedMs,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peerOriginClusterId ?? string.Empty),
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome));
     }
 
@@ -715,7 +723,8 @@ internal sealed partial class ReplicationApplier(
         var ms = deltaTicks / (double)TimeSpan.TicksPerMillisecond;
         LatticeReplicationMetrics.ApplyLag.Record(
             ms,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, entry.TreeId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, entry.TreeId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, entry.OriginClusterId ?? string.Empty));
     }
 
     /// <summary>

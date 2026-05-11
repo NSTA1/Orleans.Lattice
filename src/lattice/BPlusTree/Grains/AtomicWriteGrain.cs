@@ -50,19 +50,26 @@ internal sealed class AtomicWriteGrain(
     private const int MaxRetriesPerStep = 1;
 
     /// <summary>
-    /// Maximum attempt budget for grain calls that may face a stale-routing
-    /// throw during a saga that overlaps a topology change (shard split,
-    /// online resize, or reshard). Four attempts cover the worst observed
-    /// CI-fixture scenario: a reshard targeting 8 shards from 4 produces up
-    /// to four sequential ShardMap/alias swaps a single saga can race
-    /// through end-to-end, and each swap retires one stale-routing throw.
-    /// A single-shot retry was insufficient — it allowed
-    /// <c>StaleShardRoutingException</c> from a second consecutive split
-    /// commit (or <c>StaleTreeRoutingException</c> from an alias swap that
-    /// landed between the prepare and the retry) to escape the saga and
-    /// fail the chaos test.
+    /// Wall-clock budget for stale-routing retries on grain calls that
+    /// face a topology change (shard split, online resize, or reshard)
+    /// mid-saga. The retry loops in <c>PrepareAsync</c> and
+    /// <c>MarkOneShardAsync</c> refresh routing once per
+    /// <see cref="StaleShardRoutingException"/> /
+    /// <see cref="StaleTreeRoutingException"/> throw and re-issue the
+    /// call against the freshly-resolved owner until success or the
+    /// deadline elapses. Bounded by wall-clock rather than attempt count
+    /// because the worst-case storm under a 4-to-8 reshard or an
+    /// online-resize alias swap can generate more sequential map/alias
+    /// updates than any reasonable fixed budget — an earlier
+    /// 4-attempt budget surfaced
+    /// <c>Stale*RoutingException</c> from
+    /// <c>ReshardTopologyTests.Continuous_reader_observes_zero_or_all_keys_through_mid_saga_reshard</c>
+    /// and <c>ResizeTopologyTests.Continuous_reader_observes_zero_or_all_keys_through_mid_saga_resize</c>
+    /// under CI load. The 60-second ceiling matches the chaos-test
+    /// driver timeout so a runaway topology storm still terminates with
+    /// the original stale-routing throw rather than hanging the saga.
     /// </summary>
-    private const int MaxStaleRoutingRetries = 4;
+    private static readonly TimeSpan StaleRoutingRetryBudget = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// Composite grain key (<c>{treeId}/{operationId}</c>); used for logging.
@@ -340,33 +347,40 @@ internal sealed class AtomicWriteGrain(
         foreach (var entry in entries)
         {
             LwwEntry? raw = null;
-            // Bounded retry for sequential topology changes (split commit
-            // followed by another split commit, or an alias swap that
-            // lands between attempts during an online reshard / resize).
-            // Refreshes routing once per stale-routing throw via the
-            // public ILattice.GetRoutingAsync hook before re-issuing the
-            // direct IShardRootGrain call. A single-shot retry was
-            // insufficient under reshard storms — see
+            // Deadline-bounded retry for sequential topology changes (split
+            // commit followed by another split commit, or an alias swap
+            // that lands between attempts during an online reshard /
+            // resize). Refreshes routing once per stale-routing throw via
+            // the public ILattice.GetRoutingAsync hook before re-issuing
+            // the direct IShardRootGrain call. A bounded attempt-count
+            // budget was insufficient under reshard storms — see
             // ReshardTopologyTests.Continuous_reader_observes_zero_or_all
-            // _keys_through_mid_saga_reshard which exercises this path
-            // with a 4-to-8 reshard.
-            for (int attempt = 0; attempt < MaxStaleRoutingRetries; attempt++)
+            // _keys_through_mid_saga_reshard and the matching resize test
+            // which exercise this path under a 4-to-8 reshard / online
+            // resize alias swap. The catch blocks unconditionally fire so
+            // the original stale-routing throw surfaces to the caller once
+            // the wall-clock budget elapses; a when-filter on the catch
+            // could race against the loop condition and exit silently.
+            var deadline = DateTime.UtcNow + StaleRoutingRetryBudget;
+            while (true)
             {
                 try
                 {
                     raw = await GetShardForKey(routing, entry.Key).GetRawEntryAsync(entry.Key);
                     break;
                 }
-                catch (StaleShardRoutingException) when (attempt + 1 < MaxStaleRoutingRetries)
+                catch (StaleShardRoutingException)
                 {
                     // Adaptive shard split has remapped virtual slots; refresh
-                    // routing and retry.
+                    // routing and retry until the deadline elapses.
+                    if (DateTime.UtcNow >= deadline) throw;
                     routing = await lattice.GetRoutingAsync();
                 }
-                catch (StaleTreeRoutingException) when (attempt + 1 < MaxStaleRoutingRetries)
+                catch (StaleTreeRoutingException)
                 {
                     // Tree alias was swapped mid-saga (online resize / reshard);
                     // refresh routing and retry against the new physical tree.
+                    if (DateTime.UtcNow >= deadline) throw;
                     routing = await lattice.GetRoutingAsync();
                 }
             }
@@ -473,6 +487,48 @@ internal sealed class AtomicWriteGrain(
             state.State.TouchedShards = sorted;
             await state.WriteStateAsync();
         }
+        else if (state.State.Entries.Count > 0)
+        {
+            // Routing-drift correction: TouchedShards was captured from
+            // the routing snapshot at the start of PrepareAsync, but
+            // the per-entry SetAsync calls in ExecutePhaseAsync route
+            // through the public ILattice surface which fetches a
+            // fresh routing snapshot per call. If the shard map
+            // changed between prepare and execute (an online reshard
+            // / resize / shard-split landing mid-saga, which is
+            // exactly what the chaos suite exercises), some entries'
+            // prepared writes may have landed on a *different*
+            // physical shard than the one captured in TouchedShards.
+            // The terminal broadcast must reach EVERY shard that
+            // could hold a pending-tx bucket for this saga, otherwise
+            // those buckets are orphaned forever (or until the replay
+            // coordinator ages them out) and a reader routed to that
+            // shard surfaces the destination's pre-saga value
+            // indefinitely. Fix: re-resolve every entry against a
+            // fresh routing snapshot and union the result into
+            // TouchedShards. This is purely additive — old captures
+            // are preserved (for sagas whose prepare landed on the
+            // OLD owner before a migration moved the slot, the OLD
+            // owner is in TouchedShards and ForwardSplitTerminalAsync
+            // mirrors the terminal forward to the migration's
+            // destination via state.MovedAwaySlots / SplitInProgress).
+            var routing = await lattice.GetRoutingAsync();
+            physicalTreeId = routing.PhysicalTreeId;
+            HashSet<int>? union = null;
+            foreach (var entry in state.State.Entries)
+            {
+                var owner = routing.Map.Resolve(entry.Key);
+                if (state.State.TouchedShards.Contains(owner)) continue;
+                (union ??= new HashSet<int>(state.State.TouchedShards)).Add(owner);
+            }
+            if (union is not null)
+            {
+                var sorted = new List<int>(union);
+                sorted.Sort();
+                state.State.TouchedShards = sorted;
+                await state.WriteStateAsync();
+            }
+        }
 
         if (state.State.TouchedShards.Count == 0)
         {
@@ -503,22 +559,29 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
-    /// Per-shard terminal append with bounded routing-refresh retry.
-    /// Encapsulates the stale-routing recovery so the
+    /// Per-shard terminal append with deadline-bounded routing-refresh
+    /// retry. Encapsulates the stale-routing recovery so the
     /// <see cref="BroadcastTerminalsAsync(bool)"/> fan-out body stays
     /// linear. Catches both <see cref="StaleShardRoutingException"/>
     /// (a slot moved between prepare and broadcast) and
     /// <see cref="StaleTreeRoutingException"/> (the tree's physical
     /// alias was swapped, e.g. online resize) and retries the call
-    /// against a freshly-resolved owner up to
-    /// <see cref="MaxStaleRoutingRetries"/> times. A single-shot retry
-    /// was insufficient under reshard storms where two or more
-    /// sequential ShardMap swaps can land between the prepare and
-    /// broadcast windows.
+    /// against a freshly-resolved owner until success or
+    /// <see cref="StaleRoutingRetryBudget"/> elapses. A bounded-attempt
+    /// retry was insufficient under reshard storms where many sequential
+    /// ShardMap swaps can land between the prepare and broadcast
+    /// windows; the wall-clock budget absorbs any reasonable storm and
+    /// still terminates with the original stale-routing throw if the
+    /// topology never quiesces.
     /// </summary>
     private async Task MarkOneShardAsync(string physicalTreeId, int shardIndex, Guid transactionId, bool committed)
     {
-        for (int attempt = 0; attempt < MaxStaleRoutingRetries; attempt++)
+        // The catch blocks unconditionally fire so the original
+        // stale-routing throw surfaces to the caller once the wall-clock
+        // budget elapses; a when-filter on the catch could race against
+        // the loop condition and exit silently.
+        var deadline = DateTime.UtcNow + StaleRoutingRetryBudget;
+        while (true)
         {
             try
             {
@@ -526,19 +589,21 @@ internal sealed class AtomicWriteGrain(
                 await shard.AppendTxTerminalAsync(transactionId, committed);
                 return;
             }
-            catch (StaleShardRoutingException) when (attempt + 1 < MaxStaleRoutingRetries)
+            catch (StaleShardRoutingException)
             {
                 // Slot ownership moved (adaptive shard split). Refresh
                 // routing under the same logical tree id and retry against
                 // the new owner; AppendTxTerminalAsync is shard-keyed so
                 // the refreshed call may resolve to a different physical
                 // tree id under online resize.
+                if (DateTime.UtcNow >= deadline) throw;
             }
-            catch (StaleTreeRoutingException) when (attempt + 1 < MaxStaleRoutingRetries)
+            catch (StaleTreeRoutingException)
             {
                 // Tree alias swapped mid-saga (online resize). Refresh
-                // routing under the same logical tree id and retry once
-                // against the new physical tree.
+                // routing under the same logical tree id and retry against
+                // the new physical tree.
+                if (DateTime.UtcNow >= deadline) throw;
             }
 
             var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);

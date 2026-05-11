@@ -219,180 +219,61 @@ public class LatticeReplicationMetricsTests
     }
 
     [Test]
-    public void Wal_entries_appended_counter_has_expected_name()
+    public void Apply_lag_histogram_records_with_tree_and_peer_tags()
     {
-        Assert.Multiple(() =>
-        {
-            Assert.That(LatticeReplicationMetrics.WalEntriesAppended.Name,
-                Is.EqualTo("orleans.lattice.replication.wal.entries_appended"));
-            Assert.That(LatticeReplicationMetrics.WalEntriesAppendedName,
-                Is.EqualTo(LatticeReplicationMetrics.WalEntriesAppended.Name));
-        });
-    }
-
-    [Test]
-    public void Wal_entries_appended_counter_records_with_tree_tag()
-    {
-        using var collector = new MeterCollector<long>(
-            LatticeReplicationMetrics.MeterName,
-            "orleans.lattice.replication.wal.entries_appended");
-
-        LatticeReplicationMetrics.WalEntriesAppended.Add(1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"));
-
-        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
-        var only = collector.Measurements.Single();
-        Assert.That(only.Value, Is.EqualTo(1L));
-        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
-            t.Key == "tree" && (string?)t.Value == "t"));
-    }
-
-    [Test]
-    public void Wal_entries_shipped_counter_has_expected_name()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(LatticeReplicationMetrics.WalEntriesShipped.Name,
-                Is.EqualTo("orleans.lattice.replication.wal.entries_shipped"));
-            Assert.That(LatticeReplicationMetrics.WalEntriesShippedName,
-                Is.EqualTo(LatticeReplicationMetrics.WalEntriesShipped.Name));
-        });
-    }
-
-    [Test]
-    public void Wal_entries_shipped_counter_records_with_tree_and_peer_tags()
-    {
-        using var collector = new MeterCollector<long>(
-            LatticeReplicationMetrics.MeterName,
-            "orleans.lattice.replication.wal.entries_shipped");
-
-        LatticeReplicationMetrics.WalEntriesShipped.Add(5,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "p"));
-
-        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
-        var only = collector.Measurements.Single();
-        Assert.That(only.Value, Is.EqualTo(5L));
-        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
-            t.Key == "tree" && (string?)t.Value == "t"));
-        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
-            t.Key == "peer" && (string?)t.Value == "p"));
-    }
-
-    [Test]
-    public void Causal_apply_instruments_have_expected_names_and_units()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(LatticeReplicationMetrics.ApplyBufferedEntries.Name,
-                Is.EqualTo("orleans.lattice.replication.apply.buffered_entries"));
-            Assert.That(LatticeReplicationMetrics.ApplyBufferedEntriesName,
-                Is.EqualTo(LatticeReplicationMetrics.ApplyBufferedEntries.Name));
-
-            Assert.That(LatticeReplicationMetrics.ApplyBufferBytes.Name,
-                Is.EqualTo("orleans.lattice.replication.apply.buffer_bytes"));
-            Assert.That(LatticeReplicationMetrics.ApplyBufferBytes.Unit, Is.EqualTo("By"));
-            Assert.That(LatticeReplicationMetrics.ApplyBufferBytesName,
-                Is.EqualTo(LatticeReplicationMetrics.ApplyBufferBytes.Name));
-
-            Assert.That(LatticeReplicationMetrics.ApplyDependencyWaitMs.Name,
-                Is.EqualTo("orleans.lattice.replication.apply.dependency_wait_ms"));
-            // The instrument name already encodes the unit ("dependency_wait_ms").
-            // Leaving `unit:` unset prevents the OTel→Prometheus exporter from
-            // appending a redundant `_milliseconds` suffix to the wire name.
-            Assert.That(LatticeReplicationMetrics.ApplyDependencyWaitMs.Unit, Is.Null);
-            Assert.That(LatticeReplicationMetrics.ApplyDependencyWaitMsName,
-                Is.EqualTo(LatticeReplicationMetrics.ApplyDependencyWaitMs.Name));
-
-            Assert.That(LatticeReplicationMetrics.ApplyCausalViolationsBlocked.Name,
-                Is.EqualTo("orleans.lattice.replication.apply.causal_violations_blocked"));
-            Assert.That(LatticeReplicationMetrics.ApplyCausalViolationsBlockedName,
-                Is.EqualTo(LatticeReplicationMetrics.ApplyCausalViolationsBlocked.Name));
-
-            Assert.That(LatticeReplicationMetrics.TagShard, Is.EqualTo("shard"));
-        });
-    }
-
-    [Test]
-    public void Apply_buffered_entries_records_with_tree_and_shard_tags()
-    {
-        using var collector = new MeterCollector<long>(
-            LatticeReplicationMetrics.MeterName,
-            LatticeReplicationMetrics.ApplyBufferedEntriesName);
-
-        LatticeReplicationMetrics.ApplyBufferedEntries.Add(1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagShard, "0"));
-
-        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
-        var only = collector.Measurements.Single();
-        Assert.That(only.Value, Is.EqualTo(1L));
-        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
-            t.Key == "tree" && (string?)t.Value == "t"));
-        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
-            t.Key == "shard" && (string?)t.Value == "0"));
-    }
-
-    [Test]
-    public void Apply_buffer_bytes_records_with_tree_and_shard_tags()
-    {
-        using var collector = new MeterCollector<long>(
-            LatticeReplicationMetrics.MeterName,
-            LatticeReplicationMetrics.ApplyBufferBytesName);
-
-        LatticeReplicationMetrics.ApplyBufferBytes.Add(256,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagShard, "0"));
-
-        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
-        Assert.That(collector.Measurements.Single().Value, Is.EqualTo(256L));
-    }
-
-    [Test]
-    public void Apply_dependency_wait_ms_records_with_tree_tag()
-    {
+        // The canonical applier emits both `tree` and `peer` (the
+        // entry's OriginClusterId, identifying the authoring cluster).
+        // The instrument-level test pins the schema so a future caller
+        // dropping the `peer` argument fails here before any
+        // integration test exercises the call site.
         using var collector = new MeterCollector<double>(
             LatticeReplicationMetrics.MeterName,
-            LatticeReplicationMetrics.ApplyDependencyWaitMsName);
+            "orleans.lattice.replication.apply.lag");
 
-        LatticeReplicationMetrics.ApplyDependencyWaitMs.Record(12.5,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-z"));
-
-        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
-        var only = collector.Measurements.Single();
-        Assert.That(only.Value, Is.EqualTo(12.5));
-        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
-            t.Key == "tree" && (string?)t.Value == "tree-z"));
-    }
-
-    [Test]
-    public void Apply_causal_violations_blocked_records_with_tree_tag()
-    {
-        using var collector = new MeterCollector<long>(
-            LatticeReplicationMetrics.MeterName,
-            LatticeReplicationMetrics.ApplyCausalViolationsBlockedName);
-
-        LatticeReplicationMetrics.ApplyCausalViolationsBlocked.Add(1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"));
+        LatticeReplicationMetrics.ApplyLag.Record(7.5,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-z"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "site-x"));
 
         Assert.That(collector.Measurements, Has.Count.EqualTo(1));
         var only = collector.Measurements.Single();
-        Assert.That(only.Value, Is.EqualTo(1L));
-        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
-            t.Key == "tree" && (string?)t.Value == "t"));
-    }
-
-    [Test]
-    public void Apply_fifo_violations_counter_has_expected_name_and_unit()
-    {
         Assert.Multiple(() =>
         {
-            Assert.That(LatticeReplicationMetrics.ApplyFifoViolations.Name,
-                Is.EqualTo("orleans.lattice.replication.apply.fifo_violations"));
-            Assert.That(LatticeReplicationMetrics.ApplyFifoViolations.Unit, Is.EqualTo("{entry}"));
-            Assert.That(LatticeReplicationMetrics.ApplyFifoViolationsName,
-                Is.EqualTo(LatticeReplicationMetrics.ApplyFifoViolations.Name));
-            Assert.That(LatticeReplicationMetrics.TagOrigin, Is.EqualTo("origin"));
+            Assert.That(only.Value, Is.EqualTo(7.5));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "tree" && (string?)t.Value == "tree-z"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "peer" && (string?)t.Value == "site-x"));
+        });
+    }
+
+    [Test]
+    public void Apply_duration_histogram_records_with_tree_peer_and_outcome_tags()
+    {
+        // Pins the documented `tree`+`peer`+`outcome` schema on the
+        // apply-duration histogram. Without all three tags being
+        // emitted, dashboards that filter by `peer="..."` silently
+        // drop samples. The bare three-tag form below mirrors the
+        // shape every call site in ReplicationApplier now uses.
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.apply.duration");
+
+        LatticeReplicationMetrics.ApplyDuration.Record(11.25,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-z"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "site-x"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.OutcomeSuccess));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.EqualTo(11.25));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "tree" && (string?)t.Value == "tree-z"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "peer" && (string?)t.Value == "site-x"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "outcome" && (string?)t.Value == LatticeReplicationMetrics.OutcomeSuccess));
         });
     }
 

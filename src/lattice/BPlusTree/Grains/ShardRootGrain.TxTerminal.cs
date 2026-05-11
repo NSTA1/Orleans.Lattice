@@ -328,44 +328,89 @@ internal sealed partial class ShardRootGrain
 
     /// <summary>
     /// Mirrors <see cref="AppendTxTerminalAsync(Guid, bool, CancellationToken)"/>
-    /// onto the destination shard of an in-flight shard split, when one
-    /// is active and this shard is the source. The destination shard
+    /// onto the destination shard(s) of any shard split this shard has
+    /// participated in as the source — both an in-flight split (read
+    /// from <see cref="ShardRootState.SplitInProgress"/>) and every
+    /// completed split whose moved-away slots still record the
+    /// destination shard index in
+    /// <see cref="ShardRootState.MovedAwaySlots"/>. The destination shard
     /// independently consumes its own per-saga affected-leaves map
     /// (populated by <see cref="ForwardLocalWriteToShadowIfNeededAsync"/>'s
     /// prepared-write branch via <see cref="SetAsync"/>), appends its
     /// own per-shard WAL terminal entry, and fans the terminal RPC out
     /// to its own affected-leaves subset. Idempotent: a terminal that
-    /// arrives via both this path and a subsequent stale-routing retry
-    /// from <see cref="AtomicWriteGrain"/> deduplicates inside each
-    /// leaf's <c>_recentlyTerminal</c> set. No-op when this shard has
-    /// no active split, when the split is past the swap-and-reject
-    /// boundary, or when the destination shard equals this shard
-    /// (a defensive check against pathological configuration).
+    /// arrives via this path and a subsequent stale-routing retry from
+    /// <see cref="AtomicWriteGrain"/> deduplicates inside each leaf's
+    /// <c>_recentlyTerminal</c> set. No-op when this shard has never
+    /// shadow-forwarded any prepared writes (no split state recorded).
+    /// <para>
+    /// <b>Why both windows are required.</b> A saga whose prepare runs
+    /// during <see cref="ShardSplitPhase.BeginShadowWrite"/> /
+    /// <see cref="ShardSplitPhase.Drain"/> / <see cref="ShardSplitPhase.Swap"/>
+    /// shadow-forwards every prepared write to the destination shard,
+    /// where the destination's leaf buckets the value into its own
+    /// <c>_pendingTx[txid]</c>. If the saga's terminal broadcast then
+    /// lands on this source shard *after* the split has progressed to
+    /// <see cref="ShardSplitPhase.Reject"/> — or after the split has
+    /// fully completed and <see cref="ShardRootState.SplitInProgress"/>
+    /// has been cleared — the destination's pending bucket is orphaned
+    /// forever (or until aged out by the replay coordinator), and a
+    /// reader routed to the destination after the swap surfaces the
+    /// destination's pre-saga value indefinitely. Forwarding the terminal
+    /// to every destination this shard has ever migrated slots to
+    /// closes that window: each destination either flushes a real
+    /// pending bucket into its visible projection (committed=true) or
+    /// drops it (committed=false), and destinations that hold no
+    /// pending bucket for this saga simply no-op via their per-leaf
+    /// <c>_recentlyTerminal</c> dedup.
+    /// </para>
     /// </summary>
     private Task ForwardSplitTerminalAsync(Guid transactionId, bool committed, CancellationToken cancellationToken)
     {
+        // Collect distinct destination shard indices: the in-flight
+        // split's target (if any) plus every distinct target recorded
+        // in MovedAwaySlots (which persists past SplitInProgress = null
+        // for the lifetime of this shard's activation, so completed
+        // splits whose terminal arrives after Reject / Complete are
+        // still covered).
+        HashSet<int>? targets = null;
+
         var sip = state.State.SplitInProgress;
-        if (sip is null)
-            return Task.CompletedTask;
-        // Mirror the same active-window predicate as
-        // ForwardLocalWriteToShadowIfNeededAsync: BeginShadowWrite,
-        // Drain, and Swap accept terminal forwards because the
-        // destination's pending-tx buckets are populated during those
-        // phases. Reject and Complete are post-swap — by then the
-        // destination is the authoritative owner and AtomicWriteGrain's
-        // stale-routing retry loop has re-routed the terminal to
-        // the destination's own AppendTxTerminalAsync via the public
-        // ILattice path, making the source-side forward redundant.
-        if (sip.Phase != ShardSplitPhase.BeginShadowWrite
-            && sip.Phase != ShardSplitPhase.Drain
-            && sip.Phase != ShardSplitPhase.Swap)
+        if (sip is not null && sip.ShadowTargetShardIndex != MyShardIndex)
         {
-            return Task.CompletedTask;
+            targets = new HashSet<int> { sip.ShadowTargetShardIndex };
         }
-        if (sip.ShadowTargetShardIndex == MyShardIndex)
+
+        var moved = state.State.MovedAwaySlots;
+        if (moved.Count > 0)
+        {
+            foreach (var target in moved.Values)
+            {
+                if (target == MyShardIndex) continue;
+                targets ??= new HashSet<int>();
+                targets.Add(target);
+            }
+        }
+
+        if (targets is null || targets.Count == 0)
             return Task.CompletedTask;
 
-        var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{sip.ShadowTargetShardIndex}");
-        return target.AppendTxTerminalAsync(transactionId, committed, cancellationToken);
+        if (targets.Count == 1)
+        {
+            // Fast path: single destination (the common case — one
+            // split per shard at a time, or one completed split that
+            // moved every migrated slot to the same target).
+            var only = targets.First();
+            var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{only}");
+            return target.AppendTxTerminalAsync(transactionId, committed, cancellationToken);
+        }
+
+        var tasks = new List<Task>(targets.Count);
+        foreach (var idx in targets)
+        {
+            var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{idx}");
+            tasks.Add(target.AppendTxTerminalAsync(transactionId, committed, cancellationToken));
+        }
+        return Task.WhenAll(tasks);
     }
 }

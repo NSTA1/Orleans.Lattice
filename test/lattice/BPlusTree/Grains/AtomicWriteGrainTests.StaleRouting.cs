@@ -48,8 +48,9 @@ public partial class AtomicWriteGrainTests
         Assert.That(attempts, Is.EqualTo(3),
             "PrepareAsync must retry on each StaleShardRoutingException and succeed on the third attempt.");
         // Routing was refreshed once per stale-routing throw on top of
-        // the initial fetch — three calls in total.
-        await lattice.Received(3).GetRoutingAsync(Arg.Any<CancellationToken>());
+        // the initial fetch (3 prepare-side calls) plus once by
+        // BroadcastTerminalsAsync for its drift-correction pass.
+        await lattice.Received(4).GetRoutingAsync(Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -76,7 +77,10 @@ public partial class AtomicWriteGrainTests
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
 
         Assert.That(attempts, Is.EqualTo(2));
-        await lattice.Received(2).GetRoutingAsync(Arg.Any<CancellationToken>());
+        // Prepare-side: initial fetch + one refresh for the stale-tree
+        // throw. Plus one for BroadcastTerminalsAsync's drift-correction
+        // pass. Three calls in total.
+        await lattice.Received(3).GetRoutingAsync(Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -121,7 +125,10 @@ public partial class AtomicWriteGrainTests
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
 
         Assert.That(attempts, Is.EqualTo(3));
-        await lattice.Received(3).GetRoutingAsync(Arg.Any<CancellationToken>());
+        // Prepare-side: initial fetch + one refresh per stale-routing
+        // throw (mixed shard / tree). Plus one for
+        // BroadcastTerminalsAsync's drift-correction pass.
+        await lattice.Received(4).GetRoutingAsync(Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -182,5 +189,87 @@ public partial class AtomicWriteGrainTests
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
 
         Assert.That(attempts, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task PrepareAsync_absorbs_many_sequential_stale_routing_throws_within_deadline()
+    {
+        // The retry budget is wall-clock (60 seconds), not attempt-count
+        // bounded. A reshard storm under CI load can produce many
+        // sequential ShardMap / alias swaps under a single in-flight
+        // saga, each retiring one stale-routing throw. The pre-fix
+        // 4-attempt budget surfaced
+        // StaleShardRoutingException / StaleTreeRoutingException out of
+        // the saga under that storm; the deadline-bounded loop absorbs
+        // an unbounded number of swaps so long as forward progress is
+        // made. Verify by replaying 16 sequential stale-routing throws
+        // (a mix of both exception kinds, modelling a 4-to-8 reshard
+        // followed by an alias swap) and asserting all are absorbed.
+        var (grain, _, _, lattice, shard) = CreateGrain();
+        var attempts = 0;
+        const int Storm = 16;
+        shard.GetRawEntryAsync(Arg.Any<string>())
+            .Returns(_ =>
+            {
+                if (attempts < Storm)
+                {
+                    attempts++;
+                    if ((attempts & 1) == 1)
+                        throw new StaleShardRoutingException(0, 1, 0);
+                    throw new StaleTreeRoutingException(
+                        logicalTreeId: TreeId,
+                        stalePhysicalTreeId: TreeId,
+                        destinationPhysicalTreeId: $"{TreeId}/v{attempts}");
+                }
+                attempts++;
+                return Task.FromResult<LwwEntry?>(null);
+            });
+
+        await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
+
+        Assert.That(attempts, Is.EqualTo(Storm + 1),
+            "Deadline-bounded retry must absorb every sequential stale-routing throw and succeed on the next attempt.");
+        // Routing was refreshed once per stale-routing throw on top of
+        // the initial fetch (Storm + 1 prepare-side calls), plus one
+        // by BroadcastTerminalsAsync's drift-correction pass.
+        await lattice.Received(Storm + 2).GetRoutingAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task BroadcastTerminals_absorbs_many_sequential_stale_routing_throws_within_deadline()
+    {
+        // Same invariant as the prepare-side regression test, applied
+        // to MarkOneShardAsync's retry loop. The chaos-test failure on
+        // ResizeTopologyTests.Continuous_reader_observes_zero_or_all
+        // _keys_through_mid_saga_resize was a StaleTreeRoutingException
+        // escape from the saga's terminal broadcast; verify the
+        // deadline-bounded loop absorbs an unbounded number of alias
+        // swaps and split commits between prepare and broadcast.
+        var (grain, _, _, _, shard) = CreateGrain();
+        shard.GetRawEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<LwwEntry?>(null));
+
+        var attempts = 0;
+        const int Storm = 12;
+        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                if (attempts < Storm)
+                {
+                    attempts++;
+                    if ((attempts & 1) == 1)
+                        throw new StaleShardRoutingException(0, 1, 0);
+                    throw new StaleTreeRoutingException(
+                        logicalTreeId: TreeId,
+                        stalePhysicalTreeId: TreeId,
+                        destinationPhysicalTreeId: $"{TreeId}/v{attempts}");
+                }
+                attempts++;
+                return Task.CompletedTask;
+            });
+
+        await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
+
+        Assert.That(attempts, Is.EqualTo(Storm + 1),
+            "Deadline-bounded retry on MarkOneShardAsync must absorb every sequential stale-routing throw.");
     }
 }

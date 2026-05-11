@@ -218,11 +218,14 @@ public static class LatticeReplicationMetrics
     /// a negative sample). Recorded once per successfully applied point
     /// operation (<see cref="MutationKind.Set"/> / <see cref="MutationKind.Delete"/>);
     /// range deletes carry <see cref="HybridLogicalClock.Zero"/> by design
-    /// and do not contribute. Tagged by <see cref="TagTree"/>.
+    /// and do not contribute. Tagged by <see cref="TagTree"/> and
+    /// <see cref="TagPeer"/> (the entry's <see cref="WalRecord.OriginClusterId"/>
+    /// , which under transitive replication may differ from the immediate
+    /// transport hop).
     /// </summary>
     public static readonly Histogram<double> ApplyLag =
         Meter.CreateHistogram<double>("orleans.lattice.replication.apply.lag", unit: "ms",
-            description: "Receiver-side replication lag at successful apply, tagged by tree.");
+            description: "Receiver-side replication lag at successful apply, tagged by tree and peer.");
 
     // --- Throughput counters (replog growth vs. ship rate) ----------------------
 

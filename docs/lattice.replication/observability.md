@@ -15,7 +15,9 @@
 |---|---|
 | Name | `orleans.lattice.replication.apply.lag` |
 | Unit | `ms` |
-| Tags | `tree` |
+| Tags | `tree`, `peer` |
+
+The `peer` tag carries the entry's `OriginClusterId` — i.e. the **authoring** cluster of the replicated mutation, not the immediate transport hop the receiver pulled it from. Under transitive replication (A &#8594; B &#8594; C) an entry shipped from B to C still records `peer=A`, mirroring the producer-side `WalRecord.OriginClusterId` slot. Operators filtering inbound apply lag by the source-of-truth replica use this tag value directly; queries that need transport-hop attribution join the `tree` + `peer` pair against the cluster's known replication topology.
 
 The histogram is intentionally not recorded for:
 
@@ -34,7 +36,9 @@ A receiver that operates entirely under HWM dedupe (i.e. every entry it sees has
 |---|---|
 | Name | `orleans.lattice.replication.apply.duration` |
 | Unit | `ms` |
-| Tags | `tree`, `outcome` |
+| Tags | `tree`, `peer`, `outcome` |
+
+The `peer` tag carries the same value as `apply.lag`'s `peer` tag — the entry's `OriginClusterId`, identifying the authoring cluster rather than the transport hop. The batch path's `ApplyOriginRunAsync` groups entries into contiguous same-`(treeId, originClusterId)` runs and records each per-entry duration with the run's shared `peer` value, so multi-origin batches surface as one `peer` per run rather than collapsing into a single dominant value.
 
 The `outcome` tag partitions the histogram into four mutually-exclusive buckets:
 
