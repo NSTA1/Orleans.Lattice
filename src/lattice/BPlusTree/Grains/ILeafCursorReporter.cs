@@ -12,7 +12,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// on <c>Orleans.Lattice.Replication</c> (the dependency direction is the
 /// other way around). This interface is the bridge: the replication
 /// package registers an adapter that forwards to its
-/// <c>ILatticeReplicationCursorRegistry</c>, so a host that has not added
+/// <c>IWalCursorRegistry</c>, so a host that has not added
 /// replication leaves the registration absent and the leaf grain becomes
 /// a no-op on the cursor-report path. The implementation is resolved
 /// from <see cref="IGrainContext.ActivationServices"/> via

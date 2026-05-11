@@ -1,7 +1,7 @@
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Registry of WAL-consumer cursor positions used by the WAL garbage
@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Replication;
 /// the per-shard write-ahead log (an outbound replication ship loop,
 /// a future local materialiser, an in-process bridge, ...) reports the
 /// highest <see cref="HybridLogicalClock"/> it has fully consumed for
-/// a given <c>treeName</c>; the <see cref="ILatticeReplicationGc"/>
-/// then trims entries with <see cref="WalRecord.Timestamp"/> at or
+/// a given <c>treeName</c>; the <see cref="ILatticeWalGc"/>
+/// then trims entries with <see cref="LatticeMutation.Timestamp"/> at or
 /// below the minimum reported cursor.
 /// <para>
 /// The registry is consumer-neutral: a <c>consumerId</c> may be a
@@ -22,11 +22,11 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// <para>
 /// Implementations must be safe for concurrent use; the default
-/// <see cref="InMemoryReplicationCursorRegistry"/> guards its
+/// <see cref="InMemoryWalCursorRegistry"/> guards its
 /// per-tree maps under a single lock.
 /// </para>
 /// </summary>
-public interface ILatticeReplicationCursorRegistry
+public interface IWalCursorRegistry
 {
     /// <summary>
     /// Reports the current cursor position for <paramref name="consumerId"/>
@@ -56,7 +56,7 @@ public interface ILatticeReplicationCursorRegistry
     /// Blocked-floor overload of <see cref="ReportCursorAsync(string, string, HybridLogicalClock, CancellationToken)"/>
     /// that additionally reports the consumer's atomic-batch staging
     /// buffer pin (<paramref name="blockedAtHlc"/>). The
-    /// <see cref="ILatticeReplicationGc"/> AND-s a strict-less
+    /// <see cref="ILatticeWalGc"/> AND-s a strict-less
     /// <c>entry.Timestamp &lt; blockedFloor</c> clause into its trim
     /// predicate so the producer cannot trim past an entry the
     /// receiver still needs to recover from buffer state, where
@@ -174,7 +174,7 @@ public interface ILatticeReplicationCursorRegistry
     /// <paramref name="treeName"/>, or <see langword="null"/> when no
     /// consumer has reported a cursor yet. The returned value is the
     /// "trim by cursor" half of the GC predicate; the GC additionally
-    /// applies <see cref="LatticeReplicationOptions.WalRetention"/> as
+    /// applies <see cref="LatticeOptions.WalRetention"/> as
     /// an optional hard ceiling.
     /// <para>
     /// Consumers registered with <see cref="HybridLogicalClock.Zero"/>
@@ -201,7 +201,7 @@ public interface ILatticeReplicationCursorRegistry
     /// consumer reported HLC-only). When the result is
     /// <see langword="null"/> the GC skips the causal-stable half of
     /// its predicate and degrades to the HLC cursor /
-    /// <see cref="LatticeReplicationOptions.WalRetention"/> branches.
+    /// <see cref="LatticeOptions.WalRetention"/> branches.
     /// </para>
     /// <para>
     /// Implementations are expected to cache the computed frontier and
@@ -252,7 +252,7 @@ public interface ILatticeReplicationCursorRegistry
     /// the back-pressure health check (later phase), and for asserting
     /// on registry state in tests.
     /// </summary>
-    Task<IReadOnlyList<ReplicationCursorSnapshot>> SnapshotAsync(
+    Task<IReadOnlyList<WalCursorSnapshot>> SnapshotAsync(
         string treeName,
         CancellationToken cancellationToken = default);
 }

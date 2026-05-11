@@ -287,21 +287,6 @@ public static class LatticeReplicationMetrics
         Meter.CreateCounter<long>("orleans.lattice.replication.dead_letter.removed", unit: "{entry}",
             description: "Entries removed from the per-tree dead-letter queue, tagged by tree and reason.");
 
-    // --- WAL garbage-collection counters ----------------------------------------
-
-    /// <summary>
-    /// Counter of WAL entries removed by the per-tree garbage collector
-    /// (<see cref="ILatticeReplicationGc"/>). Tagged by
-    /// <see cref="TagTree"/>. Incremented once per
-    /// <see cref="ILatticeReplicationGc.RunOnceAsync"/> pass with the
-    /// total number of entries trimmed across every shard during that
-    /// pass; a pass that yielded no eligible entries does not record
-    /// (the gauge stays sparse).
-    /// </summary>
-    public static readonly Counter<long> WalEntriesTrimmed =
-        Meter.CreateCounter<long>("orleans.lattice.replication.wal.entries_trimmed", unit: "{entry}",
-            description: "WAL entries removed by the per-tree garbage collector, tagged by tree.");
-
     // --- Per-peer observable gauges ----------------------------------------------
     //
     // The gauges below are registered lazily by ReplicationPeerStats so the

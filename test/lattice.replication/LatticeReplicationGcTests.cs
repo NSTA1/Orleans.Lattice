@@ -17,11 +17,24 @@ public class LatticeReplicationGcTests
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
         new() { WallClockTicks = ticks, Counter = counter };
 
-    private static IOptionsMonitor<LatticeReplicationOptions> Monitor(LatticeReplicationOptions options)
+    private static IOptionsMonitor<LatticeOptions> Monitor(LatticeReplicationOptions options)
     {
-        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
-        monitor.CurrentValue.Returns(options);
-        monitor.Get(Arg.Any<string>()).Returns(options);
+        // Translate from the test-time replication options shape into the
+        // core LatticeOptions surface that LatticeWalGc reads after the
+        // cursor-registry / WAL GC promotion to the core library — partition
+        // count from LatticeOptions.WalPartitions (was ReplogPartitions),
+        // retention from LatticeOptions.WalRetention, and the per-tree
+        // storage provider from LatticeOptions.WalStorageProvider (the
+        // post-configure mirror handles this at runtime).
+        var translated = new LatticeOptions
+        {
+            WalPartitions = options.ReplogPartitions,
+            WalRetention = options.WalRetention,
+            WalStorageProvider = options.WalStorageProvider,
+        };
+        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        monitor.CurrentValue.Returns(translated);
+        monitor.Get(Arg.Any<string>()).Returns(translated);
         return monitor;
     }
 
@@ -58,8 +71,8 @@ public class LatticeReplicationGcTests
         var provider = new InMemoryWalStorageProvider();
         await SeedAsync(provider, 0, SetEntry("k1", Hlc(10)), SetEntry("k2", Hlc(20)));
 
-        var registry = new InMemoryReplicationCursorRegistry();
-        var sut = new LatticeReplicationGc(
+        var registry = new InMemoryWalCursorRegistry();
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -81,10 +94,10 @@ public class LatticeReplicationGcTests
             SetEntry("b", Hlc(20)),
             SetEntry("c", Hlc(30)));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(20));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -113,11 +126,11 @@ public class LatticeReplicationGcTests
             SetEntry("b", Hlc(20)),
             SetEntry("c", Hlc(30)));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-fast", Hlc(30));
         await registry.ReportCursorAsync(Tree, "peer-slow", Hlc(10));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -135,10 +148,10 @@ public class LatticeReplicationGcTests
         await SeedAsync(provider, 0, SetEntry("a", Hlc(10)), SetEntry("b", Hlc(20)));
         await SeedAsync(provider, 1, SetEntry("c", Hlc(15)), SetEntry("d", Hlc(25)));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(20));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 2 }));
@@ -160,13 +173,13 @@ public class LatticeReplicationGcTests
             SetEntry("old", Hlc(nowTicks - TimeSpan.FromHours(2).Ticks)),
             SetEntry("new", Hlc(nowTicks - TimeSpan.FromMinutes(1).Ticks)));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         // Consumer pinned at HLC=1 (essentially the start of time) so by
         // cursor alone nothing would be trimmed; the TTL ceiling
         // overrides for the entry older than one hour.
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(1));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions
@@ -195,10 +208,10 @@ public class LatticeReplicationGcTests
             SetEntry("b", Hlc(50)),  // not eligible (above cursor)
             SetEntry("c", Hlc(20))); // would be eligible by HLC, but dense ordering forbids skipping
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(30));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -212,10 +225,10 @@ public class LatticeReplicationGcTests
     public async Task RunOnceAsync_empty_wal_is_no_op()
     {
         var provider = new InMemoryWalStorageProvider();
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -236,10 +249,10 @@ public class LatticeReplicationGcTests
             .ToArray();
         await SeedAsync(provider, 0, batch);
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(500));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -256,10 +269,10 @@ public class LatticeReplicationGcTests
         var provider = new InMemoryWalStorageProvider();
         await SeedAsync(provider, 0, SetEntry("a", Hlc(10)));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(50));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -277,7 +290,7 @@ public class LatticeReplicationGcTests
         var dummy = new InMemoryWalStorageProvider();
         var perTree = new InMemoryWalStorageProvider();
         await SeedAsync(perTree, 0, SetEntry("a", Hlc(10)));
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(50));
 
         var options = new LatticeReplicationOptions
@@ -287,7 +300,7 @@ public class LatticeReplicationGcTests
             WalStorageProvider = _ => perTree,
         };
 
-        var sut = new LatticeReplicationGc(Services(dummy), registry, Monitor(options));
+        var sut = new LatticeWalGc(Services(dummy), registry, Monitor(options));
         var report = await sut.RunOnceAsync(Tree);
 
         Assert.That(report.EntriesTrimmed, Is.EqualTo(1));
@@ -299,8 +312,8 @@ public class LatticeReplicationGcTests
     public void RunOnceAsync_throws_on_null_tree_name()
     {
         var provider = new InMemoryWalStorageProvider();
-        var registry = new InMemoryReplicationCursorRegistry();
-        var sut = new LatticeReplicationGc(
+        var registry = new InMemoryWalCursorRegistry();
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -312,8 +325,8 @@ public class LatticeReplicationGcTests
     public void RunOnceAsync_observes_cancellation()
     {
         var provider = new InMemoryWalStorageProvider();
-        var registry = new InMemoryReplicationCursorRegistry();
-        var sut = new LatticeReplicationGc(
+        var registry = new InMemoryWalCursorRegistry();
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -358,11 +371,11 @@ public class LatticeReplicationGcTests
         await SeedAsync(provider, 0,
             SetEntryWithVc("a", Hlc(10), Vc(("site-a", 10), ("site-b", 50))));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100), Vc(("site-a", 100), ("site-b", 100)));
         await registry.ReportCursorAsync(Tree, "peer-B", Hlc(100), Vc(("site-a", 100), ("site-b", 20)));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -381,11 +394,11 @@ public class LatticeReplicationGcTests
         await SeedAsync(provider, 0,
             SetEntryWithVc("a", Hlc(10), Vc(("site-a", 10), ("site-b", 5))));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100), Vc(("site-a", 100), ("site-b", 100)));
         await registry.ReportCursorAsync(Tree, "peer-B", Hlc(100), Vc(("site-a", 50), ("site-b", 50)));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -405,10 +418,10 @@ public class LatticeReplicationGcTests
         // frontier.
         await SeedAsync(provider, 0, SetEntryWithVc("legacy", Hlc(10), vc: null));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100), Vc(("site-a", 1)));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -425,10 +438,10 @@ public class LatticeReplicationGcTests
         await SeedAsync(provider, 0,
             SetEntryWithVc("a", Hlc(10), Vc(("site-a", 999))));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -452,10 +465,10 @@ public class LatticeReplicationGcTests
         await SeedAsync(provider, 0,
             SetEntryWithVc("a", Hlc(5), Vc(("site-a", 5), ("site-z", 10))));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100), Vc(("site-a", 100)));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -473,13 +486,13 @@ public class LatticeReplicationGcTests
         await SeedAsync(provider, 0,
             SetEntryWithVc("a", Hlc(50), Vc(("site-a", 50))));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         // Consumer's HLC cursor (10) is below the entry's HLC (50),
         // so nothing is trim-eligible by cursor. The frontier is
         // still surfaced in the diagnostic.
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(10), Vc(("site-a", 5)));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -500,10 +513,10 @@ public class LatticeReplicationGcTests
             SetEntryWithVc("b", Hlc(20), Vc(("site-a", 999))), // blocked by frontier
             SetEntryWithVc("c", Hlc(30), Vc(("site-a", 5))));   // would pass but unreachable
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100), Vc(("site-a", 100)));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -528,13 +541,13 @@ public class LatticeReplicationGcTests
             SetEntry("b", Hlc(50)),  // == floor    -> blocked
             SetEntry("c", Hlc(60))); // above floor -> blocked
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         // Cursor consumer authorises the HLC branch; applier consumer
         // pins the buffer floor at HLC 50.
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100));
         await registry.ReportCursorAsync(Tree, "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(50));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -554,13 +567,13 @@ public class LatticeReplicationGcTests
             SetEntry("b", Hlc(20)),
             SetEntry("c", Hlc(30)));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         // Consumer reports cursor only; no applier reports a pin so the
         // blocked-floor is null and the GC predicate degrades to the
         // HLC + causal-stable + TTL clauses alone.
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -584,11 +597,11 @@ public class LatticeReplicationGcTests
             SetEntry("b", Hlc(50)),  // == floor (blocked) AND below cursor
             SetEntry("c", Hlc(150))); // above cursor (blocked) AND above floor
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer-A", Hlc(100));
         await registry.ReportCursorAsync(Tree, "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(50));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -604,10 +617,10 @@ public class LatticeReplicationGcTests
         var provider = new InMemoryWalStorageProvider();
         await SeedAsync(provider, 0, SetEntry("a", Hlc(50)));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(40));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -633,12 +646,12 @@ public class LatticeReplicationGcTests
             SetEntry("b", Hlc(25)),  // == applier-A's pin (lower) -> blocked
             SetEntry("c", Hlc(40))); // == applier-B's pin (higher) -> blocked
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer", Hlc(1000));
         await registry.ReportCursorAsync(Tree, "applier-A", HybridLogicalClock.Zero, blockedAtHlc: Hlc(25));
         await registry.ReportCursorAsync(Tree, "applier-B", HybridLogicalClock.Zero, blockedAtHlc: Hlc(40));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));
@@ -660,11 +673,11 @@ public class LatticeReplicationGcTests
             SetEntry("a", Hlc(10)),
             SetEntry("b", Hlc(50)));
 
-        var registry = new InMemoryReplicationCursorRegistry();
+        var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, "peer", Hlc(100));
         await registry.ReportCursorAsync(Tree, "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(40));
 
-        var sut = new LatticeReplicationGc(
+        var sut = new LatticeWalGc(
             Services(provider),
             registry,
             Monitor(new LatticeReplicationOptions { ClusterId = "c", ReplogPartitions = 1 }));

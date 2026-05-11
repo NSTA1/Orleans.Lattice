@@ -115,4 +115,66 @@ public static class LatticeServiceCollectionExtensions
         }
         return builder;
     }
+
+    /// <summary>
+    /// Registers the WAL consumer-cursor registry on the silo. Single-cluster
+    /// deployments need the registry so the leaf-as-materialiser cursor
+    /// can pin the per-shard WAL GC against the leaf's durably-applied
+    /// frontier. The default <see cref="InMemoryWalCursorRegistry"/> is process-local;
+    /// after a silo restart every consumer must re-report its cursor before
+    /// the GC predicate can trim past it (the fall-off-log seam handles
+    /// that recovery). Idempotent: a host-supplied registration via
+    /// <paramref name="factory"/> takes precedence and a second call is a
+    /// no-op.
+    /// </summary>
+    public static ISiloBuilder AddWalCursorRegistry(
+        this ISiloBuilder builder,
+        Func<IServiceProvider, IWalCursorRegistry>? factory = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        if (factory is null)
+        {
+            builder.Services.TryAddSingleton<IWalCursorRegistry, InMemoryWalCursorRegistry>();
+        }
+        else
+        {
+            builder.Services.TryAddSingleton<IWalCursorRegistry>(factory);
+        }
+
+        // Opting into the cursor registry implies opting into
+        // leaf-as-materialiser cursor reporting: register the leaf-facing
+        // reporter so BPlusLeafGrain.CursorRegistry pulls a non-null
+        // ILeafCursorReporter from DI and starts pinning the WAL GC
+        // against its applied frontier. Hosts that do not call
+        // AddWalCursorRegistry leave both registrations absent and the
+        // leaf grain no-ops on the report path.
+        builder.Services.TryAddSingleton<ILeafCursorReporter, LeafCursorReporter>();
+        return builder;
+    }
+
+    /// <summary>
+    /// Registers the WAL garbage collector on the silo. The GC consumes the
+    /// <see cref="IWalCursorRegistry"/> and the <see cref="IWalStorageProvider"/>
+    /// registered above, plus <see cref="LatticeOptions.WalRetention"/> as an
+    /// optional wall-clock hard ceiling, and trims per-shard WAL partitions
+    /// to the safe trim point. Hosts decide when to run a GC pass: a hosted
+    /// background service, an Orleans reminder, or an admin-triggered call.
+    /// Idempotent: a host-supplied registration via <paramref name="factory"/>
+    /// takes precedence and a second call is a no-op.
+    /// </summary>
+    public static ISiloBuilder AddLatticeWalGc(
+        this ISiloBuilder builder,
+        Func<IServiceProvider, ILatticeWalGc>? factory = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        if (factory is null)
+        {
+            builder.Services.TryAddSingleton<ILatticeWalGc, LatticeWalGc>();
+        }
+        else
+        {
+            builder.Services.TryAddSingleton<ILatticeWalGc>(factory);
+        }
+        return builder;
+    }
 }

@@ -4,7 +4,7 @@ using Orleans.Lattice.Replication;
 namespace Orleans.Lattice.Replication.Tests;
 
 [TestFixture]
-public class InMemoryReplicationCursorRegistryTests
+public class InMemoryWalCursorRegistryTests
 {
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
         new() { WallClockTicks = ticks, Counter = counter };
@@ -12,7 +12,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task ReportCursorAsync_records_cursor_for_first_consumer()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100));
 
@@ -23,14 +23,14 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task GetMinCursorAsync_returns_null_when_no_consumers_registered()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(await sut.GetMinCursorAsync("tree"), Is.Null);
     }
 
     [Test]
     public async Task GetMinCursorAsync_returns_minimum_across_consumers()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(200));
         await sut.ReportCursorAsync("tree", "peer-B", Hlc(50));
@@ -42,7 +42,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task ReportCursorAsync_advances_existing_cursor_for_same_consumer()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100));
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(200));
@@ -53,7 +53,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task ReportCursorAsync_coalesces_stale_report_without_rolling_back()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(200));
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(50));
@@ -64,7 +64,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task UnregisterAsync_removes_consumer_from_min_computation()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(200));
         await sut.ReportCursorAsync("tree", "peer-B", Hlc(50));
@@ -77,7 +77,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task UnregisterAsync_returns_null_when_last_consumer_removed()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100));
 
         await sut.UnregisterAsync("tree", "peer-A");
@@ -88,7 +88,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task UnregisterAsync_is_idempotent()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         await sut.UnregisterAsync("tree", "peer-A");
         await sut.UnregisterAsync("tree", "peer-A");
         Assert.That(await sut.GetMinCursorAsync("tree"), Is.Null);
@@ -97,14 +97,14 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task SnapshotAsync_returns_empty_when_no_consumers()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(await sut.SnapshotAsync("tree"), Is.Empty);
     }
 
     [Test]
     public async Task SnapshotAsync_returns_one_entry_per_consumer()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100));
         await sut.ReportCursorAsync("tree", "peer-B", Hlc(200));
@@ -117,7 +117,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task SnapshotAsync_records_last_reported_at_ticks()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         var before = DateTime.UtcNow.Ticks;
 
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100));
@@ -131,7 +131,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task GetMinCursorAsync_isolates_per_tree_state()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         await sut.ReportCursorAsync("tree-A", "peer-X", Hlc(100));
         await sut.ReportCursorAsync("tree-B", "peer-X", Hlc(500));
 
@@ -142,7 +142,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void ReportCursorAsync_throws_on_null_tree_name()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.ReportCursorAsync(null!, "peer", Hlc(1)),
             Throws.InstanceOf<ArgumentException>());
@@ -151,7 +151,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void ReportCursorAsync_throws_on_whitespace_tree_name()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.ReportCursorAsync("  ", "peer", Hlc(1)),
             Throws.InstanceOf<ArgumentException>());
@@ -160,7 +160,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void ReportCursorAsync_throws_on_null_consumer_id()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.ReportCursorAsync("tree", null!, Hlc(1)),
             Throws.InstanceOf<ArgumentException>());
@@ -169,7 +169,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void ReportCursorAsync_throws_on_zero_cursor()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.ReportCursorAsync("tree", "peer", HybridLogicalClock.Zero),
             Throws.InstanceOf<ArgumentOutOfRangeException>());
@@ -178,7 +178,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void ReportCursorAsync_observes_cancellation()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         Assert.That(
@@ -189,7 +189,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void UnregisterAsync_throws_on_null_tree_name()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.UnregisterAsync(null!, "peer"),
             Throws.InstanceOf<ArgumentException>());
@@ -198,7 +198,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void UnregisterAsync_throws_on_null_consumer_id()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.UnregisterAsync("tree", null!),
             Throws.InstanceOf<ArgumentException>());
@@ -207,7 +207,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void GetMinCursorAsync_throws_on_null_tree_name()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.GetMinCursorAsync(null!),
             Throws.InstanceOf<ArgumentException>());
@@ -216,7 +216,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void SnapshotAsync_throws_on_null_tree_name()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.SnapshotAsync(null!),
             Throws.InstanceOf<ArgumentException>());
@@ -237,7 +237,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task ReportCursorAsync_vc_overload_records_vector_in_snapshot()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100), Vc(("site-a", 100), ("site-b", 50)));
 
         var snapshot = await sut.SnapshotAsync("tree");
@@ -251,14 +251,14 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task GetCausalStableAsync_returns_null_when_no_consumers_registered()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(await sut.GetCausalStableAsync("tree"), Is.Null);
     }
 
     [Test]
     public async Task GetCausalStableAsync_returns_null_when_only_hlc_only_consumers_registered()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100));
         await sut.ReportCursorAsync("tree", "peer-B", Hlc(200));
 
@@ -268,7 +268,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task GetCausalStableAsync_returns_only_consumers_vector_when_only_one_reports_vc()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100), Vc(("site-a", 50), ("site-b", 80)));
 
         var meet = await sut.GetCausalStableAsync("tree");
@@ -281,7 +281,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task GetCausalStableAsync_returns_pointwise_min_across_consumers()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100), Vc(("site-a", 100), ("site-b", 200)));
         await sut.ReportCursorAsync("tree", "peer-B", Hlc(200), Vc(("site-a", 50), ("site-b", 300)));
 
@@ -294,7 +294,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task GetCausalStableAsync_drops_origins_missing_from_any_consumer()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         // peer-A knows about site-a and site-b; peer-B only knows
         // about site-a. site-b cannot be in the meet because peer-B
         // has not proven it has observed site-b at all.
@@ -311,7 +311,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task GetCausalStableAsync_skips_hlc_only_consumers_in_mixed_registry()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100), Vc(("site-a", 100)));
         await sut.ReportCursorAsync("tree", "peer-B", Hlc(50)); // HLC-only
 
@@ -323,7 +323,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task ReportCursorAsync_vc_overload_coalesces_pointwise_max_for_existing_consumer()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100), Vc(("site-a", 100), ("site-b", 50)));
         // Second report carries a smaller site-a but a larger site-b
         // and adds a new origin site-c. The merge should keep the
@@ -341,7 +341,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task ReportCursorAsync_vc_overload_does_not_drop_existing_vector_when_followed_by_hlc_only_report()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100), Vc(("site-a", 100)));
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(200));
 
@@ -355,7 +355,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task ReportCursorAsync_vc_overload_attaches_vector_to_existing_hlc_only_consumer()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100));
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(200), Vc(("site-a", 50)));
 
@@ -368,7 +368,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task UnregisterAsync_recomputes_causal_stable_to_remaining_consumers()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100), Vc(("site-a", 50)));
         await sut.ReportCursorAsync("tree", "peer-B", Hlc(200), Vc(("site-a", 30)));
 
@@ -386,7 +386,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task GetCausalStableAsync_returned_clone_is_isolated_from_registry_state()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100), Vc(("site-a", 50)));
 
         var meet = await sut.GetCausalStableAsync("tree");
@@ -402,7 +402,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task ReportCursorAsync_vc_overload_defensively_clones_input_vector()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         var caller = Vc(("site-a", 50));
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100), caller);
 
@@ -419,7 +419,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void ReportCursorAsync_vc_overload_throws_on_null_vector()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.ReportCursorAsync("tree", "peer", Hlc(1), vector: (VersionVector)null!),
             Throws.InstanceOf<ArgumentNullException>());
@@ -428,7 +428,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void ReportCursorAsync_vc_overload_throws_on_null_tree_name()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.ReportCursorAsync(null!, "peer", Hlc(1), Vc(("o", 1))),
             Throws.InstanceOf<ArgumentException>());
@@ -437,7 +437,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void ReportCursorAsync_vc_overload_throws_on_zero_cursor()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.ReportCursorAsync("tree", "peer", HybridLogicalClock.Zero, Vc(("o", 1))),
             Throws.InstanceOf<ArgumentOutOfRangeException>());
@@ -446,7 +446,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void GetCausalStableAsync_throws_on_null_tree_name()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.GetCausalStableAsync(null!),
             Throws.InstanceOf<ArgumentException>());
@@ -455,7 +455,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void GetCausalStableAsync_observes_cancellation()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         Assert.That(
@@ -468,7 +468,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task ReportCursorAsync_blocked_floor_overload_accepts_zero_cursor()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(500));
 
@@ -482,7 +482,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void ReportCursorAsync_blocked_floor_overload_rejects_negative_cursor()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         var negative = new HybridLogicalClock { WallClockTicks = -1, Counter = 0 };
         Assert.That(
             async () => await sut.ReportCursorAsync("tree", "applier", negative, blockedAtHlc: Hlc(500)),
@@ -492,7 +492,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void ReportCursorAsync_blocked_floor_overload_rejects_negative_blocked_at_hlc()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         var negative = new HybridLogicalClock { WallClockTicks = -1, Counter = 0 };
         Assert.That(
             async () => await sut.ReportCursorAsync("tree", "applier", Hlc(100), blockedAtHlc: negative),
@@ -506,7 +506,7 @@ public class InMemoryReplicationCursorRegistryTests
         // legacy single-arg overload must keep rejecting it because a
         // legacy consumer has no buffer pin and therefore would silently
         // pin the GC's HLC branch at Zero.
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.ReportCursorAsync("tree", "peer-A", HybridLogicalClock.Zero),
             Throws.InstanceOf<ArgumentOutOfRangeException>());
@@ -515,14 +515,14 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task GetBlockedFloorAsync_returns_null_when_no_consumer_registered()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.Null);
     }
 
     [Test]
     public async Task GetBlockedFloorAsync_returns_null_when_all_consumers_report_null_pin()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(100));
         await sut.ReportCursorAsync("tree", "peer-B", Hlc(200), blockedAtHlc: null);
@@ -533,7 +533,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task GetBlockedFloorAsync_returns_pointwise_min_across_consumers()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "applier-A", HybridLogicalClock.Zero, blockedAtHlc: Hlc(500));
         await sut.ReportCursorAsync("tree", "applier-B", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
@@ -545,7 +545,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task GetBlockedFloorAsync_skips_consumers_with_null_pin()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         // Applier-A reports a pin; peer-B reports a cursor only (no pin)
         // — the meet is the applier's pin alone, not influenced by the
@@ -559,7 +559,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task ReportCursorAsync_blocked_floor_replace_semantics_advances_forward()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
         await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(700));
@@ -573,7 +573,7 @@ public class InMemoryReplicationCursorRegistryTests
         // Replace, not monotonic-merge: as the buffer admits new
         // transactions the lowest staged HLC can drop, and the registry
         // must reflect the new pin.
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(700));
         await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
@@ -585,7 +585,7 @@ public class InMemoryReplicationCursorRegistryTests
     public async Task ReportCursorAsync_blocked_floor_replace_semantics_clears_to_null()
     {
         // The buffer drains: applier reports null to release the pin.
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
         Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.EqualTo(Hlc(300)));
@@ -600,7 +600,7 @@ public class InMemoryReplicationCursorRegistryTests
     {
         // A legacy HLC-only re-report from the same consumer must leave
         // its buffer pin untouched (the parameter was not specified).
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "applier", Hlc(100), blockedAtHlc: Hlc(500));
         await sut.ReportCursorAsync("tree", "applier", Hlc(200));
@@ -612,7 +612,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task GetMinCursorAsync_skips_zero_cursor_blocked_floor_only_consumers()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(50));
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(200));
@@ -626,7 +626,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task SnapshotAsync_includes_blocked_at_hlc_per_consumer()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(500));
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(200));
@@ -642,7 +642,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task UnregisterAsync_invalidates_blocked_floor_cache()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "applier-A", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
         await sut.ReportCursorAsync("tree", "applier-B", HybridLogicalClock.Zero, blockedAtHlc: Hlc(500));
@@ -661,7 +661,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task ReportCursorAsync_invalidates_blocked_floor_cache()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
         Assert.That(await sut.GetBlockedFloorAsync("tree"), Is.EqualTo(Hlc(300)));
@@ -676,7 +676,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public async Task GetBlockedFloorAsync_isolates_per_tree()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
 
         await sut.ReportCursorAsync("tree-A", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(300));
         await sut.ReportCursorAsync("tree-B", "applier", HybridLogicalClock.Zero, blockedAtHlc: Hlc(700));
@@ -688,7 +688,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void GetBlockedFloorAsync_throws_on_null_tree_name()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.GetBlockedFloorAsync(null!),
             Throws.InstanceOf<ArgumentException>());
@@ -697,7 +697,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void GetBlockedFloorAsync_throws_on_whitespace_tree_name()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         Assert.That(
             async () => await sut.GetBlockedFloorAsync("   "),
             Throws.InstanceOf<ArgumentException>());
@@ -706,7 +706,7 @@ public class InMemoryReplicationCursorRegistryTests
     [Test]
     public void GetBlockedFloorAsync_observes_cancellation()
     {
-        var sut = new InMemoryReplicationCursorRegistry();
+        var sut = new InMemoryWalCursorRegistry();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         Assert.That(
@@ -732,7 +732,7 @@ public class InMemoryReplicationCursorRegistryTests
         // each direction at least once on a multi-core host.
         for (var iter = 0; iter < 64; iter++)
         {
-            var sut = new InMemoryReplicationCursorRegistry();
+            var sut = new InMemoryWalCursorRegistry();
 
             // Seed an initial pin so a stale cache entry would be
             // observable if invalidation broke under contention.

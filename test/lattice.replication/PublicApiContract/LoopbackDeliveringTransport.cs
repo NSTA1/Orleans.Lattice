@@ -67,8 +67,8 @@ internal sealed class LoopbackDeliveringTransport : IReplicationTransport
     /// destination silo's DI graph (for example
     /// <see cref="IChangeFeed"/>, <see cref="ISnapshotProvider"/>
     /// <see cref="IReplicationApplier"/>, <see cref="IReplicationBatchEncoder"/>
-    /// <see cref="ILatticeReplicationGc"/>, <see cref="ILatticeBootstrapCoordinator"/>
-    /// <see cref="ILatticeReplicationCursorRegistry"/>, <see cref="ILatticeReplicationDeadLetters"/>, 
+    /// <see cref="ILatticeWalGc"/>, <see cref="ILatticeBootstrapCoordinator"/>
+    /// <see cref="IWalCursorRegistry"/>, <see cref="ILatticeReplicationDeadLetters"/>, 
     /// <see cref="ReplicationPeerStats"/>) without re-constructing
     /// them in the test code.
     /// </summary>

@@ -190,14 +190,14 @@ public sealed class DashboardJsonTests
                 continue;
             }
 
-            // Replication dashboard may legitimately reference both meters in the
-            // future; today, every Replication panel is on the replication meter
-            // and Overview / CommitPath panels are on the core meter.
+            // The Replication dashboard may legitimately reference either meter:
+            // some WAL-tier instruments (e.g. orleans.lattice.wal.entries_trimmed)
+            // live on the core meter because they're shared with single-cluster
+            // deployments that don't register the replication package, yet they
+            // belong on the Replication dashboard's WAL-throughput panel
+            // alongside the replication-meter ship/append counters. Overview /
+            // CommitPath / AtomicWrites dashboards remain strictly core-meter.
             if (kind != LatticeDashboardKind.Replication && meterName == LatticeReplicationMetrics.MeterName)
-            {
-                unknown.Add($"{token} (resolved to '{meterName}', expected '{expectedMeter}')");
-            }
-            else if (kind == LatticeDashboardKind.Replication && meterName != LatticeReplicationMetrics.MeterName)
             {
                 unknown.Add($"{token} (resolved to '{meterName}', expected '{expectedMeter}')");
             }

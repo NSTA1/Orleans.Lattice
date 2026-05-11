@@ -228,7 +228,7 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
         var encoder = new TestEncoder();
-        var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var registry = Substitute.For<IWalCursorRegistry>();
         var fakeState = new FakePersistentState<ReplicationShipperState>();
         var factory = BuildGrainFactory(null, feeds, Tree);
         var grain = new ReplicationShipperGrain(
@@ -296,7 +296,7 @@ public partial class ReplicationShipperGrainTests
                 HighestAppliedHlc = new HybridLogicalClock { WallClockTicks = 6, Counter = 0 },
             });
         var encoder = new OrderRecordingEncoder();
-        var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var registry = Substitute.For<IWalCursorRegistry>();
         var fakeState = new FakePersistentState<ReplicationShipperState>();
         var factory = BuildGrainFactory(null, feeds, Tree);
         var grain = new ReplicationShipperGrain(
@@ -427,7 +427,7 @@ public partial class ReplicationShipperGrainTests
             ctx, Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
             monitor, freshTransport, new TestEncoder(),
-            Substitute.For<ILatticeReplicationCursorRegistry>(),
+            Substitute.For<IWalCursorRegistry>(),
             BuildGrainFactory(null, stubs, Tree), fakeState,
             new ReplicationPeerStats());
         freshGrain.InitializeForTesting(Tree, Peer);

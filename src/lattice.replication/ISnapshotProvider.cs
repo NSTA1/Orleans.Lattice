@@ -28,7 +28,7 @@ public interface ISnapshotProvider
     /// producer's causal-stable frontier (the pointwise minimum
     /// <see cref="Primitives.VersionVector"/> across every consumer
     /// that has reported a vector through the
-    /// <see cref="ILatticeReplicationCursorRegistry"/>, with a
+    /// <see cref="IWalCursorRegistry"/>, with a
     /// fallback to the producer's per-tree local vector clock when no
     /// consumer has reported a vector yet), and an async stream of
     /// every live entry whose

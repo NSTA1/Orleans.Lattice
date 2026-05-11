@@ -14,8 +14,8 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="ILattice.GetWithVersionAsync"/>. The snapshot's
 /// <see cref="SnapshotStream.CausalStableFrontier"/> is read once
 /// up-front from the
-/// <see cref="ILatticeReplicationCursorRegistry"/> via
-/// <see cref="ILatticeReplicationCursorRegistry.GetCausalStableAsync"/>:
+/// <see cref="IWalCursorRegistry"/> via
+/// <see cref="IWalCursorRegistry.GetCausalStableAsync"/>:
 /// the snapshot is cut at the producer's causal-stable frontier
 /// (<c>min(consumer VC)</c>), so a receiver pinning that frontier on
 /// <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/> can
@@ -43,11 +43,11 @@ namespace Orleans.Lattice.Replication;
 /// </summary>
 internal sealed class LatticeSnapshotProvider(
     IGrainFactory grainFactory,
-    ILatticeReplicationCursorRegistry cursors,
+    IWalCursorRegistry cursors,
     IOptionsMonitor<LatticeReplicationOptions> options) : ISnapshotProvider
 {
     private readonly IGrainFactory _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
-    private readonly ILatticeReplicationCursorRegistry _cursors = cursors ?? throw new ArgumentNullException(nameof(cursors));
+    private readonly IWalCursorRegistry _cursors = cursors ?? throw new ArgumentNullException(nameof(cursors));
     private readonly IOptionsMonitor<LatticeReplicationOptions> _options = options ?? throw new ArgumentNullException(nameof(options));
 
     /// <inheritdoc />

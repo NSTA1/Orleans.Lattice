@@ -173,7 +173,7 @@ public class ShipperPersistenceIntegrationTests
         FakePersistentState<ReplicationShipperState> persistent,
         IReplicationTransport transport,
         IReplicationBatchEncoder encoder,
-        ILatticeReplicationCursorRegistry registry,
+        IWalCursorRegistry registry,
         IGrainFactory factory,
         IOptionsMonitor<LatticeReplicationOptions> monitor)
     {
@@ -218,7 +218,7 @@ public class ShipperPersistenceIntegrationTests
         }
         var encoder = new TestEncoder();
         var transport = new RecordingTransport(encoder);
-        var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var registry = Substitute.For<IWalCursorRegistry>();
         var persistent = new FakePersistentState<ReplicationShipperState>();
         var grainA = BuildGrain(persistent, transport, encoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
@@ -318,7 +318,7 @@ public class ShipperPersistenceIntegrationTests
         }
         var encoder = new TestEncoder();
         var transport = new RecordingTransport(encoder);
-        var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var registry = Substitute.For<IWalCursorRegistry>();
         var persistent = new FakePersistentState<ReplicationShipperState>();
         var grainA = BuildGrain(persistent, transport, encoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
@@ -388,7 +388,7 @@ public class ShipperPersistenceIntegrationTests
         }
         var encoder = new TestEncoder();
         var transport = new RecordingTransport(encoder);
-        var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var registry = Substitute.For<IWalCursorRegistry>();
         var persistent = new FakePersistentState<ReplicationShipperState>();
         var grainA = BuildGrain(persistent, transport, encoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
@@ -466,7 +466,7 @@ public class ShipperPersistenceIntegrationTests
         }
         var encoder = new TestEncoder();
         var transport = new RecordingTransport(encoder);
-        var registry = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var registry = Substitute.For<IWalCursorRegistry>();
         var persistent = new FakePersistentState<ReplicationShipperState>();
         var grainA = BuildGrain(persistent, transport, encoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));

@@ -34,13 +34,15 @@ before calling `AddLatticeReplication`.
 - **`CausalStableFrontier`** is the producer's causal-stable frontier
   at snapshot time — the pointwise minimum `VersionVector` across
   every consumer that has reported a vector through
-  `ILatticeReplicationCursorRegistry.GetCausalStableAsync`. When no
+  `IWalCursorRegistry.GetCausalStableAsync`. When no
   consumer has reported a VC-shaped cursor (single-peer cluster, fresh
   deployment, host using the legacy HLC-only overload), the provider
   falls back to the producer's per-tree local vector clock from
   `IReplicationHighWaterMarkGrain.GetVectorAsync` — a strict superset
   of the meet that is safe as a snapshot cut-point. Receivers pin
   this on `IReplicationHighWaterMarkGrain.PinSnapshotAsync(asOfHlc, frontier)`
+
+
   before draining the entry stream so the causal dependency check on
   the first incremental entry runs from a non-empty frontier.
 - **Tombstoned and expired keys are not emitted.** Only live entries
@@ -145,7 +147,7 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   from the persisted phase. During `ApplyingSnapshot` the cursor
   is persisted every 100 entries; on resume, the snapshot stream
   is re-opened at `LastAppliedHlc` (not `Zero`), so the cost
-  of a crash is bounded re-application of at most ~100 entries —
+  of a crash is bounded re-application of at most ~100 entries — 
   and the per-origin HWM dedupe makes that re-application a
   correctness no-op.
 - **`Failed` is restartable.** On any thrown exception inside the
@@ -181,6 +183,7 @@ await coordinator.BootstrapAsync("orders", sourceClusterId: "site-a", cancellati
 LatticeBootstrapState state = await coordinator.GetStateAsync("orders", cancellationToken);
 _ = state; // LatticeBootstrapState.LiveIncremental once the bootstrap completes
 ```
+
 
 ## Operator-driven re-seed
 

@@ -316,5 +316,18 @@ public static class LatticeMetrics
     public static readonly Counter<long> LeafReplayEntries =
         Meter.CreateCounter<long>("orleans.lattice.leaf.replay.entries", unit: "{entry}",
             description: "Mutations seen by activation-time leaf-projection replay, tagged by outcome.");
+
+    // --- WAL garbage-collector instruments ----------------------------------
+
+    /// <summary>
+    /// Counter of WAL entries removed by a <see cref="ILatticeWalGc.RunOnceAsync"/>
+    /// pass, tagged with <see cref="TagTree"/>. Emitted from
+    /// <see cref="LatticeWalGc"/> after every pass that trims at least one
+    /// entry; a zero-trim pass does not emit so a high-frequency GC pass
+    /// against an empty WAL produces no measurement traffic.
+    /// </summary>
+    public static readonly Counter<long> WalEntriesTrimmed =
+        Meter.CreateCounter<long>("orleans.lattice.wal.entries_trimmed", unit: "{entry}",
+            description: "WAL entries removed by the per-tree garbage collector, tagged by tree.");
 }
 
