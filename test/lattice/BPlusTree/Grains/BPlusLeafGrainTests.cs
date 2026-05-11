@@ -16,11 +16,30 @@ public partial class BPlusLeafGrainTests
         string replicaId = "test-leaf",
         LatticeOptions? options = null,
         IBPlusLeafGrain? siblingStub = null,
-        int maxLeafKeys = 128)
+        int maxLeafKeys = 128,
+        ICommitLogWriter? commitLog = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", replicaId));
         state ??= new FakePersistentState<LeafNodeState>();
+
+        // When a fake ICommitLogWriter is supplied, wire it through
+        // the grain context's ActivationServices and seed a non-empty
+        // TreeId so the lazy ResolveCommitLogWriter() in
+        // BPlusLeafGrain.Metrics.cs returns the fake. The backstop
+        // and ordinary commit paths route durable writes through the
+        // fake exclusively; the legacy state.WriteStateAsync() call
+        // site is gone from the backstop path under the
+        // WAL-as-sole-commit-point invariant.
+        if (commitLog is not null)
+        {
+            var services = Substitute.For<IServiceProvider>();
+            services.GetService(typeof(ICommitLogWriter)).Returns(commitLog);
+            context.ActivationServices.Returns(services);
+            if (string.IsNullOrEmpty(state.State.TreeId))
+                state.State.TreeId = "test-tree";
+        }
+
         var grainFactory = Substitute.For<IGrainFactory>();
         if (siblingStub is not null)
         {

@@ -276,7 +276,7 @@ Hardening of the cross-migration LWW backstop branch on `BPlusLeafGrain.ApplyTxT
 
 **Residual gaps explicitly out of scope.** Two structural issues that the three fixes cannot close are tracked as follow-on items below. F-058 retires the standalone `state.WriteStateAsync()` call at the tail of the backstop loop in favour of a WAL-routed commit (architectural-debt parity with F-049d's WAL-as-sole-commit-point invariant). F-059 closes the residual mid-saga atomic-visibility window observed on the destination shard for the `pre=1..3, post=13..15` pattern — the prepare-before-split race the backstop cannot retroactively repair, because it is post-terminal — via a retroactive shadow-forward of in-flight prepared mutations at split-begin.
 
-### 7 · F-058
+### 7 · F-058 ✅ shipped
 **Reliability / medium impact (closes the last leaf-side foreground commit path that bypasses the WAL; follow-on to F-057)**
 
 Route the cross-migration LWW backstop write through the per-shard WAL instead of through `state.WriteStateAsync()`. The backstop branch on `BPlusLeafGrain.ApplyTxTerminalAsync` is the only remaining foreground leaf-write site in the core library that commits durable state via the Orleans persisted state row rather than via `ICommitLogWriter` — every other write path was converted to WAL-as-sole-commit-point under F-049d. F-057 corrected the per-key correctness of the branch but kept the legacy state-row commit point to scope the change minimally; F-058 closes the architectural-debt gap so every foreground commit obeys the same durability invariant.
@@ -293,6 +293,17 @@ Route the cross-migration LWW backstop write through the per-shard WAL instead o
 - The `BPlusLeafGrainTests.BackstopTerminal` partial's three F-057 regression tests (which today assert via `FakePersistentState.WriteCount`) are converted to assert via a `FakeCommitLogWriter.AppendCount` so the regression coverage tracks the WAL path rather than the legacy state-row path.
 - A code-search regression test (run as part of `Phase 6b` hygiene gates) confirms the legacy `state.WriteStateAsync()` call in the backstop branch is gone and that no new `state.WriteStateAsync` site has been introduced on any foreground write path.
 - The chaos suite (`ReshardTopologyTests` 4→8 shards × 15 rounds × 16 keys) continues to pass at the same rate as the F-057 baseline, with the WAL-routed path observably exercising the same crash-recovery contract as every other commit path under chaos.
+
+**Shipped.** F-058 was delivered as a single PR on the `feature/f058-wal-route-backstop` branch. The new wire slot landed at `[Id(18)] LatticeMutation.IsBackstop` (the F-058 spec drafted it at `[Id(15)]` but slots through `[Id(17)] ShardIndex` had already been allocated; `[Id(18)]` is strictly additive and wire-compatible). Implementation:
+
+- `src/lattice/LatticeMutation.cs` — new `[Id(18)] bool IsBackstop` slot with XML doc describing the cross-migration-backstop semantics and the `kind=backstop` metric tag.
+- `src/lattice/BPlusTree/Grains/BPlusLeafGrain.PendingTx.cs` — backstop loop in `ApplyTxTerminalAsync` rewritten to drive each missing-key write through `ICommitLogWriter.AppendAsync` (one append per key, shared HLC tick); the legacy `state.WriteStateAsync()` call is removed; per-append `LatticeMetrics.LeafWriteDuration` emission tagged `(tree, kind=backstop)`.
+- `test/lattice/Fakes/FakeCommitLogWriter.cs` — new test fake with `AppendCount` / `Appended` / `ThrowOnAppend`.
+- `test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.cs` — `CreateGrain` helper takes an optional `commitLog: ICommitLogWriter`, wires it through `IGrainContext.ActivationServices`, and seeds `state.State.TreeId = "test-tree"` so the lazy resolver returns the fake.
+- `test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.BackstopTerminal.cs` — 8 tests converted from `state.WriteCount` assertions to `commitLog.AppendCount` assertions; the renamed `ApplyTxTerminalAsync_backstop_persists_via_WAL` test additionally pins the appended mutation's `IsBackstop=true`, `Kind=Set`, `TransactionId`, and `Timestamp == Entries[k].Timestamp` invariants.
+- `test/lattice/AuditHygieneRegressionTests.cs` — new `Backstop_terminal_path_does_not_call_WriteStateAsync` regression that reads `BPlusLeafGrain.PendingTx.cs` source, strips C# comments, and reflection-asserts zero `state.WriteStateAsync(` call sites.
+
+All 336 `BPlusLeafGrainTests` and 3 `AuditHygieneRegressionTests` green on `dotnet test --filter "TestCategory!=Chaos"`.
 
 ### 8 · F-059
 **Reliability / medium impact (closes the residual mid-saga atomic-visibility window across concurrent shard splits; follow-on to F-057)**

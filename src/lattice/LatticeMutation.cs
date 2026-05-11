@@ -233,4 +233,23 @@ public readonly record struct LatticeMutation
     /// the V1 single-shard layout.
     /// </summary>
     [Id(17)] public int ShardIndex { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when this mutation is a cross-migration LWW backstop
+    /// write authored by the leaf-side terminal handler
+    /// (<c>BPlusLeafGrain.ApplyTxTerminalAsync</c>) for a saga key whose
+    /// prepare-phase shadow-forward was lost to a mid-saga shard-split
+    /// or drain race. Distinguishes the write from an ordinary
+    /// <see cref="MutationKind.Set"/> on the wire and on the
+    /// <c>orleans.lattice.leaf.write.duration</c> histogram, where the
+    /// backstop is tagged <c>kind=backstop</c> so operators can size
+    /// backstop traffic against ordinary writes. Semantically the
+    /// backstop is just a Set at the projection level — receiver-side
+    /// LWW resolution treats it identically — but carrying the flag
+    /// lets downstream consumers filter, count, or alert on the
+    /// failure mode independently. Defaults to <c>false</c> for wire
+    /// compatibility with mutations persisted before this field
+    /// existed.
+    /// </summary>
+    [Id(18)] public bool IsBackstop { get; init; }
 }

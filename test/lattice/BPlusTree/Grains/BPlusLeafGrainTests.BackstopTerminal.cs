@@ -50,25 +50,39 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task ApplyTxTerminalAsync_backstop_persists_via_WriteStateAsync()
+    public async Task ApplyTxTerminalAsync_backstop_persists_via_WAL()
     {
         var state = new FakePersistentState<LeafNodeState>();
-        var grain = CreateGrain(state);
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(state, commitLog: commitLog);
         var txid = Guid.NewGuid();
         var committed = new Dictionary<string, byte[]>(StringComparer.Ordinal)
         {
             ["k"] = [1],
         };
 
+        var appendCountBefore = commitLog.AppendCount;
         var writeCountBefore = state.WriteCount;
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
 
-        // The backstop branch is the sole deviation from the leaf's
-        // zero-leaf-I/O contract on the terminal path: by hypothesis
-        // this leaf's WAL holds no prepare to replay, so the post-saga
-        // projection must be persisted explicitly to survive a future
-        // reactivation.
-        Assert.That(state.WriteCount, Is.EqualTo(writeCountBefore + 1));
+        // The backstop persists by appending a Set mutation with
+        // IsBackstop=true to the per-shard WAL via ICommitLogWriter —
+        // NOT by calling state.WriteStateAsync(). One WAL append per
+        // missing key; the legacy standalone state-row persist is gone.
+        Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountBefore + 1),
+            "backstop must append exactly one mutation per missing key to the WAL");
+        Assert.That(state.WriteCount, Is.EqualTo(writeCountBefore),
+            "backstop must NOT call state.WriteStateAsync() — WAL is the sole commit point");
+        var appended = commitLog.Appended[^1];
+        Assert.That(appended.IsBackstop, Is.True,
+            "backstop WAL append must carry IsBackstop=true so observers can distinguish it from an ordinary Set");
+        Assert.That(appended.Kind, Is.EqualTo(MutationKind.Set));
+        Assert.That(appended.Key, Is.EqualTo("k"));
+        Assert.That(appended.Value, Is.EqualTo(new byte[] { 1 }));
+        Assert.That(appended.TransactionId, Is.EqualTo(txid),
+            "backstop WAL append must carry the saga's TransactionId so downstream observers correlate");
+        Assert.That(appended.Timestamp, Is.EqualTo(state.State.Entries["k"].Timestamp),
+            "WAL-stamped HLC must match the in-memory entry's Timestamp (shared per-terminal stamp)");
     }
 
     [Test]
@@ -209,68 +223,73 @@ public partial class BPlusLeafGrainTests
     public async Task ApplyTxTerminalAsync_with_null_committedValues_does_not_mutate_entries()
     {
         var state = new FakePersistentState<LeafNodeState>();
-        var grain = CreateGrain(state);
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(state, commitLog: commitLog);
         await grain.SetAsync("k", [9]);
         var snapshot = state.State.Entries["k"];
 
         var txid = Guid.NewGuid();
-        var writeCountBefore = state.WriteCount;
+        var appendCountBefore = commitLog.AppendCount;
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
 
         // Legacy pre-backstop call shape: no pending bucket and no
         // backstop dict means the only side-effect is recording the
-        // terminal id; Entries must be untouched and the backstop's
-        // explicit WriteStateAsync must NOT have fired.
+        // terminal id; Entries must be untouched and no WAL append
+        // must fire (the backstop persists via the WAL).
         Assert.That(state.State.Entries["k"], Is.EqualTo(snapshot));
-        Assert.That(state.WriteCount, Is.EqualTo(writeCountBefore));
+        Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountBefore));
     }
 
     [Test]
     public async Task ApplyTxTerminalAsync_with_empty_committedValues_does_not_persist()
     {
         var state = new FakePersistentState<LeafNodeState>();
-        var grain = CreateGrain(state);
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(state, commitLog: commitLog);
         var txid = Guid.NewGuid();
         var empty = new Dictionary<string, byte[]>(StringComparer.Ordinal);
 
-        var writeCountBefore = state.WriteCount;
+        var appendCountBefore = commitLog.AppendCount;
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, empty);
 
         // The backstop branch is gated on Count > 0, so an empty dict
         // is observationally identical to null: no Entries mutation
-        // and no explicit persistence.
+        // and no WAL append.
         Assert.That(state.State.Entries, Is.Empty);
-        Assert.That(state.WriteCount, Is.EqualTo(writeCountBefore));
+        Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountBefore));
     }
 
     [Test]
     public async Task ApplyTxTerminalAsync_with_committedValues_and_abort_does_not_apply_backstop()
     {
         var state = new FakePersistentState<LeafNodeState>();
-        var grain = CreateGrain(state);
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(state, commitLog: commitLog);
         var txid = Guid.NewGuid();
         var committed = new Dictionary<string, byte[]>(StringComparer.Ordinal)
         {
             ["k"] = [1, 2, 3],
         };
 
-        var writeCountBefore = state.WriteCount;
+        var appendCountBefore = commitLog.AppendCount;
 
         await grain.ApplyTxTerminalAsync(txid, committed: false, committed);
 
         // Abort path must drop the backstop values without writing
-        // them — by definition the values are not committed.
+        // them — by definition the values are not committed. No WAL
+        // append must fire because no durable write was authored.
         Assert.That(state.State.Entries, Is.Empty);
-        Assert.That(state.WriteCount, Is.EqualTo(writeCountBefore));
+        Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountBefore));
     }
 
     [Test]
     public async Task ApplyTxTerminalAsync_backstop_is_idempotent_under_recentlyTerminal()
     {
         var state = new FakePersistentState<LeafNodeState>();
-        var grain = CreateGrain(state);
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(state, commitLog: commitLog);
         var txid = Guid.NewGuid();
         var committed = new Dictionary<string, byte[]>(StringComparer.Ordinal)
         {
@@ -279,18 +298,18 @@ public partial class BPlusLeafGrainTests
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
         var firstStamp = state.State.Entries["k"].Timestamp;
-        var writeCountAfterFirst = state.WriteCount;
+        var appendCountAfterFirst = commitLog.AppendCount;
 
         // Re-broadcast under the same transaction id (e.g. coordinator
         // retry after a transient shard-root RPC failure). The second
-        // call must short-circuit on the _recentlyTerminal dedup set
-        // and produce no further side-effects.
+        // call must short-circuit on the per-(txid, key) dedup set
+        // and produce no further WAL appends.
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
 
         Assert.That(state.State.Entries["k"].Timestamp, Is.EqualTo(firstStamp),
             "idempotent re-broadcast must not re-stamp the entry");
-        Assert.That(state.WriteCount, Is.EqualTo(writeCountAfterFirst),
-            "idempotent re-broadcast must not persist again");
+        Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountAfterFirst),
+            "idempotent re-broadcast must not append to the WAL again");
     }
 
     [Test]
@@ -334,13 +353,14 @@ public partial class BPlusLeafGrainTests
     public async Task ApplyTxTerminalAsync_with_empty_transactionId_is_no_op()
     {
         var state = new FakePersistentState<LeafNodeState>();
-        var grain = CreateGrain(state);
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(state, commitLog: commitLog);
         var committed = new Dictionary<string, byte[]>(StringComparer.Ordinal)
         {
             ["k"] = [1],
         };
 
-        var writeCountBefore = state.WriteCount;
+        var appendCountBefore = commitLog.AppendCount;
 
         await grain.ApplyTxTerminalAsync(Guid.Empty, committed: true, committed);
 
@@ -348,7 +368,7 @@ public partial class BPlusLeafGrainTests
         // matter what else the caller passes, the backstop must not
         // fire because there is no saga to attribute the values to.
         Assert.That(state.State.Entries, Is.Empty);
-        Assert.That(state.WriteCount, Is.EqualTo(writeCountBefore));
+        Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountBefore));
     }
 
     [Test]
@@ -431,7 +451,7 @@ public partial class BPlusLeafGrainTests
 
         // Migrated key: backstopped via LWW because the bucket has no
         // entry for it — the prior per-saga dedup would have skipped
-        // this write entirely, leaving Entries.ContainsKey("migrated")
+        // this entirely, leaving Entries.ContainsKey("migrated")
         // false.
         Assert.That(state.State.Entries.ContainsKey("migrated"), Is.True,
             "missing key (in committedValues but not bucket) must be backstopped");
@@ -456,7 +476,8 @@ public partial class BPlusLeafGrainTests
     public async Task ApplyTxTerminalAsync_after_null_committedValues_still_backstops_subsequent_subset()
     {
         var state = new FakePersistentState<LeafNodeState>();
-        var grain = CreateGrain(state);
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(state, commitLog: commitLog);
         var txid = Guid.NewGuid();
 
         // Delivery 1: flip-dedup channel marks _recentlyTerminal[txid]
@@ -464,7 +485,7 @@ public partial class BPlusLeafGrainTests
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
         Assert.That(state.State.Entries, Is.Empty,
             "first delivery with no payload must not write any Entries");
-        var writeCountAfterFirst = state.WriteCount;
+        var appendCountAfterFirst = commitLog.AppendCount;
 
         // Delivery 2: backstop channel carries the payload. alreadyFlipped
         // is now true, but the per-key backstop path must still fire
@@ -478,8 +499,11 @@ public partial class BPlusLeafGrainTests
         Assert.That(state.State.Entries.ContainsKey("k"), Is.True,
             "second delivery's backstop must fire even though alreadyFlipped=true");
         Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 1, 2, 3 }));
-        Assert.That(state.WriteCount, Is.GreaterThan(writeCountAfterFirst),
-            "backstop write must persist explicitly to survive deactivation");
+        Assert.That(commitLog.AppendCount, Is.GreaterThan(appendCountAfterFirst),
+            "backstop write must append to the WAL (WAL is the sole commit point)");
+        var appended = commitLog.Appended[^1];
+        Assert.That(appended.IsBackstop, Is.True);
+        Assert.That(appended.Key, Is.EqualTo("k"));
     }
 
     /// <summary>
@@ -492,15 +516,16 @@ public partial class BPlusLeafGrainTests
     /// migration record). Each subset's backstop must land on the
     /// leaf without poisoning the other subset via a per-saga dedup
     /// marker. A third delivery repeating an already-backstopped key
-    /// must short-circuit on the per-(txid, key) dedup so the
-    /// foreground state-row write is not paid twice for the same
-    /// effect.
+    /// must short-circuit on the per-(txid, key) dedup so the WAL
+    /// append is not paid twice for the same effect (the WAL append,
+    /// NOT a foreground state-row write, is the durability point).
     /// </summary>
     [Test]
     public async Task ApplyTxTerminalAsync_with_disjoint_committedValues_subsets_backstops_each_subset()
     {
         var state = new FakePersistentState<LeafNodeState>();
-        var grain = CreateGrain(state);
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(state, commitLog: commitLog);
         var txid = Guid.NewGuid();
 
         // Delivery 1: subset routed by current-routing — {a, b}.
@@ -514,7 +539,9 @@ public partial class BPlusLeafGrainTests
         Assert.That(state.State.Entries["b"].Value, Is.EqualTo(new byte[] { 2 }));
         Assert.That(state.State.Entries.ContainsKey("c"), Is.False);
         Assert.That(state.State.Entries.ContainsKey("d"), Is.False);
-        var writeCountAfterFirst = state.WriteCount;
+        var appendCountAfterFirst = commitLog.AppendCount;
+        Assert.That(appendCountAfterFirst, Is.EqualTo(2),
+            "delivery 1 must append exactly one WAL entry per missing key (a, b)");
 
         // Delivery 2: disjoint subset routed by MovedAwaySlots —
         // {c, d}. A per-saga dedup would skip this entirely (the saga
@@ -529,21 +556,21 @@ public partial class BPlusLeafGrainTests
         Assert.That(state.State.Entries["c"].Value, Is.EqualTo(new byte[] { 3 }),
             "disjoint subset's keys must each backstop independently of subset 1");
         Assert.That(state.State.Entries["d"].Value, Is.EqualTo(new byte[] { 4 }));
-        Assert.That(state.WriteCount, Is.EqualTo(writeCountAfterFirst + 1),
-            "delivery 2 must persist its own backstop write");
-        var writeCountAfterSecond = state.WriteCount;
+        Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountAfterFirst + 2),
+            "delivery 2 must append exactly one WAL entry per new missing key (c, d)");
+        var appendCountAfterSecond = commitLog.AppendCount;
         var aStampAfterSecond = state.State.Entries["a"].Timestamp;
 
         // Delivery 3: replays an already-backstopped key. The
-        // per-(txid, key) dedup must short-circuit so no foreground
-        // state-row write fires, and the existing stamp is preserved.
+        // per-(txid, key) dedup must short-circuit so no WAL append
+        // fires, and the existing stamp is preserved.
         var subsetReplay = new Dictionary<string, byte[]>(StringComparer.Ordinal)
         {
             ["a"] = [1],
         };
         await grain.ApplyTxTerminalAsync(txid, committed: true, subsetReplay);
-        Assert.That(state.WriteCount, Is.EqualTo(writeCountAfterSecond),
-            "replay of already-backstopped key must not persist again");
+        Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountAfterSecond),
+            "replay of already-backstopped key must not append to the WAL again");
         Assert.That(state.State.Entries["a"].Timestamp, Is.EqualTo(aStampAfterSecond),
             "replay of already-backstopped key must not re-stamp the entry");
     }
