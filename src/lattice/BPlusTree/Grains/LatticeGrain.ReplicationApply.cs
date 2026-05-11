@@ -434,21 +434,21 @@ internal sealed partial class LatticeGrain
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
             try
             {
-                await shard.AppendTxTerminalAsync(transactionId, committed, cancellationToken);
+                await shard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
             }
             catch (StaleShardRoutingException) when (InvalidateShardMap())
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var (retryPhysicalTreeId, _) = await GetRoutingAsync();
                 var retryShard = grainFactory.GetGrain<IShardRootGrain>($"{retryPhysicalTreeId}/{shardIndex}");
-                await retryShard.AppendTxTerminalAsync(transactionId, committed, cancellationToken);
+                await retryShard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
             }
             catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var (retryPhysicalTreeId, _) = await GetRoutingAsync();
                 var retryShard = grainFactory.GetGrain<IShardRootGrain>($"{retryPhysicalTreeId}/{shardIndex}");
-                await retryShard.AppendTxTerminalAsync(transactionId, committed, cancellationToken);
+                await retryShard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
             }
         }
     }

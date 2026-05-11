@@ -109,9 +109,47 @@ internal sealed class TxRegistryGrain(
     /// <inheritdoc />
     public async Task ForgetAsync(Guid txid)
     {
-        if (state.State.Decisions.Remove(txid))
+        var droppedDecision = state.State.Decisions.Remove(txid);
+        var droppedParticipants = state.State.Participants.Remove(txid);
+        if (droppedDecision || droppedParticipants)
         {
             await state.WriteStateAsync();
         }
+    }
+
+    /// <inheritdoc />
+    public async Task RegisterParticipantAsync(Guid txid, int shardIndex)
+    {
+        if (!state.State.Participants.TryGetValue(txid, out var set))
+        {
+            set = [];
+            state.State.Participants[txid] = set;
+        }
+
+        if (!set.Add(shardIndex))
+        {
+            // Already recorded — no-op, no state write. The shard-root
+            // dedup gate normally prevents this RPC entirely on a
+            // stable activation; this branch only fires when the
+            // shard-root deactivated and reactivated between two
+            // prepare-phase writes for the same saga.
+            return;
+        }
+
+        await state.WriteStateAsync();
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<int>> GetParticipantsAsync(Guid txid)
+    {
+        if (!state.State.Participants.TryGetValue(txid, out var set) || set.Count == 0)
+        {
+            return Task.FromResult<IReadOnlyList<int>>(Array.Empty<int>());
+        }
+
+        var sorted = new int[set.Count];
+        set.CopyTo(sorted);
+        Array.Sort(sorted);
+        return Task.FromResult<IReadOnlyList<int>>(sorted);
     }
 }

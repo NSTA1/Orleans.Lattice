@@ -124,7 +124,7 @@ internal sealed partial class ShardRootGrain(
                 }
 
                 // shadow-forward the write to the split target if applicable.
-                await ForwardLocalWriteToShadowIfNeededAsync(key);
+                await ForwardLocalWriteToShadowIfNeededAsync(key, value);
                 await forwardTask;
                 return;
             }
@@ -159,7 +159,7 @@ internal sealed partial class ShardRootGrain(
                 // shadow-forward the write to the split target if applicable.
                 // The target fetches the authoritative entry via the normal merge
                 // path so expiry is preserved end-to-end.
-                await ForwardLocalWriteToShadowIfNeededAsync(key);
+                await ForwardLocalWriteToShadowIfNeededAsync(key, value, expiresAtTicks);
                 await forwardTask;
                 return;
             }
@@ -200,7 +200,7 @@ internal sealed partial class ShardRootGrain(
                 }
 
                 // shadow-forward the write to the split target if applicable.
-                await ForwardLocalWriteToShadowIfNeededAsync(key);
+                await ForwardLocalWriteToShadowIfNeededAsync(key, value);
                 await forwardTask;
                 return null;
             }
@@ -246,7 +246,7 @@ internal sealed partial class ShardRootGrain(
                 }
 
                 // shadow-forward the write to the split target if applicable.
-                await ForwardLocalWriteToShadowIfNeededAsync(key);
+                await ForwardLocalWriteToShadowIfNeededAsync(key, value);
                 await TrackShadowForward((key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return true;
             }
@@ -321,7 +321,7 @@ internal sealed partial class ShardRootGrain(
                 {
                     splitResult = await PromoteRootAsync(splitResult);
                 }
-                await ForwardLocalWriteToShadowIfNeededAsync(key);
+                await ForwardLocalWriteToShadowIfNeededAsync(key, value);
                 return;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
@@ -352,7 +352,7 @@ internal sealed partial class ShardRootGrain(
                 if (state.State.RootIsLeaf)
                 {
                     var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
-                    RecordAffectedLeafIfPrepared(state.State.RootNodeId!.Value);
+                    await RecordAffectedLeafIfPreparedAsync(state.State.RootNodeId!.Value);
                     result = await leaf.DeleteAsync(key);
                 }
                 else
@@ -360,7 +360,7 @@ internal sealed partial class ShardRootGrain(
                     // Traverse to the leaf.
                     var leafId = await TraverseToLeafAsync(key);
                     var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-                    RecordAffectedLeafIfPrepared(leafId);
+                    await RecordAffectedLeafIfPreparedAsync(leafId);
                     result = await leafGrain.DeleteAsync(key);
                 }
 

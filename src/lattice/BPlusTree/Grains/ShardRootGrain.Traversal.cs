@@ -266,7 +266,7 @@ internal sealed partial class ShardRootGrain
             var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
                 ? existing
                 : ResolveLeafGrainSlow(rootLeafId);
-            RecordAffectedLeafIfPrepared(rootLeafId);
+            await RecordAffectedLeafIfPreparedAsync(rootLeafId);
             return await leaf.SetAsync(key, value);
         }
 
@@ -295,7 +295,7 @@ internal sealed partial class ShardRootGrain
         var leafGrain = (_cachedLeaf is { } existingLeaf && _cachedLeafKey.Equals(leafId))
             ? existingLeaf
             : ResolveLeafGrainSlow(leafId);
-        RecordAffectedLeafIfPrepared(leafId);
+        await RecordAffectedLeafIfPreparedAsync(leafId);
         var splitResult = await leafGrain.SetAsync(key, value);
 
         while (splitResult is not null && path.Count > 0)
@@ -329,7 +329,7 @@ internal sealed partial class ShardRootGrain
             var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
                 ? existing
                 : ResolveLeafGrainSlow(rootLeafId);
-            RecordAffectedLeafIfPrepared(rootLeafId);
+            await RecordAffectedLeafIfPreparedAsync(rootLeafId);
             return await leaf.SetAsync(key, value, expiresAtTicks);
         }
 
@@ -358,7 +358,7 @@ internal sealed partial class ShardRootGrain
             var leafGrain = (_cachedLeaf is { } existingLeaf && _cachedLeafKey.Equals(leafId))
                 ? existingLeaf
                 : ResolveLeafGrainSlow(leafId);
-            RecordAffectedLeafIfPrepared(leafId);
+            await RecordAffectedLeafIfPreparedAsync(leafId);
             var splitResult = await leafGrain.SetAsync(key, value, expiresAtTicks);
 
             while (splitResult is not null && path.Count > 0)
