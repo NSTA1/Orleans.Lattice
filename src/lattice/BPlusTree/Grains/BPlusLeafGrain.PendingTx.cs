@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -522,7 +523,7 @@ internal sealed partial class BPlusLeafGrain
         // ambient and skip the per-leaf registry RPC entirely.
         // Decisions not in the ambient default to InFlight (consistent
         // with "decision not yet recorded as of this snapshot's
-        // wall-clock moment").
+        // wall-clock moment").	
         var ambient = LatticeRegistrySnapshotContext.Current;
         if (ambient is not null)
         {
@@ -723,14 +724,76 @@ internal sealed partial class BPlusLeafGrain
         // ticking would race with concurrent reads. When the
         // pending-flip path above already ticked Version
         // (hadPending=true), the backstop piggybacks on that single tick.
-        var didBackstopWrite = false;
+        //
+        // Each missing-key write is durably committed by appending a
+        // LatticeMutation { Kind = Set, IsBackstop = true, ... } to the
+        // per-shard WAL via ICommitLogWriter — the same primitive every
+        // other foreground commit on this leaf uses under the
+        // WAL-as-sole-commit-point invariant. The WAL append is the
+        // durability point; the in-memory projection update
+        // (StoreEntry) happens immediately after under the same shared
+        // HLC tick so a co-located reader sees the value before the
+        // next dequeue. Crash recovery rebuilds Entries from the WAL
+        // via the per-shard activation-time replay path. The legacy
+        // standalone state-row persist that used to follow this loop
+        // is gone — every leaf foreground commit now obeys the
+        // WAL-as-sole-commit-point invariant.
         if (missingKeys is { Count: > 0 })
         {
             var stamp = Primitives.HybridLogicalClock.Tick(state.State.Clock);
             var origin = LatticeOriginContext.Current;
             var vc = LatticeVectorClockContext.Current;
+            var writer = ResolveCommitLogWriter();
+            var treeId = state.State.TreeId ?? string.Empty;
+            var shardIndex = state.State.ShardIndex ?? 0;
+            var maintenance = LatticeMaintenanceContext.Current;
+
             foreach (var kvp in missingKeys)
             {
+                if (writer is not null)
+                {
+                    var mutation = new LatticeMutation
+                    {
+                        TreeId = treeId,
+                        Kind = MutationKind.Set,
+                        Key = kvp.Key,
+                        Value = kvp.Value,
+                        Timestamp = stamp,
+                        IsTombstone = false,
+                        ExpiresAtTicks = 0,
+                        OriginClusterId = origin,
+                        VectorClock = vc,
+                        TransactionId = transactionId,
+                        Category = maintenance,
+                        IsPrepared = false,
+                        IsBackstop = true,
+                        ShardIndex = shardIndex,
+                    };
+
+                    // Emit the WAL append on the LeafWriteDuration
+                    // histogram tagged `kind=backstop` so operators can
+                    // size cross-migration backstop traffic against
+                    // ordinary writes on the same instrument. The tag
+                    // dimension is additive — emissions on this
+                    // histogram from the projection-checkpoint flush
+                    // path carry no `kind` tag and remain
+                    // distinguishable as the steady-state state-row
+                    // path (now scoped to projection-checkpoint flushes
+                    // only).
+                    var walStartTicks = Stopwatch.GetTimestamp();
+                    try
+                    {
+                        await writer.AppendAsync(mutation);
+                    }
+                    finally
+                    {
+                        var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
+                        LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "backstop"));
+                    }
+                }
+
                 var value = new Primitives.LwwValue<byte[]>
                 {
                     Value = kvp.Value,
@@ -740,9 +803,9 @@ internal sealed partial class BPlusLeafGrain
                 };
                 StoreEntry(kvp.Key, value);
             }
+
             AdvanceProjectionClock(stamp);
             BumpLocalRevision();
-            didBackstopWrite = true;
 
             // Record the keys we just backstopped so a SUBSEQUENT
             // delivery (carrying possibly a different subset) skips
@@ -758,18 +821,6 @@ internal sealed partial class BPlusLeafGrain
             }
             foreach (var kvp in missingKeys)
                 perTxBackstopped.Add(kvp.Key);
-        }
-
-        // Persist iff the backstop landed any writes. The pending-flip
-        // path is zero leaf I/O because the WAL holds the prepare
-        // records the replay coordinator uses to rebuild Entries on
-        // activation. The backstop path has no such WAL prepare (this
-        // leaf never saw the saga's prepare for the migrated keys —
-        // that's why they're here), so the post-saga Entries values
-        // must be persisted explicitly to survive deactivation.
-        if (didBackstopWrite)
-        {
-            await state.WriteStateAsync();
         }
 
         // Mark the saga's pending-flip dedup. _backstoppedTerminals is
