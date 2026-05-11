@@ -318,10 +318,40 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <see cref="IShardRootGrain.AppendTxTerminalAsync"/>; not intended
     /// for direct user invocation.
     /// </para>
+    /// <para>
+    /// <b>Cross-migration LWW backstop.</b> When the optional
+    /// <paramref name="committedValues"/> dictionary is supplied (only on the
+    /// commit path), it carries the saga's committed (key, value) pairs that
+    /// route to this leaf <em>at terminal-broadcast time</em>. The leaf
+    /// applies the values as a LWW-safe backstop only when it holds no
+    /// pending bucket for <paramref name="transactionId"/> — i.e. when the
+    /// prepare-phase shadow-forward into this leaf was dropped by a mid-saga
+    /// shard-split / drain race. In every other case the existing
+    /// pending-flip path is the authoritative source and the backstop is a
+    /// no-op. The backstop stamp is <see cref="Primitives.HybridLogicalClock.Tick"/>
+    /// of the leaf's current clock, guaranteeing strict-greater HLC ordering
+    /// against any stale pre-saga value already in
+    /// <see cref="State.LeafNodeState.Entries"/>. The backstop persists via
+    /// <see cref="IPersistentState{T}.WriteStateAsync"/> so a subsequent
+    /// reactivation observes the post-saga projection even though the
+    /// WAL on this leaf contains no prepare for this saga.
+    /// </para>
     /// </summary>
     /// <param name="transactionId">The saga's transaction id stamped on every prepared mutation. Must not be <see cref="Guid.Empty"/>; the call is a no-op for that value.</param>
     /// <param name="committed"><c>true</c> to flip pending mutations into the visible projection; <c>false</c> to drop them.</param>
-    Task ApplyTxTerminalAsync(Guid transactionId, bool committed);
+    /// <param name="committedValues">
+    /// Optional cross-migration LWW backstop. When non-null and
+    /// <paramref name="committed"/> is <c>true</c>, the leaf applies each
+    /// <c>(key, value)</c> as a LWW-safe write only when it holds no
+    /// pending bucket under <paramref name="transactionId"/>. The dictionary
+    /// must be restricted to keys this leaf owns (the shard root performs
+    /// the per-key-to-leaf grouping). Passing <c>null</c> is the
+    /// pre-backstop call shape and remains supported for wire compatibility.
+    /// </param>
+    Task ApplyTxTerminalAsync(
+        Guid transactionId,
+        bool committed,
+        IReadOnlyDictionary<string, byte[]>? committedValues = null);
 
     /// <summary>
     /// Returns the leaf's current
