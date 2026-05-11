@@ -145,28 +145,35 @@ Pick the cheapest tier that still exercises the suspected hot path. Tiers are ch
 
 | Tier shape | When | Cost per run | Cohort cost (3 runs) | Existing examples |
 |---|---|---|---|---|
-| **In-process microbench** (BDN `InProcessEmitToolchain`, single silo, no docker) | Grain-call latency, allocation-per-entry, codec round-trip, serialiser cost, hash distribution | ~7-9 minutes wall (full suite at `quick` fidelity) | ~25-30 minutes | `microbench` |
+| **In-process microbench** (BDN `InProcessEmitToolchain`, single silo, no docker) | Grain-call latency, allocation-per-entry, codec round-trip, serialiser cost, hash distribution | ~7-9 min wall (full suite at `quick`); ~5-10 sec wall (scoped subset at `dry`) | ~25-30 min (`quick`); ~30 sec (`dry`) | `microbench` |
 | **Docker-compose end-to-end** (one or more silos, real network, dashboard-grade metrics) | Ship/apply, cross-silo gRPC, multi-cluster replication, fleet-level latency tails | 1-2 minutes wall + ~30s warmup | 5-10 minutes | `bidirectional-replication` |
 
 State which **tier shape** you are using and why in the chat reply. Name the specific scenario you ran. **If the hypothesis is about ship/apply or anything cross-cluster, the in-process microbench tier is wrong** - state the rejection explicitly so it is clear you considered it. Conversely, if the hypothesis is about a code path that an in-process tier can exercise honestly, do not pay for a docker-compose cohort just because that scenario is the most familiar one.
 
-#### Workload scoping (microbench tier)
+#### Workload scoping and fidelity (microbench tier)
 
-**Scope every microbench cohort to the primary metrics the hypothesis is testing.** Edit the working-tree copy of `benchmark/scenarios/microbench.env` to set `BENCH_MICROBENCH_WORKLOADS` to a fully-qualified glob list naming the relevant benchmark methods, e.g.:
+**Scope every microbench cohort to the primary metrics the hypothesis is testing.** Two knobs control which benchmarks run and how thoroughly each is measured. Both have CLI overrides on `benchmark.ps1` so you can leave the committed defaults alone:
 
+| Knob | CLI override | Env var | Values |
+|---|---|---|---|
+| Workload filter | `-Workloads` | `BENCH_MICROBENCH_WORKLOADS` | Comma-separated BDN `--filter` globs (empty = full suite) |
+| Fidelity | `-Fidelity` | `BENCH_MICROBENCH_FIDELITY` | `dry` \| `quick` \| `full` |
+
+**Recommended optimisation-cycle invocation** (baseline and candidate cohorts both):
+
+```powershell
+./benchmark.ps1 microbench -Workloads '*.PointWrite,*.PointRead' -Fidelity dry
 ```
-BENCH_MICROBENCH_WORKLOADS=*.PointWrite,*.PointRead
-```
 
-This is **not** a wall-time optimisation — at `quick` fidelity BDN's per-benchmark overhead grows when fewer benchmarks share the host process, so a 7-method subset costs roughly the same wall time as the full 20-method suite (~8 min/run either way). The reasons to scope anyway are:
+A 7-method `dry`-fidelity run completes in ~5-10 seconds end-to-end vs ~8 minutes for the full-suite `quick` run, so an n=3 cohort costs roughly **30 seconds wall time** instead of the historical **~25-30 minutes**. The n>=3 cohort-average already provides the statistical guard `dry` fidelity sacrifices by collapsing to 1 warmup + 1 measurement iteration per method.
 
-1. **Cohort schema discipline.** The narrowed `results.json` makes the cohort tables in Phase 3 / Phase 6 trivially diff-able and keeps the agent's reasoning grounded in the metrics the hypothesis actually predicts will move.
-2. **Avoiding accidental success criteria.** A full-suite cohort tempts post-hoc cherry-picking ("look, `bulk_load_alloc_b` improved!"). Scope reduces the surface for that anti-pattern.
-3. **Reusable convention.** If you do find a way to genuinely cut microbench wall time later (e.g. a per-benchmark fidelity override that does not contaminate other measurements), the scoped env file is already in place.
+**Filter semantics.** `BENCH_MICROBENCH_WORKLOADS` is forwarded as a single `--filter` argument; BDN's binder splits the comma-separated value internally into multiple globs. Empirically (BDN 0.15.4, May 2026): `--filter '*.PointWrite,*.PointRead'` correctly matches the union of both pattern families. Repeated `--filter` flags do NOT accumulate (only the last wins), and space-separated values after a single `--filter` are not consumed past the first - both of those forms are wrong; always use the comma-joined single-arg form. Globs match fully-qualified names: `*.MethodName` pulls in any method whose identifier *starts with* `MethodName` (so `*.PointWrite` pulls in `PointWrite_DeepTree` and `PointWrite_DeeperTree` too) - narrow further with `*.MethodName_ExactSuffix` if that is wrong.
 
-**The `BENCH_MICROBENCH_WORKLOADS` value is a comma-separated list of BDN `--filter` globs** matched against fully-qualified method names. Use `*.MethodName` for exact-method matching (otherwise BDN treats the pattern as substring and pulls in suffixed variants like `MethodName_DeepTree`). Restore the empty default (`BENCH_MICROBENCH_WORKLOADS=`) on the working tree before opening the hand-off PR - the scoping filter is a per-cycle scratch convention, not a committed default.
+**Fidelity levels.** `quick` (default) = `Job.ShortRun` (1 launch + 3 warmup + 3 measurement iters) + in-process toolchain. `dry` = `Job.Dry` (1 warmup + 1 measurement iter) + in-process toolchain. `full` = `Job.Default` + forking toolchain (~30+ min/run, gold-standard rigour reserved for cycle-end re-verification when a `dry`/`quick` delta is borderline).
 
-**Both cohorts must run against the same scoping.** If you change `BENCH_MICROBENCH_WORKLOADS` between baseline and candidate, you have a confounded experiment, same rule as for any other scenario env var.
+**Both cohorts must run against the same scoping AND the same fidelity.** If you change `-Workloads` or `-Fidelity` between baseline and candidate, you have a confounded experiment - same rule as for any other scenario env var. Record both values in the Phase 1 hypothesis so the post-mortem can reproduce the cohort verbatim.
+
+**No working-tree edits required.** The previous convention of editing `benchmark/scenarios/microbench.env` in-place and reverting before the hand-off PR is obsolete - the CLI overrides supersede it. Leave `microbench.env` at its committed defaults (`BENCH_MICROBENCH_FIDELITY=quick`, empty `BENCH_MICROBENCH_WORKLOADS`) and drive every cohort via the `-Workloads`/`-Fidelity` flags. The env-file knobs remain available as a fallback for CI scenarios that cannot pass CLI args.
 
 #### Authoring a new scenario
 

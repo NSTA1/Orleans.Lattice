@@ -22,9 +22,17 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// default forking toolchain when methodology rigour outranks wall-clock budget.
 /// </para>
 /// <para>
-/// <b>Job.</b> <see cref="Job.ShortRun"/> by default to keep microbench in the same
-/// 2-3 minute envelope as the other scenarios. <c>BENCH_MICROBENCH_FIDELITY=full</c>
-/// also widens to <see cref="Job.Default"/> for higher-confidence statistics.
+/// <b>Job.</b> Three fidelity levels are recognised via <c>BENCH_MICROBENCH_FIDELITY</c>:
+/// <list type="bullet">
+///   <item><c>dry</c> &mdash; <see cref="Job.Dry"/> + <see cref="InProcessEmitToolchain"/>.
+///     1 warmup, 1 measurement, single iteration. Use for fast smoke-test runs and for
+///     optimisation cohorts where the n=3 cohort-average already provides the statistical
+///     guard. Per-method wall time drops by roughly an order of magnitude vs <c>quick</c>.</item>
+///   <item><c>quick</c> &mdash; <see cref="Job.ShortRun"/> + <see cref="InProcessEmitToolchain"/>.
+///     Default. 1 launch, 3 warmup, 3 measurement iterations. Standard cohort fidelity.</item>
+///   <item><c>full</c> &mdash; <see cref="Job.Default"/> + default forking toolchain.
+///     Gold-standard rigour; ~30+ minutes per run.</item>
+/// </list>
 /// </para>
 /// </summary>
 internal sealed class HarnessConfig : ManualConfig
@@ -32,16 +40,30 @@ internal sealed class HarnessConfig : ManualConfig
     public HarnessConfig(string resultsJsonPath)
     {
         var fidelity = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_FIDELITY") ?? "quick";
-        var fast = !string.Equals(fidelity, "full", StringComparison.OrdinalIgnoreCase);
 
-        var job = fast ? Job.ShortRun : Job.Default;
-        if (fast)
+        Job job;
+        if (string.Equals(fidelity, "full", StringComparison.OrdinalIgnoreCase))
         {
-            // Keep the cluster alive for the full BDN session by emitting all
+            // Forking toolchain + Job.Default for gold-standard rigour.
+            job = Job.Default;
+        }
+        else if (string.Equals(fidelity, "dry", StringComparison.OrdinalIgnoreCase))
+        {
+            // Job.Dry: 1 warmup + 1 measurement iteration. Statistical noise per
+            // single benchmark is high, so this fidelity is only meaningful when
+            // the caller is averaging across an n>=3 cohort (the standard
+            // optimisation-cycle pattern). In-process toolchain so the cluster
+            // is not respawned per benchmark.
+            job = Job.Dry.WithToolchain(InProcessEmitToolchain.Instance);
+        }
+        else
+        {
+            // Default "quick" path: Job.ShortRun + in-process toolchain.
+            // Keeps the cluster alive for the full BDN session by emitting all
             // workloads inside one process. Loses some JIT-isolation guarantees
             // but the trend dashboard cares about run-over-run delta, not absolute
             // single-digit ns precision.
-            job = job.WithToolchain(InProcessEmitToolchain.Instance);
+            job = Job.ShortRun.WithToolchain(InProcessEmitToolchain.Instance);
         }
 
         AddJob(job);
