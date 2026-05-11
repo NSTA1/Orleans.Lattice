@@ -67,6 +67,18 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<LwwEntry?> GetRawEntryAsync(string key);
 
     /// <summary>
+    /// Batched variant of <see cref="GetRawEntryAsync(string)"/>. Returns
+    /// the raw persisted entry for every key in <paramref name="keys"/>,
+    /// with the result list aligned by index with the input list
+    /// (so <c>result[i]</c> corresponds to <c>keys[i]</c>). Per-element
+    /// semantics match the single-key variant: <c>null</c> if the key
+    /// has never been written to this leaf, otherwise the raw record
+    /// including expiry metadata and tombstone flag. Does <b>not</b>
+    /// filter expired entries.
+    /// </summary>
+    Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys);
+
+    /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
     /// already exist (or is tombstoned). Returns a <see cref="GetOrSetResult"/> containing
     /// the existing value when the key is live, or <c>null</c> existing value when the

@@ -44,6 +44,29 @@ public partial class AtomicWriteGrainTests
         shard.GetRawEntryAsync(Arg.Any<string>())
             .Returns(Task.FromResult<LwwEntry?>(null));
 
+        // The production saga now issues a single batched
+        // GetRawEntriesAsync per shard rather than one GetRawEntryAsync
+        // per key. Stub the batched call to delegate to the existing
+        // per-key GetRawEntryAsync mock so tests can continue to stub
+        // individual keys (or per-call sequences for stale-routing
+        // retries) on the single-key method without rewriting every
+        // assertion. Per-key throws propagate out of the batched call
+        // and are caught by the saga's per-shard retry loop, which
+        // matches production behaviour (a batched call that throws
+        // on any key fails the whole batch).
+        shard.GetRawEntriesAsync(Arg.Any<List<string>>())
+            .Returns(async callInfo =>
+            {
+                var keys = (List<string>)callInfo[0];
+                var results = new List<LwwEntry?>(keys.Count);
+                foreach (var key in keys)
+                {
+                    var entry = await shard.GetRawEntryAsync(key);
+                    results.Add(entry);
+                }
+                return results;
+            });
+
         var opts = options ?? new LatticeOptions();
         var routing = new RoutingInfo(
             TreeId,

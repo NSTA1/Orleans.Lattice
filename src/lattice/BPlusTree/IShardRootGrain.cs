@@ -53,6 +53,20 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<LwwEntry?> GetRawEntryAsync(string key);
 
     /// <summary>
+    /// Batched variant of <see cref="GetRawEntryAsync(string)"/>. Returns
+    /// the raw entry for every key in <paramref name="keys"/>, with the
+    /// result list aligned by index with the input list (so
+    /// <c>result[i]</c> corresponds to <c>keys[i]</c>). Group-by-leaf
+    /// inside the shard root collapses the per-key fan-out into one
+    /// leaf RPC per distinct target leaf, mirroring the
+    /// <see cref="GetManyAsync(List{string})"/> traversal pattern.
+    /// Per-element semantics match the single-key variant: <c>null</c>
+    /// for absent or tombstoned keys; already-expired entries are
+    /// returned for caller-side introspection of expiry metadata.
+    /// </summary>
+    Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys);
+
+    /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
     /// already exist (or is tombstoned). Returns the existing value when the key is live,
     /// or <c>null</c> when the write was performed.

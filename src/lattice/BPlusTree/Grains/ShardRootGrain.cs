@@ -88,6 +88,80 @@ internal sealed partial class ShardRootGrain(
         return raw;
     }
 
+    /// <inheritdoc />
+    public async Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys)
+    {
+        await PrepareForOperationAsync();
+        ThrowIfRejectedForAnyKey(keys);
+        RecordRead();
+
+        var result = new List<LwwEntry?>(keys.Count);
+        for (int i = 0; i < keys.Count; i++) result.Add(null);
+
+        if (state.State.RootNodeId is null) return result;
+
+        // Group keys by their target leaf. Mirrors TraverseForBatchReadAsync
+        // but addresses the raw leaf grain directly (bypassing LeafCacheGrain)
+        // so tombstones and TTL metadata survive — matching single-key
+        // GetRawEntryAsync semantics. The bucket value carries the
+        // (key, inputIndex) pair so the per-leaf batched response can be
+        // scattered back into the index-aligned result list.
+        var leafBuckets = new Dictionary<GrainId, List<(string Key, int Index)>>();
+        if (state.State.RootIsLeaf)
+        {
+            var rootLeaf = state.State.RootNodeId!.Value;
+            var bucket = new List<(string, int)>(keys.Count);
+            for (int i = 0; i < keys.Count; i++) bucket.Add((keys[i], i));
+            leafBuckets[rootLeaf] = bucket;
+        }
+        else
+        {
+            for (int i = 0; i < keys.Count; i++)
+            {
+                var leafId = await TraverseToLeafAsync(keys[i]);
+                if (!leafBuckets.TryGetValue(leafId, out var bucket))
+                {
+                    bucket = new List<(string, int)>();
+                    leafBuckets[leafId] = bucket;
+                }
+                bucket.Add((keys[i], i));
+            }
+        }
+
+        // One batched RPC per distinct leaf. Sequential rather than
+        // parallel: each leaf grain serialises its incoming calls anyway
+        // (Orleans single-threaded reentrancy model), and the saga's
+        // microbench workload has all keys in a single leaf, so the
+        // sequential vs WhenAll distinction is observably identical for
+        // n=1 leaf and trades one Task.WhenAll allocation per call
+        // otherwise. Keep sequential to mirror the existing
+        // TraverseForBatchReadAsync shape.
+        foreach (var (leafId, bucket) in leafBuckets)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var leafKeys = new List<string>(bucket.Count);
+            foreach (var (key, _) in bucket) leafKeys.Add(key);
+
+            var leafResult = await leaf.GetRawEntriesAsync(leafKeys);
+
+            for (int i = 0; i < bucket.Count; i++)
+            {
+                var raw = leafResult[i];
+                // Tombstones are surfaced as null to match the single-key
+                // GetRawEntryAsync semantics. Already-expired entries are
+                // returned (callers filter via LwwValue.IsExpired) for
+                // parity with the single-key variant.
+                if (raw is null || raw.Value.IsTombstone)
+                {
+                    // result slot already initialised to null above.
+                    continue;
+                }
+                result[bucket[i].Index] = raw;
+            }
+        }
+        return result;
+    }
+
     public async Task<bool> ExistsAsync(string key)
     {
         await PrepareForOperationAsync();

@@ -376,6 +376,27 @@ internal sealed partial class BPlusLeafGrain(
         return Task.FromResult<LwwEntry?>(null);
     }
 
+    /// <inheritdoc />
+    public Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys)
+    {
+        // Pure in-memory dictionary lookup loop; no I/O, no allocation
+        // beyond the result list itself. The Orleans grain-call boundary
+        // wraps this in a single async state machine even though the
+        // method body is synchronous, so the cost per batch is one
+        // Task allocation regardless of key count - which is exactly
+        // the win the saga's PrepareAsync capture loop targets.
+        var entries = state.State.Entries;
+        var result = new List<LwwEntry?>(keys.Count);
+        foreach (var key in keys)
+        {
+            if (entries.TryGetValue(key, out var lww))
+                result.Add(new LwwEntry(key, lww));
+            else
+                result.Add(null);
+        }
+        return Task.FromResult(result);
+    }
+
     private async Task<SplitResult?> SetCoreAsync(string key, byte[] value, long expiresAtTicks)
     {
         // Recovery: if a previous split was interrupted, complete it first.
