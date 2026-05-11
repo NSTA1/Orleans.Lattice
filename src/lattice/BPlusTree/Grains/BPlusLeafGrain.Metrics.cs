@@ -6,12 +6,31 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// <see cref="System.Diagnostics.Metrics"/> instrumentation for
-/// <see cref="BPlusLeafGrain"/>. Wraps <c>IPersistentState.WriteStateAsync</c>
-/// in a latency-capturing helper, exposes typed tag builders for the
-/// scan, compaction, and tombstone-churn counters defined in
-/// <see cref="LatticeMetrics"/>, and provides the dual-durability
-/// commit-path helpers (lazy <see cref="ICommitLogWriter"/> resolution,
-/// shadow-persist wrapper, and per-step latency recorder).
+/// <see cref="BPlusLeafGrain"/>, plus the lazy DI resolvers shared by
+/// every partial of the class. Houses (a) <see cref="PersistAsync"/>,
+/// which wraps the leaf's <c>IPersistentState.WriteStateAsync</c> in a
+/// latency-capturing helper so the <see cref="LatticeMetrics.LeafWriteDuration"/>
+/// histogram observes every state-row flush, (b) the lazy
+/// <see cref="ICommitLogWriter"/> and <see cref="ILogger{T}"/>
+/// resolvers consulted by the foreground commit and projection paths,
+/// and (c) the per-step <see cref="RecordCommitStep"/> recorder for the
+/// commit-pipeline latency histogram.
+/// <para>
+/// Post-WAL-first scope: the per-shard WAL is the durability boundary
+/// for every saga / set / tombstone / backstop commit, so the surviving
+/// role of <see cref="PersistAsync"/> is narrowed to two slices:
+/// (i) persisting non-WAL-replayable topology and lifecycle metadata
+/// (sibling pointers, split lifecycle fields, tree id, shard index,
+/// key range, last-compaction version), and (ii) flushing the
+/// projection-checkpoint snapshot consulted by the activation-time WAL
+/// replay path. A small residual set of foreground commit sites in
+/// <c>MergeEntriesAsync</c>, <c>MergeManyAsync</c>, and
+/// <c>CompactTombstonesAsync</c> still drive their entry mutations
+/// through <see cref="PersistAsync"/> directly without a preceding WAL
+/// append; rerouting these to <see cref="ICommitLogWriter"/> is tracked
+/// as a follow-on roadmap entry so the surviving
+/// <see cref="PersistAsync"/> path becomes strictly topology + checkpoint.
+/// </para>
 /// </summary>
 internal sealed partial class BPlusLeafGrain
 {
@@ -19,9 +38,13 @@ internal sealed partial class BPlusLeafGrain
     /// Cached <see cref="ICommitLogWriter"/> resolved from
     /// <see cref="IGrainContext.ActivationServices"/> on first use.
     /// <see langword="null"/> when the host has not registered the
-    /// commit-log adapter (i.e. no replication package), in which case
-    /// the dual-durability commit path falls through to the legacy
-    /// state-row persist exclusively.
+    /// commit-log adapter (i.e. no replication package is in the
+    /// composition root), in which case the foreground commit paths
+    /// that consult the resolver short-circuit to the legacy state-row
+    /// persist. With the adapter registered, the WAL append is the
+    /// durability boundary and the legacy state-row persist is reserved
+    /// for the topology / lifecycle metadata and projection-checkpoint
+    /// slices described on the class-level summary.
     /// </summary>
     private ICommitLogWriter? _commitLogWriter;
 
@@ -34,18 +57,30 @@ internal sealed partial class BPlusLeafGrain
     private bool _commitLogWriterResolved;
 
     /// <summary>
-    /// Cached typed logger resolved on first use. Used by the
-    /// dual-durability commit path to log a warning when the
-    /// shadow-persist step throws (the caller still observes success
-    /// because the WAL is the durable boundary).
+    /// Cached typed logger resolved on first use. Used by the foreground
+    /// commit paths that route through <see cref="ICommitLogWriter"/>
+    /// to log diagnostic context when the optional post-WAL bookkeeping
+    /// (e.g. metric tagging, observer dispatch) throws — the caller
+    /// still observes success because the WAL append already established
+    /// the durable boundary.
     /// </summary>
     private ILogger<BPlusLeafGrain>? _logger;
 
     /// <summary>
-    /// Persists the leaf's state and records the elapsed time on the
-    /// <see cref="LatticeMetrics.LeafWriteDuration"/> histogram. The tree-id
-    /// tag is sourced from persisted state and may be empty when the tree
-    /// has not yet been registered with this leaf (pre-<c>SetTreeIdAsync</c>).
+    /// Persists the leaf's state row and records the elapsed time on
+    /// the <see cref="LatticeMetrics.LeafWriteDuration"/> histogram.
+    /// Used by (a) the topology / lifecycle paths (sibling pointer
+    /// updates, split lifecycle transitions, tree-id / shard-index /
+    /// key-range assignment, last-compaction-version stamping) that
+    /// persist metadata not carried by the per-shard WAL, (b) the
+    /// projection-checkpoint flush that snapshots <c>Entries</c> plus
+    /// <c>ProjectionCheckpointOffset</c> for the activation-time WAL
+    /// replayer, and (c) the residual foreground commit sites in
+    /// <c>MergeEntriesAsync</c>, <c>MergeManyAsync</c>, and
+    /// <c>CompactTombstonesAsync</c> still pending rerouting through
+    /// <see cref="ICommitLogWriter"/>. The tree-id tag is sourced from
+    /// persisted state and may be empty when the tree has not yet been
+    /// registered with this leaf (pre-<c>SetTreeIdAsync</c>).
     /// </summary>
     private async Task PersistAsync()
     {
