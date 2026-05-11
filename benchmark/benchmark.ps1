@@ -105,6 +105,18 @@ param(
     [Parameter(ParameterSetName = 'Run')]
     [switch] $NoHistoryPush,
 
+    # Microbench-only: override BENCH_MICROBENCH_WORKLOADS for this invocation.
+    # Comma-separated BDN --filter glob list (e.g. '*.PointWrite,*.PointRead').
+    # Ignored for non-microbench scenarios.
+    [Parameter(ParameterSetName = 'Run')]
+    [string] $Workloads = '',
+
+    # Microbench-only: override BENCH_MICROBENCH_FIDELITY for this invocation.
+    # One of 'dry' | 'quick' | 'full'. Ignored for non-microbench scenarios.
+    [Parameter(ParameterSetName = 'Run')]
+    [ValidateSet('', 'dry', 'quick', 'full')]
+    [string] $Fidelity = '',
+
     [Parameter(ParameterSetName = 'Compare', Mandatory = $true)]
     [switch] $Compare,
 
@@ -181,7 +193,7 @@ $AutoDiscoverPrefixes = @(
 $AutoDiscoverDotnetAllow = @(
     'dotnet_gc_collections',
     'dotnet_gc_pause_time_seconds',
-    'dotnet_gc_heap_total_allocated_bytes',
+    'dotnet_gc_heap_total Allocated Bytes',
     'dotnet_gc_last_collection_heap_size_bytes',
     'dotnet_gc_last_collection_memory_committed_size_bytes'
 )
@@ -803,7 +815,18 @@ function Invoke-Microbench {
     # Use the shared Get-GitSha helper so docker and microbench produce identical sha shapes.
     # Mismatched lengths (7 vs 10 chars) silently break trend continuity in the history dashboard.
     $gitSha = Get-GitSha
+    # Apply microbench CLI overrides to $EnvMap before Set-ProcessEnv so
+    # HarnessConfig (which reads BENCH_MICROBENCH_FIDELITY from the process
+    # env) and the log lines below all see the resolved values. -Workloads
+    # and -Fidelity are no-ops on non-microbench scenarios.
+    if (-not [string]::IsNullOrWhiteSpace($Fidelity)) {
+        $EnvMap['BENCH_MICROBENCH_FIDELITY'] = $Fidelity
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Workloads)) {
+        $EnvMap['BENCH_MICROBENCH_WORKLOADS'] = $Workloads
+    }
     Set-ProcessEnv -Map $EnvMap
+
     $env:BENCH_SCENARIO  = $ScenarioId
     $env:BENCH_RUN_ID    = $RunId
     $env:BENCH_GIT_SHA   = $gitSha
@@ -818,12 +841,27 @@ function Invoke-Microbench {
     if ($LASTEXITCODE -ne 0) { throw "microbench build failed (exit $LASTEXITCODE)" }
 
     # 2. Run BDN. The exporter writes results.json to BENCH_RESULTS_PATH on completion.
+    #
+    # BDN's --filter accepts comma-separated globs within a SINGLE argument value
+    # (the binder splits on comma internally) — e.g. '*.PointWrite,*.PointRead'
+    # correctly matches both pattern families. Repeated --filter flags do NOT
+    # accumulate; only the last one wins. Space-separated values after one
+    # --filter flag are also not consumed past the first.
+    # -Workloads (CLI) and BENCH_MICROBENCH_WORKLOADS (env) are already resolved
+    # into $EnvMap above.
+    $workloadsSpec = $EnvMap['BENCH_MICROBENCH_WORKLOADS']
     $filterArgs = @()
-    if (-not [string]::IsNullOrWhiteSpace($EnvMap['BENCH_MICROBENCH_WORKLOADS'])) {
-        $filterArgs = @('--filter', $EnvMap['BENCH_MICROBENCH_WORKLOADS'])
+    if (-not [string]::IsNullOrWhiteSpace($workloadsSpec)) {
+        # Normalise (trim whitespace around commas) and forward as a single arg.
+        $patterns = $workloadsSpec.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        if ($patterns.Count -gt 0) {
+            $filterArgs = @('--filter', ($patterns -join ','))
+            Write-Host ("[microbench] workload filter: {0}" -f ($patterns -join ', ')) -ForegroundColor Cyan
+        }
     }
     Write-Host "[microbench] running BenchmarkDotNet (fidelity=$($EnvMap['BENCH_MICROBENCH_FIDELITY']))" -ForegroundColor Cyan
     & dotnet run --project $projectPath -c Release --no-build -- --results $resultsPath @filterArgs
+
     if ($LASTEXITCODE -ne 0) { throw "microbench run failed (exit $LASTEXITCODE)" }
 
     # 3. Stamp the wall-clock duration onto the JSON the exporter wrote.

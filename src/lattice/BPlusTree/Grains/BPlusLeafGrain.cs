@@ -90,7 +90,19 @@ internal sealed partial class BPlusLeafGrain(
 
     private static readonly Task<StateDelta> EmptyDeltaTask = Task.FromResult(EmptyDelta);
 
-    private string ReplicaId => context.GrainId.ToString();
+    /// <summary>
+    /// Cached <see cref="IGrainContext.GrainId"/> rendered as a <see cref="string"/>.
+    /// The grain id is immutable for the lifetime of an activation, so this field
+    /// is populated lazily on first <see cref="ReplicaId"/> access and reused for
+    /// every subsequent read. Eliminates the per-call <see cref="object.ToString"/>
+    /// allocation that the previous getter shape paid on every CRUD operation
+    /// (8 hot-path call sites: 6 <see cref="VersionVector.Tick(string)"/> calls
+    /// across <c>CommitSetAsync</c> / <c>CommitDeleteAsync</c> / <c>MergeAsync</c>
+    /// / saga commit + 2 caller-clock reads inside <c>GetDeltaSinceAsync</c>).
+    /// </summary>
+    private string? _replicaId;
+
+    private string ReplicaId => _replicaId ??= context.GrainId.ToString();
     private ResolvedLatticeOptions? _options;
     private ValueTask<ResolvedLatticeOptions> GetOptionsAsync() =>
         _options is not null
