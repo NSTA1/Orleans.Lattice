@@ -24,7 +24,7 @@ public class CommitLogAdapterSeamRegistrationTests
         var resolved = provider.GetService<ICommitLogWriter>();
 
         Assert.That(resolved, Is.Not.Null);
-        Assert.That(resolved, Is.InstanceOf<ReplicationCommitLogWriter>());
+        Assert.That(resolved, Is.InstanceOf<WalCommitLogWriter>());
     }
 
     [Test]
@@ -35,7 +35,7 @@ public class CommitLogAdapterSeamRegistrationTests
         var resolved = provider.GetService<ICommitLogReader>();
 
         Assert.That(resolved, Is.Not.Null);
-        Assert.That(resolved, Is.InstanceOf<ReplicationCommitLogReader>());
+        Assert.That(resolved, Is.InstanceOf<WalCommitLogReader>());
     }
 
     [Test]
@@ -46,7 +46,7 @@ public class CommitLogAdapterSeamRegistrationTests
         var resolved = provider.GetService<ILeafSnapshotProvider>();
 
         Assert.That(resolved, Is.Not.Null);
-        Assert.That(resolved, Is.InstanceOf<ReplicationLeafSnapshotProvider>());
+        Assert.That(resolved, Is.InstanceOf<LeafSnapshotProvider>());
     }
 
     [Test]
@@ -76,6 +76,13 @@ public class CommitLogAdapterSeamRegistrationTests
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
+        // AddLatticeReplication now layers on top of AddLattice — the
+        // commit-log adapter seams (ICommitLogWriter / ICommitLogReader /
+        // IWalStorageProvider) are core registrations that AddLattice
+        // owns. The replication add-on wires the snapshot provider and
+        // per-tree mode resolver. Tests must call both, in order, to
+        // model the production registration shape.
+        builder.AddLattice((_, _) => { });
         builder.AddLatticeReplication(o =>
         {
             o.ClusterId = "test-cluster";

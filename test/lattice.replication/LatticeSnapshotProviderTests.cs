@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice;
@@ -32,7 +33,6 @@ public class LatticeSnapshotProviderTests
         _provider = new LatticeSnapshotProvider(
             _cluster.Client,
             new InMemoryReplicationCursorRegistry(),
-            new InMemoryInFlightSagaTracker(),
             LatticeSnapshotProviderUnitTests.TestOptions());
     }
 
@@ -175,12 +175,12 @@ public class LatticeSnapshotProviderTests
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLatticeReplication(opts => opts.ClusterId = ClusterId);
-            siloBuilder.Services.AddSingleton<IReplicationModeResolver, AllowAllLwwRegisterResolver>();
+            siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllLwwRegisterResolver>();
         }
     }
 
-    private sealed class AllowAllLwwRegisterResolver : IReplicationModeResolver
+    private sealed class AllowAllLwwRegisterResolver : ILatticeMergeModeResolver
     {
-        public ReplicationMode? Resolve(string treeId) => ReplicationMode.LwwRegister;
+        public LatticeMergeMode? Resolve(string treeId) => LatticeMergeMode.LwwRegister;
     }
 }

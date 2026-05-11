@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Diagnostics.Metrics;
 
 namespace Orleans.Lattice.Replication;
@@ -64,7 +65,7 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// <see cref="TagOutcome"/> value: the entry was short-circuited by
     /// the receiver before merge — either the per-origin high-water-mark
-    /// already covers <see cref="ReplogEntry.Timestamp"/>, or a
+    /// already covers <see cref="WalRecord.Timestamp"/>, or a
     /// defence-in-depth gate detected a local-origin entry that must
     /// not loop back onto its authoring cluster.
     /// </summary>
@@ -82,7 +83,7 @@ public static class LatticeReplicationMetrics
 
     /// <summary>
     /// <see cref="TagOutcome"/> value: the entry parked on the causal-apply
-    /// buffer because its declared <see cref="ReplogEntry.VectorClock"/>
+    /// buffer because its declared <see cref="WalRecord.VectorClock"/>
     /// was not yet dominated by the local vector clock. The original
     /// delivery is not advanced through the high-water-mark; the entry
     /// re-enters the apply pipeline through the buffer drain when its
@@ -104,27 +105,12 @@ public static class LatticeReplicationMetrics
     public const string OutcomeShadowForwardDedup = "shadow-forward-dedup";
 
     /// <summary>
-    /// <see cref="TagOutcome"/> value: the entry was admitted to the
-    /// per-tree atomic-batch staging buffer because the
-    /// receiver has <see cref="LatticeReplicationOptions.AtomicBatchDelivery"/>
-    /// enabled and the entry carries a non-zero
-    /// <see cref="ReplogEntry.AtomicBatchSize"/> indicating membership
-    /// in an enclosing <c>SetManyAtomicAsync</c> transaction. The
-    /// per-origin high-water-mark is left unchanged so the producer
-    /// continues to re-ship the entry until every sibling lands and
-    /// the whole batch is applied atomically; the entry re-enters the
-    /// apply pipeline when the buffer reports completeness for its
-    /// transaction id.
-    /// </summary>
-    public const string OutcomeAtomicBuffered = "atomic-buffered";
-
-    /// <summary>
     /// Tag key for the dead-letter enqueue / removal reason. Values are
     /// drawn from <see cref="ReasonDiscarded"/>, <see cref="ReasonReplayed"/>,
     /// <see cref="ReasonEvicted"/>, <see cref="ReasonSchema"/>,
     /// <see cref="ReasonHlcSkew"/>, <see cref="ReasonOversized"/>,
-    /// <see cref="ReasonAtomicApplyFailure"/>,
-    /// <see cref="ReasonOrphanTransaction"/>, and <see cref="ReasonUnknown"/>.
+
+    /// and <see cref="ReasonUnknown"/>.
     /// </summary>
     public const string TagReason = "reason";
 
@@ -158,11 +144,11 @@ public static class LatticeReplicationMetrics
 
     /// <summary>
     /// Reason tag value: enqueue cause was a malformed or self-inconsistent
-    /// <see cref="ReplogEntry"/> the receiver could not interpret. Examples
-    /// include a <see cref="ReplogOp.Set"/> with a <see langword="null"/>
-    /// <see cref="ReplogEntry.Value"/>, an unrecognised
-    /// <see cref="ReplogEntry.Mode"/>, or a missing required field
-    /// (<see cref="ReplogEntry.TreeId"/> / <see cref="ReplogEntry.OriginClusterId"/>).
+    /// <see cref="WalRecord"/> the receiver could not interpret. Examples
+    /// include a <see cref="MutationKind.Set"/> with a <see langword="null"/>
+    /// <see cref="WalRecord.Value"/>, an unrecognised
+    /// <see cref="WalRecord.Mode"/>, or a missing required field
+    /// (<see cref="WalRecord.TreeId"/> / <see cref="WalRecord.OriginClusterId"/>).
     /// Surfaces from <see cref="ArgumentException"/> /
     /// <see cref="InvalidOperationException"/> raised by the canonical
     /// <see cref="ReplicationApplier"/>.
@@ -172,7 +158,7 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Reason tag value: enqueue cause was implausible HLC skew between
     /// the receiver's wall clock and the entry's
-    /// <see cref="ReplogEntry.Timestamp"/>. Reserved for receivers that
+    /// <see cref="WalRecord.Timestamp"/>. Reserved for receivers that
     /// surface <see cref="HybridLogicalClock"/>-related faults as
     /// classified exceptions; the canonical applier does not currently
     /// raise this class of failure.
@@ -186,43 +172,6 @@ public static class LatticeReplicationMetrics
     /// the canonical applier in a size-validating decorator.
     /// </summary>
     public const string ReasonOversized = "oversized";
-
-    /// <summary>
-    /// Reason tag value: enqueue cause was an atomic-batch saga that
-    /// failed to commit on the receiver. Set when the cross-cluster
-    /// atomic apply seam (<c>IReplicationApplyGrain.ApplyManyAtomicAsync</c>)
-    /// returned <c>AtomicApplyOutcome.Compensated</c> for a completed
-    /// atomic batch surfaced from the per-tree
-    /// <c>IReplicationTxBufferGrain</c>, or threw with a non-cancellation
-    /// exception out of the apply pipeline. The whole batch is parked
-    /// together (one DLQ row per entry, every row sharing the same
-    /// transaction id and reason tag) so an operator inspecting the DLQ
-    /// sees the full atomic batch as a unit. The per-origin
-    /// high-water-mark is intentionally left unchanged on this path so
-    /// the producer continues to re-ship until the DLQ is recovered or
-    /// discarded.
-    /// </summary>
-    public const string ReasonAtomicApplyFailure = "atomic-apply-failure";
-
-    /// <summary>
-    /// Reason tag value: enqueue cause was an atomic-batch transaction
-    /// that remained partially-buffered on the receiver-side
-    /// <c>IReplicationTxBufferGrain</c> for longer than
-    /// <c>LatticeReplicationOptions.TxBufferOrphanTimeout</c>. The
-    /// per-tree maintenance grain sweeps stuck transactions on a
-    /// half-cadence relative to the WAL garbage-collection cadence and
-    /// routes every staged entry of an orphaned transaction through
-    /// <c>IReplicationDeadLetterGrain.EnqueueAsync</c> tagged with this
-    /// value (one DLQ row per entry, every row sharing the same
-    /// transaction id) so an operator inspecting the DLQ sees the
-    /// orphan as a unit. Eviction also clears the buffer's
-    /// blocked-floor pin and advances the per-origin high-water-mark
-    /// past the orphan's maximum HLC so causal-stream progress
-    /// resumes; the orphan's siblings are re-shippable on demand
-    /// through the standard <c>ILatticeReplicationDeadLetters.ReplayAsync</c>
-    /// tooling.
-    /// </summary>
-    public const string ReasonOrphanTransaction = "orphan-transaction";
 
     /// <summary>
     /// Reason tag value: catch-all bucket for enqueue causes the inbound
@@ -267,18 +216,21 @@ public static class LatticeReplicationMetrics
     /// in milliseconds and clamped to a non-negative value (a future
     /// timestamp from a faster-moving peer reports as <c>0</c> rather than
     /// a negative sample). Recorded once per successfully applied point
-    /// operation (<see cref="ReplogOp.Set"/> / <see cref="ReplogOp.Delete"/>);
+    /// operation (<see cref="MutationKind.Set"/> / <see cref="MutationKind.Delete"/>);
     /// range deletes carry <see cref="HybridLogicalClock.Zero"/> by design
-    /// and do not contribute. Tagged by <see cref="TagTree"/>.
+    /// and do not contribute. Tagged by <see cref="TagTree"/> and
+    /// <see cref="TagPeer"/> (the entry's <see cref="WalRecord.OriginClusterId"/>
+    /// , which under transitive replication may differ from the immediate
+    /// transport hop).
     /// </summary>
     public static readonly Histogram<double> ApplyLag =
         Meter.CreateHistogram<double>("orleans.lattice.replication.apply.lag", unit: "ms",
-            description: "Receiver-side replication lag at successful apply, tagged by tree.");
+            description: "Receiver-side replication lag at successful apply, tagged by tree and peer.");
 
     // --- Throughput counters (replog growth vs. ship rate) ----------------------
 
     /// <summary>
-    /// Counter of <see cref="ReplogEntry"/> records appended to the
+    /// Counter of <see cref="WalRecord"/> records appended to the
     /// per-tree write-ahead log on the local cluster. Incremented once
     /// per successful append at the
     /// <see cref="ShardedReplogSink"/> seam — i.e. counts entries that
@@ -297,7 +249,7 @@ public static class LatticeReplicationMetrics
             description: "Replog entries committed to the local WAL, tagged by tree.");
 
     /// <summary>
-    /// Counter of <see cref="ReplogEntry"/> records the local sender
+    /// Counter of <see cref="WalRecord"/> records the local sender
     /// successfully shipped to a remote peer. Incremented once per
     /// entry inside an acknowledged outbound batch (i.e. by the count
     /// of entries in the batch envelope, summed only on successful
@@ -312,7 +264,7 @@ public static class LatticeReplicationMetrics
     // --- Dead-letter queue counters ---------------------------------------------
 
     /// <summary>
-    /// Counter of <see cref="ReplogEntry"/> records parked on the per-tree
+    /// Counter of <see cref="WalRecord"/> records parked on the per-tree
     /// dead-letter queue after exhausting
     /// <see cref="LatticeReplicationOptions.MaxApplyRetries"/> consecutive
     /// apply attempts on the same
@@ -412,7 +364,7 @@ public static class LatticeReplicationMetrics
     // --- Causal+ apply-buffer instruments ---------------------------------------
 
     /// <summary>
-    /// UpDownCounter of <see cref="ReplogEntry"/> records currently parked
+    /// UpDownCounter of <see cref="WalRecord"/> records currently parked
     /// in the receiver-side causal-apply buffer pending dependency
     /// satisfaction. Incremented on park, decremented on drain or
     /// overflow eviction. Tagged by <see cref="TagTree"/> and
@@ -447,7 +399,7 @@ public static class LatticeReplicationMetrics
             description: "Wait time between park and drain for a buffered causal-apply entry, tagged by tree.");
 
     /// <summary>
-    /// Counter of <see cref="ReplogEntry"/> records that the receiver
+    /// Counter of <see cref="WalRecord"/> records that the receiver
     /// could not apply immediately because their declared causal
     /// dependencies were not yet satisfied by the local vector clock.
     /// Incremented once per park (including overflow-evicted parks);
@@ -504,7 +456,7 @@ public static class LatticeReplicationMetrics
     /// </para>
     /// <para>
     /// Tagged by <see cref="TagTree"/> and <see cref="TagOrigin"/>; the
-    /// origin tag carries the entry's <see cref="ReplogEntry.OriginClusterId"/>
+    /// origin tag carries the entry's <see cref="WalRecord.OriginClusterId"/>
     /// so operators can attribute a regression to the authoring cluster
     /// rather than the immediate transport peer.
     /// </para>
@@ -541,170 +493,4 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="PeerFellOffLog"/> counter.
     /// </summary>
     public const string PeerFellOffLogName = "orleans.lattice.replication.peer.fell_off_log";
-
-    // --- Atomic-batch instruments -----------------------------------------------
-    //
-    // Surface receiver-side cross-cluster atomic-batch staging health for hosts
-    // that have flipped <see cref="LatticeReplicationOptions.AtomicBatchDelivery"/>
-    // to <c>true</c>. The four instruments below are only emitted on opt-in
-    // trees; a host running every replicated tree under the default
-    // (<c>AtomicBatchDelivery = false</c>) receives an empty distribution and
-    // an unchanging counter on every dimension, which is the correct signal
-    // (no atomic-batch traffic is being staged, so there is nothing to
-    // observe).
-
-    /// <summary>
-    /// <see cref="TagOutcome"/> value emitted by
-    /// <see cref="ApplyTxCompleted"/> when the receiver-side
-    /// atomic-batch saga committed every key in the batch under one
-    /// <see cref="IReplicationApplyGrain.ApplyManyAtomicAsync"/> call
-    /// and the per-origin high-water-mark advanced once to the maximum
-    /// HLC across the batch. Every key in the batch is now visible to
-    /// concurrent readers on the receiver, satisfying the cross-cluster
-    /// atomic-visibility contract this instrument exists to surface.
-    /// </summary>
-    public const string OutcomeTxSuccess = "success";
-
-    /// <summary>
-    /// <see cref="TagOutcome"/> value emitted by
-    /// <see cref="ApplyTxCompleted"/> when a partially-buffered atomic
-    /// batch exceeded
-    /// <see cref="LatticeReplicationOptions.TxBufferOrphanTimeout"/>
-    /// and was swept by the per-tree maintenance grain. Every staged
-    /// entry of the orphan was parked on the per-tree dead-letter
-    /// queue tagged
-    /// <see cref="ReasonOrphanTransaction"/>; the per-origin
-    /// high-water-mark was advanced past the orphan's max HLC so
-    /// causal-stream progress resumes. Recovery is via the standard
-    /// <c>ILatticeReplicationDeadLetters.ReplayAsync</c> tooling.
-    /// </summary>
-    public const string OutcomeTxDlqOrphan = "dlq_orphan";
-
-    /// <summary>
-    /// <see cref="TagOutcome"/> value emitted by
-    /// <see cref="ApplyTxCompleted"/> when the receiver-side
-    /// atomic-batch saga returned
-    /// <c>AtomicApplyOutcome.Compensated</c> or threw a non-cancellation
-    /// exception out of
-    /// <see cref="IReplicationApplyGrain.ApplyManyAtomicAsync"/>. Every
-    /// staged entry of the failed batch was parked on the per-tree
-    /// dead-letter queue tagged
-    /// <see cref="ReasonAtomicApplyFailure"/>; the per-origin
-    /// high-water-mark was left unchanged so the producer continues
-    /// to re-ship the batch until the DLQ is recovered or discarded.
-    /// </summary>
-    public const string OutcomeTxDlqApplyFailure = "dlq_apply_failure";
-
-    /// <summary>
-    /// <see cref="TagOutcome"/> value emitted by
-    /// <see cref="ApplyTxCompleted"/> when the receiver-side
-    /// atomic-batch staging buffer evicted a partially-buffered
-    /// transaction to honour
-    /// <see cref="LatticeReplicationOptions.AtomicBatchBufferMaxTransactions"/>
-    /// or
-    /// <see cref="LatticeReplicationOptions.AtomicBatchBufferMaxBytes"/>.
-    /// Eviction routes every displaced entry through the per-tree
-    /// dead-letter queue tagged <see cref="ReasonEvicted"/>; the
-    /// producer's per-origin high-water-mark was never advanced past
-    /// the displaced entries so they remain durably re-shippable.
-    /// </summary>
-    public const string OutcomeTxEvictedCapacity = "evicted_capacity";
-
-    /// <summary>
-    /// UpDownCounter of distinct <c>(originClusterId, transactionId)</c>
-    /// transactions currently partially-buffered on the receiver-side
-    /// atomic-batch staging buffer. Incremented when an admission
-    /// inserts a new transaction key (the first staged entry of a
-    /// batch) and decremented when the transaction is removed
-    /// (apply-on-completion handoff, capacity eviction, or orphan
-    /// sweep). Subsequent admissions to an already-tracked transaction
-    /// grow <see cref="ApplyTxBufferBytes"/> but not this counter.
-    /// Tagged by <see cref="TagTree"/>.
-    /// <para>
-    /// Activation rehydration does not contribute: a silo restart
-    /// reactivating the buffer with persisted entries inherits the
-    /// occupancy from the prior silo lifetime, so re-incrementing
-    /// would silently double-count under the typical Orleans
-    /// activation churn pattern. The counter is therefore a delta
-    /// surface relative to the activation's lifetime — operators
-    /// should not interpret it as an absolute occupancy gauge across
-    /// silo restarts.
-    /// </para>
-    /// </summary>
-    public static readonly UpDownCounter<long> ApplyTxBuffered =
-        Meter.CreateUpDownCounter<long>("orleans.lattice.replication.apply.tx_buffered", unit: "{transaction}",
-            description: "Distinct atomic-batch transactions currently partially-buffered, tagged by tree.");
-
-    /// <summary>
-    /// UpDownCounter of cumulative serialised payload bytes parked on
-    /// the receiver-side atomic-batch staging buffer. Tracks the same
-    /// lifecycle as <see cref="ApplyTxBuffered"/> at per-entry
-    /// granularity (every staged entry contributes its estimated
-    /// size). Drives a future health-probe integration. Tagged by
-    /// <see cref="TagTree"/>.
-    /// </summary>
-    public static readonly UpDownCounter<long> ApplyTxBufferBytes =
-        Meter.CreateUpDownCounter<long>("orleans.lattice.replication.apply.tx_buffer_bytes", unit: "By",
-            description: "Cumulative serialised payload size parked on the atomic-batch staging buffer, tagged by tree.");
-
-    /// <summary>
-    /// Histogram of the wall-clock interval, in milliseconds, between
-    /// the first staged entry of an atomic batch landing on the
-    /// receiver-side staging buffer and the saga that applies the
-    /// completed batch returning a terminal outcome. Reported once
-    /// per terminal apply outcome (<see cref="OutcomeTxSuccess"/> or
-    /// <see cref="OutcomeTxDlqApplyFailure"/>); orphan eviction and
-    /// capacity eviction do not record this histogram because no
-    /// apply was attempted. The sample is the user-visible
-    /// cross-cluster atomic-batch latency operators alert on when
-    /// they have opted into the stronger visibility guarantee. Tagged
-    /// by <see cref="TagTree"/> and <see cref="TagOutcome"/>.
-    /// <para>
-    /// The instrument name encodes the unit (<c>tx_apply_duration_ms</c>);
-    /// <c>unit:</c> is left null so an OpenTelemetry → Prometheus
-    /// exporter does not append a redundant <c>_milliseconds</c>
-    /// suffix to the wire name.
-    /// </para>
-    /// </summary>
-    public static readonly Histogram<double> ApplyTxApplyDurationMs =
-        Meter.CreateHistogram<double>("orleans.lattice.replication.apply.tx_apply_duration_ms",
-            description: "Cross-cluster atomic-batch apply latency from first-stage to saga-terminal, tagged by tree and outcome.");
-
-    /// <summary>
-    /// Counter of receiver-side atomic-batch transactions that
-    /// reached a terminal disposition. Every transaction admitted to
-    /// the staging buffer is guaranteed to increment this counter
-    /// exactly once across one of the four
-    /// <see cref="TagOutcome"/> partitions —
-    /// <see cref="OutcomeTxSuccess"/>,
-    /// <see cref="OutcomeTxDlqOrphan"/>,
-    /// <see cref="OutcomeTxDlqApplyFailure"/>, or
-    /// <see cref="OutcomeTxEvictedCapacity"/> — so the sum of the
-    /// four counters equals the total number of admitted transactions
-    /// in steady state. Tagged by <see cref="TagTree"/> and
-    /// <see cref="TagOutcome"/>.
-    /// </summary>
-    public static readonly Counter<long> ApplyTxCompleted =
-        Meter.CreateCounter<long>("orleans.lattice.replication.apply.tx_completed", unit: "{transaction}",
-            description: "Receiver-side atomic-batch transactions that reached a terminal disposition, tagged by tree and outcome.");
-
-    /// <summary>
-    /// Canonical name of the <see cref="ApplyTxBuffered"/> up/down counter.
-    /// </summary>
-    public const string ApplyTxBufferedName = "orleans.lattice.replication.apply.tx_buffered";
-
-    /// <summary>
-    /// Canonical name of the <see cref="ApplyTxBufferBytes"/> up/down counter.
-    /// </summary>
-    public const string ApplyTxBufferBytesName = "orleans.lattice.replication.apply.tx_buffer_bytes";
-
-    /// <summary>
-    /// Canonical name of the <see cref="ApplyTxApplyDurationMs"/> histogram.
-    /// </summary>
-    public const string ApplyTxApplyDurationMsName = "orleans.lattice.replication.apply.tx_apply_duration_ms";
-
-    /// <summary>
-    /// Canonical name of the <see cref="ApplyTxCompleted"/> counter.
-    /// </summary>
-    public const string ApplyTxCompletedName = "orleans.lattice.replication.apply.tx_completed";
 }

@@ -1,8 +1,10 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Hosting;
 using Orleans.Lattice.Replication;
+using Orleans.Lattice.Replication.Adapters;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Replication.Tests;
@@ -156,6 +158,10 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
+        // IWalStorageProvider is owned by AddLattice (core) since the WAL
+        // adapters were promoted out of replication. AddLatticeReplication
+        // composes on top and must not overwrite the core registration.
+        builder.AddLattice((_, _) => { });
         builder.AddLatticeReplication(_ => { });
 
         var provider = services.BuildServiceProvider();
@@ -171,6 +177,7 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
+        builder.AddLattice((_, _) => { });
         builder.AddLatticeReplication(_ => { });
 
         var provider = services.BuildServiceProvider();
@@ -188,6 +195,7 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
+        builder.AddLattice((_, _) => { });
         builder.AddLatticeReplication(_ => { });
 
         var provider = services.BuildServiceProvider();
@@ -285,23 +293,23 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         builder.AddLatticeReplication(_ => { });
 
         var provider = services.BuildServiceProvider();
-        var resolver = provider.GetRequiredService<IReplicationModeResolver>();
-        Assert.That(resolver, Is.InstanceOf<ReplicationModeResolver>());
+        var resolver = provider.GetRequiredService<ILatticeMergeModeResolver>();
+        Assert.That(resolver, Is.InstanceOf<ConfiguredLatticeMergeModeResolver>());
     }
 
     [Test]
     public void AddLatticeReplication_does_not_overwrite_pre_registered_mode_resolver()
     {
         var services = new ServiceCollection();
-        var custom = Substitute.For<IReplicationModeResolver>();
-        services.AddSingleton<IReplicationModeResolver>(custom);
+        var custom = Substitute.For<ILatticeMergeModeResolver>();
+        services.AddSingleton<ILatticeMergeModeResolver>(custom);
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
         builder.AddLatticeReplication(_ => { });
 
         var provider = services.BuildServiceProvider();
-        Assert.That(provider.GetRequiredService<IReplicationModeResolver>(), Is.SameAs(custom));
+        Assert.That(provider.GetRequiredService<ILatticeMergeModeResolver>(), Is.SameAs(custom));
     }
 
     [Test]
@@ -593,7 +601,7 @@ public class LatticeReplicationServiceCollectionExtensionsTests
 
         var provider = services.BuildServiceProvider();
         var reporter = provider.GetRequiredService<Orleans.Lattice.BPlusTree.Grains.ILeafCursorReporter>();
-        Assert.That(reporter, Is.InstanceOf<ReplicationLeafCursorReporter>());
+        Assert.That(reporter, Is.InstanceOf<LeafCursorReporter>());
     }
 
     [Test]

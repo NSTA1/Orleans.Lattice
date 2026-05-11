@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Grpc.Core;
@@ -154,7 +155,7 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
                 WireVersion = ReplicationBatchEnvelope.CurrentVersion,
                 TreeName = batch.TreeName,
                 OriginClusterId = batch.OriginClusterId,
-                Entries = Array.Empty<ReplogEntry>(),
+                Entries = Array.Empty<WalRecord>(),
             };
         }
 

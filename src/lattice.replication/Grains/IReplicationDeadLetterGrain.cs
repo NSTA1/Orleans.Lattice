@@ -1,8 +1,9 @@
+using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication.Grains;
 
 /// <summary>
 /// Per-tree dead-letter queue grain. Holds bounded FIFO storage for
-/// <see cref="ReplogEntry"/> records the inbound apply pipeline could
+/// <see cref="WalRecord"/> records the inbound apply pipeline could
 /// not install after exhausting
 /// <see cref="LatticeReplicationOptions.MaxApplyRetries"/> consecutive
 /// retries on the same
@@ -11,7 +12,7 @@ namespace Orleans.Lattice.Replication.Grains;
 /// Grain key format: the tree id verbatim. A replicated tree therefore
 /// has at most one DLQ activation regardless of how many origin
 /// clusters publish to it; the entry's
-/// <see cref="ReplogEntry.OriginClusterId"/> remains carried inside
+/// <see cref="WalRecord.OriginClusterId"/> remains carried inside
 /// the parked <see cref="DeadLetterEntry.Entry"/> for diagnostic
 /// fan-out by the inspection seam.
 /// </para>
@@ -39,7 +40,7 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
     /// <c>reason</c> dimension stays stable across publishers.
     /// </para>
     /// </summary>
-    Task<long> EnqueueAsync(ReplogEntry entry, string failureReason, int retryCount, string reasonTag, CancellationToken cancellationToken);
+    Task<long> EnqueueAsync(WalRecord entry, string failureReason, int retryCount, string reasonTag, CancellationToken cancellationToken);
 
     /// <summary>Returns every parked entry in ascending entry-id order. Empty list when the queue is empty.</summary>
     Task<IReadOnlyList<DeadLetterEntry>> ListAsync(CancellationToken cancellationToken);

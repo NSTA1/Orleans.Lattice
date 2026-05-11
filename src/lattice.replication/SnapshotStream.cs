@@ -63,43 +63,6 @@ public sealed class SnapshotStream
     public IAsyncEnumerable<SnapshotEntry> Entries { get; }
 
     /// <summary>
-    /// Atomic-batch saga transaction ids that the producer-side
-    /// snapshot quiesce path
-    /// (<see cref="LatticeReplicationOptions.SnapshotSagaQuiesceTimeout"/>)
-    /// could not drain to completion before the snapshot's tree
-    /// scan began. Empty when no saga was in flight or every
-    /// in-flight saga finished emitting before the timeout elapsed.
-    /// <para>
-    /// Each id in the list identifies a saga whose per-key
-    /// <c>SetManyAtomicAsync</c> emissions <i>may</i> have been
-    /// split across the snapshot / incremental boundary — some
-    /// keys committed before the snapshot's <see cref="AsOfHlc"/>
-    /// (visible in <see cref="Entries"/>), the remainder committed
-    /// after (delivered on the post-snapshot incremental stream).
-    /// The receiver's bootstrap state machine pins the list on
-    /// <see cref="Grains.BootstrapCoordinatorState.SagaBlacklist"/>
-    /// and registers it with the per-tree
-    /// <see cref="Grains.IReplicationTxBufferGrain"/>; subsequent
-    /// incremental entries carrying a blacklisted
-    /// <see cref="ReplogEntry.TransactionId"/> bypass the staging
-    /// buffer and are applied as point writes directly. Atomic
-    /// visibility is degraded to causal+ for those specific
-    /// timed-out sagas — operators should raise
-    /// <see cref="LatticeReplicationOptions.SnapshotSagaQuiesceTimeout"/>
-    /// (or reduce snapshot concurrency) if the blacklist is
-    /// non-empty under steady-state load.
-    /// </para>
-    /// <para>
-    /// Always non-null; the empty-list case is the steady-state
-    /// happy path. Wire-compatibility: legacy receivers that decode
-    /// a missing field simply observe an empty blacklist and apply
-    /// every incremental entry through the unmodified
-    /// staging-buffer path.
-    /// </para>
-    /// </summary>
-    public IReadOnlyList<Guid> SagaBlacklist { get; }
-
-    /// <summary>
     /// Constructs a new <see cref="SnapshotStream"/>. The constructor
     /// takes ownership of the supplied
     /// <paramref name="causalStableFrontier"/> reference; callers
@@ -109,19 +72,11 @@ public sealed class SnapshotStream
     /// <param name="asOfHlc">The snapshot's as-of HLC.</param>
     /// <param name="causalStableFrontier">The producer's per-tree vector clock at snapshot time. Must be non-null.</param>
     /// <param name="entries">The entry stream. Must be non-null.</param>
-    /// <param name="sagaBlacklist">
-    /// Atomic-batch saga transaction ids that did not drain to
-    /// completion within the producer-side quiesce window. May be
-    /// <see langword="null"/> for backwards compatibility — the
-    /// constructor coerces a null reference to
-    /// <see cref="Array.Empty{T}"/>.
-    /// </param>
     public SnapshotStream(
         string treeName,
         HybridLogicalClock asOfHlc,
         VersionVector causalStableFrontier,
-        IAsyncEnumerable<SnapshotEntry> entries,
-        IReadOnlyList<Guid>? sagaBlacklist = null)
+        IAsyncEnumerable<SnapshotEntry> entries)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
         ArgumentNullException.ThrowIfNull(causalStableFrontier);
@@ -131,6 +86,5 @@ public sealed class SnapshotStream
         AsOfHlc = asOfHlc;
         CausalStableFrontier = causalStableFrontier;
         Entries = entries;
-        SagaBlacklist = sagaBlacklist ?? Array.Empty<Guid>();
     }
 }

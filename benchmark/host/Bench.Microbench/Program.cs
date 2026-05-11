@@ -5,13 +5,23 @@ using Orleans.Lattice.Benchmark.Microbench;
 
 // CLI:  --results <path>   write the harness-shaped results.json here
 //       --filter  <glob>   pass-through to BDN's --filter (multiple comma-separated globs)
+//       --baseline <path>  optional baseline results.json for regression-gate comparison
+//                          (defaults to baseline-v3.4.0.json next to the assembly when
+//                          BENCH_REGRESSION_GATE_ENABLED=true)
+//       --tolerance <pct>  regression tolerance band in percent (default: 10)
 //
 // Env-var fallbacks (so benchmark.ps1 doesn't have to assemble a CLI):
 //   BENCH_RESULTS_PATH         → --results
 //   BENCH_MICROBENCH_WORKLOADS → --filter (comma list of method names; '*' wildcards apply)
+//   BENCH_BASELINE_PATH        → --baseline
+//   BENCH_REGRESSION_TOLERANCE → --tolerance
+//   BENCH_REGRESSION_GATE_ENABLED=true enables the gate even when no --baseline is set
+//                                       (resolves to the bundled baseline-v3.4.0.json)
 
 string? resultsPath = null;
 string? filterRaw = null;
+string? baselinePath = null;
+string? toleranceRaw = null;
 
 for (var i = 0; i < args.Length; i++)
 {
@@ -25,6 +35,12 @@ for (var i = 0; i < args.Length; i++)
         case "-f":
             filterRaw = args[++i];
             break;
+        case "--baseline":
+            baselinePath = args[++i];
+            break;
+        case "--tolerance":
+            toleranceRaw = args[++i];
+            break;
         default:
             // Unknown args are forwarded to BDN's argument parser later. Keeping
             // the simple parse loop limited to the harness-specific switches.
@@ -36,7 +52,15 @@ resultsPath ??= Environment.GetEnvironmentVariable("BENCH_RESULTS_PATH");
 if (string.IsNullOrWhiteSpace(resultsPath))
 {
     var runId = DateTime.UtcNow.ToString("yyyy-MM-ddTHH-mm-ssZ");
-    resultsPath = Path.Combine(".run", "microbench", runId, "results.json");
+    // Default fallback: write into the canonical benchmark/.run/microbench
+    // tree that benchmark.ps1 (and .gitignore) both target. Resolved
+    // relative to the benchmark project root (walking up from the
+    // executing assembly) rather than the current working directory, so
+    // ad-hoc `dotnet run --project ...` invocations from the repo root
+    // don't drop a sibling `.run/` directory outside the gitignored area.
+    var projectRoot = LocateBenchmarkRoot()
+        ?? Path.GetFullPath("benchmark");
+    resultsPath = Path.Combine(projectRoot, ".run", "microbench", runId, "results.json");
 }
 resultsPath = Path.GetFullPath(resultsPath);
 
@@ -62,4 +86,78 @@ if (!string.IsNullOrWhiteSpace(filterRaw))
 }
 
 var summary = BenchmarkRunner.Run<LatticeMicroBenchmarks>(config);
-return summary.HasCriticalValidationErrors ? 1 : 0;
+var bdnExitCode = summary.HasCriticalValidationErrors ? 1 : 0;
+
+// Regression-gate pass: if a baseline is configured (explicitly via --baseline /
+// BENCH_BASELINE_PATH, or implicitly via BENCH_REGRESSION_GATE_ENABLED=true which
+// resolves to the bundled baseline-v3.4.0.json next to the assembly), compare the
+// freshly-written results.json against it and OR-combine the violation count
+// into the process exit code.
+baselinePath ??= Environment.GetEnvironmentVariable("BENCH_BASELINE_PATH");
+toleranceRaw ??= Environment.GetEnvironmentVariable("BENCH_REGRESSION_TOLERANCE");
+var gateRequested = !string.IsNullOrWhiteSpace(baselinePath)
+    || string.Equals(Environment.GetEnvironmentVariable("BENCH_REGRESSION_GATE_ENABLED"), "true", StringComparison.OrdinalIgnoreCase);
+if (gateRequested && !summary.HasCriticalValidationErrors)
+{
+    if (string.IsNullOrWhiteSpace(baselinePath))
+    {
+        baselinePath = Path.Combine(AppContext.BaseDirectory, "baseline-v3.4.0.json");
+    }
+    var tolerance = 10d;
+    if (!string.IsNullOrWhiteSpace(toleranceRaw)
+        && double.TryParse(toleranceRaw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var t))
+    {
+        tolerance = t;
+    }
+
+    if (!File.Exists(baselinePath))
+    {
+        Console.WriteLine($"[regression-gate] baseline file not found: {baselinePath} — skipping gate.");
+    }
+    else if (!File.Exists(resultsPath))
+    {
+        Console.WriteLine($"[regression-gate] current results not found: {resultsPath} — skipping gate.");
+    }
+    else
+    {
+        var report = RegressionGate.Compare(baselinePath, resultsPath, tolerance);
+        Console.Write(RegressionGate.Render(report));
+        if (report.Violations.Count > 0)
+        {
+            // OR-combine with BDN's own exit code so a regression is fail-fast in CI
+            // even when the BDN run itself reports clean.
+            bdnExitCode |= 2;
+        }
+    }
+}
+
+return bdnExitCode;
+
+// Local-function helper for the top-level fallback path resolution above.
+// Walks upward from AppContext.BaseDirectory looking for the canonical
+// `benchmark/` folder shipped at the repo root. Returns its full path,
+// or null if not found (which only happens when the assembly has been
+// published or moved out of the source tree, in which case the caller
+// falls back to a CWD-relative path). Keeps ad-hoc `dotnet run --project
+// benchmark/host/Bench.Microbench` invocations writing into the same
+// gitignored `benchmark/.run/microbench/` location that benchmark.ps1
+// uses, instead of dropping a sibling `.run/` at the repo root.
+static string? LocateBenchmarkRoot()
+{
+    // BaseDirectory points at .../benchmark/host/Bench.Microbench/bin/<config>/<tfm>/.
+    // Walk up looking for a directory whose name is exactly "benchmark"
+    // and whose parent contains a sibling "src" folder (the repo
+    // structure). The walk has a small upper bound so a misplaced
+    // assembly cannot loop indefinitely.
+    var dir = new DirectoryInfo(AppContext.BaseDirectory);
+    for (var i = 0; i < 16 && dir is not null; i++, dir = dir.Parent)
+    {
+        if (string.Equals(dir.Name, "benchmark", StringComparison.OrdinalIgnoreCase)
+            && dir.Parent is { } parent
+            && Directory.Exists(Path.Combine(parent.FullName, "src")))
+        {
+            return dir.FullName;
+        }
+    }
+    return null;
+}

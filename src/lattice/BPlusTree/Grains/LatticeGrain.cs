@@ -212,18 +212,49 @@ internal sealed partial class LatticeGrain(
             bucket.Add(key);
         }
 
-        // Fan out batch reads in parallel per shard.
-        var result = new ConcurrentDictionary<string, byte[]>();
-        var tasks = new List<Task>(shardBuckets.Count);
-
-        foreach (var (shardIdx, bucket) in shardBuckets)
+        // Double-checked snapshot retry: pre-fetch a TxRegistry snapshot
+        // (snap1), fan out under that ambient view, then re-fetch
+        // (snap2) and confirm no saga transitioned InFlight->Committed
+        // during the fan-out. The single-shot snapshot pattern is
+        // insufficient because per-leaf drain into Entries on
+        // ApplyTxCommit is irreversible: a reader whose snap1 was
+        // taken before MarkCommittedAsync but whose fan-out reaches
+        // some leaves after their drain will see drained leaves return
+        // post-saga Entries (no pending entry to gate visibility) while
+        // sibling undrained leaves consult snap1.InFlight and fall
+        // through to pre-saga Entries — split-observation that defeats
+        // strict per-tree atomic visibility. Retrying with snap2 (now
+        // reflecting the committed transition) makes the next fan-out
+        // observe the saga as Committed everywhere, so undrained
+        // leaves surface pending.value (post) and drained leaves'
+        // Entries=post are consistent.
+        var maxRetries = Math.Max(1, Options.MaxScanRetries);
+        for (int attempt = 0; attempt < maxRetries; attempt++)
         {
-            var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
-            tasks.Add(FetchFromShardAsync(shard, bucket, result));
+            var snap1 = await FetchRegistrySnapshotAsync();
+            var concurrent = new ConcurrentDictionary<string, byte[]>();
+            using (LatticeRegistrySnapshotContext.BeginScope(snap1))
+            {
+                var tasks = new List<Task>(shardBuckets.Count);
+                foreach (var (shardIdx, bucket) in shardBuckets)
+                {
+                    var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
+                    tasks.Add(FetchFromShardAsync(shard, bucket, concurrent));
+                }
+                await Task.WhenAll(tasks);
+            }
+
+            var snap2 = await FetchRegistrySnapshotAsync();
+            if (IsSnapshotStable(snap1, snap2))
+                return new Dictionary<string, byte[]>(concurrent);
+            // else: a saga's InFlight->Committed transition raced our
+            // fan-out; retry with the fresh snapshot in scope.
         }
 
-        await Task.WhenAll(tasks);
-        return new Dictionary<string, byte[]>(result);
+        throw new InvalidOperationException(
+            $"GetManyAsync exceeded {Options.MaxScanRetries} retries while the TxRegistry " +
+            "kept committing sagas faster than the fan-out could complete. Increase " +
+            "LatticeOptions.MaxScanRetries or reduce concurrent saga rate.");
 
         static async Task FetchFromShardAsync(
             IShardRootGrain shard,
@@ -706,6 +737,25 @@ internal sealed partial class LatticeGrain(
             var versionAtStart = shardMap0.Version;
             var virtualShardCount = shardMap0.Slots.Length;
 
+            // Per-attempt double-checked TxRegistry snapshot. snap1 is
+            // stamped onto the ambient for the lifetime of the fan-out
+            // so every leaf applies the same registry decision view (a
+            // linearizable scan over the InFlight->Committed
+            // transition). snap2, taken after the fan-out, is checked
+            // against snap1 alongside the shard-map version stability
+            // check below — either an InFlight->Committed transition or
+            // a topology change forces a retry. The single-shot
+            // snapshot pattern (snap1 only, fixed for the lifetime of
+            // the call) is insufficient because per-leaf drain into
+            // Entries on TxCommit is irreversible: a reader whose snap1
+            // was taken before MarkCommittedAsync but whose fan-out
+            // reaches some leaves after their drain observes drained
+            // leaves returning post-saga Entries while sibling
+            // undrained leaves consult snap1.InFlight and fall through
+            // to pre-saga Entries — split observation that defeats
+            // strict per-tree atomic visibility.
+            var snap1 = await FetchRegistrySnapshotAsync();
+
             // Fast path: Version == 0 means the default identity map is in
             // effect — no split has ever been persisted for this tree.
             // ShardMap.Version is monotonically incremented on every persist,
@@ -715,11 +765,16 @@ internal sealed partial class LatticeGrain(
             // slot hashing / binary-search entirely.
             if (versionAtStart == 0L)
             {
-                var simple = await SimpleSumCountAsync(physicalTreeId, physicalShards);
+                int simple;
+                using (LatticeRegistrySnapshotContext.BeginScope(snap1))
+                {
+                    simple = await SimpleSumCountAsync(physicalTreeId, physicalShards);
+                }
                 var mapAfter = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
-                if (mapAfter.Version == 0L) return simple;
-                shardMap0 = mapAfter;
-                continue;
+                if (mapAfter.Version != 0L) { shardMap0 = mapAfter; continue; }
+                var snap2Fast = await FetchRegistrySnapshotAsync();
+                if (!IsSnapshotStable(snap1, snap2Fast)) continue;
+                return simple;
             }
 
             // Partition virtual slots by current owner per the
@@ -729,19 +784,22 @@ internal sealed partial class LatticeGrain(
             // shard is in its per-split phase machine.
             var ownedByShard = BuildOwnedSlotMap(shardMap0);
             var pass1Tasks = new Task<int>[physicalShards.Count];
-            for (int i = 0; i < physicalShards.Count; i++)
+            using (LatticeRegistrySnapshotContext.BeginScope(snap1))
             {
-                var physicalIdx = physicalShards[i];
-                var shard = GetShardGrainByIndex(physicalTreeId, physicalIdx);
-                if (!ownedByShard.TryGetValue(physicalIdx, out var owned) || owned.Length == 0)
+                for (int i = 0; i < physicalShards.Count; i++)
                 {
-                    // Shard referenced by the map but owning no slots (pathological).
-                    pass1Tasks[i] = Task.FromResult(0);
-                    continue;
+                    var physicalIdx = physicalShards[i];
+                    var shard = GetShardGrainByIndex(physicalTreeId, physicalIdx);
+                    if (!ownedByShard.TryGetValue(physicalIdx, out var owned) || owned.Length == 0)
+                    {
+                        // Shard referenced by the map but owning no slots (pathological).
+                        pass1Tasks[i] = Task.FromResult(0);
+                        continue;
+                    }
+                    pass1Tasks[i] = shard.CountForSlotsAsync(owned, virtualShardCount);
                 }
-                pass1Tasks[i] = shard.CountForSlotsAsync(owned, virtualShardCount);
+                await Task.WhenAll(pass1Tasks);
             }
-            await Task.WhenAll(pass1Tasks);
 
             var total = 0;
             for (int i = 0; i < pass1Tasks.Length; i++)
@@ -753,6 +811,12 @@ internal sealed partial class LatticeGrain(
             // the fresh map.
             var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
             if (shardMapNow.Version != versionAtStart) continue;
+
+            // TxRegistry stability check: an InFlight->Committed
+            // transition during the fan-out forces a retry under a
+            // fresh snapshot.
+            var snap2 = await FetchRegistrySnapshotAsync();
+            if (!IsSnapshotStable(snap1, snap2)) continue;
 
             return total;
         }
@@ -910,46 +974,62 @@ internal sealed partial class LatticeGrain(
             var versionAtStart = shardMap.Version;
             var virtualShardCount = shardMap.Slots.Length;
 
+            // Per-attempt double-checked TxRegistry snapshot — same
+            // rationale as CountAsyncCore. Per-shard counts must apply
+            // a single registry decision view across every shard so
+            // the totals reconcile against CountAsync; snap1/snap2
+            // validation prevents the InFlight->Committed transition
+            // race that would otherwise produce a split observation
+            // across drained vs undrained leaves.
+            var snap1 = await FetchRegistrySnapshotAsync();
+
             // Fast path: Version == 0 means no split has ever been persisted
             // for this tree. Use the cheap per-shard CountAsync() path and
             // confirm the map is still at Version 0 after fan-out.
             if (versionAtStart == 0L)
             {
                 var fastTasks = new Task<int>[physicalShards.Count];
-                for (int i = 0; i < physicalShards.Count; i++)
+                using (LatticeRegistrySnapshotContext.BeginScope(snap1))
                 {
-                    var sh = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
-                    fastTasks[i] = sh.CountAsync();
+                    for (int i = 0; i < physicalShards.Count; i++)
+                    {
+                        var sh = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
+                        fastTasks[i] = sh.CountAsync();
+                    }
+                    await Task.WhenAll(fastTasks);
                 }
-                await Task.WhenAll(fastTasks);
                 var mapAfter = await registry.GetShardMapAsync(TreeId) ?? shardMap;
-                if (mapAfter.Version == 0L)
-                {
-                    var fastCounts = new int[physicalShards.Count];
-                    for (int i = 0; i < physicalShards.Count; i++) fastCounts[i] = fastTasks[i].Result;
-                    return fastCounts;
-                }
-                shardMap = mapAfter;
-                continue;
+                if (mapAfter.Version != 0L) { shardMap = mapAfter; continue; }
+                var snap2Fast = await FetchRegistrySnapshotAsync();
+                if (!IsSnapshotStable(snap1, snap2Fast)) continue;
+                var fastCounts = new int[physicalShards.Count];
+                for (int i = 0; i < physicalShards.Count; i++) fastCounts[i] = fastTasks[i].Result;
+                return fastCounts;
             }
 
             var ownedByShard = BuildOwnedSlotMap(shardMap);
             var tasks = new Task<int>[physicalShards.Count];
-            for (int i = 0; i < physicalShards.Count; i++)
+            using (LatticeRegistrySnapshotContext.BeginScope(snap1))
             {
-                var physicalIdx = physicalShards[i];
-                var shard = GetShardGrainByIndex(physicalTreeId, physicalIdx);
-                if (!ownedByShard.TryGetValue(physicalIdx, out var owned) || owned.Length == 0)
+                for (int i = 0; i < physicalShards.Count; i++)
                 {
-                    tasks[i] = Task.FromResult(0);
-                    continue;
+                    var physicalIdx = physicalShards[i];
+                    var shard = GetShardGrainByIndex(physicalTreeId, physicalIdx);
+                    if (!ownedByShard.TryGetValue(physicalIdx, out var owned) || owned.Length == 0)
+                    {
+                        tasks[i] = Task.FromResult(0);
+                        continue;
+                    }
+                    tasks[i] = shard.CountForSlotsAsync(owned, virtualShardCount);
                 }
-                tasks[i] = shard.CountForSlotsAsync(owned, virtualShardCount);
+                await Task.WhenAll(tasks);
             }
-            await Task.WhenAll(tasks);
 
             var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap;
             if (shardMapNow.Version != versionAtStart) continue;
+
+            var snap2 = await FetchRegistrySnapshotAsync();
+            if (!IsSnapshotStable(snap1, snap2)) continue;
 
             var counts = new int[physicalShards.Count];
             for (int i = 0; i < physicalShards.Count; i++)
@@ -1175,4 +1255,95 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     internal static int GetShardIndex(string key, int shardCount) =>
         LatticeSharding.GetShardIndex(key, shardCount);
+
+    /// <summary>
+    /// Fetches a single per-tree <see cref="ITxRegistryGrain"/> decision
+    /// snapshot. Used by multi-shard read fan-outs in concert with
+    /// <see cref="IsSnapshotStable"/> to implement a double-checked
+    /// snapshot retry: pre-fetch (snap1) is stamped onto the ambient
+    /// <see cref="LatticeRegistrySnapshotContext"/> for the lifetime of
+    /// the fan-out so every leaf applies the same registry decision
+    /// view; post-fetch (snap2) is compared against snap1 to detect any
+    /// <see cref="TxStatus.InFlight"/>-&gt;<see cref="TxStatus.Committed"/>
+    /// transition that raced the fan-out and would otherwise produce
+    /// a split observation across drained vs undrained leaves.
+    /// <para>
+    /// Defensive: if the registry RPC fails the call returns
+    /// <c>null</c> so the scan still proceeds — leaves fall back to
+    /// their per-leaf <c>GetStatusManyAsync</c> RPC, which reintroduces
+    /// the original non-linearizable-scan race but keeps reads
+    /// available. The matching <see cref="IsSnapshotStable"/> check
+    /// treats a <c>null</c> snap2 as stable for the same reason.
+    /// </para>
+    /// </summary>
+    private async ValueTask<Dictionary<Guid, TxStatus>?> FetchRegistrySnapshotAsync()
+    {
+        var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
+        try
+        {
+            return await registry.SnapshotAsync();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when a fan-out result computed under
+    /// <paramref name="snap1"/> is still consistent given a fresh
+    /// <paramref name="snap2"/> taken after the fan-out — that is, no
+    /// saga transitioned <see cref="TxStatus.InFlight"/>-&gt;
+    /// <see cref="TxStatus.Committed"/> during the fan-out window. The
+    /// check is asymmetric: every <see cref="TxStatus.Committed"/>
+    /// entry in snap2 must already be Committed in snap1.
+    /// <para>
+    /// The asymmetry is the whole point. Per-leaf drain into
+    /// <c>state.State.Entries</c> on
+    /// <see cref="MutationKind.TxCommit"/> is irreversible — once a
+    /// leaf has flipped a saga's prepared keys into Entries it has no
+    /// record they came from a saga, so a stale
+    /// <see cref="TxStatus.InFlight"/> snapshot can no longer gate
+    /// visibility on that leaf. A reader whose snap1 was taken before
+    /// <c>MarkCommittedAsync</c> but whose fan-out reaches some leaves
+    /// after their drain therefore observes drained leaves serving
+    /// post-saga Entries while sibling undrained leaves consult
+    /// snap1.InFlight and fall through to pre-saga Entries — split
+    /// observation. snap2.Committed reveals the transition; the
+    /// caller retries with the fresh snapshot in scope so the next
+    /// fan-out observes the saga as Committed everywhere (drained
+    /// leaves return Entries=post AND undrained leaves surface
+    /// pending.value=post via <see cref="TxStatus.Committed"/>).
+    /// </para>
+    /// <para>
+    /// <see cref="TxStatus.Aborted"/> transitions and registry forgets
+    /// (snap1 has the txid, snap2 does not) are atomic-safe by
+    /// construction and do not invalidate snap1: an Aborted saga
+    /// drains by removing pending entries everywhere (no Entries
+    /// change), and a forget implies every leaf has already drained
+    /// the terminal mark, so snap1.Committed already gates undrained
+    /// pending consistently. A <c>null</c> snap2 (registry RPC
+    /// failure) is treated as stable so the scan completes rather
+    /// than retrying indefinitely.
+    /// </para>
+    /// </summary>
+    private static bool IsSnapshotStable(
+        Dictionary<Guid, TxStatus>? snap1,
+        Dictionary<Guid, TxStatus>? snap2)
+    {
+        if (snap2 is null) return true;
+        foreach (var (txid, status) in snap2)
+        {
+            if (status == TxStatus.Committed)
+            {
+                if (snap1 is null
+                    || !snap1.TryGetValue(txid, out var s1)
+                    || s1 != TxStatus.Committed)
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
 }

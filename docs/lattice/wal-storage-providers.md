@@ -113,7 +113,7 @@ The table is created on first use (idempotent) so hosts do not need to provision
 
 Every `AppendBatchAsync` call is translated to **one** `SubmitTransactionAsync` containing one head-sentinel upsert plus one `Add` per appended entry. Azure Tables commits the transaction atomically across the partition or fails the whole batch, satisfying the all-or-nothing append contract.
 
-Azure Tables caps a single transaction at **100 actions and 4 MiB**. Because every batch reserves one action for the head upsert, the provider rejects batches of more than `MaxEntriesPerBatch = 99` entries with `ArgumentException`. The replication package's `LatticeReplicationOptions.MaxBatchSize` already keeps batches well below this cap in the canonical pipeline; callers writing the WAL directly should chunk larger batches before invoking the provider.
+Azure Tables caps a single transaction at **100 actions and 4 MiB**. Because every batch reserves one action for the head upsert, the provider rejects batches of more than `MaxEntriesPerBatch = 99` entries with `ArgumentException`. The replication package's `LatticeReplicationOptions.WalMaxBatchEntries` (default 100, validated against this cap) already keeps batches well below this limit in the canonical pipeline; callers writing the WAL directly should chunk larger batches before invoking the provider.
 
 #### Operational characteristics
 

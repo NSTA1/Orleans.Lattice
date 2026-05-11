@@ -1,9 +1,9 @@
 # Replication modes
 
 Every tree replicated by `Orleans.Lattice.Replication` declares a
-**`ReplicationMode`** at configuration time. The mode tells receivers how
+**`LatticeMergeMode`** at configuration time. The mode tells receivers how
 to merge the captured value bytes; the producer stamps it onto every
-emitted `ReplogEntry` so the receiver never has to guess.
+emitted `WalRecord` so the receiver never has to guess.
 
 There is no implicit fallback. A tree that is not declared in
 `LatticeReplicationOptions.ReplicatedTrees` is **not replicated**. This is
@@ -18,10 +18,10 @@ concurrent-update data loss; explicit declaration removes the footgun.
 siloBuilder.AddLatticeReplication(opts =>
 {
     opts.ClusterId = "site-a";
-    opts.ReplicatedTrees = new Dictionary<string, ReplicationMode>
+    opts.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
     {
-        ["users"] = ReplicationMode.LwwRegister,
-        ["orders"] = ReplicationMode.LwwRegister,
+        ["users"] = LatticeMergeMode.LwwRegister,
+        ["orders"] = LatticeMergeMode.LwwRegister,
     };
 });
 ```
@@ -38,7 +38,7 @@ commit-time observer short-circuits before any sink call.
 | `PnCounter` | **Available** | Positive-negative counter. Pointwise-max merge on each replica's positive and negative components — concurrent increments and decrements from multiple clusters sum correctly. |
 | `VersionVector` | **Available** | Version vector. Pointwise-max merge on each replica's `HybridLogicalClock` entry. Late or duplicate delivery is a no-op. |
 
-The validator accepts every defined `ReplicationMode` value; only undefined integer values fail validation.
+The validator accepts every defined `LatticeMergeMode` value; only undefined integer values fail validation.
 
 ## When `LwwRegister` is the right choice
 
@@ -55,7 +55,7 @@ State-based merge is commutative, associative, and idempotent: late or duplicate
 ## How the mode is resolved at commit time
 
 The commit-time observer routes every mutation through
-`IReplicationModeResolver.Resolve(treeId)`:
+`ILatticeMergeModeResolver.Resolve(treeId)`:
 
 - The default implementation reads
   `LatticeReplicationOptions.ReplicatedTrees` and caches the per-tree
@@ -66,5 +66,5 @@ The commit-time observer routes every mutation through
 - A `null` return value means "this tree is not replicated" and the
   observer returns immediately, before any `IReplogSink` call.
 
-The resolved mode is written to `ReplogEntry.Mode` so receivers can pick
+The resolved mode is written to `WalRecord.Mode` so receivers can pick
 the correct apply algorithm without re-inspecting the value bytes.

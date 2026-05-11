@@ -82,4 +82,31 @@ public static class LatticeSinkServiceCollectionExtensions
         services.AddHostedService<LatticeWriteDriver>();
         return services;
     }
+
+    /// <summary>
+    /// Registers <see cref="LatticeAtomicSagaDriver"/> as an <see cref="IHostedService"/>
+    /// bound to the supplied <paramref name="configurationSection"/>. Safe to call
+    /// unconditionally - the driver short-circuits its <c>ExecuteAsync</c> when
+    /// <c>AtomicSagaDriver:Enabled</c> is <c>false</c>, so scenarios that don't generate
+    /// atomic-saga load incur only the cost of an empty hosted-service slot.
+    /// </summary>
+    /// <remarks>
+    /// Used by the atomic-write benchmarks (single-cluster and bidirectional-replication
+    /// variants) to drive <c>SetManyAtomicAsync</c> sagas at a configured rate. Pair with
+    /// <see cref="AddLatticeSink"/> on the same silo so the sink reuses the same
+    /// <c>ILattice</c> tree and the resulting WAL captures both simulator-driven writes
+    /// and atomic-saga writes under a single observable surface.
+    /// </remarks>
+    public static IServiceCollection AddLatticeAtomicSagaDriver(
+        this IServiceCollection services,
+        IConfiguration configurationSection)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configurationSection);
+
+        services.AddOptions<LatticeAtomicSagaDriverOptions>().Bind(configurationSection);
+        services.TryAddSingleton<LatticeAtomicSagaDriverMetrics>();
+        services.AddHostedService<LatticeAtomicSagaDriver>();
+        return services;
+    }
 }

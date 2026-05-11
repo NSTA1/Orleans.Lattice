@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Buffers;
 
 namespace Orleans.Lattice.Replication;
@@ -5,7 +6,7 @@ namespace Orleans.Lattice.Replication;
 /// <summary>
 /// Pluggable seam for encoding and decoding the on-the-wire payload
 /// supplied to <see cref="IReplicationTransport.SendAsync(ReplicationBatch, CancellationToken)"/>.
-/// Implementations frame a batch of <see cref="ReplogEntry"/> records
+/// Implementations frame a batch of <see cref="WalRecord"/> records
 /// inside a versioned <see cref="ReplicationBatchEnvelope"/>; the
 /// transport treats the resulting bytes as opaque and never inspects
 /// them.

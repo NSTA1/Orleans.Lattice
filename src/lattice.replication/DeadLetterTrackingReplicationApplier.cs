@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
@@ -35,7 +36,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
     private readonly ConcurrentDictionary<RetryKey, int> _failures = new();
 
     /// <inheritdoc />
-    public async Task<ApplyResult> ApplyAsync(ReplogEntry entry, CancellationToken cancellationToken = default)
+    public async Task<ApplyResult> ApplyAsync(WalRecord entry, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -83,7 +84,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
     /// </para>
     /// </remarks>
     public async Task<ApplyResult> ApplyBatchAsync(
-        IReadOnlyList<ReplogEntry> entries,
+        IReadOnlyList<WalRecord> entries,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entries);
@@ -162,7 +163,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
     }
 
     private async Task<ApplyResult> OnFailureAsync(
-        ReplogEntry entry,
+        WalRecord entry,
         Exception failure,
         CancellationToken cancellationToken)
     {
@@ -191,7 +192,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         // would be misleading. Local-origin entries cannot reach this
         // path because the canonical applier returns Applied=false
         // synchronously without throwing.
-        if (entry.Op != ReplogOp.DeleteRange)
+        if (entry.Op != MutationKind.DeleteRange)
         {
             var hwm = grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(entry.TreeId);
             await hwm.TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken).ConfigureAwait(false);
@@ -201,7 +202,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
     }
 
-    private static RetryKey KeyFor(ReplogEntry entry) =>
+    private static RetryKey KeyFor(WalRecord entry) =>
         new(
             entry.TreeId ?? string.Empty,
             entry.OriginClusterId ?? string.Empty,
@@ -220,7 +221,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         string OriginClusterId,
         HybridLogicalClock Timestamp,
         string Key,
-        ReplogOp Op);
+        MutationKind Op);
 
     /// <summary>
     /// Classifies the terminal apply failure into a stable
@@ -238,14 +239,14 @@ internal sealed class DeadLetterTrackingReplicationApplier(
     ///   <item>
     ///     <see cref="ArgumentException"/> — surfaced by
     ///     <see cref="ReplicationApplier"/> for malformed entries
-    ///     (null <see cref="ReplogEntry.Value"/> on a
-    ///     <see cref="ReplogOp.Set"/>, missing <see cref="ReplogEntry.EndExclusiveKey"/>,
+    ///     (null <see cref="WalRecord.Value"/> on a
+    ///     <see cref="MutationKind.Set"/>, missing <see cref="WalRecord.EndExclusiveKey"/>,
     ///     empty required fields). Tagged
     ///     <see cref="LatticeReplicationMetrics.ReasonSchema"/>.
     ///   </item>
     ///   <item>
     ///     <see cref="InvalidOperationException"/> — surfaced for
-    ///     unrecognised <see cref="ReplicationMode"/> dispatch and
+    ///     unrecognised <see cref="LatticeMergeMode"/> dispatch and
     ///     CAS-budget exhaustion on state-merge applies. Both are
     ///     payload-shape faults from the receiver's perspective and
     ///     are tagged

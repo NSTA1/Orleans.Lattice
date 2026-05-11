@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Primitives;
@@ -18,11 +19,11 @@ public class LatticeWalIntrospectionTests
     private static HybridLogicalClock Hlc(long ticks) =>
         new() { WallClockTicks = ticks, Counter = 0 };
 
-    private static ReplogShardPage PageWithHead(long ticks) => new()
+    private static WalShardPage PageWithHead(long ticks) => new()
     {
-        Entries = new ReplogShardEntry[]
+        Entries = new WalShardSequencedEntry[]
         {
-            new() { Sequence = 0, Entry = new ReplogEntry { Timestamp = Hlc(ticks) } },
+            new() { Sequence = 0, Entry = new WalRecord { Timestamp = Hlc(ticks) } },
         },
         NextSequence = 1,
     };
@@ -93,10 +94,10 @@ public class LatticeWalIntrospectionTests
     public async Task GetOldestAvailableHlcAsync_returns_null_when_every_shard_is_empty()
     {
         var (intro, factory) = Create(3);
-        var grain = Substitute.For<IReplogShardGrain>();
+        var grain = Substitute.For<IWalShardGrain>();
         grain.ReadAsync(0, 1, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(ReplogShardPage.Empty(0)));
-        factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(grain);
+            .Returns(Task.FromResult(WalShardPage.Empty(0)));
+        factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(grain);
 
         var oldest = await intro.GetOldestAvailableHlcAsync(Tree);
         Assert.That(oldest, Is.Null);
@@ -106,10 +107,10 @@ public class LatticeWalIntrospectionTests
     public async Task GetOldestAvailableHlcAsync_returns_head_for_single_partition()
     {
         var (intro, factory) = Create(1);
-        var grain = Substitute.For<IReplogShardGrain>();
+        var grain = Substitute.For<IWalShardGrain>();
         grain.ReadAsync(0, 1, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(PageWithHead(42)));
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/0").Returns(grain);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
         var oldest = await intro.GetOldestAvailableHlcAsync(Tree);
         Assert.That(oldest, Is.EqualTo(Hlc(42)));
@@ -119,19 +120,19 @@ public class LatticeWalIntrospectionTests
     public async Task GetOldestAvailableHlcAsync_returns_minimum_across_multiple_partitions()
     {
         var (intro, factory) = Create(3);
-        var p0 = Substitute.For<IReplogShardGrain>();
+        var p0 = Substitute.For<IWalShardGrain>();
         p0.ReadAsync(0, 1, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(PageWithHead(100)));
-        var p1 = Substitute.For<IReplogShardGrain>();
+        var p1 = Substitute.For<IWalShardGrain>();
         p1.ReadAsync(0, 1, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(PageWithHead(25)));  // minimum
-        var p2 = Substitute.For<IReplogShardGrain>();
+        var p2 = Substitute.For<IWalShardGrain>();
         p2.ReadAsync(0, 1, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(PageWithHead(75)));
 
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/0").Returns(p0);
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/1").Returns(p1);
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/2").Returns(p2);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(p0);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/1").Returns(p1);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/2").Returns(p2);
 
         var oldest = await intro.GetOldestAvailableHlcAsync(Tree);
         Assert.That(oldest, Is.EqualTo(Hlc(25)));
@@ -141,19 +142,19 @@ public class LatticeWalIntrospectionTests
     public async Task GetOldestAvailableHlcAsync_skips_empty_shards_and_returns_min_of_populated_ones()
     {
         var (intro, factory) = Create(3);
-        var p0 = Substitute.For<IReplogShardGrain>();
+        var p0 = Substitute.For<IWalShardGrain>();
         p0.ReadAsync(0, 1, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(ReplogShardPage.Empty(0)));
-        var p1 = Substitute.For<IReplogShardGrain>();
+            .Returns(Task.FromResult(WalShardPage.Empty(0)));
+        var p1 = Substitute.For<IWalShardGrain>();
         p1.ReadAsync(0, 1, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(PageWithHead(99)));
-        var p2 = Substitute.For<IReplogShardGrain>();
+        var p2 = Substitute.For<IWalShardGrain>();
         p2.ReadAsync(0, 1, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(PageWithHead(33)));
 
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/0").Returns(p0);
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/1").Returns(p1);
-        factory.GetGrain<IReplogShardGrain>($"{Tree}/2").Returns(p2);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(p0);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/1").Returns(p1);
+        factory.GetGrain<IWalShardGrain>($"{Tree}/2").Returns(p2);
 
         var oldest = await intro.GetOldestAvailableHlcAsync(Tree);
         Assert.That(oldest, Is.EqualTo(Hlc(33)));
@@ -163,15 +164,15 @@ public class LatticeWalIntrospectionTests
     public async Task GetOldestAvailableHlcAsync_resolves_each_shard_by_canonical_grain_key()
     {
         var (intro, factory) = Create(2);
-        var grain = Substitute.For<IReplogShardGrain>();
+        var grain = Substitute.For<IWalShardGrain>();
         grain.ReadAsync(0, 1, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(PageWithHead(10)));
-        factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(grain);
+        factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(grain);
 
         await intro.GetOldestAvailableHlcAsync(Tree);
 
-        factory.Received(1).GetGrain<IReplogShardGrain>($"{Tree}/0");
-        factory.Received(1).GetGrain<IReplogShardGrain>($"{Tree}/1");
+        factory.Received(1).GetGrain<IWalShardGrain>($"{Tree}/0");
+        factory.Received(1).GetGrain<IWalShardGrain>($"{Tree}/1");
     }
 
     [Test]
@@ -182,14 +183,14 @@ public class LatticeWalIntrospectionTests
         var (intro, factory) = Create(2);
         using var cts = new CancellationTokenSource();
 
-        var grain = Substitute.For<IReplogShardGrain>();
+        var grain = Substitute.For<IWalShardGrain>();
         grain.ReadAsync(0, 1, Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 cts.Cancel();
-                return Task.FromCanceled<ReplogShardPage>(cts.Token);
+                return Task.FromCanceled<WalShardPage>(cts.Token);
             });
-        factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(grain);
+        factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(grain);
 
         Assert.That(
             async () => await intro.GetOldestAvailableHlcAsync(Tree, cts.Token),
@@ -209,11 +210,11 @@ public class LatticeWalIntrospectionTests
         var dispatched = 0;
         var allDispatched = new TaskCompletionSource();
 
-        ReplogShardPage HeadPage(int ticks) => new()
+        WalShardPage HeadPage(int ticks) => new()
         {
-            Entries = new ReplogShardEntry[]
+            Entries = new WalShardSequencedEntry[]
             {
-                new() { Sequence = 0, Entry = new ReplogEntry { Timestamp = Hlc(ticks) } },
+                new() { Sequence = 0, Entry = new WalRecord { Timestamp = Hlc(ticks) } },
             },
             NextSequence = 1,
         };
@@ -221,7 +222,7 @@ public class LatticeWalIntrospectionTests
         for (var i = 0; i < partitions; i++)
         {
             var ticks = (i + 1) * 10;
-            var grain = Substitute.For<IReplogShardGrain>();
+            var grain = Substitute.For<IWalShardGrain>();
             grain.ReadAsync(0, 1, Arg.Any<CancellationToken>())
                 .Returns(async _ =>
                 {
@@ -232,7 +233,7 @@ public class LatticeWalIntrospectionTests
                     await allDispatched.Task.ConfigureAwait(false);
                     return HeadPage(ticks);
                 });
-            factory.GetGrain<IReplogShardGrain>($"{Tree}/{i}").Returns(grain);
+            factory.GetGrain<IWalShardGrain>($"{Tree}/{i}").Returns(grain);
         }
 
         var oldest = await intro.GetOldestAvailableHlcAsync(Tree);

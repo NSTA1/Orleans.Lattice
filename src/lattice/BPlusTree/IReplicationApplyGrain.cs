@@ -142,60 +142,96 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     Task ApplyMergeManyAsync(IReadOnlyList<ApplyMergeItem> items);
 
     /// <summary>
-    /// Installs a batch of remote mutations atomically as a saga, so the
-    /// entire batch either commits to the local tree or rolls back as a
-    /// unit. Unlike <see cref="ApplyMergeManyAsync"/> — which collapses
-    /// per-key shard fan-out for steady-state throughput but commits
-    /// each key independently — this seam dispatches the batch through
-    /// the existing <see cref="IAtomicWriteGrain"/> saga keyed by
-    /// <c>{treeId}/{transactionId}</c>, providing transactional
-    /// all-or-nothing semantics on the receiver side. Each entry's
-    /// authoring metadata (<see cref="AtomicApplyEntry.Timestamp"/>,
-    /// <see cref="AtomicApplyEntry.VectorClock"/>,
-    /// <see cref="AtomicApplyEntry.ExpiresAtTicks"/>) is preserved
-    /// verbatim so the persisted <see cref="LwwValue{T}"/> matches the
-    /// authoring cluster bit-identically.
+    /// Installs a single saga prepare-phase Set authored on a remote
+    /// cluster into this tree's per-leaf pending-transaction map. The
+    /// receiver leaf sees the same ambient context stack the source
+    /// saga's prepare step would have produced
+    /// (<see cref="LatticePreparedContext"/>, 
+    /// <see cref="LatticeOriginContext"/>,
+    /// <see cref="LatticeVectorClockContext"/>, 
+    /// <see cref="LatticeHlcOverrideContext"/>, 
+    /// <see cref="LatticeAtomicBatchContext"/>, and the
+    /// <c>LatticeTransactionContext</c> request-scope value), so the
+    /// resulting per-leaf entry routes into the leaf's
+    /// <c>_pendingTx[transactionId]</c> bucket and bears the source
+    /// cluster's HLC, origin cluster id, vector-clock frontier, and
+    /// atomic-batch coordinates verbatim.
     /// </summary>
-    /// <param name="applyEntries">
-    /// The per-key remote mutations to install. Each entry carries its
-    /// own source HLC and frontier so the saga's per-step dispatch
-    /// stamps the leaf grain's persisted entry with the source-side
-    /// metadata exactly as authored.
-    /// </param>
-    /// <param name="transactionId">
-    /// Caller-supplied idempotency key. Resubmissions with the same id
-    /// re-attach to the original saga and inherit its terminal outcome
-    /// without re-executing the writes. Must be a non-empty
-    /// <see cref="Guid"/>.
-    /// </param>
-    /// <param name="originClusterId">
-    /// The id of the remote cluster that authored the batch. Stamped
-    /// onto every per-key write via the ambient
-    /// <see cref="LatticeOriginContext"/> so the receiver-side observer
-    /// publishes mutations bearing the remote origin (and the outbound
-    /// ship loop filters them back out).
-    /// </param>
-    /// <param name="sourceVectorClock">
-    /// The saga-wide vector-clock frontier captured by the remote
-    /// cluster at commit time, used to seed the saga's
-    /// <see cref="LatticeMutation.VectorClock"/> stamp during the
-    /// Prepare-phase pre-saga capture. Per-entry
-    /// <see cref="AtomicApplyEntry.VectorClock"/> values take precedence
-    /// during each per-key dispatch.
-    /// </param>
-    /// <param name="cancellationToken">Token to cancel the call.</param>
-    /// <returns>
-    /// An <see cref="AtomicApplyResult"/> carrying the saga's terminal
-    /// <see cref="AtomicApplyOutcome"/> — <see cref="AtomicApplyOutcome.Committed"/>
-    /// when every entry committed, <see cref="AtomicApplyOutcome.Compensated"/>
-    /// when any entry failed and the saga rolled back. The structured
-    /// return shape lets callers branch on the outcome rather than
-    /// catching the local saga's terminal exception.
-    /// </returns>
-    Task<AtomicApplyResult> ApplyManyAtomicAsync(
-        IReadOnlyList<AtomicApplyEntry> applyEntries,
-        Guid transactionId,
+    /// <param name="key">The key the source saga prepared.</param>
+    /// <param name="value">The committed value bytes.</param>
+    /// <param name="sourceHlc">The HLC stamped by the source cluster on the prepare.</param>
+    /// <param name="originClusterId">The id of the source cluster that authored the prepare.</param>
+    /// <param name="sourceVectorClock">The source-side vector-clock frontier captured at prepare time.</param>
+    /// <param name="expiresAtTicks">Absolute UTC tick expiry for TTL'd entries; <c>0</c> means no expiry.</param>
+    /// <param name="transactionId">The source saga's transaction id; routes the entry into the receiver leaf's pending bucket. Must not be <see cref="Guid.Empty"/>.</param>
+    /// <param name="atomicBatchSize">The source saga's batch size; stamped onto the receiver-side <see cref="LatticeMutation.AtomicBatchSize"/>.</param>
+    /// <param name="atomicBatchIndex">The source saga's per-step batch index; stamped onto the receiver-side <see cref="LatticeMutation.AtomicBatchIndex"/>.</param>
+    Task ApplyPreparedSetAsync(
+        string key,
+        byte[] value,
+        HybridLogicalClock sourceHlc,
         string originClusterId,
         VersionVector? sourceVectorClock,
+        long expiresAtTicks,
+        Guid transactionId,
+        int atomicBatchSize,
+        int atomicBatchIndex);
+
+    /// <summary>
+    /// Installs a single saga prepare-phase Delete authored on a remote
+    /// cluster into this tree's per-leaf pending-transaction map. The
+    /// receiver leaf sees the same ambient context stack the source
+    /// saga's prepare step would have produced (see
+    /// <see cref="ApplyPreparedSetAsync"/> for the full list), so the
+    /// resulting tombstone routes into the leaf's
+    /// <c>_pendingTx[transactionId]</c> bucket and bears the source
+    /// cluster's HLC, origin cluster id, vector-clock frontier, and
+    /// atomic-batch coordinates verbatim.
+    /// </summary>
+    /// <param name="key">The key the source saga prepared a delete for.</param>
+    /// <param name="sourceHlc">The HLC stamped by the source cluster on the prepare.</param>
+    /// <param name="originClusterId">The id of the source cluster that authored the prepare.</param>
+    /// <param name="sourceVectorClock">The source-side vector-clock frontier captured at prepare time.</param>
+    /// <param name="transactionId">The source saga's transaction id; routes the entry into the receiver leaf's pending bucket. Must not be <see cref="Guid.Empty"/>.</param>
+    /// <param name="atomicBatchSize">The source saga's batch size; stamped onto the receiver-side <see cref="LatticeMutation.AtomicBatchSize"/>.</param>
+    /// <param name="atomicBatchIndex">The source saga's per-step batch index; stamped onto the receiver-side <see cref="LatticeMutation.AtomicBatchIndex"/>.</param>
+    Task ApplyPreparedDeleteAsync(
+        string key,
+        HybridLogicalClock sourceHlc,
+        string originClusterId,
+        VersionVector? sourceVectorClock,
+        Guid transactionId,
+        int atomicBatchSize,
+        int atomicBatchIndex);
+
+    /// <summary>
+    /// Installs a saga terminal mark (commit or abort) authored on a
+    /// remote cluster onto this tree, marking the per-tree
+    /// <see cref="ITxRegistryGrain"/> with the saga outcome (the
+    /// tree-wide linearization point readers dial back through) and
+    /// driving the per-shard
+    /// <see cref="IShardRootGrain.AppendTxTerminalAsync"/> under a
+    /// <see cref="LatticeHlcOverrideContext"/> + 
+    /// <see cref="LatticeOriginContext"/> stack so the receiver's local
+    /// WAL append re-stamps the source cluster's terminal HLC and
+    /// origin verbatim. Idempotent on repeated delivery via the
+    /// per-leaf <c>_recentlyTerminal</c> dedup and the registry's
+    /// repeat-same-outcome no-op. Pairs with
+    /// <see cref="ApplyPreparedSetAsync"/> /
+    /// <see cref="ApplyPreparedDeleteAsync"/> to deliver cross-cluster
+    /// atomic visibility on the receiver side.
+    /// </summary>
+    /// <param name="transactionId">The source saga's transaction id. Must not be <see cref="Guid.Empty"/>.</param>
+    /// <param name="committed"><c>true</c> for commit terminals; <c>false</c> for abort terminals.</param>
+    /// <param name="shardIndex">The source-shard index the terminal applies to. Maps to the receiver's same-numbered shard root.</param>
+    /// <param name="terminalHlc">The HLC the source cluster stamped on the terminal record. Re-stamped verbatim on the receiver via the ambient HLC override.</param>
+    /// <param name="originClusterId">The id of the source cluster that authored the terminal.</param>
+    /// <param name="cancellationToken">Token to cancel the call.</param>
+    Task ApplyTxTerminalAsync(
+        Guid transactionId,
+        bool committed,
+        int shardIndex,
+        HybridLogicalClock terminalHlc,
+        string originClusterId,
         CancellationToken cancellationToken = default);
 }

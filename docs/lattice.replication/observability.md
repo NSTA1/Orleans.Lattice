@@ -15,11 +15,13 @@
 |---|---|
 | Name | `orleans.lattice.replication.apply.lag` |
 | Unit | `ms` |
-| Tags | `tree` |
+| Tags | `tree`, `peer` |
+
+The `peer` tag carries the entry's `OriginClusterId` — i.e. the **authoring** cluster of the replicated mutation, not the immediate transport hop the receiver pulled it from. Under transitive replication (A &#8594; B &#8594; C) an entry shipped from B to C still records `peer=A`, mirroring the producer-side `WalRecord.OriginClusterId` slot. Operators filtering inbound apply lag by the source-of-truth replica use this tag value directly; queries that need transport-hop attribution join the `tree` + `peer` pair against the cluster's known replication topology.
 
 The histogram is intentionally not recorded for:
 
-- **`ReplogOp.DeleteRange`** — range deletes carry `HybridLogicalClock.Zero` by design (a range walk produces many per-leaf HLCs that cannot be faithfully collapsed into one), so the lag would be a meaningless multi-decade value.
+- **`MutationKind.DeleteRange`** — range deletes carry `HybridLogicalClock.Zero` by design (a range walk produces many per-leaf HLCs that cannot be faithfully collapsed into one), so the lag would be a meaningless multi-decade value.
 - **HWM-deduped re-deliveries** — the entry never reached the merge step, so reporting lag would conflate "applied" and "filtered" samples.
 - **Local-origin entries** — the apply path short-circuits at the local-origin no-op gate before touching the receiver-side merge.
 - **Source HLC equal to `Zero`** — protects against a malformed entry that would otherwise publish a garbage "now - 0" sample.
@@ -34,7 +36,9 @@ A receiver that operates entirely under HWM dedupe (i.e. every entry it sees has
 |---|---|
 | Name | `orleans.lattice.replication.apply.duration` |
 | Unit | `ms` |
-| Tags | `tree`, `outcome` |
+| Tags | `tree`, `peer`, `outcome` |
+
+The `peer` tag carries the same value as `apply.lag`'s `peer` tag — the entry's `OriginClusterId`, identifying the authoring cluster rather than the transport hop. The batch path's `ApplyOriginRunAsync` groups entries into contiguous same-`(treeId, originClusterId)` runs and records each per-entry duration with the run's shared `peer` value, so multi-origin batches surface as one `peer` per run rather than collapsing into a single dominant value.
 
 The `outcome` tag partitions the histogram into four mutually-exclusive buckets:
 
@@ -64,89 +68,12 @@ Operators monitor `rate(wal_entries_appended) / rate(wal_entries_shipped)` per t
 
 | Value | When |
 |---|---|
-| `schema` | The terminal failure was an `ArgumentException` (malformed entry, missing field, range delete with no end key) or an `InvalidOperationException` (unrecognised `ReplicationMode`, state-merge CAS budget exhausted). The receiver classifies these as payload-shape faults. |
+| `schema` | The terminal failure was an `ArgumentException` (malformed entry, missing field, range delete with no end key) or an `InvalidOperationException` (unrecognised `LatticeMergeMode`, state-merge CAS budget exhausted). The receiver classifies these as payload-shape faults. |
 | `hlc_skew` | Reserved. Future receiver decorators that surface implausible HLC skew between the receiver's wall clock and the entry's `Timestamp` as a classified exception will tag this value. |
 | `oversized` | Reserved. Future receiver decorators that wrap the canonical applier with a size-validating check will tag this value when a single entry exceeds the configured per-entry size ceiling. |
 | `unknown` | Catch-all for terminal failure shapes the canonical decorator could not classify (e.g. transport / IO / `TimeoutException`). |
 
 The mapping lives in `DeadLetterTrackingReplicationApplier.ClassifyFailure` and is intentionally conservative: only failure shapes whose source is under the package's control are matched explicitly, so the `reason` dimension stays stable across publishers and operators can alert on `unknown` rising without false positives from future schema-shape additions.
-
-## Atomic-batch instruments
-
-Four instruments cover the receiver-side cross-cluster atomic-batch staging buffer and saga lifecycle. Every instrument is per-tree, gated on the `LatticeReplicationOptions.AtomicBatchDelivery` opt-in: a tree with the option `false` (the default) never admits an entry to the buffer and therefore never emits any of these signals. A tree opting in surfaces every transaction's lifecycle from first-staged-entry through terminal disposition.
-
-### Buffered-transaction gauge (`apply.tx_buffered`)
-
-| Property | Value |
-|---|---|
-| Name | `orleans.lattice.replication.apply.tx_buffered` |
-| Kind | UpDownCounter |
-| Unit | `{transaction}` |
-| Tags | `tree` |
-
-Tracks the count of distinct `(originClusterId, transactionId)` keys currently staged on the buffer. Incremented by `+1` when the first entry of a new transaction is admitted; subsequent admits within the same transaction are a no-op on the gauge (the buffer-bytes gauge tracks per-entry growth instead). Decremented by `-1` when the transaction is removed for any reason (apply completion, capacity eviction, orphan eviction, manual discard). Activation rehydration of staged entries does **not** contribute — the gauge is session-scoped and tracks live admission lifecycle, not durable buffer occupancy.
-
-### Buffered-bytes gauge (`apply.tx_buffer_bytes`)
-
-| Property | Value |
-|---|---|
-| Name | `orleans.lattice.replication.apply.tx_buffer_bytes` |
-| Kind | UpDownCounter |
-| Unit | `By` |
-| Tags | `tree` |
-
-Tracks cumulative serialised payload bytes parked on the buffer at per-entry granularity. Every staged entry contributes its estimated serialised size on admission and reverses that contribution on removal. Drives a future health-probe integration so operators can alert on buffer pressure before `AtomicBatchBufferMaxBytes` triggers capacity eviction. Like `apply.tx_buffered`, activation rehydration does not contribute.
-
-### Atomic-apply duration histogram (`apply.tx_apply_duration_ms`)
-
-| Property | Value |
-|---|---|
-| Name | `orleans.lattice.replication.apply.tx_apply_duration_ms` |
-| Kind | Histogram |
-| Unit | `ms` (encoded in the instrument name) |
-| Tags | `tree`, `outcome` |
-
-Wall-clock interval, in milliseconds, between the first staged entry of an atomic batch landing on the buffer and the saga that applies the completed batch returning a terminal outcome. The sample is `now - min(staged.EnqueuedAtTicks across all entries in the completed batch)`, clamped to a non-negative value so cross-activation wall-clock skew (a rehydrated `EnqueuedAtTicks` carried forward from a prior silo whose clock was ahead of the current silo's, or an in-flight NTP correction) never produces a negative sample. Recorded **once** per terminal apply outcome — every entry inside the batch shares the same sample, so a 5-key batch with a 200 ms saga records one 200 ms sample, not five.
-
-This is the single most operationally-important instrument on the atomic-batch surface: a host configuring `AtomicBatchDelivery = true` is explicitly trading per-transaction latency for cross-cluster atomic visibility, and this histogram is how that trade-off is verified in production. Pair it with `apply.lag` (per-entry, point-write granularity) to compare the producer-emit-to-receiver-apply lag of point writes vs atomic batches on the same tree.
-
-The `outcome` tag partitions samples by the saga's terminal disposition:
-
-| Value | Constant | When |
-|---|---|---|
-| `success` | `LatticeReplicationMetrics.OutcomeTxSuccess` | The saga committed every entry in the batch and the per-origin high-water-mark advanced to the batch's max HLC. |
-| `dlq_apply_failure` | `LatticeReplicationMetrics.OutcomeTxDlqApplyFailure` | The saga returned `Compensated`, or threw any non-cancellation exception. The receiver routes every entry in the batch to the dead-letter queue tagged `atomic-apply-failure` and holds the high-water-mark unchanged so the producer re-ships on the next pump cycle. |
-
-The histogram is intentionally **not** recorded for the two non-apply terminal paths (`dlq_orphan` and `evicted_capacity`): both reach a terminal disposition without invoking the saga, so a duration sample would conflate "time the buffer held the entries" with "time the saga spent applying them" and corrupt latency dashboards. Both paths still emit a `tx_completed` counter sample tagged with the matching outcome, so terminal accounting stays balanced.
-
-`OperationCanceledException` rethrown from the saga (graceful shutdown traffic) does **not** record a sample — cancellation is not a terminal disposition; the transaction remains in the buffer for the next pump tick to pick up.
-
-### Atomic-batch terminal-outcome counter (`apply.tx_completed`)
-
-| Property | Value |
-|---|---|
-| Name | `orleans.lattice.replication.apply.tx_completed` |
-| Kind | Counter |
-| Unit | `{transaction}` |
-| Tags | `tree`, `outcome` |
-
-Increments by `1` on every terminal disposition of a buffered transaction. The `outcome` tag partitions the counter into four mutually-exclusive buckets so the sum across outcomes equals the total number of transactions that reached a terminal state on this tree:
-
-| Value | Constant | When |
-|---|---|---|
-| `success` | `LatticeReplicationMetrics.OutcomeTxSuccess` | The saga committed every entry. Pairs with the `apply.tx_apply_duration_ms{outcome=success}` sample. |
-| `dlq_apply_failure` | `LatticeReplicationMetrics.OutcomeTxDlqApplyFailure` | The saga returned `Compensated` or threw a non-cancellation exception. Pairs with the `apply.tx_apply_duration_ms{outcome=dlq_apply_failure}` sample. Every entry in the batch is parked on the dead-letter queue tagged `atomic-apply-failure`. |
-| `dlq_orphan` | `LatticeReplicationMetrics.OutcomeTxDlqOrphan` | The orphan-sweep maintenance pass evicted a transaction whose admission age exceeded `TxBufferOrphanTimeout` because at least one sibling never arrived. Every staged entry of the orphan is parked on the dead-letter queue tagged `orphan-transaction`. |
-| `evicted_capacity` | `LatticeReplicationMetrics.OutcomeTxEvictedCapacity` | A new admission would have exceeded `AtomicBatchBufferMaxTransactions` or `AtomicBatchBufferMaxBytes`, so the buffer evicted the FIFO-oldest transaction to admit the new one. The displaced transaction's staged entries are parked on the dead-letter queue. |
-
-Two carve-outs preserve the counter's "every admitted transaction reaches exactly one terminal outcome" contract:
-
-- **Cancellation does not increment.** A saga that throws `OperationCanceledException` (host shutdown, transport cancellation, explicit operator stop) leaves the transaction staged for the next pump tick. The counter is only stamped on a genuine terminal disposition.
-- **Partial admission does not increment.** A transaction whose `BatchSize` is `5` but only `3` entries have arrived stays in the buffer without contributing to the counter. Only the entry that completes the batch (or the eviction that displaces it before completion) emits the sample.
-
-Activation rehydration walks the durable system tree and reconstructs the in-memory index without emitting any signal — the rehydrated transactions resume their pre-restart admission lifecycle and only emit `tx_completed` when they reach their next terminal disposition.
-
-A receiver running healthy steady-state atomic-batch traffic shows `success` dominating; a sustained `dlq_apply_failure` rise indicates a deterministic saga-side fault (operators inspect the `atomic-apply-failure` DLQ entries); a sustained `dlq_orphan` rise indicates the producer is dropping siblings mid-batch (operators inspect the producer-side ship loop and partition routing); a sustained `evicted_capacity` rise indicates the buffer is undersized for the workload (operators tune `AtomicBatchBufferMaxTransactions` / `AtomicBatchBufferMaxBytes`).
 
 ## Subscribing
 

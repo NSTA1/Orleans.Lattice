@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// throw <see cref="InvalidOperationException"/> for both the registry
 /// tree id (<see cref="LatticeConstants.RegistryTreeId"/>) and any
 /// id beginning with the replog prefix
-/// (<see cref="LatticeConstants.ReplogTreePrefix"/>). Internal callers
+/// (<see cref="LatticeConstants.WalTreePrefix"/>). Internal callers
 /// that legitimately bootstrap system trees go through
 /// <see cref="ISystemLattice"/>, which is exercised by
 /// <c>SystemLatticeIntegrationTests</c>.

@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
@@ -51,7 +52,7 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// <para>
 /// <b>No-op for non-replicated trees.</b> When
-/// <see cref="IReplicationModeResolver.Resolve"/> returns
+/// <see cref="ILatticeMergeModeResolver.Resolve"/> returns
 /// <see langword="null"/> for the supplied tree (the tree is not
 /// listed in
 /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/>), the call

@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
@@ -28,11 +29,11 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// <para>
 /// The DeleteRange caveat documented on
-/// <see cref="ReplogEntry.Timestamp"/> still applies: range-delete
+/// <see cref="WalRecord.Timestamp"/> still applies: range-delete
 /// entries carry <see cref="HybridLogicalClock.Zero"/>, so a
 /// non-<c>Zero</c> cursor filters them out. This is a pre-existing
-/// property of the ReplogEntry shape, not a property of the change
-/// feed itself, and is fixed at the ReplogEntry layer in a later phase.
+/// property of the WalRecord shape, not a property of the change
+/// feed itself, and is fixed at the WalRecord layer in a later phase.
 /// </para>
 /// </summary>
 internal sealed class ChangeFeed(
@@ -42,7 +43,7 @@ internal sealed class ChangeFeed(
     private const int PageSize = 256;
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<ReplogEntry> Subscribe(
+    public async IAsyncEnumerable<WalRecord> Subscribe(
         string treeName,
         HybridLogicalClock cursor,
         bool includeLocalOrigin = true,
@@ -54,12 +55,12 @@ internal sealed class ChangeFeed(
         var partitions = resolved.ReplogPartitions;
         var localClusterId = resolved.ClusterId;
 
-        var collected = new List<ReplogEntry>();
+        var collected = new List<WalRecord>();
         for (var partition = 0; partition < partitions; partition++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var grain = grainFactory.GetGrain<IReplogShardGrain>($"{treeName}/{partition}");
+            var grain = grainFactory.GetGrain<IWalShardGrain>($"{treeName}/{partition}");
             var nextSequence = 0L;
             while (true)
             {

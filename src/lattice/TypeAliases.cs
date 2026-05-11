@@ -76,6 +76,8 @@ internal static class TypeAliases
     internal const string AtomicWriteState = "ol.aws";
     internal const string AtomicWritePhase = "ol.awp";
     internal const string AtomicPreValue = "ol.apv";
+    internal const string TxRegistryState = "ol.txr";
+    internal const string TxStatus = "ol.txo";
 
     // Stateful cursor / iterator
     internal const string LatticeCursorKind = "ol.lck";
@@ -125,6 +127,7 @@ internal static class TypeAliases
     internal const string ILatticeStats = "ol.gls";
     internal const string IReplicationApplyGrain = "ol.gra";
     internal const string ILeafReplayCoordinatorGrain = "ol.grc";
+    internal const string ITxRegistryGrain = "ol.gxr";
 
     // Replication apply DTO (batch path)
     internal const string ApplyMergeItem = "ol.ami";
@@ -139,8 +142,19 @@ internal static class TypeAliases
     // package today; foreground commit-log adapter tomorrow)
     internal const string WalEntry = "ol.we";
 
-    // Cross-cluster atomic-batch apply DTOs (source-HLC-preserving apply seam)
-    internal const string AtomicApplyEntry = "ol.aae";
-    internal const string AtomicApplyResult = "ol.aar";
-    internal const string AtomicApplyOutcome = "ol.aao";
+    // WAL grain & wire-record surface (ship-time envelope and per-shard
+    // sequenced storage shape). Originally declared with the legacy
+    // <c>olr.</c> prefix from the replication package; preserved
+    // verbatim here after the WAL adapter move so the Orleans manifest
+    // wire format stays compatible with rolling-upgrade peers that
+    // were registered against the old assembly. The former
+    // <c>WalOp</c> enum (alias <c>olr.ro</c>) was collapsed into the
+    // core <see cref="Orleans.Lattice.MutationKind"/> enum during the
+    // WAL-to-core move; that alias slot is therefore intentionally
+    // retired and not reused.
+    internal const string WalRecord = "olr.re";
+    internal const string LatticeMergeMode = "olr.rm";
+    internal const string IWalShardGrain = "olr.gw";
+    internal const string WalShardSequencedEntry = "olr.we";
+    internal const string WalShardPage = "olr.wp";
 }

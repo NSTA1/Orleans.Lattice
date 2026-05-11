@@ -105,8 +105,8 @@ bypassing the canonical `IReplicationApplier` (and therefore every
 decorator stacked on top of it: dead-letter, causal buffer, host-supplied
 fan-out hooks).
 
-For typed CRDTs replicated under `ReplicationMode.OrSet` /
-`ReplicationMode.PnCounter` / `ReplicationMode.LwwRegister`, this means
+For typed CRDTs replicated under `LatticeMergeMode.OrSet` /
+`LatticeMergeMode.PnCounter` / `LatticeMergeMode.LwwRegister`, this means
 host code that observes apply via a decorator (e.g. to fire UI live-update
 events) only sees *live-incremental* entries, not bootstrap-arrived
 entries. A receiver that catches up via bootstrap therefore picks up the

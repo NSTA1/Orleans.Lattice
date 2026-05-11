@@ -434,4 +434,160 @@ public partial class BPlusLeafGrainTests
         Assert.That(state.State.SplitState, Is.EqualTo(Orleans.Lattice.Primitives.SplitState.SplitComplete));
         Assert.That(state.State.NextSibling, Is.EqualTo(result.NewSiblingId));
     }
+
+    // -------------------------------------------------------------------
+    // Split-time projection-checkpoint advance (Option E).
+    //
+    // Without this, after a split the donor's persisted Entries reflect
+    // the post-split (narrowed) state but ProjectionCheckpointOffset
+    // remains 0, so on every subsequent activation the materialiser
+    // re-applies every WAL entry from offset 0. With the per-key-range
+    // filter this is correctness-safe (foreign-range entries are
+    // filtered, own-range entries are LWW-idempotent), but it scales
+    // O(WAL-history) per activation. Stamping the donor's checkpoint
+    // to the current WAL head at split time bounds replay to entries
+    // committed strictly after the split.
+    //
+    // The sibling-side checkpoint hint serves a stronger purpose:
+    // a freshly-created sibling has its Entries populated synchronously
+    // by MergeEntriesAsync from the donor's pre-split state. Without
+    // a checkpoint hint, the sibling would replay every WAL entry from
+    // offset 0 on its first activation (filtering by range) — wasted
+    // work that scales with the entire shard's history.
+    // -------------------------------------------------------------------
+
+    private static (BPlusLeafGrain Grain,
+                    FakePersistentState<LeafNodeState> State,
+                    IBPlusLeafGrain SiblingMock,
+                    ILeafReplayCoordinatorGrain Coordinator)
+        BuildSplitFixture(long walHead, int maxLeafKeys = 3)
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = "test-tree";
+
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var siblingContext = Substitute.For<IGrainContext>();
+        siblingContext.GrainId.Returns(GrainId.Create("leaf", Guid.NewGuid().ToString()));
+        var siblingMock = Substitute.For<IBPlusLeafGrain, IGrainBase>();
+        ((IGrainBase)siblingMock).GrainContext.Returns(siblingContext);
+        siblingMock.MergeEntriesAsync(Arg.Any<Dictionary<string, Orleans.Lattice.Primitives.LwwValue<byte[]>>>())
+            .Returns(Task.FromResult<SplitResult?>(null));
+        siblingMock.SetTreeIdAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
+        siblingMock.SetNextSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
+        siblingMock.SetPrevSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
+        siblingMock.SetShardIndexAsync(Arg.Any<int>()).Returns(Task.CompletedTask);
+        siblingMock.SetKeyRangeAsync(Arg.Any<string?>(), Arg.Any<string?>()).Returns(Task.CompletedTask);
+        siblingMock.SetCheckpointOffsetHintAsync(Arg.Any<long>()).Returns(Task.CompletedTask);
+        grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(siblingMock);
+        grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(siblingMock);
+
+        var coordinator = Substitute.For<ILeafReplayCoordinatorGrain>();
+        coordinator.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(walHead));
+        grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
+
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("leaf", "test-leaf"));
+
+        // MaterialiserCheckpointInterval = TimeSpan.Zero forces every-entry
+        // flush mode so the persisted checkpoint becomes the observable of
+        // "the split-time checkpoint advance fired".
+        var optionsResolver = TestOptionsResolver.Create(
+            baseOptions: new LatticeOptions { MaterialiserCheckpointInterval = TimeSpan.Zero },
+            maxLeafKeys: maxLeafKeys,
+            shardCount: 1,
+            factory: grainFactory);
+
+        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers());
+        return (grain, state, siblingMock, coordinator);
+    }
+
+    [Test]
+    public async Task Split_advances_donor_checkpoint_to_wal_head()
+    {
+        var (grain, state, _, _) = BuildSplitFixture(walHead: 42L);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        var result = await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        Assert.That(result, Is.Not.Null, "split should have occurred");
+        // Donor's checkpoint advanced to the WAL head captured at split time.
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(42L));
+    }
+
+    [Test]
+    public async Task Split_stamps_sibling_checkpoint_hint_to_wal_head()
+    {
+        var (grain, _, siblingMock, _) = BuildSplitFixture(walHead: 42L);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        var result = await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        Assert.That(result, Is.Not.Null, "split should have occurred");
+        // Sibling received the WAL-head hint so its first activation can
+        // skip replaying the entire shard history.
+        await siblingMock.Received(1).SetCheckpointOffsetHintAsync(42L);
+    }
+
+    [Test]
+    public async Task Split_stamps_sibling_key_range_with_split_key_and_inherited_high()
+    {
+        // Donor inherited a non-null HighKeyExclusive from a prior split
+        // (chain leaf in the middle of the chain). The sibling created
+        // by the next split must inherit the donor's pre-split high.
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = "test-tree";
+        state.State.LowKeyInclusive = "a";
+        state.State.HighKeyExclusive = "z";
+
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var siblingContext = Substitute.For<IGrainContext>();
+        siblingContext.GrainId.Returns(GrainId.Create("leaf", Guid.NewGuid().ToString()));
+        var siblingMock = Substitute.For<IBPlusLeafGrain, IGrainBase>();
+        ((IGrainBase)siblingMock).GrainContext.Returns(siblingContext);
+        siblingMock.MergeEntriesAsync(Arg.Any<Dictionary<string, Orleans.Lattice.Primitives.LwwValue<byte[]>>>())
+            .Returns(Task.FromResult<SplitResult?>(null));
+        siblingMock.SetTreeIdAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
+        siblingMock.SetNextSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
+        siblingMock.SetPrevSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
+        siblingMock.SetShardIndexAsync(Arg.Any<int>()).Returns(Task.CompletedTask);
+        siblingMock.SetKeyRangeAsync(Arg.Any<string?>(), Arg.Any<string?>()).Returns(Task.CompletedTask);
+        siblingMock.SetCheckpointOffsetHintAsync(Arg.Any<long>()).Returns(Task.CompletedTask);
+        grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(siblingMock);
+        grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(siblingMock);
+
+        var coordinator = Substitute.For<ILeafReplayCoordinatorGrain>();
+        coordinator.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
+        grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
+
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("leaf", "test-leaf"));
+
+        var optionsResolver = TestOptionsResolver.Create(
+            baseOptions: new LatticeOptions { MaterialiserCheckpointInterval = TimeSpan.Zero },
+            maxLeafKeys: 3,
+            shardCount: 1,
+            factory: grainFactory);
+
+        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers());
+
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("3"));
+        var result = await grain.SetAsync("e", Encoding.UTF8.GetBytes("4"));
+
+        Assert.That(result, Is.Not.Null, "split should have occurred");
+        var splitKey = result!.PromotedKey;
+        // Sibling's range = [splitKey, donor.preSplitHigh). Donor's
+        // preSplitHigh was "z", and the split happens before donor's
+        // own HighKeyExclusive is narrowed to splitKey.
+        await siblingMock.Received(1).SetKeyRangeAsync(splitKey, "z");
+        // Donor narrows its own high to splitKey.
+        Assert.That(state.State.HighKeyExclusive, Is.EqualTo(splitKey));
+        // Donor's low is unchanged.
+        Assert.That(state.State.LowKeyInclusive, Is.EqualTo("a"));
+    }
 }

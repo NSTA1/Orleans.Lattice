@@ -178,53 +178,10 @@ internal sealed class AtomicWriteState
     [Id(11)] public Primitives.VersionVector? VectorClock { get; set; }
 
     /// <summary>
-    /// <see langword="true"/> when this saga was started via
-    /// <c>IReplicationApplyGrain.ApplyManyAtomicAsync</c> (cross-cluster
-    /// atomic-batch apply). In apply mode the saga reads
-    /// per-entry source metadata from <see cref="ApplyEntries"/> rather
-    /// than treating every entry as a fresh local write: each per-key
-    /// call is wrapped in nested
-    /// <see cref="LatticeOriginContext.With(string?)"/> +
-    /// <see cref="LatticeVectorClockContext.With(Primitives.VersionVector?)"/> +
-    /// <see cref="LatticeHlcOverrideContext.With(Primitives.HybridLogicalClock?)"/>
-    /// scopes drawn from <see cref="OriginClusterId"/> and the entry's
-    /// <see cref="AtomicApplyEntry.VectorClock"/> /
-    /// <see cref="AtomicApplyEntry.Timestamp"/>, so the leaf grain
-    /// re-stamps the source-side metadata bit-identically. Wire-compatible:
-    /// missing field on legacy persisted state decodes to
-    /// <see langword="false"/> (local-saga semantics).
-    /// </summary>
-    [Id(12)] public bool IsApplyMode { get; set; }
-
-    /// <summary>
-    /// Per-entry source metadata for an apply-mode saga, populated when
-    /// <see cref="IsApplyMode"/> is <see langword="true"/>. Indices are
-    /// kept in lock-step with <see cref="Entries"/> so the
-    /// pre-saga-capture and execute machinery in
-    /// <see cref="Grains.AtomicWriteGrain"/> can reuse the existing
-    /// <see cref="NextIndex"/> cursor. Empty for legacy local-saga state.
-    /// </summary>
-    [Id(13)] public List<AtomicApplyEntry> ApplyEntries { get; set; } = [];
-
-    /// <summary>
-    /// Saga-wide origin cluster id captured from the
-    /// <see cref="IReplicationApplyGrain.ApplyManyAtomicAsync"/>
-    /// call's <c>originClusterId</c> argument and re-stamped onto
-    /// every per-key call the saga issues during
-    /// <see cref="AtomicWritePhase.Execute"/> via
-    /// <see cref="LatticeOriginContext.With(string?)"/> so the leaf
-    /// grain stamps the authoring cluster's id verbatim onto the
-    /// persisted <see cref="Primitives.LwwValue{T}.OriginClusterId"/>
-    /// <see langword="null"/> for legacy local-saga state.
-    /// </summary>
-    [Id(14)] public string? OriginClusterId { get; set; }
-
-    /// <summary>
     /// Total entry count of the enclosing atomic transaction, captured
     /// once on the first <see cref="AtomicWritePhase.Prepare"/> from
-    /// <see cref="Entries"/>'s <c>Count</c> (or
-    /// <see cref="ApplyEntries"/>'s <c>Count</c> in apply mode) and
-    /// re-stamped — together with each per-key index — onto Orleans
+    /// <see cref="Entries"/>'s <c>Count</c> and re-stamped — together
+    /// with each per-key index — onto Orleans
     /// <see cref="Runtime.RequestContext"/> via
     /// <see cref="LatticeAtomicBatchContext.With"/> on every per-key
     /// call the saga issues during
@@ -241,4 +198,39 @@ internal sealed class AtomicWriteState
     /// single-key non-saga writes).
     /// </summary>
     [Id(15)] public int AtomicBatchSize { get; set; }
+
+    /// <summary>
+    /// Distinct physical-shard indices the saga's prepare phase routed
+    /// per-key writes onto, captured during <see cref="AtomicWritePhase.Prepare"/>
+    /// against the routing snapshot resolved up-front via
+    /// <see cref="ILattice.GetRoutingAsync"/>. Drives the post-execute
+    /// terminal broadcast loop in
+    /// <see cref="Grains.AtomicWriteGrain"/>: one
+    /// <see cref="IShardRootGrain.AppendTxTerminalAsync(Guid, bool, CancellationToken)"/>
+    /// call per index — never per key — produces the saga's per-shard
+    /// linearization point. Persisted so a crash-resume re-broadcasts
+    /// terminals to the same shard set; the leaf-side
+    /// <c>_recentlyTerminal</c> dedup makes re-delivery idempotent.
+    /// Wire-compatible: missing field on legacy persisted state decodes
+    /// to an empty list, in which case the saga falls back to
+    /// re-resolving the touched-shard set from the persisted
+    /// <see cref="Entries"/> against a freshly fetched routing snapshot.
+    /// </summary>
+    [Id(16)] public List<int> TouchedShards { get; set; } = [];
+
+    /// <summary>
+    /// Wall-clock tick (UTC) at which the saga first entered
+    /// <see cref="AtomicWritePhase.Prepare"/>, captured once on the
+    /// initial Prepare call and persisted across reminder-driven
+    /// recovery so the end-to-end saga duration recorded by
+    /// <c>orleans.lattice.atomic_write.duration</c> on
+    /// <see cref="AtomicWritePhase.Completed"/> reflects the true
+    /// wall-clock cost (including any time the saga was suspended
+    /// across silo restarts), not just the time since the most recent
+    /// activation. Wire-compatible: missing field on legacy persisted
+    /// state decodes to <c>0</c>, in which case
+    /// <see cref="Grains.AtomicWriteGrain"/> stamps the current tick
+    /// on the next Prepare entry as a best-effort fallback.
+    /// </summary>
+    [Id(17)] public long SagaStartedAtTicks { get; set; }
 }

@@ -3,6 +3,7 @@ using MultiSiteManufacturing.Host.Baseline;
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Lattice;
+using Orleans.Lattice;
 using Orleans.Lattice.Replication;
 
 namespace MultiSiteManufacturing.Host.Replication;
@@ -50,6 +51,17 @@ namespace MultiSiteManufacturing.Host.Replication;
 /// the package's apply pipeline (which would surface as a 500 on the
 /// inbound gRPC <c>Push</c> RPC and stall replication).
 /// </para>
+/// <para>
+/// <b>Layering with chaos gating.</b> When the chaos
+/// <c>ReplicationDisconnect</c> preset is active, the sibling
+/// <see cref="ChaosReplicationApplier"/> decorator is registered as
+/// the <i>outer</i> applier layer (see
+/// <see cref="ChaosReplicationApplierRegistrationExtensions.AddChaosReplicationApplierDecorator"/>);
+/// it throws before this decorator runs, so the dashboard does not
+/// receive a fact-replicated event for an entry that was actually
+/// rejected to the peer. This decorator therefore only ever sees
+/// entries that the chaos gate has already let through.
+/// </para>
 /// </remarks>
 internal sealed class BaselineReplicationApplier(
     IReplicationApplier inner,
@@ -67,7 +79,7 @@ internal sealed class BaselineReplicationApplier(
     public const string ObservedTreeId = LatticeFactBackend.FactTreeId;
 
     /// <inheritdoc />
-    public async Task<ApplyResult> ApplyAsync(ReplogEntry entry, CancellationToken cancellationToken = default)
+    public async Task<ApplyResult> ApplyAsync(WalRecord entry, CancellationToken cancellationToken = default)
     {
         var result = await inner.ApplyAsync(entry, cancellationToken).ConfigureAwait(false);
         if (result.Applied)
@@ -79,7 +91,7 @@ internal sealed class BaselineReplicationApplier(
 
     /// <inheritdoc />
     public async Task<ApplyResult> ApplyBatchAsync(
-        IReadOnlyList<ReplogEntry> entries,
+        IReadOnlyList<WalRecord> entries,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entries);
@@ -119,7 +131,7 @@ internal sealed class BaselineReplicationApplier(
     /// <see cref="FederationRouter.FactReplicated"/>; otherwise
     /// <see langword="null"/> (entry skipped or decode/emit failed).
     /// </returns>
-    internal async Task<Fact?> TryFanOutAsync(ReplogEntry entry, CancellationToken cancellationToken)
+    internal async Task<Fact?> TryFanOutAsync(WalRecord entry, CancellationToken cancellationToken)
     {
         if (entry.TreeId == ObservedTreeId)
         {
@@ -140,9 +152,9 @@ internal sealed class BaselineReplicationApplier(
     /// <see cref="Fact"/>, emit it into the baseline backend, and
     /// raise <see cref="FederationRouter.FactReplicated"/>.
     /// </summary>
-    private async Task<Fact?> TryFanOutFactAsync(ReplogEntry entry, CancellationToken cancellationToken)
+    private async Task<Fact?> TryFanOutFactAsync(WalRecord entry, CancellationToken cancellationToken)
     {
-        if (entry.Op != ReplogOp.Set || entry.IsTombstone || entry.Value is not { Length: > 0 } payload)
+        if (entry.Op != MutationKind.Set || entry.IsTombstone || entry.Value is not { Length: > 0 } payload)
         {
             // Only successful Set entries with a non-empty value carry
             // a fact payload. Deletes, tombstones, and range deletes
@@ -185,7 +197,7 @@ internal sealed class BaselineReplicationApplier(
 
     /// <summary>
     /// Cross-cluster <c>mfg-part-labels</c> apply path: extract the
-    /// serial from <see cref="ReplogEntry.Key"/> and raise
+    /// serial from <see cref="WalRecord.Key"/> and raise
     /// <see cref="PartCrdtStore.PartChanged"/> so the local
     /// <c>DashboardBroadcaster</c> rebuilds and fans out a
     /// <c>PartSummaryUpdate</c> for every subscribed circuit. Without
@@ -205,14 +217,14 @@ internal sealed class BaselineReplicationApplier(
     /// observable effect.
     /// </para>
     /// </summary>
-    private void FanOutLabelChange(ReplogEntry entry)
+    private void FanOutLabelChange(WalRecord entry)
     {
         // Only Set entries on the labels tree carry an OR-Set delta
         // worth surfacing. Tombstones / range-deletes / Op=Delete do
         // happen (e.g. shadow-key cleanup after heal) but don't
         // change what GetLabelsAsync would return for any user-visible
         // serial, so they're skipped.
-        if (entry.Op != ReplogOp.Set || entry.IsTombstone)
+        if (entry.Op != MutationKind.Set || entry.IsTombstone)
         {
             return;
         }

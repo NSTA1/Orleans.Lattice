@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication;
@@ -9,7 +10,7 @@ namespace Orleans.Lattice.Replication;
 /// a future local materialiser, an in-process bridge, ...) reports the
 /// highest <see cref="HybridLogicalClock"/> it has fully consumed for
 /// a given <c>treeName</c>; the <see cref="ILatticeReplicationGc"/>
-/// then trims entries with <see cref="ReplogEntry.Timestamp"/> at or
+/// then trims entries with <see cref="WalRecord.Timestamp"/> at or
 /// below the minimum reported cursor.
 /// <para>
 /// The registry is consumer-neutral: a <c>consumerId</c> may be a

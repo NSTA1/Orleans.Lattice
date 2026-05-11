@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication.Grains;
@@ -48,7 +49,7 @@ internal sealed class ReplicationShipperState
     /// Per-partition resume cursors keyed by partition index. Each value
     /// is the next unread WAL sequence number for that partition — i.e.
     /// the value to pass as <c>fromSequence</c> on the next call to
-    /// <see cref="Grains.IReplogShardGrain.ReadAsync"/>
+    /// <see cref="Grains.IWalShardGrain.ReadAsync"/>
     /// </summary>
     /// <remarks>
     /// <para>

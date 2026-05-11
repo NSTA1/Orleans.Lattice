@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Replication.Grains;
@@ -7,8 +8,8 @@ namespace Orleans.Lattice.Replication;
 /// <summary>
 /// Default <see cref="IReplogSink"/> registered by
 /// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>.
-/// Routes each captured <see cref="ReplogEntry"/> to a single
-/// <see cref="IReplogShardGrain"/> activation keyed by
+/// Routes each captured <see cref="WalRecord"/> to a single
+/// <see cref="IWalShardGrain"/> activation keyed by
 /// <c>{treeId}/{partition}</c>, where <c>partition</c> is a stable hash
 /// of the entry's key modulo
 /// <see cref="LatticeReplicationOptions.ReplogPartitions"/>.
@@ -44,12 +45,12 @@ internal sealed class ShardedReplogSink(
     ILogger<ShardedReplogSink> logger) : IReplogSink
 {
     /// <inheritdoc />
-    public async Task WriteAsync(ReplogEntry entry, CancellationToken cancellationToken)
+    public async Task WriteAsync(WalRecord entry, CancellationToken cancellationToken)
     {
         var resolved = options.CurrentValue;
         var partitions = resolved.ReplogPartitions;
-        var partition = ReplogPartitionHash.Compute(entry.Key ?? string.Empty, partitions);
-        var grain = grainFactory.GetGrain<IReplogShardGrain>($"{entry.TreeId}/{partition}");
+        var partition = WalPartitionHash.Compute(entry.Key ?? string.Empty, partitions);
+        var grain = grainFactory.GetGrain<IWalShardGrain>($"{entry.TreeId}/{partition}");
         await grain.AppendAsync(entry, cancellationToken).ConfigureAwait(false);
 
         // Increment after the WAL grain confirms the append so the

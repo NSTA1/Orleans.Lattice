@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Text;
 using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
@@ -6,7 +7,7 @@ using Orleans.Lattice.Replication;
 namespace Orleans.Lattice.Replication.Tests.Chaos;
 
 /// <summary>
-/// Convergence chaos test for the <see cref="ReplicationMode.LwwRegister"/>
+/// Convergence chaos test for the <see cref="LatticeMergeMode.LwwRegister"/>
 /// dispatch path. Three sites issue concurrent point writes against a
 /// single key while a partition isolates one site mid-workload; after
 /// the partition heals and the delivery pump drains, every site must
@@ -87,7 +88,7 @@ public class LwwRegisterConvergenceChaosTests
 
     private sealed class TestRunner : IAsyncDisposable
     {
-        public MultiSiteClusterFixture Fixture { get; } = new(ReplicationMode.LwwRegister, SiteCount);
+        public MultiSiteClusterFixture Fixture { get; } = new(LatticeMergeMode.LwwRegister, SiteCount);
         public ChaosDeliveryPump Pump { get; private set; } = null!;
 
         public async Task InitializeAsync()

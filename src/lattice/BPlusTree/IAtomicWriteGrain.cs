@@ -33,42 +33,6 @@ internal interface IAtomicWriteGrain : IGrainWithStringKey
     Task ExecuteAsync(string treeId, List<KeyValuePair<string, byte[]>> entries);
 
     /// <summary>
-    /// Cross-cluster atomic-batch apply entry-point. Starts (or
-    /// resumes) a saga against the tree identified by
-    /// <paramref name="treeId"/> with each entry's source-side
-    /// <c>(Timestamp, OriginClusterId, VectorClock, ExpiresAtTicks)</c>
-    /// preserved verbatim onto the persisted
-    /// <see cref="Primitives.LwwValue{T}"/>. Each per-key call is
-    /// wrapped in nested
-    /// <see cref="LatticeOriginContext.With(string?)"/> +
-    /// <see cref="LatticeVectorClockContext.With(Primitives.VersionVector?)"/> +
-    /// <see cref="LatticeHlcOverrideContext.With(Primitives.HybridLogicalClock?)"/>
-    /// scopes so the leaf grain re-stamps the authoring cluster's
-    /// metadata bit-identically — preserving the source-HLC-preservation
-    /// invariant the per-entry apply seam already enforces. The saga is
-    /// keyed by <c>{treeId}/{transactionId}</c>; resubmissions with the
-    /// same id re-attach to the original saga and inherit its terminal
-    /// outcome. Returns an <see cref="AtomicApplyResult"/> rather than
-    /// throwing on saga failure so the receiver-side adapter can route
-    /// batched and per-entry applies through a common outcome path.
-    /// </summary>
-    /// <param name="treeId">Logical tree ID to apply into.</param>
-    /// <param name="applyEntries">
-    /// The per-entry source metadata. Must not contain duplicate keys
-    /// (mirrors the local saga's invariant). Empty batches return
-    /// <see cref="AtomicApplyOutcome.Committed"/> with
-    /// <c>AppliedCount == 0</c>.
-    /// </param>
-    /// <param name="originClusterId">
-    /// The id of the remote cluster that authored the batch. Saga-wide
-    /// because every entry in a producer's saga shares one origin.
-    /// </param>
-    Task<AtomicApplyResult> ExecuteApplyAsync(
-        string treeId,
-        List<AtomicApplyEntry> applyEntries,
-        string originClusterId);
-
-    /// <summary>
     /// Returns <c>true</c> when the saga has finished (either all writes
     /// committed or compensation completed) or has not been started.
     /// </summary>

@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
@@ -20,7 +21,7 @@ public partial class ReplicationApplierTests
     {
         var (applier, _, apply, hwm) = CreateApplier();
 
-        var result = await applier.ApplyBatchAsync(Array.Empty<ReplogEntry>());
+        var result = await applier.ApplyBatchAsync(Array.Empty<WalRecord>());
 
         Assert.Multiple(() =>
         {

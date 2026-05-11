@@ -98,6 +98,22 @@ services:
       WriteDriver__KeyPrefix: ${BENCH_REPLICA_WRITE_DRIVER_KEY_PREFIX:-replica-}
       WriteDriver__ValueSizeBytes: ${BENCH_REPLICA_WRITE_DRIVER_VALUE_BYTES:-256}
       WriteDriver__WarmupDelay: ${BENCH_REPLICA_WRITE_DRIVER_WARMUP:-00:00:15}
+      # Atomic-saga driver on the replica (atomic-write-replication only). Mirrors the
+      # origin-side AtomicSagaDriver block so both clusters generate SetManyAtomicAsync
+      # sagas concurrently — exercises the cross-cluster atomic-visibility path under
+      # symmetric saga load. Defaults off so non-atomic replication scenarios stay unaffected.
+      # Per-worker key prefix already includes a w## suffix in the driver, so the replica
+      # uses a distinct top-level prefix (atomic-replica-) to keep cross-cluster keysets
+      # disjoint and avoid LWW conflicts swamping the saga-throughput measurement.
+      AtomicSagaDriver__Enabled: ${BENCH_REPLICA_ATOMIC_SAGA_DRIVER_ENABLED:-false}
+      AtomicSagaDriver__TreeId: ${BENCH_TREE_ID:-vehicle-fleet}
+      AtomicSagaDriver__RatePerSecond: ${BENCH_REPLICA_ATOMIC_SAGA_DRIVER_RATE:-0}
+      AtomicSagaDriver__Concurrency: ${BENCH_REPLICA_ATOMIC_SAGA_DRIVER_CONCURRENCY:-16}
+      AtomicSagaDriver__BatchSize: ${BENCH_REPLICA_ATOMIC_SAGA_DRIVER_BATCH_SIZE:-16}
+      AtomicSagaDriver__KeyspaceSize: ${BENCH_REPLICA_ATOMIC_SAGA_DRIVER_KEYSPACE:-4000}
+      AtomicSagaDriver__KeyPrefix: ${BENCH_REPLICA_ATOMIC_SAGA_DRIVER_KEY_PREFIX:-atomic-replica-}
+      AtomicSagaDriver__ValueSizeBytes: ${BENCH_REPLICA_ATOMIC_SAGA_DRIVER_VALUE_BYTES:-256}
+      AtomicSagaDriver__WarmupDelay: ${BENCH_REPLICA_ATOMIC_SAGA_DRIVER_WARMUP:-00:00:15}
     expose:
       - "11111"
       - "30000"

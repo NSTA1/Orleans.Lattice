@@ -1,10 +1,11 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
 /// Per-tree bounded FIFO cache of recently-applied
-/// <see cref="ReplogEntry"/> identity tuples
+/// <see cref="WalRecord"/> identity tuples
 /// (<c>(originClusterId, timestamp, key, op)</c>) used by
 /// <see cref="ReplicationApplier"/> to drop duplicate-emit pairs that
 /// arise when a structural rewrite (shard split / merge / saga
@@ -94,12 +95,12 @@ internal sealed class RecentApplyCache
     /// </summary>
     /// <param name="entry">
     /// The replog entry to dedupe. The cache key is built from
-    /// <see cref="ReplogEntry.OriginClusterId"/>,
-    /// <see cref="ReplogEntry.Timestamp"/>, <see cref="ReplogEntry.Key"/>,
+    /// <see cref="WalRecord.OriginClusterId"/>,
+    /// <see cref="WalRecord.Timestamp"/>, <see cref="WalRecord.Key"/>,
 
-    /// and <see cref="ReplogEntry.Op"/>; other fields are ignored.
+    /// and <see cref="WalRecord.Op"/>; other fields are ignored.
     /// </param>
-    public bool TryAdd(ReplogEntry entry)
+    public bool TryAdd(WalRecord entry)
     {
         var key = EntryKey.From(entry);
         lock (_gate)
@@ -143,7 +144,7 @@ internal sealed class RecentApplyCache
     /// transport's retry path and silently drops the entry until
     /// FIFO eviction.
     /// </summary>
-    public bool Remove(ReplogEntry entry)
+    public bool Remove(WalRecord entry)
     {
         var key = EntryKey.From(entry);
         lock (_gate)
@@ -164,7 +165,7 @@ internal sealed class RecentApplyCache
     /// for tests; production callers use <see cref="TryAdd"/> for
     /// the atomic check-and-record.
     /// </summary>
-    public bool Contains(ReplogEntry entry)
+    public bool Contains(WalRecord entry)
     {
         var key = EntryKey.From(entry);
         lock (_gate)
@@ -177,9 +178,9 @@ internal sealed class RecentApplyCache
         string OriginClusterId,
         HybridLogicalClock Timestamp,
         string Key,
-        ReplogOp Op)
+        MutationKind Op)
     {
-        public static EntryKey From(ReplogEntry entry) =>
+        public static EntryKey From(WalRecord entry) =>
             new(
                 entry.OriginClusterId ?? string.Empty,
                 entry.Timestamp,

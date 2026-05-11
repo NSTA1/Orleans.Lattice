@@ -38,6 +38,8 @@ internal sealed partial class BPlusLeafGrain
             DeltaPayload = delta?.Payload,
             AtomicBatchSize = batch?.Size ?? 0,
             AtomicBatchIndex = batch?.Index ?? 0,
+            IsPrepared = LatticePreparedContext.Current,
+            ShardIndex = state.State.ShardIndex ?? 0,
         };
         return mutationObservers.PublishAsync(mutation);
     }
@@ -66,6 +68,8 @@ internal sealed partial class BPlusLeafGrain
             DeltaPayload = delta?.Payload,
             AtomicBatchSize = batch?.Size ?? 0,
             AtomicBatchIndex = batch?.Index ?? 0,
+            IsPrepared = LatticePreparedContext.Current,
+            ShardIndex = state.State.ShardIndex ?? 0,
         };
         return mutationObservers.PublishAsync(mutation);
     }

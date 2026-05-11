@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Replication;
@@ -5,7 +6,7 @@ using Orleans.Lattice.Replication;
 namespace Orleans.Lattice.Replication.Tests.Chaos;
 
 /// <summary>
-/// Convergence chaos test for the <see cref="ReplicationMode.PnCounter"/>
+/// Convergence chaos test for the <see cref="LatticeMergeMode.PnCounter"/>
 /// dispatch path. Three sites issue concurrent increments and decrements
 /// against a single counter key while a partition isolates one site
 /// mid-workload; after the partition heals and the delivery pump drains,
@@ -129,7 +130,7 @@ public class PnCounterConvergenceChaosTests
 
     private sealed class TestRunner : IAsyncDisposable
     {
-        public MultiSiteClusterFixture Fixture { get; } = new(ReplicationMode.PnCounter, SiteCount);
+        public MultiSiteClusterFixture Fixture { get; } = new(LatticeMergeMode.PnCounter, SiteCount);
         public ChaosDeliveryPump Pump { get; private set; } = null!;
 
         public async Task InitializeAsync()

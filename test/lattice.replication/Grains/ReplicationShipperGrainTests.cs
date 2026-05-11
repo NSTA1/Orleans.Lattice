@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Buffers;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -50,7 +51,7 @@ public partial class ReplicationShipperGrainTests
             throw new NotSupportedException();
     }
 
-    private static ReplogEntry MakeEntry(
+    private static WalRecord MakeEntry(
         string key,
         string origin = LocalCluster,
         long ticks = 1,
@@ -58,7 +59,7 @@ public partial class ReplicationShipperGrainTests
         => new()
         {
             TreeId = Tree,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = key,
             Value = new byte[] { 1 },
             Timestamp = new HybridLogicalClock { WallClockTicks = ticks, Counter = counter },
@@ -88,8 +89,8 @@ public partial class ReplicationShipperGrainTests
     }
 
     /// <summary>
-    /// In-memory <see cref="IReplogShardGrain"/> stand-in. Tests
-    /// populate it via <see cref="Append(ReplogEntry)"/> (or the
+    /// In-memory <see cref="IWalShardGrain"/> stand-in. Tests
+    /// populate it via <see cref="Append(WalRecord)"/> (or the
     /// equivalent legacy <see cref="Entries"/> list); the stub assigns
     /// monotonically-increasing sequence numbers starting at <c>0</c>.
     /// <para>
@@ -100,22 +101,22 @@ public partial class ReplicationShipperGrainTests
     /// rescan from sequence 0 each tick.
     /// </para>
     /// </summary>
-    private sealed class StubReplogShardGrain : IReplogShardGrain
+    private sealed class StubReplogShardGrain : IWalShardGrain
     {
-        public List<ReplogEntry> Entries { get; } = new();
+        public List<WalRecord> Entries { get; } = new();
         public Exception? ThrowOnRead { get; set; }
         public int ReadCalls { get; private set; }
         public List<long> ReadFromSequences { get; } = new();
 
-        public void Append(ReplogEntry entry) => Entries.Add(entry);
+        public void Append(WalRecord entry) => Entries.Add(entry);
 
-        public Task<long> AppendAsync(ReplogEntry entry, CancellationToken cancellationToken)
+        public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken)
         {
             Entries.Add(entry);
             return Task.FromResult((long)(Entries.Count - 1));
         }
 
-        public Task<ReplogShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+        public Task<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
         {
             ReadCalls++;
             ReadFromSequences.Add(fromSequence);
@@ -127,21 +128,21 @@ public partial class ReplicationShipperGrainTests
             cancellationToken.ThrowIfCancellationRequested();
             if (fromSequence >= Entries.Count)
             {
-                return Task.FromResult(ReplogShardPage.Empty(fromSequence));
+                return Task.FromResult(WalShardPage.Empty(fromSequence));
             }
             var endExclusive = (int)Math.Min(Entries.Count, fromSequence + maxEntries);
             var capacity = endExclusive - (int)fromSequence;
-            var entries = new ReplogShardEntry[capacity];
+            var entries = new WalShardSequencedEntry[capacity];
             for (var i = 0; i < capacity; i++)
             {
                 var seq = fromSequence + i;
-                entries[i] = new ReplogShardEntry
+                entries[i] = new WalShardSequencedEntry
                 {
                     Sequence = seq,
                     Entry = Entries[(int)seq],
                 };
             }
-            return Task.FromResult(new ReplogShardPage
+            return Task.FromResult(new WalShardPage
             {
                 Entries = entries,
                 NextSequence = endExclusive,
@@ -157,7 +158,7 @@ public partial class ReplicationShipperGrainTests
 
     /// <summary>
     /// Wires the per-partition stubs into a substitute <see cref="IGrainFactory"/>
-    /// so the shipper resolves <see cref="IReplogShardGrain"/> by
+    /// so the shipper resolves <see cref="IWalShardGrain"/> by
     /// <c>{tree}/{partition}</c> and gets back the right stub for that
     /// partition. Single-partition tests populate
     /// <c>partitionedFeeds[0]</c> only.
@@ -170,7 +171,7 @@ public partial class ReplicationShipperGrainTests
         var factory = caller ?? Substitute.For<IGrainFactory>();
         for (var p = 0; p < partitionedFeeds.Length; p++)
         {
-            factory.GetGrain<IReplogShardGrain>($"{treeName}/{p}").Returns(partitionedFeeds[p]);
+            factory.GetGrain<IWalShardGrain>($"{treeName}/{p}").Returns(partitionedFeeds[p]);
         }
         return factory;
     }
@@ -396,6 +397,172 @@ public partial class ReplicationShipperGrainTests
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
         Assert.That(state.State.Cursor, Is.EqualTo(HybridLogicalClock.Zero));
+    }
+
+    // --- Empty-origin filter: drop durability-only WAL appends ---
+    //
+    // The leaf-grain durability writer (WalCommitLogWriter) and the
+    // replication mutation observer (ReplicationMutationObserver +
+    // ShardedReplogSink) both append to the same per-tree WAL. The
+    // durability writer leaves OriginClusterId empty; the replication
+    // observer stamps a non-empty origin. Shipping the empty-origin
+    // copy would surface as ArgumentException on the receiver's
+    // per-origin HWM dedup path and dead-letter the entry every tick,
+    // even though the matching stamped copy carries the same payload.
+
+    [Test]
+    public async Task PumpOnceAsync_skips_entries_with_empty_origin_cluster_id()
+    {
+        var (grain, state, feed, transport, _, _, _) = Create();
+        feed.Append(MakeEntry("k1", origin: string.Empty, ticks: 10));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        await transport.DidNotReceive().SendAsync(
+            Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
+        Assert.That(state.State.Cursor, Is.EqualTo(HybridLogicalClock.Zero));
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_skips_entries_with_null_origin_cluster_id()
+    {
+        var (grain, state, feed, transport, _, _, _) = Create();
+        feed.Append(MakeEntry("k1", origin: null!, ticks: 10));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        await transport.DidNotReceive().SendAsync(
+            Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
+        Assert.That(state.State.Cursor, Is.EqualTo(HybridLogicalClock.Zero));
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_ships_only_stamped_copy_when_durability_and_observer_both_appended()
+    {
+        // Mirrors the production layout: a single Set commits both a
+        // durability WAL append (empty origin, stamped HLC) and an
+        // observer WAL append (stamped origin, same HLC). The shipper
+        // must drop the empty-origin row and ship exactly the stamped
+        // one, with no duplicate sends.
+        var (grain, _, feed, transport, _, _, _) = Create();
+        ReplicationBatch? captured = null;
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                captured = call.Arg<ReplicationBatch>();
+                return new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero };
+            });
+        feed.Append(MakeEntry("k1", origin: string.Empty, ticks: 5));
+        feed.Append(MakeEntry("k1", origin: LocalCluster, ticks: 5));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        await transport.Received(1).SendAsync(
+            Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
+        Assert.That(captured, Is.Not.Null);
+        Assert.That(captured!.Value.OriginClusterId, Is.EqualTo(LocalCluster));
+    }
+
+    // --- Zero-HLC exemption: ship DeleteRange entries even when the
+    //     cursor has advanced past Zero ---
+    //
+    // DeleteRange entries intentionally carry HybridLogicalClock.Zero
+    // (per WalRecord.Timestamp docs) because a single range may
+    // produce many per-leaf HLCs that cannot be faithfully collapsed.
+    // The defensive HLC filter at the merge head must therefore
+    // exempt Zero-stamped entries; otherwise every DeleteRange write
+    // is silently dropped once any non-zero cursor has been observed.
+    // DeleteRange entries are tracked solely by the per-partition
+    // sequence cursor, which already prevents re-shipping in steady
+    // state.
+
+    [Test]
+    public async Task PumpOnceAsync_ships_zero_hlc_delete_range_entry_when_cursor_already_advanced()
+    {
+        var seedState = new ReplicationShipperState
+        {
+            Cursor = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 },
+        };
+        var (grain, _, feed, transport, _, _, _) = Create(seedState: seedState);
+        ReplicationBatch? captured = null;
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                captured = call.Arg<ReplicationBatch>();
+                return new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero };
+            });
+        feed.Append(new WalRecord
+        {
+            TreeId = Tree,
+            Op = MutationKind.DeleteRange,
+            Key = "a",
+            EndExclusiveKey = "c",
+            Timestamp = HybridLogicalClock.Zero,
+            IsTombstone = true,
+            OriginClusterId = LocalCluster,
+        });
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        await transport.Received(1).SendAsync(
+            Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
+        Assert.That(captured, Is.Not.Null);
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_skips_zero_hlc_entry_originating_from_peer_under_cycle_break()
+    {
+        // Composition: the Zero-HLC exemption only neutralises the
+        // defensive HLC filter; the cycle-break filter still rejects
+        // an entry whose origin matches the destination peer.
+        var seedState = new ReplicationShipperState
+        {
+            Cursor = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 },
+        };
+        var (grain, _, feed, transport, _, _, _) = Create(seedState: seedState);
+        feed.Append(new WalRecord
+        {
+            TreeId = Tree,
+            Op = MutationKind.DeleteRange,
+            Key = "a",
+            EndExclusiveKey = "c",
+            Timestamp = HybridLogicalClock.Zero,
+            IsTombstone = true,
+            OriginClusterId = Peer,
+        });
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        await transport.DidNotReceive().SendAsync(
+            Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_skips_zero_hlc_entry_with_empty_origin()
+    {
+        // Composition: the Zero-HLC exemption only neutralises the
+        // defensive HLC filter; the empty-origin filter still rejects
+        // a durability-only DeleteRange append.
+        var seedState = new ReplicationShipperState
+        {
+            Cursor = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 },
+        };
+        var (grain, _, feed, transport, _, _, _) = Create(seedState: seedState);
+        feed.Append(new WalRecord
+        {
+            TreeId = Tree,
+            Op = MutationKind.DeleteRange,
+            Key = "a",
+            EndExclusiveKey = "c",
+            Timestamp = HybridLogicalClock.Zero,
+            IsTombstone = true,
+            OriginClusterId = string.Empty,
+        });
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        await transport.DidNotReceive().SendAsync(
+            Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
     }
 
     // --- Filter: KeyFilter ---
@@ -734,7 +901,7 @@ public partial class ReplicationShipperGrainTests
 
         // Each entry in the failed batch is parked individually, tagged ReasonSchema.
         await dlq.Received(3).EnqueueAsync(
-            Arg.Any<ReplogEntry>(),
+            Arg.Any<WalRecord>(),
             "malformed",
             0,
             LatticeReplicationMetrics.ReasonSchema,
@@ -757,7 +924,7 @@ public partial class ReplicationShipperGrainTests
         await grain.OnDoorbellAsync(CancellationToken.None);
 
         await dlq.Received(1).EnqueueAsync(
-            Arg.Any<ReplogEntry>(),
+            Arg.Any<WalRecord>(),
             "schema-broken",
             0,
             LatticeReplicationMetrics.ReasonSchema,
@@ -771,7 +938,7 @@ public partial class ReplicationShipperGrainTests
         // A deterministically-failing DLQ must not pin the ship loop.
         var dlq = Substitute.For<IReplicationDeadLetterGrain>();
         dlq.EnqueueAsync(
-            Arg.Any<ReplogEntry>(),
+            Arg.Any<WalRecord>(),
             Arg.Any<string>(),
             Arg.Any<int>(),
             Arg.Any<string>(),
@@ -794,7 +961,7 @@ public partial class ReplicationShipperGrainTests
     {
         public string ContentType => "application/x-test";
         public int CurrentWireVersion => 1;
-        public List<IReadOnlyList<ReplogEntry>> CapturedEntryLists { get; } = new();
+        public List<IReadOnlyList<WalRecord>> CapturedEntryLists { get; } = new();
         public List<IBufferWriter<byte>> CapturedWriters { get; } = new();
         public List<int> WrittenCountBeforeEncode { get; } = new();
         public int BytesPerEncode { get; set; } = 4;

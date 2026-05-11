@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -53,9 +54,9 @@ public class ChangeFeedIntegrationTests
         }
     }
 
-    private static async Task<List<ReplogEntry>> CollectAsync(IAsyncEnumerable<ReplogEntry> source)
+    private static async Task<List<WalRecord>> CollectAsync(IAsyncEnumerable<WalRecord> source)
     {
-        var result = new List<ReplogEntry>();
+        var result = new List<WalRecord>();
         await foreach (var entry in source)
         {
             result.Add(entry);
@@ -74,7 +75,7 @@ public class ChangeFeedIntegrationTests
 
         var entries = await CollectAsync(_feed.Subscribe(tree, HybridLogicalClock.Zero));
 
-        var keys = entries.Where(e => e.Op == ReplogOp.Set).Select(e => e.Key).ToArray();
+        var keys = entries.Where(e => e.Op == MutationKind.Set).Select(e => e.Key).ToArray();
         Assert.That(keys, Is.SupersetOf(new[] { "a", "b" }));
     }
 
@@ -89,7 +90,7 @@ public class ChangeFeedIntegrationTests
         var entries = await CollectAsync(_feed.Subscribe(tree, HybridLogicalClock.Zero));
 
         Assert.That(
-            entries.Any(e => e.Op == ReplogOp.Delete && e.Key == "k" && e.IsTombstone),
+            entries.Any(e => e.Op == MutationKind.Delete && e.Key == "k" && e.IsTombstone),
             Is.True);
     }
 
@@ -138,7 +139,7 @@ public class ChangeFeedIntegrationTests
         }
 
         var entries = await CollectAsync(_feed.Subscribe(tree, HybridLogicalClock.Zero));
-        var setEntries = entries.Where(e => e.Op == ReplogOp.Set).ToArray();
+        var setEntries = entries.Where(e => e.Op == MutationKind.Set).ToArray();
 
         for (var i = 1; i < setEntries.Length; i++)
         {
@@ -159,12 +160,12 @@ public class ChangeFeedIntegrationTests
 
             // Tests use ad-hoc tree ids; opt every tree in to LwwRegister so
             // the commit-time observer doesn't short-circuit.
-            siloBuilder.Services.AddSingleton<IReplicationModeResolver, AllowAllLwwRegisterResolver>();
+            siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllLwwRegisterResolver>();
         }
     }
 
-    private sealed class AllowAllLwwRegisterResolver : IReplicationModeResolver
+    private sealed class AllowAllLwwRegisterResolver : ILatticeMergeModeResolver
     {
-        public ReplicationMode? Resolve(string treeId) => ReplicationMode.LwwRegister;
+        public LatticeMergeMode? Resolve(string treeId) => LatticeMergeMode.LwwRegister;
     }
 }

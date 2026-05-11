@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication.Grains;
 
 /// <summary>
@@ -27,7 +28,7 @@ internal interface IReplicationShipperGrain : IGrainWithStringKey
 
     /// <summary>
     /// Best-effort writer-side doorbell signalling that
-    /// ShardedReplogSink just appended a fresh ReplogEntry. The
+    /// ShardedReplogSink just appended a fresh WalRecord. The
     /// shipper short-circuits its next steady-state timer wait and
     /// pumps immediately. Idempotent and non-blocking.
     /// </summary>

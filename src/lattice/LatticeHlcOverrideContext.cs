@@ -26,9 +26,13 @@ namespace Orleans.Lattice;
 /// <see cref="HybridLogicalClock.Tick(HybridLogicalClock)"/> path.
 /// </para>
 /// <para>
-/// The single supported authoring path is the receiver-side
-/// cross-cluster atomic-batch apply seam (<c>IReplicationApplyGrain.ApplyManyAtomicAsync</c>),
-/// where the saga grain wraps each per-key call in a
+/// The supported authoring paths are the receiver-side
+/// cross-cluster atomic-visibility apply seam
+/// (<see cref="IReplicationApplyGrain.ApplyPreparedSetAsync"/> /
+/// <see cref="IReplicationApplyGrain.ApplyPreparedDeleteAsync"/>)
+/// and the per-entry merge apply seam
+/// (<see cref="IReplicationApplyGrain.ApplyMergeManyAsync"/>),
+/// where each per-key call is wrapped in a
 /// <see cref="With(HybridLogicalClock?)"/> scope alongside
 /// <see cref="LatticeOriginContext"/> and
 /// <see cref="LatticeVectorClockContext"/> so the leaf re-stamps the

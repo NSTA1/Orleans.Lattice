@@ -278,6 +278,34 @@ internal sealed partial class ShardRootGrain
         if (raw is null || raw.Value.IsTombstone) return; // deleted/missing — handled by cleanup phase.
 
         var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{sip.ShadowTargetShardIndex}");
+
+        // Saga prepare-phase shadow-forward branch. When the local write is
+        // a saga prepare (LatticePreparedContext active and a non-empty
+        // transaction id is set), MergeManyAsync would land the value
+        // directly in the destination leaf's visible Entries — bypassing
+        // the prepared / pending-tx semantics that BPlusLeafGrain.CommitSetAsync
+        // applies on the foreground SetAsync path. The destination leaf
+        // would then surface the prepared value to readers immediately
+        // (post-saga visibility before commit) and never receive the
+        // saga's terminal mark via the per-shard fan-out, leaving its
+        // Entries stuck on the prepared value and breaking strict atomic
+        // reader isolation across the migrating slot. Routing through
+        // SetAsync instead lets the destination's BPlusLeafGrain see
+        // the propagated LatticePreparedContext + LatticeTransactionContext
+        // (via Orleans RequestContext) and bucket the value into its own
+        // _pendingTx[txid][key], where it is correctly hidden from
+        // readers until the saga's terminal mark — forwarded by
+        // AppendTxTerminalAsync via the symmetric split-shadow forward —
+        // flips it into Entries.
+        if (LatticePreparedContext.Current && LatticeTransactionContext.Current != Guid.Empty)
+        {
+            // raw.Value.IsTombstone is false (checked above), so Value is non-null
+            // by the LwwValue invariant; the compiler can't see through the
+            // tombstone-vs-live discriminator.
+            await target.SetAsync(key, raw.Value.Value!);
+            return;
+        }
+
         await target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = raw.Value.ToLwwValue() });
     }
 

@@ -50,6 +50,28 @@ internal sealed class AtomicWriteGrain(
     private const int MaxRetriesPerStep = 1;
 
     /// <summary>
+    /// Wall-clock budget for stale-routing retries on grain calls that
+    /// face a topology change (shard split, online resize, or reshard)
+    /// mid-saga. The retry loops in <c>PrepareAsync</c> and
+    /// <c>MarkOneShardAsync</c> refresh routing once per
+    /// <see cref="StaleShardRoutingException"/> /
+    /// <see cref="StaleTreeRoutingException"/> throw and re-issue the
+    /// call against the freshly-resolved owner until success or the
+    /// deadline elapses. Bounded by wall-clock rather than attempt count
+    /// because the worst-case storm under a 4-to-8 reshard or an
+    /// online-resize alias swap can generate more sequential map/alias
+    /// updates than any reasonable fixed budget — an earlier
+    /// 4-attempt budget surfaced
+    /// <c>Stale*RoutingException</c> from
+    /// <c>ReshardTopologyTests.Continuous_reader_observes_zero_or_all_keys_through_mid_saga_reshard</c>
+    /// and <c>ResizeTopologyTests.Continuous_reader_observes_zero_or_all_keys_through_mid_saga_resize</c>
+    /// under CI load. The 60-second ceiling matches the chaos-test
+    /// driver timeout so a runaway topology storm still terminates with
+    /// the original stale-routing throw rather than hanging the saga.
+    /// </summary>
+    private static readonly TimeSpan StaleRoutingRetryBudget = TimeSpan.FromSeconds(60);
+
+    /// <summary>
     /// Composite grain key (<c>{treeId}/{operationId}</c>); used for logging.
     /// </summary>
     private string OperationKey => GrainContext.GrainId.Key.ToString()!;
@@ -114,20 +136,6 @@ internal sealed class AtomicWriteGrain(
         // Empty batch: fast success, no saga work, no reminder needed.
         if (entries.Count == 0) return;
 
-        // Defensive grain-key collision guard: the apply-mode saga
-        // (ExecuteApplyAsync) and the local saga (ExecuteAsync) share a
-        // grain interface but use disjoint composite-key conventions
-        // ({tree}/{tx:N} vs {tree}/{opId}). Reject the mismatch loudly
-        // so a colliding caller-supplied opId surfaces as a caller error
-        // rather than silently bleeding apply-mode state into the local
-        // saga's resume path.
-        if (state.State.Phase != AtomicWritePhase.NotStarted && state.State.IsApplyMode)
-        {
-            throw new InvalidOperationException(
-                $"Atomic-write operation '{OperationKey}' grain id collides with a previously-started apply-mode saga; " +
-                "use a different operationId.");
-        }
-
         // Caller-supplied idempotency keys: if the same operationId is
         // re-submitted with a different key set, reject it rather than
         // silently replaying the original persisted entries. Only
@@ -173,190 +181,6 @@ internal sealed class AtomicWriteGrain(
             state.State.Phase == AtomicWritePhase.NotStarted ||
             state.State.Phase == AtomicWritePhase.Completed);
 
-    /// <inheritdoc />
-    public async Task<AtomicApplyResult> ExecuteApplyAsync(
-        string treeId,
-        List<AtomicApplyEntry> applyEntries,
-        string originClusterId)
-    {
-        ArgumentNullException.ThrowIfNull(treeId);
-        ArgumentNullException.ThrowIfNull(applyEntries);
-        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
-
-        // Empty batch: fast success, no saga work, no reminder needed.
-        if (applyEntries.Count == 0)
-        {
-            return new AtomicApplyResult
-            {
-                Outcome = AtomicApplyOutcome.Committed,
-                AppliedCount = 0,
-                FailureReason = null,
-            };
-        }
-
-        // Validate every incoming batch — including idempotent re-entry and
-        // reminder-driven resume — so a caller passing a malformed payload
-        // gets a clean ArgumentException regardless of saga state, rather
-        // than a downstream NullReferenceException from the projection /
-        // fingerprint helpers.
-        ValidateApplyInputs(applyEntries);
-
-        // Defensive grain-key collision guard: the local saga
-        // (ExecuteAsync) and the apply-mode saga (ExecuteApplyAsync) share
-        // a grain interface but use disjoint composite-key conventions
-        // ({tree}/{opId} vs {tree}/{tx:N}). If a caller's opId happens to
-        // collide with a transactionId.N format, persistent state from one
-        // path would otherwise silently bleed into the other. Reject the
-        // mismatch loudly so the collision surfaces as a caller error
-        // rather than a wrong AppliedCount.
-        if (state.State.Phase != AtomicWritePhase.NotStarted && !state.State.IsApplyMode)
-        {
-            throw new InvalidOperationException(
-                $"Atomic-apply saga '{OperationKey}' grain id collides with a previously-started local saga; " +
-                "use a different transactionId.");
-        }
-
-        // Caller-supplied transactionId: if the same saga grain is
-        // re-targeted with a different key set, reject it rather than
-        // silently replaying the original persisted entries. Mirrors
-        // the local saga's KeyFingerprint check. Computed directly
-        // against the IReadOnlyList shape so the resume path skips the
-        // per-entry projection allocation. Runs BEFORE the Completed
-        // idempotent-replay early-return so a malformed retry against a
-        // committed saga surfaces as a clean InvalidOperationException
-        // rather than a silent no-op.
-        if (state.State.Phase != AtomicWritePhase.NotStarted
-            && state.State.KeyFingerprint is { } persistedFingerprint)
-        {
-            var incomingFingerprint = ComputeKeyFingerprint(applyEntries);
-            if (!CryptographicOperations.FixedTimeEquals(persistedFingerprint, incomingFingerprint))
-            {
-                throw new InvalidOperationException(
-                    $"Atomic-apply saga '{OperationKey}' was previously submitted with a different key set; " +
-                    "reuse of a transactionId requires the exact same set of keys.");
-            }
-        }
-
-        // Idempotent re-entry: a prior call has already completed this
-        // saga, so the second call observes the original outcome
-        // verbatim. Reconstruct the result from persisted state rather
-        // than persisting an extra slot.
-        if (state.State.Phase == AtomicWritePhase.Completed)
-        {
-            return BuildApplyResult();
-        }
-
-        // Fresh saga - validate inputs, register the keepalive reminder
-        // first (so a crash mid-Prepare still has a reminder-driven
-        // recovery path), and then capture pre-saga state for
-        // compensation. Projection from AtomicApplyEntry to the
-        // local-saga KeyValuePair shape happens only here — the
-        // resume / re-entry paths above never need it.
-        if (state.State.Phase == AtomicWritePhase.NotStarted)
-        {
-            state.State.IsApplyMode = true;
-            state.State.ApplyEntries = applyEntries;
-            state.State.OriginClusterId = originClusterId;
-            await RegisterKeepaliveAsync();
-            var derivedEntries = ProjectApplyEntriesToLocalEntries(applyEntries);
-            await PrepareAsync(treeId, derivedEntries);
-        }
-
-        try
-        {
-            await RunSagaAsync();
-        }
-        catch (InvalidOperationException ex)
-        {
-            // RunSagaAsync throws after compensation completes for the
-            // local-saga code path; for apply mode we surface the same
-            // information through the structured result type. Persisted
-            // state is already terminal at this point.
-            return new AtomicApplyResult
-            {
-                Outcome = AtomicApplyOutcome.Compensated,
-                AppliedCount = 0,
-                FailureReason = state.State.FailureMessage ?? ex.Message,
-            };
-        }
-
-        return BuildApplyResult();
-    }
-
-    /// <summary>
-    /// Validates the apply batch: non-null keys and no duplicate keys.
-    /// Tombstone entries deliberately allow <see langword="null"/>
-    /// values (they carry no payload); non-tombstone entries with a
-    /// <see langword="null"/> value are rejected.
-    /// </summary>
-    private static void ValidateApplyInputs(List<AtomicApplyEntry> applyEntries)
-    {
-        var seen = new HashSet<string>(applyEntries.Count, StringComparer.Ordinal);
-        foreach (var entry in applyEntries)
-        {
-            if (entry.Key is null)
-                throw new ArgumentException(
-                    "Atomic apply batch contains a null key.", nameof(applyEntries));
-            if (!entry.IsTombstone && entry.Value is null)
-                throw new ArgumentException(
-                    $"Atomic apply batch contains a null value for non-tombstone key '{entry.Key}'.",
-                    nameof(applyEntries));
-            if (entry.IsTombstone && entry.ExpiresAtTicks != 0)
-                throw new ArgumentException(
-                    $"Atomic apply batch contains a tombstone with non-zero ExpiresAtTicks for key '{entry.Key}'.",
-                    nameof(applyEntries));
-            if (!seen.Add(entry.Key))
-                throw new ArgumentException(
-                    $"Atomic apply batch contains duplicate key '{entry.Key}'.", nameof(applyEntries));
-        }
-    }
-
-    /// <summary>
-    /// Projects the apply-mode batch into the
-    /// <see cref="AtomicWriteState.Entries"/> shape used by the existing
-    /// <see cref="PrepareAsync"/> capture and <see cref="ComputeKeyFingerprint"/>
-    /// helper. Tombstone entries surface as a zero-length placeholder
-    /// value because the local saga's value field is non-null; the
-    /// real authoritative shape lives in <see cref="AtomicWriteState.ApplyEntries"/>.
-    /// </summary>
-    private static List<KeyValuePair<string, byte[]>> ProjectApplyEntriesToLocalEntries(
-        List<AtomicApplyEntry> applyEntries)
-    {
-        var derived = new List<KeyValuePair<string, byte[]>>(applyEntries.Count);
-        foreach (var entry in applyEntries)
-        {
-            derived.Add(new KeyValuePair<string, byte[]>(
-                entry.Key,
-                entry.IsTombstone ? Array.Empty<byte>() : entry.Value!));
-        }
-        return derived;
-    }
-
-    /// <summary>
-    /// Reconstructs the terminal <see cref="AtomicApplyResult"/> from
-    /// persisted state. Called on idempotent re-entry and on the
-    /// post-saga return path.
-    /// </summary>
-    private AtomicApplyResult BuildApplyResult()
-    {
-        if (state.State.FailureMessage is not null)
-        {
-            return new AtomicApplyResult
-            {
-                Outcome = AtomicApplyOutcome.Compensated,
-                AppliedCount = 0,
-                FailureReason = state.State.FailureMessage,
-            };
-        }
-
-        return new AtomicApplyResult
-        {
-            Outcome = AtomicApplyOutcome.Committed,
-            AppliedCount = state.State.ApplyEntries.Count,
-            FailureReason = null,
-        };
-    }
-
     /// <summary>
     /// Validates the batch: non-null values and no duplicate keys.
     /// </summary>
@@ -388,25 +212,6 @@ internal sealed class AtomicWriteGrain(
     {
         var sortedKeys = new string[entries.Count];
         for (int i = 0; i < entries.Count; i++) sortedKeys[i] = entries[i].Key;
-        Array.Sort(sortedKeys, StringComparer.Ordinal);
-
-        return ComputeKeyFingerprintCore(sortedKeys);
-    }
-
-    /// <summary>
-    /// Apply-mode overload of <see cref="ComputeKeyFingerprint(List{KeyValuePair{string, byte[]}})"/>
-    /// that reads keys directly from the
-    /// <see cref="IReadOnlyList{AtomicApplyEntry}"/> shape, avoiding the
-    /// per-entry projection allocation on the resume path. The two
-    /// overloads must produce identical fingerprints for the same set
-    /// of keys so the apply saga's fingerprint persisted on first
-    /// Prepare can be cross-checked against the apply-mode resubmit
-    /// path.
-    /// </summary>
-    internal static byte[] ComputeKeyFingerprint(IReadOnlyList<AtomicApplyEntry> applyEntries)
-    {
-        var sortedKeys = new string[applyEntries.Count];
-        for (int i = 0; i < applyEntries.Count; i++) sortedKeys[i] = applyEntries[i].Key;
         Array.Sort(sortedKeys, StringComparer.Ordinal);
 
         return ComputeKeyFingerprintCore(sortedKeys);
@@ -503,23 +308,81 @@ internal sealed class AtomicWriteGrain(
             state.State.AtomicBatchSize = entries.Count;
         }
 
+        // Saga start tick capture-once. Stamps the wall-clock UTC tick
+        // on the first PrepareAsync entry so the
+        // orleans.lattice.atomic_write.duration histogram emitted on
+        // CompleteSagaAsync reflects true end-to-end saga cost,
+        // including any time spent suspended across silo restarts.
+        // Zero is the "never captured" sentinel; a reminder-driven
+        // replay that finds a non-zero value preserves the original
+        // start tick rather than restamping it.
+        if (state.State.SagaStartedAtTicks == 0)
+        {
+            state.State.SagaStartedAtTicks = DateTimeOffset.UtcNow.UtcTicks;
+        }
+
         var lattice = grainFactory.GetGrain<ILattice>(treeId);
         var routing = await lattice.GetRoutingAsync();
         var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
 
+        // Touched-shard set capture. Populated from the routing
+        // snapshot's Map.Resolve(key) per entry, deduplicated and
+        // sorted for stable persistence ordering. Drives the
+        // post-execute terminal broadcast loop: one
+        // AppendTxTerminalAsync call per distinct physical shard,
+        // never per key. A migration that remaps slots between
+        // capture and broadcast is handled in BroadcastTerminalsAsync
+        // via StaleShardRoutingException / StaleTreeRoutingException
+        // retry, which re-resolves the owner against a fresh routing
+        // snapshot.
+        var touched = new HashSet<int>();
         foreach (var entry in entries)
         {
-            LwwEntry? raw;
-            try
+            touched.Add(routing.Map.Resolve(entry.Key));
+        }
+        var touchedSorted = new List<int>(touched);
+        touchedSorted.Sort();
+        state.State.TouchedShards = touchedSorted;
+
+        foreach (var entry in entries)
+        {
+            LwwEntry? raw = null;
+            // Deadline-bounded retry for sequential topology changes (split
+            // commit followed by another split commit, or an alias swap
+            // that lands between attempts during an online reshard /
+            // resize). Refreshes routing once per stale-routing throw via
+            // the public ILattice.GetRoutingAsync hook before re-issuing
+            // the direct IShardRootGrain call. A bounded attempt-count
+            // budget was insufficient under reshard storms — see
+            // ReshardTopologyTests.Continuous_reader_observes_zero_or_all
+            // _keys_through_mid_saga_reshard and the matching resize test
+            // which exercise this path under a 4-to-8 reshard / online
+            // resize alias swap. The catch blocks unconditionally fire so
+            // the original stale-routing throw surfaces to the caller once
+            // the wall-clock budget elapses; a when-filter on the catch
+            // could race against the loop condition and exit silently.
+            var deadline = DateTime.UtcNow + StaleRoutingRetryBudget;
+            while (true)
             {
-                raw = await GetShardForKey(routing, entry.Key).GetRawEntryAsync(entry.Key);
-            }
-            catch (StaleShardRoutingException)
-            {
-                // Adaptive shard split has remapped virtual slots; refresh
-                // routing and retry this key once.
-                routing = await lattice.GetRoutingAsync();
-                raw = await GetShardForKey(routing, entry.Key).GetRawEntryAsync(entry.Key);
+                try
+                {
+                    raw = await GetShardForKey(routing, entry.Key).GetRawEntryAsync(entry.Key);
+                    break;
+                }
+                catch (StaleShardRoutingException)
+                {
+                    // Adaptive shard split has remapped virtual slots; refresh
+                    // routing and retry until the deadline elapses.
+                    if (DateTime.UtcNow >= deadline) throw;
+                    routing = await lattice.GetRoutingAsync();
+                }
+                catch (StaleTreeRoutingException)
+                {
+                    // Tree alias was swapped mid-saga (online resize / reshard);
+                    // refresh routing and retry against the new physical tree.
+                    if (DateTime.UtcNow >= deadline) throw;
+                    routing = await lattice.GetRoutingAsync();
+                }
             }
 
             // LwwEntry fields are flat (Value/Timestamp/IsTombstone/ExpiresAtTicks).
@@ -556,6 +419,200 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
+    /// Broadcasts the saga's terminal mark
+    /// (<see cref="MutationKind.TxCommit"/> on
+    /// <paramref name="committed"/> = <see langword="true"/>;
+    /// <see cref="MutationKind.TxAbort"/> otherwise) to every physical
+    /// shard the prepare phase touched, by calling
+    /// <see cref="IShardRootGrain.AppendTxTerminalAsync(System.Guid, bool, System.Threading.CancellationToken)"/>
+    /// once per shard.
+    /// <para>
+    /// The shard set is read from the persisted
+    /// <see cref="AtomicWriteState.TouchedShards"/>. If that list is
+    /// empty (legacy saga state from before the field existed, or a
+    /// reactivation after a crash that pre-dated this field) the
+    /// touched shard set is reconstructed by re-resolving every entry
+    /// against a freshly fetched routing snapshot and persisted in
+    /// place so subsequent retries skip the recomputation.
+    /// </para>
+    /// <para>
+    /// Each per-shard call is wrapped in a one-shot retry on
+    /// <see cref="StaleShardRoutingException"/> (a slot moved between
+    /// prepare and broadcast) and
+    /// <see cref="StaleTreeRoutingException"/> (a tree alias was
+    /// swapped mid-saga, e.g. by online resize). The retry refreshes
+    /// the routing snapshot via <see cref="ILattice.GetRoutingAsync"/>
+    /// and re-broadcasts under the new physical tree id; re-delivery
+    /// to a shard that already saw the terminal is a no-op via the
+    /// leaf-side recently-terminal dedup, so retries on the happy
+    /// path are safe too. Per-shard calls run in parallel because
+    /// each shard's append is independent.
+    /// </para>
+    /// </summary>
+    private async Task BroadcastTerminalsAsync(bool committed)
+    {
+        var transactionId = state.State.TransactionId;
+        if (transactionId == Guid.Empty)
+        {
+            // Defensive: Saga should never reach broadcast without a
+            // minted transaction id. If it does (legacy persisted
+            // state, or a code path that bypassed StampTransactionId),
+            // there is no per-shard linearization point to mark, so
+            // skip the broadcast. The saga still completes — the
+            // worst case is that prepared writes (if any) remain
+            // bucketed in the leaves' pending-tx maps until they
+            // age out of replay or the operator manually drops them.
+            Logger.LogWarning(
+                "Atomic-write saga {OperationKey}: skipping terminal broadcast — no transaction id is set on persisted state.",
+                OperationKey);
+            return;
+        }
+
+        // Reconstruct the touched-shard set on legacy state where the
+        // slot was never populated. Persist the reconstruction so a
+        // subsequent crash-resume can skip the rebuild.
+        var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
+        string? physicalTreeId = null;
+        if (state.State.TouchedShards.Count == 0 && state.State.Entries.Count > 0)
+        {
+            var routing = await lattice.GetRoutingAsync();
+            physicalTreeId = routing.PhysicalTreeId;
+            var touched = new HashSet<int>();
+            foreach (var entry in state.State.Entries)
+            {
+                touched.Add(routing.Map.Resolve(entry.Key));
+            }
+            var sorted = new List<int>(touched);
+            sorted.Sort();
+            state.State.TouchedShards = sorted;
+            await state.WriteStateAsync();
+        }
+        else if (state.State.Entries.Count > 0)
+        {
+            // Routing-drift correction: TouchedShards was captured from
+            // the routing snapshot at the start of PrepareAsync, but
+            // the per-entry SetAsync calls in ExecutePhaseAsync route
+            // through the public ILattice surface which fetches a
+            // fresh routing snapshot per call. If the shard map
+            // changed between prepare and execute (an online reshard
+            // / resize / shard-split landing mid-saga, which is
+            // exactly what the chaos suite exercises), some entries'
+            // prepared writes may have landed on a *different*
+            // physical shard than the one captured in TouchedShards.
+            // The terminal broadcast must reach EVERY shard that
+            // could hold a pending-tx bucket for this saga, otherwise
+            // those buckets are orphaned forever (or until the replay
+            // coordinator ages them out) and a reader routed to that
+            // shard surfaces the destination's pre-saga value
+            // indefinitely. Fix: re-resolve every entry against a
+            // fresh routing snapshot and union the result into
+            // TouchedShards. This is purely additive — old captures
+            // are preserved (for sagas whose prepare landed on the
+            // OLD owner before a migration moved the slot, the OLD
+            // owner is in TouchedShards and ForwardSplitTerminalAsync
+            // mirrors the terminal forward to the migration's
+            // destination via state.MovedAwaySlots / SplitInProgress).
+            var routing = await lattice.GetRoutingAsync();
+            physicalTreeId = routing.PhysicalTreeId;
+            HashSet<int>? union = null;
+            foreach (var entry in state.State.Entries)
+            {
+                var owner = routing.Map.Resolve(entry.Key);
+                if (state.State.TouchedShards.Contains(owner)) continue;
+                (union ??= new HashSet<int>(state.State.TouchedShards)).Add(owner);
+            }
+            if (union is not null)
+            {
+                var sorted = new List<int>(union);
+                sorted.Sort();
+                state.State.TouchedShards = sorted;
+                await state.WriteStateAsync();
+            }
+        }
+
+        if (state.State.TouchedShards.Count == 0)
+        {
+            // Empty saga (zero entries): no shard was touched, so no
+            // terminal mark to broadcast.
+            return;
+        }
+
+        // Seed the broadcast pass with the logical tree id as the
+        // physical tree id. Under steady state (no online resize in
+        // flight) logical and physical coincide, so the first attempt
+        // succeeds and we save an RPC. If a resize alias-swap has
+        // landed between prepare and broadcast, the first per-shard
+        // call throws StaleTreeRoutingException and MarkOneShardAsync's
+        // retry loop refreshes routing against the new physical tree —
+        // amortised across the per-shard fan-out. When we just had to
+        // reconstruct the touched-shard set above we already have a
+        // fresh routing snapshot in hand and reuse it.
+        physicalTreeId ??= state.State.TreeId;
+
+        var pending = new List<Task>(state.State.TouchedShards.Count);
+        foreach (var shardIndex in state.State.TouchedShards)
+        {
+            pending.Add(MarkOneShardAsync(physicalTreeId, shardIndex, transactionId, committed));
+        }
+
+        await Task.WhenAll(pending);
+    }
+
+    /// <summary>
+    /// Per-shard terminal append with deadline-bounded routing-refresh
+    /// retry. Encapsulates the stale-routing recovery so the
+    /// <see cref="BroadcastTerminalsAsync(bool)"/> fan-out body stays
+    /// linear. Catches both <see cref="StaleShardRoutingException"/>
+    /// (a slot moved between prepare and broadcast) and
+    /// <see cref="StaleTreeRoutingException"/> (the tree's physical
+    /// alias was swapped, e.g. online resize) and retries the call
+    /// against a freshly-resolved owner until success or
+    /// <see cref="StaleRoutingRetryBudget"/> elapses. A bounded-attempt
+    /// retry was insufficient under reshard storms where many sequential
+    /// ShardMap swaps can land between the prepare and broadcast
+    /// windows; the wall-clock budget absorbs any reasonable storm and
+    /// still terminates with the original stale-routing throw if the
+    /// topology never quiesces.
+    /// </summary>
+    private async Task MarkOneShardAsync(string physicalTreeId, int shardIndex, Guid transactionId, bool committed)
+    {
+        // The catch blocks unconditionally fire so the original
+        // stale-routing throw surfaces to the caller once the wall-clock
+        // budget elapses; a when-filter on the catch could race against
+        // the loop condition and exit silently.
+        var deadline = DateTime.UtcNow + StaleRoutingRetryBudget;
+        while (true)
+        {
+            try
+            {
+                var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+                await shard.AppendTxTerminalAsync(transactionId, committed);
+                return;
+            }
+            catch (StaleShardRoutingException)
+            {
+                // Slot ownership moved (adaptive shard split). Refresh
+                // routing under the same logical tree id and retry against
+                // the new owner; AppendTxTerminalAsync is shard-keyed so
+                // the refreshed call may resolve to a different physical
+                // tree id under online resize.
+                if (DateTime.UtcNow >= deadline) throw;
+            }
+            catch (StaleTreeRoutingException)
+            {
+                // Tree alias swapped mid-saga (online resize). Refresh
+                // routing under the same logical tree id and retry against
+                // the new physical tree.
+                if (DateTime.UtcNow >= deadline) throw;
+            }
+
+            var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
+            var refreshed = await lattice.GetRoutingAsync();
+            physicalTreeId = refreshed.PhysicalTreeId;
+        }
+    }
+
+    /// <summary>
     /// Dispatches on <see cref="AtomicWriteState.Phase"/> and drives the saga
     /// to a terminal state. Throws the original failure exception (or a
     /// surrogate) after compensation completes.
@@ -582,7 +639,25 @@ internal sealed class AtomicWriteGrain(
 
         if (state.State.Phase == AtomicWritePhase.Compensate)
         {
-            await CompensatePhaseAsync();
+            // Saga aborted mid-Execute. The prepare-phase writes were
+            // stamped IsPrepared=true and bucketed into each leaf's
+            // pending-tx map - they are NOT visible to readers, so
+            // per-key compensation rolls would be both unnecessary
+            // and harmful (a non-prepared rollback write would land
+            // as a fresh visible entry that subsequently overlays
+            // the pre-saga state once the abort terminal drops the
+            // pending bucket on the same leaf).
+            //
+            // Strict per-tree atomic-visibility: record the abort
+            // decision in the per-tree TxRegistry BEFORE fanning out
+            // the per-leaf abort terminals. This is the single
+            // tree-wide linearization point on the rollback side -
+            // any leaf serving a read against this saga's pending
+            // bucket between this call and the terminal fan-out
+            // resolves to the pre-saga value via the registry, so
+            // readers never observe a partial rollback.
+            await RecordTerminalDecisionAsync(committed: false);
+            await BroadcastTerminalsAsync(committed: false);
             await CompleteSagaAsync(success: false);
             throw new InvalidOperationException(
                 $"Atomic write saga for tree '{state.State.TreeId}' failed and was rolled back: " +
@@ -591,8 +666,53 @@ internal sealed class AtomicWriteGrain(
 
         if (state.State.Phase == AtomicWritePhase.Execute && state.State.NextIndex >= state.State.Entries.Count)
         {
+            // Every prepare-phase write succeeded.
+            //
+            // Strict per-tree atomic-visibility: record the commit
+            // decision in the per-tree TxRegistry BEFORE fanning out
+            // the per-leaf commit terminals. This is the single
+            // tree-wide linearization point on the commit side - any
+            // leaf serving a read against this saga's pending bucket
+            // between this call and the terminal fan-out resolves to
+            // the prepared (post-saga) value via the registry, so
+            // readers never observe a partial commit.
+            //
+            // A crash between the registry write and the Completed
+            // flip leaves the saga in Execute (NextIndex ==
+            // Entries.Count); reminder-driven re-entry observes the
+            // post-loop condition, re-runs the registry write
+            // (idempotent), re-runs the broadcast (idempotent via
+            // the leaf-side recently-terminal dedup), and proceeds
+            // to CompleteSagaAsync.
+            await RecordTerminalDecisionAsync(committed: true);
+            await BroadcastTerminalsAsync(committed: true);
             await CompleteSagaAsync(success: true);
         }
+    }
+
+    /// <summary>
+    /// Records the saga's terminal commit/abort decision on the per-tree
+    /// <see cref="ITxRegistryGrain"/> before the per-leaf terminal
+    /// fan-out begins. The registry write is the single tree-wide
+    /// linearization point that delivers strict atomic-visibility:
+    /// every leaf reader that sees the saga in its pending bucket
+    /// dials back through the registry to resolve the read against the
+    /// already-recorded outcome, so the post-fan-out window in which
+    /// some leaves have flipped and others have not is invisible to
+    /// readers. Idempotent - reminder-driven re-entry after a crash
+    /// between the registry write and the saga's Completed flip is
+    /// safe because both <c>MarkCommittedAsync</c> and
+    /// <c>MarkAbortedAsync</c> treat repeated same-outcome calls as
+    /// no-ops.
+    /// </summary>
+    private Task RecordTerminalDecisionAsync(bool committed)
+    {
+        var txid = state.State.TransactionId;
+        if (txid == Guid.Empty) return Task.CompletedTask;
+        var registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
+        return committed
+            ? registry.MarkCommittedAsync(txid)
+            : registry.MarkAbortedAsync(txid);
     }
 
     /// <summary>
@@ -619,11 +739,17 @@ internal sealed class AtomicWriteGrain(
                 // per-step index and is restored on disposal.
                 using (LatticeAtomicBatchContext.With((state.State.AtomicBatchSize, state.State.NextIndex)))
                 {
-                    if (state.State.IsApplyMode)
-                    {
-                        await ExecuteApplyStepAsync(lattice, state.State.NextIndex);
-                    }
-                    else
+                    // Stamp the prepare-phase ambient so the leaf
+                    // grain's commit pipeline routes the resulting
+                    // mutation into the per-leaf in-memory pending-tx
+                    // map (IsPrepared=true on the LatticeMutation
+                    // wire) rather than into the visible projection.
+                    // The terminal-mark broadcast that runs after
+                    // every prepare succeeds (or after any prepare
+                    // fails) is the per-shard linearization point
+                    // that flips pending entries into Entries (commit)
+                    // or drops them (abort).
+                    using (LatticePreparedContext.BeginScope())
                     {
                         var entry = state.State.Entries[state.State.NextIndex];
                         await lattice.SetAsync(entry.Key, entry.Value);
@@ -661,155 +787,6 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
-    /// Walks committed writes in reverse, restoring each pre-saga value via
-    /// <see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/> or
-    /// <see cref="ILattice.DeleteAsync(string, CancellationToken)"/>. Each
-    /// per-key call is wrapped in
-    /// <see cref="LatticeOriginContext.With"/> /
-    /// <see cref="LatticeVectorClockContext.With"/> scopes drawn from the
-    /// captured <see cref="AtomicPreValue"/> so the rollback emits a
-    /// <see cref="LatticeMutation"/> bearing the same source-side
-    /// metadata the original write carried. A persistent failure leaves
-    /// the saga in <see cref="AtomicWritePhase.Compensate"/>; a future
-    /// reminder tick re-runs this method.
-    /// </summary>
-    private async Task CompensatePhaseAsync()
-    {
-        var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
-
-        // On reminder-driven re-entry, reset the per-step retry counter so a
-        // transient fault that outlived a previous activation can be retried
-        // fresh rather than stalling at MaxRetriesPerStep immediately.
-        if (state.State.RetriesOnCurrentStep > 0)
-        {
-            state.State.RetriesOnCurrentStep = 0;
-            await state.WriteStateAsync();
-        }
-
-        // Compensation walks committed writes in reverse. The saga persists
-        // NextIndex during Execute to point at the next uncommitted entry, so
-        // committed entries are [0 .. NextIndex-1]. During Compensate we treat
-        // NextIndex as the next index still needing revert (walks downward).
-        // On fresh Compensate entry, NextIndex equals the count of committed
-        // writes. Crash-resume restarts from whatever value was last persisted.
-        while (state.State.NextIndex > 0)
-        {
-            var index = state.State.NextIndex - 1;
-            var pre = state.State.PreValues[index];
-
-            try
-            {
-                // Compensation rolls inherit the original prepare's
-                // index for each key — `index` is the persisted-cursor
-                // mirror of the per-step index recorded in
-                // ExecutePhaseAsync — so the resulting LatticeMutation
-                // carries the same AtomicBatchIndex as the original
-                // commit. AtomicBatchSize is unchanged across the
-                // saga's lifetime.
-                using (LatticeAtomicBatchContext.With((state.State.AtomicBatchSize, index)))
-                using (LatticeOriginContext.With(pre.OriginClusterId))
-                using (LatticeVectorClockContext.With(pre.VectorClock))
-                {
-                    if (pre.Existed && pre.Value is not null)
-                    {
-                        if (pre.ExpiresAtTicks > 0)
-                        {
-                            // Preserve the original absolute expiry by computing
-                            // the remaining time-to-live against the current wall
-                            // clock. If the entry's expiry has already elapsed,
-                            // treat it as absent and tombstone instead — public
-                            // reads would already hide an expired entry.
-                            var remainingTicks = pre.ExpiresAtTicks - DateTimeOffset.UtcNow.UtcTicks;
-                            if (remainingTicks <= 0)
-                                await lattice.DeleteAsync(pre.Key);
-                            else
-                                await lattice.SetAsync(pre.Key, pre.Value, TimeSpan.FromTicks(remainingTicks));
-                        }
-                        else
-                        {
-                            await lattice.SetAsync(pre.Key, pre.Value);
-                        }
-                    }
-                    else
-                    {
-                        await lattice.DeleteAsync(pre.Key);
-                    }
-                }
-
-                state.State.NextIndex--;
-                state.State.RetriesOnCurrentStep = 0;
-                await state.WriteStateAsync();
-            }
-            catch (Exception ex) when (state.State.RetriesOnCurrentStep < MaxRetriesPerStep)
-            {
-                state.State.RetriesOnCurrentStep++;
-                await state.WriteStateAsync();
-                Logger.LogWarning(ex,
-                    "Atomic-write saga {OperationKey}: retrying compensation of step {Index} (attempt {Attempt}).",
-                    OperationKey, index, state.State.RetriesOnCurrentStep);
-            }
-            catch (Exception ex)
-            {
-                // Persistent compensation failure — log and stop. The saga is
-                // poisoned; state remains Compensate so a future reminder tick
-                // can retry once the underlying fault clears.
-                Logger.LogError(ex,
-                    "Atomic-write saga {OperationKey}: compensation of step {Index} failed after retries; saga is poisoned.",
-                    OperationKey, index);
-                throw;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Apply-mode per-key dispatch. Wraps the per-key call in nested
-    /// <see cref="LatticeOriginContext"/> + <see cref="LatticeVectorClockContext"/>
-    /// + <see cref="LatticeHlcOverrideContext"/> scopes drawn from
-    /// <see cref="AtomicWriteState.OriginClusterId"/> and the entry's
-    /// <see cref="AtomicApplyEntry.VectorClock"/> /
-    /// <see cref="AtomicApplyEntry.Timestamp"/> so the leaf grain
-    /// re-stamps the source-side metadata bit-identically. TTL'd
-    /// entries route through the
-    /// <see cref="ILattice.SetAsync(string, byte[], TimeSpan, CancellationToken)"/>
-    /// overload with the remaining time-to-live computed against the
-    /// current wall clock; if the absolute expiry has already elapsed
-    /// the entry is treated as absent and tombstoned instead, matching
-    /// the public-read semantics for expired entries.
-    /// </summary>
-    private async Task ExecuteApplyStepAsync(ILattice lattice, int index)
-    {
-        var apply = state.State.ApplyEntries[index];
-
-        using (LatticeOriginContext.With(state.State.OriginClusterId))
-        using (LatticeVectorClockContext.With(apply.VectorClock))
-        using (LatticeHlcOverrideContext.With(apply.Timestamp))
-        {
-            if (apply.IsTombstone)
-            {
-                await lattice.DeleteAsync(apply.Key);
-            }
-            else if (apply.ExpiresAtTicks > 0)
-            {
-                var remainingTicks = apply.ExpiresAtTicks - DateTimeOffset.UtcNow.UtcTicks;
-                if (remainingTicks <= 0)
-                {
-                    // Absolute expiry already elapsed — treat as absent
-                    // (public reads would already hide the entry).
-                    await lattice.DeleteAsync(apply.Key);
-                }
-                else
-                {
-                    await lattice.SetAsync(apply.Key, apply.Value!, TimeSpan.FromTicks(remainingTicks));
-                }
-            }
-            else
-            {
-                await lattice.SetAsync(apply.Key, apply.Value!);
-            }
-        }
-    }
-
-    /// <summary>
     /// Marks the saga Completed, unregisters the keepalive reminder, arms the
     /// retention reminder (via the shared TtlGrain base) for delayed state
     /// cleanup, and requests deactivation. Safe to call in both success and
@@ -838,6 +815,30 @@ internal sealed class AtomicWriteGrain(
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
 
+        // End-to-end saga duration and batch size, paired histograms tagged
+        // by the same {tree, outcome} dimensions as AtomicWriteCompleted so
+        // operators can pivot from "how many sagas committed?" to "how long
+        // did they take?" and "how big were they?" on the same dashboard.
+        // SagaStartedAtTicks is captured once on the first PrepareAsync and
+        // persisted across reminder-driven recovery, so the recorded ms
+        // reflects true wall-clock cost (including any time the saga was
+        // suspended across silo restarts). A legacy persisted state with a
+        // missing Id-17 slot decodes SagaStartedAtTicks to 0; the duration
+        // record is suppressed in that case rather than emit a misleadingly
+        // huge "ticks since 0001-01-01" value.
+        if (state.State.SagaStartedAtTicks > 0)
+        {
+            var elapsedMs = (DateTimeOffset.UtcNow.UtcTicks - state.State.SagaStartedAtTicks)
+                / (double)TimeSpan.TicksPerMillisecond;
+            LatticeMetrics.AtomicWriteDuration.Record(elapsedMs,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
+        }
+
+        LatticeMetrics.AtomicWriteBatchSize.Record(state.State.Entries.Count,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
+
         // Publish AtomicWriteCompleted only when the saga committed all writes.
         // Rolled-back sagas emitted per-key Set events during ExecutePhase but
         // compensated them back via LWW tombstones/restores; there is no net
@@ -845,6 +846,29 @@ internal sealed class AtomicWriteGrain(
         if (success)
         {
             await PublishCompletedEventAsync();
+        }
+
+        // Strict per-tree atomic-visibility cleanup: every touched leaf
+        // has now applied its terminal (and therefore drained its
+        // pending-tx bucket for this saga), so no leaf will ever
+        // consult the registry for this txid again. Forget the
+        // decision so the registry's persisted footprint stays
+        // bounded by in-flight + recently-completed sagas. Best-effort:
+        // a transient failure here leaves a tombstone behind that the
+        // next saga on the same tree will eventually amortise; it is
+        // not worth a retry loop on the saga critical path.
+        try
+        {
+            var txid = state.State.TransactionId;
+            if (txid != Guid.Empty)
+            {
+                var registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
+                await registry.ForgetAsync(txid);
+            }
+        }
+        catch
+        {
+            // Swallow - registry GC is non-critical.
         }
 
         this.DeactivateOnIdle();

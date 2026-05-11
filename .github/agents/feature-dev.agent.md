@@ -94,7 +94,7 @@ The agent **must invoke each command below verbatim** and **paste the tail of it
 1. **Feature-tracker leak scan.** No `F-NNN` / `R-NNN` / `FX-NNN` / `G-NNN` identifiers may appear outside `roadmap.md` files (and the commit message / PR title, which are not in the working tree). The repo enforces this via `RoadmapIdentifierHygieneTests.Tracker_identifiers_appear_only_in_roadmap`. Run it directly:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~RoadmapIdentifierHygieneTests" --nologo --verbosity quiet
+   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~RoadmapIdentifierHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
    The output's `Failed: 0` line is the gate. If `Failed: 1`, the failure message lists every leaking file and line — fix every one (replace `F-NNN` with `F-XXX` placeholders or with a behavioural description by name) and re-run the gate from scratch.
@@ -102,19 +102,19 @@ The agent **must invoke each command below verbatim** and **paste the tail of it
 2. **Type-alias hygiene.** Dead-or-orphan alias constants are caught by `TypeAliasesTests.Every_alias_constant_is_referenced_by_exactly_one_type`. Run it directly:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~TypeAliasesTests" --nologo --verbosity quiet
+   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~TypeAliasesTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
 3. **Logger-category hygiene.** `AuditHygieneRegressionTests.Every_grain_uses_generic_ILogger_category` enforces typed `ILogger<T>` on every grain. Run it directly:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~AuditHygieneRegressionTests" --nologo --verbosity quiet
+   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~AuditHygieneRegressionTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
 4. **Docs-snippet harness.** Renames to public types break opt-in `csharp verify` snippets under `docs/`:
 
    ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~DocsSnippetCompilationTests" --nologo --verbosity quiet
+   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~DocsSnippetCompilationTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
 If any 6b gate is red, **do not run 6c**. Fix the leak, re-run all of 6b from the top, and only proceed once every gate is green. The hygiene gates are non-negotiable: a green CI run is not a substitute for them, because CI catches them after the PR is open and a force-push is more expensive than fixing them locally.
@@ -135,7 +135,7 @@ If the change touches the core library, run the core test project. If it touches
 
 ```powershell
 # Example: a change scoped to src/lattice/
-dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory!=Chaos" --nologo
+dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory!=Chaos" --nologo --blame-hang-timeout 2m --blame-hang-dump-type none
 ```
 
 Chaos tests (`[Category("Chaos")]`) are reserved for CI and pre-PR runs. Report the `Failed:` / `Passed:` / `Total:` summary line in the chat reply.
@@ -177,7 +177,7 @@ Before telling the user the work is done, self-review. Each numbered item must b
 
 Only when the user explicitly asks:
 
-1. **Final cross-solution verify.** Before the commit, run `dotnet test --filter "TestCategory!=Chaos"` once at the solution root and confirm `Failed: 0` across every test project. This is the only place in the workflow where the full cross-solution suite is mandatory; Phase 6c is deliberately scoped to the changed project to keep the inner dev loop fast.
+1. **Final cross-solution verify.** Before the commit, run `dotnet test --filter "TestCategory!=Chaos" --blame-hang-timeout 2m --blame-hang-dump-type none` once at the solution root and confirm `Failed: 0` across every test project. This is the only place in the workflow where the full cross-solution suite is mandatory; Phase 6c is deliberately scoped to the changed project to keep the inner dev loop fast.
 2. **Commit** with a conventional commit message: `feat: <description> (F-XXX)` for features, `fix: <description>` for fixes, `docs: <description>` for doc-only changes.
 3. **Push** the branch.
 4. **Create a PR** using `gh pr create` with:
@@ -265,6 +265,7 @@ When the user explicitly asks to release one or more packages by tagging `main`:
 - **Always use `--body-file` with a tracked `.scratch/` file for PR descriptions** to avoid shell escaping issues with backticks and special characters. **Never** use `New-TemporaryFile` for the body — it has produced silent failures with non-ASCII content.
 - **`gh pr create` and `gh pr edit` silently no-op on malformed body files.** Always verify the live body via `gh pr view <num> --json body` immediately after the call. The PR URL printed by `gh` is not proof the body applied — it is printed in the failure case too.
 - **Phase 6c is project-scoped, not solution-wide.** Run `dotnet test` against the test project(s) covering the source project you changed, with `--filter "TestCategory!=Chaos"`. The full cross-solution sweep is reserved for the Phase 8 final verify (immediately before commit/push) — running it on every iteration of the inner dev loop wastes wall-clock time without buying additional signal, because CI runs the full suite on every PR.
+- **Always wrap dotnet test with a two-minute hang blame.** Pass `--blame-hang-timeout 2m --blame-hang-dump-type none` on every `dotnet test` invocation - hygiene gates, scoped sweeps, and the Phase 8 final cross-solution verify alike. The terminal tool surfaces a hung child as `A task was canceled.` with no signal as to which test hung, which both wastes wall-clock time and obscures the failure mode. The blame timeout makes the test runner fail fast with the offending test name and its stack trace; `--blame-hang-dump-type none` skips the (large, often-useless) process dump while keeping the actionable failure output. A wedged integration test in the inner dev loop is the most common cause - never assume a long-running `dotnet test` is making progress.
 - **Build must be clean** — zero errors, zero warnings — before declaring work complete.
 - **One feature per branch.** Branch name: `feature/fXXX-short-description`.
 - **Never use inline PowerShell `-Command` (or `run_command_in_terminal` heredocs) to edit file content with multi-line strings.** Semicolon-joined inline commands have leaked variable-assignment text into target files (the `README.md` `ath = 'README.md'` incident — the literal text `ath = 'README.md'` ended up inside a csharp code block in the Quick Start). For any edit that involves a multi-line string literal, use one of: (a) `edit_file` / `replace_string_in_file` directly, or (b) seed an empty `.scratch/<edit>.ps1` via `New-Item -Force`, populate it with `edit_file`, then dot-source it. Inline `run_command_in_terminal` is fine for single-line, no-string-content commands like `dotnet build` or `git status`.

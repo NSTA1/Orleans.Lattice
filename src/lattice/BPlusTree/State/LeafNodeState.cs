@@ -93,6 +93,60 @@ internal sealed class LeafNodeState
     /// </summary>
     [Id(12)] public byte[]? ProjectionHash { get; set; }
 
+    /// <summary>
+    /// Logical chain-shard index this leaf belongs to — i.e. the
+    /// <c>shardIndex</c> half of the owning
+    /// <c>ShardRootGrain</c>'s <c>{treeId}/{shardIndex}</c> grain key.
+    /// Persisted exactly once by <c>SetShardIndexAsync</c>, called by
+    /// the shard-root coordinator alongside <see cref="TreeId"/> at
+    /// every leaf-create site. Consulted by the activation-time WAL
+    /// materialiser to filter out records authored by sibling chain
+    /// shards that share a WAL partition — without this slot a leaf
+    /// reading a shared WAL partition would absorb every other shard's
+    /// keys into its own projection on every reactivation. The slot is
+    /// nullable for back-compat with the V1 single-shard layout: a leaf
+    /// whose state pre-dates this field decodes as <c>null</c>, and the
+    /// materialiser treats that as "apply unconditionally" so the
+    /// upgrade-time replay path is unchanged for the V1 single-shard
+    /// case (every chain shard is shard 0).
+    /// </summary>
+    [Id(13)] public int? ShardIndex { get; set; }
+
+    /// <summary>
+    /// Inclusive lower bound of this leaf's owned key range, or
+    /// <see langword="null"/> when the leaf has no persisted lower
+    /// bound (the chain's leftmost leaf, or any leaf whose state
+    /// pre-dates this slot). Persisted exactly once at sibling-birth
+    /// time by <c>SetKeyRangeAsync</c>, called from
+    /// <c>CompleteSplitAsync</c> on the donor leaf. Donor leaves never
+    /// call <c>SetKeyRangeAsync</c> for their own slot — they update
+    /// <see cref="HighKeyExclusive"/> directly when a split narrows
+    /// their range. Consulted by the activation-time WAL materialiser
+    /// to filter out records whose key falls outside this leaf's
+    /// current ownership range — without this slot a leaf reading the
+    /// shared shard WAL partition would absorb every sibling chain
+    /// leaf's keys into its own projection on every reactivation. The
+    /// slot is nullable for back-compat with the V1 single-leaf
+    /// layout: a leaf whose state pre-dates this field decodes as
+    /// <see langword="null"/>, and the materialiser treats both
+    /// bounds as "no constraint" so the upgrade-time replay path is
+    /// unchanged.
+    /// </summary>
+    [Id(14)] public string? LowKeyInclusive { get; set; }
+
+    /// <summary>
+    /// Exclusive upper bound of this leaf's owned key range, or
+    /// <see langword="null"/> when the leaf has no persisted upper
+    /// bound (the chain's rightmost leaf, or any leaf whose state
+    /// pre-dates this slot). Donors narrow their own
+    /// <see cref="HighKeyExclusive"/> directly to the split key at
+    /// <c>CompleteSplitAsync</c> time; siblings inherit their high
+    /// from the donor's pre-split high via <c>SetKeyRangeAsync</c>.
+    /// See <see cref="LowKeyInclusive"/> for the legacy-compat /
+    /// rebuild semantics shared by both bounds.
+    /// </summary>
+    [Id(15)] public string? HighKeyExclusive { get; set; }
+
     /// <summary>Returns the number of live (non-tombstoned) entries.</summary>
     public int LiveCount
     {

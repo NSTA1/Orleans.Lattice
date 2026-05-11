@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication.Tests;
 
 [TestFixture]
@@ -19,7 +20,7 @@ public class DeadLetterEntryTests
     [Test]
     public void With_initialiser_round_trips_every_property()
     {
-        var inner = new ReplogEntry { TreeId = "t", Key = "k", OriginClusterId = "o" };
+        var inner = new WalRecord { TreeId = "t", Key = "k", OriginClusterId = "o" };
         var entry = new DeadLetterEntry
         {
             EntryId = 42,
@@ -44,7 +45,7 @@ public class DeadLetterEntryTests
     [Test]
     public void Two_entries_with_the_same_payload_are_equal()
     {
-        var inner = new ReplogEntry { TreeId = "t", Key = "k", OriginClusterId = "o" };
+        var inner = new WalRecord { TreeId = "t", Key = "k", OriginClusterId = "o" };
         var a = new DeadLetterEntry { EntryId = 1, Entry = inner, FailureReason = "x", RetryCount = 1, EnqueuedAtTicks = 0 };
         var b = new DeadLetterEntry { EntryId = 1, Entry = inner, FailureReason = "x", RetryCount = 1, EnqueuedAtTicks = 0 };
 

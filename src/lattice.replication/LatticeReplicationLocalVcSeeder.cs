@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
@@ -26,7 +27,7 @@ namespace Orleans.Lattice.Replication;
 internal sealed class LatticeReplicationLocalVcSeeder(
     IGrainFactory grainFactory,
     IShardCountProvider shardCounts,
-    IReplicationModeResolver modeResolver,
+    ILatticeMergeModeResolver modeResolver,
     LocalVectorClockCache localVcCache)
     : IReplicationLocalVcSeeder
 {
@@ -34,7 +35,7 @@ internal sealed class LatticeReplicationLocalVcSeeder(
         grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
     private readonly IShardCountProvider _shardCounts =
         shardCounts ?? throw new ArgumentNullException(nameof(shardCounts));
-    private readonly IReplicationModeResolver _modeResolver =
+    private readonly ILatticeMergeModeResolver _modeResolver =
         modeResolver ?? throw new ArgumentNullException(nameof(modeResolver));
     private readonly LocalVectorClockCache _localVcCache =
         localVcCache ?? throw new ArgumentNullException(nameof(localVcCache));

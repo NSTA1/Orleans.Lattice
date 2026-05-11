@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
@@ -214,14 +215,14 @@ public class ReplicationApplyIntegrationTests
         // Build a Site A-origin OrSet payload carrying a different element.
         var remoteSet = new OrSet();
         remoteSet.Add(new byte[] { 2 }, "site-a", 1);
-        var entry = new ReplogEntry
+        var entry = new WalRecord
         {
             TreeId = tree,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = key,
             Value = JsonLatticeSerializer<OrSet>.Default.Serialize(remoteSet),
             Timestamp = Hlc(1_000),
-            Mode = ReplicationMode.OrSet,
+            Mode = LatticeMergeMode.OrSet,
             OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
         };
 
@@ -253,14 +254,14 @@ public class ReplicationApplyIntegrationTests
         var remoteCounter = new PnCounter();
         remoteCounter.Increment("site-a", 5);
         remoteCounter.Decrement("site-a", 2);
-        var entry = new ReplogEntry
+        var entry = new WalRecord
         {
             TreeId = tree,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = key,
             Value = JsonLatticeSerializer<PnCounter>.Default.Serialize(remoteCounter),
             Timestamp = Hlc(1_000),
-            Mode = ReplicationMode.PnCounter,
+            Mode = LatticeMergeMode.PnCounter,
             OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
         };
 
@@ -287,14 +288,14 @@ public class ReplicationApplyIntegrationTests
         remote.Entries["site-a"] = Hlc(7777, 9);
         // Stale Site B clock that must be subsumed by the local higher value.
         remote.Entries["site-b"] = HybridLogicalClock.Zero;
-        var entry = new ReplogEntry
+        var entry = new WalRecord
         {
             TreeId = tree,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = key,
             Value = JsonLatticeSerializer<VersionVector>.Default.Serialize(remote),
             Timestamp = Hlc(1_000),
-            Mode = ReplicationMode.VersionVector,
+            Mode = LatticeMergeMode.VersionVector,
             OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
         };
 
@@ -326,14 +327,14 @@ public class ReplicationApplyIntegrationTests
 
         var remoteSet = new OrSet();
         remoteSet.Add(new byte[] { 9 }, "site-a", 1);
-        var entry = new ReplogEntry
+        var entry = new WalRecord
         {
             TreeId = tree,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = key,
             Value = JsonLatticeSerializer<OrSet>.Default.Serialize(remoteSet),
             Timestamp = Hlc(1_000),
-            Mode = ReplicationMode.OrSet,
+            Mode = LatticeMergeMode.OrSet,
             OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
         };
 

@@ -246,25 +246,25 @@ builder.Host.UseOrleans(silo =>
             silo.AddLatticeReplication(opts =>
             {
                 opts.ClusterId = clusterName;
-                opts.ReplicatedTrees = new Dictionary<string, ReplicationMode>(StringComparer.Ordinal)
+                opts.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
                 {
                     // The primary HLC-ordered fact log. Every domain
                     // event lands here; the Compliance fold reads
                     // from it; cross-cluster replication keeps both
                     // regions converged on the same fold result.
-                    [LatticeFactBackend.FactTreeId] = ReplicationMode.LwwRegister,
+                    [LatticeFactBackend.FactTreeId] = LatticeMergeMode.LwwRegister,
                     // Secondary index keyed by {site}/{HLC}/{serial}
                     // for the "Inventory By Activity" tab. Same
                     // shipping mode as the fact tree — entries are
                     // append-only LWW writes.
-                    [SiteActivityIndex.TreeId] = ReplicationMode.LwwRegister,
+                    [SiteActivityIndex.TreeId] = LatticeMergeMode.LwwRegister,
                     // Per-serial OR-Set of process labels. Typed
                     // CRDT delta shipping: the package transmits
                     // add/remove/merge operations rather than raw
                     // byte values, which is the reason this tree is
                     // a separate replicated surface from the
                     // cluster-local operator-LWW tree.
-                    [PartCrdtStore.LabelsTreeId] = ReplicationMode.OrSet,
+                    [PartCrdtStore.LabelsTreeId] = LatticeMergeMode.OrSet,
                 };
                 opts.ReplicationPeers = new[] { packagePeerClusterId! };
             });
@@ -319,6 +319,18 @@ if (packageReplicationConfigured)
     // populates the replog, so a change-feed subscriber never sees
     // foreign-origin entries.
     builder.Services.AddBaselineReplicationApplierDecorator();
+
+    // Inbound counterpart to AddChaosReplicationTransportDecorator
+    // above: when the operator-driven IReplicationDisconnectGrain
+    // flag is set, the package's gRPC Push handler will see the
+    // applier throw, rethrow as StatusCode.Internal to the peer, and
+    // the peer's transport will not advance its per-peer cursor.
+    // Without this, the local "Disconnect" button only halved the
+    // cut: outbound from this cluster paused but inbound from the
+    // peer kept arriving and applying. Must be the OUTERMOST applier
+    // decorator so the gate fires before BaselineReplicationApplier
+    // fans an entry out to the dashboard.
+    builder.Services.AddChaosReplicationApplierDecorator();
 }
 
 // OpenTelemetry: export the orleans.lattice and orleans.lattice.replication

@@ -12,9 +12,16 @@ cases where partial application on failure is acceptable.
 ## Atomicity Guarantees
 
 This section describes the **atomicity** contract of the saga. For the
-reader-visibility and consistency model (partial-visibility window,
-interaction with concurrent point reads, etc.), see
-[Consistency](consistency.md#batch-operations).
+reader-visibility model — the per-tree `ITxRegistryGrain` linearization
+point and how each read path consults it — see
+[Consistency: Atomic visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster).
+The atomicity guarantee is **universal**: it holds within a single
+tree on the local cluster *and* across every cluster the tree
+replicates to. Receiver-side replication routes prepared writes and
+the per-shard terminal mark through the same `ITxRegistryGrain`
+linearization point used locally, so a remote reader concurrent with
+replication of a `SetManyAtomicAsync` observes either zero or all of
+the saga's keys — never a partial view (see Consistency for details).
 
 Given a batch `[(k₀, v₀), (k₁, v₁), …, (kₙ₋₁, vₙ₋₁)]`, a successful
 `SetManyAtomicAsync` call guarantees:
@@ -41,14 +48,12 @@ Given a batch `[(k₀, v₀), (k₁, v₁), …, (kₙ₋₁, vₙ₋₁)]`, a s
 
 ### What `SetManyAtomicAsync` does **not** guarantee
 
-- **Reader isolation.** Readers concurrent with an in-flight saga may observe
-  a partial view: some keys updated, some not. The window is bounded by the
-  saga's execution time (ordering of ~ N × round-trip-to-leaf). **Once
-  `SetManyAtomicAsync` returns without throwing, every key in the batch holds
-  its target value and the partial-visibility window is closed.** Applications
-  requiring strict isolation *during* a saga should layer optimistic
-  concurrency on top using [`GetWithVersionAsync`](api.md) +
-  [`SetIfVersionAsync`](api.md).
+- **Cross-tree atomicity.** The per-tree `ITxRegistryGrain` is the unit
+  of atomic visibility. A `SetManyAtomicAsync` call is bound to a single
+  tree (`ILattice`) and gives strict atomic visibility *within* that
+  tree only. Operations that span multiple trees (separate `ILattice`
+  instances) require application-level coordination — Lattice does not
+  offer a cross-tree saga primitive.
 - **Ordering across distinct sagas.** Two concurrent `SetManyAtomicAsync`
   calls touching overlapping keys are resolved pairwise by LWW — the later
   HLC tick wins per key. There is no global transaction order.
@@ -91,10 +96,20 @@ where `operationId` is a GUID generated per call. The grain persists a single
 `AtomicWriteState` POCO whose phase transitions drive the saga lifecycle:
 
 ```
-NotStarted ──► Prepare ──► Execute ──► Completed     (success)
+NotStarted ──► Prepare ──► Execute ──► registry.MarkCommitted ──► fan-out ──► Completed   (success)
                               │
-                              └──► Compensate ──► Completed   (failure)
+                              └──► Compensate ──► registry.MarkAborted ──► fan-out ──► Completed   (failure)
 ```
+
+The persisted `AtomicWritePhase` enum tracks `NotStarted, Prepare,
+Execute, Compensate, Completed`; the `registry.Mark*` and `fan-out`
+steps run synchronously inside `RunSagaAsync` between the
+Execute / Compensate phase exit and the final `Phase = Completed`
+write. **The registry write is the single tree-wide visibility flip**
+(see [Consistency: Atomic
+visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster));
+the terminal fan-out is best-effort lazy GC of each touched leaf's
+pending-tx bucket.
 
 ### Phase 1 — Prepare
 
@@ -109,11 +124,16 @@ with a `WriteStateAsync` that flips the persisted phase to `Execute`.
 ### Phase 2 — Execute
 
 The coordinator walks the batch in order, calling `ILattice.SetAsync(key,
-value)` for each entry. `NextIndex` is incremented and persisted after every
+value)` for each entry under an ambient `LatticePreparedContext.BeginScope()`.
+The leaf grain's commit pipeline observes the prepared-context flag and
+routes each per-key write into its in-memory `_pendingTx[txid]` bucket
+rather than into the visible `Entries` projection — so prepared writes
+are **invisible to concurrent readers** for the duration of the
+prepare window. `NextIndex` is incremented and persisted after every
 successful step, so crash-resume can pick up exactly where it left off
-without replaying committed writes. Each step has a bounded retry budget
-(`MaxRetriesPerStep = 1`); a persistent fault pivots the saga into
-`Compensate` without re-throwing.
+without replaying committed prepares. Each step has a bounded retry
+budget (`MaxRetriesPerStep = 1`); a persistent fault pivots the saga
+into `Compensate` without re-throwing.
 
 ### Phase 3 — Compensate (failure path only)
 
@@ -128,13 +148,44 @@ On reminder-driven re-entry, the per-step retry counter is reset so a
 transient fault that outlived the previous activation can be retried
 freshly.
 
+### Tree-wide visibility flip
+
+After Execute completes (success path) or after Compensate completes
+(failure path), the saga records its terminal outcome on the per-tree
+`ITxRegistryGrain` via `MarkCommittedAsync(txid)` or
+`MarkAbortedAsync(txid)`. **This single registry write is the moment
+of tree-wide visibility flip.** It is the only point in the saga's
+lifecycle at which any reader, anywhere in the tree, can observe the
+saga's effect: every read path that finds a key in a leaf's pending-tx
+bucket dials back through the registry and resolves the read against
+the recorded outcome. There is no inter-leaf coordination beyond the
+registry write — the post-decision / pre-fan-out window is invisible
+to readers because the registry is the single tree-wide linearization
+point.
+
+After the registry write the saga broadcasts `MutationKind.TxCommit`
+(success) or `MutationKind.TxAbort` (failure) terminal marks to every
+shard root the saga touched (`ShardRootGrain.AppendTxTerminalAsync`
+→ per-leaf `ApplyTxCommit` / `ApplyTxAbort`). The terminals drain
+each leaf's pending-tx bucket into visible `Entries` (commit) or drop
+the prepared values (abort) — this is **best-effort lazy GC of the
+pending bucket**, not the visibility primitive. Readers that race the
+fan-out continue to observe the registry-recorded outcome via
+dial-back until their pending entries are drained.
+
 ### Phase 4 — Complete
 
 Whether the saga succeeds or rolls back, it ends by writing `Phase =
-Completed`, unregistering the keepalive reminder, and calling
-`DeactivateOnIdle`. Failed sagas preserve `FailureMessage` so a client that
-re-invokes the same grain key receives the original failure via
-`InvalidOperationException`.
+Completed`, unregistering the keepalive reminder, arming the retention
+reminder (`atomic-write-retention`, default 48 h via
+`LatticeOptions.AtomicWriteRetention`) for delayed state cleanup,
+calling `registry.ForgetAsync(txid)` to drop the saga decision now
+that every touched leaf has applied its terminal, and calling
+`DeactivateOnIdle`. Failed sagas preserve `FailureMessage` so a client
+that re-invokes the same grain key receives the original failure via
+`InvalidOperationException`. The `ForgetAsync` cleanup is best-effort
+— a transient failure leaves a tombstone in the registry that
+amortises against the next saga on the same tree.
 
 ## Crash-Recovery Timeline
 
@@ -149,14 +200,21 @@ re-invokes the same grain key receives the original failure via
 
 - A saga of size *N* issues approximately *2N* + 3 Orleans calls: *N*
   pre-saga reads, *N* writes, and 3 `WriteStateAsync` calls on the saga's own
-  state. For large batches where atomicity is not required, prefer the
-  parallel `SetManyAsync`.
+  state — plus one registry write (`MarkCommittedAsync` /
+  `MarkAbortedAsync`), one per-shard terminal fan-out RPC, and one
+  registry `ForgetAsync` cleanup. For large batches where atomicity is
+  not required, prefer the parallel `SetManyAsync`.
 - `AtomicWriteState` is stored under the Lattice storage provider
   (`"OrleansLattice"`). The saga grain deactivates on completion, so the
   storage row is typically read exactly once (on activation) and written
   four times (Prepare → Execute → … → Completed).
-- Readers observing a saga in flight pay no additional cost; the
-  coordinator does not block, lock, or serialise reads.
+- Readers observing a saga in flight pay one extra registry RPC per
+  pending key: `BPlusLeafGrain.ResolvePendingStatusAsync` for direct
+  single-key reads, a single batched `GetStatusManyAsync` per leaf for
+  scans, or a single `SnapshotAsync` per multi-shard fan-out (stamped
+  onto an ambient context so every leaf in the scan reuses it). The
+  coordinator does not block, lock, or serialise reads — the registry
+  RPC is the entire visibility cost.
 
 ## Caller-supplied idempotency keys
 
@@ -275,15 +333,29 @@ existing capture-once slots, and re-stamped onto Orleans
 the head of every per-key call the saga issues — including
 compensation rolls, which inherit the original prepare's index for
 each key. Single-key writes outside a saga emit `0` / `0` (the
-"not-in-a-saga" sentinel a replication-aware receiver reads to route
-the entry as a point write rather than buffering it for atomic
-delivery).
+"not-in-a-saga" sentinel).
 
-The pair is the canonical sibling-membership signal a remote receiver
-reads to detect when every entry of a batch has arrived at its
-staging buffer; convergence between the producer and receiver does
-not depend on shipping order — only on every entry of the same
-`TransactionId` being available at apply time.
+These two slots are **observability metadata about the saga's shape**
+— they let a downstream observer (a change-feed consumer, a
+mutation-observer pipeline, an audit log) recognise that several
+mutations belong to the same enclosing batch and reason about
+batch-level invariants without coordinating with the producer. They
+are *not* the atomicity primitive: tree-wide atomic visibility is
+delivered by the per-tree `ITxRegistryGrain` + per-leaf pending-tx
+mechanism described above. **Cross-cluster atomic visibility ships
+universally** through the same primitive: prepared writes ride the
+standard per-key WAL → replication transport carrying an additive
+`IsPrepared` slot and the saga's `TransactionId`, the per-shard
+`TxCommit` / `TxAbort` terminal mark ships as a single record exempt
+from the producer-side per-key filter, and on the receiver
+`IReplicationApplyGrain.ApplyPreparedSetAsync` /
+`ApplyPreparedDeleteAsync` route each prepared entry into the local
+leaf's per-tx pending bucket, with `ApplyTxTerminalAsync` flipping
+visibility under the source HLC after marking the receiver's
+`ITxRegistryGrain`. The `AtomicBatchSize` and `AtomicBatchIndex`
+slots remain reserved for future receiver-side batch optimisations
+but are not consumed by the current apply path. See
+[Consistency: Atomic visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster).
 
 ## Related
 

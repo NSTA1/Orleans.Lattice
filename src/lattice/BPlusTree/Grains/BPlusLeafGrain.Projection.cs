@@ -39,13 +39,27 @@ internal sealed partial class BPlusLeafGrain
         switch (mutation.Kind)
         {
             case MutationKind.Set:
-                ApplySet(mutation);
+                if (mutation.IsPrepared)
+                    ApplyPreparedSet(mutation);
+                else
+                    ApplySet(mutation);
                 break;
             case MutationKind.Delete:
-                ApplyDelete(mutation);
+                if (mutation.IsPrepared)
+                    ApplyPreparedDelete(mutation);
+                else
+                    ApplyDelete(mutation);
                 break;
             case MutationKind.DeleteRange:
                 ApplyDeleteRange(mutation);
+                break;
+            case MutationKind.TxCommit:
+                ApplyTxCommit(mutation.TransactionId);
+                AdvanceProjectionClock(mutation.Timestamp);
+                break;
+            case MutationKind.TxAbort:
+                ApplyTxAbort(mutation.TransactionId);
+                AdvanceProjectionClock(mutation.Timestamp);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(
@@ -80,6 +94,36 @@ internal sealed partial class BPlusLeafGrain
                 nameof(offset),
                 offset,
                 $"Projection checkpoint must be monotonically non-decreasing; current offset is {current}.");
+        }
+
+        // Clamp the requested advance back behind any unresolved saga
+        // prepare. Advancing the persisted checkpoint past the WAL
+        // offset of an unresolved prepare would silently lose the
+        // saga's writes if the leaf crashes before the terminal mark
+        // replays — crash recovery would resume from offset+1 and
+        // never see the prepare again. The clamp floor is
+        // (min unresolved prepare offset) - 1 so a future replay
+        // re-emits the prepare exactly once. Foreground commits leave
+        // _pendingTxOffsets untouched (no ambient apply offset to
+        // stamp), so this clamp degrades to a no-op for foreground-
+        // only leaves.
+        if (MinUnresolvedPrepareOffset is long minPrepare)
+        {
+            var clampFloor = minPrepare - 1;
+            if (offset > clampFloor)
+            {
+                offset = clampFloor;
+            }
+        }
+
+        if (offset < current)
+        {
+            // The clamp drove the requested offset back behind the
+            // current materialised position. Silent no-op: the caller's
+            // intent is preserved by the still-buffered prepare, and a
+            // subsequent SetCheckpointOffsetAsync after the prepare's
+            // terminal mark will be free to advance.
+            return;
         }
 
         if (offset == current)
@@ -170,6 +214,27 @@ internal sealed partial class BPlusLeafGrain
         AdvanceProjectionClock(mutation.Timestamp);
     }
 
+    /// <summary>
+    /// Replay path for a prepared-phase Set mutation. Routes the entry
+    /// into the per-leaf pending-tx map rather than the visible
+    /// projection so concurrent readers see pre-saga state until the
+    /// saga's terminal mark surfaces.
+    /// </summary>
+    private void ApplyPreparedSet(in LatticeMutation mutation)
+    {
+        var incoming = new LwwValue<byte[]>
+        {
+            Value = mutation.IsTombstone ? null : mutation.Value,
+            Timestamp = mutation.Timestamp,
+            IsTombstone = mutation.IsTombstone,
+            ExpiresAtTicks = mutation.ExpiresAtTicks,
+            OriginClusterId = mutation.OriginClusterId,
+            VectorClock = mutation.VectorClock,
+        };
+        AddPreparedMutation(mutation.TransactionId, mutation.Key, incoming);
+        AdvanceProjectionClock(mutation.Timestamp);
+    }
+
     private void ApplyDelete(in LatticeMutation mutation)
     {
         var tombstone = new LwwValue<byte[]>
@@ -182,6 +247,26 @@ internal sealed partial class BPlusLeafGrain
             VectorClock = mutation.VectorClock,
         };
         MergeIntoProjection(mutation.Key, tombstone);
+        AdvanceProjectionClock(mutation.Timestamp);
+    }
+
+    /// <summary>
+    /// Replay path for a prepared-phase Delete mutation. Routes the
+    /// tombstone into the per-leaf pending-tx map rather than the
+    /// visible projection.
+    /// </summary>
+    private void ApplyPreparedDelete(in LatticeMutation mutation)
+    {
+        var tombstone = new LwwValue<byte[]>
+        {
+            Value = null,
+            Timestamp = mutation.Timestamp,
+            IsTombstone = true,
+            ExpiresAtTicks = 0,
+            OriginClusterId = mutation.OriginClusterId,
+            VectorClock = mutation.VectorClock,
+        };
+        AddPreparedMutation(mutation.TransactionId, mutation.Key, tombstone);
         AdvanceProjectionClock(mutation.Timestamp);
     }
 

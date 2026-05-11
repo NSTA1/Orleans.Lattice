@@ -30,8 +30,7 @@ public class ReplicationMaintenanceGrainTests
         ILatticeFallOffLogDetector Detector,
         ILatticeWalIntrospection Introspection,
         LatticeReplicationOptions Options,
-        IGrainFactory GrainFactory,
-        IReplicationTxBufferGrain BufferGrain) Create(
+        IGrainFactory GrainFactory) Create(
             LatticeReplicationOptions? options = null,
             ReplicationMaintenanceState? seed = null,
             string treeName = Tree)
@@ -64,19 +63,10 @@ public class ReplicationMaintenanceGrainTests
             fakeState.State = seed;
         }
         var grainFactory = Substitute.For<IGrainFactory>();
-        // Default the buffer-grain stub to a successful no-op sweep so
-        // tests that do not exercise the orphan-sweep cadence are
-        // unaffected by the half-cadence call. Tests that need to
-        // observe or override the stub call Create()'s factory tuple
-        // member directly.
-        var bufferGrain = Substitute.For<IReplicationTxBufferGrain>();
-        bufferGrain.SweepOrphansAsync(Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
-            .Returns(0);
-        grainFactory.GetGrain<IReplicationTxBufferGrain>(Arg.Any<string>()).Returns(bufferGrain);
         var grain = new ReplicationMaintenanceGrain(
             context, reminders, NullLogger<ReplicationMaintenanceGrain>.Instance,
             monitor, gc, detector, introspection, grainFactory, fakeState);
-        return (grain, fakeState, monitor, gc, detector, introspection, resolved, grainFactory, bufferGrain);
+        return (grain, fakeState, monitor, gc, detector, introspection, resolved, grainFactory);
     }
 
     // --- Constructor null guards ---
@@ -195,7 +185,7 @@ public class ReplicationMaintenanceGrainTests
     [Test]
     public void EnsureActiveAsync_observes_pre_cancelled_token()
     {
-        var (grain, _, _, _, _, _, _, _, _) = Create();
+        var (grain, _, _, _, _, _, _, _) = Create();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         Assert.That(
@@ -213,7 +203,7 @@ public class ReplicationMaintenanceGrainTests
             ClusterId = "site-a",
             ReplicationPeers = Array.Empty<string>(),
         };
-        var (grain, state, _, gc, _, _, _, _, _) = Create(opts);
+        var (grain, state, _, gc, _, _, _, _) = Create(opts);
 
         await grain.ProcessNextPhaseAsync();
 
@@ -229,7 +219,7 @@ public class ReplicationMaintenanceGrainTests
             ClusterId = "site-a",
             ReplicationPeers = Array.Empty<string>(),
         };
-        var (grain, state, _, gc, _, _, _, _, _) = Create(opts);
+        var (grain, state, _, gc, _, _, _, _) = Create(opts);
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns<ReplicationGcReport>(_ => throw new InvalidOperationException("gc-failed"));
 
@@ -247,7 +237,7 @@ public class ReplicationMaintenanceGrainTests
     public async Task ProcessNextPhaseAsync_skips_fall_off_probe_when_peers_null()
     {
         var opts = new LatticeReplicationOptions { ClusterId = "site-a", ReplicationPeers = null };
-        var (grain, _, _, _, detector, introspection, _, _, _) = Create(opts);
+        var (grain, _, _, _, detector, introspection, _, _) = Create(opts);
 
         await grain.ProcessNextPhaseAsync();
 
@@ -266,7 +256,7 @@ public class ReplicationMaintenanceGrainTests
             ClusterId = "site-a",
             ReplicationPeers = Array.Empty<string>(),
         };
-        var (grain, _, _, _, detector, introspection, _, _, _) = Create(opts);
+        var (grain, _, _, _, detector, introspection, _, _) = Create(opts);
 
         await grain.ProcessNextPhaseAsync();
 
@@ -285,7 +275,7 @@ public class ReplicationMaintenanceGrainTests
             ClusterId = "site-a",
             ReplicationPeers = new[] { "site-b" },
         };
-        var (grain, _, _, _, detector, introspection, _, _, _) = Create(opts);
+        var (grain, _, _, _, detector, introspection, _, _) = Create(opts);
         introspection.GetOldestAvailableHlcAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns((HybridLogicalClock?)null);
 
@@ -304,7 +294,7 @@ public class ReplicationMaintenanceGrainTests
             ClusterId = "site-a",
             ReplicationPeers = new[] { "site-b", "site-c", "site-d" },
         };
-        var (grain, _, _, _, detector, introspection, _, _, _) = Create(opts);
+        var (grain, _, _, _, detector, introspection, _, _) = Create(opts);
         var hlc = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
         introspection.GetOldestAvailableHlcAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(hlc);
@@ -324,7 +314,7 @@ public class ReplicationMaintenanceGrainTests
             ClusterId = "site-a",
             ReplicationPeers = new[] { "", "  ", "site-b", null! },
         };
-        var (grain, _, _, _, detector, introspection, _, _, _) = Create(opts);
+        var (grain, _, _, _, detector, introspection, _, _) = Create(opts);
         introspection.GetOldestAvailableHlcAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
 
@@ -345,7 +335,7 @@ public class ReplicationMaintenanceGrainTests
             ClusterId = "site-a",
             ReplicationPeers = new[] { "site-b", "site-c" },
         };
-        var (grain, _, _, _, detector, introspection, _, _, _) = Create(opts);
+        var (grain, _, _, _, detector, introspection, _, _) = Create(opts);
         introspection.GetOldestAvailableHlcAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
         detector.CheckAndTriggerAsync(Tree, "site-b", Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
@@ -377,7 +367,7 @@ public class ReplicationMaintenanceGrainTests
             LastGcTicks = DateTime.UtcNow.Ticks,
             LastFallOffCheckTicks = DateTime.UtcNow.Ticks,
         };
-        var (grain, _, _, gc, _, _, _, _, _) = Create(opts, seed);
+        var (grain, _, _, gc, _, _, _, _) = Create(opts, seed);
 
         await grain.ProcessNextPhaseAsync();
 
@@ -400,7 +390,7 @@ public class ReplicationMaintenanceGrainTests
             LastGcTicks = DateTime.UtcNow.Ticks - TimeSpan.FromHours(1).Ticks,
             LastFallOffCheckTicks = DateTime.UtcNow.Ticks,
         };
-        var (grain, _, _, gc, _, _, _, _, _) = Create(opts, seed);
+        var (grain, _, _, gc, _, _, _, _) = Create(opts, seed);
 
         await grain.ProcessNextPhaseAsync();
 
@@ -423,7 +413,7 @@ public class ReplicationMaintenanceGrainTests
             LastGcTicks = DateTime.UtcNow.Ticks - TimeSpan.FromHours(1).Ticks,
             LastFallOffCheckTicks = DateTime.UtcNow.Ticks,
         };
-        var (grain, _, _, gc, detector, introspection, _, _, _) = Create(opts, seed);
+        var (grain, _, _, gc, detector, introspection, _, _) = Create(opts, seed);
         introspection.GetOldestAvailableHlcAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
 
@@ -433,99 +423,5 @@ public class ReplicationMaintenanceGrainTests
         await detector.DidNotReceive().CheckAndTriggerAsync(
             Arg.Any<string>(), Arg.Any<string>(),
             Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
-    }
-
-    // --- ProcessNextPhaseAsync — orphan-sweep cadence ---
-
-    [Test]
-    public async Task ProcessNextPhaseAsync_runs_orphan_sweep_on_first_tick()
-    {
-        var opts = new LatticeReplicationOptions
-        {
-            ClusterId = "site-a",
-            ReplicationPeers = Array.Empty<string>(),
-        };
-        var (grain, state, _, _, _, _, _, _, bufferGrain) = Create(opts);
-
-        await grain.ProcessNextPhaseAsync();
-
-        await bufferGrain.Received(1).SweepOrphansAsync(
-            opts.TxBufferOrphanTimeout, Arg.Any<CancellationToken>());
-        Assert.That(state.State.LastOrphanSweepTicks, Is.GreaterThan(0L));
-    }
-
-    [Test]
-    public async Task ProcessNextPhaseAsync_does_not_advance_last_orphan_sweep_ticks_when_sweep_throws()
-    {
-        var opts = new LatticeReplicationOptions
-        {
-            ClusterId = "site-a",
-            ReplicationPeers = Array.Empty<string>(),
-        };
-        var (grain, state, _, _, _, _, _, _, bufferGrain) = Create(opts);
-        bufferGrain.SweepOrphansAsync(Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
-            .Returns<int>(_ => throw new InvalidOperationException("sweep-failed"));
-
-        // Failure is swallowed and logged; the cadence stamp does NOT
-        // advance so the next phase tick retries rather than waiting
-        // a full cadence interval. Mirrors the GC failure-handling
-        // contract.
-        await grain.ProcessNextPhaseAsync();
-
-        Assert.That(state.State.LastOrphanSweepTicks, Is.EqualTo(0L));
-        await bufferGrain.Received(1).SweepOrphansAsync(
-            Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task ProcessNextPhaseAsync_runs_orphan_sweep_at_half_cadence_relative_to_gc()
-    {
-        // GC interval = 200ms ⇒ orphan-sweep cadence = 100ms. Seed the
-        // state so GC is NOT due (LastGcTicks just stamped) but the
-        // orphan sweep IS due (last run > 100ms ago).
-        var opts = new LatticeReplicationOptions
-        {
-            ClusterId = "site-a",
-            ReplicationPeers = Array.Empty<string>(),
-            MaintenanceGcInterval = TimeSpan.FromMilliseconds(200),
-        };
-        var seed = new ReplicationMaintenanceState
-        {
-            LastGcTicks = DateTime.UtcNow.Ticks,
-            LastOrphanSweepTicks = DateTime.UtcNow.Ticks - TimeSpan.FromMilliseconds(150).Ticks,
-            LastFallOffCheckTicks = DateTime.UtcNow.Ticks,
-        };
-        var (grain, _, _, gc, _, _, _, _, bufferGrain) = Create(opts, seed);
-
-        await grain.ProcessNextPhaseAsync();
-
-        await bufferGrain.Received(1).SweepOrphansAsync(
-            opts.TxBufferOrphanTimeout, Arg.Any<CancellationToken>());
-        await gc.DidNotReceive().RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task ProcessNextPhaseAsync_skips_orphan_sweep_when_within_cadence_window()
-    {
-        // Seed LastOrphanSweepTicks just-now; cadence is 5s ⇒ 2.5s
-        // half-cadence. The sweep must NOT fire on this tick.
-        var opts = new LatticeReplicationOptions
-        {
-            ClusterId = "site-a",
-            ReplicationPeers = Array.Empty<string>(),
-            MaintenanceGcInterval = TimeSpan.FromSeconds(5),
-        };
-        var seed = new ReplicationMaintenanceState
-        {
-            LastGcTicks = DateTime.UtcNow.Ticks,
-            LastOrphanSweepTicks = DateTime.UtcNow.Ticks,
-            LastFallOffCheckTicks = DateTime.UtcNow.Ticks,
-        };
-        var (grain, _, _, _, _, _, _, _, bufferGrain) = Create(opts, seed);
-
-        await grain.ProcessNextPhaseAsync();
-
-        await bufferGrain.DidNotReceive().SweepOrphansAsync(
-            Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
     }
 }

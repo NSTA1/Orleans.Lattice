@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Buffers;
 using Orleans.Serialization;
 
@@ -89,7 +90,7 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
         var stamped = envelope with
         {
             WireVersion = envelope.WireVersion == 0 ? CurrentWireVersion : envelope.WireVersion,
-            Entries = envelope.Entries ?? Array.Empty<ReplogEntry>(),
+            Entries = envelope.Entries ?? Array.Empty<WalRecord>(),
         };
 
         // Hand the buffer writer straight to the Orleans serializer so
@@ -141,7 +142,7 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
         // not have to add a null guard.
         if (envelope.Entries is null)
         {
-            envelope = envelope with { Entries = Array.Empty<ReplogEntry>() };
+            envelope = envelope with { Entries = Array.Empty<WalRecord>() };
         }
 
         return envelope;

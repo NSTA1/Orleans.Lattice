@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
@@ -47,30 +48,30 @@ public partial class ReplicationApplierTests
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
         new() { WallClockTicks = ticks, Counter = counter };
 
-    private static ReplogEntry SetEntry(string key, HybridLogicalClock ts, string origin = RemoteCluster) => new()
+    private static WalRecord SetEntry(string key, HybridLogicalClock ts, string origin = RemoteCluster) => new()
     {
         TreeId = Tree,
-        Op = ReplogOp.Set,
+        Op = MutationKind.Set,
         Key = key,
         Value = new byte[] { 1 },
         Timestamp = ts,
         OriginClusterId = origin,
     };
 
-    private static ReplogEntry DeleteEntry(string key, HybridLogicalClock ts, string origin = RemoteCluster) => new()
+    private static WalRecord DeleteEntry(string key, HybridLogicalClock ts, string origin = RemoteCluster) => new()
     {
         TreeId = Tree,
-        Op = ReplogOp.Delete,
+        Op = MutationKind.Delete,
         Key = key,
         Timestamp = ts,
         IsTombstone = true,
         OriginClusterId = origin,
     };
 
-    private static ReplogEntry RangeDeleteEntry(string startInclusive, string endExclusive, string origin = RemoteCluster) => new()
+    private static WalRecord RangeDeleteEntry(string startInclusive, string endExclusive, string origin = RemoteCluster) => new()
     {
         TreeId = Tree,
-        Op = ReplogOp.DeleteRange,
+        Op = MutationKind.DeleteRange,
         Key = startInclusive,
         EndExclusiveKey = endExclusive,
         Timestamp = HybridLogicalClock.Zero,
@@ -262,10 +263,10 @@ public partial class ReplicationApplierTests
             .Returns(new LatticeReplicationOptions { ClusterId = LocalCluster });
         var applier = new ReplicationApplier(factory, monitor, new LocalVectorClockCache(factory));
 
-        await applier.ApplyAsync(new ReplogEntry
+        await applier.ApplyAsync(new WalRecord
         {
             TreeId = "alpha",
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1 },
             Timestamp = Hlc(1),
@@ -408,7 +409,7 @@ public partial class ReplicationApplierTests
         var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
         var entry = SetEntry("k", Hlc(10)) with
         {
-            Mode = ReplicationMode.OrSet,
+            Mode = LatticeMergeMode.OrSet,
             Value = EncodeOrSet(s => s.Add(OrSetMember, "site-b", 1)),
         };
 
@@ -430,7 +431,7 @@ public partial class ReplicationApplierTests
         var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
         var entry = SetEntry("k", Hlc(11)) with
         {
-            Mode = ReplicationMode.PnCounter,
+            Mode = LatticeMergeMode.PnCounter,
             Value = EncodePnCounter(c => c.Increment("site-b", 5)),
         };
 
@@ -452,7 +453,7 @@ public partial class ReplicationApplierTests
         var remoteHlc = Hlc(42, 3);
         var entry = SetEntry("k", Hlc(12)) with
         {
-            Mode = ReplicationMode.VersionVector,
+            Mode = LatticeMergeMode.VersionVector,
             Value = EncodeVersionVector(v => v.Entries["site-b"] = remoteHlc),
         };
 
@@ -476,7 +477,7 @@ public partial class ReplicationApplierTests
         var ts = Hlc(99, 1);
         var entry = SetEntry("k", ts) with
         {
-            Mode = ReplicationMode.OrSet,
+            Mode = LatticeMergeMode.OrSet,
             Value = EncodeOrSet(),
         };
 
@@ -493,7 +494,7 @@ public partial class ReplicationApplierTests
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
         var entry = SetEntry("k", Hlc(20)) with
         {
-            Mode = ReplicationMode.OrSet,
+            Mode = LatticeMergeMode.OrSet,
             Value = EncodeOrSet(),
         };
 
@@ -510,7 +511,7 @@ public partial class ReplicationApplierTests
         var (applier, _, _, _) = CreateTypedCrdtApplier();
         var entry = SetEntry("k", Hlc(1)) with
         {
-            Mode = ReplicationMode.OrSet,
+            Mode = LatticeMergeMode.OrSet,
             Value = null,
         };
 
@@ -526,7 +527,7 @@ public partial class ReplicationApplierTests
             .Returns(false, false, true);
         var entry = SetEntry("k", Hlc(7)) with
         {
-            Mode = ReplicationMode.OrSet,
+            Mode = LatticeMergeMode.OrSet,
             Value = EncodeOrSet(s => s.Add(OrSetMember, "site-b", 1)),
         };
 
@@ -546,7 +547,7 @@ public partial class ReplicationApplierTests
         var (applier, _, _, _) = CreateTypedCrdtApplier();
         var entry = SetEntry("k", Hlc(1)) with
         {
-            Mode = (ReplicationMode)999,
+            Mode = (LatticeMergeMode)999,
             Value = new byte[] { 1 },
         };
 
@@ -561,7 +562,7 @@ public partial class ReplicationApplierTests
         var (applier, _, apply, _) = CreateTypedCrdtApplier();
         var entry = SetEntry("k", Hlc(1)) with
         {
-            Mode = ReplicationMode.OrSet,
+            Mode = LatticeMergeMode.OrSet,
             Value = EncodeOrSet(),
         };
 
@@ -775,7 +776,7 @@ public partial class ReplicationApplierTests
         var (applier, _, _, _) = CreateTypedCrdtApplier();
         var entry = SetEntry("k", Hlc(1)) with
         {
-            Mode = (ReplicationMode)999,
+            Mode = (LatticeMergeMode)999,
             Value = new byte[] { 1 },
         };
 

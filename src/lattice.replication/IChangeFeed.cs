@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication;
@@ -6,7 +7,7 @@ namespace Orleans.Lattice.Replication;
 /// Pure-pull, cursor-driven subscriber API over the per-shard
 /// write-ahead log. Lets in-process consumers (the outbound ship loop
 /// in later phases, custom bridges, integration tests) read every
-/// captured <see cref="ReplogEntry"/> for a tree without touching the
+/// captured <see cref="WalRecord"/> for a tree without touching the
 /// primary state and without depending on transport-shaped acks.
 /// <para>
 /// The contract is deliberately neutral: there is no peer id, no
@@ -51,7 +52,7 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="IReplicationApplier"/> decorator: the decorator wraps
 /// the canonical applier, sees every receiver-side install, and is
 /// invoked on the same thread that performs the merge so it has the
-/// full <see cref="ReplogEntry"/> in hand. The change feed remains
+/// full <see cref="WalRecord"/> in hand. The change feed remains
 /// the right surface for "ship this cluster's authored writes
 /// elsewhere"; the apply-decorator is the right surface for "react to
 /// every byte that lands in this cluster's state".
@@ -60,9 +61,9 @@ namespace Orleans.Lattice.Replication;
 public interface IChangeFeed
 {
     /// <summary>
-    /// Yields every captured <see cref="ReplogEntry"/> for
+    /// Yields every captured <see cref="WalRecord"/> for
     /// <paramref name="treeName"/> with
-    /// <see cref="ReplogEntry.Timestamp"/> strictly greater than
+    /// <see cref="WalRecord.Timestamp"/> strictly greater than
     /// <paramref name="cursor"/>. Entries are emitted in HLC ascending
     /// order; ties are broken by the order in which the merge consumes
     /// them across partitions and is therefore unspecified - consumers
@@ -84,7 +85,7 @@ public interface IChangeFeed
     /// </summary>
     /// <param name="treeName">
     /// Logical tree id whose change feed is being consumed. Only
-    /// entries with <see cref="ReplogEntry.TreeId"/> equal to this
+    /// entries with <see cref="WalRecord.TreeId"/> equal to this
     /// value are yielded. Must not be <see langword="null"/>.
     /// </param>
     /// <param name="cursor">
@@ -97,7 +98,7 @@ public interface IChangeFeed
     /// When <see langword="true"/> (the default), entries authored by
     /// the local cluster are included in the stream. When
     /// <see langword="false"/>, entries whose
-    /// <see cref="ReplogEntry.OriginClusterId"/> matches the configured
+    /// <see cref="WalRecord.OriginClusterId"/> matches the configured
     /// local <see cref="LatticeReplicationOptions.ClusterId"/> are
     /// filtered out - the cursor-driven cycle-break used by remote
     /// shippers. Defaults to <see langword="true"/> because the future
@@ -108,7 +109,7 @@ public interface IChangeFeed
     /// cluster — see the type-level remarks).
     /// </param>
     /// <param name="cancellationToken">Cancellation token observed between every page read and every yielded entry.</param>
-    IAsyncEnumerable<ReplogEntry> Subscribe(
+    IAsyncEnumerable<WalRecord> Subscribe(
         string treeName,
         HybridLogicalClock cursor,
         bool includeLocalOrigin = true,

@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -25,15 +26,15 @@ internal sealed class MultiSiteClusterFixture
     /// <summary>The cluster id assigned to site <paramref name="index"/>.</summary>
     public static string ClusterIdFor(int index) => $"site-{index}";
 
-    private static readonly ConcurrentDictionary<string, ReplicationMode> Modes = new();
+    private static readonly ConcurrentDictionary<string, LatticeMergeMode> Modes = new();
 
     /// <summary>
     /// Per-cluster silo-side <see cref="LatticeReplicationOptions"/>
     /// customisers. Keyed by the per-site cluster id so a single
     /// post-configure type can route every silo to the chaos test's
-    /// requested overrides (e.g. <c>AtomicBatchDelivery=true</c>,
-    /// tightened orphan timeouts) without per-site configurator
-    /// duplication. The map is cleared in
+    /// requested overrides (e.g. tightened orphan timeouts, custom
+    /// dead-letter routing) without per-site configurator duplication.
+    /// The map is cleared in
     /// <see cref="DisposeAsync"/> so consecutive chaos tests do not
     /// leak overrides into the next fixture.
     /// </summary>
@@ -42,7 +43,7 @@ internal sealed class MultiSiteClusterFixture
     private readonly TestCluster[] _sites;
     private readonly IChangeFeed[] _changeFeeds;
     private readonly ReplicationApplier[] _appliers;
-    private readonly ReplicationMode _mode;
+    private readonly LatticeMergeMode _mode;
     private readonly Action<LatticeReplicationOptions>? _siloCustomizer;
     private readonly Action<LatticeReplicationOptions>? _clientCustomizer;
 
@@ -59,9 +60,8 @@ internal sealed class MultiSiteClusterFixture
     /// <see cref="LatticeReplicationOptions"/>. Runs as a
     /// post-configure after the cluster id has been mirrored from
     /// <see cref="Orleans.Configuration.ClusterOptions.ClusterId"/>;
-    /// a chaos test that needs to opt into receiver-side
-    /// atomic-batch delivery, tighten the orphan-sweep timeout, or
-    /// flip any other replication option uses this hook.
+    /// a chaos test that needs to tighten the orphan-sweep timeout
+    /// or flip any other replication option uses this hook.
     /// </param>
     /// <param name="configureClient">
     /// Optional client-side customiser for the test-fixture
@@ -73,12 +73,11 @@ internal sealed class MultiSiteClusterFixture
     /// <see cref="IOptionsMonitor{TOptions}.Get(string)"/>, but the
     /// pump-side applier is constructed against this in-memory
     /// monitor so the two halves of the chaos pipeline must be
-    /// configured symmetrically when receiver-side behaviour
-    /// (e.g. <see cref="LatticeReplicationOptions.AtomicBatchDelivery"/>)
-    /// is being exercised.
+    /// configured symmetrically when receiver-side behaviour is
+    /// being exercised.
     /// </param>
     public MultiSiteClusterFixture(
-        ReplicationMode mode,
+        LatticeMergeMode mode,
         int siteCount = 3,
         Action<LatticeReplicationOptions>? configureSilo = null,
         Action<LatticeReplicationOptions>? configureClient = null)
@@ -186,7 +185,7 @@ internal sealed class MultiSiteClusterFixture
             {
                 services.AddSingleton<IPostConfigureOptions<LatticeReplicationOptions>, ChaosClusterIdPostConfigure>();
                 services.AddSingleton<IPostConfigureOptions<LatticeReplicationOptions>, ChaosCustomPostConfigure>();
-                services.AddSingleton<IReplicationModeResolver, ChaosModeResolver>();
+                services.AddSingleton<ILatticeMergeModeResolver, ChaosModeResolver>();
             });
         }
     }
@@ -229,9 +228,9 @@ internal sealed class MultiSiteClusterFixture
     /// the silo's own cluster id so a single configurator type works for
     /// every site.
     /// </summary>
-    private sealed class ChaosModeResolver(IOptionsMonitor<LatticeReplicationOptions> options) : IReplicationModeResolver
+    private sealed class ChaosModeResolver(IOptionsMonitor<LatticeReplicationOptions> options) : ILatticeMergeModeResolver
     {
-        public ReplicationMode? Resolve(string treeId)
+        public LatticeMergeMode? Resolve(string treeId)
         {
             var clusterId = options.CurrentValue.ClusterId;
             return Modes.TryGetValue(clusterId, out var mode) ? mode : null;

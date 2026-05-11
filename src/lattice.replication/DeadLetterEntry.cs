@@ -1,7 +1,8 @@
+using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// A single <see cref="ReplogEntry"/> the inbound apply pipeline could
+/// A single <see cref="WalRecord"/> the inbound apply pipeline could
 /// not install after exhausting
 /// <see cref="LatticeReplicationOptions.MaxApplyRetries"/> consecutive
 /// retries, parked on the per-tree dead-letter queue together with the
@@ -22,7 +23,7 @@ public readonly record struct DeadLetterEntry
 
     /// <summary>The replicated entry that failed to apply.</summary>
     [Id(1)]
-    public ReplogEntry Entry { get; init; }
+    public WalRecord Entry { get; init; }
 
     /// <summary>
     /// Human-readable description of the terminal failure, typically the

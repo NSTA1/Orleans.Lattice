@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Buffers;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -74,11 +75,11 @@ public class ShipperPersistenceIntegrationTests
     {
         public string ContentType => "application/x-test";
         public int CurrentWireVersion => 1;
-        public List<ReplogEntry> LastEncoded { get; private set; } = new();
+        public List<WalRecord> LastEncoded { get; private set; } = new();
 
         public void Encode(ReplicationBatchEnvelope envelope, IBufferWriter<byte> writer)
         {
-            LastEncoded = new List<ReplogEntry>(envelope.Entries);
+            LastEncoded = new List<WalRecord>(envelope.Entries);
             writer.Write(new byte[] { 1 });
         }
 
@@ -87,42 +88,42 @@ public class ShipperPersistenceIntegrationTests
     }
 
     /// <summary>
-    /// In-process <see cref="IReplogShardGrain"/> stand-in. The same
+    /// In-process <see cref="IWalShardGrain"/> stand-in. The same
     /// instance is reused across activations to model "WAL persists
     /// across silo crash".
     /// </summary>
-    private sealed class WalShardStub : IReplogShardGrain
+    private sealed class WalShardStub : IWalShardGrain
     {
-        public List<ReplogEntry> Entries { get; } = new();
+        public List<WalRecord> Entries { get; } = new();
 
-        public void Append(ReplogEntry entry) => Entries.Add(entry);
+        public void Append(WalRecord entry) => Entries.Add(entry);
 
-        public Task<long> AppendAsync(ReplogEntry entry, CancellationToken cancellationToken)
+        public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken)
         {
             Entries.Add(entry);
             return Task.FromResult((long)(Entries.Count - 1));
         }
 
-        public Task<ReplogShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+        public Task<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (fromSequence >= Entries.Count)
             {
-                return Task.FromResult(ReplogShardPage.Empty(fromSequence));
+                return Task.FromResult(WalShardPage.Empty(fromSequence));
             }
             var endExclusive = (int)Math.Min(Entries.Count, fromSequence + maxEntries);
             var capacity = endExclusive - (int)fromSequence;
-            var entries = new ReplogShardEntry[capacity];
+            var entries = new WalShardSequencedEntry[capacity];
             for (var i = 0; i < capacity; i++)
             {
                 var seq = fromSequence + i;
-                entries[i] = new ReplogShardEntry
+                entries[i] = new WalShardSequencedEntry
                 {
                     Sequence = seq,
                     Entry = Entries[(int)seq],
                 };
             }
-            return Task.FromResult(new ReplogShardPage
+            return Task.FromResult(new WalShardPage
             {
                 Entries = entries,
                 NextSequence = endExclusive,
@@ -136,10 +137,10 @@ public class ShipperPersistenceIntegrationTests
             Task.FromResult((long)Entries.Count);
     }
 
-    private static ReplogEntry MakeEntry(string key, long ticks) => new()
+    private static WalRecord MakeEntry(string key, long ticks) => new()
     {
         TreeId = Tree,
-        Op = ReplogOp.Set,
+        Op = MutationKind.Set,
         Key = key,
         Value = new byte[] { 1 },
         Timestamp = new HybridLogicalClock { WallClockTicks = ticks, Counter = 0 },
@@ -161,7 +162,7 @@ public class ShipperPersistenceIntegrationTests
         {
             var key = $"{tree}/{p}";
             var stub = shards[p];
-            factory.GetGrain<IReplogShardGrain>(key).Returns(stub);
+            factory.GetGrain<IWalShardGrain>(key).Returns(stub);
         }
         factory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>())
             .Returns(Substitute.For<IReplicationDeadLetterGrain>());

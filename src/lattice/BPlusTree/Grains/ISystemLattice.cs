@@ -9,7 +9,7 @@ using System.ComponentModel;
 /// <see cref="LatticeConstants.SystemTreePrefix"/>, including the
 /// registry tree <see cref="LatticeConstants.RegistryTreeId"/> and the
 /// replication write-ahead-log prefix
-/// <see cref="LatticeConstants.ReplogTreePrefix"/>).
+/// <see cref="LatticeConstants.WalTreePrefix"/>).
 /// <para>
 /// <see cref="LatticeGrain"/> implements both <see cref="ILattice"/>
 /// (public, guarded) and this interface (internal, unguarded) against the

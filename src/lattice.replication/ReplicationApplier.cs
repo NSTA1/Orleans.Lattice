@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -14,7 +15,7 @@ namespace Orleans.Lattice.Replication;
 /// the per-origin high-water-mark for the entry's
 /// <c>(treeId, originClusterId)</c> pair, filters re-delivery, runs
 /// the causal-plus dependency check — parking entries whose
-/// declared <see cref="ReplogEntry.VectorClock"/> is not yet
+/// declared <see cref="WalRecord.VectorClock"/> is not yet
 /// dominated by the local vector clock — and routes the entry through
 /// the core library's <see cref="IReplicationApplyGrain"/> seam so
 /// the persisted <c>LwwValue&lt;byte[]&gt;</c> carries the remote
@@ -27,7 +28,6 @@ internal sealed partial class ReplicationApplier(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeReplicationOptions> options,
     LocalVectorClockCache localVectorClockCache,
-    ILatticeReplicationCursorRegistry? cursorRegistry = null,
     ILogger<ReplicationApplier>? logger = null) : IReplicationApplier
 {
     private readonly ILogger<ReplicationApplier> _logger =
@@ -80,40 +80,8 @@ internal sealed partial class ReplicationApplier(
     private readonly ConcurrentDictionary<(string TreeId, string Origin), HybridLogicalClock> _lastAppliedSourceHlc =
         new();
 
-    /// <summary>
-    /// Per-tree semaphore serialising the
-    /// <see cref="ReportBlockedFloorAsync(string, IReplicationTxBufferGrain, CancellationToken)"/>
-    /// helper's grain-call + registry-call pair. Concurrent applier
-    /// invocations (e.g. multiple peer ship loops pushing into the
-    /// same receiver tree) would otherwise interleave the
-    /// <c>GetLowestStagedHlc</c> read against the
-    /// <c>ReportCursorAsync</c> write and a stale snapshot from a
-    /// late-arriving thread could clobber a fresher snapshot from an
-    /// earlier-resolving thread (replace semantics: most-recent
-    /// caller wins, but "most recent" was wall-clock arrival, not
-    /// most-recent observation of buffer state). Holding the
-    /// semaphore across both calls collapses the TOCTOU window so
-    /// the registry's pin always reflects the latest observation in
-    /// linearisable order.
-    /// </summary>
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _floorReportLocks =
-        new(StringComparer.Ordinal);
-
-    /// <summary>
-    /// Last value (and observed-vs-never) the applier has published
-    /// to the cursor registry for each tree's blocked-floor pin.
-    /// Used to suppress redundant reports when a steady-state batch
-    /// of identical-HLC admissions does not move the floor; also used
-    /// by the on-drain unregister path to detect the
-    /// "transition to null after a non-null" case.
-    /// </summary>
-    private readonly ConcurrentDictionary<string, BlockedFloorReport> _lastReportedFloor =
-        new(StringComparer.Ordinal);
-
-    private readonly record struct BlockedFloorReport(bool Reported, HybridLogicalClock? Value);
-
     /// <inheritdoc />
-    public async Task<ApplyResult> ApplyAsync(ReplogEntry entry, CancellationToken cancellationToken = default)
+    public async Task<ApplyResult> ApplyAsync(WalRecord entry, CancellationToken cancellationToken = default)
     {
         // Apply-duration instrumentation: record the wall-clock duration
         // of every terminal apply outcome (success / dedup / failure /
@@ -132,13 +100,13 @@ internal sealed partial class ReplicationApplier(
 
             if (string.IsNullOrEmpty(entry.TreeId))
             {
-                throw new ArgumentException("ReplogEntry.TreeId must be non-empty.", nameof(entry));
+                throw new ArgumentException("WalRecord.TreeId must be non-empty.", nameof(entry));
             }
 
             if (string.IsNullOrEmpty(entry.OriginClusterId))
             {
                 throw new ArgumentException(
-                    "ReplogEntry.OriginClusterId must be non-empty for replication apply.",
+                    "WalRecord.OriginClusterId must be non-empty for replication apply.",
                     nameof(entry));
             }
 
@@ -159,7 +127,7 @@ internal sealed partial class ReplicationApplier(
             // produces many per-leaf HLCs that cannot be faithfully collapsed),
             // so per-origin HWM dedupe does not apply to them. Range applies
             // are naturally idempotent at the leaf layer.
-            if (entry.Op == ReplogOp.DeleteRange)
+            if (entry.Op == MutationKind.DeleteRange)
             {
                 // Defence-in-depth: a DeleteRange entry tagged with
                 // atomic-batch metadata (AtomicBatchSize > 0) is a
@@ -171,13 +139,16 @@ internal sealed partial class ReplicationApplier(
                 // ArgumentException so the producer fails fast rather
                 // than the receiver silently applying a non-atomic range
                 // delete that carries an unfulfilled atomic-batch
-                // promise. The check is independent of the receiver-side
-                // AtomicBatchDelivery opt-in because the violation is
-                // producer-shaped, not receiver-shaped.
+                // promise. The violation is producer-shaped, not
+                // receiver-shaped — the wire slot remains additive on
+                // every WalRecord so the receiver-side prepared-Set /
+                // prepared-Delete primitive can route Set/Delete entries
+                // through the per-tx pending bucket while DeleteRange
+                // entries are explicitly rejected here.
                 if (entry.AtomicBatchSize > 0)
                 {
                     throw new ArgumentException(
-                        "ReplogEntry.Op=DeleteRange must not carry atomic-batch metadata "
+                        "WalRecord.Op=DeleteRange must not carry atomic-batch metadata "
                         + "(AtomicBatchSize > 0). Atomic batches must contain only Set / Delete entries; "
                         + "range deletes are emitted by the producer's DeleteRangeAsync surface, not "
                         + "SetManyAtomicAsync.",
@@ -189,126 +160,34 @@ internal sealed partial class ReplicationApplier(
                 return new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero };
             }
 
+            // Saga terminal-mark records (TxCommit / TxAbort) are
+            // saga-id-keyed and idempotent on the receiver
+            // (per-tree TxRegistry repeat-same-outcome no-op + per-leaf
+            // _recentlyTerminal HashSet dedup). They bypass the
+            // per-origin HWM check, the shadow-forward dedup cache, and
+            // the causal-buffer parking path: those primitives are
+            // per-key data-flow dedup primitives and have no defined
+            // semantics on saga linearization records. The receiver-side
+            // ApplyTxTerminalAsync routes the mark through the per-tree
+            // ITxRegistryGrain (the linearization point readers dial
+            // back through) and the addressed shard's
+            // AppendTxTerminalAsync under a LatticeHlcOverrideContext
+            // so the receiver's local WAL append re-stamps the source
+            // cluster's terminal HLC verbatim — preserving the
+            // cross-cluster ordering invariant on receiver replays.
+            if (entry.Op is MutationKind.TxCommit or MutationKind.TxAbort)
+            {
+                await ApplyTxTerminalCoreAsync(entry, cancellationToken);
+                outcome = LatticeReplicationMetrics.OutcomeSuccess;
+                return new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero };
+            }
+
             var hwmGrain = GetHwmGrain(entry.TreeId);
             var hwm = await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
             if (entry.Timestamp <= hwm)
             {
                 outcome = LatticeReplicationMetrics.OutcomeDedup;
                 return new ApplyResult { Applied = false, HighWaterMark = hwm };
-            }
-
-            // Atomic-batch staging buffer: when the receiver
-            // has opted in via LatticeReplicationOptions.AtomicBatchDelivery
-            // and the entry carries a non-zero AtomicBatchSize (it is
-            // part of an enclosing SetManyAtomicAsync transaction), hand
-            // the entry off to the per-tree buffer grain. While the
-            // batch is incomplete, return Applied=false with the
-            // per-origin HWM unchanged so the producer continues to
-            // re-ship until every sibling lands and the buffer dedupes
-            // wire-shape re-deliveries by (origin, transactionId, index).
-            // When the admission completes the enclosing batch, dispatch
-            // the whole batch atomically through the source-HLC-preserving
-            // IReplicationApplyGrain.ApplyManyAtomicAsync seam: every key
-            // commits or rolls back together, the per-origin HWM advances
-            // exactly once to the maximum HLC across the batch, and a
-            // failed saga (Compensated outcome or thrown exception) routes
-            // every entry to the per-tree dead-letter queue tagged
-            // ReasonAtomicApplyFailure with the HWM left unchanged so the
-            // producer continues to re-ship until the DLQ is recovered.
-            //
-            // The gate sits after HWM dedup (so a re-delivery of an
-            // already-applied batch is not redundantly buffered) and
-            // before the shadow-forward dedupe cache (the buffer's
-            // (origin, txid, index) dedup is a stronger contract than
-            // the cache's (origin, hlc, key, op) tuple).
-            if (resolved.AtomicBatchDelivery && entry.AtomicBatchSize > 0)
-            {
-                if (entry.TransactionId == Guid.Empty)
-                {
-                    throw new ArgumentException(
-                        "ReplogEntry.TransactionId must be non-empty when AtomicBatchSize > 0 and "
-                        + "AtomicBatchDelivery is enabled. Producer must stamp a transaction id on every "
-                        + "entry of an atomic batch.",
-                        nameof(entry));
-                }
-
-                var txBuffer = grainFactory.GetGrain<IReplicationTxBufferGrain>(entry.TreeId);
-                var admission = await txBuffer.AdmitAsync(entry, cancellationToken).ConfigureAwait(false);
-
-                // Saga-blacklist bypass: an entry whose
-                // TransactionId was registered on the buffer's saga
-                // blacklist by the receiver-side bootstrap state
-                // machine — because the producer-side quiesce path
-                // could not drain the saga to completion before the
-                // snapshot capture — short-circuits past the staging
-                // buffer entirely. The buffer returns
-                // BlacklistedBypass=true with no entry staged; the
-                // applier falls through to the canonical
-                // point-apply path below so the entry lands as a
-                // direct point write. Atomic visibility is degraded
-                // to causal+ for the blacklisted saga, but the
-                // alternative (admitting the entry to a buffer
-                // whose missing siblings will never arrive) would
-                // stall completion until the orphan-timeout sweep
-                // evicted the partial batch. Operators tune
-                // SnapshotSagaQuiesceTimeout (or reduce snapshot
-                // concurrency) to keep the blacklist empty.
-                //
-                // The bypass branch deliberately does NOT report
-                // the buffer's blocked floor: the buffer did not
-                // mutate (no entry staged), so the blocked-floor
-                // value is unchanged from whatever the previous
-                // admit / removal call published.
-                if (!admission.BlacklistedBypass)
-                {
-                    // Publish the buffer's lowest staged HLC to the
-                    // cursor registry so the producer-side WAL GC AND-s a
-                    // strict-less blocked-floor clause into its trim
-                    // predicate. Reported after every admit (admit may
-                    // have grown the buffer with a fresh batch) and after
-                    // every batch-completion path (admission below
-                    // returned BatchComplete=true; the staged entries for
-                    // that transaction have been removed and the floor
-                    // may have advanced or cleared). Failure is swallowed
-                    // with no observable apply-path impact - the WAL still
-                    // holds the entry and a subsequent admit / removal
-                    // re-publishes the floor.
-                    await ReportBlockedFloorAsync(entry.TreeId, txBuffer, cancellationToken).ConfigureAwait(false);
-
-                    if (!admission.BatchComplete)
-                    {
-                        outcome = LatticeReplicationMetrics.OutcomeAtomicBuffered;
-                        return new ApplyResult { Applied = false, HighWaterMark = hwm };
-                    }
-
-                    var batchResult = await ApplyCompletedAtomicBatchAsync(
-                        entry,
-                        admission.CompletedBatch,
-                        hwmGrain,
-                        hwm,
-                        resolved,
-                        cancellationToken).ConfigureAwait(false);
-
-                    // Re-report after the saga returns: a successful
-                    // commit does not mutate the buffer further (the
-                    // siblings were removed atomically inside the
-                    // BatchComplete=true branch above), but a thrown saga
-                    // path may have routed entries to the DLQ without
-                    // changing the in-memory floor. Re-publishing here is
-                    // a defensive sweep so the floor reflects post-saga
-                    // buffer state; redundant when the saga did not
-                    // mutate the buffer (no-op cost is one cheap grain
-                    // call).
-                    await ReportBlockedFloorAsync(entry.TreeId, txBuffer, cancellationToken).ConfigureAwait(false);
-
-                    outcome = batchResult.Applied
-                        ? LatticeReplicationMetrics.OutcomeSuccess
-                        : LatticeReplicationMetrics.OutcomeFailure;
-                    return batchResult;
-                }
-
-                // Fall through to the point-apply path below for
-                // blacklisted entries.
             }
 
             // Shadow-forward dedupe cache: a structural rewrite (shard
@@ -344,7 +223,7 @@ internal sealed partial class ReplicationApplier(
             // the retry would observe TryAdd=false (cache hit), classify
             // the call as Applied=false (shadow-forward-dedup), and the
             // dead-letter decorator's retry-counter contract would clear
-            // the failure counter on what looks like a filtered call —
+            // the failure counter on what looks like a filtered call —,
             // silently dropping the entry until FIFO eviction admits a
             // future retry. The park branch returns normally inside the
             // try, so its cache reservation is correctly retained: the
@@ -414,7 +293,7 @@ internal sealed partial class ReplicationApplier(
         }
         finally
         {
-            RecordApplyDuration(entry.TreeId, startTimestamp, outcome);
+            RecordApplyDuration(entry.TreeId, entry.OriginClusterId ?? string.Empty, startTimestamp, outcome);
         }
     }
 
@@ -423,10 +302,17 @@ internal sealed partial class ReplicationApplier(
     /// histogram. Skipped when <paramref name="treeId"/> is empty so a
     /// validation throw on the tree-id guard does not publish a histogram
     /// sample with an empty <c>tree</c> tag (which would be unusable for
-    /// per-tree alerting). The duration is read via
-    /// <see cref="Stopwatch.GetElapsedTime(long)"/>, which is allocation-free.
+    /// per-tree alerting). The <paramref name="peerOriginClusterId"/> is
+    /// emitted on the <see cref="LatticeReplicationMetrics.TagPeer"/>
+    /// dimension so per-source-peer break-down is honoured by the
+    /// instrument's documented schema; an empty value (e.g. when the
+    /// origin guard threw before any apply work happened) is emitted
+    /// verbatim rather than skipped so the histogram still records the
+    /// failure outcome and operators get a stable cardinality. The
+    /// duration is read via <see cref="Stopwatch.GetElapsedTime(long)"/>,
+    /// which is allocation-free.
     /// </summary>
-    private static void RecordApplyDuration(string treeId, long startTimestamp, string outcome)
+    private static void RecordApplyDuration(string treeId, string peerOriginClusterId, long startTimestamp, string outcome)
     {
         if (string.IsNullOrEmpty(treeId))
         {
@@ -437,138 +323,15 @@ internal sealed partial class ReplicationApplier(
         LatticeReplicationMetrics.ApplyDuration.Record(
             elapsedMs,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peerOriginClusterId ?? string.Empty),
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome));
     }
 
-    private static bool HasCausalDependencies(ReplogEntry entry) =>
+    private static bool HasCausalDependencies(WalRecord entry) =>
         entry.VectorClock is { Entries.Count: > 0 };
 
-    /// <summary>
-    /// Consumer id under which the receiver-side applier
-    /// registers its atomic-batch staging buffer pin in the
-    /// <see cref="ILatticeReplicationCursorRegistry"/>. The applier
-    /// is a blocked-floor-only consumer (cursor=Zero) so its
-    /// registration does not pollute the GC's HLC <c>min(cursor)</c>
-    /// branch — the per-origin HWM grain and the leaf cursor reporter
-    /// already cover that side. Per-tree scoping is achieved by the
-    /// registry's <c>(treeName, consumerId)</c> key shape so the same
-    /// constant is safely reused across every replicated tree.
-    /// </summary>
-    private const string AtomicBatchApplierConsumerId = "applier:atomic-batch";
-
-    /// <summary>
-    /// Reads the per-tree atomic-batch staging buffer's
-    /// lowest staged HLC and publishes it to the
-    /// <see cref="ILatticeReplicationCursorRegistry"/> as the
-    /// applier's blocked-floor pin. Called after every admit and
-    /// every batch-completion event so the producer-side WAL GC sees
-    /// the current floor across silos. No-op when the registry seam
-    /// was not supplied (test-only constructor path); production DI
-    /// always injects the registered singleton.
-    /// </summary>
-    /// <remarks>
-    /// Failures are intentionally swallowed: the WAL retains the
-    /// authoritative copy of every staged entry and a subsequent
-    /// admit / removal call against the buffer re-publishes the
-    /// floor. Surfacing a registry exception out of the apply hot
-    /// path would convert a diagnostic-side outage into an apply-
-    /// path failure, which is the wrong trade-off (the GC is the
-    /// only consumer of the registry's blocked-floor and a stale
-    /// frontier merely defers a trim, never breaks correctness).
-    /// Swallowed exceptions are logged at <see cref="LogLevel.Warning"/>
-    /// so an operator dashboard can still surface a sustained
-    /// registry outage.
-    /// </remarks>
-    private async Task ReportBlockedFloorAsync(
-        string treeName,
-        IReplicationTxBufferGrain txBuffer,
-        CancellationToken cancellationToken)
-    {
-        if (cursorRegistry is null)
-        {
-            return;
-        }
-
-        var lockTaken = false;
-        var semaphore = _floorReportLocks.GetOrAdd(treeName, static _ => new SemaphoreSlim(1, 1));
-        try
-        {
-            // Serialise across both the GetLowestStagedHlc read + ReportCursorAsync
-            // write so a stale snapshot from a late-arriving thread does not clobber
-            // a fresher snapshot from an earlier-resolving thread (replace semantics:
-            // most-recent caller wins, but "most recent" was wall-clock arrival, not
-            // most-recent observation of buffer state).
-            await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-            lockTaken = true;
-
-            var floor = await txBuffer.GetLowestStagedHlcAsync(cancellationToken).ConfigureAwait(false);
-
-            // Suppress duplicate reports: the steady-state hot path
-            // through the helper observes an unchanged floor on every
-            // call (admit raises buffer count but does not always
-            // change the minimum HLC; the post-saga defensive sweep
-            // re-publishes the same value). The cache eliminates the
-            // redundant grain hops without affecting correctness.
-            var previous = _lastReportedFloor.TryGetValue(treeName, out var existing)
-                ? existing
-                : default;
-            if (previous.Reported && Nullable.Equals(previous.Value, floor))
-            {
-                return;
-            }
-
-            // Drain transition: when the buffer has fully drained
-            // (floor == null) AND we previously had a non-null pin
-            // registered, unregister the consumer entirely instead
-            // of holding a (cursor=Zero, blockedAtHlc=null) row that
-            // contributes nothing to either GC predicate branch but
-            // still surfaces in SnapshotAsync output. A subsequent
-            // non-null admit re-registers cleanly.
-            if (floor is null && previous.Reported && previous.Value is not null)
-            {
-                await cursorRegistry.UnregisterAsync(
-                    treeName,
-                    AtomicBatchApplierConsumerId,
-                    cancellationToken).ConfigureAwait(false);
-                _lastReportedFloor[treeName] = new BlockedFloorReport(true, null);
-                return;
-            }
-
-            await cursorRegistry.ReportCursorAsync(
-                treeName,
-                AtomicBatchApplierConsumerId,
-                HybridLogicalClock.Zero,
-                floor,
-                cancellationToken).ConfigureAwait(false);
-            _lastReportedFloor[treeName] = new BlockedFloorReport(true, floor);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            // Swallow: see <remarks/> on this method. The WAL retains
-            // the staged entry and a subsequent admit / removal call
-            // re-publishes the floor. Logged at Warning so a
-            // sustained outage is visible on the dashboard.
-            _logger.LogWarning(ex,
-                "Replication blocked-floor registry report failed for tree {Tree}; "
-                + "the WAL retains the staged entry and a subsequent admit / removal "
-                + "will re-publish the floor.",
-                treeName);
-        }
-        finally
-        {
-            if (lockTaken)
-            {
-                semaphore.Release();
-            }
-        }
-    }
-
     private async Task ParkAsync(
-        ReplogEntry entry,
+        WalRecord entry,
         LatticeReplicationOptions resolved,
         CancellationToken cancellationToken)
     {
@@ -690,44 +453,59 @@ internal sealed partial class ReplicationApplier(
         }
     }
 
-    private Task ApplyPointAsync(ReplogEntry entry)
+    private Task ApplyPointAsync(WalRecord entry)
     {
         var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
+
+        // Saga prepare-phase entries (IsPrepared==true) route through
+        // the prepared-apply seam so the receiver leaf parks them in
+        // its per-tx pending bucket rather than flipping the visible
+        // projection. The terminal record arriving subsequently via
+        // ApplyTxTerminalAsync is the per-shard linearization point
+        // that flips pending into visible (or drops on abort). Only
+        // LwwRegister mode is supported — the saga surface
+        // (SetManyAtomicAsync) emits only Set/Delete in that mode;
+        // CRDT modes have no saga-prepared shape on the wire.
+        if (entry.IsPrepared && entry.Op is MutationKind.Set or MutationKind.Delete)
+        {
+            return ApplyPreparedPointAsync(apply, entry);
+        }
+
         return entry.Op switch
         {
-            ReplogOp.Set when entry.Value is null
+            MutationKind.Set when entry.Value is null
                 => throw new ArgumentException(
-                    "ReplogEntry.Value must be non-null for ReplogOp.Set.",
+                    "WalRecord.Value must be non-null for MutationKind.Set.",
                     nameof(entry)),
-            ReplogOp.Set => entry.Mode switch
+            MutationKind.Set => entry.Mode switch
             {
-                ReplicationMode.LwwRegister => apply.ApplySetAsync(
+                LatticeMergeMode.LwwRegister => apply.ApplySetAsync(
                     entry.Key,
                     entry.Value!,
                     entry.Timestamp,
                     entry.OriginClusterId!,
                     sourceVectorClock: null,
                     entry.ExpiresAtTicks),
-                ReplicationMode.OrSet => ApplyStateMergeAsync<OrSet>(
+                LatticeMergeMode.OrSet => ApplyStateMergeAsync<OrSet>(
                     entry,
                     static (existing, incoming) => existing.MergeFrom(incoming),
                     static () => new OrSet()),
-                ReplicationMode.PnCounter => ApplyStateMergeAsync<PnCounter>(
+                LatticeMergeMode.PnCounter => ApplyStateMergeAsync<PnCounter>(
                     entry,
                     static (existing, incoming) => existing.MergeFrom(incoming),
                     static () => new PnCounter()),
-                ReplicationMode.VersionVector => ApplyStateMergeAsync<VersionVector>(
+                LatticeMergeMode.VersionVector => ApplyStateMergeAsync<VersionVector>(
                     entry,
                     static (existing, incoming) => existing.MergeFrom(incoming),
                     static () => new VersionVector()),
                 _ => throw new InvalidOperationException(
-                    $"ReplogEntry on tree '{entry.TreeId}' carries unrecognised replication mode '{entry.Mode}' "
+                    $"WalRecord on tree '{entry.TreeId}' carries unrecognised replication mode '{entry.Mode}' "
                     + "(value="
                     + ((int)entry.Mode).ToString(System.Globalization.CultureInfo.InvariantCulture)
                     + "). The receiver has no apply rule registered for this mode; in a future release such "
                     + "entries will be routed to a dead-letter queue."),
             },
-            ReplogOp.Delete => apply.ApplyDeleteAsync(
+            MutationKind.Delete => apply.ApplyDeleteAsync(
                 entry.Key,
                 entry.Timestamp,
                 entry.OriginClusterId!,
@@ -738,9 +516,114 @@ internal sealed partial class ReplicationApplier(
     }
 
     /// <summary>
+    /// Routes an inbound saga prepare-phase entry through the
+    /// receiver-side <see cref="IReplicationApplyGrain.ApplyPreparedSetAsync"/>
+    /// or <see cref="IReplicationApplyGrain.ApplyPreparedDeleteAsync"/>
+    /// seam. The seam wraps the per-key write in the same ambient
+    /// context stack the source saga's prepare step would have produced
+    /// (<see cref="LatticePreparedContext"/>, 
+    /// <see cref="LatticeOriginContext"/>, <see cref="LatticeVectorClockContext"/>, 
+    /// <see cref="LatticeHlcOverrideContext"/>, 
+    /// <see cref="LatticeAtomicBatchContext"/>, and the request-scope
+    /// transaction id) so the receiver leaf routes the entry into its
+    /// per-tx pending bucket instead of the visible projection.
+    /// </summary>
+    private static Task ApplyPreparedPointAsync(IReplicationApplyGrain apply, WalRecord entry)
+    {
+        if (entry.TransactionId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                $"WalRecord on tree '{entry.TreeId}' carries IsPrepared=true but TransactionId=Guid.Empty; "
+                + "saga prepare-phase entries must stamp the saga's transaction id so the receiver can "
+                + "route the entry into the correct per-leaf pending-tx bucket.",
+                nameof(entry));
+        }
+
+        if (entry.Op == MutationKind.Set)
+        {
+            if (entry.Value is null)
+            {
+                throw new ArgumentException(
+                    "WalRecord.Value must be non-null for prepared MutationKind.Set.",
+                    nameof(entry));
+            }
+
+            return apply.ApplyPreparedSetAsync(
+                entry.Key,
+                entry.Value,
+                entry.Timestamp,
+                entry.OriginClusterId!,
+                sourceVectorClock: null,
+                entry.ExpiresAtTicks,
+                entry.TransactionId,
+                entry.AtomicBatchSize,
+                entry.AtomicBatchIndex);
+        }
+
+        return apply.ApplyPreparedDeleteAsync(
+            entry.Key,
+            entry.Timestamp,
+            entry.OriginClusterId!,
+            sourceVectorClock: null,
+            entry.TransactionId,
+            entry.AtomicBatchSize,
+            entry.AtomicBatchIndex);
+    }
+
+    /// <summary>
+    /// Routes an inbound saga terminal-mark record (TxCommit / TxAbort)
+    /// through the receiver-side
+    /// <see cref="IReplicationApplyGrain.ApplyTxTerminalAsync"/> seam.
+    /// Resolves the source-side shard index from the typed
+    /// <see cref="WalRecord.ShardIndex"/> slot, falling back to parsing
+    /// <see cref="WalRecord.Key"/> for back-compat with pre-Option A WAL
+    /// records authored before the typed slot was introduced.
+    /// </summary>
+    private Task ApplyTxTerminalCoreAsync(WalRecord entry, CancellationToken cancellationToken)
+    {
+        var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
+        var committed = entry.Op == MutationKind.TxCommit;
+
+        int shardIndex;
+        if (entry.ShardIndex > 0)
+        {
+            shardIndex = entry.ShardIndex;
+        }
+        else if (!string.IsNullOrEmpty(entry.Key)
+            && int.TryParse(entry.Key, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            && parsed >= 0)
+        {
+            shardIndex = parsed;
+        }
+        else
+        {
+            throw new ArgumentException(
+                $"WalRecord.Op={entry.Op} on tree '{entry.TreeId}' must carry a positive ShardIndex slot or a "
+                + $"non-negative numeric Key (got Key='{entry.Key}', ShardIndex={entry.ShardIndex}).",
+                nameof(entry));
+        }
+
+        if (entry.TransactionId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                $"WalRecord.Op={entry.Op} on tree '{entry.TreeId}' must carry a non-empty TransactionId so the "
+                + "receiver can address the saga's per-tree TxRegistry mark.",
+                nameof(entry));
+        }
+
+        return apply.ApplyTxTerminalAsync(
+            entry.TransactionId,
+            committed,
+            shardIndex,
+            entry.Timestamp,
+            entry.OriginClusterId!,
+            cancellationToken);
+    }
+
+    /// <summary>
     /// CAS retry budget for the read-merge-write loop used by typed CRDT
-    /// state-merge applies (<see cref="ReplicationMode.OrSet"/>,
-    /// <see cref="ReplicationMode.PnCounter"/>, <see cref="ReplicationMode.VersionVector"/>).
+    /// state-merge applies (<see cref="LatticeMergeMode.OrSet"/>,
+    /// <see cref="LatticeMergeMode.PnCounter"/>, <see cref="LatticeMergeMode.VersionVector"/>).
     /// Mirrors the budget the typed accessors (<see cref="OrSetAccessor.DefaultMaxAttempts"/>,
     /// <see cref="PnCounterAccessor.DefaultMaxAttempts"/>,
     /// <see cref="VersionVectorAccessor.DefaultMaxAttempts"/>) use for the
@@ -749,7 +632,7 @@ internal sealed partial class ReplicationApplier(
     private const int StateMergeMaxAttempts = 16;
 
     private async Task ApplyStateMergeAsync<TState>(
-        ReplogEntry entry,
+        WalRecord entry,
         Action<TState, TState> merge,
         Func<TState> emptyFactory)
         where TState : class
@@ -757,7 +640,7 @@ internal sealed partial class ReplicationApplier(
         if (entry.Value is null)
         {
             throw new ArgumentException(
-                $"ReplogEntry.Value must be non-null for {entry.Mode} state-merge apply.",
+                $"WalRecord.Value must be non-null for {entry.Mode} state-merge apply.",
                 nameof(entry));
         }
 
@@ -794,14 +677,14 @@ internal sealed partial class ReplicationApplier(
             + "budget in a future configuration knob.");
     }
 
-    private Task ApplyRangeAsync(ReplogEntry entry, CancellationToken cancellationToken)
+    private Task ApplyRangeAsync(WalRecord entry, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         if (entry.EndExclusiveKey is null)
         {
             throw new ArgumentException(
-                "ReplogEntry.EndExclusiveKey must be non-null for ReplogOp.DeleteRange.",
+                "WalRecord.EndExclusiveKey must be non-null for MutationKind.DeleteRange.",
                 nameof(entry));
         }
 
@@ -813,362 +696,6 @@ internal sealed partial class ReplicationApplier(
         grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeId);
 
     /// <summary>
-    /// Dispatches a completed atomic batch surfaced from the per-tree
-    /// <see cref="IReplicationTxBufferGrain"/> through the source-HLC-preserving
-    /// <see cref="IReplicationApplyGrain.ApplyManyAtomicAsync"/> seam,
-    /// advances the per-origin high-water-mark exactly once to the
-    /// maximum HLC across the batch on
-    /// <see cref="AtomicApplyOutcome.Committed"/>, and routes every
-    /// entry to the per-tree dead-letter queue tagged
-    /// <see cref="LatticeReplicationMetrics.ReasonAtomicApplyFailure"/>
-    /// on <see cref="AtomicApplyOutcome.Compensated"/> or a thrown
-    /// non-cancellation exception. The HWM advance is critical for the
-    /// atomic-visibility contract: a concurrent reader of the per-origin
-    /// HWM never observes an intermediate value where some-but-not-all
-    /// keys in the batch have been applied. On failure the HWM is left
-    /// unchanged so the producer continues to re-ship until the DLQ is
-    /// recovered or discarded.
-    /// </summary>
-    private async Task<ApplyResult> ApplyCompletedAtomicBatchAsync(
-        ReplogEntry trigger,
-        IReadOnlyList<TxStagedEntry> completedBatch,
-        IReplicationHighWaterMarkGrain hwmGrain,
-        HybridLogicalClock currentHwm,
-        LatticeReplicationOptions resolved,
-        CancellationToken cancellationToken)
-    {
-        var (committed, maxHlc) = await RunAtomicSagaAsync(
-            trigger, completedBatch, currentHwm, cancellationToken).ConfigureAwait(false);
-
-        if (!committed)
-        {
-            return new ApplyResult { Applied = false, HighWaterMark = currentHwm };
-        }
-
-        // Committed: advance the per-origin HWM exactly once to the
-        // maximum HLC across the batch. Doing this in a single grain
-        // call (instead of per-entry) is the load-bearing invariant for
-        // cross-cluster atomic visibility: a concurrent reader of the
-        // per-origin HWM never sees an intermediate value where some
-        // but not all keys are visible.
-        var advanced = await hwmGrain
-            .TryAdvanceAsync(trigger.OriginClusterId!, maxHlc, cancellationToken)
-            .ConfigureAwait(false);
-        var newHwm = advanced
-            ? maxHlc
-            : await hwmGrain.GetAsync(trigger.OriginClusterId!, cancellationToken).ConfigureAwait(false);
-
-        if (advanced)
-        {
-            // Mirror the foreign advance into the producer-side local
-            // vector clock cache so a subsequent local emit observes
-            // the just-applied foreign frontier. Mirrors the per-entry
-            // success path's AdvanceForeign call site.
-            localVectorClockCache.AdvanceForeign(
-                trigger.TreeId,
-                trigger.OriginClusterId!,
-                maxHlc);
-            await DrainBufferAsync(trigger.TreeId, hwmGrain, resolved, cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        return new ApplyResult { Applied = true, HighWaterMark = newHwm };
-    }
-
-    /// <summary>
-    /// Dispatches the atomic batch through the source-HLC-preserving
-    /// saga seam and routes failures to the per-tree dead-letter
-    /// queue. Returns the saga outcome alongside the maximum HLC across
-    /// the batch on success — callers integrate the HLC into their own
-    /// high-water-mark advance step (the per-entry path advances
-    /// directly via the HWM grain; the batch path defers the advance
-    /// to the end-of-run flush). On a non-committed outcome the
-    /// returned HLC is the supplied <paramref name="baselineHlc"/>
-    /// because no advance is warranted.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The saga-wide <see cref="VersionVector"/> passed to the apply
-    /// seam is read from the first staged entry. Per the producer-side
-    /// atomic-batch capture contract, every entry in an atomic batch
-    /// shares the same saga-wide vector-clock frontier (single capture
-    /// at the start of the saga's first <c>Prepare</c>, stamped on every
-    /// per-key emit), so every staged entry carries an identical
-    /// <see cref="ReplogEntry.VectorClock"/> and reading from index 0
-    /// is canonical.
-    /// </para>
-    /// <para>
-    /// The <see cref="IReplicationApplyGrain.ApplyManyAtomicAsync"/>
-    /// seam is itself idempotent on
-    /// <see cref="ReplogEntry.TransactionId"/> — the underlying
-    /// <c>AtomicWriteGrain</c> activation is keyed
-    /// <c>(treeId, transactionId)</c> and replays its persisted saga
-    /// state on re-entry — so a producer that re-ships the batch after
-    /// a transient receiver failure observes the same terminal outcome
-    /// on the second attempt.
-    /// </para>
-    /// </remarks>
-    private async Task<(bool Committed, HybridLogicalClock MaxHlc)> RunAtomicSagaAsync(
-        ReplogEntry trigger,
-        IReadOnlyList<TxStagedEntry> completedBatch,
-        HybridLogicalClock baselineHlc,
-        CancellationToken cancellationToken)
-    {
-        // Defence-in-depth: the buffer-grain contract guarantees a
-        // non-empty CompletedBatch on BatchComplete=true. A zero-entry
-        // admission would index [0] below for the saga-wide VC capture
-        // and trip an opaque IndexOutOfRangeException; surface a typed
-        // contract violation instead so an operator inspecting the
-        // failure sees the buffer-grain contract that was broken.
-        if (completedBatch.Count == 0)
-        {
-            throw new InvalidOperationException(
-                $"Atomic batch on tree '{trigger.TreeId}' admitted with zero staged entries — "
-                + "buffer-grain contract violation (BatchComplete=true requires a non-empty CompletedBatch).");
-        }
-
-        // Atomic-batch terminal-disposition observability. The
-        // outcome is null until a terminal branch decides it; a
-        // null-on-exit (only reachable via OperationCanceledException
-        // re-throw) intentionally skips both the duration histogram
-        // and the tx_completed counter, because cancellation is not
-        // a terminal disposition — the producer redelivers the
-        // trigger on the next pump cycle and the buffer admits a
-        // fresh transaction-key cycle, which records the eventual
-        // terminal disposition then. Every other path sets `outcome`
-        // before returning so the finally records exactly one
-        // sample/increment per terminal saga.
-        string? outcome = null;
-        try
-        {
-            // Map TxStagedEntry → AtomicApplyEntry. ReplogOp.Set becomes a
-            // non-tombstone item with its committed value bytes and
-            // ExpiresAtTicks; ReplogOp.Delete becomes a tombstone item with
-            // a null Value and ExpiresAtTicks=0 (the contract on
-            // AtomicApplyEntry forbids non-zero expiry on tombstones).
-            // Range-delete entries are not part of an atomic batch by
-            // construction (the producer's SetManyAtomicAsync surface only
-            // emits Set/Delete) so they do not appear here; if a malformed
-            // entry slips through we surface it as the same
-            // InvalidOperationException the canonical apply path raises.
-            var applyEntries = new AtomicApplyEntry[completedBatch.Count];
-            var maxHlc = baselineHlc;
-            for (var i = 0; i < completedBatch.Count; i++)
-            {
-                var staged = completedBatch[i].Entry;
-                applyEntries[i] = MapStagedToAtomicApplyEntry(staged, trigger.TreeId);
-
-                if (staged.Timestamp.CompareTo(maxHlc) > 0)
-                {
-                    maxHlc = staged.Timestamp;
-                }
-            }
-
-            // Saga-wide VC: per the producer-side capture contract every
-            // entry in the batch shares the same frontier, so reading from
-            // index 0 is canonical.
-            var sagaVc = completedBatch[0].Entry.VectorClock;
-
-            var apply = grainFactory.GetGrain<IReplicationApplyGrain>(trigger.TreeId);
-            AtomicApplyResult sagaResult;
-            try
-            {
-                sagaResult = await apply.ApplyManyAtomicAsync(
-                    applyEntries,
-                    trigger.TransactionId,
-                    trigger.OriginClusterId!,
-                    sagaVc,
-                    cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Cancellation is not a saga failure — propagate to the
-                // caller so the cooperative cancellation contract is
-                // preserved (no DLQ park, no HWM advance, the producer's
-                // next pump cycle redelivers the trigger entry).
-                throw;
-            }
-            catch (Exception ex)
-            {
-                await RouteAtomicBatchToDlqAsync(
-                    trigger.TreeId,
-                    completedBatch,
-                    ex.Message ?? "Atomic apply saga threw with no message.",
-                    cancellationToken).ConfigureAwait(false);
-                outcome = LatticeReplicationMetrics.OutcomeTxDlqApplyFailure;
-                return (false, baselineHlc);
-            }
-
-            if (sagaResult.Outcome == AtomicApplyOutcome.Compensated)
-            {
-                await RouteAtomicBatchToDlqAsync(
-                    trigger.TreeId,
-                    completedBatch,
-                    sagaResult.FailureReason ?? "Atomic apply saga compensated.",
-                    cancellationToken).ConfigureAwait(false);
-                outcome = LatticeReplicationMetrics.OutcomeTxDlqApplyFailure;
-                return (false, baselineHlc);
-            }
-
-            // Defence-in-depth: a Committed outcome must have applied
-            // every entry in the batch — the saga is all-or-nothing by
-            // construction. A mismatch indicates a saga-contract violation
-            // (e.g. a future RunSagaAsync refactor that silently drops a
-            // per-key write); surface it as a typed exception so the
-            // per-origin HWM is not advanced past entries that never
-            // landed and the producer redelivers on the next pump cycle.
-            if (sagaResult.AppliedCount != completedBatch.Count)
-            {
-                // Contract violation maps onto the dlq_apply_failure
-                // partition for visibility-surface accounting: the
-                // batch did not commit cleanly and is not safely
-                // re-applicable without operator intervention. The
-                // outcome is stamped before throw so the finally
-                // records the terminal disposition.
-                outcome = LatticeReplicationMetrics.OutcomeTxDlqApplyFailure;
-                throw new InvalidOperationException(
-                    $"Atomic apply saga on tree '{trigger.TreeId}' returned Committed with "
-                    + $"AppliedCount={sagaResult.AppliedCount} but BatchSize={completedBatch.Count} — "
-                    + "saga contract violation (Committed implies every entry applied).");
-            }
-
-            outcome = LatticeReplicationMetrics.OutcomeTxSuccess;
-            return (true, maxHlc);
-        }
-        finally
-        {
-            if (outcome is not null)
-            {
-                RecordTxApplyTerminal(trigger.TreeId, completedBatch, outcome);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Records the cross-cluster atomic-batch apply latency
-    /// (<see cref="LatticeReplicationMetrics.ApplyTxApplyDurationMs"/>)
-    /// and the matching terminal-disposition counter
-    /// (<see cref="LatticeReplicationMetrics.ApplyTxCompleted"/>) for
-    /// a saga that reached one of the two apply-side outcome
-    /// partitions (<see cref="LatticeReplicationMetrics.OutcomeTxSuccess"/>
-    /// or <see cref="LatticeReplicationMetrics.OutcomeTxDlqApplyFailure"/>).
-    /// The duration sample is the wall-clock interval from the first
-    /// staged entry of the batch landing on the buffer (as the
-    /// minimum <see cref="TxStagedEntry.EnqueuedAtTicks"/>) to the
-    /// saga returning a terminal outcome — i.e. the user-visible
-    /// cross-cluster atomic-batch latency operators alert on. The
-    /// sample is clamped non-negative so a wall-clock skew between
-    /// admit-time and now does not corrupt the histogram.
-    /// </summary>
-    private static void RecordTxApplyTerminal(
-        string treeId,
-        IReadOnlyList<TxStagedEntry> completedBatch,
-        string outcome)
-    {
-        // Skip when treeId is empty so a validation throw on the
-        // tree-id guard does not publish a sample with an empty
-        // tree tag (which would be unusable for per-tree alerting).
-        // Mirrors the same guard on
-        // <see cref="RecordApplyDuration(string, long, string)"/>.
-        if (string.IsNullOrEmpty(treeId) || completedBatch.Count == 0)
-        {
-            return;
-        }
-
-        var minEnqueuedTicks = completedBatch[0].EnqueuedAtTicks;
-        for (var i = 1; i < completedBatch.Count; i++)
-        {
-            if (completedBatch[i].EnqueuedAtTicks < minEnqueuedTicks)
-            {
-                minEnqueuedTicks = completedBatch[i].EnqueuedAtTicks;
-            }
-        }
-
-        var elapsedTicks = DateTime.UtcNow.Ticks - minEnqueuedTicks;
-        var elapsedMs = elapsedTicks >= 0
-            ? elapsedTicks / (double)TimeSpan.TicksPerMillisecond
-            : 0d;
-
-        LatticeReplicationMetrics.ApplyTxApplyDurationMs.Record(
-            elapsedMs,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome));
-
-        LatticeReplicationMetrics.ApplyTxCompleted.Add(
-            1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome));
-    }
-
-    private static AtomicApplyEntry MapStagedToAtomicApplyEntry(ReplogEntry staged, string treeId) =>
-        staged.Op switch
-        {
-            ReplogOp.Set when staged.Value is null
-                => throw new ArgumentException(
-                    "Staged ReplogEntry.Value must be non-null for ReplogOp.Set in an atomic batch.",
-                    nameof(staged)),
-            ReplogOp.Set => new AtomicApplyEntry
-            {
-                Key = staged.Key,
-                Value = staged.Value,
-                Timestamp = staged.Timestamp,
-                ExpiresAtTicks = staged.ExpiresAtTicks,
-                VectorClock = staged.VectorClock,
-                IsTombstone = false,
-            },
-            ReplogOp.Delete => new AtomicApplyEntry
-            {
-                Key = staged.Key,
-                Value = null,
-                Timestamp = staged.Timestamp,
-                ExpiresAtTicks = 0,
-                VectorClock = staged.VectorClock,
-                IsTombstone = true,
-            },
-            _ => throw new InvalidOperationException(
-                $"Atomic batch on tree '{treeId}' carries unsupported op '{staged.Op}' "
-                + "for key '" + staged.Key + "'. Atomic batches must contain only Set / Delete entries."),
-        };
-
-    /// <summary>
-    /// Routes every entry in a failed atomic batch to the per-tree
-    /// dead-letter queue tagged
-    /// <see cref="LatticeReplicationMetrics.ReasonAtomicApplyFailure"/>.
-    /// Every entry in the batch is parked under the same reason and
-    /// transaction id so an operator inspecting the DLQ sees the whole
-    /// batch as a unit. DLQ enqueue failures are swallowed because the
-    /// per-origin high-water-mark was not advanced for this batch — the
-    /// producer continues to re-ship until the DLQ is recovered, so a
-    /// transient DLQ failure does not block apply progress on a
-    /// deterministically-failing DLQ.
-    /// </summary>
-    private async Task RouteAtomicBatchToDlqAsync(
-        string treeId,
-        IReadOnlyList<TxStagedEntry> completedBatch,
-        string failureReason,
-        CancellationToken cancellationToken)
-    {
-        var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(treeId);
-        for (var i = 0; i < completedBatch.Count; i++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                await dlq.EnqueueAsync(
-                    completedBatch[i].Entry,
-                    failureReason,
-                    retryCount: 0,
-                    reasonTag: LatticeReplicationMetrics.ReasonAtomicApplyFailure,
-                    cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception) when (!cancellationToken.IsCancellationRequested)
-            {
-                // Best-effort routing — see method summary.
-            }
-        }
-    }
-
-    /// <summary>
     /// Records the receiver-side replication-lag sample for a successfully
     /// applied point operation. Lag is computed as
     /// <c>now - entry.Timestamp.WallClockTicks</c> in milliseconds and
@@ -1176,7 +703,7 @@ internal sealed partial class ReplicationApplier(
     /// wall clock leads the receiver's) reports as <c>0</c> rather than a
     /// negative sample, which would corrupt downstream histograms.
     /// </summary>
-    private static void RecordApplyLag(ReplogEntry entry)
+    private static void RecordApplyLag(WalRecord entry)
     {
         var sourceTicks = entry.Timestamp.WallClockTicks;
         if (sourceTicks <= 0)
@@ -1196,7 +723,8 @@ internal sealed partial class ReplicationApplier(
         var ms = deltaTicks / (double)TimeSpan.TicksPerMillisecond;
         LatticeReplicationMetrics.ApplyLag.Record(
             ms,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, entry.TreeId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, entry.TreeId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, entry.OriginClusterId ?? string.Empty));
     }
 
     /// <summary>
@@ -1211,12 +739,12 @@ internal sealed partial class ReplicationApplier(
     /// upstream) does not silently downgrade the tracker on the rare
     /// path where it slipped through.
     /// </summary>
-    private void RecordFifoState(ReplogEntry entry)
+    private void RecordFifoState(WalRecord entry)
     {
         // Skip range deletes (carry HLC.Zero) and entries with a missing
         // origin (defensive — the caller-side guard rejects empty origins
         // before we get here).
-        if (entry.Op == ReplogOp.DeleteRange || string.IsNullOrEmpty(entry.OriginClusterId))
+        if (entry.Op == MutationKind.DeleteRange || string.IsNullOrEmpty(entry.OriginClusterId))
         {
             return;
         }

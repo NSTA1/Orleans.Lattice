@@ -288,48 +288,168 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
-    public Task<AtomicApplyResult> ApplyManyAtomicAsync(
-        IReadOnlyList<AtomicApplyEntry> applyEntries,
-        Guid transactionId,
+    public async Task ApplyPreparedSetAsync(
+        string key,
+        byte[] value,
+        HybridLogicalClock sourceHlc,
         string originClusterId,
         VersionVector? sourceVectorClock,
-        CancellationToken cancellationToken = default)
+        long expiresAtTicks,
+        Guid transactionId,
+        int atomicBatchSize,
+        int atomicBatchIndex)
     {
         ThrowIfSystemTree();
-        ArgumentNullException.ThrowIfNull(applyEntries);
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(value);
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
         if (transactionId == Guid.Empty)
         {
             throw new ArgumentException(
-                "ApplyManyAtomicAsync requires a non-empty transactionId for idempotent retry.",
+                "ApplyPreparedSetAsync requires a non-empty transactionId so the receiver leaf can route the entry into its per-tx pending bucket.",
+                nameof(transactionId));
+        }
+
+        // Re-establish the same ambient-context stack the source-side
+        // saga's prepare step produced so the receiver leaf:
+        //   - routes this mutation into its _pendingTx[transactionId]
+        //     bucket (LatticePreparedContext);
+        //   - re-stamps the source's HLC bit-identically
+        //     (LatticeHlcOverrideContext);
+        //   - persists OriginClusterId, VectorClock, AtomicBatchSize,
+        //     AtomicBatchIndex, and TransactionId on the resulting
+        //     LatticeMutation verbatim.
+        // The terminal mark that arrives subsequently via
+        // ApplyTxTerminalAsync flips the pending bucket into the
+        // visible projection.
+        LatticeTransactionContext.Set(transactionId);
+        using (LatticeAtomicBatchContext.With(
+            atomicBatchSize > 0 ? (atomicBatchSize, atomicBatchIndex) : null))
+        using (LatticePreparedContext.BeginScope())
+        using (LatticeOriginContext.With(originClusterId))
+        using (LatticeVectorClockContext.With(sourceVectorClock))
+        using (LatticeHlcOverrideContext.With(sourceHlc))
+        {
+            if (expiresAtTicks > 0)
+            {
+                var remainingTicks = expiresAtTicks - DateTimeOffset.UtcNow.UtcTicks;
+                if (remainingTicks <= 0)
+                {
+                    // Absolute expiry already elapsed — treat as absent
+                    // by routing as a tombstone, matching the
+                    // public-read semantics for expired entries.
+                    await DeleteAsync(key);
+                }
+                else
+                {
+                    await SetAsync(key, value, TimeSpan.FromTicks(remainingTicks));
+                }
+            }
+            else
+            {
+                await SetAsync(key, value);
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task ApplyPreparedDeleteAsync(
+        string key,
+        HybridLogicalClock sourceHlc,
+        string originClusterId,
+        VersionVector? sourceVectorClock,
+        Guid transactionId,
+        int atomicBatchSize,
+        int atomicBatchIndex)
+    {
+        ThrowIfSystemTree();
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        if (transactionId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "ApplyPreparedDeleteAsync requires a non-empty transactionId so the receiver leaf can route the tombstone into its per-tx pending bucket.",
+                nameof(transactionId));
+        }
+
+        LatticeTransactionContext.Set(transactionId);
+        using (LatticeAtomicBatchContext.With(
+            atomicBatchSize > 0 ? (atomicBatchSize, atomicBatchIndex) : null))
+        using (LatticePreparedContext.BeginScope())
+        using (LatticeOriginContext.With(originClusterId))
+        using (LatticeVectorClockContext.With(sourceVectorClock))
+        using (LatticeHlcOverrideContext.With(sourceHlc))
+        {
+            await DeleteAsync(key);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task ApplyTxTerminalAsync(
+        Guid transactionId,
+        bool committed,
+        int shardIndex,
+        HybridLogicalClock terminalHlc,
+        string originClusterId,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        if (transactionId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "ApplyTxTerminalAsync requires a non-empty transactionId.",
                 nameof(transactionId));
         }
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (applyEntries.Count == 0)
+        // Step 1 (linearization point) — mark the per-tree TxRegistry
+        // with the saga's outcome. Receiver-side readers that find a
+        // pending entry on a leaf dial back through the registry to
+        // resolve their read against the already-recorded outcome,
+        // delivering strict atomic-visibility regardless of how the
+        // per-leaf terminal fan-out is interleaved.
+        var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
+        if (committed)
         {
-            return Task.FromResult(new AtomicApplyResult
-            {
-                Outcome = AtomicApplyOutcome.Committed,
-                AppliedCount = 0,
-                FailureReason = null,
-            });
+            await registry.MarkCommittedAsync(transactionId);
+        }
+        else
+        {
+            await registry.MarkAbortedAsync(transactionId);
         }
 
-        // The saga's PrepareAsync captures LatticeVectorClockContext.Current
-        // as the saga-wide pre-saga frontier; stamp it here so the saga
-        // sees the remote cluster's frontier verbatim. Per-entry
-        // VectorClock values override this saga-wide stamp during each
-        // per-key dispatch (see ExecuteApplyStepAsync).
-        using var vcScope = LatticeVectorClockContext.With(sourceVectorClock);
-
-        // Materialize the apply list once. The interface's IReadOnlyList<T>
-        // shape lets callers pass any collection; the saga's persisted state
-        // requires a concrete List<T>. The cost is a single allocation per
-        // batch — small relative to the per-shard saga overhead.
-        var entries = applyEntries as List<AtomicApplyEntry> ?? new List<AtomicApplyEntry>(applyEntries);
-
-        var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{transactionId:N}");
-        return saga.ExecuteApplyAsync(TreeId, entries, originClusterId);
+        // Step 2 (foreground visibility + WAL re-stamp) — drive the
+        // per-shard terminal-mark primitive under the source's HLC and
+        // origin so the receiver's local WAL append re-stamps the
+        // source cluster's terminal HLC and origin verbatim. The shard
+        // root's ComputeTerminalHlcAsync honours
+        // LatticeHlcOverrideContext.Current and returns the override
+        // unchanged — preserving the cross-cluster ordering invariant
+        // on receiver replays.
+        using (LatticeOriginContext.With(originClusterId))
+        using (LatticeHlcOverrideContext.With(terminalHlc))
+        {
+            var (physicalTreeId, _) = await GetRoutingAsync();
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+            try
+            {
+                await shard.AppendTxTerminalAsync(transactionId, committed, cancellationToken);
+            }
+            catch (StaleShardRoutingException) when (InvalidateShardMap())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var (retryPhysicalTreeId, _) = await GetRoutingAsync();
+                var retryShard = grainFactory.GetGrain<IShardRootGrain>($"{retryPhysicalTreeId}/{shardIndex}");
+                await retryShard.AppendTxTerminalAsync(transactionId, committed, cancellationToken);
+            }
+            catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var (retryPhysicalTreeId, _) = await GetRoutingAsync();
+                var retryShard = grainFactory.GetGrain<IShardRootGrain>($"{retryPhysicalTreeId}/{shardIndex}");
+                await retryShard.AppendTxTerminalAsync(transactionId, committed, cancellationToken);
+            }
+        }
     }
 }

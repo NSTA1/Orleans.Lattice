@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.Primitives;
@@ -242,7 +243,7 @@ public partial class BootstrapCausalHandoffTests
         // eviction). Subsequent enqueues are restored to the success
         // handler explicitly to model a transient outage.
         h.Dlq.EnqueueAsync(
-                Arg.Any<ReplogEntry>(),
+                Arg.Any<WalRecord>(),
                 Arg.Any<string>(),
                 Arg.Any<int>(),
                 Arg.Any<string>(),
@@ -261,7 +262,7 @@ public partial class BootstrapCausalHandoffTests
         // After the outage clears, a non-overflowing apply path on the
         // same applier still works.
         h.Dlq.EnqueueAsync(
-                Arg.Any<ReplogEntry>(),
+                Arg.Any<WalRecord>(),
                 Arg.Any<string>(),
                 Arg.Any<int>(),
                 Arg.Any<string>(),

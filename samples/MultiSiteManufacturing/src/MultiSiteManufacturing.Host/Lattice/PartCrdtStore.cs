@@ -23,7 +23,7 @@ namespace MultiSiteManufacturing.Host.Lattice;
 ///     the <c>mfg-part-labels</c> tree, one OrSet per serial, accessed
 ///     through the package's
 ///     <see cref="OrSetAccessor"/>. Cross-cluster replicated as
-///     <see cref="Orleans.Lattice.Replication.ReplicationMode.OrSet"/> so
+///     <see cref="Orleans.Lattice.LatticeMergeMode.OrSet"/> so
 ///     the package ships typed CRDT deltas (add / remove / merge) rather
 ///     than raw byte writes.
 ///   </item>

@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Primitives;
@@ -10,7 +11,7 @@ public partial class DeadLetterTrackingReplicationApplierTests
 {
     private const string TreeId = "tree";
 
-    private static ReplogEntry MakeEntry(string key = "k", ReplogOp op = ReplogOp.Set) => new()
+    private static WalRecord MakeEntry(string key = "k", MutationKind op = MutationKind.Set) => new()
     {
         TreeId = TreeId,
         Op = op,
@@ -50,7 +51,7 @@ public partial class DeadLetterTrackingReplicationApplierTests
     {
         var (decorator, inner, _, _, _) = Build(maxRetries: 3);
         var expected = new ApplyResult { Applied = true };
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>()).Returns(expected);
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(expected);
 
         var result = await decorator.ApplyAsync(MakeEntry(), CancellationToken.None);
 
@@ -61,7 +62,7 @@ public partial class DeadLetterTrackingReplicationApplierTests
     public void ApplyAsync_rethrows_failure_below_threshold()
     {
         var (decorator, inner, _, _, _) = Build(maxRetries: 3);
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ => throw new InvalidOperationException("boom"));
 
         Assert.That(
@@ -73,7 +74,7 @@ public partial class DeadLetterTrackingReplicationApplierTests
     public async Task ApplyAsync_parks_entry_when_threshold_reached()
     {
         var (decorator, inner, dlq, hwm, _) = Build(maxRetries: 2);
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ => throw new InvalidOperationException("boom"));
 
         var entry = MakeEntry();
@@ -94,10 +95,10 @@ public partial class DeadLetterTrackingReplicationApplierTests
     public async Task ApplyAsync_skips_hwm_advance_for_range_deletes()
     {
         var (decorator, inner, dlq, hwm, _) = Build(maxRetries: 1);
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ => throw new InvalidOperationException("boom"));
 
-        var entry = MakeEntry(op: ReplogOp.DeleteRange);
+        var entry = MakeEntry(op: MutationKind.DeleteRange);
         var result = await decorator.ApplyAsync(entry, CancellationToken.None);
 
         Assert.That(result.Applied, Is.False);
@@ -110,7 +111,7 @@ public partial class DeadLetterTrackingReplicationApplierTests
     {
         var (decorator, inner, dlq, _, _) = Build(maxRetries: 3);
         var calls = 0;
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ =>
             {
                 calls++;
@@ -127,20 +128,20 @@ public partial class DeadLetterTrackingReplicationApplierTests
         var success = await decorator.ApplyAsync(entry, CancellationToken.None);
 
         Assert.That(success.Applied, Is.True);
-        await dlq.DidNotReceive().EnqueueAsync(Arg.Any<ReplogEntry>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await dlq.DidNotReceive().EnqueueAsync(Arg.Any<WalRecord>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
 
         // The next failure now starts a fresh budget; should rethrow, not park.
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ => throw new InvalidOperationException("boom-2"));
         Assert.That(async () => await decorator.ApplyAsync(entry, CancellationToken.None), Throws.InvalidOperationException);
-        await dlq.DidNotReceive().EnqueueAsync(Arg.Any<ReplogEntry>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await dlq.DidNotReceive().EnqueueAsync(Arg.Any<WalRecord>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
     public void ApplyAsync_propagates_cancellation_without_counting_as_failure()
     {
         var (decorator, inner, _, _, _) = Build(maxRetries: 1);
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ => throw new OperationCanceledException());
 
         Assert.That(
@@ -164,7 +165,7 @@ public partial class DeadLetterTrackingReplicationApplierTests
     public async Task ApplyAsync_classifies_argument_exception_as_schema_reason()
     {
         var (decorator, inner, dlq, _, _) = Build(maxRetries: 1);
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ => throw new ArgumentException("missing field"));
 
         var entry = MakeEntry();
@@ -182,7 +183,7 @@ public partial class DeadLetterTrackingReplicationApplierTests
     public async Task ApplyAsync_classifies_invalid_operation_exception_as_schema_reason()
     {
         var (decorator, inner, dlq, _, _) = Build(maxRetries: 1);
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ => throw new InvalidOperationException("bad mode"));
 
         var entry = MakeEntry();
@@ -200,7 +201,7 @@ public partial class DeadLetterTrackingReplicationApplierTests
     public async Task ApplyAsync_classifies_other_exceptions_as_unknown_reason()
     {
         var (decorator, inner, dlq, _, _) = Build(maxRetries: 1);
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ => throw new TimeoutException("transport timed out"));
 
         var entry = MakeEntry();

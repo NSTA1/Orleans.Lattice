@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -36,10 +37,10 @@ public class ReplicationDeadLetterGrainTests
         return (grain, data, options);
     }
 
-    private static ReplogEntry MakeEntry(string key = "k") => new()
+    private static WalRecord MakeEntry(string key = "k") => new()
     {
         TreeId = TreeId,
-        Op = ReplogOp.Set,
+        Op = MutationKind.Set,
         Key = key,
         Value = new byte[] { 1, 2, 3 },
         Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),

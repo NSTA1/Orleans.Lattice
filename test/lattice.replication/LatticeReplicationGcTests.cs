@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -31,20 +32,20 @@ public class LatticeReplicationGcTests
         return sc.BuildServiceProvider();
     }
 
-    private static async Task SeedAsync(IWalStorageProvider provider, int shard, params ReplogEntry[] entries)
+    private static async Task SeedAsync(IWalStorageProvider provider, int shard, params WalRecord[] entries)
     {
         var wal = entries.Select((e, i) => new WalEntry
         {
             Offset = i,
-            Mutation = ReplogEntryConverter.FromReplogEntry(e),
+            Mutation = WalRecordConverter.FromWalRecord(e),
         }).ToArray();
         await provider.AppendBatchAsync(Tree, shard, wal, CancellationToken.None);
     }
 
-    private static ReplogEntry SetEntry(string key, HybridLogicalClock ts) => new()
+    private static WalRecord SetEntry(string key, HybridLogicalClock ts) => new()
     {
         TreeId = Tree,
-        Op = ReplogOp.Set,
+        Op = MutationKind.Set,
         Key = key,
         Value = new byte[] { 1 },
         Timestamp = ts,
@@ -336,10 +337,10 @@ public class LatticeReplicationGcTests
         return vc;
     }
 
-    private static ReplogEntry SetEntryWithVc(string key, HybridLogicalClock ts, VersionVector? vc) => new()
+    private static WalRecord SetEntryWithVc(string key, HybridLogicalClock ts, VersionVector? vc) => new()
     {
         TreeId = Tree,
-        Op = ReplogOp.Set,
+        Op = MutationKind.Set,
         Key = key,
         Value = new byte[] { 1 },
         Timestamp = ts,

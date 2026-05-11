@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
@@ -45,7 +46,7 @@ public class ReplicationBatchEnvelopeTests
     {
         // Diagnostic minor version is bumped on strictly additive
         // changes to the envelope shape - e.g. a new [Id] slot on
-        // ReplogEntry that legacy peers safely decode as null. Pinning
+        // WalRecord that legacy peers safely decode as null. Pinning
         // the value here guarantees a future bump is a deliberate
         // edit, not an accidental drift.
         Assert.That(ReplicationBatchEnvelope.CurrentMinorVersion, Is.EqualTo(1));
@@ -54,7 +55,7 @@ public class ReplicationBatchEnvelopeTests
     [Test]
     public void Properties_are_settable_via_object_initialiser()
     {
-        var entry = new ReplogEntry { TreeId = "t", Op = ReplogOp.Set, Key = "k" };
+        var entry = new WalRecord { TreeId = "t", Op = MutationKind.Set, Key = "k" };
         var envelope = new ReplicationBatchEnvelope
         {
             WireVersion = 7,
@@ -90,15 +91,15 @@ public class ReplicationBatchEnvelopeTests
     public void Serializer_round_trips_envelope_with_entries()
     {
         var ts = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
-        var entry = new ReplogEntry
+        var entry = new WalRecord
         {
             TreeId = "tree",
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1, 2, 3 },
             Timestamp = ts,
             OriginClusterId = "site-a",
-            Mode = ReplicationMode.LwwRegister,
+            Mode = LatticeMergeMode.LwwRegister,
         };
         var original = new ReplicationBatchEnvelope
         {
@@ -121,7 +122,7 @@ public class ReplicationBatchEnvelopeTests
             Assert.That(copy.Entries[0].Value, Is.EqualTo(new byte[] { 1, 2, 3 }));
             Assert.That(copy.Entries[0].Timestamp, Is.EqualTo(ts));
             Assert.That(copy.Entries[0].OriginClusterId, Is.EqualTo("site-a"));
-            Assert.That(copy.Entries[0].Mode, Is.EqualTo(ReplicationMode.LwwRegister));
+            Assert.That(copy.Entries[0].Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
         });
     }
 
@@ -133,7 +134,7 @@ public class ReplicationBatchEnvelopeTests
             WireVersion = 1,
             TreeName = "tree",
             OriginClusterId = "site-a",
-            Entries = Array.Empty<ReplogEntry>(),
+            Entries = Array.Empty<WalRecord>(),
         };
 
         var bytes = _serializer.SerializeToArray(original);
@@ -151,10 +152,10 @@ public class ReplicationBatchEnvelopeTests
     public void Serializer_round_trips_large_entry_batch()
     {
         var entries = Enumerable.Range(0, 100)
-            .Select(i => new ReplogEntry
+            .Select(i => new WalRecord
             {
                 TreeId = "tree",
-                Op = ReplogOp.Set,
+                Op = MutationKind.Set,
                 Key = $"k-{i}",
                 Value = new byte[] { (byte)i, (byte)(i + 1) },
                 Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
@@ -187,15 +188,15 @@ public class ReplicationBatchEnvelopeTests
         // DependencySummary both null. Receivers treat null as the
         // empty frontier and behave identically to the per-origin-only
         // high-water-mark check.
-        var legacy = new ReplogEntry
+        var legacy = new WalRecord
         {
             TreeId = "tree",
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1 },
             Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
             OriginClusterId = "site-a",
-            Mode = ReplicationMode.LwwRegister,
+            Mode = LatticeMergeMode.LwwRegister,
         };
         var original = new ReplicationBatchEnvelope
         {
@@ -224,15 +225,15 @@ public class ReplicationBatchEnvelopeTests
         vc.Entries["site-a"] = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
         vc.Entries["site-b"] = HybridLogicalClock.Tick(HybridLogicalClock.Tick(HybridLogicalClock.Zero));
 
-        var entry = new ReplogEntry
+        var entry = new WalRecord
         {
             TreeId = "tree",
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1 },
             Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
             OriginClusterId = "site-a",
-            Mode = ReplicationMode.LwwRegister,
+            Mode = LatticeMergeMode.LwwRegister,
             VectorClock = vc,
             DependencySummary = vc,
         };

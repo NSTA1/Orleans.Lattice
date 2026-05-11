@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Buffers;
 using Grpc.Net.Client;
 using Microsoft.AspNetCore.Builder;
@@ -81,10 +82,10 @@ public class GrpcPushTransportIntegrationTests
     public void SetUp()
     {
         _applier.ClearReceivedCalls();
-        _applier.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        _applier.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
-                var entry = callInfo.Arg<ReplogEntry>();
+                var entry = callInfo.Arg<WalRecord>();
                 return Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = entry.Timestamp });
             });
 
@@ -93,10 +94,10 @@ public class GrpcPushTransportIntegrationTests
         // call through the default-interface-method body, so we set up
         // ApplyBatchAsync to mirror the per-entry semantics: walk each
         // entry, return the pointwise-maximum HighWaterMark.
-        _applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+        _applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
-                var batch = callInfo.Arg<IReadOnlyList<ReplogEntry>>();
+                var batch = callInfo.Arg<IReadOnlyList<WalRecord>>();
                 var max = HybridLogicalClock.Zero;
                 var applied = false;
                 foreach (var e in batch)
@@ -152,8 +153,8 @@ public class GrpcPushTransportIntegrationTests
             OriginClusterId = "remote",
             Entries = new[]
             {
-                new ReplogEntry { TreeId = "tree", Op = ReplogOp.Set, Key = "a", Value = new byte[] { 1 }, Timestamp = hlcA, OriginClusterId = "remote", Mode = ReplicationMode.LwwRegister },
-                new ReplogEntry { TreeId = "tree", Op = ReplogOp.Set, Key = "b", Value = new byte[] { 2 }, Timestamp = hlcB, OriginClusterId = "remote", Mode = ReplicationMode.LwwRegister },
+                new WalRecord { TreeId = "tree", Op = MutationKind.Set, Key = "a", Value = new byte[] { 1 }, Timestamp = hlcA, OriginClusterId = "remote", Mode = LatticeMergeMode.LwwRegister },
+                new WalRecord { TreeId = "tree", Op = MutationKind.Set, Key = "b", Value = new byte[] { 2 }, Timestamp = hlcB, OriginClusterId = "remote", Mode = LatticeMergeMode.LwwRegister },
             },
         };
 
@@ -168,7 +169,7 @@ public class GrpcPushTransportIntegrationTests
         });
         // Service collapses per-entry calls into a single ApplyBatchAsync.
         await _applier.Received(1).ApplyBatchAsync(
-            Arg.Is<IReadOnlyList<ReplogEntry>>(list => list.Count == 2),
+            Arg.Is<IReadOnlyList<WalRecord>>(list => list.Count == 2),
             Arg.Any<CancellationToken>());
     }
 
@@ -186,7 +187,7 @@ public class GrpcPushTransportIntegrationTests
                 WireVersion = 1,
                 TreeName = "tree",
                 OriginClusterId = "remote",
-                Entries = Array.Empty<ReplogEntry>(),
+                Entries = Array.Empty<WalRecord>(),
             },
         };
 

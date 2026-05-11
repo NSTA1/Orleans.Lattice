@@ -1,6 +1,6 @@
 # Replication wire format (`IReplicationBatchEncoder`)
 
-`IReplicationBatchEncoder` is the public, pluggable seam over the on-the-wire bytes that an outbound shipper stuffs into [`ReplicationBatch.Payload`](transport.md). It is the encode/decode counterpart to [`IReplicationTransport`](transport.md): the transport delivers opaque bytes between clusters, and the encoder is the only component that knows how to translate a batch of [`ReplogEntry`](change-feed.md) records to and from those bytes.
+`IReplicationBatchEncoder` is the public, pluggable seam over the on-the-wire bytes that an outbound shipper stuffs into [`ReplicationBatch.Payload`](transport.md). It is the encode/decode counterpart to [`IReplicationTransport`](transport.md): the transport delivers opaque bytes between clusters, and the encoder is the only component that knows how to translate a batch of [`WalRecord`](change-feed.md) records to and from those bytes.
 
 The default registration is a binary encoder that uses the Orleans serializer applied to a versioned envelope. Hosts that need a different framing — JSON for HTTP-transport debuggability, a custom envelope for compatibility with an external pipeline, content-hash-prefixed framing for deduplication — replace the registration via standard DI.
 
@@ -22,7 +22,7 @@ public readonly record struct ReplicationBatchEnvelope
     public int WireVersion { get; init; }
     public string TreeName { get; init; }
     public string OriginClusterId { get; init; }
-    public IReadOnlyList<ReplogEntry> Entries { get; init; }
+    public IReadOnlyList<WalRecord> Entries { get; init; }
 
     public const int CurrentVersion = 1;
 }
@@ -33,7 +33,7 @@ public readonly record struct ReplicationBatchEnvelope
 | `WireVersion` | The wire-format version this envelope was authored against. Receivers compare against `IReplicationBatchEncoder.CurrentWireVersion` and reject payloads carrying a strictly greater value rather than guess at the layout. Hand-constructed envelopes default to `0`; the canonical encoder stamps `CurrentVersion` at encode time when the caller supplies `0`. |
 | `TreeName` | Logical tree id the entries were captured from. Mirrors `ReplicationBatch.TreeName` on the surrounding call envelope; receivers route the per-tree apply pipeline on this value. |
 | `OriginClusterId` | Stable identifier of the originating cluster. Mirrors `ReplicationBatch.OriginClusterId` on the surrounding call envelope; receivers use it to attribute origin and break replication cycles. |
-| `Entries` | The captured `ReplogEntry` records, in commit order. May be empty (heartbeat / keep-alive batch). Never `null` on a value produced by the canonical encoder; hand-constructed envelopes that leave this default decode as an empty list because the canonical decoder normalises `null` to `Array.Empty<ReplogEntry>()`. |
+| `Entries` | The captured `WalRecord` records, in commit order. May be empty (heartbeat / keep-alive batch). Never `null` on a value produced by the canonical encoder; hand-constructed envelopes that leave this default decode as an empty list because the canonical decoder normalises `null` to `Array.Empty<WalRecord>()`. |
 
 The envelope is Orleans-serialisable (alias `olr.be`); the call-shape `ReplicationBatch` is intentionally not. Wire-format hardening — versioned envelopes, content framing, compression — happens *inside* `ReplicationBatch.Payload`, and the envelope is the canonical shape that lives there.
 
@@ -46,7 +46,7 @@ Future breaking changes to the on-the-wire shape — new top-level fields that o
 
 This is the canonical fail-fast posture: an older receiver paired with a newer producer immediately surfaces a deployment-ordering bug rather than mis-applying a payload it cannot interpret. A newer receiver paired with an older producer is the "normal" mixed-version case during a rolling upgrade and decodes the payload directly.
 
-Forward-compatible additions (new `[Id(n)]` slots on `ReplogEntry` with stable defaults, like the `Mode` slot stamped by the commit-time observer when a tree's replication mode is declared) do not require a wire-version bump: the Orleans serializer's per-field id model handles them transparently and unknown ids on a legacy receiver decode as the default value.
+Forward-compatible additions (new `[Id(n)]` slots on `WalRecord` with stable defaults, like the `Mode` slot stamped by the commit-time observer when a tree's replication mode is declared) do not require a wire-version bump: the Orleans serializer's per-field id model handles them transparently and unknown ids on a legacy receiver decode as the default value.
 
 ## Default encoder: Orleans serializer (binary)
 
@@ -84,7 +84,7 @@ Forcing the writer-supplied shape pushes buffer ownership to the caller, who can
 
 The writer's lifetime is the caller's responsibility — the encoder makes no claim on the bytes after `Encode` returns. This matches the ownership model `ReplicationBatch.Payload` already imposes on the bytes it carries.
 
-The decode side accepts `ReadOnlyMemory<byte>` because the envelope graph itself (the `string`s and `IReadOnlyList<ReplogEntry>`) is unavoidably allocated by the deserialiser — there is no realistic pool-friendly alternative for the materialised payload graph.
+The decode side accepts `ReadOnlyMemory<byte>` because the envelope graph itself (the `string`s and `IReadOnlyList<WalRecord>`) is unavoidably allocated by the deserialiser — there is no realistic pool-friendly alternative for the materialised payload graph.
 
 ## Registration
 

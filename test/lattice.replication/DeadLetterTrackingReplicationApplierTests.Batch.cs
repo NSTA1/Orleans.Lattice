@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using NSubstitute;
 using Orleans.Lattice.Primitives;
 
@@ -16,7 +17,7 @@ public partial class DeadLetterTrackingReplicationApplierTests
     {
         var (decorator, inner, _, _, _) = Build(maxRetries: 3);
 
-        var result = await decorator.ApplyBatchAsync(Array.Empty<ReplogEntry>(), CancellationToken.None);
+        var result = await decorator.ApplyBatchAsync(Array.Empty<WalRecord>(), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -33,7 +34,7 @@ public partial class DeadLetterTrackingReplicationApplierTests
         var (decorator, inner, _, _, _) = Build(maxRetries: 3);
         var hwm = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
         var expected = new ApplyResult { Applied = true, HighWaterMark = hwm };
-        inner.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+        inner.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns(expected);
 
         var entries = new[] { MakeEntry("a"), MakeEntry("b") };
@@ -41,7 +42,7 @@ public partial class DeadLetterTrackingReplicationApplierTests
 
         Assert.That(result, Is.EqualTo(expected));
         await inner.Received(1).ApplyBatchAsync(
-            Arg.Is<IReadOnlyList<ReplogEntry>>(l => l.Count == 2),
+            Arg.Is<IReadOnlyList<WalRecord>>(l => l.Count == 2),
             Arg.Any<CancellationToken>());
         await inner.DidNotReceiveWithAnyArgs().ApplyAsync(default!, default);
     }
@@ -51,13 +52,13 @@ public partial class DeadLetterTrackingReplicationApplierTests
     {
         var (decorator, inner, _, _, _) = Build(maxRetries: 3);
         var expected = new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Tick(HybridLogicalClock.Zero) };
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns(expected);
 
         var result = await decorator.ApplyBatchAsync(new[] { MakeEntry("a") }, CancellationToken.None);
 
         Assert.That(result, Is.EqualTo(expected));
-        await inner.Received(1).ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>());
+        await inner.Received(1).ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>());
         await inner.DidNotReceiveWithAnyArgs().ApplyBatchAsync(default!, default);
     }
 
@@ -76,18 +77,18 @@ public partial class DeadLetterTrackingReplicationApplierTests
 
         // Reset inner: succeed for both entries on the next pass.
         inner.ClearReceivedCalls();
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult(new ApplyResult
             {
                 Applied = true,
-                HighWaterMark = callInfo.Arg<ReplogEntry>().Timestamp,
+                HighWaterMark = callInfo.Arg<WalRecord>().Timestamp,
             }));
 
         var entries = new[] { poisoned, MakeEntry("b") };
         var result = await decorator.ApplyBatchAsync(entries, CancellationToken.None);
 
         Assert.That(result.Applied, Is.True);
-        await inner.Received(2).ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>());
+        await inner.Received(2).ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>());
         await inner.DidNotReceiveWithAnyArgs().ApplyBatchAsync(default!, default);
     }
 
@@ -95,28 +96,28 @@ public partial class DeadLetterTrackingReplicationApplierTests
     public async Task ApplyBatchAsync_falls_back_to_per_entry_when_inner_batch_throws()
     {
         var (decorator, inner, _, _, _) = Build(maxRetries: 3);
-        inner.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+        inner.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ => throw new InvalidOperationException("batch-boom"));
-        inner.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult(new ApplyResult
             {
                 Applied = true,
-                HighWaterMark = callInfo.Arg<ReplogEntry>().Timestamp,
+                HighWaterMark = callInfo.Arg<WalRecord>().Timestamp,
             }));
 
         var entries = new[] { MakeEntry("a"), MakeEntry("b") };
         var result = await decorator.ApplyBatchAsync(entries, CancellationToken.None);
 
         Assert.That(result.Applied, Is.True);
-        await inner.Received(1).ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>());
-        await inner.Received(2).ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>());
+        await inner.Received(1).ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>());
+        await inner.Received(2).ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
     public void ApplyBatchAsync_propagates_inner_batch_cancellation_without_falling_through()
     {
         var (decorator, inner, _, _, _) = Build(maxRetries: 3);
-        inner.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+        inner.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns<Task<ApplyResult>>(_ => throw new OperationCanceledException());
 
         var entries = new[] { MakeEntry("a"), MakeEntry("b") };

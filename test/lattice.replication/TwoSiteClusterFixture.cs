@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
@@ -125,12 +126,12 @@ internal sealed class TwoSiteClusterFixture
         // options-backed mode resolver with a permissive stub that opts every
         // tree in to LwwRegister so individual tests do not need to enumerate
         // their tree ids on the silo configurator.
-        siloBuilder.Services.AddSingleton<IReplicationModeResolver, AllowAllLwwRegisterResolver>();
+        siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllLwwRegisterResolver>();
     }
 
-    private sealed class AllowAllLwwRegisterResolver : IReplicationModeResolver
+    private sealed class AllowAllLwwRegisterResolver : ILatticeMergeModeResolver
     {
-        public ReplicationMode? Resolve(string treeId) => ReplicationMode.LwwRegister;
+        public LatticeMergeMode? Resolve(string treeId) => LatticeMergeMode.LwwRegister;
     }
 
     private sealed class SiteASiloConfigurator : ISiloConfigurator

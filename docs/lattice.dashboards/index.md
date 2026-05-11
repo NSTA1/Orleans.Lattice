@@ -25,9 +25,10 @@ builder.Services.AddOpenTelemetry()
 ```csharp
 using Orleans.Lattice.Dashboards;
 
-var overview    = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Overview);
-var commitPath  = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.CommitPath);
-var replication = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Replication);
+var overview     = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Overview);
+var commitPath   = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.CommitPath);
+var replication  = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Replication);
+var atomicWrites = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.AtomicWrites);
 ```
 
 Either import each JSON via Grafana's *Dashboards → New → Import* UI, or write the strings to a provisioning directory referenced by `Provisioning/dashboards.yaml`.
@@ -36,9 +37,10 @@ Either import each JSON via Grafana's *Dashboards → New → Import* UI, or wri
 
 | Dashboard | Source meter | Focus |
 |-----------|---------------|-------|
-| `Overview` | `orleans.lattice` | Throughput, leaf-write percentiles, cache hit-rate, tombstone churn, splits, atomic-write outcomes, coordinator completions, tree-lifecycle, events, runtime config changes. |
+| `Overview` | `orleans.lattice` | Throughput, leaf-write percentiles, cache hit-rate, tombstone churn, splits, atomic-write outcomes, coordinator completions, tree-lifecycle, events, runtime config changes. The dashboard now also includes a horizontal row of three atomic-write panels (saga duration p50/p95/p99, batch size p50/p95/p99, and a dedicated saga-failure-rate panel with 1% / 5% threshold lines). |
 | `CommitPath` | `orleans.lattice` | WAL-only commit path: per-step latency (`wal` / `apply` / `observer`), activation replay duration and entries by recovery outcome, storage-provider IOPS contribution, compaction. |
-| `Replication` | `orleans.lattice.replication` | Ship / apply / lag percentiles, WAL append vs trim throughput, dead-letter queue churn, apply FIFO and causal violations, dependency-wait histogram, fell-off-log events, per-peer entries / bytes behind, last contact, consecutive errors, cross-cluster atomic-batch staging (transactions / bytes parked, apply latency, completion rate by outcome). |
+| `Replication` | `orleans.lattice.replication` | Ship / apply / lag percentiles, WAL append vs trim throughput, dead-letter queue churn, apply FIFO and causal violations, dependency-wait histogram, fell-off-log events, per-peer entries / bytes behind, last contact, consecutive errors. |
+| `AtomicWrites` | `orleans.lattice` | Dedicated `SetManyAtomicAsync` saga deep-dive: outcome rate (stacked area), saga duration p50/p95/p99 and p95 by outcome, batch size p50/p95/p99 and p95 by outcome, per-tree committed throughput, range-window non-committed saga count, and a separate saga-failure-rate panel. The right home for incident triage and SLO drill-down on the atomic-write surface; the `Overview` row is the at-a-glance teaser. |
 
 See [`metrics-to-panel-map.md`](metrics-to-panel-map.md) for the per-instrument coverage table.
 

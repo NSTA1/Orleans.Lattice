@@ -38,4 +38,15 @@ public enum LatticeDashboardKind
     /// replication package is registered on the silo.
     /// </summary>
     Replication = 2,
+
+    /// <summary>
+    /// Deep-dive into the <c>SetManyAtomicAsync</c> saga: outcome
+    /// rate, end-to-end saga duration percentiles
+    /// (<c>atomic_write.duration</c>), batch-size percentiles
+    /// (<c>atomic_write.batch_size</c>), per-tree committed
+    /// throughput, and a dedicated saga-failure-rate panel
+    /// (compensated + failed as a fraction of all terminal
+    /// transitions). Sources the <c>orleans.lattice</c> meter only.
+    /// </summary>
+    AtomicWrites = 3,
 }

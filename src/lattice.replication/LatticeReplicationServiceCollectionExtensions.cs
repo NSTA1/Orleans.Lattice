@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Replication.Adapters;
 
 namespace Orleans.Lattice.Replication;
@@ -19,6 +20,19 @@ public static class LatticeReplicationServiceCollectionExtensions
     /// <see cref="LatticeReplicationOptions"/> instance. Replace the transport
     /// registration after this call (e.g. with an HTTP or gRPC implementation)
     /// to enable real cross-cluster shipping.
+    /// <para>
+    /// Must be called <i>after</i>
+    /// <see cref="LatticeServiceCollectionExtensions.AddLattice"/>: the core
+    /// registration is the source of truth for the WAL grain, the in-memory
+    /// WAL storage provider, the foreground commit-log adapters, and the
+    /// default null-returning <see cref="ILatticeMergeModeResolver"/>. This
+    /// call replaces the resolver with a per-tree
+    /// <see cref="ConfiguredLatticeMergeModeResolver"/>, registers the
+    /// replication-only sinks/transports/applier, and mirrors the WAL-related
+    /// fields of <see cref="LatticeReplicationOptions"/> onto
+    /// <see cref="LatticeOptions"/> so the core WAL grain observes the same
+    /// per-tree values when both options instances are configured.
+    /// </para>
     /// </summary>
     public static ISiloBuilder AddLatticeReplication(
         this ISiloBuilder builder,
@@ -34,6 +48,15 @@ public static class LatticeReplicationServiceCollectionExtensions
         // baseline must be visible to every named lookup - not only the
         // default instance.
         builder.Services.ConfigureAll(configure);
+
+        // Mirror WAL-related fields from LatticeReplicationOptions onto
+        // LatticeOptions so the core WAL grain (which reads LatticeOptions)
+        // observes the same per-tree values when the host configures the
+        // replication options. Registered as IPostConfigureOptions so the
+        // mirror runs after every Configure(...) action on LatticeOptions,
+        // including the host's own per-tree overrides.
+        builder.Services.AddSingleton<IPostConfigureOptions<LatticeOptions>, MirrorReplicationOptionsToLatticeOptions>();
+
         builder.Services.TryAddSingleton<IReplicationTransport, NoOpReplicationTransport>();
         builder.Services.TryAddSingleton<IReplogSink, ShardedReplogSink>();
         builder.Services.TryAddSingleton<IChangeFeed, ChangeFeed>();
@@ -61,11 +84,45 @@ public static class LatticeReplicationServiceCollectionExtensions
                 sp.GetRequiredService<IGrainFactory>(),
                 sp.GetRequiredService<ReplicationApplier>()));
 
-        builder.Services.TryAddSingleton<IReplicationModeResolver, ReplicationModeResolver>();
-        builder.Services.TryAddSingleton<IWalStorageProvider, InMemoryWalStorageProvider>();
+        // The core AddLattice registers DefaultLatticeMergeModeResolver (returns
+        // null for every tree). Swap that out for the per-tree resolver so
+        // configured trees get their declared LatticeMergeMode at commit time,
+        // while preserving any user-supplied custom resolver registered before
+        // this call. The protocol is: remove the Default registration if (and
+        // only if) it is the active one, then TryAdd Configured. A user who
+        // registered their own ILatticeMergeModeResolver before AddLatticeReplication
+        // is left untouched and the TryAdd is a no-op.
+        for (var i = builder.Services.Count - 1; i >= 0; i--)
+        {
+            var d = builder.Services[i];
+            if (d.ServiceType == typeof(ILatticeMergeModeResolver)
+                && d.ImplementationType == typeof(DefaultLatticeMergeModeResolver))
+            {
+                builder.Services.RemoveAt(i);
+            }
+        }
+        builder.Services.TryAddSingleton<ILatticeMergeModeResolver, ConfiguredLatticeMergeModeResolver>();
+
+        // Same swap protocol for the per-tree origin-cluster-id resolver:
+        // remove the core's DefaultLatticeOriginClusterIdResolver (returns
+        // string.Empty) when present, then TryAdd the configured resolver
+        // that reads LatticeReplicationOptions.ClusterId. A user-supplied
+        // resolver registered before this call is left untouched (TryAdd
+        // is a no-op).
+        for (var i = builder.Services.Count - 1; i >= 0; i--)
+        {
+            var d = builder.Services[i];
+            if (d.ServiceType == typeof(ILatticeOriginClusterIdResolver)
+                && d.ImplementationType == typeof(DefaultLatticeOriginClusterIdResolver))
+            {
+                builder.Services.RemoveAt(i);
+            }
+        }
+        builder.Services.TryAddSingleton<ILatticeOriginClusterIdResolver, ConfiguredLatticeOriginClusterIdResolver>();
+
         builder.Services.TryAddSingleton<IReplicationBatchEncoder, OrleansBinaryReplicationBatchEncoder>();
         builder.Services.TryAddSingleton<ILatticeReplicationCursorRegistry, InMemoryReplicationCursorRegistry>();
-        builder.Services.TryAddSingleton<Orleans.Lattice.BPlusTree.Grains.ILeafCursorReporter, ReplicationLeafCursorReporter>();
+        builder.Services.TryAddSingleton<ILeafCursorReporter, LeafCursorReporter>();
         builder.Services.TryAddSingleton<ILatticeReplicationGc, LatticeReplicationGc>();
         builder.Services.TryAddSingleton<ReplicationPeerStats>();
         // Producer-side per-(silo, tree) local vector clock cache.
@@ -86,26 +143,16 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<IShardCountProvider, DefaultShardCountProvider>();
         builder.Services.TryAddSingleton<IReplicationLocalVcSeeder, LatticeReplicationLocalVcSeeder>();
 
-        // Producer-side in-flight atomic-batch saga tracker
-        // consumed by LatticeSnapshotProvider's quiesce path
-        // The default in-process tracker is process-local
-        // by design — a silo crash that loses the tracker observes
-        // an empty in-flight set on the next snapshot, which is the
-        // conservative "no quiesce needed" outcome.
-        builder.Services.TryAddSingleton<IInFlightSagaTracker, InMemoryInFlightSagaTracker>();
-
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IMutationObserver, ReplicationMutationObserver>());
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<LatticeReplicationOptions>, LatticeReplicationOptionsValidator>());
 
-        // Commit-log adapter seams (dormant). The core library resolves
-        // these as nullable services; registering them here lets a future
-        // foreground caller drive WAL append / read without taking a hard
-        // reference on this package.
-        builder.Services.TryAddSingleton<Orleans.Lattice.BPlusTree.Grains.ICommitLogWriter, ReplicationCommitLogWriter>();
-        builder.Services.TryAddSingleton<Orleans.Lattice.BPlusTree.Grains.ICommitLogReader, ReplicationCommitLogReader>();
-        builder.Services.TryAddSingleton<Orleans.Lattice.BPlusTree.Grains.ILeafSnapshotProvider, ReplicationLeafSnapshotProvider>();
+        // Replication-only commit-log seam: streaming snapshot drain for
+        // the SnapshotThenWal recovery path. The core ICommitLogReader /
+        // ICommitLogWriter / IWalStorageProvider are already wired by
+        // AddLattice, so they are not re-registered here.
+        builder.Services.TryAddSingleton<ILeafSnapshotProvider, LeafSnapshotProvider>();
 
         // Production replication drivers: host-startup
         // activation of one shipper per (tree, peer) and one
@@ -149,5 +196,55 @@ public static class LatticeReplicationServiceCollectionExtensions
 
         builder.Services.Configure(treeName, configure);
         return builder;
+    }
+
+    /// <summary>
+    /// <see cref="IPostConfigureOptions{TOptions}"/> that mirrors WAL-related
+    /// fields from <see cref="LatticeReplicationOptions"/> onto
+    /// <see cref="LatticeOptions"/> for the same tree id, so a host that
+    /// configures the replication options surface gets the matching values
+    /// reflected on the core options surface read by the WAL grain. Runs
+    /// after every <c>Configure</c> action on <see cref="LatticeOptions"/>,
+    /// preserving any explicit per-tree override the host applied directly.
+    /// </summary>
+    /// <remarks>
+    /// The mirror is deliberately one-way (replication -> core). Hosts that
+    /// configure <see cref="LatticeOptions"/> directly take precedence: the
+    /// post-configure step only writes when the replication side carries a
+    /// non-default value for the corresponding field, so a direct override
+    /// is preserved as long as the replication side is left at its default.
+    /// </remarks>
+    private sealed class MirrorReplicationOptionsToLatticeOptions(
+        IOptionsMonitor<LatticeReplicationOptions> replicationOptions) : IPostConfigureOptions<LatticeOptions>
+    {
+        public void PostConfigure(string? name, LatticeOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+
+            var rep = replicationOptions.Get(name ?? Options.DefaultName);
+
+            if (rep.ReplogPartitions != LatticeReplicationOptions.DefaultReplogPartitions
+                && options.WalPartitions == LatticeOptions.DefaultWalPartitions)
+            {
+                options.WalPartitions = rep.ReplogPartitions;
+            }
+
+            if (rep.WalMaxBatchEntries != LatticeReplicationOptions.DefaultWalMaxBatchEntries
+                && options.WalMaxBatchEntries == LatticeOptions.DefaultWalMaxBatchEntries)
+            {
+                options.WalMaxBatchEntries = rep.WalMaxBatchEntries;
+            }
+
+            if (rep.WalMaxBatchBytes != LatticeReplicationOptions.DefaultWalMaxBatchBytes
+                && options.WalMaxBatchBytes == LatticeOptions.DefaultWalMaxBatchBytes)
+            {
+                options.WalMaxBatchBytes = rep.WalMaxBatchBytes;
+            }
+
+            if (rep.WalStorageProvider is not null && options.WalStorageProvider is null)
+            {
+                options.WalStorageProvider = rep.WalStorageProvider;
+            }
+        }
     }
 }

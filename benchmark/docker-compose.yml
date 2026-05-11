@@ -100,6 +100,20 @@ services:
       ReadDriver__WarmupDelay: ${BENCH_READ_WARMUP:-00:00:15}
       ReadDriver__KeyspaceRefreshInterval: ${BENCH_READ_KEYSPACE_REFRESH:-00:00:10}
       ReadDriver__KeyspaceSampleSize: ${BENCH_READ_KEYSPACE_SAMPLE:-4096}
+      # Atomic-saga driver bindings (only consumed when Telemetry__Sink=lattice). Drives the
+      # atomic-write and atomic-write-replication scenarios — generates a steady stream of
+      # SetManyAtomicAsync sagas into the replicated tree to exercise the WAL-only prepare
+      # path and the per-saga AtomicWriteGrain RPS ceiling. Defaults are off so non-atomic
+      # scenarios stay unaffected.
+      AtomicSagaDriver__Enabled: ${BENCH_ATOMIC_SAGA_DRIVER_ENABLED:-false}
+      AtomicSagaDriver__TreeId: ${BENCH_TREE_ID:-vehicle-fleet}
+      AtomicSagaDriver__RatePerSecond: ${BENCH_ATOMIC_SAGA_DRIVER_RATE:-0}
+      AtomicSagaDriver__Concurrency: ${BENCH_ATOMIC_SAGA_DRIVER_CONCURRENCY:-16}
+      AtomicSagaDriver__BatchSize: ${BENCH_ATOMIC_SAGA_DRIVER_BATCH_SIZE:-16}
+      AtomicSagaDriver__KeyspaceSize: ${BENCH_ATOMIC_SAGA_DRIVER_KEYSPACE:-4000}
+      AtomicSagaDriver__KeyPrefix: ${BENCH_ATOMIC SAGA_DRIVER_KEY_PREFIX:-atomic-}
+      AtomicSagaDriver__ValueSizeBytes: ${BENCH_ATOMIC_SAGA_DRIVER_VALUE_BYTES:-256}
+      AtomicSagaDriver__WarmupDelay: ${BENCH_ATOMIC_SAGA_DRIVER_WARMUP:-00:00:15}
     expose:
       - "11111"
       - "30000"

@@ -19,7 +19,9 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.leaf.commit.duration` | histogram (ms) | `tree`, `step` | CommitPath | Commit-step latency p50/p95/p99 |
 | `orleans.lattice.cache.hits` | counter | `tree` | Overview | Cache hit ratio |
 | `orleans.lattice.cache.misses` | counter | `tree` | Overview | Cache hit ratio |
-| `orleans.lattice.atomic_write.completed` | counter | `tree`, `outcome` | Overview | Atomic write outcomes |
+| `orleans.lattice.atomic_write.completed` | counter | `tree`, `outcome` | Overview, AtomicWrites | Atomic write outcomes (rate); per-tree committed throughput; saga failure rate (failed + compensated / total); range-window non-committed saga count |
+| `orleans.lattice.atomic_write.duration` | histogram (ms) | `tree`, `outcome` | Overview, AtomicWrites | Saga duration p50/p95/p99; saga duration p95 by outcome |
+| `orleans.lattice.atomic_write.batch_size` | histogram (`{entry}`) | `tree`, `outcome` | Overview, AtomicWrites | Batch size p50/p95/p99; batch size p95 by outcome |
 | `orleans.lattice.coordinator.completed` | counter | `tree`, `kind` | Overview | Coordinator completions |
 | `orleans.lattice.tree.lifecycle` | counter | `tree`, `kind` | Overview | Tree lifecycle events (annotation + stat) |
 | `orleans.lattice.events.published` | counter | `tree`, `kind` | Overview | Events published |
@@ -50,7 +52,3 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.replication.peer.bytes_behind` | gauge | `peer` | Per-peer bytes behind |
 | `orleans.lattice.replication.peer.last_contact_seconds` | gauge | `peer` | Per-peer last contact |
 | `orleans.lattice.replication.peer.consecutive_errors` | gauge | `peer` | Per-peer consecutive errors |
-| `orleans.lattice.replication.apply.tx_buffered` | gauge | `tree` | Atomic-batch buffer (transactions) |
-| `orleans.lattice.replication.apply.tx_buffer_bytes` | gauge | `tree` | Atomic-batch buffer (bytes) |
-| `orleans.lattice.replication.apply.tx_apply_duration_ms` | histogram (ms) | `tree`, `outcome` | Atomic-batch apply duration p50/p95/p99 |
-| `orleans.lattice.replication.apply.tx_completed` | counter | `tree`, `outcome` | Atomic-batch completion rate by outcome |

@@ -1957,6 +1957,219 @@
           "format": "time_series"
         }
       ]
+    },
+    {
+      "type": "row",
+      "title": "Atomic Writes  -  microbench",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 24,
+        "h": 1
+      },
+      "id": 35,
+      "panels": []
+    },
+    {
+      "id": 36,
+      "type": "barchart",
+      "title": "SetManyAtomic ops/sec",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ops",
+          "decimals": 0,
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 500 },
+              { "color": "green", "value": 2000 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": 0,
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "hidden", "placement": "bottom", "showLegend": false },
+        "xTickLabelMaxLength": 0,
+        "xTickLabelSpacing": 0
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "bench_microbench_set_many_atomic_per_second{scenario=\"microbench\"}",
+          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 37,
+      "type": "barchart",
+      "title": "SetManyAtomic p99 (ns)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 36,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ns",
+          "decimals": 0,
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1000000 },
+              { "color": "red", "value": 5000000 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": 0,
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "hidden", "placement": "bottom", "showLegend": false },
+        "xTickLabelMaxLength": 0,
+        "xTickLabelSpacing": 0
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "bench_microbench_set_many_atomic_p99_ns{scenario=\"microbench\"}",
+          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "type": "barchart",
+      "title": "SetManyAtomic mean (ns)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 36,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "ns",
+          "decimals": 0,
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 500000 },
+              { "color": "red", "value": 2000000 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": 0,
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "hidden", "placement": "bottom", "showLegend": false },
+        "xTickLabelMaxLength": 0,
+        "xTickLabelSpacing": 0
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "bench_microbench_set_many_atomic_mean_ns{scenario=\"microbench\"}",
+          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 39,
+      "type": "barchart",
+      "title": "SetManyAtomic alloc/op (B)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 36,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 0,
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 4096 },
+              { "color": "red", "value": 16384 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": 0,
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "hidden", "placement": "bottom", "showLegend": false },
+        "xTickLabelMaxLength": 0,
+        "xTickLabelSpacing": 0
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "bench_microbench_set_many_atomic_alloc_b{scenario=\"microbench\"}",
+          "legendFormat": "{{scenario}} {{run_id}} @ {{git_sha}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ]
     }
   ],
   "refresh": "",

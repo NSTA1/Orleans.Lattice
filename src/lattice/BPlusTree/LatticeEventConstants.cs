@@ -106,10 +106,13 @@ public static class LatticeEventConstants
     /// clock past the override via
     /// <see cref="Primitives.HybridLogicalClock.Merge(Primitives.HybridLogicalClock, Primitives.HybridLogicalClock)"/>
     /// to preserve local monotonicity for any subsequent foreground
-    /// tick. The single supported authoring path is the receiver-side
-    /// cross-cluster atomic-batch apply seam
-    /// (<c>IReplicationApplyGrain.ApplyManyAtomicAsync</c>). Internal —
-    /// set through <see cref="LatticeHlcOverrideContext"/>.
+    /// tick. The supported authoring paths are the receiver-side
+    /// cross-cluster atomic-visibility apply seam
+    /// (<see cref="IReplicationApplyGrain.ApplyPreparedSetAsync"/> /
+    /// <see cref="IReplicationApplyGrain.ApplyPreparedDeleteAsync"/>)
+    /// and the per-entry merge apply seam
+    /// (<see cref="IReplicationApplyGrain.ApplyMergeManyAsync"/>).
+    /// Internal — set through <see cref="LatticeHlcOverrideContext"/>.
     /// </summary>
     internal const string HlcOverrideRequestContextKey = "ol.hlc";
 
@@ -128,4 +131,46 @@ public static class LatticeEventConstants
     /// set through <see cref="LatticeAtomicBatchContext"/>.
     /// </summary>
     internal const string AtomicBatchRequestContextKey = "ol.batch";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to flag the current logical
+    /// call as a saga prepare-phase write. When set to <c>true</c>, the
+    /// leaf grain's commit pipeline routes the mutation into the per-leaf
+    /// in-memory pending-transaction map (keyed by
+    /// <see cref="LatticeMutation.TransactionId"/>) rather than into the
+    /// visible projection; reads filter pending entries out of view. A
+    /// subsequent terminal <see cref="MutationKind.TxCommit"/> or
+    /// <see cref="MutationKind.TxAbort"/> mutation flips or drops the
+    /// pending entries on the leaf. Internal — set through
+    /// <see cref="LatticePreparedContext"/>.
+    /// </summary>
+    internal const string PreparedRequestContextKey = "ol.prep";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to communicate the WAL
+    /// offset of the mutation currently being driven through
+    /// <c>ILeafProjection.Apply</c>. The replay coordinator stamps the
+    /// offset before each Apply call so the leaf can record per-prepare
+    /// offsets in its pending-transaction map and clamp the projection
+    /// checkpoint back to <c>min(highest contiguous Apply'd offset,
+    /// (min unresolved prepare offset) - 1)</c> — preventing crash
+    /// recovery from advancing past an unresolved saga prepare and
+    /// silently losing its writes when the terminal mark eventually
+    /// arrives. Internal — set through <see cref="LatticeApplyOffsetContext"/>.
+    /// </summary>
+    internal const string ApplyOffsetRequestContextKey = "ol.aoff";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry a per-scan
+    /// snapshot of <see cref="BPlusTree.ITxRegistryGrain"/> decisions
+    /// from a lattice-level read fan-out down into every per-shard
+    /// leaf participating in the scan. When set, leaf read paths use
+    /// the pre-fetched snapshot in place of an independent
+    /// <c>GetStatusManyAsync</c> RPC, ensuring every leaf in the same
+    /// scan applies the same registry decision view (linearizable scan
+    /// over the registry's <c>InFlight</c>→<c>Committed</c>
+    /// transition). Internal — set through
+    /// <see cref="LatticeRegistrySnapshotContext"/>.
+    /// </summary>
+    internal const string RegistrySnapshotRequestContextKey = "ol.txregsnap";
 }

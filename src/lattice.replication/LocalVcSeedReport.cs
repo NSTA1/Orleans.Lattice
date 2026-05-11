@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication;
@@ -38,7 +39,7 @@ namespace Orleans.Lattice.Replication;
 /// frontier on the per-tree HWM grain and primed the producer-side
 /// <see cref="LocalVectorClockCache"/>. <see langword="false"/>
 /// when the tree is not configured for replication
-/// (<see cref="IReplicationModeResolver.Resolve"/> returned
+/// (<see cref="ILatticeMergeModeResolver.Resolve"/> returned
 /// <see langword="null"/>); in that case
 /// <see cref="EntriesScanned"/> is <c>0</c> and
 /// <see cref="Frontier"/> is <see langword="null"/> - the seeder

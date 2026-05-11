@@ -129,8 +129,22 @@ internal sealed partial class BPlusLeafGrain(
         return state.State.Clock;
     }
 
+    /// <inheritdoc />
+    public Task<HybridLogicalClock> GetClockAsync() => Task.FromResult(state.State.Clock);
+
     public Task<byte[]?> GetAsync(string key)
     {
+        // Strict atomic-visibility: a key with a pending-tx entry
+        // dials back through the per-tree TxRegistry — the
+        // registry-recorded saga outcome is the single tree-wide
+        // linearization point, so readers never observe a partial
+        // commit / abort across leaves. The fast path (no pending
+        // entry on this leaf) avoids the RPC entirely.
+        if (TryFindPendingForKey(key, out var txid, out var pendingValue))
+        {
+            return GetWithPendingAsync(key, txid, pendingValue);
+        }
+
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
         {
@@ -140,8 +154,38 @@ internal sealed partial class BPlusLeafGrain(
         return Task.FromResult<byte[]?>(null);
     }
 
+    private async Task<byte[]?> GetWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
+    {
+        var status = await ResolvePendingStatusAsync(txid);
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        switch (status)
+        {
+            case TxStatus.Committed:
+                if (pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks))
+                    return null;
+                return pendingValue.Value;
+            default:
+                // InFlight or Aborted — surface the pre-saga value
+                // from Entries. Strict atomic visibility: until the
+                // registry records a Committed decision, the saga's
+                // prepared writes are invisible and readers must see
+                // exactly the state that existed before the saga
+                // started. Hiding the key on InFlight would create a
+                // split observation across leaves whose prepares
+                // arrive at different wall-clock moments.
+                if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
+                    return lww.Value;
+                return null;
+        }
+    }
+
     public Task<VersionedValue> GetWithVersionAsync(string key)
     {
+        if (TryFindPendingForKey(key, out var txid, out var pendingValue))
+        {
+            return GetWithVersionWithPendingAsync(key, txid, pendingValue);
+        }
+
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
         {
@@ -151,23 +195,68 @@ internal sealed partial class BPlusLeafGrain(
         return Task.FromResult(new VersionedValue());
     }
 
+    private async Task<VersionedValue> GetWithVersionWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
+    {
+        var status = await ResolvePendingStatusAsync(txid);
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        switch (status)
+        {
+            case TxStatus.Committed:
+                if (pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks))
+                    return new VersionedValue();
+                return new VersionedValue { Value = pendingValue.Value, Version = pendingValue.Timestamp };
+            default:
+                // InFlight or Aborted — surface the pre-saga value.
+                // See GetWithPendingAsync for the rationale.
+                if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
+                    return new VersionedValue { Value = lww.Value, Version = lww.Timestamp };
+                return new VersionedValue();
+        }
+    }
+
     public Task<bool> ExistsAsync(string key)
     {
+        if (TryFindPendingForKey(key, out var txid, out var pendingValue))
+        {
+            return ExistsWithPendingAsync(key, txid, pendingValue);
+        }
+
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         return Task.FromResult(
             state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks));
     }
 
+    private async Task<bool> ExistsWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
+    {
+        var status = await ResolvePendingStatusAsync(txid);
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        switch (status)
+        {
+            case TxStatus.Committed:
+                return !pendingValue.IsTombstone && !pendingValue.IsExpired(nowTicks);
+            default:
+                // InFlight or Aborted — fall through to Entries.
+                // See GetWithPendingAsync for the rationale.
+                return state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks);
+        }
+    }
+
     public Task<GetOrSetResult> GetOrSetAsync(string key, byte[] value)
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
-        // Short-circuit: if the key already exists and is live (and not expired), return its value without writing.
-        if (state.State.Entries.TryGetValue(key, out var existing) && !existing.IsTombstone && !existing.IsExpired(nowTicks))
+        // Short-circuit: if the key already exists and is live (and not expired)
+        // AND has no pending-tx mutation, return its value without writing.
+        // A pending mutation makes the key invisible, so we must fall through
+        // to the write path to record the caller's intent.
+        if (!IsKeyPending(key)
+            && state.State.Entries.TryGetValue(key, out var existing)
+            && !existing.IsTombstone
+            && !existing.IsExpired(nowTicks))
         {
             return Task.FromResult(new GetOrSetResult { ExistingValue = existing.Value });
         }
 
-        // Key is absent, tombstoned, or expired — delegate to the write path and wrap the result.
+        // Key is absent, tombstoned, expired, or pending — delegate to the write path and wrap the result.
         return GetOrSetWriteAsync(key, value);
     }
 
@@ -180,10 +269,19 @@ internal sealed partial class BPlusLeafGrain(
     public Task<CasResult> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        // Pending-tx isolation: a key with an in-flight saga prepare is
+        // invisible to CAS — treat it as absent so expectedVersion must
+        // be Zero. The CAS write itself races with the saga's terminal
+        // mark; LWW resolves the conflict deterministically via HLC.
+        var pending = IsKeyPending(key);
+
         // Check current entry version. Treat expired live entries as absent
         // for CAS purposes (same as tombstones) so a fresh write with
         // expectedVersion == Zero succeeds after expiry.
-        if (state.State.Entries.TryGetValue(key, out var existing) && !existing.IsTombstone && !existing.IsExpired(nowTicks))
+        if (!pending
+            && state.State.Entries.TryGetValue(key, out var existing)
+            && !existing.IsTombstone
+            && !existing.IsExpired(nowTicks))
         {
             if (existing.Timestamp != expectedVersion)
             {
@@ -196,7 +294,7 @@ internal sealed partial class BPlusLeafGrain(
         }
         else
         {
-            // Key is absent or tombstoned — expectedVersion must be Zero.
+            // Key is absent, tombstoned, or pending — expectedVersion must be Zero.
             if (expectedVersion != HybridLogicalClock.Zero)
             {
                 return Task.FromResult(new CasResult
@@ -224,18 +322,32 @@ internal sealed partial class BPlusLeafGrain(
         };
     }
 
-    public Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
+    public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var result = new Dictionary<string, byte[]>(keys.Count);
         foreach (var key in keys)
         {
+            if (pendingKeys.TryGetValue(key, out var pending))
+            {
+                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                if (status == TxStatus.Committed)
+                {
+                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
+                        result[key] = pending.value.Value!;
+                    continue;
+                }
+                // InFlight or Aborted — fall through to Entries
+                // (pre-saga visibility). See GetWithPendingAsync.
+            }
+
             if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
             {
                 result[key] = lww.Value!;
             }
         }
-        return Task.FromResult(result);
+        return result;
     }
 
     public Task<SplitResult?> SetAsync(string key, byte[] value) =>
@@ -306,8 +418,18 @@ internal sealed partial class BPlusLeafGrain(
     {
         // step 0 (build) - HLC tick (or override), build LwwValue. Version
         // vector is foreground-only; ILeafProjection.Apply does not advance it.
+        // Prepared writes (saga prepare phase) skip the Version tick because
+        // they route into the pending-tx map, not visible Entries; ticking
+        // Version on prepare would advance the cache's saved callerClock
+        // past prepare time and the cache's per-entry HLC delta filter would
+        // then exclude the drained value when the saga's terminal mark
+        // re-stamps and surfaces it. The terminal handler ticks Version
+        // itself so the cache observes a single linearization-point
+        // advance covering the whole saga's drained set.
         var stamp = AdvanceClockOrOverride();
-        state.State.Version.Tick(ReplicaId);
+        var isPrepared = LatticePreparedContext.Current;
+        if (!isPrepared)
+            state.State.Version.Tick(ReplicaId);
         BumpLocalRevision();
         var newEntry = LwwValue<byte[]>.CreateWithExpiry(value, stamp, expiresAtTicks)
             with
@@ -334,6 +456,13 @@ internal sealed partial class BPlusLeafGrain(
             DeltaPayload = delta?.Payload,
             AtomicBatchSize = batch?.Size ?? 0,
             AtomicBatchIndex = batch?.Index ?? 0,
+            IsPrepared = isPrepared,
+            // Stamp the leaf's owning chain-shard index so a sibling
+            // shard's leaf reading the same WAL partition can filter
+            // this entry out at activation-time replay. Falls back to
+            // 0 for the V1 single-shard test path where SetShardIndexAsync
+            // has not yet been called (every chain shard is shard 0).
+            ShardIndex = state.State.ShardIndex ?? 0,
         };
 
         var options = await GetOptionsAsync();
@@ -348,14 +477,23 @@ internal sealed partial class BPlusLeafGrain(
         }
         RecordCommitStep("wal", walStartTicks);
 
-        // step 2 (apply) - LWW-merge into the in-memory projection.
+        // step 2 (apply) - LWW-merge into the in-memory projection, or
+        // into the per-leaf pending-tx map when the mutation is a saga
+        // prepare-phase write. Prepared writes never trigger a leaf
+        // split because they are not yet visible in Entries.
         var applyStartTicks = Stopwatch.GetTimestamp();
-        StoreEntry(key, newEntry);
-
         SplitResult? splitResult = null;
-        if (state.State.Entries.Count > options.MaxLeafKeys)
+        if (isPrepared)
         {
-            splitResult = await SplitAsync();
+            AddPreparedMutation(mutation.TransactionId, key, newEntry);
+        }
+        else
+        {
+            StoreEntry(key, newEntry);
+            if (state.State.Entries.Count > options.MaxLeafKeys)
+            {
+                splitResult = await SplitAsync();
+            }
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -365,10 +503,22 @@ internal sealed partial class BPlusLeafGrain(
         var observerStartTicks = Stopwatch.GetTimestamp();
         if (mutationObservers.HasObservers)
         {
-            // After a split, the key may have migrated to the new sibling -
-            // fall back to newEntry, which is guaranteed by strict-HLC-tick
-            // monotonicity to be the committed LWW winner.
-            var published = state.State.Entries.TryGetValue(key, out var committed) ? committed : newEntry;
+            // For non-prepared writes, the key may have migrated to the
+            // new sibling on a split - fall back to newEntry, which is
+            // guaranteed by strict-HLC-tick monotonicity to be the
+            // committed LWW winner. For prepared writes the entry is in
+            // the pending-tx map (not Entries), so always use newEntry
+            // verbatim; the observer payload's IsPrepared flag tells
+            // downstream consumers the entry is not yet visible.
+            LwwValue<byte[]> published;
+            if (isPrepared)
+            {
+                published = newEntry;
+            }
+            else
+            {
+                published = state.State.Entries.TryGetValue(key, out var committed) ? committed : newEntry;
+            }
             using (LatticeCommitLogContext.BeginScope())
             {
                 await PublishSetAsync(key, published);
@@ -393,14 +543,26 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<bool> DeleteAsync(string key)
     {
-        if (!state.State.Entries.TryGetValue(key, out var existing) || existing.IsTombstone)
+        var isPrepared = LatticePreparedContext.Current;
+
+        // For non-prepared deletes, the absent / tombstoned short-circuit
+        // saves an HLC tick and a WAL append. For prepared deletes the
+        // saga still expects a pending-tx entry, so we always emit a
+        // tombstone into the pending bucket — committing the saga must
+        // make the absence durable (the caller's pre-saga value is
+        // captured separately by the saga coordinator).
+        if (!isPrepared && (!state.State.Entries.TryGetValue(key, out var existing) || existing.IsTombstone))
         {
             return false;
         }
 
         // step 0 (build) - HLC tick (or override), build tombstone, build mutation envelope.
         var stamp = AdvanceClockOrOverride();
-        state.State.Version.Tick(ReplicaId);
+        // Prepared deletes route to the pending-tx map and skip the
+        // Version tick for the same reason as CommitSetAsync (see the
+        // build-step comment there for the cache-callerClock argument).
+        if (!isPrepared)
+            state.State.Version.Tick(ReplicaId);
         BumpLocalRevision();
         var tombstone = LwwValue<byte[]>.Tombstone(stamp)
             with
@@ -409,6 +571,7 @@ internal sealed partial class BPlusLeafGrain(
                 VectorClock = LatticeVectorClockContext.Current,
             };
         var delta = LatticeDeltaContext.Current;
+        var batch = LatticeAtomicBatchContext.Current;
         var mutation = new LatticeMutation
         {
             TreeId = state.State.TreeId ?? string.Empty,
@@ -422,6 +585,9 @@ internal sealed partial class BPlusLeafGrain(
             Category = LatticeMaintenanceContext.Current,
             DeltaKind = delta?.Kind,
             DeltaPayload = delta?.Payload,
+            AtomicBatchSize = batch?.Size ?? 0,
+            AtomicBatchIndex = batch?.Index ?? 0,
+            IsPrepared = isPrepared,
         };
 
         // step 1 (wal)
@@ -433,9 +599,18 @@ internal sealed partial class BPlusLeafGrain(
         }
         RecordCommitStep("wal", walStartTicks);
 
-        // step 2 (apply)
+        // step 2 (apply) - LWW-merge into the in-memory projection, or
+        // into the per-leaf pending-tx map when the mutation is a saga
+        // prepare-phase write.
         var applyStartTicks = Stopwatch.GetTimestamp();
-        StoreEntry(key, tombstone);
+        if (isPrepared)
+        {
+            AddPreparedMutation(mutation.TransactionId, key, tombstone);
+        }
+        else
+        {
+            StoreEntry(key, tombstone);
+        }
         RecordCommitStep("apply", applyStartTicks);
 
         LatticeMetrics.LeafTombstonesCreated.Add(1, LeafTreeTag());
@@ -516,6 +691,14 @@ internal sealed partial class BPlusLeafGrain(
             Category = LatticeMaintenanceContext.Current,
             DeltaKind = delta?.Kind,
             DeltaPayload = delta?.Payload,
+            // Stamp the leaf's owning chain-shard index; see SetAsync
+            // for the rationale. DeleteRange replay on the receiving
+            // leaf iterates that leaf's own Entries only, so the
+            // filter is not strictly required for correctness on
+            // DeleteRange — but stamping consistently keeps every
+            // mutation kind on the same wire shape so receivers and
+            // operator tooling can rely on the slot being populated.
+            ShardIndex = state.State.ShardIndex ?? 0,
         };
 
         // step 1 (wal)
@@ -547,28 +730,77 @@ internal sealed partial class BPlusLeafGrain(
         return new RangeDeleteResult { Deleted = keysToDelete.Count, PastRange = pastRange };
     }
 
-    public Task<int> CountAsync()
+    public async Task<int> CountAsync()
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var count = 0;
-        foreach (var lww in state.State.Entries.Values)
+        foreach (var (key, lww) in state.State.Entries)
         {
-            if (!lww.IsTombstone && !lww.IsExpired(nowTicks)) count++;
+            if (pendingKeys.TryGetValue(key, out var pending))
+            {
+                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                if (status == TxStatus.Committed)
+                {
+                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)) count++;
+                    continue;
+                }
+                // InFlight or Aborted — fall through to Entries
+                // (pre-saga visibility). See GetWithPendingAsync.
+            }
+            if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
+            count++;
         }
-        return Task.FromResult(count);
+
+        // Fresh committed pending keys that are NOT in Entries
+        // (saga inserted a brand-new key) must also be counted.
+        foreach (var (key, pending) in pendingKeys)
+        {
+            if (state.State.Entries.ContainsKey(key)) continue;
+            var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+            if (status != TxStatus.Committed) continue;
+            if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            count++;
+        }
+
+        return count;
     }
 
-    public Task<LeafStats> GetStatsAsync()
+    public async Task<LeafStats> GetStatsAsync()
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var live = 0;
         var tombstones = 0;
-        foreach (var lww in state.State.Entries.Values)
+        foreach (var (key, lww) in state.State.Entries)
         {
+            if (pendingKeys.TryGetValue(key, out var pending))
+            {
+                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                if (status == TxStatus.Committed)
+                {
+                    if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) tombstones++;
+                    else live++;
+                    continue;
+                }
+                // InFlight or Aborted — fall through to Entries
+                // (pre-saga visibility). See GetWithPendingAsync.
+            }
             if (lww.IsTombstone || lww.IsExpired(nowTicks)) tombstones++;
             else live++;
         }
-        return Task.FromResult(new LeafStats { LiveKeys = live, Tombstones = tombstones });
+
+        // Fresh committed pending keys not yet in Entries.
+        foreach (var (key, pending) in pendingKeys)
+        {
+            if (state.State.Entries.ContainsKey(key)) continue;
+            var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+            if (status != TxStatus.Committed) continue;
+            if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) tombstones++;
+            else live++;
+        }
+
+        return new LeafStats { LiveKeys = live, Tombstones = tombstones };
     }
 
     public Task<GrainId?> GetNextSiblingAsync() =>
@@ -598,6 +830,46 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<string?> GetTreeIdAsync() =>
         Task.FromResult(state.State.TreeId);
+
+    public async Task SetShardIndexAsync(int shardIndex)
+    {
+        // Idempotent: skip the persist if the slot is already seeded.
+        // The shard-root coordinator calls this once per leaf-create
+        // alongside SetTreeIdAsync; a re-call (e.g. from a defensive
+        // re-seed in a future code path) must not silently overwrite
+        // the persisted value, both because the value is immutable
+        // for a leaf's lifetime and because the writer would
+        // otherwise pay an extra WriteStateAsync round-trip on every
+        // shard-root activation that walks its leaves.
+        if (state.State.ShardIndex is not null) return;
+        state.State.ShardIndex = shardIndex;
+        await PersistAsync();
+    }
+
+    public async Task SetKeyRangeAsync(string? lowKeyInclusive, string? highKeyExclusive)
+    {
+        // Idempotent on the low bound: every legitimate caller
+        // (CompleteSplitAsync stamping a freshly-created sibling)
+        // passes a non-null splitKey as the low bound, so a non-null
+        // persisted LowKeyInclusive is the unambiguous "already
+        // seeded" sentinel. Donors never call this — they update
+        // their own HighKeyExclusive directly inside CompleteSplitAsync
+        // when narrowing their own range to the split key.
+        if (state.State.LowKeyInclusive is not null) return;
+        state.State.LowKeyInclusive = lowKeyInclusive;
+        state.State.HighKeyExclusive = highKeyExclusive;
+        await PersistAsync();
+    }
+
+    public Task SetCheckpointOffsetHintAsync(long offset)
+    {
+        // Routes through the existing ILeafProjection seam so the
+        // unresolved-prepare clamp is honoured. For a freshly-created
+        // sibling at birth there are no unresolved prepares so the
+        // clamp is a no-op; the seam's monotonic-non-decrease guard
+        // makes a re-call with a smaller offset a silent no-op.
+        return ((ILeafProjection)this).SetCheckpointOffsetAsync(offset, CancellationToken.None);
+    }
 
     public async Task<int> CompactTombstonesAsync(TimeSpan gracePeriod)
     {
@@ -793,12 +1065,13 @@ internal sealed partial class BPlusLeafGrain(
         await PersistAsync();
     }
 
-    public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
+    public async Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
     {
         var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
+        var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
 
         var keys = new List<string>();
         foreach (var (key, lww) in state.State.Entries)
@@ -813,31 +1086,61 @@ internal sealed partial class BPlusLeafGrain(
                 string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
                 break;
 
-            if (lww.IsTombstone || lww.IsExpired(nowTicks))
-                continue;
-
             if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
                 continue;
 
             if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0)
                 continue;
 
+            if (pendingKeys.TryGetValue(key, out var pending))
+            {
+                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                if (status == TxStatus.Committed)
+                {
+                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
+                        keys.Add(key);
+                    continue;
+                }
+                // InFlight or Aborted — fall through to Entries
+                // (pre-saga visibility). See GetWithPendingAsync.
+            }
+
+            if (lww.IsTombstone || lww.IsExpired(nowTicks))
+                continue;
+
             keys.Add(key);
         }
+
+        // Fresh committed pending keys not yet in Entries, respecting range filters.
+        foreach (var (key, pending) in pendingKeys)
+        {
+            if (state.State.Entries.ContainsKey(key)) continue;
+            if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0) continue;
+            if (beforeExclusive is not null && string.Compare(key, beforeExclusive, StringComparison.Ordinal) >= 0) continue;
+            if (splitInProgress && splitKey is not null && string.Compare(key, splitKey, StringComparison.Ordinal) >= 0) continue;
+            if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0) continue;
+            if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0) continue;
+            var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+            if (status != TxStatus.Committed) continue;
+            if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            keys.Add(key);
+        }
+        keys.Sort(StringComparer.Ordinal);
 
         var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         LatticeMetrics.LeafScanDuration.Record(elapsedMs,
             LeafTreeTag(),
             new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, "keys"));
-        return Task.FromResult(keys);
+        return keys;
     }
 
-    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
+    public async Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
     {
         var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
+        var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
 
         var entries = new List<KeyValuePair<string, byte[]>>();
         foreach (var (key, lww) in state.State.Entries)
@@ -852,52 +1155,119 @@ internal sealed partial class BPlusLeafGrain(
                 string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
                 break;
 
-            if (lww.IsTombstone || lww.IsExpired(nowTicks))
-                continue;
-
             if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
                 continue;
 
             if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0)
                 continue;
 
+            if (pendingKeys.TryGetValue(key, out var pending))
+            {
+                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                if (status == TxStatus.Committed)
+                {
+                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
+                        entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
+                    continue;
+                }
+                // InFlight or Aborted — fall through to Entries
+                // (pre-saga visibility). See GetWithPendingAsync.
+            }
+
+            if (lww.IsTombstone || lww.IsExpired(nowTicks))
+                continue;
+
             entries.Add(new KeyValuePair<string, byte[]>(key, lww.Value!));
         }
+
+        // Fresh committed pending keys not yet in Entries, respecting range filters.
+        foreach (var (key, pending) in pendingKeys)
+        {
+            if (state.State.Entries.ContainsKey(key)) continue;
+            if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0) continue;
+            if (beforeExclusive is not null && string.Compare(key, beforeExclusive, StringComparison.Ordinal) >= 0) continue;
+            if (splitInProgress && splitKey is not null && string.Compare(key, splitKey, StringComparison.Ordinal) >= 0) continue;
+            if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0) continue;
+            if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0) continue;
+            var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+            if (status != TxStatus.Committed) continue;
+            if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
+        }
+        entries.Sort(static (a, b) => StringComparer.Ordinal.Compare(a.Key, b.Key));
 
         var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         LatticeMetrics.LeafScanDuration.Record(elapsedMs,
             LeafTreeTag(),
             new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, "entries"));
-        return Task.FromResult(entries);
+        return entries;
     }
 
-    public Task<Dictionary<string, byte[]>> GetLiveEntriesAsync()
+    public async Task<Dictionary<string, byte[]>> GetLiveEntriesAsync()
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var result = new Dictionary<string, byte[]>();
         foreach (var (key, lww) in state.State.Entries)
         {
-            if (!lww.IsTombstone && !lww.IsExpired(nowTicks))
+            if (pendingKeys.TryGetValue(key, out var pending))
             {
-                result[key] = lww.Value!;
+                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                if (status == TxStatus.Committed)
+                {
+                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
+                        result[key] = pending.value.Value!;
+                    continue;
+                }
+                // InFlight or Aborted — fall through to Entries
+                // (pre-saga visibility). See GetWithPendingAsync.
             }
+            if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
+            result[key] = lww.Value!;
         }
-        return Task.FromResult(result);
+        foreach (var (key, pending) in pendingKeys)
+        {
+            if (state.State.Entries.ContainsKey(key)) continue;
+            var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+            if (status != TxStatus.Committed) continue;
+            if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            result[key] = pending.value.Value!;
+        }
+        return result;
     }
 
     /// <inheritdoc />
-    public Task<List<LwwEntry>> GetLiveRawEntriesAsync()
+    public async Task<List<LwwEntry>> GetLiveRawEntriesAsync()
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var result = new List<LwwEntry>(state.State.Entries.Count);
         foreach (var (key, lww) in state.State.Entries)
         {
-            if (!lww.IsTombstone && !lww.IsExpired(nowTicks))
+            if (pendingKeys.TryGetValue(key, out var pending))
             {
-                result.Add(new LwwEntry(key, lww));
+                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                if (status == TxStatus.Committed)
+                {
+                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
+                        result.Add(new LwwEntry(key, pending.value));
+                    continue;
+                }
+                // InFlight or Aborted — fall through to Entries
+                // (pre-saga visibility). See GetWithPendingAsync.
             }
+            if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
+            result.Add(new LwwEntry(key, lww));
         }
-        return Task.FromResult(result);
+        foreach (var (key, pending) in pendingKeys)
+        {
+            if (state.State.Entries.ContainsKey(key)) continue;
+            var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+            if (status != TxStatus.Committed) continue;
+            if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            result.Add(new LwwEntry(key, pending.value));
+        }
+        return result;
     }
 
     /// <summary>

@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using System.Buffers;
 using System.Collections.Concurrent;
 using Grpc.Net.Client;
@@ -17,8 +18,8 @@ namespace Orleans.Lattice.Replication.Grpc.Tests;
 /// gRPC mirror of the R-086 transport metadata pass-through contract:
 /// asserts that the canonical
 /// <see cref="GrpcPushTransport"/> + receiver-side service round-trips
-/// <see cref="ReplogEntry.VectorClock"/> and
-/// <see cref="ReplogEntry.DependencySummary"/> verbatim across the wire.
+/// <see cref="WalRecord.VectorClock"/> and
+/// <see cref="WalRecord.DependencySummary"/> verbatim across the wire.
 /// Captures the entries delivered to the receiver-side
 /// <see cref="IReplicationApplier"/> and compares the metadata slots
 /// against the producer-side originals.
@@ -30,17 +31,17 @@ public class TransportMetadataPassthroughContractTests
     private GrpcChannel _channel = null!;
     private IReplicationApplier _applier = null!;
     private IReplicationBatchEncoder _encoder = null!;
-    private ConcurrentQueue<ReplogEntry> _capturedEntries = null!;
+    private ConcurrentQueue<WalRecord> _capturedEntries = null!;
 
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
     {
-        _capturedEntries = new ConcurrentQueue<ReplogEntry>();
+        _capturedEntries = new ConcurrentQueue<WalRecord>();
         _applier = Substitute.For<IReplicationApplier>();
-        _applier.ApplyAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+        _applier.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
-                var entry = callInfo.Arg<ReplogEntry>();
+                var entry = callInfo.Arg<WalRecord>();
                 _capturedEntries.Enqueue(entry);
                 return Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = entry.Timestamp });
             });
@@ -53,10 +54,10 @@ public class TransportMetadataPassthroughContractTests
         // metadata-pass-through assertions pointed at the captured queue
         // regardless of whether the service decides to dispatch per-entry
         // or per-batch in the future.
-        _applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<ReplogEntry>>(), Arg.Any<CancellationToken>())
+        _applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
-                var batch = callInfo.Arg<IReadOnlyList<ReplogEntry>>();
+                var batch = callInfo.Arg<IReadOnlyList<WalRecord>>();
                 var max = HybridLogicalClock.Zero;
                 var applied = false;
                 foreach (var entry in batch)
@@ -130,7 +131,7 @@ public class TransportMetadataPassthroughContractTests
         return vc;
     }
 
-    private static ReplogEntry MakeEntry(
+    private static WalRecord MakeEntry(
         string key,
         long wallClock,
         VersionVector? vectorClock,
@@ -138,12 +139,12 @@ public class TransportMetadataPassthroughContractTests
         => new()
         {
             TreeId = "tree",
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = key,
             Value = new byte[] { 1, 2, 3 },
             Timestamp = new HybridLogicalClock { WallClockTicks = wallClock, Counter = 0 },
             OriginClusterId = "remote",
-            Mode = ReplicationMode.LwwRegister,
+            Mode = LatticeMergeMode.LwwRegister,
             VectorClock = vectorClock,
             DependencySummary = dependencySummary,
         };

@@ -2,7 +2,7 @@
 
 The replication package ships a small set of typed delta records — one per replicable primitive — that form the wire contract between a producer cluster's commit-time change feed and a receiver cluster's apply pipeline. Each delta is the minimum information needed to merge the originating mutation into a remote replica without re-reading the primary.
 
-Today the records are defined as a contract and the receiver-side apply pipeline dispatches state-merge mutations on `ReplogEntry.Mode` for every defined `ReplicationMode` (LWW register and the three typed CRDT primitives). Producer-side delta extraction at commit time — emitting these record shapes on the wire instead of the full state bytes the typed accessors persist — follows in a later phase.
+Today the records are defined as a contract and the receiver-side apply pipeline dispatches state-merge mutations on `WalRecord.Mode` for every defined `LatticeMergeMode` (LWW register and the three typed CRDT primitives). Producer-side delta extraction at commit time — emitting these record shapes on the wire instead of the full state bytes the typed accessors persist — follows in a later phase.
 
 ## Why typed deltas
 
@@ -46,4 +46,4 @@ Two structurally-identical deltas built from independently-allocated arrays / di
 
 `LwwRegisterDelta` carries `OriginClusterId` directly because the LWW register is the only delta whose convergence depends on the writer's identity (the lexicographic tiebreaker under equal HLCs). The other deltas encode origin implicitly through their per-replica indexed structure (`OrSetDot.ReplicaId`, the keys of `PnCounterDelta.Increments`/`Decrements`, the keys of `VersionVectorDelta.Entries`). Receivers do not need a separate origin field for those records — the per-replica row identifies the producer.
 
-The receiver-side per-origin high-water-mark table is keyed `(treeId, originClusterId)` and dedupes at the `ReplogEntry` envelope layer; it does not inspect delta internals.
+The receiver-side per-origin high-water-mark table is keyed `(treeId, originClusterId)` and dedupes at the `WalRecord` envelope layer; it does not inspect delta internals.

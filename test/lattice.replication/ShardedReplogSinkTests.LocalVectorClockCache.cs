@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -41,22 +42,22 @@ public class ShardedReplogSinkLocalVectorClockCacheTests
     private static (
         ShardedReplogSink Sink,
         IGrainFactory Factory,
-        IReplogShardGrain WalGrain,
+        IWalShardGrain WalGrain,
         LocalVectorClockCache Cache)
         CreateSink(bool walAppendThrows = false)
     {
         var factory = Substitute.For<IGrainFactory>();
-        var walGrain = Substitute.For<IReplogShardGrain>();
+        var walGrain = Substitute.For<IWalShardGrain>();
         if (walAppendThrows)
         {
-            walGrain.AppendAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>())
+            walGrain.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
                 .Throws(new InvalidOperationException("simulated WAL failure"));
         }
         else
         {
-            walGrain.AppendAsync(Arg.Any<ReplogEntry>(), Arg.Any<CancellationToken>()).Returns(0L);
+            walGrain.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(0L);
         }
-        factory.GetGrain<IReplogShardGrain>(Arg.Any<string>()).Returns(walGrain);
+        factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(walGrain);
         var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
         hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
@@ -71,10 +72,10 @@ public class ShardedReplogSinkLocalVectorClockCacheTests
         var (sink, _, _, cache) = CreateSink();
         var ts = Hlc(100);
 
-        await sink.WriteAsync(new ReplogEntry
+        await sink.WriteAsync(new WalRecord
         {
             TreeId = Tree,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1 },
             Timestamp = ts,
@@ -97,10 +98,10 @@ public class ShardedReplogSinkLocalVectorClockCacheTests
         // origin.
         var (sink, _, _, cache) = CreateSink();
 
-        await sink.WriteAsync(new ReplogEntry
+        await sink.WriteAsync(new WalRecord
         {
             TreeId = Tree,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1 },
             Timestamp = Hlc(100),
@@ -127,10 +128,10 @@ public class ShardedReplogSinkLocalVectorClockCacheTests
         var (sink, _, _, cache) = CreateSink(walAppendThrows: true);
 
         Assert.That(
-            async () => await sink.WriteAsync(new ReplogEntry
+            async () => await sink.WriteAsync(new WalRecord
             {
                 TreeId = Tree,
-                Op = ReplogOp.Set,
+                Op = MutationKind.Set,
                 Key = "k",
                 Value = new byte[] { 1 },
                 Timestamp = Hlc(100),
@@ -148,19 +149,19 @@ public class ShardedReplogSinkLocalVectorClockCacheTests
     {
         var (sink, _, _, cache) = CreateSink();
 
-        await sink.WriteAsync(new ReplogEntry
+        await sink.WriteAsync(new WalRecord
         {
             TreeId = Tree,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1 },
             Timestamp = Hlc(50),
             OriginClusterId = LocalCluster,
         }, CancellationToken.None);
-        await sink.WriteAsync(new ReplogEntry
+        await sink.WriteAsync(new WalRecord
         {
             TreeId = Tree,
-            Op = ReplogOp.Set,
+            Op = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 2 },
             Timestamp = Hlc(80),
