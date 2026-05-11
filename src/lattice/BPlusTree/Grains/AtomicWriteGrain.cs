@@ -818,61 +818,58 @@ internal sealed class AtomicWriteGrain(
     {
         var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
 
-        while (state.State.NextIndex < state.State.Entries.Count)
+        // Stamp the prepare-phase ambient once for the entire saga prepare
+        // loop rather than per-key. The leaf grain's commit pipeline reads
+        // LatticePreparedContext.Current at LatticeMutation emit time, so the
+        // flag being "on" across the between-iteration state.WriteStateAsync
+        // calls is semantically equivalent to being "off" — those persists
+        // do not emit a LatticeMutation. Hoisting saves (N-1) Scope-class
+        // allocations per N-key saga without changing observable behaviour.
+        using (LatticePreparedContext.BeginScope())
         {
-            try
+            while (state.State.NextIndex < state.State.Entries.Count)
             {
-                // Stamp the per-key (Size, Index) ambient so the
-                // mutation publish helpers stamp identical
-                // LatticeMutation.AtomicBatchSize across the batch
-                // and a strictly-increasing AtomicBatchIndex per
-                // emit. The saga-wide stamp from
-                // StampAtomicBatchContext seeded Index=0; this
-                // per-key scope overrides that with the actual
-                // per-step index and is restored on disposal.
-                using (LatticeAtomicBatchContext.With((state.State.AtomicBatchSize, state.State.NextIndex)))
+                try
                 {
-                    // Stamp the prepare-phase ambient so the leaf
-                    // grain's commit pipeline routes the resulting
-                    // mutation into the per-leaf in-memory pending-tx
-                    // map (IsPrepared=true on the LatticeMutation
-                    // wire) rather than into the visible projection.
-                    // The terminal-mark broadcast that runs after
-                    // every prepare succeeds (or after any prepare
-                    // fails) is the per-shard linearization point
-                    // that flips pending entries into Entries (commit)
-                    // or drops them (abort).
-                    using (LatticePreparedContext.BeginScope())
+                    // Stamp the per-key (Size, Index) ambient so the
+                    // mutation publish helpers stamp identical
+                    // LatticeMutation.AtomicBatchSize across the batch
+                    // and a strictly-increasing AtomicBatchIndex per
+                    // emit. The saga-wide stamp from
+                    // StampAtomicBatchContext seeded Index=0; this
+                    // per-key scope overrides that with the actual
+                    // per-step index and is restored on disposal.
+                    using (LatticeAtomicBatchContext.With((state.State.AtomicBatchSize, state.State.NextIndex)))
                     {
                         var entry = state.State.Entries[state.State.NextIndex];
                         await lattice.SetAsync(entry.Key, entry.Value);
                     }
-                }
 
-                state.State.NextIndex++;
-                state.State.RetriesOnCurrentStep = 0;
-                await state.WriteStateAsync();
-            }
-            catch (Exception ex)
-            {
-                if (state.State.RetriesOnCurrentStep < MaxRetriesPerStep)
-                {
-                    state.State.RetriesOnCurrentStep++;
+                    state.State.NextIndex++;
+                    state.State.RetriesOnCurrentStep = 0;
                     await state.WriteStateAsync();
-                    Logger.LogWarning(ex,
-                        "Atomic-write saga {OperationKey}: retrying step {Index} (attempt {Attempt}).",
-                        OperationKey, state.State.NextIndex, state.State.RetriesOnCurrentStep);
-                    continue;
                 }
+                catch (Exception ex)
+                {
+                    if (state.State.RetriesOnCurrentStep < MaxRetriesPerStep)
+                    {
+                        state.State.RetriesOnCurrentStep++;
+                        await state.WriteStateAsync();
+                        Logger.LogWarning(ex,
+                            "Atomic-write saga {OperationKey}: retrying step {Index} (attempt {Attempt}).",
+                            OperationKey, state.State.NextIndex, state.State.RetriesOnCurrentStep);
+                        continue;
+                    }
 
-                // Exhausted retries — pivot to compensation.
-                state.State.Phase = AtomicWritePhase.Compensate;
-                state.State.FailureMessage = ex.Message;
-                // NextIndex currently points at the failed-to-commit entry; it
-                // was NOT written, so compensation rolls back entries [0..NextIndex-1].
-                state.State.RetriesOnCurrentStep = 0;
-                await state.WriteStateAsync();
-                return;
+                    // Exhausted retries — pivot to compensation.
+                    state.State.Phase = AtomicWritePhase.Compensate;
+                    state.State.FailureMessage = ex.Message;
+                    // NextIndex currently points at the failed-to-commit entry; it
+                    // was NOT written, so compensation rolls back entries [0..NextIndex-1].
+                    state.State.RetriesOnCurrentStep = 0;
+                    await state.WriteStateAsync();
+                    return;
+                }
             }
         }
 
