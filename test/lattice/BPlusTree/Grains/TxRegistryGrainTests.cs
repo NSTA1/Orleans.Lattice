@@ -305,4 +305,136 @@ public class TxRegistryGrainTests
         foreach (var id in ids)
             Assert.That(state.State.Decisions[id], Is.EqualTo(TxStatus.Committed));
     }
+
+    [Test]
+    public async Task GetParticipantsAsync_returns_empty_for_unknown_txid()
+    {
+        var (grain, _) = CreateGrain();
+
+        var participants = await grain.GetParticipantsAsync(Guid.NewGuid());
+
+        Assert.That(participants, Is.Empty);
+    }
+
+    [Test]
+    public async Task RegisterParticipantAsync_records_single_shard()
+    {
+        var (grain, state) = CreateGrain();
+        var txid = Guid.NewGuid();
+
+        await grain.RegisterParticipantAsync(txid, 3);
+
+        Assert.That(state.WriteCount, Is.EqualTo(1));
+        var participants = await grain.GetParticipantsAsync(txid);
+        Assert.That(participants, Is.EquivalentTo(new[] { 3 }));
+    }
+
+    [Test]
+    public async Task RegisterParticipantAsync_records_multiple_shards_for_same_txid()
+    {
+        var (grain, state) = CreateGrain();
+        var txid = Guid.NewGuid();
+
+        await grain.RegisterParticipantAsync(txid, 0);
+        await grain.RegisterParticipantAsync(txid, 5);
+        await grain.RegisterParticipantAsync(txid, 2);
+
+        Assert.That(state.WriteCount, Is.EqualTo(3));
+        var participants = await grain.GetParticipantsAsync(txid);
+        Assert.That(participants, Is.EqualTo(new[] { 0, 2, 5 }),
+            "Participants must be returned sorted ascending so the saga's broadcast iteration is deterministic.");
+    }
+
+    [Test]
+    public async Task RegisterParticipantAsync_is_idempotent_on_repeated_pair()
+    {
+        var (grain, state) = CreateGrain();
+        var txid = Guid.NewGuid();
+
+        await grain.RegisterParticipantAsync(txid, 2);
+        await grain.RegisterParticipantAsync(txid, 2);
+        await grain.RegisterParticipantAsync(txid, 2);
+
+        Assert.That(state.WriteCount, Is.EqualTo(1),
+            "Re-registering the same shard for the same txid must short-circuit before persisting.");
+        var participants = await grain.GetParticipantsAsync(txid);
+        Assert.That(participants, Is.EquivalentTo(new[] { 2 }));
+    }
+
+    [Test]
+    public async Task RegisterParticipantAsync_isolates_participants_across_txids()
+    {
+        var (grain, _) = CreateGrain();
+        var tx1 = Guid.NewGuid();
+        var tx2 = Guid.NewGuid();
+
+        await grain.RegisterParticipantAsync(tx1, 0);
+        await grain.RegisterParticipantAsync(tx1, 1);
+        await grain.RegisterParticipantAsync(tx2, 2);
+        await grain.RegisterParticipantAsync(tx2, 3);
+
+        var p1 = await grain.GetParticipantsAsync(tx1);
+        var p2 = await grain.GetParticipantsAsync(tx2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(p1, Is.EqualTo(new[] { 0, 1 }));
+            Assert.That(p2, Is.EqualTo(new[] { 2, 3 }));
+        });
+    }
+
+    [Test]
+    public async Task ForgetAsync_drops_participants_alongside_decision()
+    {
+        var (grain, state) = CreateGrain();
+        var txid = Guid.NewGuid();
+        await grain.RegisterParticipantAsync(txid, 0);
+        await grain.RegisterParticipantAsync(txid, 1);
+        await grain.MarkCommittedAsync(txid);
+
+        await grain.ForgetAsync(txid);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.Decisions, Does.Not.ContainKey(txid));
+            Assert.That(state.State.Participants, Does.Not.ContainKey(txid));
+        });
+        var participants = await grain.GetParticipantsAsync(txid);
+        Assert.That(participants, Is.Empty);
+    }
+
+    [Test]
+    public async Task ForgetAsync_persists_when_only_participants_present()
+    {
+        var (grain, state) = CreateGrain();
+        var txid = Guid.NewGuid();
+        await grain.RegisterParticipantAsync(txid, 0);
+        var initialWrites = state.WriteCount;
+
+        await grain.ForgetAsync(txid);
+
+        Assert.That(state.WriteCount, Is.EqualTo(initialWrites + 1),
+            "Forgetting a txid that has only participants (no decision) must still drop the participants and persist.");
+        Assert.That(state.State.Participants, Does.Not.ContainKey(txid));
+    }
+
+    [Test]
+    public async Task GetParticipantsAsync_returns_independent_snapshot()
+    {
+        var (grain, _) = CreateGrain();
+        var txid = Guid.NewGuid();
+        await grain.RegisterParticipantAsync(txid, 0);
+        await grain.RegisterParticipantAsync(txid, 1);
+
+        var first = await grain.GetParticipantsAsync(txid);
+        await grain.RegisterParticipantAsync(txid, 2);
+        var second = await grain.GetParticipantsAsync(txid);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo(new[] { 0, 1 }),
+                "First snapshot must reflect the registry state at the moment of the call, not be aliased to live state.");
+            Assert.That(second, Is.EqualTo(new[] { 0, 1, 2 }));
+        });
+    }
 }

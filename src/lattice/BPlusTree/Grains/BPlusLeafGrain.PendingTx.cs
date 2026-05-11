@@ -90,6 +90,48 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private HashSet<Guid>? _recentlyTerminal;
 
+    /// <summary>
+    /// Tracks per-saga which keys have already had the cross-migration
+    /// LWW backstop applied. Keyed by transaction id; value is the set
+    /// of keys whose backstop write has landed on this leaf.
+    /// <para>
+    /// Per-key (NOT per-saga) granularity is load-bearing for the
+    /// shard-split + reshard chaos surface: two terminal deliveries to
+    /// the same leaf can legitimately carry DIFFERENT
+    /// <c>committedValues</c> subsets — e.g.
+    /// </para>
+    /// <list type="number">
+    ///   <item><description>
+    ///     <c>AtomicWriteGrain</c>'s direct fan-out to the destination
+    ///     shard with the subset routed to that shard per the saga's
+    ///     drift-corrected routing snapshot (typically the keys whose
+    ///     slot has already migrated).
+    ///   </description></item>
+    ///   <item><description>
+    ///     A source shard's <c>ForwardSplitTerminalAsync</c> mirror to
+    ///     the same destination with a DIFFERENT subset — the keys whose
+    ///     prepare landed on the source pre-split but whose slot has
+    ///     since migrated to this destination.
+    ///   </description></item>
+    /// </list>
+    /// <para>
+    /// A per-saga dedup (the prior shape) would observe (1) first, mark
+    /// the saga "backstopped", and short-circuit (2)'s missing keys —
+    /// leaving them stuck at the drained pre-saga value. The chaos
+    /// pattern <c>split (pre=5, post=11)</c> on the reshard fixture
+    /// reproduces this exactly: 5 keys (one source shard's worth)
+    /// orphaned because their backstop arrived after another shard's
+    /// subset already poisoned the txid's dedup marker.
+    /// </para>
+    /// <para>
+    /// Lazily allocated for the same reason as <see cref="_pendingTx"/>.
+    /// The inner <c>HashSet&lt;string&gt;</c> uses <see cref="StringComparer.Ordinal"/>
+    /// for consistency with <see cref="Dictionary{TKey,TValue}"/>
+    /// instances elsewhere in this file.
+    /// </para>
+    /// </summary>
+    private Dictionary<Guid, HashSet<string>>? _backstoppedTerminals;
+
     private ITxRegistryGrain? registry;
 
     /// <summary>
@@ -568,59 +610,172 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc />
-    public Task ApplyTxTerminalAsync(Guid transactionId, bool committed)
+    public async Task ApplyTxTerminalAsync(
+        Guid transactionId,
+        bool committed,
+        IReadOnlyDictionary<string, byte[]>? committedValues = null)
     {
         if (transactionId == Guid.Empty)
-            return Task.CompletedTask;
+            return;
 
-        // Idempotency dedup: a re-broadcast under the same transaction
-        // id (e.g. after a coordinator retry on a transient shard-root
-        // RPC failure) is a no-op rather than a redundant projection
-        // update.
-        if (_recentlyTerminal is not null && _recentlyTerminal.Contains(transactionId))
-            return Task.CompletedTask;
+        // Capture the bucket reference up-front. ApplyTxCommit/ApplyTxAbort
+        // remove the bucket from _pendingTx, so we need the snapshot here to
+        // compute the per-key backstop set below before the flip path mutates
+        // _pendingTx. The reference into the bucket dictionary remains valid
+        // after Remove (we only need to read its keys).
+        Dictionary<string, LwwValue<byte[]>>? bucket = null;
+        if (_pendingTx is not null && _pendingTx.TryGetValue(transactionId, out var existingBucket))
+            bucket = existingBucket;
+        var hadPending = bucket is not null;
 
-        // Fast-path: leaf never saw a prepared mutation under this id.
-        // Record the terminal for late-arriving prepares and return.
-        var hadPending = _pendingTx is not null && _pendingTx.ContainsKey(transactionId);
-        if (!hadPending)
+        var alreadyFlipped = _recentlyTerminal is not null && _recentlyTerminal.Contains(transactionId);
+
+        // Per-key backstop set: every key in committedValues that is
+        // (a) NOT already covered by this leaf's pending bucket (the
+        // pending-flip path will surface those values), AND
+        // (b) NOT already backstopped under this transaction id by a
+        // prior terminal delivery (per-key dedup, not per-saga).
+        //
+        // Per-key dedup is load-bearing: two terminal deliveries to the
+        // same leaf can legitimately carry DIFFERENT committedValues
+        // subsets — the AtomicWriteGrain direct fan-out routes by
+        // current-routing per shard, while a source shard's
+        // ForwardSplitTerminalAsync mirror routes by MovedAwaySlots's
+        // earlier migration record. A per-saga dedup observes one
+        // subset first, marks the saga backstopped, and short-circuits
+        // the OTHER subset's missing keys — leaving them stuck at the
+        // drained pre-saga value. The chaos pattern
+        // `split (pre=5, post=11)` on the reshard fixture reproduces
+        // this exactly: 5 keys (one source shard's worth) orphaned
+        // because their backstop arrived after another shard's subset
+        // already poisoned the txid's dedup marker.
+        List<KeyValuePair<string, byte[]>>? missingKeys = null;
+        var hasBackstopPayload = committed && committedValues is { Count: > 0 };
+        HashSet<string>? alreadyBackstoppedKeys = null;
+        if (hasBackstopPayload)
         {
-            (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
-            return Task.CompletedTask;
+            if (_backstoppedTerminals is not null)
+                _backstoppedTerminals.TryGetValue(transactionId, out alreadyBackstoppedKeys);
+
+            foreach (var kvp in committedValues!)
+            {
+                if (bucket is not null && bucket.ContainsKey(kvp.Key))
+                    continue;
+                if (alreadyBackstoppedKeys is not null && alreadyBackstoppedKeys.Contains(kvp.Key))
+                    continue;
+                (missingKeys ??= []).Add(kvp);
+            }
         }
 
-        if (committed)
-        {
-            // Tick state.State.Version[ReplicaId] at the saga's
-            // terminal-foreground entry point so the cache's next
-            // delta(callerClock) call no longer hits the
-            // sinceVersion.DominatesOrEquals(state.State.Version)
-            // short-circuit, AND so callerClock at the next refresh
-            // (which equals the cache's new saved Version[ReplicaId])
-            // is strictly less than the drained values' re-stamped
-            // Timestamps (= state.State.Clock at terminal-time, which
-            // already trails Version by zero-or-positive ticks because
-            // the prepare path no longer ticks Version). Foreground-
-            // only — the replay path inherits the
-            // ILeafProjection.Apply convention of not advancing
-            // Version, so terminal replay rebuilds Entries
-            // deterministically without contributing to a
-            // foreground-cache version-vector view that does not
-            // exist during replay.
-            state.State.Version.Tick(ReplicaId);
-            ApplyTxCommit(transactionId);
-        }
-        else
-            ApplyTxAbort(transactionId);
+        // Hot-path short-circuit: a duplicate terminal delivery with
+        // nothing new to do. The flip side already ran (alreadyFlipped),
+        // and either there is no backstop payload, or every payload key
+        // is already covered (in the bucket — which is null on the
+        // alreadyFlipped path — or in the per-key backstopped set).
+        if (alreadyFlipped && missingKeys is null && !hadPending)
+            return;
 
-        // Zero leaf I/O: the terminal mark is durable on the per-shard
-        // WAL (appended by the shard root before this RPC fans out),
-        // and the in-memory flip is reconstructed on activation by the
-        // replay coordinator driving Apply over the WAL slice. The
-        // foreground commit path already commits zero leaf-state
-        // writes under the zero-leaf-I/O contract — the terminal
-        // handler must hold the same contract or it would re-introduce
-        // the leaf-state shadow write the project explicitly removed.
-        return Task.CompletedTask;
+        // Pending-flip path: drain the bucket into Entries (commit) or
+        // drop it without surfacing (abort). Zero leaf I/O — the WAL is
+        // the recovery source for the flipped entries. Gated on
+        // !alreadyFlipped so a duplicate delivery (e.g. arriving via
+        // both the direct fan-out and a split-shadow forward) does not
+        // attempt to re-flip a bucket that the first delivery already
+        // consumed.
+        if (hadPending && !alreadyFlipped)
+        {
+            if (committed)
+            {
+                // Tick state.State.Version[ReplicaId] at the saga's
+                // terminal-foreground entry point so the cache's next
+                // delta(callerClock) call no longer hits the
+                // sinceVersion.DominatesOrEquals(state.State.Version)
+                // short-circuit, AND so callerClock at the next refresh
+                // (which equals the cache's new saved Version[ReplicaId])
+                // is strictly less than the drained values' re-stamped
+                // Timestamps (= state.State.Clock at terminal-time, which
+                // already trails Version by zero-or-positive ticks because
+                // the prepare path no longer ticks Version). Foreground-
+                // only — the replay path inherits the
+                // ILeafProjection.Apply convention of not advancing
+                // Version, so terminal replay rebuilds Entries
+                // deterministically without contributing to a
+                // foreground-cache version-vector view that does not
+                // exist during replay.
+                state.State.Version.Tick(ReplicaId);
+                ApplyTxCommit(transactionId);
+            }
+            else
+            {
+                ApplyTxAbort(transactionId);
+            }
+        }
+
+        // Per-key cross-migration LWW backstop. Fires on the commit
+        // path for every committedValues key that the bucket did not
+        // cover and the per-key dedup set did not already cover.
+        // Stamp every backstop entry with the SAME Tick(state.State.Clock)
+        // value: HLC.Tick guarantees strict-greater ordering against any
+        // pre-saga drained value already in Entries, so LWW.Merge
+        // resolves in favour of the backstop. We do NOT tick Version on
+        // the pure backstop path (hadPending=false) — the cache is not
+        // tracking this leaf as a pending source for this saga, and
+        // ticking would race with concurrent reads. When the
+        // pending-flip path above already ticked Version
+        // (hadPending=true), the backstop piggybacks on that single tick.
+        var didBackstopWrite = false;
+        if (missingKeys is { Count: > 0 })
+        {
+            var stamp = Primitives.HybridLogicalClock.Tick(state.State.Clock);
+            var origin = LatticeOriginContext.Current;
+            var vc = LatticeVectorClockContext.Current;
+            foreach (var kvp in missingKeys)
+            {
+                var value = new Primitives.LwwValue<byte[]>
+                {
+                    Value = kvp.Value,
+                    Timestamp = stamp,
+                    OriginClusterId = origin,
+                    VectorClock = vc,
+                };
+                StoreEntry(kvp.Key, value);
+            }
+            AdvanceProjectionClock(stamp);
+            BumpLocalRevision();
+            didBackstopWrite = true;
+
+            // Record the keys we just backstopped so a SUBSEQUENT
+            // delivery (carrying possibly a different subset) skips
+            // these via the alreadyBackstoppedKeys check above without
+            // re-stamping Entries. Per-key dedup is the load-bearing
+            // invariant — a per-txid marker would short-circuit a
+            // legitimate sibling subset arriving later.
+            _backstoppedTerminals ??= new Dictionary<Guid, HashSet<string>>();
+            if (!_backstoppedTerminals.TryGetValue(transactionId, out var perTxBackstopped))
+            {
+                perTxBackstopped = new HashSet<string>(StringComparer.Ordinal);
+                _backstoppedTerminals[transactionId] = perTxBackstopped;
+            }
+            foreach (var kvp in missingKeys)
+                perTxBackstopped.Add(kvp.Key);
+        }
+
+        // Persist iff the backstop landed any writes. The pending-flip
+        // path is zero leaf I/O because the WAL holds the prepare
+        // records the replay coordinator uses to rebuild Entries on
+        // activation. The backstop path has no such WAL prepare (this
+        // leaf never saw the saga's prepare for the migrated keys —
+        // that's why they're here), so the post-saga Entries values
+        // must be persisted explicitly to survive deactivation.
+        if (didBackstopWrite)
+        {
+            await state.WriteStateAsync();
+        }
+
+        // Mark the saga's pending-flip dedup. _backstoppedTerminals is
+        // populated above only when a backstop write actually landed,
+        // keyed per-key so future deliveries with different subsets
+        // continue to do real work for keys they haven't covered yet.
+        (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
     }
 }

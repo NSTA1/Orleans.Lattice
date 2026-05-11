@@ -450,5 +450,24 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// not roll back a successfully-appended terminal mark — by then the
     /// linearization decision has been published to the WAL.
     /// </param>
-    Task AppendTxTerminalAsync(Guid transactionId, bool committed, CancellationToken cancellationToken = default);
+    /// <param name="committedValues">
+    /// Optional cross-migration LWW backstop payload. When non-null and
+    /// <paramref name="committed"/> is <c>true</c>, the shard root groups the
+    /// dictionary by leaf grain id (via the per-key traversal used by
+    /// <see cref="SetAsync"/>) and passes each leaf its subset to
+    /// <see cref="IBPlusLeafGrain.ApplyTxTerminalAsync"/>. The leaf applies
+    /// the values as a LWW-safe write only when it holds no pending bucket
+    /// under <paramref name="transactionId"/> — i.e. when a prepare-phase
+    /// shadow-forward was dropped by a mid-saga shard-split / drain race.
+    /// The dictionary is also threaded through the shadow-forward and
+    /// split-shadow-forward mirrors so every destination shard observes
+    /// the backstop alongside its own per-shard terminal. Passing
+    /// <c>null</c> matches the pre-backstop call shape and remains
+    /// supported for wire compatibility.
+    /// </param>
+    Task AppendTxTerminalAsync(
+        Guid transactionId,
+        bool committed,
+        IReadOnlyDictionary<string, byte[]>? committedValues = null,
+        CancellationToken cancellationToken = default);
 }

@@ -42,6 +42,23 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 // routing layer — the code falls back to walking the full chain, which
 // is the pre-optimisation behaviour.
 //
+// Cross-shard participant tracking (closes the reshard-race orphaning).
+// In addition to the per-activation in-memory affected-leaves map, the
+// hook also registers this shard with the per-tree TxRegistry as a
+// participant in the saga (gated by a per-activation HashSet so the
+// RPC fires exactly once per saga, regardless of how many keys it
+// prepared on this shard). AtomicWriteGrain.BroadcastTerminalsAsync
+// queries the registry for the authoritative participant set and
+// unions it into the saga's TouchedShards slot before fanning out
+// terminals — so a saga whose prepare-time routing snapshot is stale
+// (e.g. an in-flight shard split landing between prepare and execute,
+// or between execute and broadcast) still has its terminal delivered
+// to every shard that holds a pending bucket. Without this seam, the
+// drift-correction pass in BroadcastTerminalsAsync could miss a shard
+// that held a bucket but is no longer the routing target for the
+// affected keys, orphaning the bucket and causing readers to surface
+// the destination's pre-saga value indefinitely.
+//
 // Lifetime / leak considerations.
 //   * The map lives only in the activation; it is not persisted. On
 //     shard-root reactivation the map is empty, and AppendTxTerminalAsync
@@ -53,6 +70,15 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 //     is bounded by concurrent in-flight sagas × leaves-per-saga
 //     (sagas typically touch a small handful of keys, so this is
 //     small).
+//   * The registry-participant dedup set is bounded by the number of
+//     distinct sagas this activation has participated in; entries are
+//     not actively GC'd within the activation (the post-terminal
+//     ForgetAsync on the registry is the authoritative cleanup). If
+//     the shard-root deactivates and reactivates the dedup set is
+//     reset, which is correct: a fresh activation has to re-register
+//     with the registry on any in-flight saga's next prepare-phase
+//     write so the registry's participant set survives reactivation
+//     transparently.
 //   * If a saga's coordinator fails between recording prepares and
 //     calling AppendTxTerminalAsync the entry leaks for the
 //     remaining lifetime of this activation — bounded by the
@@ -79,13 +105,45 @@ internal sealed partial class ShardRootGrain
     private Dictionary<Guid, HashSet<GrainId>>? _affectedLeavesByTx;
 
     /// <summary>
+    /// Per-activation dedup set: every saga txid for which this shard
+    /// has already registered as a participant in the per-tree
+    /// TxRegistry. Gates the registry RPC inside
+    /// <see cref="RecordAffectedLeafIfPreparedAsync"/> so a saga that
+    /// prepares <i>K</i> keys on this shard pays exactly one registry
+    /// RPC, not <i>K</i>. The set is in-memory only and is reset on
+    /// reactivation; see the file-level comment for the correctness
+    /// argument under reactivation.
+    /// </summary>
+    private HashSet<Guid>? _registeredParticipantTxids;
+
+    /// <summary>
     /// Records <paramref name="leafId"/> as a participant in the
     /// ambient saga's prepare phase, when (and only when) both
     /// <see cref="LatticeTransactionContext.Current"/> is non-empty
     /// and <see cref="LatticePreparedContext.Current"/> is true.
-    /// Outside that window this is a cheap, allocation-free no-op.
+    /// Outside that window this is a cheap, allocation-free no-op
+    /// that completes synchronously.
+    /// <para>
+    /// On the first call for a given saga on this shard, this method
+    /// also awaits an idempotent
+    /// <see cref="ITxRegistryGrain.RegisterParticipantAsync"/> RPC so
+    /// the per-tree registry records this shard's participation.
+    /// Subsequent calls for the same saga short-circuit on the
+    /// per-activation dedup set and complete synchronously.
+    /// </para>
+    /// <para>
+    /// Correctness note. The dedup set is updated <i>before</i> the
+    /// awaited RPC and rolled back inside the catch on failure so a
+    /// transient failure (e.g. an in-flight grain rebalance, a
+    /// storage throttle) does not leave the activation believing the
+    /// shard is registered when the registry has no record. A
+    /// silent loss here would cause the saga's terminal-broadcast
+    /// participant union to omit this shard, reverting to the
+    /// stale-snapshot orphaning the registry-participant primitive
+    /// is designed to close.
+    /// </para>
     /// </summary>
-    private void RecordAffectedLeafIfPrepared(GrainId leafId)
+    private async Task RecordAffectedLeafIfPreparedAsync(GrainId leafId)
     {
         if (!LatticePreparedContext.Current)
             return;
@@ -102,6 +160,29 @@ internal sealed partial class ShardRootGrain
             _affectedLeavesByTx[txid] = set;
         }
         set.Add(leafId);
+
+        _registeredParticipantTxids ??= [];
+        if (!_registeredParticipantTxids.Add(txid))
+            return;
+
+        try
+        {
+            // First prepare for this saga on this shard — register
+            // with the per-tree registry so the saga's terminal
+            // broadcast can discover us authoritatively, regardless
+            // of any routing flips between prepare and broadcast.
+            var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
+            await registry.RegisterParticipantAsync(txid, MyShardIndex);
+        }
+        catch
+        {
+            // Roll back the dedup gate so a subsequent prepare on
+            // this saga retries the registration. A silent loss here
+            // would defeat the registry-participant primitive's
+            // purpose.
+            _registeredParticipantTxids.Remove(txid);
+            throw;
+        }
     }
 
     /// <summary>
