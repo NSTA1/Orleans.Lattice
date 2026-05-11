@@ -145,10 +145,28 @@ Pick the cheapest tier that still exercises the suspected hot path. Tiers are ch
 
 | Tier shape | When | Cost per run | Cohort cost (3 runs) | Existing examples |
 |---|---|---|---|---|
-| **In-process microbench** (BDN `InProcessEmitToolchain`, single silo, no docker) | Grain-call latency, allocation-per-entry, codec round-trip, serialiser cost, hash distribution | seconds-to-tens-of-seconds | < 2 minutes | `microbench` |
+| **In-process microbench** (BDN `InProcessEmitToolchain`, single silo, no docker) | Grain-call latency, allocation-per-entry, codec round-trip, serialiser cost, hash distribution | ~7-9 minutes wall (full suite at `quick` fidelity) | ~25-30 minutes | `microbench` |
 | **Docker-compose end-to-end** (one or more silos, real network, dashboard-grade metrics) | Ship/apply, cross-silo gRPC, multi-cluster replication, fleet-level latency tails | 1-2 minutes wall + ~30s warmup | 5-10 minutes | `bidirectional-replication` |
 
 State which **tier shape** you are using and why in the chat reply. Name the specific scenario you ran. **If the hypothesis is about ship/apply or anything cross-cluster, the in-process microbench tier is wrong** - state the rejection explicitly so it is clear you considered it. Conversely, if the hypothesis is about a code path that an in-process tier can exercise honestly, do not pay for a docker-compose cohort just because that scenario is the most familiar one.
+
+#### Workload scoping (microbench tier)
+
+**Scope every microbench cohort to the primary metrics the hypothesis is testing.** Edit the working-tree copy of `benchmark/scenarios/microbench.env` to set `BENCH_MICROBENCH_WORKLOADS` to a fully-qualified glob list naming the relevant benchmark methods, e.g.:
+
+```
+BENCH_MICROBENCH_WORKLOADS=*.PointWrite,*.PointRead
+```
+
+This is **not** a wall-time optimisation — at `quick` fidelity BDN's per-benchmark overhead grows when fewer benchmarks share the host process, so a 7-method subset costs roughly the same wall time as the full 20-method suite (~8 min/run either way). The reasons to scope anyway are:
+
+1. **Cohort schema discipline.** The narrowed `results.json` makes the cohort tables in Phase 3 / Phase 6 trivially diff-able and keeps the agent's reasoning grounded in the metrics the hypothesis actually predicts will move.
+2. **Avoiding accidental success criteria.** A full-suite cohort tempts post-hoc cherry-picking ("look, `bulk_load_alloc_b` improved!"). Scope reduces the surface for that anti-pattern.
+3. **Reusable convention.** If you do find a way to genuinely cut microbench wall time later (e.g. a per-benchmark fidelity override that does not contaminate other measurements), the scoped env file is already in place.
+
+**The `BENCH_MICROBENCH_WORKLOADS` value is a comma-separated list of BDN `--filter` globs** matched against fully-qualified method names. Use `*.MethodName` for exact-method matching (otherwise BDN treats the pattern as substring and pulls in suffixed variants like `MethodName_DeepTree`). Restore the empty default (`BENCH_MICROBENCH_WORKLOADS=`) on the working tree before opening the hand-off PR - the scoping filter is a per-cycle scratch convention, not a committed default.
+
+**Both cohorts must run against the same scoping.** If you change `BENCH_MICROBENCH_WORKLOADS` between baseline and candidate, you have a confounded experiment, same rule as for any other scenario env var.
 
 #### Authoring a new scenario
 

@@ -37,6 +37,15 @@ internal sealed partial class LatticeGrain(
     // invalidation hooks below null this field; the next slow-path call
     // re-allocates against the fresh map.
     private IShardRootGrain?[]? _cachedShards;
+    // Per-activation cached RoutingInfo. Populated by GetRoutingSlowAsync once
+    // both _physicalTreeId and _shardMap are resolved; nulled by both
+    // invalidation hooks alongside the rest of the routing state. Caching the
+    // record itself (rather than re-allocating on every GetRoutingAsync call)
+    // is what lets GetRoutingAsync degenerate to a non-async sync-fast-path
+    // method, which in turn lets GetShardGrainAsync do the same on the
+    // shard-cache hit path. Combined: no async state-machine box and no
+    // RoutingInfo allocation on the steady-state read/write fast path.
+    private RoutingInfo? _cachedRouting;
     private readonly PublishEventsGate _eventsGate = new();
 
     /// <summary>
@@ -1096,14 +1105,33 @@ internal sealed partial class LatticeGrain(
         return _physicalTreeId;
     }
 
-    private async ValueTask<IShardRootGrain> GetShardGrainAsync(string key)
+    private ValueTask<IShardRootGrain> GetShardGrainAsync(string key)
     {
-        var (physicalTreeId, shardMap) = await GetRoutingAsync();
-        var shardIndex = shardMap.Resolve(key);
+        // Sync fast path: if routing is already cached, resolve the shard
+        // index and look up the per-activation array cache synchronously.
+        // Skips both the async state-machine box for this method AND the
+        // RoutingInfo allocation that the async wrapper used to take through
+        // GetRoutingAsync on every call.
+        var routing = _cachedRouting;
+        if (routing is not null)
+        {
+            var shardIndex = routing.Map.Resolve(key);
+            var shardCache = _cachedShards;
+            if (shardCache is not null && (uint)shardIndex < (uint)shardCache.Length && shardCache[shardIndex] is { } existing)
+                return new ValueTask<IShardRootGrain>(existing);
+            return new ValueTask<IShardRootGrain>(ResolveShardSlow(routing.PhysicalTreeId, shardIndex));
+        }
+        return GetShardGrainSlowAsync(key);
+    }
+
+    private async ValueTask<IShardRootGrain> GetShardGrainSlowAsync(string key)
+    {
+        var routing = await GetRoutingAsync();
+        var shardIndex = routing.Map.Resolve(key);
         var cache = _cachedShards;
         if (cache is not null && (uint)shardIndex < (uint)cache.Length && cache[shardIndex] is { } existing)
             return existing;
-        return ResolveShardSlow(physicalTreeId, shardIndex);
+        return ResolveShardSlow(routing.PhysicalTreeId, shardIndex);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -1182,7 +1210,7 @@ internal sealed partial class LatticeGrain(
     /// <see cref="TryInvalidateStaleAlias"/> when a downstream shard reports
     /// the tree as deleted.
     /// </summary>
-    public async ValueTask<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default)
+    public ValueTask<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default)
     {
         // NOTE: intentionally NOT guarded — `GetRoutingAsync` is called by the
         // library's own internal coordinator grains (saga compensation, stats,
@@ -1190,24 +1218,33 @@ internal sealed partial class LatticeGrain(
         // dispatching further internal calls. It does not read or mutate user
         // data; the shard grains enforce the real boundary on reads/writes.
         cancellationToken.ThrowIfCancellationRequested();
+        var cached = _cachedRouting;
+        if (cached is not null) return new ValueTask<RoutingInfo>(cached);
+        return GetRoutingSlowAsync(cancellationToken);
+    }
+
+    private async ValueTask<RoutingInfo> GetRoutingSlowAsync(CancellationToken cancellationToken)
+    {
         var physicalTreeId = await GetPhysicalTreeIdAsync();
-        if (_shardMap is not null) return new RoutingInfo(physicalTreeId, _shardMap);
-
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        if (_shardMap is null)
         {
-            // System trees never have a custom shard map; using the default
-            // also avoids a circular registry call.
-            _shardMap = ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+            var resolved = await optionsResolver.ResolveAsync(TreeId);
+            if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+            {
+                // System trees never have a custom shard map; using the default
+                // also avoids a circular registry call.
+                _shardMap = ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+            }
+            else
+            {
+                var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+                _shardMap = await registry.GetShardMapAsync(TreeId)
+                    ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+            }
         }
-        else
-        {
-            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-            _shardMap = await registry.GetShardMapAsync(TreeId)
-                ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
-        }
-
-        return new RoutingInfo(physicalTreeId, _shardMap);
+        var routing = new RoutingInfo(physicalTreeId, _shardMap);
+        _cachedRouting = routing;
+        return routing;
     }
 
     /// <inheritdoc />
@@ -1231,6 +1268,7 @@ internal sealed partial class LatticeGrain(
         _physicalTreeId = null;
         _shardMap = null;
         _cachedShards = null;
+        _cachedRouting = null;
         return true;
     }
 
@@ -1245,6 +1283,7 @@ internal sealed partial class LatticeGrain(
     {
         _shardMap = null;
         _cachedShards = null;
+        _cachedRouting = null;
         return true;
     }
 
