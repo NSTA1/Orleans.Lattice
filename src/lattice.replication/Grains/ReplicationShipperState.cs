@@ -59,7 +59,7 @@ internal sealed class ReplicationShipperState
     /// rescan-from-zero walk into an O(page) read past the last
     /// successfully shipped offset. The HLC <see cref="Cursor"/> is
     /// retained alongside because it is the contract surface the
-    /// <see cref="ILatticeReplicationCursorRegistry"/> / WAL GC
+    /// <see cref="IWalCursorRegistry"/> / WAL GC
     /// predicate consume; partition cursors are private shipper state.
     /// </para>
     /// <para>

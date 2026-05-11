@@ -286,7 +286,7 @@
         },
         {
           "refId": "T",
-          "expr": "sum(rate(orleans_lattice_replication_wal_entries_trimmed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum(rate(orleans_lattice_wal_entries_trimmed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
           "legendFormat": "trimmed"
         }
       ]

@@ -23,7 +23,7 @@ migration on silo loss without leader election.
 | Grain | Key | Cadence | Purpose |
 |---|---|---|---|
 | `IReplicationShipperGrain` | `{treeName}/{peerClusterId}` | 200 ms phase timer + 90 s reminder backstop + writer-side doorbell | Drains the per-tree change feed from the per-peer cursor, applies producer-side filters and the cycle-break, calls `IReplicationTransport.SendAsync`, advances the cursor on ack, applies exponential backoff on transient failure, parks malformed batches on the per-tree DLQ. |
-| `IReplicationMaintenanceGrain` | `{treeName}` | 5 s phase timer + 60 s reminder backstop | Schedules WAL garbage collection (`ILatticeReplicationGc.RunOnceAsync`) and per-peer fall-off-the-log probes (`ILatticeFallOffLogDetector.CheckAndTriggerAsync`) on independent cadences. |
+| `IReplicationMaintenanceGrain` | `{treeName}` | 5 s phase timer + 60 s reminder backstop | Schedules WAL garbage collection (`ILatticeWalGc.RunOnceAsync`) and per-peer fall-off-the-log probes (`ILatticeFallOffLogDetector.CheckAndTriggerAsync`) on independent cadences. |
 
 The shipper is per-peer because per-peer back-pressure isolation must not
 couple peers to each other; one slow peer cannot block any other.
@@ -87,7 +87,7 @@ Every phase tick (default 200 ms) the shipper:
 5. Calls `IReplicationTransport.SendAsync` with the framed batch.
 6. On positive ack, advances the durable cursor to
    `min(ack.HighestAppliedHlc, lastShippedHlc)` and reports the new
-   cursor through the `ILatticeReplicationCursorRegistry`.
+   cursor through the `IWalCursorRegistry`.
 
 A successful round-trip resets `ConsecutiveFailures` to `0` and clears
 the backoff budget.
@@ -206,7 +206,7 @@ amortised storage cost.
 
 ### Persist-then-report ordering (load-bearing)
 
-`ILatticeReplicationCursorRegistry.ReportCursorAsync` is called
+`IWalCursorRegistry.ReportCursorAsync` is called
 strictly **after** `WriteStateAsync` completes. The WAL GC consumes
 the reported cursor to compute the trim frontier, so reporting before
 persistence would risk trimming entries the shipper cannot recover
@@ -251,7 +251,7 @@ and on multi-batch in-flight WAL flush landing first.
 The two scheduled passes run on independent cadences with their own
 last-run timestamps in persistent state:
 
-- **GC pass** — calls `ILatticeReplicationGc.RunOnceAsync(treeName)` every
+- **GC pass** — calls `ILatticeWalGc.RunOnceAsync(treeName)` every
   `MaintenanceGcInterval` (default 5 s). The GC consults the
   cursor registry for the slowest-ack frontier across `IChangeFeed`
   consumers and trims the WAL up to that frontier (or the
@@ -319,7 +319,7 @@ shows which driver is the source of each.
 The shipper grain is the canonical scheduler skeleton for the
 **local-apply materialiser** in the core library — the
 same `IChangeFeed` consumer shape, the same per-consumer cursor on
-`ILatticeReplicationCursorRegistry`, the same phase-timer + doorbell +
+`IWalCursorRegistry`, the same phase-timer + doorbell +
 reminder triad. The materialiser is just another change-feed consumer
 with its own cursor; the `IReplicationTransport.SendAsync` call is
 replaced with a local `IReplicationApplier.ApplyAsync` call (or the

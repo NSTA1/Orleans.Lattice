@@ -156,19 +156,19 @@ public class LatticeReplicationMetricsTests
     [Test]
     public void Wal_entries_trimmed_counter_has_expected_name()
     {
-        Assert.That(LatticeReplicationMetrics.WalEntriesTrimmed.Name,
-            Is.EqualTo("orleans.lattice.replication.wal.entries_trimmed"));
+        Assert.That(LatticeMetrics.WalEntriesTrimmed.Name,
+            Is.EqualTo("orleans.lattice.wal.entries_trimmed"));
     }
 
     [Test]
     public void Wal_entries_trimmed_counter_records_with_tree_tag()
     {
         using var collector = new MeterCollector<long>(
-            LatticeReplicationMetrics.MeterName,
-            "orleans.lattice.replication.wal.entries_trimmed");
+            LatticeMetrics.MeterName,
+            "orleans.lattice.wal.entries_trimmed");
 
-        LatticeReplicationMetrics.WalEntriesTrimmed.Add(7,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-x"));
+        LatticeMetrics.WalEntriesTrimmed.Add(7,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, "tree-x"));
 
         Assert.That(collector.Measurements, Has.Count.EqualTo(1));
         var only = collector.Measurements.Single();

@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Replication.Grains;
 /// IReplicationBatchEncoder, and ships them through
 /// IReplicationTransport.SendAsync. On a positive ReplicationAck
 /// the shipper advances the per-peer cursor through
-/// ILatticeReplicationCursorRegistry.ReportCursorAsync.
+/// IWalCursorRegistry.ReportCursorAsync.
 /// <para>
 /// Grain key format: {treeName}/{peerClusterId}. Cluster-singleton
 /// placement gives auto-migration on silo loss with no leader

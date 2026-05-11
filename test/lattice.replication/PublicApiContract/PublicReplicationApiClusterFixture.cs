@@ -173,7 +173,7 @@ internal sealed class PublicReplicationApiClusterFixture
     /// (<see cref="IChangeFeed"/>, <see cref="ISnapshotProvider"/>,
     /// <see cref="IReplicationApplier"/>,
     /// <see cref="IReplicationBatchEncoder"/>,
-    /// <see cref="ILatticeReplicationGc"/>, etc.).
+    /// <see cref="ILatticeWalGc"/>, etc.).
     /// </summary>
     public static IServiceProvider ServicesFor(string clusterId) =>
         LoopbackDeliveringTransport.ServicesFor(clusterId);
@@ -241,7 +241,7 @@ internal sealed class PublicReplicationApiClusterFixture
             // shipper's steady-state phase timer.
             opts.ReplicationPeers = new[] { peerClusterId };
             // Force the shipper to flush its cursor to the
-            // ILatticeReplicationCursorRegistry after every batch
+            // IWalCursorRegistry after every batch
             // (default is 16) so contract tests that observe
             // cursor-driven state — registry snapshots, GC reports —
             // converge on a small write count.

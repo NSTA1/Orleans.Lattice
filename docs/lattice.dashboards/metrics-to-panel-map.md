@@ -40,7 +40,7 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.replication.apply.dependency_wait_ms` | histogram (ms) | `tree` | Dependency wait p95 |
 | `orleans.lattice.replication.wal.entries_appended` | counter | `tree` | WAL throughput |
 | `orleans.lattice.replication.wal.entries_shipped` | counter | `tree` | WAL throughput |
-| `orleans.lattice.replication.wal.entries_trimmed` | counter | `tree` | WAL throughput |
+| `orleans.lattice.wal.entries_trimmed` | counter | `tree` | WAL throughput |
 | `orleans.lattice.replication.dead_letter.enqueued` | counter | `tree` | Dead-letter churn |
 | `orleans.lattice.replication.dead_letter.removed` | counter | `tree`, `reason` | Dead-letter churn |
 | `orleans.lattice.replication.apply.fifo_violations` | counter | `tree` | Apply correctness violations |

@@ -55,12 +55,12 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
         // Defensive default: hosts that don't call AddLatticeReplication
         // (e.g. test hosts that wire only the gRPC service against a
         // substituted IReplicationApplier) still need a concrete
-        // ILatticeReplicationCursorRegistry for the gRPC service's
+        // IWalCursorRegistry for the gRPC service's
         // post-apply blocked-floor read. TryAdd preserves any explicit
         // registration the host already made (production hosts that
         // called AddLatticeReplication land their canonical
-        // InMemoryReplicationCursorRegistry singleton first).
-        services.TryAddSingleton<ILatticeReplicationCursorRegistry, InMemoryReplicationCursorRegistry>();
+        // InMemoryWalCursorRegistry singleton first).
+        services.TryAddSingleton<IWalCursorRegistry, InMemoryWalCursorRegistry>();
         services.TryAddSingleton<LatticeReplicationGrpcService>();
         services.TryAddSingleton<LatticeReplicationGrpcServiceBase>(sp => sp.GetRequiredService<LatticeReplicationGrpcService>());
         return services;

@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// <summary>
 /// Unit coverage of <see cref="LatticeSnapshotProvider"/>'s
 /// causal-stable cut-point selection. The frontier source is the
-/// <see cref="ILatticeReplicationCursorRegistry"/>'s causal-stable
+/// <see cref="IWalCursorRegistry"/>'s causal-stable
 /// meet when at least one consumer has reported a vector; otherwise
 /// the producer's per-tree
 /// <see cref="IReplicationHighWaterMarkGrain.GetVectorAsync"/> is
@@ -20,10 +20,10 @@ public class LatticeSnapshotProviderUnitTests
 {
     private const string Tree = "snap-tree";
 
-    private static (LatticeSnapshotProvider Provider, IGrainFactory Factory, ILatticeReplicationCursorRegistry Cursors, ILattice Lattice, IReplicationHighWaterMarkGrain Hwm) Create()
+    private static (LatticeSnapshotProvider Provider, IGrainFactory Factory, IWalCursorRegistry Cursors, ILattice Lattice, IReplicationHighWaterMarkGrain Hwm) Create()
     {
         var factory = Substitute.For<IGrainFactory>();
-        var cursors = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var cursors = Substitute.For<IWalCursorRegistry>();
         var lattice = Substitute.For<ILattice>();
         var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
 
@@ -81,7 +81,7 @@ public class LatticeSnapshotProviderUnitTests
     [Test]
     public void Constructor_throws_when_grain_factory_is_null()
     {
-        var cursors = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var cursors = Substitute.For<IWalCursorRegistry>();
         Assert.That(
             () => new LatticeSnapshotProvider(null!, cursors, TestOptions()),
             Throws.InstanceOf<ArgumentNullException>());
@@ -100,7 +100,7 @@ public class LatticeSnapshotProviderUnitTests
     public void Constructor_throws_when_options_is_null()
     {
         var factory = Substitute.For<IGrainFactory>();
-        var cursors = Substitute.For<ILatticeReplicationCursorRegistry>();
+        var cursors = Substitute.For<IWalCursorRegistry>();
         Assert.That(
             () => new LatticeSnapshotProvider(factory, cursors, null!),
             Throws.InstanceOf<ArgumentNullException>());

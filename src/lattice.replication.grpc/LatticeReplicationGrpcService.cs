@@ -96,7 +96,7 @@ internal static class LatticeReplicationGrpcMethodHolder
 internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServiceBase
 {
     private readonly IReplicationApplier _applier;
-    private readonly ILatticeReplicationCursorRegistry _cursorRegistry;
+    private readonly IWalCursorRegistry _cursorRegistry;
     private readonly ILogger<LatticeReplicationGrpcService> _logger;
 
     /// <summary>
@@ -114,7 +114,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     public LatticeReplicationGrpcService(
         LatticeReplicationGrpcMethod method,
         IReplicationApplier applier,
-        ILatticeReplicationCursorRegistry cursorRegistry,
+        IWalCursorRegistry cursorRegistry,
         ILogger<LatticeReplicationGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(method);

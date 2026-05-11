@@ -26,7 +26,7 @@ public class ReplicationMaintenanceGrainTests
         ReplicationMaintenanceGrain Grain,
         FakePersistentState<ReplicationMaintenanceState> State,
         IOptionsMonitor<LatticeReplicationOptions> Monitor,
-        ILatticeReplicationGc Gc,
+        ILatticeWalGc Gc,
         ILatticeFallOffLogDetector Detector,
         ILatticeWalIntrospection Introspection,
         LatticeReplicationOptions Options,
@@ -42,9 +42,9 @@ public class ReplicationMaintenanceGrainTests
         var resolved = options ?? new LatticeReplicationOptions { ClusterId = "site-a" };
         monitor.CurrentValue.Returns(resolved);
         monitor.Get(Arg.Any<string>()).Returns(resolved);
-        var gc = Substitute.For<ILatticeReplicationGc>();
+        var gc = Substitute.For<ILatticeWalGc>();
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(new ReplicationGcReport(
+            .Returns(new LatticeWalGcReport(
                 treeName,
                 MinCursor: null,
                 TtlCeilingHlc: null,
@@ -80,7 +80,7 @@ public class ReplicationMaintenanceGrainTests
             () => new ReplicationMaintenanceGrain(
                 ctx, Substitute.For<IReminderRegistry>(),
                 NullLogger<ReplicationMaintenanceGrain>.Instance,
-                null!, Substitute.For<ILatticeReplicationGc>(),
+                null!, Substitute.For<ILatticeWalGc>(),
                 Substitute.For<ILatticeFallOffLogDetector>(),
                 Substitute.For<ILatticeWalIntrospection>(),
                 Substitute.For<IGrainFactory>(),
@@ -115,7 +115,7 @@ public class ReplicationMaintenanceGrainTests
                 ctx, Substitute.For<IReminderRegistry>(),
                 NullLogger<ReplicationMaintenanceGrain>.Instance,
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
-                Substitute.For<ILatticeReplicationGc>(),
+                Substitute.For<ILatticeWalGc>(),
                 null!, Substitute.For<ILatticeWalIntrospection>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationMaintenanceState>()),
@@ -132,7 +132,7 @@ public class ReplicationMaintenanceGrainTests
                 ctx, Substitute.For<IReminderRegistry>(),
                 NullLogger<ReplicationMaintenanceGrain>.Instance,
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
-                Substitute.For<ILatticeReplicationGc>(),
+                Substitute.For<ILatticeWalGc>(),
                 Substitute.For<ILatticeFallOffLogDetector>(),
                 null!,
                 Substitute.For<IGrainFactory>(),
@@ -150,7 +150,7 @@ public class ReplicationMaintenanceGrainTests
                 ctx, Substitute.For<IReminderRegistry>(),
                 NullLogger<ReplicationMaintenanceGrain>.Instance,
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
-                Substitute.For<ILatticeReplicationGc>(),
+                Substitute.For<ILatticeWalGc>(),
                 Substitute.For<ILatticeFallOffLogDetector>(),
                 Substitute.For<ILatticeWalIntrospection>(),
                 null!,
@@ -171,7 +171,7 @@ public class ReplicationMaintenanceGrainTests
             ctx, Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationMaintenanceGrain>.Instance,
             Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
-            Substitute.For<ILatticeReplicationGc>(),
+            Substitute.For<ILatticeWalGc>(),
             Substitute.For<ILatticeFallOffLogDetector>(),
             Substitute.For<ILatticeWalIntrospection>(),
             Substitute.For<IGrainFactory>(),
@@ -221,7 +221,7 @@ public class ReplicationMaintenanceGrainTests
         };
         var (grain, state, _, gc, _, _, _, _) = Create(opts);
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns<ReplicationGcReport>(_ => throw new InvalidOperationException("gc-failed"));
+            .Returns<LatticeWalGcReport>(_ => throw new InvalidOperationException("gc-failed"));
 
         // Failure is swallowed and logged; the cadence stamp does NOT
         // advance so the next phase tick retries rather than waiting

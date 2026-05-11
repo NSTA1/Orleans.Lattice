@@ -199,7 +199,7 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.MaintenanceGcInterval)} "
                 + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
                 + "A zero or negative GC cadence would tight-loop the maintenance grain through "
-                + $"{nameof(ILatticeReplicationGc)}.{nameof(ILatticeReplicationGc.RunOnceAsync)} calls.");
+                + $"{nameof(ILatticeWalGc)}.{nameof(ILatticeWalGc.RunOnceAsync)} calls.");
         }
 
         if (options.MaintenanceFallOffCheckInterval <= TimeSpan.Zero)

@@ -3,10 +3,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
-/// Default <see cref="ILatticeReplicationGc"/> implementation. Walks
+/// Default <see cref="ILatticeWalGc"/> implementation. Walks
 /// every WAL partition for the named tree from the head, finds the
 /// largest contiguous prefix whose entries satisfy the GC predicate,
 /// and asks the configured <see cref="IWalStorageProvider"/> to trim
@@ -16,12 +16,12 @@ namespace Orleans.Lattice.Replication;
 /// <list type="bullet">
 ///   <item>
 ///     <b>Cursor</b> - <c>entry.Timestamp &lt;= minCursor</c> when the
-///     <see cref="ILatticeReplicationCursorRegistry"/> reports a
+///     <see cref="IWalCursorRegistry"/> reports a
 ///     non-<see langword="null"/> minimum across registered consumers.
 ///   </item>
 ///   <item>
 ///     <b>TTL ceiling</b> - when
-///     <see cref="LatticeReplicationOptions.WalRetention"/> is set,
+///     <see cref="LatticeOptions.WalRetention"/> is set,
 ///     the predicate also accepts entries whose
 ///     <see cref="HybridLogicalClock.WallClockTicks"/> is older than
 ///     <c>now - WalRetention</c>. A lagging consumer that pins the log
@@ -33,7 +33,7 @@ namespace Orleans.Lattice.Replication;
 ///     <b>Causal-stable frontier</b> - when at least one consumer has
 ///     reported a per-origin <see cref="VersionVector"/> through the
 ///     causal+ overload of
-///     <see cref="ILatticeReplicationCursorRegistry.ReportCursorAsync(string, string, HybridLogicalClock, VersionVector, CancellationToken)"/>,
+///     <see cref="IWalCursorRegistry.ReportCursorAsync(string, string, HybridLogicalClock, VersionVector, CancellationToken)"/>,
 ///     the GC AND-s
 ///     <c>causalStable.DominatesOrEquals(entry.VectorClock)</c> into
 ///     the predicate. The cursor / TTL branches above remain for
@@ -46,7 +46,7 @@ namespace Orleans.Lattice.Replication;
 ///     <b>Blocked-floor</b> - when at least one consumer has
 ///     reported a non-<see langword="null"/> <c>BlockedAtHlc</c> pin
 ///     through the blocked-floor overloads of
-///     <see cref="ILatticeReplicationCursorRegistry.ReportCursorAsync(string, string, HybridLogicalClock, HybridLogicalClock?, CancellationToken)"/>,
+///     <see cref="IWalCursorRegistry.ReportCursorAsync(string, string, HybridLogicalClock, HybridLogicalClock?, CancellationToken)"/>,
 ///     the GC AND-s a strict-less <c>entry.Timestamp &lt; blockedFloor</c>
 ///     clause where <c>blockedFloor = min(BlockedAtHlc across reporting
 ///     consumers)</c>. The strict-less semantics protect the buffered
@@ -61,7 +61,7 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// <para>
 /// Legacy / range-delete entries with a <see langword="null"/>
-/// <see cref="WalRecord.VectorClock"/> are treated as the empty VC,
+/// <see cref="LatticeMutation.VectorClock"/> are treated as the empty VC,
 /// which is dominated by every non-<see langword="null"/> causal-stable
 /// frontier and therefore passes the causal-stable clause without
 /// blocking the existing HLC-shaped trim path.
@@ -77,11 +77,11 @@ namespace Orleans.Lattice.Replication;
 /// skipped this round.
 /// </para>
 /// </summary>
-public sealed class LatticeReplicationGc(
+public sealed class LatticeWalGc(
     IServiceProvider services,
-    ILatticeReplicationCursorRegistry cursors,
-    IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
-    TimeProvider? timeProvider = null) : ILatticeReplicationGc
+    IWalCursorRegistry cursors,
+    IOptionsMonitor<LatticeOptions> optionsMonitor,
+    TimeProvider? timeProvider = null) : ILatticeWalGc
 {
     /// <summary>Page size for reading the head of each shard during the scan.</summary>
     private const int ScanPageSize = 256;
@@ -89,7 +89,7 @@ public sealed class LatticeReplicationGc(
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
     /// <inheritdoc />
-    public async Task<ReplicationGcReport> RunOnceAsync(
+    public async Task<LatticeWalGcReport> RunOnceAsync(
         string treeName,
         CancellationToken cancellationToken = default)
     {
@@ -97,7 +97,7 @@ public sealed class LatticeReplicationGc(
         cancellationToken.ThrowIfCancellationRequested();
 
         var resolved = optionsMonitor.Get(treeName);
-        var partitions = resolved.ReplogPartitions;
+        var partitions = resolved.WalPartitions;
         var provider = resolved.WalStorageProvider?.Invoke(treeName)
             ?? services.GetRequiredService<IWalStorageProvider>();
 
@@ -138,7 +138,7 @@ public sealed class LatticeReplicationGc(
             // entries that the HLC-shaped clauses would otherwise
             // allow. So a present-but-unused frontier or floor is
             // still reported in the diagnostic for transparency.
-            return new ReplicationGcReport(treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, 0);
+            return new LatticeWalGcReport(treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, 0);
         }
 
         long totalTrimmed = 0;
@@ -150,12 +150,12 @@ public sealed class LatticeReplicationGc(
 
         if (totalTrimmed > 0)
         {
-            LatticeReplicationMetrics.WalEntriesTrimmed.Add(
+            LatticeMetrics.WalEntriesTrimmed.Add(
                 totalTrimmed,
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName));
         }
 
-        return new ReplicationGcReport(treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed);
+        return new LatticeWalGcReport(treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed);
     }
 
     private static async Task<long> TrimShardAsync(
