@@ -826,24 +826,35 @@ internal sealed class AtomicWriteGrain(
         // do not emit a LatticeMutation. Hoisting saves (N-1) Scope-class
         // allocations per N-key saga without changing observable behaviour.
         using (LatticePreparedContext.BeginScope())
+        // Sentinel-hoist the atomic-batch ambient with Index=0. The outer
+        // using's Dispose restores the pre-saga ambient (typically null)
+        // once after the loop instead of N times. Each per-key iteration
+        // overwrites Current via the bare setter, which is a single
+        // RequestContext.Set call — half the cost of the prior nested
+        // using's entry+exit pair. The bare-setter cost per key is the
+        // same as the outer using's entry cost; restoration is amortised
+        // across the whole saga rather than paid 16 times.
+        using (LatticeAtomicBatchContext.With((state.State.AtomicBatchSize, 0)))
         {
             while (state.State.NextIndex < state.State.Entries.Count)
             {
                 try
                 {
-                    // Stamp the per-key (Size, Index) ambient so the
-                    // mutation publish helpers stamp identical
-                    // LatticeMutation.AtomicBatchSize across the batch
-                    // and a strictly-increasing AtomicBatchIndex per
-                    // emit. The saga-wide stamp from
-                    // StampAtomicBatchContext seeded Index=0; this
-                    // per-key scope overrides that with the actual
-                    // per-step index and is restored on disposal.
-                    using (LatticeAtomicBatchContext.With((state.State.AtomicBatchSize, state.State.NextIndex)))
-                    {
-                        var entry = state.State.Entries[state.State.NextIndex];
-                        await lattice.SetAsync(entry.Key, entry.Value);
-                    }
+                    // Overwrite the per-key (Size, Index) ambient via the
+                    // bare property setter. The leaf grain's mutation
+                    // publish helpers read Current at emit time inside
+                    // the SetAsync call below, so the value stamped onto
+                    // the wire is identical to the previous nested-using
+                    // shape. The outer sentinel scope owns restoration of
+                    // the pre-saga ambient on disposal; we do not need a
+                    // per-key dispose call to restore between iterations
+                    // because the between-iteration state.WriteStateAsync
+                    // does not emit a LatticeMutation.
+                    LatticeAtomicBatchContext.Current =
+                        (state.State.AtomicBatchSize, state.State.NextIndex);
+
+                    var entry = state.State.Entries[state.State.NextIndex];
+                    await lattice.SetAsync(entry.Key, entry.Value);
 
                     state.State.NextIndex++;
                     state.State.RetriesOnCurrentStep = 0;
