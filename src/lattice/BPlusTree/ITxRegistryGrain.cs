@@ -88,6 +88,43 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// any pending mutation.
     /// </summary>
     Task ForgetAsync(Guid txid);
+
+    /// <summary>
+    /// Idempotently records that the shard identified by
+    /// <paramref name="shardIndex"/> routed at least one prepare-phase
+    /// write under the saga identified by <paramref name="txid"/>.
+    /// Repeated calls with the same <paramref name="txid"/> /
+    /// <paramref name="shardIndex"/> pair are no-ops and do not
+    /// trigger a state write.
+    /// <para>
+    /// Each <c>ShardRootGrain</c> calls this exactly once per saga it
+    /// participates in (gated by a per-activation dedup set), so a
+    /// saga touching <i>N</i> shards produces at most <i>N</i>
+    /// registry writes regardless of how many keys it prepared per
+    /// shard. The participant set is queried at terminal-broadcast
+    /// time by <see cref="GetParticipantsAsync"/> so the fan-out
+    /// reaches every shard that holds a pending bucket, even when
+    /// routing flips between the prepare and broadcast windows
+    /// (e.g. an in-flight shard split landing mid-saga).
+    /// </para>
+    /// <para>
+    /// Cleared by <see cref="ForgetAsync"/> alongside the decision
+    /// entry so the persisted footprint stays bounded by in-flight +
+    /// recently-completed sagas.
+    /// </para>
+    /// </summary>
+    Task RegisterParticipantAsync(Guid txid, int shardIndex);
+
+    /// <summary>
+    /// Returns the sorted set of physical shard indices that have
+    /// registered as participants in the saga identified by
+    /// <paramref name="txid"/>. Returns an empty list when no
+    /// participant has registered (the saga touched no shards on this
+    /// tree, or its participants have already been forgotten via
+    /// <see cref="ForgetAsync"/>). The result is sorted ascending so
+    /// callers can use it as a deterministic broadcast target list.
+    /// </summary>
+    Task<IReadOnlyList<int>> GetParticipantsAsync(Guid txid);
 }
 
 /// <summary>

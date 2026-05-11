@@ -473,9 +473,16 @@ internal sealed class AtomicWriteGrain(
         // subsequent crash-resume can skip the rebuild.
         var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
         string? physicalTreeId = null;
+        // Hoist the routing snapshot so the drift-correction pass and
+        // the per-shard backstop-dict computation below reuse the same
+        // GetRoutingAsync fetch. A second fetch would double-bill the
+        // routing-refresh budget tracked by AtomicWriteGrainTests.StaleRouting
+        // and obscures the contract that the broadcast pass takes
+        // exactly one routing snapshot per non-trivial saga.
+        RoutingInfo? routing = null;
         if (state.State.TouchedShards.Count == 0 && state.State.Entries.Count > 0)
         {
-            var routing = await lattice.GetRoutingAsync();
+            routing = await lattice.GetRoutingAsync();
             physicalTreeId = routing.PhysicalTreeId;
             var touched = new HashSet<int>();
             foreach (var entry in state.State.Entries)
@@ -512,7 +519,7 @@ internal sealed class AtomicWriteGrain(
             // owner is in TouchedShards and ForwardSplitTerminalAsync
             // mirrors the terminal forward to the migration's
             // destination via state.MovedAwaySlots / SplitInProgress).
-            var routing = await lattice.GetRoutingAsync();
+            routing = await lattice.GetRoutingAsync();
             physicalTreeId = routing.PhysicalTreeId;
             HashSet<int>? union = null;
             foreach (var entry in state.State.Entries)
@@ -527,6 +534,44 @@ internal sealed class AtomicWriteGrain(
                 sorted.Sort();
                 state.State.TouchedShards = sorted;
                 await state.WriteStateAsync();
+            }
+        }
+
+        // Authoritative participant union from the per-tree TxRegistry.
+        // Every ShardRootGrain that routed a prepare-phase write under
+        // this saga registered itself as a participant inside
+        // RecordAffectedLeafIfPreparedAsync (gated by a per-activation
+        // dedup so the RPC fires once per saga per shard). Unioning the
+        // registry's participant set into TouchedShards before the
+        // broadcast closes the orphaning window left by the snapshot-
+        // based drift correction above: if a key's prepare landed on a
+        // shard that is no longer the routing target at broadcast time
+        // (e.g. a shard-split swap completed mid-saga), the snapshot-
+        // based correction cannot rediscover the old owner, but the
+        // registry remembers it. The registry RPC is a single
+        // cross-grain call regardless of saga fan-out width, so the
+        // amortised cost is negligible compared to the per-shard
+        // terminal fan-out below. The registry returns a sorted set
+        // so the union iteration is order-deterministic.
+        if (transactionId != Guid.Empty)
+        {
+            var registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
+            var participants = await registry.GetParticipantsAsync(transactionId);
+            if (participants.Count > 0)
+            {
+                HashSet<int>? regUnion = null;
+                foreach (var shardIndex in participants)
+                {
+                    if (state.State.TouchedShards.Contains(shardIndex)) continue;
+                    (regUnion ??= new HashSet<int>(state.State.TouchedShards)).Add(shardIndex);
+                }
+                if (regUnion is not null)
+                {
+                    var sorted = new List<int>(regUnion);
+                    sorted.Sort();
+                    state.State.TouchedShards = sorted;
+                    await state.WriteStateAsync();
+                }
             }
         }
 
@@ -549,10 +594,54 @@ internal sealed class AtomicWriteGrain(
         // fresh routing snapshot in hand and reuse it.
         physicalTreeId ??= state.State.TreeId;
 
+        // Compute per-shard subsets of the saga's committed values for
+        // the cross-migration LWW backstop. The backstop fires on the
+        // commit path only; on abort, the leaf-side handler drops the
+        // pending bucket and the values are not surfaced. Each shard
+        // receives ONLY the (key, value) pairs that route to it under
+        // the routing snapshot in hand — the shard root performs the
+        // further per-leaf grouping inside AppendTxTerminalAsync.
+        //
+        // The keys whose routing has DRIFTED since prepare (already
+        // unioned into TouchedShards above) are routed to their NEW
+        // owner here, so the destination shard's leaf receives the
+        // backstop even when its prepare-phase shadow-forward was
+        // dropped. Note: a shard in TouchedShards that no longer owns
+        // any of the saga's keys (e.g. the original owner of a
+        // migrated slot) receives a null backstop dict; that's
+        // correct — its pending-flip path remains the authoritative
+        // delivery for it.
+        Dictionary<int, Dictionary<string, byte[]>>? perShardCommitted = null;
+        if (committed && state.State.Entries.Count > 0)
+        {
+            // Reuse the routing snapshot the drift-correction branch
+            // above already fetched. Both branches that can reach this
+            // point with Entries.Count > 0 also fetched routing
+            // (TouchedShards-reconstruction and drift-correction), so
+            // routing is non-null here. The defensive null-coalesce
+            // covers the theoretical case where future edits add a
+            // path that bypasses both branches.
+            var routingForBackstop = routing ?? await lattice.GetRoutingAsync();
+            perShardCommitted = new Dictionary<int, Dictionary<string, byte[]>>();
+            foreach (var entry in state.State.Entries)
+            {
+                var owner = routingForBackstop.Map.Resolve(entry.Key);
+                if (!perShardCommitted.TryGetValue(owner, out var bucket))
+                {
+                    bucket = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+                    perShardCommitted[owner] = bucket;
+                }
+                bucket[entry.Key] = entry.Value;
+            }
+        }
+
         var pending = new List<Task>(state.State.TouchedShards.Count);
         foreach (var shardIndex in state.State.TouchedShards)
         {
-            pending.Add(MarkOneShardAsync(physicalTreeId, shardIndex, transactionId, committed));
+            IReadOnlyDictionary<string, byte[]>? subset = null;
+            if (perShardCommitted is not null && perShardCommitted.TryGetValue(shardIndex, out var bucket))
+                subset = bucket;
+            pending.Add(MarkOneShardAsync(physicalTreeId, shardIndex, transactionId, committed, subset));
         }
 
         await Task.WhenAll(pending);
@@ -574,7 +663,12 @@ internal sealed class AtomicWriteGrain(
     /// still terminates with the original stale-routing throw if the
     /// topology never quiesces.
     /// </summary>
-    private async Task MarkOneShardAsync(string physicalTreeId, int shardIndex, Guid transactionId, bool committed)
+    private async Task MarkOneShardAsync(
+        string physicalTreeId,
+        int shardIndex,
+        Guid transactionId,
+        bool committed,
+        IReadOnlyDictionary<string, byte[]>? committedValues)
     {
         // The catch blocks unconditionally fire so the original
         // stale-routing throw surfaces to the caller once the wall-clock
@@ -586,7 +680,7 @@ internal sealed class AtomicWriteGrain(
             try
             {
                 var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
-                await shard.AppendTxTerminalAsync(transactionId, committed);
+                await shard.AppendTxTerminalAsync(transactionId, committed, committedValues);
                 return;
             }
             catch (StaleShardRoutingException)
@@ -678,8 +772,7 @@ internal sealed class AtomicWriteGrain(
             // readers never observe a partial commit.
             //
             // A crash between the registry write and the Completed
-            // flip leaves the saga in Execute (NextIndex ==
-            // Entries.Count); reminder-driven re-entry observes the
+            // flip leaves the saga in Execute (NextIndex == Entries.Count); reminder-driven re-entry observes the
             // post-loop condition, re-runs the registry write
             // (idempotent), re-runs the broadcast (idempotent via
             // the leaf-side recently-terminal dedup), and proceeds

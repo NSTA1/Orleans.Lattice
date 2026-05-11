@@ -88,7 +88,11 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
-    public async Task AppendTxTerminalAsync(Guid transactionId, bool committed, CancellationToken cancellationToken = default)
+    public async Task AppendTxTerminalAsync(
+        Guid transactionId,
+        bool committed,
+        IReadOnlyDictionary<string, byte[]>? committedValues = null,
+        CancellationToken cancellationToken = default)
     {
         // Pre-flight gate: refuse if this shard is rejecting (mid
         // Rejecting phase of a tree-rewrite). The caller will catch
@@ -110,14 +114,21 @@ internal sealed partial class ShardRootGrain
         // chain. When absent (shard-root deactivated mid-saga, or
         // the routing layer was bypassed), fall back to the full
         // chain walk so correctness is preserved.
+        //
+        // The cross-migration LWW backstop (committedValues) is
+        // applied in step 4 to a UNION of trackedAffected and the
+        // set of leaves that own a saga key NOW — leaves outside
+        // trackedAffected but holding a saga key are exactly the
+        // Bug B exposure surface that the backstop is designed to
+        // cover, so the fan-out must reach them too.
         var trackedAffected = TryConsumeAffectedLeaves(transactionId);
-        IReadOnlyList<IBPlusLeafGrain> targetLeaves;
+        IReadOnlyList<IBPlusLeafGrain> hlcLeaves;
         if (trackedAffected is { Count: > 0 })
         {
             var resolved = new List<IBPlusLeafGrain>(trackedAffected.Count);
             foreach (var id in trackedAffected)
                 resolved.Add(grainFactory.GetGrain<IBPlusLeafGrain>(id));
-            targetLeaves = resolved;
+            hlcLeaves = resolved;
         }
         else
         {
@@ -125,7 +136,7 @@ internal sealed partial class ShardRootGrain
             // (each step needs the previous leaf's next-sibling
             // pointer); the subsequent fan-outs (clock collection,
             // terminal apply) parallelise across the collected list.
-            targetLeaves = await CollectChainLeavesAsync(cancellationToken);
+            hlcLeaves = await CollectChainLeavesAsync(cancellationToken);
         }
 
         // Step 2 (terminal HLC) — fan out GetClockAsync across the
@@ -143,7 +154,7 @@ internal sealed partial class ShardRootGrain
         // a receiver-side relay stamping a source-cluster terminal
         // verbatim) the override wins so the receiver's local record
         // matches the authoring cluster's HLC bit-identically.
-        var terminalHlc = await ComputeTerminalHlcAsync(targetLeaves);
+        var terminalHlc = await ComputeTerminalHlcAsync(hlcLeaves);
 
         // Step 3 (durability) — append the terminal mark to this
         // shard's WAL partition before any in-memory delivery. The
@@ -217,13 +228,19 @@ internal sealed partial class ShardRootGrain
         //       ShardSplitTopologyTests.Continuous_reader_observes_zero
         //       _or_all_keys_through_mid_saga_shard_split exercises
         //       this path.
-        var leafFanOut = BroadcastTerminalToLeavesAsync(targetLeaves, transactionId, committed, cancellationToken);
+        var leafFanOut = BroadcastTerminalToLeavesAsync(
+            trackedAffected,
+            transactionId,
+            committed,
+            committedValues,
+            cancellationToken);
 
         var shadowForward = ForwardShadowAsync(
-            (transactionId, committed, cancellationToken),
-            static (target, state) => target.AppendTxTerminalAsync(state.transactionId, state.committed, state.cancellationToken));
+            (transactionId, committed, committedValues, cancellationToken),
+            static (target, state) => target.AppendTxTerminalAsync(
+                state.transactionId, state.committed, state.committedValues, state.cancellationToken));
 
-        var splitShadowForward = ForwardSplitTerminalAsync(transactionId, committed, cancellationToken);
+        var splitShadowForward = ForwardSplitTerminalAsync(transactionId, committed, committedValues, cancellationToken);
 
         await Task.WhenAll(leafFanOut, shadowForward, splitShadowForward);
     }
@@ -301,33 +318,96 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Fans out the saga terminal mark to every leaf in
-    /// <paramref name="leaves"/> in parallel and awaits all completions.
-    /// Each leaf invocation is idempotent (the per-leaf
-    /// <c>_recentlyTerminal</c> HashSet dedups a terminal arriving via
-    /// both the foreground RPC and the WAL replay channels). Empty
-    /// lists are a no-op.
+    /// Fans out the saga terminal mark to the union of (a) every leaf in
+    /// <paramref name="trackedAffected"/> (the leaves that received a
+    /// prepare-phase write under this saga on this shard) and (b) every
+    /// leaf that currently owns a key in <paramref name="committedValues"/>
+    /// (the set of saga keys this shard routes to NOW). Each targeted
+    /// leaf receives ONLY its own per-key subset of the backstop dict —
+    /// the shard root performs the per-key-to-leaf grouping via
+    /// <see cref="TraverseToLeafAsync"/> so the leaf does not have to
+    /// perform a range-ownership check. Each leaf invocation is
+    /// idempotent (the per-leaf <c>_recentlyTerminal</c> HashSet dedups
+    /// a terminal arriving via both the foreground RPC and the WAL
+    /// replay channels). When both sources are empty, falls back to a
+    /// chain walk so a saga that touched no keys on this shard (e.g. an
+    /// abort whose prepare never reached us) still propagates the
+    /// terminal — historic pre-backstop behaviour.
     /// </summary>
-    private static async Task BroadcastTerminalToLeavesAsync(
-        IReadOnlyList<IBPlusLeafGrain> leaves,
+    private async Task BroadcastTerminalToLeavesAsync(
+        HashSet<GrainId>? trackedAffected,
         Guid transactionId,
         bool committed,
+        IReadOnlyDictionary<string, byte[]>? committedValues,
         CancellationToken cancellationToken)
     {
-        if (leaves.Count == 0)
-            return;
-
         cancellationToken.ThrowIfCancellationRequested();
 
-        var pending = new Task[leaves.Count];
-        for (var i = 0; i < leaves.Count; i++)
-            pending[i] = leaves[i].ApplyTxTerminalAsync(transactionId, committed);
+        // Per-leaf target map. Key = leaf grain id. Value = the subset
+        // of committedValues that routes to this leaf, or null when the
+        // leaf is reached only via trackedAffected (the pre-backstop
+        // pending-flip path).
+        Dictionary<GrainId, Dictionary<string, byte[]>?>? leafTargets = null;
 
+        if (trackedAffected is { Count: > 0 })
+        {
+            leafTargets = new Dictionary<GrainId, Dictionary<string, byte[]>?>(trackedAffected.Count);
+            foreach (var id in trackedAffected)
+                leafTargets[id] = null;
+        }
+
+        // Group committedValues by destination leaf via per-key
+        // traversal. This is the same routing helper used by SetAsync,
+        // so the resolved leaf is the authoritative current owner of
+        // the key on this shard.
+        if (committed && committedValues is { Count: > 0 })
+        {
+            leafTargets ??= new Dictionary<GrainId, Dictionary<string, byte[]>?>();
+            foreach (var kvp in committedValues)
+            {
+                if (state.State.RootNodeId is null)
+                    continue;
+                var leafId = state.State.RootIsLeaf
+                    ? state.State.RootNodeId!.Value
+                    : await TraverseToLeafAsync(kvp.Key);
+                if (!leafTargets.TryGetValue(leafId, out var bucket) || bucket is null)
+                {
+                    bucket = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+                    leafTargets[leafId] = bucket;
+                }
+                bucket[kvp.Key] = kvp.Value;
+            }
+        }
+
+        if (leafTargets is null || leafTargets.Count == 0)
+        {
+            // Fallback path. Historic pre-backstop behaviour: walk the
+            // chain so every leaf sees the terminal even when neither
+            // the routing layer (trackedAffected) nor a backstop
+            // payload (committedValues) was supplied. Empty chains are
+            // a no-op.
+            var chain = await CollectChainLeavesAsync(cancellationToken);
+            if (chain.Count == 0) return;
+            var chainTasks = new Task[chain.Count];
+            for (var i = 0; i < chain.Count; i++)
+                chainTasks[i] = chain[i].ApplyTxTerminalAsync(transactionId, committed, null);
+            await Task.WhenAll(chainTasks);
+            return;
+        }
+
+        var pending = new Task[leafTargets.Count];
+        var idx = 0;
+        foreach (var kvp in leafTargets)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(kvp.Key);
+            IReadOnlyDictionary<string, byte[]>? subset = kvp.Value;
+            pending[idx++] = leaf.ApplyTxTerminalAsync(transactionId, committed, subset);
+        }
         await Task.WhenAll(pending);
     }
 
     /// <summary>
-    /// Mirrors <see cref="AppendTxTerminalAsync(Guid, bool, CancellationToken)"/>
+    /// Mirrors <see cref="AppendTxTerminalAsync(Guid, bool, IReadOnlyDictionary{string, byte[]}, CancellationToken)"/>
     /// onto the destination shard(s) of any shard split this shard has
     /// participated in as the source — both an in-flight split (read
     /// from <see cref="ShardRootState.SplitInProgress"/>) and every
@@ -365,7 +445,7 @@ internal sealed partial class ShardRootGrain
     /// <c>_recentlyTerminal</c> dedup.
     /// </para>
     /// </summary>
-    private Task ForwardSplitTerminalAsync(Guid transactionId, bool committed, CancellationToken cancellationToken)
+    private Task ForwardSplitTerminalAsync(Guid transactionId, bool committed, IReadOnlyDictionary<string, byte[]>? committedValues, CancellationToken cancellationToken)
     {
         // Collect distinct destination shard indices: the in-flight
         // split's target (if any) plus every distinct target recorded
@@ -402,14 +482,14 @@ internal sealed partial class ShardRootGrain
             // moved every migrated slot to the same target).
             var only = targets.First();
             var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{only}");
-            return target.AppendTxTerminalAsync(transactionId, committed, cancellationToken);
+            return target.AppendTxTerminalAsync(transactionId, committed, committedValues, cancellationToken);
         }
 
         var tasks = new List<Task>(targets.Count);
         foreach (var idx in targets)
         {
             var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{idx}");
-            tasks.Add(target.AppendTxTerminalAsync(transactionId, committed, cancellationToken));
+            tasks.Add(target.AppendTxTerminalAsync(transactionId, committed, committedValues, cancellationToken));
         }
         return Task.WhenAll(tasks);
     }

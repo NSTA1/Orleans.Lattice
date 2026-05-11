@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// stale-routing throws than a single retry can absorb, so the
 /// exception escapes the saga and surfaces as
 /// "round=N: unknown-round (..., other&gt;0)" in the chaos test
-/// <c>ReshardTopologyTests.Continuous_reader_observes_zero_or_all_keys
+/// <c>ResharpTopologyTests.Continuous_reader_observes_zero_or_all_keys
 /// _through_mid_saga_reshard</c>.
 /// </summary>
 public partial class AtomicWriteGrainTests
@@ -149,7 +149,7 @@ public partial class AtomicWriteGrainTests
         // factory.GetGrain&lt;IShardRootGrain&gt;(...) call, so all three
         // attempts route through this single configured Returns.
         var attempts = 0;
-        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 if (attempts++ < 2)
@@ -175,7 +175,7 @@ public partial class AtomicWriteGrainTests
         shard.GetRawEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<LwwEntry?>(null));
 
         var attempts = 0;
-        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 if (attempts++ < 1)
@@ -250,7 +250,7 @@ public partial class AtomicWriteGrainTests
 
         var attempts = 0;
         const int Storm = 12;
-        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 if (attempts < Storm)

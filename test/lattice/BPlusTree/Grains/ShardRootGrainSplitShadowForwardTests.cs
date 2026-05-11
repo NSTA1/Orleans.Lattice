@@ -91,7 +91,7 @@ public class ShardRootGrainSplitShadowForwardTests
         var shadowTarget = Substitute.For<IShardRootGrain>();
         shadowTarget.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.CompletedTask);
         shadowTarget.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>()).Returns(Task.CompletedTask);
-        shadowTarget.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+        shadowTarget.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shadowTarget);
 
@@ -223,6 +223,7 @@ public class ShardRootGrainSplitShadowForwardTests
         await h.ShadowTarget.Received().AppendTxTerminalAsync(
             txid,
             true,
+            Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -235,7 +236,7 @@ public class ShardRootGrainSplitShadowForwardTests
         await h.Grain.AppendTxTerminalAsync(txid, committed: true);
 
         await h.ShadowTarget.Received().AppendTxTerminalAsync(
-            txid, true, Arg.Any<CancellationToken>());
+            txid, true, Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -247,7 +248,7 @@ public class ShardRootGrainSplitShadowForwardTests
         await h.Grain.AppendTxTerminalAsync(txid, committed: false);
 
         await h.ShadowTarget.Received().AppendTxTerminalAsync(
-            txid, false, Arg.Any<CancellationToken>());
+            txid, false, Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -276,7 +277,7 @@ public class ShardRootGrainSplitShadowForwardTests
         await h.Grain.AppendTxTerminalAsync(txid, committed: true);
 
         await h.ShadowTarget.Received().AppendTxTerminalAsync(
-            txid, true, Arg.Any<CancellationToken>());
+            txid, true, Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -308,7 +309,7 @@ public class ShardRootGrainSplitShadowForwardTests
         await h.Grain.AppendTxTerminalAsync(txid, committed: true);
 
         await h.ShadowTarget.Received().AppendTxTerminalAsync(
-            txid, true, Arg.Any<CancellationToken>());
+            txid, true, Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -333,9 +334,9 @@ public class ShardRootGrainSplitShadowForwardTests
         // the forward.
         var targetA = Substitute.For<IShardRootGrain>();
         var targetB = Substitute.For<IShardRootGrain>();
-        targetA.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+        targetA.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
-        targetB.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+        targetB.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
         h.Factory.GetGrain<IShardRootGrain>($"{TreeId}/{TargetA}").Returns(targetA);
         h.Factory.GetGrain<IShardRootGrain>($"{TreeId}/{TargetB}").Returns(targetB);
@@ -343,8 +344,8 @@ public class ShardRootGrainSplitShadowForwardTests
         var txid = Guid.NewGuid();
         await h.Grain.AppendTxTerminalAsync(txid, committed: true);
 
-        await targetA.Received().AppendTxTerminalAsync(txid, true, Arg.Any<CancellationToken>());
-        await targetB.Received().AppendTxTerminalAsync(txid, true, Arg.Any<CancellationToken>());
+        await targetA.Received().AppendTxTerminalAsync(txid, true, Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
+        await targetB.Received().AppendTxTerminalAsync(txid, true, Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -357,7 +358,7 @@ public class ShardRootGrainSplitShadowForwardTests
         await h.Grain.AppendTxTerminalAsync(txid, committed: true);
 
         await h.ShadowTarget.DidNotReceive().AppendTxTerminalAsync(
-            Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+            Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -371,6 +372,6 @@ public class ShardRootGrainSplitShadowForwardTests
         await h.Grain.AppendTxTerminalAsync(Guid.Empty, committed: true);
 
         await h.ShadowTarget.DidNotReceive().AppendTxTerminalAsync(
-            Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+            Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
     }
 }

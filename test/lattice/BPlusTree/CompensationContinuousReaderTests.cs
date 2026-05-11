@@ -132,6 +132,7 @@ public class CompensationContinuousReaderTests
         await shard.Received(touchedCount).AppendTxTerminalAsync(
             Arg.Any<Guid>(),
             committed: false,
+            Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
             Arg.Any<CancellationToken>());
 
         // Defensive: no committed terminal must escape on the rollback
@@ -140,6 +141,7 @@ public class CompensationContinuousReaderTests
         await shard.DidNotReceive().AppendTxTerminalAsync(
             Arg.Any<Guid>(),
             committed: true,
+            Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -165,10 +167,12 @@ public class CompensationContinuousReaderTests
         await shard.Received(touchedCount).AppendTxTerminalAsync(
             Arg.Any<Guid>(),
             committed: true,
+            Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
             Arg.Any<CancellationToken>());
         await shard.DidNotReceive().AppendTxTerminalAsync(
             Arg.Any<Guid>(),
             committed: false,
+            Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -188,6 +192,7 @@ public class CompensationContinuousReaderTests
         await shard.DidNotReceive().AppendTxTerminalAsync(
             Arg.Any<Guid>(),
             Arg.Any<bool>(),
+            Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
             Arg.Any<CancellationToken>());
     }
 }

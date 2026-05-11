@@ -237,8 +237,19 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// After a successful local write, forward the post-write LWW value to the
     /// shadow target if a split is active and the key falls in a moved virtual
-    /// slot. The post-write value is captured by reading back the leaf's
-    /// version via <see cref="TraverseForReadWithVersionAsync(string)"/>
+    /// slot. For non-prepared writes the post-write value is captured by reading
+    /// back the leaf's persisted <see cref="LwwValue{T}"/> so TTL metadata
+    /// (<c>ExpiresAtTicks</c>) is preserved verbatim. For prepared writes the
+    /// caller-supplied <paramref name="value"/> is forwarded directly via
+    /// <see cref="IShardRootGrain.SetAsync(string, byte[])"/> — the leaf read-back
+    /// is skipped because during a prepare the leaf's <c>Entries</c> still holds
+    /// the pre-saga value (the prepare routed into the per-leaf pending-tx
+    /// map, not the visible projection), and forwarding that stale value would
+    /// bucket the wrong value into the destination's <c>_pendingTx[txid][key]</c>
+    /// — which the saga's terminal mark would then flip into the destination's
+    /// <c>Entries</c>, leaving a reader routed to the destination after the
+    /// shard-map swap surfacing the pre-saga value indefinitely (a saga
+    /// atomic-visibility violation across the migrating slot).
     /// <para>
     /// <b>Coverage</b>: this helper handles live values only. Tombstone
     /// forwarding for <c>DeleteAsync</c>/<c>DeleteRangeAsync</c> is performed
@@ -254,7 +265,7 @@ internal sealed partial class ShardRootGrain
     /// (highest HLC wins) will converge to the correct value on the target.
     /// </para>
     /// </summary>
-    private async Task ForwardLocalWriteToShadowIfNeededAsync(string key)
+    private async Task ForwardLocalWriteToShadowIfNeededAsync(string key, byte[] value, long expiresAtTicks = 0L)
     {
         var sip = state.State.SplitInProgress;
         if (sip is null) return;
@@ -265,17 +276,6 @@ internal sealed partial class ShardRootGrain
 
         var slot = ShardMap.GetVirtualSlot(key, sip.VirtualShardCount);
         if (!sip.IsMovedSlot(slot)) return;
-
-        // read the raw LwwValue (not the filtered VersionedValue) so the
-        // entry's ExpiresAtTicks is forwarded verbatim. Using the filtered path
-        // would drop TTL metadata, leaving the target shard with a non-expiring
-        // copy after the split commits.
-        var leafId = state.State.RootIsLeaf
-            ? state.State.RootNodeId!.Value
-            : await TraverseToLeafAsync(key);
-        var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-        var raw = await leaf.GetRawEntryAsync(key);
-        if (raw is null || raw.Value.IsTombstone) return; // deleted/missing — handled by cleanup phase.
 
         var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{sip.ShadowTargetShardIndex}");
 
@@ -297,14 +297,35 @@ internal sealed partial class ShardRootGrain
         // readers until the saga's terminal mark — forwarded by
         // AppendTxTerminalAsync via the symmetric split-shadow forward —
         // flips it into Entries.
+        //
+        // Important: forward the caller-supplied value (the prepared
+        // value), NOT a read-back of the leaf's Entries. During a prepare
+        // the leaf's Entries still holds the pre-saga value (the prepare
+        // wrote into _pendingTx, not Entries), so a leaf read-back here
+        // would forward the stale pre-saga value and the destination's
+        // _pendingTx[txid][key] would carry the wrong value — which the
+        // saga's terminal would then commit into Entries, producing the
+        // mid-saga atomic-visibility violation described in the method's
+        // XML doc.
         if (LatticePreparedContext.Current && LatticeTransactionContext.Current != Guid.Empty)
         {
-            // raw.Value.IsTombstone is false (checked above), so Value is non-null
-            // by the LwwValue invariant; the compiler can't see through the
-            // tombstone-vs-live discriminator.
-            await target.SetAsync(key, raw.Value.Value!);
+            if (expiresAtTicks > 0L)
+                await target.SetAsync(key, value, expiresAtTicks);
+            else
+                await target.SetAsync(key, value);
             return;
         }
+
+        // Non-prepared path: read the raw LwwValue (not the filtered VersionedValue)
+        // so the entry's ExpiresAtTicks is forwarded verbatim. Using the filtered path
+        // would drop TTL metadata, leaving the target shard with a non-expiring
+        // copy after the split commits.
+        var leafId = state.State.RootIsLeaf
+            ? state.State.RootNodeId!.Value
+            : await TraverseToLeafAsync(key);
+        var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+        var raw = await leaf.GetRawEntryAsync(key);
+        if (raw is null || raw.Value.IsTombstone) return; // deleted/missing — handled by cleanup phase.
 
         await target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = raw.Value.ToLwwValue() });
     }
