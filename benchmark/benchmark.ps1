@@ -117,6 +117,16 @@ param(
     [ValidateSet('', 'dry', 'quick', 'full')]
     [string] $Fidelity = '',
 
+    # Microbench-only: enable per-method EventPipe profiling. One of
+    # 'off' | 'alloc' | 'cpu' | 'both'. Default 'off' is a no-op. The
+    # profile.json sidecar is written next to results.json. NOTE: profiling
+    # perturbs measurements - do not use profile-enabled runs as cohort
+    # baselines. Refused when -Fidelity full (forking BDN toolchain breaks
+    # the in-process EventPipe attach).
+    [Parameter(ParameterSetName = 'Run')]
+    [ValidateSet('', 'off', 'alloc', 'cpu', 'both')]
+    [string] $Profile = '',
+
     [Parameter(ParameterSetName = 'Compare', Mandatory = $true)]
     [switch] $Compare,
 
@@ -824,6 +834,9 @@ function Invoke-Microbench {
     }
     if (-not [string]::IsNullOrWhiteSpace($Workloads)) {
         $EnvMap['BENCH_MICROBENCH_WORKLOADS'] = $Workloads
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Profile)) {
+        $EnvMap['BENCH_MICROBENCH_PROFILE'] = $Profile
     }
     Set-ProcessEnv -Map $EnvMap
 
