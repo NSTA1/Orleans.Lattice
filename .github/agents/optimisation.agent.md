@@ -134,7 +134,7 @@ State, in writing, before doing anything else:
 1. **Target metric.** A single primary metric (a series the harness already auto-discovers, or one you will add an OTel instrument for first). Example: `bench_apply_lag_p95_ms`.
 2. **Target scenario.** Which `./benchmark.ps1 -Scenario` invocation will exercise the metric. Example: `bidirectional-replication`.
 3. **Expected direction and magnitude.** "Reduce by `>= 20%`", "increase by `>= 1000`", or similar. Magnitude must be greater than what you can attribute to noise - if you cannot articulate a noise band yet, defer that to Phase 3 but commit to a direction now.
-4. **Code locus.** Which file or hot path you suspect dominates the metric. If you cannot name one, do a profiling pass first (the agent does not yet support automated profiling - state this as an explicit open).
+4. **Code locus.** Which file or hot path you suspect dominates the metric. If you cannot name one - or you have named one but the target metric sits at the noise floor of `-Fidelity dry` (IQR=0 across n>=3 baseline runs) so that no candidate hypothesis can clear the threshold without an empirical pointer - run a per-method profiling pass first (see the "Per-method profiling (microbench tier)" subsection below). The profiler attributes allocations and CPU samples to specific managed methods, so it produces an empirically-grounded code locus instead of a guess.
 5. **Falsification rule.** Under what observed outcome will you discard the change. Default: "candidate median fails to move past `baseline_median +/- 1.5 * IQR_baseline` in the desired direction".
 
 Write all five into the chat reply. Without them you do not have a hypothesis - you have a hunch.
@@ -174,6 +174,69 @@ A 7-method `dry`-fidelity run completes in ~5-10 seconds end-to-end vs ~8 minute
 **Both cohorts must run against the same scoping AND the same fidelity.** If you change `-Workloads` or `-Fidelity` between baseline and candidate, you have a confounded experiment - same rule as for any other scenario env var. Record both values in the Phase 1 hypothesis so the post-mortem can reproduce the cohort verbatim.
 
 **No working-tree edits required.** The previous convention of editing `benchmark/scenarios/microbench.env` in-place and reverting before the hand-off PR is obsolete - the CLI overrides supersede it. Leave `microbench.env` at its committed defaults (`BENCH_MICROBENCH_FIDELITY=quick`, empty `BENCH_MICROBENCH_WORKLOADS`) and drive every cohort via the `-Workloads`/`-Fidelity` flags. The env-file knobs remain available as a fallback for CI scenarios that cannot pass CLI args.
+
+#### Per-method profiling (microbench tier)
+
+When Phase 1 cannot name a concrete code locus, or when a microbench cohort
+sits at the noise floor (IQR=0 across n>=3 runs of `-Fidelity dry`) so that no
+candidate hypothesis can clear the threshold without an empirical pointer,
+attach the **EventPipe-driven per-method profiler** to the next microbench
+pass. It dumps managed-allocation and CPU-sample events for the duration of
+every `[Benchmark]` method into a `profile.json` sidecar alongside the run's
+`results.json`, attributing each event to the deepest named managed stack
+frame.
+
+Activate via the `-Profile` parameter on `benchmark.ps1`:
+
+| Value | Captures |
+|---|---|
+| `off` (default) | Nothing. Profiler does not start. |
+| `alloc` | `GCSampledObjectAllocation` events. Top-N allocators by bytes. |
+| `cpu` | `SampleProfiler` events (every ~10ms thread sample). Top-N hot methods by sample count. |
+| `both` | Both of the above. |
+
+```powershell
+# Attribute allocations for the Mixed_70R_30W workload at dry fidelity:
+./benchmark.ps1 microbench -Workloads '*.Mixed_70R_30W' -Fidelity dry -Profile alloc
+```
+
+The `profile.json` shape is identical across `-Profile` values; unused lists
+(`top_cpu` under `alloc`-only, `top_allocators` under `cpu`-only) are emitted
+as empty arrays. Both top-lists are sorted descending by their primary metric
+and bounded by `BENCH_MICROBENCH_PROFILE_TOPN` (default 50). The full schema
+and an example payload are in [`docs/lattice/benchmarks.md`](../../docs/lattice/benchmarks.md).
+
+**Use the profiler as a diagnostic, not a cohort sample.** The EventPipe
+session adds per-event stack-walking inside the runtime, so a
+`-Profile`-enabled run's `results.json` timings are perturbed and are NOT a
+valid baseline or candidate cohort sample. The flow is:
+
+1. Run **one** `-Profile alloc` (or `cpu`, or `both`) pass on `main` with
+   the target workload. The cohort sample is wasted; only the `profile.json`
+   is the deliverable.
+2. Read the top-N attribution table. Pick the highest-percentage frame that
+   is in `Orleans.Lattice.*` (or another module you can modify); skip
+   framework frames like `System.Threading.Tasks.*` unless the hypothesis
+   genuinely targets them.
+3. Use that frame as the **code locus** in Phase 1.
+4. Run baseline and candidate cohorts with `-Profile off` (the default) as
+   normal. The profiler's job ends as soon as the locus is identified; the
+   actual cohort decision is made on un-perturbed `results.json` timings.
+
+**`-Profile` is incompatible with `-Fidelity full`.** That fidelity uses
+BDN's forking toolchain, which spawns one child process per `[Benchmark]`
+method. The harness's EventPipe session runs in the parent process and
+would see no workload activity. The orchestrator refuses to start the
+profiler under `-Fidelity full` and writes a warning to stderr - treat that
+as a configuration error, not a "profile.json was empty" data point. Use
+`-Fidelity dry` or `-Fidelity quick`.
+
+**Optional raw `.nettrace` sidecar.** Set
+`BENCH_MICROBENCH_PROFILE_NETTRACE_PATH` to also emit the raw `.nettrace`
+blob for post-mortem inspection in [PerfView](https://github.com/microsoft/perfview)
+or [dotnet-trace](https://learn.microsoft.com/dotnet/core/diagnostics/dotnet-trace).
+Rarely needed during normal optimisation cycles; the aggregated
+`profile.json` is the primary artefact.
 
 #### Authoring a new scenario
 
@@ -291,6 +354,9 @@ The following have all happened in this codebase before. Each one wasted hours.
 - **Implicit `-NoHistoryPush`.** Once `-NoHistoryPush` is in your invocation history it gets cargo-culted into every subsequent command. This produces a working tree of clean run files that never reach the VM, and a dashboard that lies by omission. Strip it from your terminal history when starting an optimisation cycle.
 
 - **Pre-shipping the empirical claim.** Do not write the PR body's "we measured -X%" sentence until **after** Phase 6 has produced the actual table. The number you remembered from a previous session is wrong.
+- **Treating a `-Profile`-enabled run as a cohort sample.** The EventPipe session perturbs measurements; the `profile.json` is the only deliverable from a profile-enabled run. Do not include profile-enabled `results.json` files in a baseline or candidate cohort.
+
+- **Running `-Profile` against `-Fidelity full`.** Will silently produce an empty `profile.json` because the EventPipe session in the parent sees no work in the child processes BDN forks per `[Benchmark]`. The orchestrator now refuses this combination and writes a stderr warning, but pre-warning runs in your shell history may have produced empty profiles - re-run under `-Fidelity dry` or `-Fidelity quick`.
 
 ## What this agent does NOT do
 

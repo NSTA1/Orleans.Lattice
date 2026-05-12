@@ -10,4 +10,5 @@
   <Project Path="test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj" />
   <Project Path="test/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.Tests.csproj" />
   <Project Path="test/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.Tests.csproj" />
+  <Project Path="test/microbench/Orleans.Lattice.Benchmark.Microbench.Tests.csproj" />
 </Solution>

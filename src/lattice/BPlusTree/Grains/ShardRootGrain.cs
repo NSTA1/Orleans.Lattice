@@ -102,7 +102,7 @@ internal sealed partial class ShardRootGrain(
 
         // Group keys by their target leaf. Mirrors TraverseForBatchReadAsync
         // but addresses the raw leaf grain directly (bypassing LeafCacheGrain)
-        // so tombstones and TTL metadata survive — matching single-key
+        // so tombstones and TTL metadata survive - matching single-key
         // GetRawEntryAsync semantics. The bucket value carries the
         // (key, inputIndex) pair so the per-leaf batched response can be
         // scattered back into the index-aligned result list.
