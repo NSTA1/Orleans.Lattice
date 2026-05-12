@@ -17,6 +17,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// most-recent applied timestamp keyed by <c>{treeId}/{originClusterId}</c>.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class ReplicationApplyIntegrationTests
 {
     private TwoSiteClusterFixture _fixture = null!;

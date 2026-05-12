@@ -14,6 +14,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// mid-scan, exercising the real reconciliation code path.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class MultiPageScanOrderingIntegrationTests
 {
     private MultiPageFourShardClusterFixture _fixture = null!;

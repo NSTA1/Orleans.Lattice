@@ -9,6 +9,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// small-leaf cluster to force many splits and expose routing bugs.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class BPlusTreeInsertionOrderTests
 {
     private SmallLeafClusterFixture _fixture = null!;

@@ -5,6 +5,7 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 [TestFixture]
+[Category("Integration")]
 public class FaultInjectionStorageTests
 {
     private FaultInjectionClusterFixture _fixture = null!;

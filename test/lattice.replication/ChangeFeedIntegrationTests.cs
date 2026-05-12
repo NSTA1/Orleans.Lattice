@@ -17,6 +17,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// mutation appears on the change feed.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class ChangeFeedIntegrationTests
 {
     private const string ClusterId = "feed-site";

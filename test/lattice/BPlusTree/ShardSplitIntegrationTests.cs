@@ -6,6 +6,7 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 [TestFixture]
+[Category("Integration")]
 public class ShardSplitIntegrationTests
 {
     private FourShardClusterFixture _fixture = null!;

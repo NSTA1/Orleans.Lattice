@@ -11,6 +11,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <c>ShardRootGrain</c> → <c>BPlusLeafGrain</c> pipeline.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public sealed partial class MutationObserverIntegrationTests
 {
     private MutationObserverClusterFixture _fixture = null!;

@@ -5,6 +5,7 @@ using Orleans.TestingHost;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 [TestFixture]
+[Category("Integration")]
 public class CrdtAccessorIntegrationTests
 {
     private FourShardClusterFixture _fixture = null!;

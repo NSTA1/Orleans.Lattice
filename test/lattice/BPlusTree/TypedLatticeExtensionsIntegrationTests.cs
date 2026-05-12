@@ -7,6 +7,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// Integration tests for <see cref="TypedLatticeExtensions"/>.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class TypedLatticeExtensionsIntegrationTests
 {
     private record Product(string Name, decimal Price);

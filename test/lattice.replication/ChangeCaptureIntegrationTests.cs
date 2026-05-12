@@ -11,6 +11,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// <see cref="IReplogSink"/> before the originating grain call returns.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class ChangeCaptureIntegrationTests
 {
     private TwoSiteClusterFixture _fixture = null!;

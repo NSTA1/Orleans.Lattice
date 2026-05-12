@@ -1,6 +1,7 @@
 namespace Orleans.Lattice.Replication.Tests;
 
 [TestFixture]
+[Category("Integration")]
 public class TwoSiteClusterFixtureTests
 {
     private TwoSiteClusterFixture _fixture = null!;

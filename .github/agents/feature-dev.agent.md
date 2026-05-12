@@ -123,6 +123,17 @@ The agent **must invoke each command below verbatim** and **paste the tail of it
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~EmDashHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
+6. **Integration-category hygiene.** Every `[TestFixture]` that spins up a cluster, host, or gRPC channel must carry one of the slow-category tags (`Integration`, `Chaos`, or `AzureTableEmulator`) so the strict-delta Tier 3 filter (`TestCategory=Integration|TestCategory=Docs`) covers it. `IntegrationCategoryHygieneTests.Every_cluster_based_fixture_carries_a_slow_category` lives as a sibling copy in every test project that hosts cluster-based fixtures; run it in each project whose source you touched:
+
+   ```powershell
+   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   dotnet test test/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   dotnet test test/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   ```
+
+   If a fixture is flagged, either tag it (`[Category("Integration")]` is the default) or, if the detection is a false positive (the fixture stores a `*ClusterFixture`-suffixed type for an unrelated reason), rename the field type so it does not match the detection signal. Do not weaken the detection list to accommodate a single fixture.
+
 If any 6b gate is red, **do not run 6c**.
 
 #### 6c - Test suite (changed project, non-chaos)

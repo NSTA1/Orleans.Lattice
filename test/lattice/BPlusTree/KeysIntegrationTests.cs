@@ -9,6 +9,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// (default shard count, default max leaf keys - no splits expected for small data sets).
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class KeysDefaultClusterTests
 {
     private ClusterFixture _fixture = null!;
@@ -121,6 +122,7 @@ public class KeysDefaultClusterTests
 /// with small leaf keys (max 4) to exercise leaf splits within a single shard.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class KeysSingleShardSplitTests
 {
     private SmallLeafClusterFixture _fixture = null!;
@@ -247,6 +249,7 @@ public class KeysSingleShardSplitTests
 /// with small leaf keys to exercise cross-shard merging and leaf splits.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class KeysFourShardTests
 {
     private FourShardClusterFixture _fixture = null!;
@@ -395,6 +398,7 @@ public class KeysFourShardTests
 /// parameter enabled, using a 4-shard cluster with small leaves to force pagination.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class KeysPrefetchTests
 {
     private FourShardClusterFixture _fixture = null!;

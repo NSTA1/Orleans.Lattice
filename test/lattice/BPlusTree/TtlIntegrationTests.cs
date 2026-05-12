@@ -10,6 +10,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// read path exposed by <see cref="ILattice"/>.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class TtlIntegrationTests
 {
     private ClusterFixture _fixture = null!;
@@ -126,6 +127,7 @@ public class TtlIntegrationTests
 /// four-shard cluster.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class TtlMultiShardIntegrationTests
 {
     private FourShardClusterFixture _fixture = null!;
@@ -282,6 +284,7 @@ public class TtlMultiShardIntegrationTests
 /// destination physical tree.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class TtlResizeIntegrationTests
 {
     private SmallLeafClusterFixture _fixture = null!;

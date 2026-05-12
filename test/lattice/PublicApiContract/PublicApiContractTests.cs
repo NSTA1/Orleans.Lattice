@@ -18,6 +18,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.PublicApiContract;
 /// </para>
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 [Category("API")]
 public partial class PublicApiContractTests
 {

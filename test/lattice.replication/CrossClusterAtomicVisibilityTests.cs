@@ -26,6 +26,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </list>
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class CrossClusterAtomicVisibilityTests
 {
     private TwoSiteClusterFixture _fixture = null!;

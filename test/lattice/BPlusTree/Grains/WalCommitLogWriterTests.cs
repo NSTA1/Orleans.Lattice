@@ -20,6 +20,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// at unit-test granularity so any future revert lights up immediately.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class WalCommitLogWriterTests
 {
     private const string TreeId = "tree-x";

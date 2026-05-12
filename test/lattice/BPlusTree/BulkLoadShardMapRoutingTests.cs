@@ -11,6 +11,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// pinned to shard 0 is a no-op and the routing assertion is vacuous.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class BulkLoadShardMapRoutingTests
 {
     private FourShardClusterFixture _fixture = null!;

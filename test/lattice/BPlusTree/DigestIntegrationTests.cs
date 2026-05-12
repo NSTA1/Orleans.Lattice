@@ -10,6 +10,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// and produces stable digests for identical state.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class DigestIntegrationTests
 {
     private FourShardClusterFixture _fixture = null!;

@@ -8,6 +8,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// Integration tests for <see cref="ILattice.EntriesAsync"/> using the default cluster.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class EntriesDefaultClusterTests
 {
     private ClusterFixture _fixture = null!;
@@ -111,6 +112,7 @@ public class EntriesDefaultClusterTests
 /// to exercise multi-leaf pagination across splits.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class EntriesSmallLeafClusterTests
 {
     private SmallLeafClusterFixture _fixture = null!;
@@ -193,6 +195,7 @@ public class EntriesSmallLeafClusterTests
 /// parameter enabled, using a 4-shard cluster with small leaves to force pagination.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class EntriesPrefetchTests
 {
     private FourShardClusterFixture _fixture = null!;

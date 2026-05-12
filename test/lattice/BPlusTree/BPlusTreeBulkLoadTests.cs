@@ -11,6 +11,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// Uses a single-shard, small-leaf cluster to exercise multi-level tree construction.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public partial class BPlusTreeBulkLoadTests
 {
     private SmallLeafClusterFixture _fixture = null!;

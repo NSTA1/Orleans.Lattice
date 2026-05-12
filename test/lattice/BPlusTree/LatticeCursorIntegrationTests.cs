@@ -9,6 +9,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// resumable range delete exposed on <see cref="ILattice"/>.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class LatticeCursorIntegrationTests
 {
     private ClusterFixture _fixture = null!;

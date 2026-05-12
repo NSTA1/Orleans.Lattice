@@ -12,6 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// even when adaptive shard splits are happening concurrently.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class StronglyConsistentScanIntegrationTests
 {
     private FourShardClusterFixture _fixture = null!;

@@ -10,6 +10,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// only arrive on trees that explicitly opt in via the per-tree override.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public sealed class PublishEventsOverrideIntegrationTests
 {
     private PublishEventsOverrideClusterFixture _fixture = null!;
