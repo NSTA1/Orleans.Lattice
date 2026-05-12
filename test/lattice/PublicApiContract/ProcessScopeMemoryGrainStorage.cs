@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.PublicApiContract;
 /// a static <see cref="ConcurrentDictionary{TKey, TValue}"/> so the
 /// store survives <see cref="PublicApiContractClusterFixture.RestartClusterAsync"/>
 /// even though the silo's own DI container is torn down. This is the
-/// fixture-side counterpart to the WAL provider — together they let
+/// fixture-side counterpart to the WAL provider - together they let
 /// the WAL-reactivation tests prove that the activation-time materialiser
 /// rebuilds leaves from the WAL when grain-state would otherwise be
 /// wiped by a process-internal cluster restart.
@@ -32,7 +32,7 @@ internal sealed class ProcessScopeMemoryGrainStorage : IGrainStorage
     /// Drops every persisted entry. Call from a fixture teardown when
     /// you want the next deployment to start from a clean slate;
     /// <see cref="PublicApiContractClusterFixture.RestartClusterAsync"/>
-    /// deliberately does <i>not</i> call this — surviving the restart
+    /// deliberately does <i>not</i> call this - surviving the restart
     /// is the whole point.
     /// </summary>
     public static void Reset() => Store.Clear();

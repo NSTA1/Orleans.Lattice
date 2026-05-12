@@ -66,13 +66,13 @@ public partial class BPlusLeafGrainTests
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
 
         // The backstop persists by appending a Set mutation with
-        // IsBackstop=true to the per-shard WAL via ICommitLogWriter —
+        // IsBackstop=true to the per-shard WAL via ICommitLogWriter -
         // NOT by calling state.WriteStateAsync(). One WAL append per
         // missing key; the legacy standalone state-row persist is gone.
         Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountBefore + 1),
             "backstop must append exactly one mutation per missing key to the WAL");
         Assert.That(state.WriteCount, Is.EqualTo(writeCountBefore),
-            "backstop must NOT call state.WriteStateAsync() — WAL is the sole commit point");
+            "backstop must NOT call state.WriteStateAsync() - WAL is the sole commit point");
         var appended = commitLog.Appended[^1];
         Assert.That(appended.IsBackstop, Is.True,
             "backstop WAL append must carry IsBackstop=true so observers can distinguish it from an ordinary Set");
@@ -278,7 +278,7 @@ public partial class BPlusLeafGrainTests
         await grain.ApplyTxTerminalAsync(txid, committed: false, committed);
 
         // Abort path must drop the backstop values without writing
-        // them — by definition the values are not committed. No WAL
+        // them - by definition the values are not committed. No WAL
         // append must fire because no durable write was authored.
         Assert.That(state.State.Entries, Is.Empty);
         Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountBefore));
@@ -342,8 +342,8 @@ public partial class BPlusLeafGrainTests
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedDict);
 
-        // The prepared bucket value (7, 7, 7) wins — NOT the backstop
-        // value (1, 2, 3) — because hadPending=true short-circuits the
+        // The prepared bucket value (7, 7, 7) wins - NOT the backstop
+        // value (1, 2, 3) - because hadPending=true short-circuits the
         // backstop branch.
         Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 7, 7, 7 }),
             "pending bucket must win over backstop when both are present");
@@ -403,7 +403,7 @@ public partial class BPlusLeafGrainTests
     /// <summary>
     /// Regression: per-key (NOT per-saga) backstop semantics. A leaf can
     /// legitimately hold a pending bucket that covers a SUBSET of the
-    /// saga's keys — the prepare phase landed on this leaf for some
+    /// saga's keys - the prepare phase landed on this leaf for some
     /// keys, while OTHER keys' slots migrated onto this leaf via a
     /// cross-shard split AFTER the prepare. The terminal delivery must
     /// (a) flip the pending bucket's keys via the pending-flip path
@@ -444,13 +444,13 @@ public partial class BPlusLeafGrainTests
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
 
         // Bucket key: flipped from pending into Entries with the
-        // prepare's value (NOT the backstop's value — the bucket wins
+        // prepare's value (NOT the backstop's value - the bucket wins
         // for keys the leaf actually prepared).
         Assert.That(state.State.Entries["in-bucket"].Value, Is.EqualTo(new byte[] { 7, 7, 7 }),
             "pending bucket must win over backstop for keys present in both");
 
         // Migrated key: backstopped via LWW because the bucket has no
-        // entry for it — the prior per-saga dedup would have skipped
+        // entry for it - the prior per-saga dedup would have skipped
         // this entirely, leaving Entries.ContainsKey("migrated")
         // false.
         Assert.That(state.State.Entries.ContainsKey("migrated"), Is.True,
@@ -464,8 +464,8 @@ public partial class BPlusLeafGrainTests
     /// (e.g. <c>ForwardSplitTerminalAsync</c> mirrors with no per-shard
     /// subset routed via this hop) marks <c>_recentlyTerminal[txid]</c>
     /// so the pending-flip path will not re-run. A subsequent delivery
-    /// from a different channel — typically <c>AtomicWriteGrain</c>'s
-    /// direct fan-out with the full committedValues — must still apply
+    /// from a different channel - typically <c>AtomicWriteGrain</c>'s
+    /// direct fan-out with the full committedValues - must still apply
     /// the cross-migration LWW backstop for keys that the first
     /// delivery did not cover. The prior shape gated the backstop on
     /// <c>!alreadyFlipped</c>, which short-circuited every subsequent
@@ -507,9 +507,9 @@ public partial class BPlusLeafGrainTests
     }
 
     /// <summary>
-    /// Regression: per-(txid, key) — not per-(txid) — backstop dedup.
+    /// Regression: per-(txid, key) - not per-(txid) - backstop dedup.
     /// Two terminal deliveries to the same leaf can legitimately carry
-    /// disjoint <c>committedValues</c> subsets — the AtomicWriteGrain
+    /// disjoint <c>committedValues</c> subsets - the AtomicWriteGrain
     /// direct fan-out and the source shard's
     /// <c>ForwardSplitTerminalAsync</c> mirror route by independent
     /// criteria (current-routing vs <c>MovedAwaySlots</c> earlier
@@ -528,7 +528,7 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain(state, commitLog: commitLog);
         var txid = Guid.NewGuid();
 
-        // Delivery 1: subset routed by current-routing — {a, b}.
+        // Delivery 1: subset routed by current-routing - {a, b}.
         var subsetA = new Dictionary<string, byte[]>(StringComparer.Ordinal)
         {
             ["a"] = [1],
@@ -543,7 +543,7 @@ public partial class BPlusLeafGrainTests
         Assert.That(appendCountAfterFirst, Is.EqualTo(2),
             "delivery 1 must append exactly one WAL entry per missing key (a, b)");
 
-        // Delivery 2: disjoint subset routed by MovedAwaySlots —
+        // Delivery 2: disjoint subset routed by MovedAwaySlots -
         // {c, d}. A per-saga dedup would skip this entirely (the saga
         // was already "backstopped" by delivery 1). The per-key dedup
         // must allow these new keys through.

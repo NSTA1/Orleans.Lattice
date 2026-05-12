@@ -7,7 +7,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// A per-shard WAL-read coordinator that amortises commit-log reads across
 /// every leaf grain that activates within a single shard. Keyed
-/// <c>{treeId}/{shardIndex}</c>. Internal — the leaf grain is the sole
+/// <c>{treeId}/{shardIndex}</c>. Internal - the leaf grain is the sole
 /// caller; the V1 surface does not expose this on any public API.
 /// </summary>
 [Alias(TypeAliases.ILeafReplayCoordinatorGrain)]
@@ -28,13 +28,13 @@ internal interface ILeafReplayCoordinatorGrain : IGrainWithStringKey
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the current head offset of the per-shard write-ahead log —
+    /// Returns the current head offset of the per-shard write-ahead log -
     /// i.e. the next sequence number that will be assigned to a future append.
     /// </summary>
     Task<long> GetHeadOffsetAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the current tail offset of the per-shard write-ahead log —
+    /// Returns the current tail offset of the per-shard write-ahead log -
     /// i.e. the offset of the oldest entry still readable. Equals the head
     /// when the log is empty or has never been trimmed.
     /// </summary>

@@ -20,7 +20,7 @@ namespace VehicleFleetSimulator.Benchmark.Sink;
 /// <remarks>
 /// <para>
 /// Discrete events (<see cref="VehicleEvent"/>) are deliberately discarded. The benchmark plan
-/// keeps the events feed off the hot path — it's lower-volume, lower-value for the sustained
+/// keeps the events feed off the hot path - it's lower-volume, lower-value for the sustained
 /// write benchmark, and the design seam (<see cref="ITelemetrySink"/>) intentionally allows it.
 /// </para>
 /// </remarks>
@@ -86,7 +86,7 @@ public sealed class LatticeSink : ITelemetrySink, IHostedService, IAsyncDisposab
             return ValueTask.CompletedTask;
         }
 
-        // BoundedChannelFullMode.Wait — fall back to async write so we apply backpressure.
+        // BoundedChannelFullMode.Wait - fall back to async write so we apply backpressure.
         return WaitWriteAsync(telemetry, cancellationToken, start);
 
         async ValueTask WaitWriteAsync(VehicleTelemetryEvent t, CancellationToken ct, long s)
@@ -136,7 +136,7 @@ public sealed class LatticeSink : ITelemetrySink, IHostedService, IAsyncDisposab
         }
         catch (OperationCanceledException)
         {
-            // Drain didn't complete within the budget — record a bulk drop count and move on.
+            // Drain didn't complete within the budget - record a bulk drop count and move on.
             var remaining = _channel.Reader.Count;
             if (remaining > 0)
                 LatticeSinkMetrics.DroppedOnShutdown.Add(remaining);
@@ -282,7 +282,7 @@ public sealed class LatticeSink : ITelemetrySink, IHostedService, IAsyncDisposab
 
     private static byte[] DefaultSerializer(VehicleTelemetryEvent telemetry)
     {
-        // Hand-rolled UTF-8 JSON encoder — one allocation per call (the byte[]). Avoids taking
+        // Hand-rolled UTF-8 JSON encoder - one allocation per call (the byte[]). Avoids taking
         // a System.Text.Json dependency on the abstractions package and keeps the serialized
         // shape deterministic across runs (no reflection-based property ordering).
         var buffer = new ArrayBufferWriter<byte>(initialCapacity: 192);
@@ -306,7 +306,7 @@ public sealed class LatticeSink : ITelemetrySink, IHostedService, IAsyncDisposab
     }
 }
 
-/// <summary>Internal helper — lightweight expanding buffer for <see cref="Utf8JsonWriter"/>.</summary>
+/// <summary>Internal helper - lightweight expanding buffer for <see cref="Utf8JsonWriter"/>.</summary>
 internal sealed class ArrayBufferWriter<T> : System.Buffers.IBufferWriter<T>
 {
     private T[] _buffer;

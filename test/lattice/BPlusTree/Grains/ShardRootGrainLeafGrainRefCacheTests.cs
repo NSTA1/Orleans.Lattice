@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 ///   leaf id) causes the next traversal to detect the mismatch and refresh
 ///   the slot, so reference resolution remains correct on rotation.</item>
 ///   <item>Every traversal entry-point that goes via the leaf grain (writes,
-///   CAS, GetOrSet, GetWithVersion) shares the same single-slot cache —
+///   CAS, GetOrSet, GetWithVersion) shares the same single-slot cache -
 ///   mixing methods against the same leaf id resolves the reference once,
 ///   not once per method.</item>
 /// </list>

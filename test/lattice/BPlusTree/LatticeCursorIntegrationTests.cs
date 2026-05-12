@@ -201,7 +201,7 @@ public class LatticeCursorIntegrationTests
     public async Task Cursor_survives_multiple_paging_iterations_exact_page_size()
     {
         // Edge case: items exactly divisible by pageSize. HasMore should become
-        // false only after the final empty fetch — we accept that the cursor
+        // false only after the final empty fetch - we accept that the cursor
         // may report HasMore=true on the last non-empty page.
         var tree = await SeedTreeAsync($"cur-exact-{Guid.NewGuid():N}",
             new[] { "a", "b", "c", "d" });

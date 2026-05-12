@@ -33,7 +33,7 @@ internal sealed class LeafReplayCoordinatorGrain(
     private int _shardIndex = -1;
     private ICommitLogReader? _reader;
 
-    // Last-served slice cache — V1 amortisation surface.
+    // Last-served slice cache - V1 amortisation surface.
     private long _cachedFromExclusive = -1;
     private long _cachedToInclusive = -1;
     private DateTime _cachedAtUtc = DateTime.MinValue;
@@ -89,7 +89,7 @@ internal sealed class LeafReplayCoordinatorGrain(
 
         EnsureBindingsParsed();
 
-        // V1 cache — serve from cache when the new range matches the
+        // V1 cache - serve from cache when the new range matches the
         // cached window byte-for-byte and the entry has not aged past
         // the TTL. Conservative on purpose: any deviation falls
         // through to a fresh read.

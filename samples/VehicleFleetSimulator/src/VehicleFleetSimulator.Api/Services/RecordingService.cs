@@ -18,7 +18,7 @@ namespace VehicleFleetSimulator.Api.Services;
 /// the stash to recreate the scene.
 /// </summary>
 /// <remarks>
-/// Recordings live in process memory only — restarting the API loses them. That's an intentional
+/// Recordings live in process memory only - restarting the API loses them. That's an intentional
 /// scope limitation called out in the roadmap as "bigger lift" before adding a persistent sink.
 /// </remarks>
 public sealed class RecordingService : IHostedService, IAsyncDisposable
@@ -110,7 +110,7 @@ public sealed class RecordingService : IHostedService, IAsyncDisposable
         private Task? _telemetryLoop;
         private Task? _eventLoop;
 
-        // Bounded ring lists — when the cap is reached we evict the oldest entry, which keeps
+        // Bounded ring lists - when the cap is reached we evict the oldest entry, which keeps
         // the list cost bounded in memory and gives "the most recent N samples" replay semantics.
         private readonly LinkedList<RecordedTelemetry> _telemetry = new();
         private readonly LinkedList<RecordedEvent> _events = new();

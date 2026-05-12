@@ -17,7 +17,7 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// Initiates a soft delete of the tree. Marks all shards as deleted so that
     /// subsequent reads and writes throw <see cref="InvalidOperationException"/>.
     /// Registers a reminder to purge the tree after the configured soft-delete
-    /// duration. Idempotent — calling again on an already-deleted tree is a no-op.
+    /// duration. Idempotent - calling again on an already-deleted tree is a no-op.
     /// </summary>
     Task DeleteTreeAsync();
 
@@ -32,7 +32,7 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// <c>IsDeleted</c> flag on all shards and unregisters the purge reminder.
     /// Throws <see cref="InvalidOperationException"/> if the tree has not been
     /// deleted, or if the purge has already completed (data is gone).
-    /// Idempotent during the soft-delete window — calling multiple times is safe.
+    /// Idempotent during the soft-delete window - calling multiple times is safe.
     /// </summary>
     Task RecoverAsync();
 

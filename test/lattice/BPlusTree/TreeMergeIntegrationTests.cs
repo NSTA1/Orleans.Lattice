@@ -106,7 +106,7 @@ public class TreeMergeIntegrationTests
         // Write to source (newer timestamp).
         await source.SetAsync("conflict-key", Encoding.UTF8.GetBytes("source-value"));
 
-        // Merge — source should win because it has a newer timestamp.
+        // Merge - source should win because it has a newer timestamp.
         var merge = _cluster.GrainFactory.GetGrain<ITreeMergeGrain>(targetTree);
         await merge.MergeAsync(sourceTree);
         await merge.RunMergePassAsync();
@@ -133,7 +133,7 @@ public class TreeMergeIntegrationTests
         // Write to target (newer timestamp).
         await target.SetAsync("conflict-key", Encoding.UTF8.GetBytes("target-value"));
 
-        // Merge — target should win because it has a newer timestamp.
+        // Merge - target should win because it has a newer timestamp.
         var merge = _cluster.GrainFactory.GetGrain<ITreeMergeGrain>(targetTree);
         await merge.MergeAsync(sourceTree);
         await merge.RunMergePassAsync();

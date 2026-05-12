@@ -180,8 +180,8 @@ public class PnCounterTests
         a.Increment("r2", 7);
 
         var b = new PnCounter();
-        b.Increment("r1", 3); // smaller than a's 5 — pointwise-max keeps a's
-        b.Increment("r2", 9); // larger than a's 7 — pointwise-max keeps b's
+        b.Increment("r1", 3); // smaller than a's 5 - pointwise-max keeps a's
+        b.Increment("r2", 9); // larger than a's 7 - pointwise-max keeps b's
         b.Decrement("r3", 4);
 
         var staticResult = PnCounter.Merge(a, b);

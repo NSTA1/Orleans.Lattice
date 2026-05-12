@@ -5,7 +5,7 @@ namespace Orleans.Lattice;
 /// and serializable types. Each alias is a short, fixed string
 /// that provides a stable wire-format identity independent of CLR type names.
 /// Every constant must use the <c>ol.</c> prefix, be at most 6 characters,
-/// and be unique — these invariants are enforced by <c>TypeAliasesTests</c>.
+/// and be unique - these invariants are enforced by <c>TypeAliasesTests</c>.
 /// </summary>
 internal static class TypeAliases
 {
@@ -61,7 +61,7 @@ internal static class TypeAliases
     internal const string TreeReshardState = "ol.txs";
     internal const string ReshardPhase = "ol.rxp";
 
-    // Online resize — shadow-forwarding primitive
+    // Online resize - shadow-forwarding primitive
     internal const string ShadowForwardState = "ol.sfs";
     internal const string ShadowForwardPhase = "ol.sfp";
     internal const string StaleTreeRouting = "ol.str";
@@ -104,7 +104,7 @@ internal static class TypeAliases
     internal const string MutationCategory = "ol.muc";
     internal const string LatticeDeltaCarry = "ol.dlc";
 
-    // Grain interfaces — each must be applied via [Alias(...)] on the
+    // Grain interfaces - each must be applied via [Alias(...)] on the
     // interface declaration so the Orleans manifest carries a stable,
     // short wire-format identity independent of CLR type names.
     internal const string ILattice = "ol.gl";

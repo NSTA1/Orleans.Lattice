@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="8.0.1">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -27,6 +31,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
+    <ProjectReference Include="..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
+    <ProjectReference Include="..\..\src\lattice.replication.grpc\Orleans.Lattice.Replication.Grpc.csproj" />
   </ItemGroup>
 
 </Project>

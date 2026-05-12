@@ -250,7 +250,7 @@ public partial class BPlusTreeBulkLoadTests
     [Test]
     public async Task BulkLoad_idempotent_retry_is_noop()
     {
-        // BulkLoadAsync on the same tree twice should succeed — the second
+        // BulkLoadAsync on the same tree twice should succeed - the second
         // call hits the idempotency guard (LastCompletedBulkOperationId).
         await RegisterSingleShardAsync("bulk-idempotent");
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-idempotent");
@@ -260,7 +260,7 @@ public partial class BPlusTreeBulkLoadTests
 
         await tree.BulkLoadAsync(entries);
 
-        // Second call — should not throw or corrupt the tree.
+        // Second call - should not throw or corrupt the tree.
         // (LatticeGrain generates a new operationId, but ShardRootGrain rejects
         // it with "already has data" if the shard is non-empty, unless the
         // operation ID matches. So we test at the shard level for true idempotency.)
@@ -286,7 +286,7 @@ public partial class BPlusTreeBulkLoadTests
     public async Task BulkAppend_idempotent_retry_same_operationId_is_noop()
     {
         // Calling BulkAppendAsync twice with the same operationId should
-        // produce the same result — no duplicate entries, no corruption.
+        // produce the same result - no duplicate entries, no corruption.
         var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("bulk-append-idem/0");
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-append-idem");
 
@@ -296,7 +296,7 @@ public partial class BPlusTreeBulkLoadTests
 
         await shard.BulkAppendAsync("op-1", entries);
 
-        // Retry with same operationId — should be a no-op.
+        // Retry with same operationId - should be a no-op.
         await shard.BulkAppendAsync("op-1", entries);
 
         // Verify key count matches expected (no duplicates).
@@ -336,7 +336,7 @@ public partial class BPlusTreeBulkLoadTests
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-empty");
         await tree.BulkLoadAsync([]);
 
-        // Tree should still work — set and get a key after empty bulk load.
+        // Tree should still work - set and get a key after empty bulk load.
         await tree.SetAsync("after", Encoding.UTF8.GetBytes("val"));
         var result = await tree.GetAsync("after");
         Assert.That(result, Is.Not.Null);
@@ -354,7 +354,7 @@ public partial class BPlusTreeBulkLoadTests
             .ToList();
         await shard.BulkAppendAsync("op-1", entries);
 
-        // Append empty — should not fail or change anything.
+        // Append empty - should not fail or change anything.
         await shard.BulkAppendAsync("op-2", []);
 
         var keys = new List<string>();

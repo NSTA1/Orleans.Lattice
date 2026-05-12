@@ -17,7 +17,7 @@ internal interface ITombstoneCompactionGrain : IGrainWithStringKey
     Task EnsureReminderAsync();
 
     /// <summary>
-    /// Runs a complete compaction pass synchronously — walks every shard's
+    /// Runs a complete compaction pass synchronously - walks every shard's
     /// leaf chain and compacts tombstones older than the configured grace
     /// period. Intended for manual triggers and integration testing;
     /// the periodic reminder uses a timer-based approach instead.

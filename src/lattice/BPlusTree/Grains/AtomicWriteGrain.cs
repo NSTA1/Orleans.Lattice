@@ -60,7 +60,7 @@ internal sealed class AtomicWriteGrain(
     /// deadline elapses. Bounded by wall-clock rather than attempt count
     /// because the worst-case storm under a 4-to-8 reshard or an
     /// online-resize alias swap can generate more sequential map/alias
-    /// updates than any reasonable fixed budget — an earlier
+    /// updates than any reasonable fixed budget - an earlier
     /// 4-attempt budget surfaced
     /// <c>Stale*RoutingException</c> from
     /// <c>ReshardTopologyTests.Continuous_reader_observes_zero_or_all_keys_through_mid_saga_reshard</c>
@@ -162,7 +162,7 @@ internal sealed class AtomicWriteGrain(
             return;
         }
 
-        // Fresh saga — validate inputs, register the keepalive reminder first
+        // Fresh saga - validate inputs, register the keepalive reminder first
         // (so a crash mid-Prepare still has a reminder-driven recovery path),
         // and then capture pre-saga state.
         if (state.State.Phase == AtomicWritePhase.NotStarted)
@@ -204,7 +204,7 @@ internal sealed class AtomicWriteGrain(
     /// Computes a SHA-256 fingerprint over the batch's sorted key set plus
     /// its entry count. Reordering the same keys produces the same
     /// fingerprint; changing any key (or the count) changes it. Values
-    /// are not hashed — a caller retrying the same logical operation with
+    /// are not hashed - a caller retrying the same logical operation with
     /// slightly-different serialized payloads for the same keys is treated
     /// as an idempotent retry, not a mismatch.
     /// </summary>
@@ -244,7 +244,7 @@ internal sealed class AtomicWriteGrain(
     /// hook (which returns routing metadata only, no CRDT internals) and the
     /// saga then addresses <see cref="IShardRootGrain"/> directly. This keeps
     /// the raw <see cref="LwwEntry"/> traffic on guarded internal grain
-    /// interfaces — it never crosses the public <see cref="ILattice"/> surface.
+    /// interfaces - it never crosses the public <see cref="ILattice"/> surface.
     /// A <see cref="StaleShardRoutingException"/> from an adaptive shard split
     /// triggers a one-shot routing refresh and retry for the affected key.
     /// </para>
@@ -353,7 +353,7 @@ internal sealed class AtomicWriteGrain(
             // resize). Refreshes routing once per stale-routing throw via
             // the public ILattice.GetRoutingAsync hook before re-issuing
             // the direct IShardRootGrain call. A bounded attempt-count
-            // budget was insufficient under reshard storms — see
+            // budget was insufficient under reshard storms - see
             // ReshardTopologyTests.Continuous_reader_observes_zero_or_all
             // _keys_through_mid_saga_reshard and the matching resize test
             // which exercise this path under a 4-to-8 reshard / online
@@ -458,12 +458,12 @@ internal sealed class AtomicWriteGrain(
             // minted transaction id. If it does (legacy persisted
             // state, or a code path that bypassed StampTransactionId),
             // there is no per-shard linearization point to mark, so
-            // skip the broadcast. The saga still completes — the
+            // skip the broadcast. The saga still completes - the
             // worst case is that prepared writes (if any) remain
             // bucketed in the leaves' pending-tx maps until they
             // age out of replay or the operator manually drops them.
             Logger.LogWarning(
-                "Atomic-write saga {OperationKey}: skipping terminal broadcast — no transaction id is set on persisted state.",
+                "Atomic-write saga {OperationKey}: skipping terminal broadcast - no transaction id is set on persisted state.",
                 OperationKey);
             return;
         }
@@ -513,7 +513,7 @@ internal sealed class AtomicWriteGrain(
             // shard surfaces the destination's pre-saga value
             // indefinitely. Fix: re-resolve every entry against a
             // fresh routing snapshot and union the result into
-            // TouchedShards. This is purely additive — old captures
+            // TouchedShards. This is purely additive - old captures
             // are preserved (for sagas whose prepare landed on the
             // OLD owner before a migration moved the slot, the OLD
             // owner is in TouchedShards and ForwardSplitTerminalAsync
@@ -588,7 +588,7 @@ internal sealed class AtomicWriteGrain(
         // succeeds and we save an RPC. If a resize alias-swap has
         // landed between prepare and broadcast, the first per-shard
         // call throws StaleTreeRoutingException and MarkOneShardAsync's
-        // retry loop refreshes routing against the new physical tree —
+        // retry loop refreshes routing against the new physical tree -
         // amortised across the per-shard fan-out. When we just had to
         // reconstruct the touched-shard set above we already have a
         // fresh routing snapshot in hand and reuse it.
@@ -599,7 +599,7 @@ internal sealed class AtomicWriteGrain(
         // commit path only; on abort, the leaf-side handler drops the
         // pending bucket and the values are not surfaced. Each shard
         // receives ONLY the (key, value) pairs that route to it under
-        // the routing snapshot in hand — the shard root performs the
+        // the routing snapshot in hand - the shard root performs the
         // further per-leaf grouping inside AppendTxTerminalAsync.
         //
         // The keys whose routing has DRIFTED since prepare (already
@@ -609,7 +609,7 @@ internal sealed class AtomicWriteGrain(
         // dropped. Note: a shard in TouchedShards that no longer owns
         // any of the saga's keys (e.g. the original owner of a
         // migrated slot) receives a null backstop dict; that's
-        // correct — its pending-flip path remains the authoritative
+        // correct - its pending-flip path remains the authoritative
         // delivery for it.
         Dictionary<int, Dictionary<string, byte[]>>? perShardCommitted = null;
         if (committed && state.State.Entries.Count > 0)
@@ -721,7 +721,7 @@ internal sealed class AtomicWriteGrain(
 
         if (state.State.Phase == AtomicWritePhase.Prepare)
         {
-            // Crash before execute was persisted — replay Prepare.
+            // Crash before execute was persisted - replay Prepare.
             var entries = state.State.Entries;
             await PrepareAsync(state.State.TreeId, entries);
         }
@@ -810,7 +810,7 @@ internal sealed class AtomicWriteGrain(
 
     /// <summary>
     /// Applies each entry in order. A failure transitions the saga into
-    /// <see cref="AtomicWritePhase.Compensate"/> without re-throwing — the
+    /// <see cref="AtomicWritePhase.Compensate"/> without re-throwing - the
     /// caller is driven by <see cref="RunSagaAsync"/> which continues into
     /// compensation on the same call.
     /// </summary>
@@ -822,7 +822,7 @@ internal sealed class AtomicWriteGrain(
         // loop rather than per-key. The leaf grain's commit pipeline reads
         // LatticePreparedContext.Current at LatticeMutation emit time, so the
         // flag being "on" across the between-iteration state.WriteStateAsync
-        // calls is semantically equivalent to being "off" — those persists
+        // calls is semantically equivalent to being "off" - those persists
         // do not emit a LatticeMutation. Hoisting saves (N-1) Scope-class
         // allocations per N-key saga without changing observable behaviour.
         using (LatticePreparedContext.BeginScope())
@@ -830,7 +830,7 @@ internal sealed class AtomicWriteGrain(
         // using's Dispose restores the pre-saga ambient (typically null)
         // once after the loop instead of N times. Each per-key iteration
         // overwrites Current via the bare setter, which is a single
-        // RequestContext.Set call — half the cost of the prior nested
+        // RequestContext.Set call - half the cost of the prior nested
         // using's entry+exit pair. The bare-setter cost per key is the
         // same as the outer using's entry cost; restoration is amortised
         // across the whole saga rather than paid 16 times.
@@ -872,7 +872,7 @@ internal sealed class AtomicWriteGrain(
                         continue;
                     }
 
-                    // Exhausted retries — pivot to compensation.
+                    // Exhausted retries - pivot to compensation.
                     state.State.Phase = AtomicWritePhase.Compensate;
                     state.State.FailureMessage = ex.Message;
                     // NextIndex currently points at the failed-to-commit entry; it
@@ -884,7 +884,7 @@ internal sealed class AtomicWriteGrain(
             }
         }
 
-        // Every entry committed — switch to Completed marker on saga exit.
+        // Every entry committed - switch to Completed marker on saga exit.
     }
 
     /// <summary>
@@ -893,7 +893,7 @@ internal sealed class AtomicWriteGrain(
     /// cleanup, and requests deactivation. Safe to call in both success and
     /// post-compensation paths. <paramref name="success"/> gates emission of
     /// the terminal <see cref="LatticeTreeEventKind.AtomicWriteCompleted"/>
-    /// event — rolled-back sagas do not publish a completion event because
+    /// event - rolled-back sagas do not publish a completion event because
     /// no write actually committed.
     /// </summary>
     private async Task CompleteSagaAsync(bool success)
@@ -993,8 +993,8 @@ internal sealed class AtomicWriteGrain(
     /// <summary>
     /// Stamps the saga's persisted transaction id onto Orleans
     /// <see cref="RequestContext"/> so every per-key <c>SetAsync</c> /
-    /// <c>DeleteAsync</c> call the saga makes — including compensation
-    /// rewrites — surfaces with the same
+    /// <c>DeleteAsync</c> call the saga makes - including compensation
+    /// rewrites - surfaces with the same
     /// <see cref="LatticeMutation.TransactionId"/>. Lazily mints an id
     /// when persisted state is empty (e.g. legacy persisted state or a
     /// reactivation after a crash that pre-dated this field) so resumed
@@ -1012,8 +1012,8 @@ internal sealed class AtomicWriteGrain(
     /// <summary>
     /// Re-establishes the saga's persisted author-delta carry on Orleans
     /// <see cref="RequestContext"/> so every per-key <c>SetAsync</c> /
-    /// <c>DeleteAsync</c> the saga issues — including compensation
-    /// rewrites — surfaces with the same
+    /// <c>DeleteAsync</c> the saga issues - including compensation
+    /// rewrites - surfaces with the same
     /// <see cref="LatticeMutation.DeltaKind"/> /
     /// <see cref="LatticeMutation.DeltaPayload"/> as the original batch.
     /// No-op when the caller did not supply a delta context on the first

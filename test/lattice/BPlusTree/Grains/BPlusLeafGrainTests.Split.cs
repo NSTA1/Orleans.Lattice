@@ -78,7 +78,7 @@ public partial class BPlusLeafGrainTests
         // First recovery attempt.
         var result1 = await grain.SetAsync("z", Encoding.UTF8.GetBytes("3"));
 
-        // The sibling ID in the result must match the persisted one — not a new Guid.
+        // The sibling ID in the result must match the persisted one - not a new Guid.
         Assert.That(result1!.NewSiblingId, Is.EqualTo(siblingId));
     }
 
@@ -394,7 +394,7 @@ public partial class BPlusLeafGrainTests
         // crashes after receiving SplitResult but before the source's
         // trimmed state is persisted, the parent would route lookups to
         // the new sibling while the unflushed source still holds the
-        // (now-moved) keys — producing a visible "duplicated keys"
+        // (now-moved) keys - producing a visible "duplicated keys"
         // state in the tree.
         var state = new FakePersistentState<LeafNodeState>();
         var siblingContext = Substitute.For<IGrainContext>();
@@ -452,7 +452,7 @@ public partial class BPlusLeafGrainTests
     // a freshly-created sibling has its Entries populated synchronously
     // by MergeEntriesAsync from the donor's pre-split state. Without
     // a checkpoint hint, the sibling would replay every WAL entry from
-    // offset 0 on its first activation (filtering by range) — wasted
+    // offset 0 on its first activation (filtering by range) - wasted
     // work that scales with the entire shard's history.
     // -------------------------------------------------------------------
 

@@ -199,7 +199,7 @@ public partial class PublicApiContractTests
     [Test]
     public void LatticeOriginContext_With_restores_previous_value_on_dispose()
     {
-        // Pure ambient-context test — no grain calls needed.
+        // Pure ambient-context test - no grain calls needed.
         Assert.That(LatticeOriginContext.Current, Is.Null);
 
         using (LatticeOriginContext.With("outer"))

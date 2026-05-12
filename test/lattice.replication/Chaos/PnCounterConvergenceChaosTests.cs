@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 /// dispatch path. Three sites issue concurrent increments and decrements
 /// against a single counter key while a partition isolates one site
 /// mid-workload; after the partition heals and the delivery pump drains,
-/// every site must read the same total — the algebraic sum across all
+/// every site must read the same total - the algebraic sum across all
 /// sites' authored deltas.
 /// </summary>
 [TestFixture]
@@ -86,7 +86,7 @@ public class PnCounterConvergenceChaosTests
     /// <summary>
     /// Wraps <see cref="PnCounterAccessor.IncrementAsync"/> in a bounded
     /// retry loop. A single CAS-budget exhaustion under chaos contention
-    /// is not a correctness failure — the chaos pump is concurrently
+    /// is not a correctness failure - the chaos pump is concurrently
     /// merging foreign-origin states onto the same key, racing the local
     /// CAS loop. Retry from the call site, mirroring what a real
     /// application would do.
@@ -106,7 +106,7 @@ public class PnCounterConvergenceChaosTests
             }
         }
 
-        // Final attempt — let the exception propagate if it still fails.
+        // Final attempt - let the exception propagate if it still fails.
         await lattice.PnCounter(Key).IncrementAsync(replicaId, 1);
     }
 

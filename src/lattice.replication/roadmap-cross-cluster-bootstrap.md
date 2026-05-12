@@ -1,4 +1,4 @@
-# Cross-cluster bootstrap transport — scoped roadmap
+# Cross-cluster bootstrap transport - scoped roadmap
 
 This file is a **scoped roadmap** that sits alongside the canonical
 [`roadmap.md`](./roadmap.md). It documents a gap in the snapshot/bootstrap
@@ -48,7 +48,7 @@ await foreach (var entry in _grainFactory
 This is correct for the *intra-cluster* snapshot-as-a-tool path
 (`R-093 ✓ shipped`: an operator snapshots a tree, restores it later in
 the same cluster, and seeds the local vector clock from the surviving
-`LwwEntry.VectorClock` slots) — there the local tree IS the authoritative
+`LwwEntry.VectorClock` slots) - there the local tree IS the authoritative
 source.
 
 It is **not** correct for the *cross-cluster* bootstrap path. On a fresh
@@ -78,7 +78,7 @@ The canonical roadmap's snapshot/bootstrap items deliver:
 `R-050`'s design intent is explicit on the missing piece (lines 442–443
 of the canonical roadmap):
 
-> *Avoid hard-coding "remote peer" in the API surface — keep it*
+> *Avoid hard-coding "remote peer" in the API surface - keep it*
 > *`ISnapshotProvider.ExportAsync(treeName, asOfHlc, ct)` and let the*
 > *consumer decide what to do with the stream.*
 
@@ -123,7 +123,7 @@ below.
 
 ## 3. Proposed features (priority + dependency order)
 
-- [ ] **R-150 — Cross-cluster `ISnapshotProvider` transport contract** *(no deps)*
+- [ ] **R-150 - Cross-cluster `ISnapshotProvider` transport contract** *(no deps)*
 
   Define the transport-shaped sub-interface that delivers a snapshot
   stream from a sender cluster to a receiver cluster. Pure abstraction
@@ -148,7 +148,7 @@ below.
   ```
 
   The metadata RPC returns the sender's current `(asOfHlc,
-  causalStableFrontier)` cut-point — captured atomically with the start
+  causalStableFrontier)` cut-point - captured atomically with the start
   of the stream so the receiver can `PinSnapshotAsync` correctly without
   requiring the sender to embed cut-point markers inside the entry stream.
 
@@ -175,14 +175,14 @@ below.
 
 ---
 
-- [ ] **R-151 — Sender-side snapshot service handler** *(deps: R-150)*
+- [ ] **R-151 - Sender-side snapshot service handler** *(deps: R-150)*
 
   A service registered on the *sender* silo that responds to inbound
   `IRemoteSnapshotTransport.RequestSnapshotAsync` calls by invoking the
   **sender's** local `LatticeSnapshotProvider` against its own tree and
   streaming the entries back through the transport.
 
-  The handler is independent of the transport binding — gRPC, in-process,
+  The handler is independent of the transport binding - gRPC, in-process,
   or test-loopback can all reuse the same handler. Concrete bindings
   plug in via the transport's host-registration surface (`R-154` for gRPC).
 
@@ -198,7 +198,7 @@ below.
 
 ---
 
-- [ ] **R-152 — Receiver-side `RemoteSnapshotProvider` adapter** *(deps: R-150, R-151)*
+- [ ] **R-152 - Receiver-side `RemoteSnapshotProvider` adapter** *(deps: R-150, R-151)*
 
   An `ISnapshotProvider` implementation that hosts can register *before*
   `AddLatticeReplication` to override the local-tree default. It calls
@@ -246,7 +246,7 @@ below.
 
 ---
 
-- [ ] **R-153 — `LatticeBootstrapCoordinatorGrain` routes snapshot drain through `IReplicationApplier`** *(deps: R-152)*
+- [ ] **R-153 - `LatticeBootstrapCoordinatorGrain` routes snapshot drain through `IReplicationApplier`** *(deps: R-152)*
 
   Internal-seam change: `DrainSnapshotAsync` switches from
   `IReplicationApplyGrain.ApplySetAsync(...)` to
@@ -274,7 +274,7 @@ below.
 
 ---
 
-- [ ] **R-154 — gRPC binding for `IRemoteSnapshotTransport`** *(deps: R-150, R-151, R-153)*
+- [ ] **R-154 - gRPC binding for `IRemoteSnapshotTransport`** *(deps: R-150, R-151, R-153)*
 
   Concrete `IRemoteSnapshotTransport` implementation in
   `Orleans.Lattice.Replication.Grpc`, mirroring the existing
@@ -307,17 +307,17 @@ below.
   cluster A while cluster B drains its bootstrap snapshot must observe
   either (a) all keys of the batch in the snapshot stream, or (b) zero
   keys in the snapshot plus all keys in the post-bootstrap incremental
-  stream — never a partial-snapshot view that splits the batch on the
+  stream - never a partial-snapshot view that splits the batch on the
   bootstrapped peer.
 
 ---
 
-- [ ] **R-155 — Auto-bootstrap rate limit + concurrency floor** *(no new deps; refines `R-051 ✓ shipped` / `R-052 ✓ shipped`)*
+- [ ] **R-155 - Auto-bootstrap rate limit + concurrency floor** *(no new deps; refines `R-051 ✓ shipped` / `R-052 ✓ shipped`)*
 
   Independent of the transport work but observable only once the transport
   work lands. Today `LatticeFallOffLogDetector.CheckAndTriggerAsync`
   delegates idempotent kickoff to `ILatticeBootstrapCoordinator`
-  (per-tree, per-source-cluster mutex via grain activation) — but a
+  (per-tree, per-source-cluster mutex via grain activation) - but a
   malformed `senderOldestAvailableHlc` source could trigger a fall-off
   detection on every probe. In the current pre-transport state this
   manifests as the harmless infinite-no-op loop seen in the
@@ -340,7 +340,7 @@ below.
 
 ---
 
-- [ ] **R-156 — Bootstrap progress observability** *(deps: R-152, R-153)*
+- [ ] **R-156 - Bootstrap progress observability** *(deps: R-152, R-153)*
 
   Three new instruments on the existing `orleans.lattice.replication` meter
   plus a structured log at each phase transition. Mirrors the per-peer
@@ -369,7 +369,7 @@ below.
 
 ---
 
-- [ ] **R-157 — Operator-facing "force re-bootstrap" admin RPC widening** *(deps: R-152, refines `R-053 ✓ shipped`)*
+- [ ] **R-157 - Operator-facing "force re-bootstrap" admin RPC widening** *(deps: R-152, refines `R-053 ✓ shipped`)*
 
   `R-053`'s `ILatticeReplicationAdmin.RequestSnapshotAsync(treeName,
   sourceClusterId, ct)` already routes through the bootstrap coordinator,

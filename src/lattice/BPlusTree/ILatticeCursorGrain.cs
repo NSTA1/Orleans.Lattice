@@ -11,7 +11,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// <para>
 /// Ordering across resumptions is preserved because the continuation uses the
 /// same <see cref="ILattice.KeysAsync"/> / <see cref="ILattice.EntriesAsync"/>
-/// path bounded by the persisted last-yielded key — and those paths already
+/// path bounded by the persisted last-yielded key - and those paths already
 /// deliver strict global ordering under topology change.
 /// </para>
 /// <para>
@@ -25,7 +25,7 @@ internal interface ILatticeCursorGrain : IGrainWithStringKey
 {
     /// <summary>
     /// Initializes the cursor with the given scan specification. Idempotent
-    /// on the same <paramref name="spec"/> — a second open is a no-op and the
+    /// on the same <paramref name="spec"/> - a second open is a no-op and the
     /// cursor continues from its persisted progress. Throws
     /// <see cref="InvalidOperationException"/> if the cursor was opened with
     /// a different spec.
@@ -60,7 +60,7 @@ internal interface ILatticeCursorGrain : IGrainWithStringKey
 
     /// <summary>
     /// Closes the cursor, clears its persisted state, and requests
-    /// deactivation. Idempotent — calling on an already-closed cursor is a
+    /// deactivation. Idempotent - calling on an already-closed cursor is a
     /// no-op.
     /// </summary>
     Task CloseAsync();

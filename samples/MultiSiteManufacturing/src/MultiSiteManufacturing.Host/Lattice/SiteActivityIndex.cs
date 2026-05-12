@@ -16,14 +16,14 @@ namespace MultiSiteManufacturing.Host.Lattice;
 /// <c>{site}/{wallTicks:D20}/{counter:D10}/{serial}</c> whose value
 /// is a short UTF-8 activity label (e.g. "Step: Machining",
 /// "Inspection: CMM Pass", "MRB: UseAsIs"). The index tree is a pure
-/// B+ tree demo — its sole purpose is to answer "which parts are at
+/// B+ tree demo - its sole purpose is to answer "which parts are at
 /// site X right now?" via a native descending range scan over the
 /// site prefix.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Every fact inherits <see cref="Fact.Site"/>, so every fact type is
-/// a candidate — including inspections at sites like
+/// a candidate - including inspections at sites like
 /// <c>StuttgartCmmLab</c> that never emit a
 /// <see cref="ProcessStepCompleted"/>. That is what lets the "Stuttgart
 /// CMM Lab" panel actually list its CMM inspections instead of
@@ -32,7 +32,7 @@ namespace MultiSiteManufacturing.Host.Lattice;
 /// <para>
 /// Keys embed the fact's zero-padded HLC so a <c>reverse: true</c>
 /// lexicographic scan natively yields HLC-descending
-/// (most-recent-first) order — no in-memory sort needed. The serial
+/// (most-recent-first) order - no in-memory sort needed. The serial
 /// is appended last so two facts recorded at the same instant don't
 /// collide. <see cref="ListAtSiteAsync"/> dedups by serial, keeping
 /// only the most recent activity per part.
@@ -40,7 +40,7 @@ namespace MultiSiteManufacturing.Host.Lattice;
 /// <para>
 /// Every silo runs its own copy of the hosted service, so both silo A
 /// and silo B append to the shared index tree (the lattice tree
-/// itself is cluster-wide). Write failures are logged and swallowed —
+/// itself is cluster-wide). Write failures are logged and swallowed -
 /// a transient storage hiccup on the index must not break the main
 /// fact pipeline.
 /// </para>
@@ -75,7 +75,7 @@ public sealed class SiteActivityIndex(
     /// the fact's hybrid logical clock, with one row per part (the
     /// latest activity for that part at that site). Implemented as a
     /// native descending <see cref="ILattice"/> range scan over the
-    /// <c>{site}/</c> prefix — the zero-padded HLC embedded in each
+    /// <c>{site}/</c> prefix - the zero-padded HLC embedded in each
     /// key means a reverse lexicographic scan is already
     /// HLC-descending; no post-sort is required.
     /// </summary>
@@ -132,7 +132,7 @@ public sealed class SiteActivityIndex(
 
     /// <summary>
     /// Short, human-readable label describing what happened at a
-    /// site — these render directly into the parts-by-site grid.
+    /// site - these render directly into the parts-by-site grid.
     /// Exposed so the dashboard broadcaster can build a
     /// <see cref="SiteActivityIndexEntry"/> for a live fact without
     /// round-tripping through the lattice (the range scan writes the
@@ -180,7 +180,7 @@ public sealed class SiteActivityIndex(
 }
 
 /// <summary>
-/// One row from <see cref="SiteActivityIndex.ListAtSiteAsync"/> — the
+/// One row from <see cref="SiteActivityIndex.ListAtSiteAsync"/> - the
 /// site, the part involved, the HLC at which the activity occurred
 /// (used for most-recent-first ordering and relative-time display),
 /// and a short label describing what happened.

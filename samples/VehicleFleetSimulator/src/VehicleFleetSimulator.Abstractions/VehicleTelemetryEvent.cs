@@ -2,7 +2,7 @@ namespace VehicleFleetSimulator.Abstractions;
 
 /// <summary>
 /// Per-tick telemetry snapshot emitted by a vehicle grain to its stream. A value type so that the
-/// 1000 msg/sec producer path doesn't allocate on the heap — pooling a record class would require
+/// 1000 msg/sec producer path doesn't allocate on the heap - pooling a record class would require
 /// a return-to-pool hook after the Orleans memory stream consumer drains it, which the provider
 /// doesn't expose. As a struct it travels through the stream by value, copied once into the
 /// memory stream's serialization buffer (pooled internally) with zero GC pressure on the producer.

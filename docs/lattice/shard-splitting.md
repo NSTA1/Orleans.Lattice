@@ -1,7 +1,7 @@
 # Adaptive Shard Splitting
 
 Adaptive shard splitting allows a hot physical shard to split into two **at
-runtime, fully online** — no shard is ever taken offline. Splits happen
+runtime, fully online** - no shard is ever taken offline. Splits happen
 automatically when an autonomic monitor detects a hot shard. Shard
 splitting is internal-only: `ITreeShardSplitGrain` is declared `internal`
 and is not reachable from consumer assemblies.
@@ -31,13 +31,13 @@ stateDiagram-v2
     Complete --> [*] : final drain pass + S.CompleteSplitAsync()
 ```
 
-1. **BeginShadowWrite** — Coordinator persists intent and calls
+1. **BeginShadowWrite** - Coordinator persists intent and calls
    `S.BeginSplitAsync(targetShardIndex, movedSlots, virtualShardCount)`. From
    this point on, every successful write *S* applies to a key in a moved
    virtual slot is mirrored to *T* via `T.MergeManyAsync`, preserving the
    original HLC. CRDT LWW guarantees correct convergence regardless of how
    the foreground write and the background drain interleave.
-2. **Drain** — Coordinator walks *S*'s leaf chain and forwards moved-slot
+2. **Drain** - Coordinator walks *S*'s leaf chain and forwards moved-slot
    entries (including tombstones) to *T* with their original HLC timestamps.
    The drain is **chunked** and **leaf-side filtered**: each leaf returns
    only entries whose virtual slot is in the moved-slot set via
@@ -45,16 +45,16 @@ stateDiagram-v2
    to *T* in batches of `SplitDrainBatchSize` (default 1024) entries. This
    bounds peak memory on the coordinator regardless of source shard size,
    and avoids transferring non-moved entries over the wire. Idempotent under
-   retry — re-running merges only converges to the same state.
-3. **Swap** — Coordinator persists a new `ShardMap` in the registry that
+   retry - re-running merges only converges to the same state.
+3. **Swap** - Coordinator persists a new `ShardMap` in the registry that
    redirects moved slots to *T*. New `LatticeGrain` activations immediately
    route the moved slots to *T*; stale activations still cache the old map.
-4. **Reject** — Coordinator calls `S.EnterRejectPhaseAsync()`. From this
+4. **Reject** - Coordinator calls `S.EnterRejectPhaseAsync()`. From this
    point any read or write to *S* for a moved-slot key throws
    `StaleShardRoutingException`. `LatticeGrain` catches the exception,
    invalidates its cached map, fetches the fresh map from the registry, and
-   retries against *T* — a single transparent retry per call.
-5. **Complete** — Coordinator runs one final drain pass to capture any
+   retries against *T* - a single transparent retry per call.
+5. **Complete** - Coordinator runs one final drain pass to capture any
    tombstones written during shadow that were not mirrored on the hot path,
    then calls `S.CompleteSplitAsync()` and clears its own state.
    `CompleteSplitAsync` also promotes the just-completed split's moved
@@ -74,7 +74,7 @@ idempotent.
 
 This section describes the *mechanism* by which live operations behave
 during a split. For the consistency contract each `ILattice` method
-provides — including under concurrent splits — see
+provides - including under concurrent splits - see
 [Consistency](consistency.md).
 
 Point reads and writes (`GetAsync`, `SetAsync`, `DeleteAsync`,
@@ -96,21 +96,21 @@ Each scan uses a reconciliation algorithm coordinated against the
 registry's monotonically-incrementing `ShardMap.Version`, but `CountAsync`
 and the `ScanKeysAsync` / `ScanEntriesAsync` streams follow two different paths.
 
-#### `CountAsync` / `CountPerShardAsync` — per-slot routing
+#### `CountAsync` / `CountPerShardAsync` - per-slot routing
 
 The orchestrator reads the authoritative `ShardMap`, partitions virtual
 slots by current owner (via `LatticeGrain.BuildOwnedSlotMap`), and asks
 each physical shard to count only its owned slots via
 `IShardRootGrain.CountForSlotsAsync(sortedSlots, virtualShardCount)`.
-Because each virtual slot is counted exactly once — against whichever
-shard the map identifies as its current owner — the result is
+Because each virtual slot is counted exactly once - against whichever
+shard the map identifies as its current owner - the result is
 topology-consistent by construction, independent of the source shard's
 per-split phase. The map version is re-read after the fan-out; if it
 moved, the count is discarded and retried on the fresh map, bounded by
 `LatticeOptions.MaxScanRetries` (default 3). Throws
 `InvalidOperationException` on retry exhaustion.
 
-#### `ScanKeysAsync` / `ScanEntriesAsync` — in-line reconciliation
+#### `ScanKeysAsync` / `ScanEntriesAsync` - in-line reconciliation
 
 Reconciliation is driven inside the main k-way merge loop rather than
 as a separate pass. Each shard root reports back:
@@ -131,7 +131,7 @@ same priority queue. The merge invariant (global minimum is yielded
 next) then carries ordering across the topology boundary. A per-call
 `HashSet<string>` suppresses duplicates across pre- and post-swap
 views. A final stability check after the priority queue drains catches
-the edge case where a split commits after all live cursors finished —
+the edge case where a split commits after all live cursors finished -
 reconciled entries from this path are also sorted and injected as a
 cursor, not appended. Bounded by `LatticeOptions.MaxScanRetries`.
 
@@ -166,7 +166,7 @@ re-anchored by a keepalive reminder. On each tick (default every 30 s) it:
    physical shard's `IsSplittingAsync()`. If that count is already
    `MaxConcurrentAutoSplits`, the pass returns without triggering anything.
    Because `HotShardMonitorGrain` is keyed per-tree, the cap is enforced
-   independently per tree — in a multi-tree cluster each tree may have up
+   independently per tree - in a multi-tree cluster each tree may have up
    to `MaxConcurrentAutoSplits` concurrent splits running simultaneously.
 4. Selects the top-`(MaxConcurrentAutoSplits − inFlight)` hottest shards
    whose rate exceeds `HotShardOpsPerSecondThreshold` (default 200 ops/s),
@@ -214,12 +214,12 @@ individually** when:
 
 ## Convergence guarantees
 
-* **No data loss** — every write committed to *S* is either drained,
+* **No data loss** - every write committed to *S* is either drained,
   shadow-mirrored, or both, and `MergeManyAsync` is idempotent under LWW.
-* **No duplicate authority** — after the swap, only *T* is reachable for
+* **No duplicate authority** - after the swap, only *T* is reachable for
   moved slots via the public API; orphan entries on *S* are unreachable
   and reclaimed on tree purge.
-* **Geometric convergence on a single hot slot** — if all heat is in one
+* **Geometric convergence on a single hot slot** - if all heat is in one
   virtual slot, successive autonomic splits subdivide *S*'s slot set in
   half each pass, isolating the hot slot in `O(log virtualSlotsPerShard)`
   splits.
@@ -227,7 +227,7 @@ individually** when:
 ## Scope
 
 Shard splitting is an autonomic concern. `ITreeShardSplitGrain` is internal
-infrastructure protected by `InternalGrainGuardFilter` — external client
+infrastructure protected by `InternalGrainGuardFilter` - external client
 calls are rejected with `InvalidOperationException`. There is no public
 API to trigger or control a split; tuning is performed exclusively through
 the `LatticeOptions` listed above.

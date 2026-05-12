@@ -44,7 +44,7 @@ internal interface ILeafSnapshotProvider
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the WAL offset associated with the snapshot view — the
+    /// Returns the WAL offset associated with the snapshot view - the
     /// offset a tail-replay should resume from after the snapshot drain
     /// completes. Today the adapter returns the WAL head offset at the
     /// moment of the call; the future replay coordinator may refine the contract once the

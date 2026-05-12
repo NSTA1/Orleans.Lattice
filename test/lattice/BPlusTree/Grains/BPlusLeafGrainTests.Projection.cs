@@ -700,7 +700,7 @@ public partial class BPlusLeafGrainTests
             // actually touches the dictionary (no-op deletes leave it
             // untouched). When null, it is logically equivalent to the
             // walk-state hash of an empty dictionary, which is 32 zero
-            // bytes — exactly what a fresh walk also produces.
+            // bytes - exactly what a fresh walk also produces.
             var live = grain.PersistedProjectionHash ?? new byte[32];
             Assert.That(live, Is.EqualTo(walked),
                 $"incremental hash diverged from walk-state hash after op {i} (kind {op}, key {key})");

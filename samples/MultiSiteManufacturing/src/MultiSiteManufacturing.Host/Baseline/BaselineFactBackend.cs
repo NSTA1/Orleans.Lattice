@@ -5,7 +5,7 @@ using MultiSiteManufacturing.Host.Federation;
 namespace MultiSiteManufacturing.Host.Baseline;
 
 /// <summary>
-/// Baseline backend — delegates per-part state to <see cref="IBaselinePartGrain"/>
+/// Baseline backend - delegates per-part state to <see cref="IBaselinePartGrain"/>
 /// and keeps an in-process directory of known parts so <see cref="ListPartsAsync"/>
 /// doesn't require a query-by-convention over grain storage.
 /// </summary>
@@ -13,7 +13,7 @@ namespace MultiSiteManufacturing.Host.Baseline;
 /// <para>
 /// The in-process directory is rebuilt on every host start (facts replayed
 /// through <see cref="EmitAsync"/> repopulate it). Grain state itself is
-/// durable — the directory is a cache, not the source of truth.
+/// durable - the directory is a cache, not the source of truth.
 /// </para>
 /// <para>
 /// On peer clusters, <see cref="EmitAsync"/> is also called from

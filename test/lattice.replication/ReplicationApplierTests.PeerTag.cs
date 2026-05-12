@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// so the documented metric schema and the actual emission cannot
 /// drift again. Each test asserts that the recorded sample carries
 /// a `peer` tag whose value matches the entry's
-/// <see cref="WalRecord.OriginClusterId"/> — the authoring cluster
+/// <see cref="WalRecord.OriginClusterId"/> - the authoring cluster
 /// of the replicated mutation, not the immediate transport hop. The
 /// per-entry path's defence-in-depth gates and the batch path's
 /// per-origin run grouping are both covered so a future refactor

@@ -105,7 +105,7 @@ public sealed class FleetStreamService : FleetStream.FleetStreamBase
     {
         // Sized to comfortably hold a typical 50 ms drain at 1000 msg/s without growing.
         // The drain loop hard-caps at BatchMaxMessages so capacity settles at 256 / 512
-        // and never grows unboundedly — no need to evict large lists.
+        // and never grows unboundedly - no need to evict large lists.
         private const int InitialCapacity = 64;
 
         public List<TelemetryMessage> Create() => new(InitialCapacity);

@@ -6,7 +6,7 @@ namespace Orleans.Lattice;
 /// Internal ambient transaction-id context used to stamp
 /// <see cref="LatticeMutation.TransactionId"/> onto mutations authored by
 /// the current logical call. Public callers do not interact with this
-/// type — observers read <see cref="LatticeMutation.TransactionId"/>
+/// type - observers read <see cref="LatticeMutation.TransactionId"/>
 /// directly.
 /// </summary>
 /// <remarks>
@@ -27,7 +27,7 @@ namespace Orleans.Lattice;
 /// <c>ShardRootGrain.MutationObserver</c>) read <see cref="Current"/>
 /// when constructing the <see cref="LatticeMutation"/> payload. Reads
 /// fall back to <see cref="System.Guid.Empty"/> when the context is
-/// missing — the convergence-only paths that publish without a leading
+/// missing - the convergence-only paths that publish without a leading
 /// public entry-point produce an empty id rather than fabricate a fresh
 /// one, which matches the documented "wire-compatible default" semantics
 /// for legacy persisted observers.
@@ -51,8 +51,8 @@ internal static class LatticeTransactionContext
     /// <summary>
     /// Returns the current ambient transaction id; if none is set, mints
     /// a fresh <see cref="Guid"/> and stores it on the
-    /// <see cref="RequestContext"/> so subsequent grain calls — and the
-    /// publish helpers that read <see cref="Current"/> — see the same id.
+    /// <see cref="RequestContext"/> so subsequent grain calls - and the
+    /// publish helpers that read <see cref="Current"/> - see the same id.
     /// </summary>
     public static Guid EnsureCurrent()
     {

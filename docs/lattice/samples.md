@@ -6,7 +6,7 @@ Each sample lives under [`samples/`](../../samples) and is a self-contained
 
 [`samples/HelloWorld`](../../samples/HelloWorld)
 
-Minimal interactive REPL over a single-silo, in-memory Orleans cluster. Starts a silo configured with `AddLattice(...)` + in-memory grain storage and reminders, then prompts for commands — `create`, `read`, `update`, `delete`, `list`, `exit` — and applies each one against a tree named `hello-world`. Every operation is timed with `Stopwatch` and reported as `[OK]` / `[FAIL]` with the elapsed milliseconds, so it doubles as a quick sanity check that a locally-built `Orleans.Lattice` package behaves correctly.
+Minimal interactive REPL over a single-silo, in-memory Orleans cluster. Starts a silo configured with `AddLattice(...)` + in-memory grain storage and reminders, then prompts for commands - `create`, `read`, `update`, `delete`, `list`, `exit` - and applies each one against a tree named `hello-world`. Every operation is timed with `Stopwatch` and reported as `[OK]` / `[FAIL]` with the elapsed milliseconds, so it doubles as a quick sanity check that a locally-built `Orleans.Lattice` package behaves correctly.
 
 Run it with:
 
@@ -24,10 +24,10 @@ The sample runs as **two independent Orleans clusters** (`us` and `eu`), each wi
 
 Supporting documentation lives alongside the sample:
 
-- [`plan.md`](../../samples/MultiSiteManufacturing/plan.md) — design document and feature plan.
-- [`approach.md`](../../samples/MultiSiteManufacturing/approach.md) — implementation rationale, gotchas, and the reasoning behind each design choice.
-- [`architecture.md`](../../samples/MultiSiteManufacturing/architecture.md) — structural view: topology, component graph, grain interdependencies, Lattice trees, replication sequence.
-- [`glossary.md`](../../samples/MultiSiteManufacturing/glossary.md) — domain and implementation terms.
+- [`plan.md`](../../samples/MultiSiteManufacturing/plan.md) - design document and feature plan.
+- [`approach.md`](../../samples/MultiSiteManufacturing/approach.md) - implementation rationale, gotchas, and the reasoning behind each design choice.
+- [`architecture.md`](../../samples/MultiSiteManufacturing/architecture.md) - structural view: topology, component graph, grain interdependencies, Lattice trees, replication sequence.
+- [`glossary.md`](../../samples/MultiSiteManufacturing/glossary.md) - domain and implementation terms.
 
 Run it with:
 
@@ -35,13 +35,13 @@ Run it with:
 ./samples/MultiSiteManufacturing/run.ps1
 ```
 
-The script builds the host image if needed, starts both clusters (four silos plus two Azurites plus two Traefik proxies) under Docker Compose, and prints the per-cluster URLs — `http://localhost:5001` for `us` and `http://localhost:5002` for `eu`. Use `-Down` to tear everything back down, `-Clean` to wipe state between runs, and `-Logs` to tail silo logs.
+The script builds the host image if needed, starts both clusters (four silos plus two Azurites plus two Traefik proxies) under Docker Compose, and prints the per-cluster URLs - `http://localhost:5001` for `us` and `http://localhost:5002` for `eu`. Use `-Down` to tear everything back down, `-Clean` to wipe state between runs, and `-Logs` to tail silo logs.
 
 ## VehicleFleetSimulator
 
 [`samples/VehicleFleetSimulator`](../../samples/VehicleFleetSimulator)
 
-A simulated vehicle fleet that streams structured telemetry events over gRPC, imported into this repo to drive forthcoming WAL benchmarks for `Orleans.Lattice` and `Orleans.Lattice.Replication` and as the foundation for a future sample that bridges the simulator's event stream into a Lattice tree. Currently independent of the lattice library — it builds and runs on its own, with its own `VehicleFleetSimulator.slnx`.
+A simulated vehicle fleet that streams structured telemetry events over gRPC, imported into this repo to drive forthcoming WAL benchmarks for `Orleans.Lattice` and `Orleans.Lattice.Replication` and as the foundation for a future sample that bridges the simulator's event stream into a Lattice tree. Currently independent of the lattice library - it builds and runs on its own, with its own `VehicleFleetSimulator.slnx`.
 
 The full stack (Azurite + Silo + gRPC API + Blazor WASM UI) runs under Docker Compose:
 

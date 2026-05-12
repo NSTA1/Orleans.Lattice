@@ -214,7 +214,7 @@ public class OperatorActionsTests
 
         var facts = await router.GetBackend("lattice").GetFactsAsync(serial);
 
-        // Sort by HLC — that's the lattice fold order — and assert the
+        // Sort by HLC - that's the lattice fold order - and assert the
         // trio kind/site contract.
         var inHlcOrder = facts.OrderBy(f => f.Hlc.WallClockTicks)
                               .ThenBy(f => f.Hlc.Counter)
@@ -239,7 +239,7 @@ public class OperatorActionsTests
             Assert.That(((MrbDisposition)inHlcOrder[2]).Disposition, Is.EqualTo(MrbDispositionKind.UseAsIs));
             Assert.That(inHlcOrder[2].Site, Is.EqualTo(ProcessSite.CincinnatiMrb));
 
-            // NCR and MRB carry the same ncNumber — that's the linkage that
+            // NCR and MRB carry the same ncNumber - that's the linkage that
             // lets UseAsIs actually demote the flag under HLC-ordered fold.
             Assert.That(
                 ((MrbDisposition)inHlcOrder[2]).NcNumber,
@@ -297,7 +297,7 @@ public class OperatorActionsTests
         // Seed a Flagged state on both backends by racing the trio; under
         // a deterministic single-threaded emission the baseline fold may
         // still end up Flagged because arrival order is NCR-Pass-MRB and
-        // that's a valid demotion path — so to be robust we explicitly
+        // that's a valid demotion path - so to be robust we explicitly
         // raise a minor NCR and leave it unresolved.
         await actions.RaiseNonConformanceAsync(
             serial,

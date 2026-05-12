@@ -2,7 +2,7 @@ namespace MultiSiteManufacturing.Host.Federation;
 
 /// <summary>
 /// Chaos configuration for a single process site. All defaults are
-/// "nominal" — no pause, no delay, no reorder — so a freshly activated
+/// "nominal" - no pause, no delay, no reorder - so a freshly activated
 /// grain passes traffic through unchanged.
 /// </summary>
 [GenerateSerializer, Immutable]

@@ -32,7 +32,7 @@ public static class LatticeSinkMetrics
         Meter.CreateCounter<long>("vehicle_fleet_simulator.sink.dropped_on_shutdown", unit: "{events}");
 
     /// <summary>Count of <c>SetAsync</c> / <c>BulkLoadAsync</c> failures observed inside the drain
-    /// loop. The producer never sees these — they're recorded here so the dashboard surfaces the
+    /// loop. The producer never sees these - they're recorded here so the dashboard surfaces the
     /// downstream failure independently.</summary>
     public static readonly Counter<long> FlushErrors =
         Meter.CreateCounter<long>("vehicle_fleet_simulator.sink.flush_errors", unit: "{errors}");

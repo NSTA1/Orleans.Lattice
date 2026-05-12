@@ -206,7 +206,7 @@ internal sealed partial class ReplicationApplier
             applyGrain ??= grainFactory.GetGrain<IReplicationApplyGrain>(treeId);
 
             // Hand the list off to the apply call by reference and
-            // immediately null the locals — NSubstitute and other mocks
+            // immediately null the locals - NSubstitute and other mocks
             // capture the reference for late argument matching, so a
             // subsequent .Clear() would mutate the captured snapshot
             // out from under the assertion. Production code paths read
@@ -274,7 +274,7 @@ internal sealed partial class ReplicationApplier
             // shadow-forward cache reservation that must be rolled back
             // if an exception escapes. Cleared when ownership transfers
             // (deferral to pendingApplies, successful inline apply) or
-            // when the park branch returns normally — in which case the
+            // when the park branch returns normally - in which case the
             // reservation is intentionally retained so duplicate-emit
             // pairs of the parked entry are suppressed while it is
             // buffered.
@@ -284,7 +284,7 @@ internal sealed partial class ReplicationApplier
                 if (entry.Op == MutationKind.DeleteRange)
                 {
                     // Range delete forces the pending LWW batch to flush
-                    // first — the producer ordered the WAL such that
+                    // first - the producer ordered the WAL such that
                     // entries before the range delete must observe their
                     // effect after, and any deferred LWW work must be
                     // visible before the range walk starts.
@@ -421,7 +421,7 @@ internal sealed partial class ReplicationApplier
                 // phantom started-never-completed samples in the apply
                 // duration histogram. Record OutcomeFailure for every
                 // deferred entry now (the throwing entry's own failure
-                // is recorded by the finally below). Cold path only —
+                // is recorded by the finally below). Cold path only -
                 // hit by contract violations (Set with null Value),
                 // mid-loop cancellation, and FlushPendingAsync re-throws
                 // when the throw originates somewhere other than inside

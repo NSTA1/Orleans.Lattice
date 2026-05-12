@@ -12,7 +12,7 @@ namespace MultiSiteManufacturing.Host.Lattice;
 /// <remarks>
 /// Using System.Text.Json with an explicit type-discriminator keeps the
 /// sample's wire format readable when browsing the underlying Azure Table
-/// via Azure Storage Explorer — inspecting a row shows a human-legible
+/// via Azure Storage Explorer - inspecting a row shows a human-legible
 /// <c>"$type": "InspectionRecorded"</c> alongside the payload.
 /// </remarks>
 public static class FactJsonCodec

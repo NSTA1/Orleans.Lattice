@@ -143,7 +143,7 @@ internal sealed class LoopbackDeliveringTransport : IReplicationTransport
             return new ReplicationAck { Accepted = false, HighestAppliedHlc = default };
         }
 
-        // Empty payload (heartbeat / keep-alive) — accept without
+        // Empty payload (heartbeat / keep-alive) - accept without
         // decoding so the wire-shape contract for empty batches is
         // honoured end-to-end.
         if (batch.Payload.IsEmpty)

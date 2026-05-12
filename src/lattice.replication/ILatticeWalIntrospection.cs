@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Replication;
 /// configured WAL partition (default <c>1</c>); operators can cache
 /// the result with bounded staleness without affecting
 /// fall-off-detection correctness because the WAL is append-only at
-/// the head and trim-only at the tail — a stale "oldest" reading is
+/// the head and trim-only at the tail - a stale "oldest" reading is
 /// always older than or equal to the current oldest, never newer.
 /// </para>
 /// </summary>

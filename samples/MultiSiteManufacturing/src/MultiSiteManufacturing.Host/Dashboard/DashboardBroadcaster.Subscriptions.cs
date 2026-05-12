@@ -71,7 +71,7 @@ public sealed partial class DashboardBroadcaster
 
     /// <summary>
     /// Live feed of divergence events. Yields a new <see cref="DivergenceEvent"/>
-    /// whenever a part's baseline/lattice agreement changes — enters
+    /// whenever a part's baseline/lattice agreement changes - enters
     /// divergence, stays divergent with a new state pair, or resolves
     /// (<see cref="DivergenceEvent.Resolved"/> is <c>true</c>).
     /// </summary>
@@ -100,7 +100,7 @@ public sealed partial class DashboardBroadcaster
     }
 
     /// <summary>
-    /// Live feed of site-activity entries — one message per fact
+    /// Live feed of site-activity entries - one message per fact
     /// routed locally (<see cref="FederationRouter.FactRouted"/>) or
     /// replicated from a peer cluster
     /// (<see cref="FederationRouter.FactReplicated"/>). The dashboard's
@@ -110,7 +110,7 @@ public sealed partial class DashboardBroadcaster
     /// activity appear immediately without re-running the range scan.
     /// </summary>
     /// <remarks>
-    /// The broadcaster does not filter by site — every subscriber
+    /// The broadcaster does not filter by site - every subscriber
     /// receives every entry and filters client-side. Volumes are
     /// modest (one entry per fact) and the per-subscriber channel is
     /// unbounded, matching the back-pressure model of the existing

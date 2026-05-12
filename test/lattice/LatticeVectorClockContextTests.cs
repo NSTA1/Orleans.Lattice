@@ -109,7 +109,7 @@ public class LatticeVectorClockContextTests
         scope.Dispose();
         Assert.That(LatticeVectorClockContext.Current, Is.SameAs(outer));
 
-        // Second dispose must not re-apply the restore — otherwise it would
+        // Second dispose must not re-apply the restore - otherwise it would
         // overwrite any value set after the first dispose returned.
         var after = NewVc("after");
         LatticeVectorClockContext.Current = after;

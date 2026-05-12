@@ -101,7 +101,7 @@ public class CoordinatorGrainDeactivationTests
     [Test]
     public void OnDeactivateAsync_propagates_exceptions_from_OnDeactivateCoreAsync()
     {
-        // Contract on the BASE: the bridge does not catch — it is
+        // Contract on the BASE: the bridge does not catch - it is
         // each derived class's responsibility to swallow its own
         // storage failures (e.g. ReplicationShipperGrain wraps its
         // own flush in try/catch). This test pins the no-catch
@@ -123,7 +123,7 @@ public class CoordinatorGrainDeactivationTests
     public void Default_OnDeactivateCoreAsync_implementation_completes_without_throwing()
     {
         // A derived grain with no deferred state must not be forced
-        // to override the hook — the default no-op must complete
+        // to override the hook - the default no-op must complete
         // synchronously and cleanly.
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("default-coord", "k"));

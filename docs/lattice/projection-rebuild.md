@@ -7,8 +7,8 @@ grain materialises that log into an in-memory + persisted projection
 WAL grows. Two operational concerns naturally arise:
 
 1. **Drift detection.** If a silo's leaf projection diverges from the
-   WAL prefix it claims to have applied — a cosmic-ray bit flip, a
-   storage-provider read-after-write anomaly, a bug in `ILeafProjection.Apply` —
+   WAL prefix it claims to have applied - a cosmic-ray bit flip, a
+   storage-provider read-after-write anomaly, a bug in `ILeafProjection.Apply` -
    how does an operator notice before downstream readers do?
 2. **Recovery from WAL trim.** If a leaf has been cold long enough that the
    WAL has been trimmed past its last persisted checkpoint, the leaf cannot
@@ -27,9 +27,9 @@ LeafProjectionDigest digest = await tree.GetLeafProjectionDigestAsync(
     shardIndex: 0,
     cancellationToken);
 
-// digest.Hash             — 16-byte XxHash128 fingerprint of the shard's projection
-// digest.EntryCount       — entries (live + tombstoned) folded into the hash
-// digest.CheckpointOffset — sum of per-leaf projection-checkpoint offsets
+// digest.Hash             - 16-byte XxHash128 fingerprint of the shard's projection
+// digest.EntryCount       - entries (live + tombstoned) folded into the hash
+// digest.CheckpointOffset - sum of per-leaf projection-checkpoint offsets
 ```
 
 `GetLeafProjectionDigestAsync` walks the leaf chain of the requested
@@ -40,8 +40,8 @@ shard-level fingerprint. The shard hash is
 XxHash128( leaf_1.Hash || leaf_2.Hash || ... || leaf_N.Hash )
 ```
 
-so a single-byte difference at any leaf — a stale tombstone, a missing
-TTL stamp, a divergent vector clock — surfaces as a different shard
+so a single-byte difference at any leaf - a stale tombstone, a missing
+TTL stamp, a divergent vector clock - surfaces as a different shard
 hash. Operators running multiple silos against the same WAL can poll
 the digest from each silo and compare bytes; equality is the strongest
 possible cross-silo state-equivalence check the library provides.
@@ -49,7 +49,7 @@ possible cross-silo state-equivalence check the library provides.
 XxHash128 is a non-cryptographic hash: it is chosen for ~10x lower CPU
 cost than SHA-256 on the per-mutation hot path and for its uniformly
 distributed output (which the XOR-fold algebra requires). The digest is
-a drift-detection fingerprint, not an authentication tag — a malicious
+a drift-detection fingerprint, not an authentication tag - a malicious
 operator with write access to the projection state could craft a
 collision, but the digest's job is to catch silent corruption, not to
 defend against forgery.
@@ -64,12 +64,12 @@ order:
 2. `lww.Timestamp.WallClockTicks` (`Int64`, little-endian)
 3. `lww.Timestamp.Counter` (`Int32`, little-endian)
 4. `lww.IsTombstone` (`byte`, `0x00` or `0x01`)
-5. `lww.ExpiresAtTicks` (`Int64`, little-endian — `0` when unset)
+5. `lww.ExpiresAtTicks` (`Int64`, little-endian - `0` when unset)
 6. `lww.OriginClusterId` (length-prefixed UTF-8, `-1` sentinel for null)
 7. `lww.VectorClock` (a deterministic ordinal-sorted feed of every
    `(replicaId, hlc.WallClockTicks, hlc.Counter)` triple, or `-1` sentinel
    when null/empty)
-8. `lww.Value` (length-prefixed bytes — `-1` sentinel for tombstones)
+8. `lww.Value` (length-prefixed bytes - `-1` sentinel for tombstones)
 
 The per-entry contributions are XOR-folded into a 16-byte running hash
 that is **maintained incrementally on every mutation** and persisted on
@@ -78,7 +78,7 @@ old contribution out and the new one in (the old contribution cancels
 under self-inverse XOR); delete XORs the contribution out. Because XOR
 is commutative, associative, and self-inverse, the running hash is
 independent of insertion order and idempotent re-application of the
-same mutation is a no-op — exactly the algebra LWW already provides
+same mutation is a no-op - exactly the algebra LWW already provides
 for entry state.
 
 The public digest is the XxHash128 of `(running_xor || entryCount ||
@@ -106,7 +106,7 @@ The digest is byte-stable across silos because every input is canonicalised:
 
 Because the per-entry XOR fold is maintained incrementally on every
 mutation, `GetLeafProjectionDigestAsync` does **not** re-walk the leaf's
-`Entries` on each call — the running hash is already on the leaf's
+`Entries` on each call - the running hash is already on the leaf's
 in-memory state, so the per-leaf computation collapses to a single
 fixed-size XxHash128 over `(running_xor || entryCount || checkpointOffset)`.
 The call still flows through grain activation: a cold leaf will be
@@ -116,7 +116,7 @@ RPC. The win versus the original O(N) walk is in the steady state:
 once a shard's leaves are warm, repeated digest polls cost one grain
 hop per leaf plus a constant-time hash, regardless of how many entries
 each leaf holds. Per-shard cost is therefore one grain hop per leaf in
-the chain plus one final XxHash128 chain through the leaf hashes — the
+the chain plus one final XxHash128 chain through the leaf hashes - the
 digest visits exactly the leaves a normal scan would visit, and never
 re-hashes their entries.
 
@@ -129,7 +129,7 @@ Heap allocations on the hot path are bounded:
 | String / VC scratch buffers             | pooled (`stackalloc 256` fast path; `ArrayPool<byte>.Shared` and `ArrayPool<string>.Shared` for the rare overflow) |
 
 The `O(1)` per-leaf cost makes the digest cheap enough for steady-state
-monitoring — including periodic cross-silo equality canaries — not just
+monitoring - including periodic cross-silo equality canaries - not just
 on-demand diagnostics. It is safe to call against a live shard under
 load: it observes the current in-memory projection without taking any
 kind of consistency freeze. The result is necessarily a snapshot at one
@@ -139,7 +139,7 @@ report different digests; equality is meaningful only between
 the two reads being compared).
 
 > **Forward-looking note.** The per-shard cost above (one grain hop per
-> leaf in the chain) is a property of the current shipping topology —
+> leaf in the chain) is a property of the current shipping topology -
 > a whole-tree poll still activates every leaf in every shard. A planned
 > follow-up promotes the same XOR running-hash up through
 > `IBPlusInternalGrain`: each internal node maintains a
@@ -148,8 +148,8 @@ the two reads being compared).
 > shipped, `GetLeafProjectionDigestAsync(shardIndex, ct)` collapses to
 > one grain call per shard root regardless of leaf count, and a
 > whole-tree poll costs `O(shardCount)` rather than
-> `O(shardCount × leafCount)`. The public surface — return type, byte
-> framing, cross-silo equality semantics — is preserved verbatim, so
+> `O(shardCount × leafCount)`. The public surface - return type, byte
+> framing, cross-silo equality semantics - is preserved verbatim, so
 > operator tooling written against today's API needs no change.
 
 ### Cross-silo divergence example
@@ -181,7 +181,7 @@ foreach (var shardIndex in routing.Map.GetPhysicalShardIndices())
 
 When a leaf grain reactivates it consults its persisted
 `ProjectionCheckpointOffset` and decides how to recover. Three triggers
-classify the activation as **fall-off-log** — the leaf cannot or should
+classify the activation as **fall-off-log** - the leaf cannot or should
 not resume by tail-replay alone:
 
 1. **WAL trimmed past checkpoint.** The per-shard WAL has GC'd entries
@@ -192,7 +192,7 @@ not resume by tail-replay alone:
    in the activation path would produce a long cold-start; the operator
    has elected to take the snapshot-then-WAL path instead.
 3. **Cold past retention.** The persisted projection age exceeds
-   `LatticeOptions.LeafProjectionRetention` (default 7 days) — long
+   `LatticeOptions.LeafProjectionRetention` (default 7 days) - long
    enough that even a healthy WAL has likely been trimmed beneath the
    leaf's checkpoint. Forcing a snapshot-based recovery here avoids a
    silent miss of trim-induced gaps.
@@ -219,19 +219,19 @@ siloBuilder.ConfigureLattice(o =>
     // a snapshot-based recovery on stale projections:
     o.LeafProjectionRetention = TimeSpan.FromDays(30);
 
-    // Strictest default — try the snapshot path before tailing:
+    // Strictest default - try the snapshot path before tailing:
     o.ProjectionRebuildPolicy = ProjectionRebuildPolicy.SnapshotThenWal;
 });
 ```
 
 ## Related surfaces
 
-- `ILattice.GetLeafProjectionDigestAsync` — the public surface.
-- `LeafProjectionDigest` — the returned `readonly record struct`.
-- `ProjectionRebuildPolicy` — the activation-time recovery policy.
+- `ILattice.GetLeafProjectionDigestAsync` - the public surface.
+- `LeafProjectionDigest` - the returned `readonly record struct`.
+- `ProjectionRebuildPolicy` - the activation-time recovery policy.
 - `LatticeOptions.MaxLeafReplayEntries`, `LatticeOptions.LeafProjectionRetention`,
   `LatticeOptions.MaterialiserCheckpointInterval`,
-  `LatticeOptions.MaterialiserCheckpointEntries` — see [Configuration](configuration.md).
-- `LeafProjectionStaleException` — thrown by `ProjectionRebuildPolicy.Fail`
+  `LatticeOptions.MaterialiserCheckpointEntries` - see [Configuration](configuration.md).
+- `LeafProjectionStaleException` - thrown by `ProjectionRebuildPolicy.Fail`
   and by `ProjectionRebuildPolicy.FullRebuildFromWal` when the WAL has
   been trimmed.

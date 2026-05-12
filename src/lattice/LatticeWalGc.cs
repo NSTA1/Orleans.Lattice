@@ -27,7 +27,7 @@ namespace Orleans.Lattice;
 ///     <c>now - WalRetention</c>. A lagging consumer that pins the log
 ///     past the ceiling is intentionally allowed to "fall off the log"
 ///     so disk usage stays bounded; that consumer will detect the gap
-///     on its next read and re-bootstrap (later phase).
+///     on its next read and re-bootstrap via the fall-off-log detector.
 ///   </item>
 ///   <item>
 ///     <b>Causal-stable frontier</b> - when at least one consumer has

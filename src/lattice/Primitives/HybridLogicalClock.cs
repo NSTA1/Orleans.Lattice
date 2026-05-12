@@ -52,12 +52,12 @@ public readonly record struct HybridLogicalClock
         int counter;
         if (maxWall > maxInput)
         {
-            // Wall clock jumped ahead of both inputs — reset counter.
+            // Wall clock jumped ahead of both inputs - reset counter.
             counter = 0;
         }
         else if (local.WallClockTicks == remote.WallClockTicks)
         {
-            // Both share the winning wall clock — bump past the higher counter.
+            // Both share the winning wall clock - bump past the higher counter.
             counter = Math.Max(local.Counter, remote.Counter) + 1;
         }
         else if (local.WallClockTicks > remote.WallClockTicks)

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Trees can be deleted via `ILattice.DeleteTreeAsync()`. Deletion is a **soft delete** — the tree is immediately marked as inaccessible, but its data is retained in storage for a configurable grace period before being permanently purged.
+Trees can be deleted via `ILattice.DeleteTreeAsync()`. Deletion is a **soft delete** - the tree is immediately marked as inaccessible, but its data is retained in storage for a configurable grace period before being permanently purged.
 
 ```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
@@ -29,7 +29,7 @@ sequenceDiagram
     L->>D: DeleteTreeAsync()
 
     rect rgb(240, 248, 255)
-    Note over D: Phase 1 — Mark all shards as deleted
+    Note over D: Phase 1 - Mark all shards as deleted
     par
         D->>S0: MarkDeletedAsync()
         D->>S1: MarkDeletedAsync()
@@ -38,7 +38,7 @@ sequenceDiagram
     end
 
     rect rgb(255, 248, 240)
-    Note over D: Phase 2 — Persist deletion state
+    Note over D: Phase 2 - Persist deletion state
     D->>D: IsDeleted = true, DeletedAtUtc = now
     D->>D: WriteStateAsync()
     D->>R: Register "tree-deletion" reminder
@@ -49,7 +49,7 @@ sequenceDiagram
     R->>D: ReceiveReminder("tree-deletion")
 
     rect rgb(240, 255, 240)
-    Note over D: Phase 3 — Purge (timer-per-shard)
+    Note over D: Phase 3 - Purge (timer-per-shard)
     D->>D: Start grain timer (2s ticks)
     loop For each shard
         D->>S0: PurgeAsync()
@@ -64,7 +64,7 @@ sequenceDiagram
 
 ### Phase 1: Mark shards as deleted
 
-`TreeDeletionGrain.DeleteTreeAsync()` calls `MarkDeletedAsync()` on every shard in parallel. Each shard persists an `IsDeleted = true` flag to its `ShardRootState`. Once set, every subsequent `GetAsync`, `SetAsync`, `DeleteAsync`, `ScanKeysAsync`, `BulkLoadAsync`, and `BulkAppendAsync` call on that shard throws `InvalidOperationException` immediately — before touching any leaf or internal node.
+`TreeDeletionGrain.DeleteTreeAsync()` calls `MarkDeletedAsync()` on every shard in parallel. Each shard persists an `IsDeleted = true` flag to its `ShardRootState`. Once set, every subsequent `GetAsync`, `SetAsync`, `DeleteAsync`, `ScanKeysAsync`, `BulkLoadAsync`, and `BulkAppendAsync` call on that shard throws `InvalidOperationException` immediately - before touching any leaf or internal node.
 
 ### Phase 2: Persist and schedule
 
@@ -72,7 +72,7 @@ After all shards are marked, the `TreeDeletionGrain` persists its own `IsDeleted
 
 ### Phase 3: Purge
 
-When the reminder fires and the soft-delete window has elapsed (`now - DeletedAtUtc ≥ SoftDeleteDuration`), a grain timer is started that processes one shard per tick (every 2 seconds) — the same pattern used by [tombstone compaction](tombstone-compaction.md).
+When the reminder fires and the soft-delete window has elapsed (`now - DeletedAtUtc ≥ SoftDeleteDuration`), a grain timer is started that processes one shard per tick (every 2 seconds) - the same pattern used by [tombstone compaction](tombstone-compaction.md).
 
 For each shard, `PurgeAsync()`:
 
@@ -86,35 +86,35 @@ After all shards are purged, the deletion grain marks `PurgeComplete = true`, un
 
 | Crash point | State on recovery | Action |
 |---|---|---|
-| During Phase 1 (some shards marked) | Some shards have `IsDeleted = true` | `DeleteTreeAsync` is idempotent — re-calling marks remaining shards |
+| During Phase 1 (some shards marked) | Some shards have `IsDeleted = true` | `DeleteTreeAsync` is idempotent - re-calling marks remaining shards |
 | After Phase 2, before Phase 3 | `IsDeleted` persisted, reminder registered | Reminder fires after soft-delete window, starts purge |
 | During Phase 3 (mid-purge) | `PurgeInProgress = true`, `NextShardIndex` persisted | Keepalive reminder (1 min) reactivates grain, resumes from persisted shard index |
 | After Phase 3 | `PurgeComplete = true` | Reminder fires, detects completion, unregisters and deactivates |
 
 ## Idempotency
 
-- `DeleteTreeAsync()` is idempotent — calling it on an already-deleted tree is a no-op.
+- `DeleteTreeAsync()` is idempotent - calling it on an already-deleted tree is a no-op.
 - `MarkDeletedAsync()` is idempotent per shard.
-- `PurgeAsync()` is safe to call multiple times — `ClearGrainStateAsync()` on an already-cleared grain is harmless, and `ClearStateAsync()` on an already-empty shard root is a no-op.
+- `PurgeAsync()` is safe to call multiple times - `ClearGrainStateAsync()` on an already-cleared grain is harmless, and `ClearStateAsync()` on an already-empty shard root is a no-op.
 - Failed shards during purge are retried once before being skipped. The next reminder tick starts a fresh purge pass.
 
 ## Read Cache Behaviour
 
-`LeafCacheGrain` is a `[StatelessWorker]` that holds an in-memory copy of leaf data. It is **not** notified when a tree is deleted — doing so would require traversing every leaf in the tree to set a flag, which is prohibitively expensive and defeats the purpose of the shard-root-level guard.
+`LeafCacheGrain` is a `[StatelessWorker]` that holds an in-memory copy of leaf data. It is **not** notified when a tree is deleted - doing so would require traversing every leaf in the tree to set a flag, which is prohibitively expensive and defeats the purpose of the shard-root-level guard.
 
-This is safe because the cache is not publicly addressable. The only path to it is through `ShardRootGrain.TraverseForReadAsync`, which calls `ThrowIfDeleted()` before reaching the cache layer. No external caller can obtain a `LeafCacheGrain` reference — its key is an internal `GrainId` string derived from the primary leaf's identity, not exposed through `ILattice`.
+This is safe because the cache is not publicly addressable. The only path to it is through `ShardRootGrain.TraverseForReadAsync`, which calls `ThrowIfDeleted()` before reaching the cache layer. No external caller can obtain a `LeafCacheGrain` reference - its key is an internal `GrainId` string derived from the primary leaf's identity, not exposed through `ILattice`.
 
-After deletion, existing cache activations may still hold stale data in memory, but no requests can reach them. Orleans will deactivate idle `StatelessWorker` activations on its normal schedule, at which point the in-memory data is garbage-collected. No persistent state is involved — the cache is purely in-memory.
+After deletion, existing cache activations may still hold stale data in memory, but no requests can reach them. Orleans will deactivate idle `StatelessWorker` activations on its normal schedule, at which point the in-memory data is garbage-collected. No persistent state is involved - the cache is purely in-memory.
 
 ## Configuration
 
 The soft-delete window is controlled by `SoftDeleteDuration` in `LatticeOptions`. See [Configuration](configuration.md) for details.
 
 ```csharp verify
-// Global default — 72 hours
+// Global default - 72 hours
 siloBuilder.ConfigureLattice(o => o.SoftDeleteDuration = TimeSpan.FromHours(72));
 
-// Per-tree override — immediate purge
+// Per-tree override - immediate purge
 siloBuilder.ConfigureLattice("ephemeral-tree", o => o.SoftDeleteDuration = TimeSpan.Zero);
 ```
 
@@ -126,7 +126,7 @@ During the soft-delete window (before purge begins), a deleted tree can be recov
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 await tree.RecoverTreeAsync();
 
-// Tree is accessible again — all data from before the delete is restored.
+// Tree is accessible again - all data from before the delete is restored.
 byte[]? value = await tree.GetAsync("customer-123");
 ```
 
@@ -136,10 +136,10 @@ byte[]? value = await tree.GetAsync("customer-123");
 
 | Tree state | Result |
 |---|---|
-| Not deleted | Throws `InvalidOperationException` — nothing to recover |
+| Not deleted | Throws `InvalidOperationException` - nothing to recover |
 | Soft-deleted (within window) | ✅ Recovers successfully |
-| Purge in progress | Throws `InvalidOperationException` — too late to recover safely |
-| Purge complete | Throws `InvalidOperationException` — data is gone |
+| Purge in progress | Throws `InvalidOperationException` - too late to recover safely |
+| Purge complete | Throws `InvalidOperationException` - data is gone |
 
 ## Manual Purge
 
@@ -159,7 +159,7 @@ await tree.PurgeTreeAsync();
 
 | Tree state | Result |
 |---|---|
-| Not deleted | Throws `InvalidOperationException` — delete first |
+| Not deleted | Throws `InvalidOperationException` - delete first |
 | Soft-deleted (within window) | ✅ Purges immediately |
 | Purge in progress (via reminder) | ✅ Purges remaining shards |
-| Purge complete | Throws `InvalidOperationException` — already purged |
+| Purge complete | Throws `InvalidOperationException` - already purged |

@@ -19,7 +19,7 @@ The simulator stands up a four-tier local stack:
 | Storage | Azurite (container) | Backing store for Orleans clustering, grain persistence, and stream queues. |
 | Silo | `VehicleFleetSimulator.Silo` | Hosts vehicle grains, the city graph, the fan-out telemetry sink, and reminder-driven simulation ticks. |
 | API | `VehicleFleetSimulator.Api` | ASP.NET Core gRPC + gRPC-Web frontend. Streams telemetry to subscribers; accepts admin commands. |
-| UI | `VehicleFleetSimulator.Ui` | Blazor WebAssembly dashboard — live map, simulation-speed slider, fleet controls. |
+| UI | `VehicleFleetSimulator.Ui` | Blazor WebAssembly dashboard - live map, simulation-speed slider, fleet controls. |
 
 A pluggable `ITelemetrySink` lets the silo route events to fan-out grains, a null sink, or (future) a Lattice-bridge sink. `VehicleSimulator` advances each vehicle along a city graph; `FuelModel` and `SpeedModel` are pure functions over each tick. Routes are generated on demand by `RouteGenerator`. All vehicle state is grain-resident; Azurite holds only Orleans plumbing.
 
@@ -41,7 +41,7 @@ Tears the stack down and removes the Azurite volume.
 
 ## Test parallelism
 
-`tests/VehicleFleetSimulator.Tests` shares a single Orleans `TestCluster` across collection-bound tests. Six pure-unit-test classes carry no `[Collection]` attribute and were running in parallel with the cluster-fixture tests by default — that races `StreamSubscriberOrderTests` against its 15s telemetry-collection budget under load. The on-import patch:
+`tests/VehicleFleetSimulator.Tests` shares a single Orleans `TestCluster` across collection-bound tests. Six pure-unit-test classes carry no `[Collection]` attribute and were running in parallel with the cluster-fixture tests by default - that races `StreamSubscriberOrderTests` against its 15s telemetry-collection budget under load. The on-import patch:
 
 ```csharp
 [assembly: CollectionBehavior(DisableTestParallelization = true)]

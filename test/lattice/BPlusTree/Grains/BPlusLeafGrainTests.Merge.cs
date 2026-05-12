@@ -74,7 +74,7 @@ public partial class BPlusLeafGrainTests
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("local"));
         var localTimestamp = state.State.Entries["k1"].Timestamp;
 
-        // Merge an older entry — should be ignored by LWW.
+        // Merge an older entry - should be ignored by LWW.
         var olderClock = default(HybridLogicalClock);
         var entries = new Dictionary<string, LwwValue<byte[]>>
         {

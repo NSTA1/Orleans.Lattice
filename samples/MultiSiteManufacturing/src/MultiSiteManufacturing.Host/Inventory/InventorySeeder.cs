@@ -8,8 +8,8 @@ namespace MultiSiteManufacturing.Host.Inventory;
 
 /// <summary>
 /// Bulk-loads a small, diverse spread of parts into the federation on
-/// silo startup. The seed is deterministic — same serial numbers, same
-/// facts, same HLCs across runs — so demos look identical every time
+/// silo startup. The seed is deterministic - same serial numbers, same
+/// facts, same HLCs across runs - so demos look identical every time
 /// the host starts against a fresh storage account.
 /// </summary>
 /// <remarks>
@@ -27,8 +27,8 @@ namespace MultiSiteManufacturing.Host.Inventory;
 /// interfere with seed determinism.
 /// </para>
 /// <para>
-/// The seed produces 5 parts — one per reachable <see cref="ComplianceState"/>
-/// terminal / representative state — chosen to keep the demo inventory
+/// The seed produces 5 parts - one per reachable <see cref="ComplianceState"/>
+/// terminal / representative state - chosen to keep the demo inventory
 /// small and readable while still exercising every fold transition the UI
 /// needs to render (Nominal early, Nominal complete, FlaggedForReview,
 /// Rework, Scrap).
@@ -99,11 +99,11 @@ public sealed class InventorySeeder(
     private async Task EmitAllAsync(CancellationToken cancellationToken)
     {
         // 5 parts total, one representative per reachable fold outcome:
-        //   seq 1 — Forge only                         → Nominal
-        //   seq 2 — Full lifecycle incl. FAI           → Nominal
-        //   seq 3 — NDT raised minor NC                → FlaggedForReview
-        //   seq 4 — NDT major NC + MRB Rework          → Rework
-        //   seq 5 — NDT critical NC                    → Scrap
+        //   seq 1 - Forge only                         → Nominal
+        //   seq 2 - Full lifecycle incl. FAI           → Nominal
+        //   seq 3 - NDT raised minor NC                → FlaggedForReview
+        //   seq 4 - NDT major NC + MRB Rework          → Rework
+        //   seq 5 - NDT critical NC                    → Scrap
         await EmitForgeOnlyAsync(1, cancellationToken);
         await EmitFullLifecycleAsync(2, cancellationToken);
         await EmitFlaggedForReviewAsync(3, cancellationToken);
@@ -278,7 +278,7 @@ public sealed class InventorySeeder(
     /// <summary>
     /// Per-part mutable context that hands out monotonic HLCs and
     /// fact ids. Each part starts in its own slot of a rolling 5-day
-    /// seed window — the slot is derived from the sequence number —
+    /// seed window - the slot is derived from the sequence number -
     /// and <see cref="NextHlc"/> advances by a jittered 60–180 minute
     /// gap per fact. Determinism is preserved across reseeds that
     /// happen inside the same 5-day window; the window itself scrolls
@@ -291,7 +291,7 @@ public sealed class InventorySeeder(
         // Spread seeded parts across the last ~5 days so per-part activity
         // streams have room to breathe without spilling into the future. Each
         // part starts ~(5d / TotalParts) after the previous one, and facts
-        // inside a part advance by a jittered 10m–2h gap — so the dashboard
+        // inside a part advance by a jittered 10m–2h gap - so the dashboard
         // "When" column shows realistic spacing (e.g. Forge 3d ago, Heat Treat
         // 2d ago, Machining 18h ago, FAI 1h ago) instead of everything landing
         // in the same millisecond.

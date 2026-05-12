@@ -19,7 +19,7 @@ internal sealed class TxRegistryState
     /// <summary>
     /// Map from saga txid to its recorded outcome. Sagas that have been
     /// forgotten (post-cleanup) are absent from this map and resolve to
-    /// <see cref="TxStatus.InFlight"/> on lookup — by which point no
+    /// <see cref="TxStatus.InFlight"/> on lookup - by which point no
     /// leaf has the txid in its pending bucket anymore so that
     /// observation is consistent with the absence of any pending
     /// mutation.

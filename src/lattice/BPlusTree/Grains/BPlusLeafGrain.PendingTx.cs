@@ -25,7 +25,7 @@ internal sealed partial class BPlusLeafGrain
     /// activation. The vast majority of read fan-outs hit this path;
     /// sharing a single empty instance avoids one zero-content
     /// dictionary allocation per leaf per scan. Callers only ever do
-    /// <c>TryGetValue</c> against the returned map — never mutate it —
+    /// <c>TryGetValue</c> against the returned map - never mutate it -
     /// so it is safe to share the instance across calls and across
     /// leaves.
     /// </summary>
@@ -50,7 +50,7 @@ internal sealed partial class BPlusLeafGrain
     /// <para>
     /// Lazily allocated on the first prepared-mutation apply. The vast
     /// majority of leaves never participate in a saga, so an upfront
-    /// allocation per activation would be pure waste — leaf activation
+    /// allocation per activation would be pure waste - leaf activation
     /// density is the dominant memory-cost knob and the dict's empty
     /// footprint (~80 B) multiplied across thousands of activations is
     /// not free.
@@ -65,7 +65,7 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="LatticeApplyOffsetContext"/> scope active; left
     /// untouched on the foreground commit path (where there is no WAL
     /// offset to stamp). The minimum value across this map is the
-    /// projection-checkpoint clamp floor — advancing the persisted
+    /// projection-checkpoint clamp floor - advancing the persisted
     /// checkpoint past <c>min - 1</c> would silently lose any prepare
     /// whose terminal mark has not yet replayed, so
     /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> clamps
@@ -75,7 +75,7 @@ internal sealed partial class BPlusLeafGrain
     /// carries an ambient offset. The vast majority of leaves never
     /// participate in a saga or are not driven by the replay
     /// coordinator, so an upfront allocation per activation would be
-    /// pure waste — see the rationale on <see cref="_pendingTx"/>.
+    /// pure waste - see the rationale on <see cref="_pendingTx"/>.
     /// </para>
     /// </summary>
     private Dictionary<Guid, long>? _pendingTxOffsets;
@@ -99,7 +99,7 @@ internal sealed partial class BPlusLeafGrain
     /// Per-key (NOT per-saga) granularity is load-bearing for the
     /// shard-split + reshard chaos surface: two terminal deliveries to
     /// the same leaf can legitimately carry DIFFERENT
-    /// <c>committedValues</c> subsets — e.g.
+    /// <c>committedValues</c> subsets - e.g.
     /// </para>
     /// <list type="number">
     ///   <item><description>
@@ -110,14 +110,14 @@ internal sealed partial class BPlusLeafGrain
     ///   </description></item>
     ///   <item><description>
     ///     A source shard's <c>ForwardSplitTerminalAsync</c> mirror to
-    ///     the same destination with a DIFFERENT subset — the keys whose
+    ///     the same destination with a DIFFERENT subset - the keys whose
     ///     prepare landed on the source pre-split but whose slot has
     ///     since migrated to this destination.
     ///   </description></item>
     /// </list>
     /// <para>
     /// A per-saga dedup (the prior shape) would observe (1) first, mark
-    /// the saga "backstopped", and short-circuit (2)'s missing keys —
+    /// the saga "backstopped", and short-circuit (2)'s missing keys -
     /// leaving them stuck at the drained pre-saga value. The chaos
     /// pattern <c>split (pre=5, post=11)</c> on the reshard fixture
     /// reproduces this exactly: 5 keys (one source shard's worth)
@@ -181,7 +181,7 @@ internal sealed partial class BPlusLeafGrain
         BumpLocalRevision();
 
         // Record the earliest WAL offset of any prepare under this
-        // transaction id, but only when an apply scope is active —
+        // transaction id, but only when an apply scope is active -
         // foreground commits author the WAL and have no offset to
         // stamp, so they leave _pendingTxOffsets untouched and the
         // checkpoint clamp degrades to a no-op for foreground-only
@@ -208,7 +208,7 @@ internal sealed partial class BPlusLeafGrain
     /// Flips every pending-tx entry under <paramref name="transactionId"/>
     /// into the visible projection via
     /// <see cref="LwwValue{T}.Merge(LwwValue{T}, LwwValue{T})"/>. The
-    /// linearization point for the saga on this leaf — every reader
+    /// linearization point for the saga on this leaf - every reader
     /// observes either zero of the saga's keys or every one of them
     /// after this call returns. Idempotent: repeated applies for the
     /// same transaction id are no-ops via
@@ -247,7 +247,7 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// <para>
     /// The branch decision uses <see cref="LwwValue{T}.OriginClusterId"/>
-    /// — a deterministic, persisted signal stamped at prepare time
+    /// - a deterministic, persisted signal stamped at prepare time
     /// from <see cref="LatticeOriginContext"/>. Because the flag is
     /// written into the WAL TxPrepare record's <see cref="LwwValue{T}"/>
     /// payload (see
@@ -265,7 +265,7 @@ internal sealed partial class BPlusLeafGrain
     /// At terminal-replay time, <c>state.State.Clock</c> equals the
     /// max of all prior WAL <see cref="LatticeMutation.Timestamp"/>
     /// values, which matches what foreground saw when the terminal
-    /// was originally appended — so foreground and replay produce
+    /// was originally appended - so foreground and replay produce
     /// bit-identical drained <see cref="LwwValue{T}.Timestamp"/>
     /// values. The WAL terminal entry itself stamps
     /// <see cref="HybridLogicalClock.Zero"/> by convention (saga-wide
@@ -339,7 +339,7 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Drops every pending-tx entry under <paramref name="transactionId"/>
-    /// without ever making it visible to readers — the saga's
+    /// without ever making it visible to readers - the saga's
     /// prepare-phase writes are undone in a single linearization step.
     /// Idempotent.
     /// </summary>
@@ -363,7 +363,7 @@ internal sealed partial class BPlusLeafGrain
     /// Returns <c>true</c> if any pending-tx entry under any transaction
     /// id covers <paramref name="key"/>. Used by the read-path filter
     /// to hide saga prepare-phase writes from concurrent readers
-    /// without a per-call RPC. O(pending-txs) — bounded by the small
+    /// without a per-call RPC. O(pending-txs) - bounded by the small
     /// cardinality of in-flight sagas and the concurrent saga rate;
     /// returns immediately when the pending-tx map has never been
     /// allocated (the steady state for every leaf that has not
@@ -376,7 +376,7 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="SnapshotPendingForReadAsync"/> (scan paths) to
     /// consult the per-tree <see cref="ITxRegistryGrain"/> for the
     /// recorded saga outcome. The registry's recorded decision is the
-    /// single tree-wide linearization point — without it, a reader
+    /// single tree-wide linearization point - without it, a reader
     /// landing on this leaf during the post-commit-decision /
     /// pre-terminal-fan-out window would observe the saga's prepared
     /// keys as hidden while a sibling leaf had already flipped them
@@ -404,7 +404,7 @@ internal sealed partial class BPlusLeafGrain
     /// pending-tx map is empty or the key has no prepared mutation.
     /// When <c>true</c>, callers MUST consult
     /// <see cref="ResolvePendingStatusAsync"/> with the returned txid
-    /// before serving the read — this method does not look at the
+    /// before serving the read - this method does not look at the
     /// per-tree TxRegistry.
     /// <para>
     /// O(pending-txs); bounded by in-flight saga cardinality. If two
@@ -443,7 +443,7 @@ internal sealed partial class BPlusLeafGrain
     /// <c>state.State.Entries</c>.
     /// <para>
     /// Returns <see cref="TxStatus.InFlight"/> on degenerate inputs
-    /// (empty txid or unknown tree id) — the strict-isolation default,
+    /// (empty txid or unknown tree id) - the strict-isolation default,
     /// which keeps the key hidden until the registry can be reached.
     /// </para>
     /// </summary>
@@ -483,7 +483,7 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// <para>
     /// On the saga-active path, makes exactly one RPC per scan
-    /// regardless of how many keys the scan visits — the batched
+    /// regardless of how many keys the scan visits - the batched
     /// registry call collapses N per-key dial-backs into one round
     /// trip. Callers iterate <c>state.State.Entries</c> as usual and,
     /// for each key found in <paramref name="pendingKeys"/>, branch on
@@ -517,7 +517,7 @@ internal sealed partial class BPlusLeafGrain
         // Linearizable-scan fast path: when the lattice-level fan-out
         // has stamped a per-scan registry snapshot via
         // LatticeRegistrySnapshotContext, every leaf in the scan must
-        // share that exact view of registry decisions — otherwise the
+        // share that exact view of registry decisions - otherwise the
         // registry's InFlight→Committed transition can fall mid-fan-out
         // and produce a split observation across leaves. Use the
         // ambient and skip the per-leaf registry RPC entirely.
@@ -539,7 +539,7 @@ internal sealed partial class BPlusLeafGrain
         if (string.IsNullOrEmpty(treeId))
         {
             // Defensive: no tree id means we cannot consult the
-            // registry. Treat every pending entry as InFlight — the
+            // registry. Treat every pending entry as InFlight - the
             // strict-isolation default keeps the prepared keys hidden
             // until activation completes its tree-id stamp.
             var hidden = new Dictionary<Guid, TxStatus>(txids.Count);
@@ -571,7 +571,7 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> to clamp
     /// the persisted checkpoint to <c>min(requested, value - 1)</c>
     /// so crash recovery does not advance past an unresolved prepare.
-    /// O(pending-txs) — bounded by the small cardinality of in-flight
+    /// O(pending-txs) - bounded by the small cardinality of in-flight
     /// sagas; returns immediately when the offset map has never been
     /// allocated (the steady state for foreground-driven leaves).
     /// </summary>
@@ -598,7 +598,7 @@ internal sealed partial class BPlusLeafGrain
         if (_pendingTx is null || _pendingTx.Count == 0)
             return Task.FromResult(new List<string>());
 
-        // De-duplicate keys across pending tx buckets — two independent
+        // De-duplicate keys across pending tx buckets - two independent
         // sagas could (rarely) prepare the same key. Set is then
         // materialised into a List for the wire shape.
         var unique = new HashSet<string>(StringComparer.Ordinal);
@@ -639,12 +639,12 @@ internal sealed partial class BPlusLeafGrain
         //
         // Per-key dedup is load-bearing: two terminal deliveries to the
         // same leaf can legitimately carry DIFFERENT committedValues
-        // subsets — the AtomicWriteGrain direct fan-out routes by
+        // subsets - the AtomicWriteGrain direct fan-out routes by
         // current-routing per shard, while a source shard's
         // ForwardSplitTerminalAsync mirror routes by MovedAwaySlots's
         // earlier migration record. A per-saga dedup observes one
         // subset first, marks the saga backstopped, and short-circuits
-        // the OTHER subset's missing keys — leaving them stuck at the
+        // the OTHER subset's missing keys - leaving them stuck at the
         // drained pre-saga value. The chaos pattern
         // `split (pre=5, post=11)` on the reshard fixture reproduces
         // this exactly: 5 keys (one source shard's worth) orphaned
@@ -671,13 +671,13 @@ internal sealed partial class BPlusLeafGrain
         // Hot-path short-circuit: a duplicate terminal delivery with
         // nothing new to do. The flip side already ran (alreadyFlipped),
         // and either there is no backstop payload, or every payload key
-        // is already covered (in the bucket — which is null on the
-        // alreadyFlipped path — or in the per-key backstopped set).
+        // is already covered (in the bucket - which is null on the
+        // alreadyFlipped path - or in the per-key backstopped set).
         if (alreadyFlipped && missingKeys is null && !hadPending)
             return;
 
         // Pending-flip path: drain the bucket into Entries (commit) or
-        // drop it without surfacing (abort). Zero leaf I/O — the WAL is
+        // drop it without surfacing (abort). Zero leaf I/O - the WAL is
         // the recovery source for the flipped entries. Gated on
         // !alreadyFlipped so a duplicate delivery (e.g. arriving via
         // both the direct fan-out and a split-shadow forward) does not
@@ -697,7 +697,7 @@ internal sealed partial class BPlusLeafGrain
                 // Timestamps (= state.State.Clock at terminal-time, which
                 // already trails Version by zero-or-positive ticks because
                 // the prepare path no longer ticks Version). Foreground-
-                // only — the replay path inherits the
+                // only - the replay path inherits the
                 // ILeafProjection.Apply convention of not advancing
                 // Version, so terminal replay rebuilds Entries
                 // deterministically without contributing to a
@@ -719,7 +719,7 @@ internal sealed partial class BPlusLeafGrain
         // value: HLC.Tick guarantees strict-greater ordering against any
         // pre-saga drained value already in Entries, so LWW.Merge
         // resolves in favour of the backstop. We do NOT tick Version on
-        // the pure backstop path (hadPending=false) — the cache is not
+        // the pure backstop path (hadPending=false) - the cache is not
         // tracking this leaf as a pending source for this saga, and
         // ticking would race with concurrent reads. When the
         // pending-flip path above already ticked Version
@@ -727,7 +727,7 @@ internal sealed partial class BPlusLeafGrain
         //
         // Each missing-key write is durably committed by appending a
         // LatticeMutation { Kind = Set, IsBackstop = true, ... } to the
-        // per-shard WAL via ICommitLogWriter — the same primitive every
+        // per-shard WAL via ICommitLogWriter - the same primitive every
         // other foreground commit on this leaf uses under the
         // WAL-as-sole-commit-point invariant. The WAL append is the
         // durability point; the in-memory projection update
@@ -736,7 +736,7 @@ internal sealed partial class BPlusLeafGrain
         // next dequeue. Crash recovery rebuilds Entries from the WAL
         // via the per-shard activation-time replay path. The legacy
         // standalone state-row persist that used to follow this loop
-        // is gone — every leaf foreground commit now obeys the
+        // is gone - every leaf foreground commit now obeys the
         // WAL-as-sole-commit-point invariant.
         if (missingKeys is { Count: > 0 })
         {
@@ -774,7 +774,7 @@ internal sealed partial class BPlusLeafGrain
                     // histogram tagged `kind=backstop` so operators can
                     // size cross-migration backstop traffic against
                     // ordinary writes on the same instrument. The tag
-                    // dimension is additive — emissions on this
+                    // dimension is additive - emissions on this
                     // histogram from the projection-checkpoint flush
                     // path carry no `kind` tag and remain
                     // distinguishable as the steady-state state-row
@@ -811,7 +811,7 @@ internal sealed partial class BPlusLeafGrain
             // delivery (carrying possibly a different subset) skips
             // these via the alreadyBackstoppedKeys check above without
             // re-stamping Entries. Per-key dedup is the load-bearing
-            // invariant — a per-txid marker would short-circuit a
+            // invariant - a per-txid marker would short-circuit a
             // legitimate sibling subset arriving later.
             _backstoppedTerminals ??= new Dictionary<Guid, HashSet<string>>();
             if (!_backstoppedTerminals.TryGetValue(transactionId, out var perTxBackstopped))

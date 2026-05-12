@@ -22,7 +22,7 @@ This single script:
 6. Compares results with the previous run (including CPU and memory)
 7. Stops the host before moving to the next approach
 8. After all approaches, prints a total summary and prompts to retain or discard
-9. Ensures the host is always killed — even on Ctrl+C, errors, or script exit
+9. Ensures the host is always killed - even on Ctrl+C, errors, or script exit
 
 ### Run history
 

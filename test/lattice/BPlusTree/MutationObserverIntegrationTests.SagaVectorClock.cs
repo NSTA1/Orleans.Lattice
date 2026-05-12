@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// persists it on the saga state, and re-stamps it onto every per-key
 /// <c>SetAsync</c> the saga issues during Execute so observers see the
 /// identical <see cref="LatticeMutation.VectorClock"/> on every emit
-/// across the batch — closing the per-key VC drift a remote receiver
+/// across the batch - closing the per-key VC drift a remote receiver
 /// would otherwise see as a partial-set state.
 /// </summary>
 public sealed partial class MutationObserverIntegrationTests
@@ -66,7 +66,7 @@ public sealed partial class MutationObserverIntegrationTests
             && m.Key == "c");
 
         // Every per-key emit carries a VectorClock equal to the captured
-        // frontier — the core R-089 invariant.
+        // frontier - the core R-089 invariant.
         foreach (var m in new[] { m1, m2, m3 })
         {
             Assert.That(m.VectorClock, Is.Not.Null);
@@ -74,7 +74,7 @@ public sealed partial class MutationObserverIntegrationTests
                 Is.EqualTo(vc.GetClock("origin-peer")));
         }
 
-        // Every per-key emit shares the same TransactionId — pin
+        // Every per-key emit shares the same TransactionId - pin
         // alongside the VC to catch a regression that decouples the
         // saga ambient stamps.
         Assert.That(m2.TransactionId, Is.EqualTo(m1.TransactionId));
@@ -95,7 +95,7 @@ public sealed partial class MutationObserverIntegrationTests
         }
         MutationObserverClusterFixture.Drain();
 
-        // No ambient context — saga should re-emit with null VC.
+        // No ambient context - saga should re-emit with null VC.
         await tree.SetManyAtomicAsync(SagaVcEntries(("second", "2")));
 
         var m = await WaitForAsync(m =>

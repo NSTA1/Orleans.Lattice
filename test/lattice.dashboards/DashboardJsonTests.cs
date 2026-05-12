@@ -44,7 +44,7 @@ public sealed class DashboardJsonTests
             AddInstrumentForms(map, instrumentName, meterName);
         }
 
-        // Some instruments — observable gauges in particular — are only created
+        // Some instruments - observable gauges in particular - are only created
         // when the host starts the subsystem that owns them, so a snapshot
         // MeterListener at test time does not see them. Both meter classes
         // expose the canonical name of every such instrument as a
@@ -179,7 +179,7 @@ public sealed class DashboardJsonTests
         var referencedTokens = ExtractInstrumentTokens(json);
 
         Assert.That(referencedTokens, Is.Not.Empty,
-            $"Dashboard '{kind}' references no orleans_lattice instruments — that's almost certainly a bug.");
+            $"Dashboard '{kind}' references no orleans_lattice instruments - that's almost certainly a bug.");
 
         var unknown = new List<string>();
         foreach (var token in referencedTokens)

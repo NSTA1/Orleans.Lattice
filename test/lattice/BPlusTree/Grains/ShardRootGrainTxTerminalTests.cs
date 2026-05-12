@@ -318,7 +318,7 @@ public class ShardRootGrainTxTerminalTests
 
         await h.Leaves[0].Received(1).ApplyTxTerminalAsync(txid, true);
         // Leaves #1..#3 are part of the chain but were never recorded
-        // as affected — they must NOT receive the terminal RPC.
+        // as affected - they must NOT receive the terminal RPC.
         await h.Leaves[1].DidNotReceive().ApplyTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>());
         await h.Leaves[2].DidNotReceive().ApplyTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>());
         await h.Leaves[3].DidNotReceive().ApplyTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>());
@@ -326,7 +326,7 @@ public class ShardRootGrainTxTerminalTests
 
     /// <summary>
     /// The terminal-HLC computation must run only over the recorded
-    /// affected leaves — untouched leaves contribute no prepare for
+    /// affected leaves - untouched leaves contribute no prepare for
     /// this saga and so cannot influence the per-saga max. Verifying
     /// that <see cref="IBPlusLeafGrain.GetClockAsync"/> is queried
     /// only on the recorded subset is the cheapest way to enforce
@@ -355,7 +355,7 @@ public class ShardRootGrainTxTerminalTests
         await h.Grain.AppendTxTerminalAsync(txid, committed: true);
 
         // Leaf #0 (the routed target in this RootIsLeaf harness)
-        // is the only recorded affected leaf — it is the only one
+        // is the only recorded affected leaf - it is the only one
         // we should have queried for a clock.
         await h.Leaves[0].Received(1).GetClockAsync();
         await h.Leaves[1].DidNotReceive().GetClockAsync();
@@ -368,7 +368,7 @@ public class ShardRootGrainTxTerminalTests
     /// bypasses the routing layer), the code falls back to walking
     /// the full chain. This test exercises the fallback by issuing
     /// the terminal under a fresh transaction id that was never
-    /// recorded — every leaf in the chain must receive the terminal
+    /// recorded - every leaf in the chain must receive the terminal
     /// RPC.
     /// </summary>
     [Test]
@@ -398,7 +398,7 @@ public class ShardRootGrainTxTerminalTests
     /// terminal completes so the in-memory map cannot grow unboundedly
     /// across the activation lifetime. Verified by issuing a second
     /// terminal under the same transaction id with no intervening
-    /// prepare-phase writes — the second call must take the fallback
+    /// prepare-phase writes - the second call must take the fallback
     /// (full-chain) path, proving the first call evicted the entry.
     /// </summary>
     [Test]
@@ -418,13 +418,13 @@ public class ShardRootGrainTxTerminalTests
             await h.Grain.SetAsync("k1", new byte[] { 1 });
         }
 
-        // First terminal — uses the recorded subset (leaf #0 only).
+        // First terminal - uses the recorded subset (leaf #0 only).
         await h.Grain.AppendTxTerminalAsync(txid, committed: true);
         h.Leaves[0].ClearReceivedCalls();
         h.Leaves[1].ClearReceivedCalls();
         h.Writer!.Appended.Clear();
 
-        // Second terminal under the same txid — entry was evicted, so
+        // Second terminal under the same txid - entry was evicted, so
         // the call must fall back to the full chain walk and fan to
         // every leaf.
         await h.Grain.AppendTxTerminalAsync(txid, committed: true);
@@ -435,7 +435,7 @@ public class ShardRootGrainTxTerminalTests
 
     /// <summary>
     /// Writes issued outside the prepared-context gate must not
-    /// populate the affected-leaves map — they do not produce a
+    /// populate the affected-leaves map - they do not produce a
     /// pending bucket on the leaf and so the terminal-mark fan-out
     /// has no business targeting them. Verified by issuing a regular
     /// (non-prepared) <c>SetAsync</c> followed by a terminal call
@@ -453,7 +453,7 @@ public class ShardRootGrainTxTerminalTests
         var h = CreateHarness(leafClocks);
         var txid = Guid.NewGuid();
 
-        // Set the txid but DO NOT open a prepared scope — a regular
+        // Set the txid but DO NOT open a prepared scope - a regular
         // user-driven SetAsync.
         LatticeTransactionContext.Set(txid);
         await h.Grain.SetAsync("k1", new byte[] { 1 });
@@ -468,7 +468,7 @@ public class ShardRootGrainTxTerminalTests
 
     /// <summary>
     /// Writes issued under a prepared scope but with no ambient
-    /// transaction id (defensive case — the receiver-side prepared
+    /// transaction id (defensive case - the receiver-side prepared
     /// apply seam always sets both, but a stray scope outside that
     /// flow must not leak into the tracking map under
     /// <c>Guid.Empty</c>). Verified by issuing a write under the
@@ -510,7 +510,7 @@ public class ShardRootGrainTxTerminalTests
     /// harness's <c>RootIsLeaf=true</c> routes every <c>SetAsync</c>
     /// to leaf #0, so we verify isolation by asserting (a) each
     /// terminal dispatches with the correct transaction id and not
-    /// the other's, and (b) leaf #1 never receives a terminal —
+    /// the other's, and (b) leaf #1 never receives a terminal -
     /// confirming the tracked-path was used for both sagas rather
     /// than the fallback chain walk.
     /// </summary>
@@ -540,7 +540,7 @@ public class ShardRootGrainTxTerminalTests
             await h.Grain.SetAsync("kB", new byte[] { 2 });
         }
 
-        // Drive saga A's terminal — must fan with txA only, and only
+        // Drive saga A's terminal - must fan with txA only, and only
         // to the recorded leaf (#0). Leaf #1 must remain untouched
         // (proves tracked path, not fallback).
         await h.Grain.AppendTxTerminalAsync(txA, committed: true);
@@ -551,7 +551,7 @@ public class ShardRootGrainTxTerminalTests
         h.Leaves[0].ClearReceivedCalls();
         h.Leaves[1].ClearReceivedCalls();
 
-        // Saga B's tracking entry must still be present — its terminal
+        // Saga B's tracking entry must still be present - its terminal
         // must dispatch with txB on leaf #0 only.
         await h.Grain.AppendTxTerminalAsync(txB, committed: true);
         await h.Leaves[0].Received(1).ApplyTxTerminalAsync(txB, true);
@@ -565,7 +565,7 @@ public class ShardRootGrainTxTerminalTests
     /// transaction id must take the fallback (full-chain) path,
     /// proving the first call evicted the entry regardless of
     /// outcome. This is a complementary regression for the eviction
-    /// behaviour — the implementation must not key eviction on
+    /// behaviour - the implementation must not key eviction on
     /// <c>committed=true</c>.
     /// </summary>
     [Test]
@@ -585,13 +585,13 @@ public class ShardRootGrainTxTerminalTests
             await h.Grain.SetAsync("k1", new byte[] { 1 });
         }
 
-        // First terminal — uses the recorded subset (leaf #0 only).
+        // First terminal - uses the recorded subset (leaf #0 only).
         await h.Grain.AppendTxTerminalAsync(txid, committed: false);
         h.Leaves[0].ClearReceivedCalls();
         h.Leaves[1].ClearReceivedCalls();
         h.Writer!.Appended.Clear();
 
-        // Second terminal under the same txid — entry was evicted, so
+        // Second terminal under the same txid - entry was evicted, so
         // the call must fall back to the full chain walk and fan to
         // every leaf.
         await h.Grain.AppendTxTerminalAsync(txid, committed: false);
@@ -608,7 +608,7 @@ public class ShardRootGrainTxTerminalTests
     /// passes the gate, so the subsequent terminal-mark must fan
     /// using the recorded subset (leaf #0 only) rather than fall
     /// back to the full chain walk. Verified in this harness by
-    /// asserting leaf #1 receives nothing — fallback would fan to
+    /// asserting leaf #1 receives nothing - fallback would fan to
     /// both leaves, while the tracked path fans only to the leaf
     /// recorded under the prepared write.
     /// </summary>
@@ -623,11 +623,11 @@ public class ShardRootGrainTxTerminalTests
         var h = CreateHarness(leafClocks);
         var txid = Guid.NewGuid();
 
-        // First: a non-prepared write — the gate must reject. No
+        // First: a non-prepared write - the gate must reject. No
         // ambient txid, no prepared scope.
         await h.Grain.SetAsync("k0", new byte[] { 9 });
 
-        // Then: a prepared write under explicit txid + scope — the
+        // Then: a prepared write under explicit txid + scope - the
         // gate accepts and records leaf #0 under txid.
         LatticeTransactionContext.Set(txid);
         using (LatticePreparedContext.BeginScope())
@@ -638,8 +638,8 @@ public class ShardRootGrainTxTerminalTests
         // Drive the terminal. The recorded subset must contain only
         // leaf #0 (from the prepared write); leaf #1 must remain
         // untouched. Pollution from the earlier non-prepared write
-        // would either widen the subset (no — the gate rejects it)
-        // or trip the fallback path (no — the prepared entry is
+        // would either widen the subset (no - the gate rejects it)
+        // or trip the fallback path (no - the prepared entry is
         // present), so the only valid observation is a single
         // dispatch on leaf #0.
         await h.Grain.AppendTxTerminalAsync(txid, committed: true);

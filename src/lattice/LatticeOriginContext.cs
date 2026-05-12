@@ -21,9 +21,9 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// The stamp is then preserved end-to-end across every lifecycle path the
-/// library guarantees for <see cref="LwwValue{T}.ExpiresAtTicks"/> — shard
+/// library guarantees for <see cref="LwwValue{T}.ExpiresAtTicks"/> - shard
 /// split shadow-forward, saga prepare / compensate, tree snapshot / restore,
-/// bulk-load, and merge — and is surfaced to post-commit
+/// bulk-load, and merge - and is surfaced to post-commit
 /// <see cref="IMutationObserver"/> consumers through
 /// <see cref="LatticeMutation.OriginClusterId"/> for loop-prevention.
 /// </para>

@@ -475,7 +475,7 @@ public class InMemoryWalCursorRegistryTests
         var floor = await sut.GetBlockedFloorAsync("tree");
         Assert.That(floor, Is.EqualTo(Hlc(500)));
         // The Zero-cursor consumer must not pollute the GC's HLC min(cursor)
-        // branch — GetMinCursorAsync skips it.
+        // branch - GetMinCursorAsync skips it.
         Assert.That(await sut.GetMinCursorAsync("tree"), Is.Null);
     }
 
@@ -548,7 +548,7 @@ public class InMemoryWalCursorRegistryTests
         var sut = new InMemoryWalCursorRegistry();
 
         // Applier-A reports a pin; peer-B reports a cursor only (no pin)
-        // — the meet is the applier's pin alone, not influenced by the
+        // - the meet is the applier's pin alone, not influenced by the
         // peer's HLC cursor.
         await sut.ReportCursorAsync("tree", "applier-A", HybridLogicalClock.Zero, blockedAtHlc: Hlc(500));
         await sut.ReportCursorAsync("tree", "peer-B", Hlc(100));
@@ -618,7 +618,7 @@ public class InMemoryWalCursorRegistryTests
         await sut.ReportCursorAsync("tree", "peer-A", Hlc(200));
         await sut.ReportCursorAsync("tree", "peer-B", Hlc(300));
 
-        // The applier's Zero cursor must not be the GC's min — that
+        // The applier's Zero cursor must not be the GC's min - that
         // would freeze the cursor branch of the predicate forever.
         Assert.That(await sut.GetMinCursorAsync("tree"), Is.EqualTo(Hlc(200)));
     }

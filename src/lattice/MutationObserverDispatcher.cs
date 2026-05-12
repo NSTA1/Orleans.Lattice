@@ -19,7 +19,7 @@ internal sealed class MutationObserverDispatcher
 
     /// <summary>
     /// Initialises the dispatcher with the DI-provided observers.
-    /// The enumerable is materialised once at construction — observers are
+    /// The enumerable is materialised once at construction - observers are
     /// expected to be singletons registered at silo start.
     /// </summary>
     public MutationObserverDispatcher(

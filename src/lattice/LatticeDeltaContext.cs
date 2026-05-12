@@ -13,12 +13,12 @@ namespace Orleans.Lattice;
 /// <para>
 /// The post-commit <see cref="IMutationObserver"/> hook receives both
 /// the post-merge <see cref="Primitives.LwwValue{T}"/> bytes (via
-/// <see cref="LatticeMutation.Value"/>) and — when the producer chooses to
-/// supply one — the <em>pre-merge author's delta</em> in opaque-bytes form
+/// <see cref="LatticeMutation.Value"/>) and - when the producer chooses to
+/// supply one - the <em>pre-merge author's delta</em> in opaque-bytes form
 /// via <see cref="LatticeMutation.DeltaKind"/> /
 /// <see cref="LatticeMutation.DeltaPayload"/>. The author's delta is the
 /// minimal record the producer would replay against an in-memory
-/// projection to reach the same converged state — for an LWW write it is
+/// projection to reach the same converged state - for an LWW write it is
 /// the value-and-HLC tuple, for an OR-Set add it is the new dot, for a
 /// PN-Counter increment it is the per-replica delta, and so on.
 /// </para>
@@ -35,7 +35,7 @@ namespace Orleans.Lattice;
 /// <c>SetIfVersionAsync</c> step) in <see cref="With(string, byte[])"/>
 /// so the publish helpers read the context at the HLC-tick site and stamp
 /// it onto the emitted <see cref="LatticeMutation"/>. Local writes that
-/// leave the context unset produce <see langword="null"/> on both slots —
+/// leave the context unset produce <see langword="null"/> on both slots -
 /// observers then operate from <see cref="LatticeMutation.Value"/> alone,
 /// exactly as before this slot existed.
 /// </para>

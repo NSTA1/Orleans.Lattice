@@ -81,7 +81,7 @@ public partial class AtomicWriteGrainTests
         // on its original Prepare must re-stamp the persisted size on
         // every resumed per-key write so observers continue to see the
         // identical batch-wide AtomicBatchSize after silo restart.
-        // Caller-side ambient context is deliberately *unset* here —
+        // Caller-side ambient context is deliberately *unset* here -
         // the value must come from persisted AtomicWriteState alone.
         var state = new FakePersistentState<AtomicWriteState>();
         state.State.Phase = AtomicWritePhase.Execute;
@@ -123,7 +123,7 @@ public partial class AtomicWriteGrainTests
     {
         // Reminder-driven replay must reuse the persisted size even if
         // a hypothetical activation-environment leak caused the
-        // ambient context to disagree — capture-once is honoured.
+        // ambient context to disagree - capture-once is honoured.
         var state = new FakePersistentState<AtomicWriteState>();
         state.State.Phase = AtomicWritePhase.Execute;
         state.State.TreeId = TreeId;

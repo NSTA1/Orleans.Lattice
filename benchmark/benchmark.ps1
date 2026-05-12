@@ -173,7 +173,7 @@ $historyGrafanaUrl = $env:BENCH_HISTORY_GRAFANA_URL ?? 'http://localhost:3001'
 #                               express (ratios, label-filtered counters,
 #                               derived gauges, KPI aliases).
 #
-# Synthesis rules — driven by the metadata `type` field, NOT the name suffix,
+# Synthesis rules - driven by the metadata `type` field, NOT the name suffix,
 # because dotnet counters like dotnet_process_cpu_time_seconds and
 # dotnet_gc_collections do not end in `_total`:
 #
@@ -229,7 +229,7 @@ $ScalarPanelExtra = [ordered]@{
     #    dual-durability commit path on BPlusLeafGrain). The WAL Performance
     #    dashboard's KPI tiles bind to these so the WAL-append step, the
     #    in-memory Apply step, and the legacy shadow-write step are visible
-    #    independently — under dual-durability the four steps add up to the
+    #    independently - under dual-durability the four steps add up to the
     #    full commit tail, and after the shadow-write removal flip the
     #    shadow alias should drop to zero while WAL-append + Apply remain
     #    the load-bearing path. The WAL-appends-per-second alias is the
@@ -246,12 +246,12 @@ $ScalarPanelExtra = [ordered]@{
     # ── Derived metrics (auto-discovery cannot synthesise ratios) ──
     #
     # IMPORTANT: aggregate each rate to a scalar BEFORE adding. PromQL's `+`
-    # is vector matching — `rate(A) + rate(B)` only retains series whose
+    # is vector matching - `rate(A) + rate(B)` only retains series whose
     # labels line up exactly between A and B. If hits and misses are emitted
     # with even one differing label (e.g. different service.instance.id, or
     # one metric carries a label the other doesn't), the addition produces
     # an empty / heavily-thinned vector, the outer sum collapses, clamp_min
-    # returns 1, and the ratio degenerates to `hits_rate / 1` — i.e. the
+    # returns 1, and the ratio degenerates to `hits_rate / 1` - i.e. the
     # absolute hits-per-second instead of a 0..1 ratio. The downstream
     # `{0:P0}` formatter then multiplies by 100 and produces nonsense like
     # "9,548%". Aggregating each rate independently with sum(...) collapses
@@ -339,7 +339,7 @@ function Set-ProcessEnv {
 # ship attempt fails at the gRPC connect timeout because the replica overlay
 # isn't running for `observer-no-peer`. The failure-path duration (~250-500 ms
 # per attempt) lands in the `[250, 500)` histogram bucket and `ship.duration`
-# p95 reports ~475 ms — making the no-peer control look like the slowest
+# p95 reports ~475 ms - making the no-peer control look like the slowest
 # replication scenario in the suite.
 #
 # `$ScenarioControlledEnvKeys` is computed once at script load by scanning
@@ -396,7 +396,7 @@ function Sync-Dashboards {
     # and strip the __inputs block which Grafana ignores during provisioning but
     # whose presence triggers a "datasource not found" toast on first load.
     if (-not (Test-Path $dashboardSrc)) {
-        Write-Warning "Dashboard source $dashboardSrc not found — skipping copy."
+        Write-Warning "Dashboard source $dashboardSrc not found - skipping copy."
         return
     }
     if (Test-Path $dashboardDst) {
@@ -440,7 +440,7 @@ function Post-VehicleBatch {
     param([int] $Count)
     # The simulator exposes /api/vehicles/batch which accepts an array of VehicleSpec.
     # An empty spec ({}) generates a vehicle with a server-assigned id, default config,
-    # and a default route — the simulator picks a pseudo-random route from the city graph.
+    # and a default route - the simulator picks a pseudo-random route from the city graph.
     $batchSize = 250
     $remaining = $Count
     $totalCreated = 0
@@ -460,7 +460,7 @@ function Post-VehicleBatch {
 
 function Invoke-PromInstantQuery {
     # Returns the first scalar value as [double], or $null if no series matched
-    # or the query errored. We never throw — a missing metric is a normal outcome
+    # or the query errored. We never throw - a missing metric is a normal outcome
     # for scenarios that don't exercise that subsystem.
     param([string] $Query)
     try {
@@ -570,7 +570,7 @@ function Get-AutoScalarPanel {
                 }
             }
             default {
-                # UpDownCounter / unknown — treat as gauge.
+                # UpDownCounter / unknown - treat as gauge.
                 $key1 = "${name}_max"
                 $key2 = "${name}_avg"
                 if ($Exclude -notcontains $key1) {
@@ -592,7 +592,7 @@ function Resolve-ScalarPanel {
 
     .DESCRIPTION
         Returns an [ordered] dictionary whose keys are the union of the
-        auto-discovered panel and $Extra. On collision, $Extra wins — that''s
+        auto-discovered panel and $Extra. On collision, $Extra wins - that''s
         the documented contract for pretty-naming auto-keys (e.g. an
         ungainly orleans_lattice_leaf_commit_duration_milliseconds_p99 can
         be aliased to the short lattice_commit_p99_ms).
@@ -746,7 +746,7 @@ function ConvertTo-PromExposition {
     foreach ($prop in $Payload.metrics.PSObject.Properties) {
         $val = $prop.Value
         if ($null -eq $val) { continue }
-        # Sanitise label values — VM accepts the same escaping rules as Prometheus.
+        # Sanitise label values - VM accepts the same escaping rules as Prometheus.
         $name = "bench_$($prop.Name)"
         $line = '{0}{{scenario="{1}",run_id="{2}",git_sha="{3}"}} {4} {5}' -f `
             $name, $scenario, $runId, $gitSha, $val, $tsMs
@@ -758,7 +758,7 @@ function ConvertTo-PromExposition {
 function Push-HistoryResults {
     param([Parameter(Mandatory = $true)] [string] $ResultsPath)
     if (-not (Test-HistoryVmReachable)) {
-        Write-Host "[history] VM at $historyVmUrl unreachable — skipping push (results.json archived locally)" -ForegroundColor DarkYellow
+        Write-Host "[history] VM at $historyVmUrl unreachable - skipping push (results.json archived locally)" -ForegroundColor DarkYellow
         return $false
     }
     try {
@@ -843,7 +843,7 @@ function Invoke-Microbench {
     # 2. Run BDN. The exporter writes results.json to BENCH_RESULTS_PATH on completion.
     #
     # BDN's --filter accepts comma-separated globs within a SINGLE argument value
-    # (the binder splits on comma internally) — e.g. '*.PointWrite,*.PointRead'
+    # (the binder splits on comma internally) - e.g. '*.PointWrite,*.PointRead'
     # correctly matches both pattern families. Repeated --filter flags do NOT
     # accumulate; only the last one wins. Space-separated values after one
     # --filter flag are also not consumed past the first.
@@ -1057,7 +1057,7 @@ function Invoke-CloseHistory {
     if (-not (Test-Path $historyCompose)) {
         throw "History compose file not found at $historyCompose."
     }
-    Write-Host "[history] down ($historyCompose) — volumes preserved" -ForegroundColor Cyan
+    Write-Host "[history] down ($historyCompose) - volumes preserved" -ForegroundColor Cyan
     Invoke-Compose -ComposeFiles @($historyCompose) -Cwd $historyRoot -Args @('down')
 }
 
@@ -1105,7 +1105,7 @@ if (-not (Test-Path $scenarioFile)) {
 }
 
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host " Orleans.Lattice benchmark — $Scenario" -ForegroundColor Cyan
+Write-Host " Orleans.Lattice benchmark - $Scenario" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 
 $envMap = Read-EnvFile -Path $scenarioFile
@@ -1172,7 +1172,7 @@ $runId = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH-mm-ssZ')
 # The microbench scenario (BENCH_KIND=microbench) bypasses the docker-compose flow
 # and instead drives the BenchmarkDotNet harness in benchmark/host/Bench.Microbench/.
 # The harness writes its own results.json, then we opportunistically push to the
-# history VM — same as the docker scenarios.
+# history VM - same as the docker scenarios.
 if ($envMap['BENCH_KIND'] -eq 'microbench') {
     Invoke-Microbench -ScenarioId $Scenario -EnvMap $envMap -RunId $runId
     return

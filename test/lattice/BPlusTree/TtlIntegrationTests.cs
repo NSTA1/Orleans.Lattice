@@ -214,7 +214,7 @@ public class TtlMultiShardIntegrationTests
         Assert.That(await target.GetAsync("long-ttl"), Is.Not.Null);
         Assert.That(await target.GetAsync("short-ttl"), Is.Not.Null);
 
-        // Wait past short TTL — it must disappear on the target, proving
+        // Wait past short TTL - it must disappear on the target, proving
         // the absolute expiry crossed the merge boundary verbatim.
         await Task.Delay(TimeSpan.FromMilliseconds(700));
         Assert.That(await target.GetAsync("short-ttl"), Is.Null,
@@ -240,7 +240,7 @@ public class TtlMultiShardIntegrationTests
         for (int i = 0; i < 200; i++)
             await tree.SetAsync($"seed-{i:D4}", Bytes($"v{i}"));
 
-        // TTL'd entries written BEFORE split starts — these are drained.
+        // TTL'd entries written BEFORE split starts - these are drained.
         var ttl = TimeSpan.FromMilliseconds(900);
         var ttlKeys = new List<string>();
         for (int i = 0; i < 40; i++)
@@ -317,7 +317,7 @@ public class TtlResizeIntegrationTests
         Assert.That(await tree.GetAsync("long-ttl"), Is.Not.Null);
         Assert.That(await tree.GetAsync("short-ttl"), Is.Not.Null);
 
-        // Wait past short TTL — must expire on the post-resize physical tree.
+        // Wait past short TTL - must expire on the post-resize physical tree.
         await Task.Delay(TimeSpan.FromMilliseconds(800));
         Assert.That(await tree.GetAsync("short-ttl"), Is.Null,
             "Short-TTL entry should have expired after resize.");

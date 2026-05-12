@@ -40,7 +40,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task SetAsync(string key, byte[] value, long expiresAtTicks);
 
     /// <summary>
-    /// Returns the raw entry for <paramref name="key"/> — wrapped in an
+    /// Returns the raw entry for <paramref name="key"/> - wrapped in an
     /// <see cref="LwwEntry"/> so the Orleans type-alias encoder handles a
     /// single aliased shape rather than a nested
     /// <c>Nullable&lt;LwwValue&lt;byte[]&gt;&gt;</c>. Preserves both the
@@ -217,13 +217,13 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Bundles depth, root-is-leaf, split/bulk state, live-key count, and
     /// hotness into a single RPC. When <paramref name="deep"/> is <c>true</c>,
     /// walks the shard's leaf chain to aggregate tombstone-and-expired counts.
-    /// Only the shard index is left unset — the caller stamps it from the key.
+    /// Only the shard index is left unset - the caller stamps it from the key.
     /// </summary>
     Task<ShardDiagnosticReport> GetDiagnosticsAsync(bool deep);
 
     /// <summary>
     /// Returns a deterministic XxHash128 <see cref="LeafProjectionDigest"/>
-    /// for this entire shard — chains every leaf's digest through XxHash128
+    /// for this entire shard - chains every leaf's digest through XxHash128
     /// in leaf-chain order so two silos with the same applied WAL prefix
     /// produce byte-identical digests. Used by chaos tests and operator
     /// tooling to detect cross-silo divergence.
@@ -311,7 +311,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     /// <remarks>
     /// Unlike <see cref="GetSortedKeysBatchAsync"/>, this method does <em>not</em>
-    /// apply the shard's <c>MovedAwaySlots</c> filter — the caller has explicitly
+    /// apply the shard's <c>MovedAwaySlots</c> filter - the caller has explicitly
     /// asked for these slots and is responsible for routing to the correct owner
     /// based on the latest <see cref="ShardMap"/>. The returned
     /// <see cref="KeysPage.MovedAwaySlots"/> is always <c>null</c>.
@@ -334,7 +334,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     /// <remarks>
     /// Unlike <see cref="GetSortedEntriesBatchAsync"/>, this method does <em>not</em>
-    /// apply the shard's <c>MovedAwaySlots</c> filter — the caller has explicitly
+    /// apply the shard's <c>MovedAwaySlots</c> filter - the caller has explicitly
     /// asked for these slots and is responsible for routing to the correct owner
     /// based on the latest <see cref="ShardMap"/>. The returned
     /// <see cref="EntriesPage.MovedAwaySlots"/> is always <c>null</c>.
@@ -364,7 +364,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Transitions this shard into the <see cref="ShadowForwardPhase.Draining"/>
     /// phase, mirroring every accepted mutation to the corresponding shard on
     /// <paramref name="destinationPhysicalTreeId"/>. Idempotent for a matching
-    /// <paramref name="operationId"/> — repeated calls are no-ops. Refused with
+    /// <paramref name="operationId"/> - repeated calls are no-ops. Refused with
     /// <see cref="InvalidOperationException"/> if the shard is already in a
     /// shadow-forward lifecycle under a different <paramref name="operationId"/>.
     /// </summary>
@@ -422,7 +422,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
 
     /// <summary>
     /// Appends a single saga-terminal mark to this shard's per-shard WAL
-    /// — a <see cref="MutationKind.TxCommit"/> when
+    /// - a <see cref="MutationKind.TxCommit"/> when
     /// <paramref name="committed"/> is <c>true</c>, otherwise a
     /// <see cref="MutationKind.TxAbort"/>. The mark surfaces to every leaf
     /// on this shard via the WAL replay path and flips (or drops) every
@@ -447,7 +447,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </param>
     /// <param name="cancellationToken">
     /// Cooperative cancellation for the WAL append. Cancellation does
-    /// not roll back a successfully-appended terminal mark — by then the
+    /// not roll back a successfully-appended terminal mark - by then the
     /// linearization decision has been published to the WAL.
     /// </param>
     /// <param name="committedValues">
@@ -457,7 +457,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <see cref="SetAsync"/>) and passes each leaf its subset to
     /// <see cref="IBPlusLeafGrain.ApplyTxTerminalAsync"/>. The leaf applies
     /// the values as a LWW-safe write only when it holds no pending bucket
-    /// under <paramref name="transactionId"/> — i.e. when a prepare-phase
+    /// under <paramref name="transactionId"/> - i.e. when a prepare-phase
     /// shadow-forward was dropped by a mid-saga shard-split / drain race.
     /// The dictionary is also threaded through the shadow-forward and
     /// split-shadow-forward mirrors so every destination shard observes

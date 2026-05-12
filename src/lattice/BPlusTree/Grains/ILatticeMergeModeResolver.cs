@@ -3,7 +3,7 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Producer-side seam that resolves the declared <see cref="LatticeMergeMode"/>
 /// for a tree id at commit time. Returning <c>null</c> means "this tree is
-/// not replicated" — the WAL writer treats <c>null</c> as
+/// not replicated" - the WAL writer treats <c>null</c> as
 /// <see cref="LatticeMergeMode.LwwRegister"/> so durability still records the
 /// mutation, but the replication-package observer short-circuits the
 /// cross-cluster ship-out before any <c>IReplogSink</c> call. Hosts replace

@@ -31,11 +31,11 @@ One unary `Push` RPC per batch, a single long-lived `GrpcChannel` per peer clust
 
 The on-the-wire shape is the same `ReplicationBatchEnvelope` (alias `olr.be`, wire version 1) the [`IReplicationBatchEncoder`](wire-format.md) seam frames. The gRPC marshaller hands the gRPC stream's `IBufferWriter<byte>` straight to `IReplicationBatchEncoder.Encode(envelope, writer)`, so the envelope's bytes are written directly into the underlying network buffer without an intermediate managed allocation. The encoder is the canonical Orleans-binary encoder by default; swapping the DI registration for a different encoder (e.g. JSON for HTTP debuggability) is the only knob needed to change the wire bytes.
 
-The gRPC service definition is **not** generated from `.proto` — it is hand-rolled via custom `Marshaller<T>` instances backed by the encoder. There is no `Grpc.Tools` build dependency, no `.proto` file to keep in sync, and no language-binding artefact to ship: a non-.NET peer that wants to talk to the receiver implements the same encoded envelope shape directly.
+The gRPC service definition is **not** generated from `.proto` - it is hand-rolled via custom `Marshaller<T>` instances backed by the encoder. There is no `Grpc.Tools` build dependency, no `.proto` file to keep in sync, and no language-binding artefact to ship: a non-.NET peer that wants to talk to the receiver implements the same encoded envelope shape directly.
 
 ## Sender-side registration
 
-```text
+```csharp verify
 siloBuilder.ConfigureServices(services =>
 {
     services.AddLatticeReplicationGrpcPushTransport(options =>
@@ -46,22 +46,24 @@ siloBuilder.ConfigureServices(services =>
 });
 ```
 
-`AddLatticeReplicationGrpcPushTransport` replaces the default `NoOpReplicationTransport` registered by `AddLatticeReplication`. Subsequent calls are idempotent — the registration uses `IServiceCollection.Replace`, not `Add`.
+`AddLatticeReplicationGrpcPushTransport` replaces the default `NoOpReplicationTransport` registered by `AddLatticeReplication`. Subsequent calls are idempotent - the registration uses `IServiceCollection.Replace`, not `Add`.
 
 ### `GrpcPushTransportOptions`
 
 | Member | Semantics |
 |---|---|
-| `PeerEndpoints` | `IDictionary<string, Uri>` keyed by `TargetClusterId`. Every peer the silo intends to ship to must be present before the first `SendAsync` call. A batch whose `TargetClusterId` is not in the map causes `SendAsync` to throw `InvalidOperationException`. The map is read once per peer (on the first dispatch) and cached — runtime edits are not observed. |
+| `PeerEndpoints` | `IDictionary<string, Uri>` keyed by `TargetClusterId`. Every peer the silo intends to ship to must be present before the first `SendAsync` call. A batch whose `TargetClusterId` is not in the map causes `SendAsync` to throw `InvalidOperationException`. The map is read once per peer (on the first dispatch) and cached - runtime edits are not observed. |
 | `ConfigureChannel` | Optional `Action<string, GrpcChannelOptions>?` invoked when the transport constructs the per-peer `GrpcChannel`. Hosts attach mTLS credentials, custom `HttpHandler`s, retry policies, and keep-alive settings here. The default (`null`) leaves channel options at `Grpc.Net.Client` defaults, which is sufficient for plaintext-loopback tests but not for production. |
 
 A future item standardises mTLS / token-rotation across both transports; until then the host is responsible for wiring transport security via `ConfigureChannel`.
 
 ## Receiver-side registration
 
-```text
-var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddLatticeReplication(o => o.ClusterId = "site-b");
+```csharp verify
+var builder = WebApplication.CreateBuilder();
+builder.Host.UseOrleans(silo => silo
+    .AddLattice((s, storageName) => s.AddMemoryGrainStorage(storageName))
+    .AddLatticeReplication(o => o.ClusterId = "site-b"));
 builder.Services.AddLatticeReplicationGrpcServer();
 
 var app = builder.Build();
@@ -75,7 +77,7 @@ The receiver service requires the standard `AddLatticeReplication` registrations
 
 ## Concurrency and idempotency
 
-The transport is safe for concurrent invocation across distinct `(TargetClusterId, TreeName)` pairs — the canonical outbound shipper fans out across peers and trees in parallel. Concurrent invocation against the same pair is implementation-defined; the canonical shipper serialises calls per pair.
+The transport is safe for concurrent invocation across distinct `(TargetClusterId, TreeName)` pairs - the canonical outbound shipper fans out across peers and trees in parallel. Concurrent invocation against the same pair is implementation-defined; the canonical shipper serialises calls per pair.
 
 Idempotency is the receiver's responsibility. The transport retries are configured via `GrpcChannelOptions.ServiceConfig` (per gRPC's standard retry policy mechanism), and the per-origin high-water-mark dedup in `IReplicationApplier` makes re-deliveries of the same `(origin, hlc)` tuple a no-op. The sender advances its per-peer cursor strictly to `ack.HighestAppliedHlc`, never to a value the sender chose locally.
 
@@ -83,11 +85,11 @@ Idempotency is the receiver's responsibility. The transport retries are configur
 
 Each `SendAsync` records a `LatticeReplicationMetrics.ShipDuration` sample tagged with:
 
-- `tree` — the `ReplicationBatch.TreeName`.
-- `peer` — the `ReplicationBatch.TargetClusterId`.
-- `outcome` — `ok` on a successful ack, `error` on any thrown exception.
+- `tree` - the `ReplicationBatch.TreeName`.
+- `peer` - the `ReplicationBatch.TargetClusterId`.
+- `outcome` - `ok` on a successful ack, `error` on any thrown exception.
 
-Per-peer gauges (`entries_behind`, `bytes_behind`, `consecutive_errors`, `last_contact_seconds`) are owned by the outbound shipper, not the transport — they aggregate across batches and are not the transport's concern.
+Per-peer gauges (`entries_behind`, `bytes_behind`, `consecutive_errors`, `last_contact_seconds`) are owned by the outbound shipper, not the transport - they aggregate across batches and are not the transport's concern.
 
 ## Implementation notes
 

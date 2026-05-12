@@ -14,7 +14,7 @@ public static class LatticeEventConstants
 
     /// <summary>
     /// Orleans <c>RequestContext</c> key used to propagate a saga's
-    /// <c>operationId</c> through each per-key write it makes. Internal —
+    /// <c>operationId</c> through each per-key write it makes. Internal -
     /// consumers should read <see cref="LatticeTreeEvent.OperationId"/> instead.
     /// </summary>
     internal const string OperationIdRequestContextKey = "ol.opid";
@@ -44,14 +44,14 @@ public static class LatticeEventConstants
     /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry the per-transaction
     /// identifier (a <see cref="System.Guid"/>) from the public
-    /// <see cref="ILattice"/> entry-point — or, in the saga case, the
-    /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> coordinator — down
+    /// <see cref="ILattice"/> entry-point - or, in the saga case, the
+    /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> coordinator - down
     /// into <see cref="BPlusTree.Grains.BPlusLeafGrain"/> /
     /// <see cref="BPlusTree.Grains.ShardRootGrain"/> mutation publish
     /// helpers. Stamped onto every emitted
     /// <see cref="LatticeMutation.TransactionId"/> so replication-aware
     /// observers can capture per-transaction state once and apply it to
-    /// every emit in the batch. Internal — consumers should read
+    /// every emit in the batch. Internal - consumers should read
     /// <see cref="LatticeMutation.TransactionId"/> instead.
     /// </summary>
     internal const string TransactionIdRequestContextKey = "ol.txid";
@@ -63,22 +63,22 @@ public static class LatticeEventConstants
     /// <c>true</c> the publish helpers stamp
     /// <see cref="LatticeMutation.Category"/> as
     /// <see cref="MutationCategory.Maintenance"/>; otherwise emits default
-    /// to <see cref="MutationCategory.User"/>. Internal — set through
+    /// to <see cref="MutationCategory.User"/>. Internal - set through
     /// <see cref="LatticeMaintenanceContext"/>.
     /// </summary>
     internal const string MaintenanceRequestContextKey = "ol.maint";
 
     /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry the
-    /// <em>author's delta</em> — the pre-merge mutation the caller actually
-    /// authored, encoded as a <c>(Kind, Payload)</c> opaque-bytes pair —
+    /// <em>author's delta</em> - the pre-merge mutation the caller actually
+    /// authored, encoded as a <c>(Kind, Payload)</c> opaque-bytes pair -
     /// from a public <see cref="ILattice"/> entry-point or a CRDT
     /// accessor down into the leaf / shard mutation publish helpers, so
     /// the emitted <see cref="LatticeMutation"/> records the producer's
     /// intent rather than only the post-merge <c>LwwValue</c> bytes. The
     /// opaque-bytes carry deliberately keeps the public extensibility
     /// contract independent of any replication-side typed delta DTO.
-    /// Internal — set through <see cref="LatticeDeltaContext"/>.
+    /// Internal - set through <see cref="LatticeDeltaContext"/>.
     /// </summary>
     internal const string DeltaRequestContextKey = "ol.delta";
 
@@ -90,7 +90,7 @@ public static class LatticeEventConstants
     /// around the post-commit observer publish so a downstream
     /// replication-aware observer can detect and short-circuit the
     /// would-be loop where its own input is fed back into the WAL.
-    /// Internal — set through <see cref="LatticeCommitLogContext"/>.
+    /// Internal - set through <see cref="LatticeCommitLogContext"/>.
     /// </summary>
     internal const string CommitLogSourceRequestContextKey = "ol.cls";
 
@@ -98,10 +98,10 @@ public static class LatticeEventConstants
     /// Orleans <c>RequestContext</c> key used to carry the source-cluster
     /// <see cref="Primitives.HybridLogicalClock"/> that the leaf grain
     /// must persist verbatim on the freshly-constructed
-    /// <see cref="Primitives.LwwValue{T}"/>'s timestamp slot — bypassing
+    /// <see cref="Primitives.LwwValue{T}"/>'s timestamp slot - bypassing
     /// the standard
     /// <see cref="Primitives.HybridLogicalClock.Tick(Primitives.HybridLogicalClock)"/>
-    /// behaviour — so receiver-side LWW resolution sees the authoring
+    /// behaviour - so receiver-side LWW resolution sees the authoring
     /// cluster's HLC bit-identically. The leaf still advances its local
     /// clock past the override via
     /// <see cref="Primitives.HybridLogicalClock.Merge(Primitives.HybridLogicalClock, Primitives.HybridLogicalClock)"/>
@@ -112,7 +112,7 @@ public static class LatticeEventConstants
     /// <see cref="IReplicationApplyGrain.ApplyPreparedDeleteAsync"/>)
     /// and the per-entry merge apply seam
     /// (<see cref="IReplicationApplyGrain.ApplyMergeManyAsync"/>).
-    /// Internal — set through <see cref="LatticeHlcOverrideContext"/>.
+    /// Internal - set through <see cref="LatticeHlcOverrideContext"/>.
     /// </summary>
     internal const string HlcOverrideRequestContextKey = "ol.hlc";
 
@@ -127,7 +127,7 @@ public static class LatticeEventConstants
     /// emit's position within its enclosing atomic transaction. The
     /// saga stamps this once per per-key emit (including compensation
     /// rolls); single-key non-saga writes leave the key absent and the
-    /// publish helpers stamp <c>0</c> / <c>0</c> verbatim. Internal —
+    /// publish helpers stamp <c>0</c> / <c>0</c> verbatim. Internal -
     /// set through <see cref="LatticeAtomicBatchContext"/>.
     /// </summary>
     internal const string AtomicBatchRequestContextKey = "ol.batch";
@@ -141,7 +141,7 @@ public static class LatticeEventConstants
     /// visible projection; reads filter pending entries out of view. A
     /// subsequent terminal <see cref="MutationKind.TxCommit"/> or
     /// <see cref="MutationKind.TxAbort"/> mutation flips or drops the
-    /// pending entries on the leaf. Internal — set through
+    /// pending entries on the leaf. Internal - set through
     /// <see cref="LatticePreparedContext"/>.
     /// </summary>
     internal const string PreparedRequestContextKey = "ol.prep";
@@ -153,10 +153,10 @@ public static class LatticeEventConstants
     /// offset before each Apply call so the leaf can record per-prepare
     /// offsets in its pending-transaction map and clamp the projection
     /// checkpoint back to <c>min(highest contiguous Apply'd offset,
-    /// (min unresolved prepare offset) - 1)</c> — preventing crash
+    /// (min unresolved prepare offset) - 1)</c> - preventing crash
     /// recovery from advancing past an unresolved saga prepare and
     /// silently losing its writes when the terminal mark eventually
-    /// arrives. Internal — set through <see cref="LatticeApplyOffsetContext"/>.
+    /// arrives. Internal - set through <see cref="LatticeApplyOffsetContext"/>.
     /// </summary>
     internal const string ApplyOffsetRequestContextKey = "ol.aoff";
 
@@ -169,7 +169,7 @@ public static class LatticeEventConstants
     /// <c>GetStatusManyAsync</c> RPC, ensuring every leaf in the same
     /// scan applies the same registry decision view (linearizable scan
     /// over the registry's <c>InFlight</c>→<c>Committed</c>
-    /// transition). Internal — set through
+    /// transition). Internal - set through
     /// <see cref="LatticeRegistrySnapshotContext"/>.
     /// </summary>
     internal const string RegistrySnapshotRequestContextKey = "ol.txregsnap";

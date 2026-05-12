@@ -41,7 +41,7 @@ public class PartitionChaosTests
     public async Task EmitAsync_passes_when_partition_not_active()
     {
         var router = BuildRouter(isPrimary: true);
-        // Clean slate — ensure the partition flag is cleared from any
+        // Clean slate - ensure the partition flag is cleared from any
         // previous test.
         await router.ConfigurePartitionAsync(false);
 

@@ -22,7 +22,7 @@ internal sealed class BPlusInternalGrain(
     /// is intrinsic; this property is never reached. Test/bench harnesses
     /// that hand an IGrainFactory mock real grain instances back to callers
     /// (see Orleans.Lattice.Benchmark.Microbench) require this self-describing
-    /// shape — exactly the pattern <see cref="BPlusLeafGrain"/> already
+    /// shape - exactly the pattern <see cref="BPlusLeafGrain"/> already
     /// follows. Adding <see cref="IGrainBase"/> here aligns the two grain
     /// classes with no production-runtime impact.
     /// </summary>
@@ -110,7 +110,7 @@ internal sealed class BPlusInternalGrain(
             // Route the caller's promotion to the correct node after recovery.
             if (string.Compare(promotedKey, state.State.SplitKey!, StringComparison.Ordinal) >= 0)
             {
-                // The promotion belongs to the new sibling — forward it there.
+                // The promotion belongs to the new sibling - forward it there.
                 var sibling = grainFactory.GetGrain<IBPlusInternalGrain>(state.State.SplitSiblingId!.Value);
                 await sibling.AcceptSplitAsync(promotedKey, newChild);
                 return pendingRecovery;
@@ -184,7 +184,7 @@ internal sealed class BPlusInternalGrain(
 
     /// <summary>
     /// Completes (or resumes) a split whose intent has already been persisted.
-    /// Safe to call multiple times — <see cref="IBPlusInternalGrain.InitializeAsync"/>
+    /// Safe to call multiple times - <see cref="IBPlusInternalGrain.InitializeAsync"/>
     /// overwrites the new sibling's state, and <see cref="IBPlusInternalGrain.AcceptSplitAsync"/>
     /// has its own idempotency guard.
     /// </summary>

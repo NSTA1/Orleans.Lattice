@@ -35,7 +35,7 @@ When the queue is at capacity, a new enqueue evicts the oldest entry first (FIFO
 
 ## Configuration
 
-```text
+```csharp verify
 siloBuilder.AddLatticeReplication(opts =>
 {
     opts.ClusterId = "site-a";
@@ -49,7 +49,7 @@ siloBuilder.AddLatticeReplication(opts =>
 | `MaxApplyRetries` | `5` | Consecutive failed apply attempts on the same `(treeId, originClusterId, timestamp, key, op)` tuple before parking. |
 | `DeadLetterQueueCapacity` | `1000` | Maximum parked entries per tree before FIFO eviction kicks in. |
 
-## Inspection seam — `ILatticeReplicationDeadLetters`
+## Inspection seam - `ILatticeReplicationDeadLetters`
 
 Resolve the seam from DI and call per-tree:
 
@@ -58,10 +58,10 @@ Resolve the seam from DI and call per-tree:
 | `ListAsync(treeId, ct)` | `IReadOnlyList<DeadLetterEntry>` | Ascending entry-id order. Pure read. |
 | `CountAsync(treeId, ct)` | `int` | Cached count, served from memory. |
 | `DiscardAsync(treeId, entryId, ct)` | `bool` | `true` when removed; `false` when the id was unknown. Emits `reason=discarded`. |
-| `ReplayAsync(treeId, entryId, ct)` | `ApplyResult?` | `null` when the id is unknown. Routes through the canonical applier (bypasses the decorators failure tracker). On any non-throwing return — including HWM-filtered re-delivery — the entry is removed with `reason=replayed`. A thrown exception leaves the entry parked. |
+| `ReplayAsync(treeId, entryId, ct)` | `ApplyResult?` | `null` when the id is unknown. Routes through the canonical applier (bypasses the decorators failure tracker). On any non-throwing return - including HWM-filtered re-delivery - the entry is removed with `reason=replayed`. A thrown exception leaves the entry parked. |
 
-```text
-var dlq = serviceProvider.GetRequiredService<ILatticeReplicationDeadLetters>();
+```csharp verify
+var dlq = client.ServiceProvider.GetRequiredService<ILatticeReplicationDeadLetters>();
 var parked = await dlq.ListAsync("orders", cancellationToken);
 foreach (var parkedEntry in parked)
 {
@@ -104,12 +104,12 @@ Two counters on the `orleans.lattice.replication` meter, both tagged with `tree`
 
 ## Persistence and rehydration
 
-The grain bulk-loads its parked rows from the system tree on every activation. Operators can therefore deactivate or restart the silo and parked entries reappear with their original `EntryId` values intact — `_nextEntryId` is recomputed as `max(stored entry-id) + 1` so subsequent enqueues are still monotonic.
+The grain bulk-loads its parked rows from the system tree on every activation. Operators can therefore deactivate or restart the silo and parked entries reappear with their original `EntryId` values intact - `_nextEntryId` is recomputed as `max(stored entry-id) + 1` so subsequent enqueues are still monotonic.
 
 ## When to discard vs. replay
 
 - **Discard** when you have validated the underlying data fault and deliberately want to drop the entry (e.g. it carries a key your tree no longer participates in). Emits `reason=discarded`.
-- **Replay** when you have fixed the upstream cause of the apply failure (config drift, schema mismatch, transient infra fault) and want the entry back in the apply path. Emits `reason=replayed`. Note that for point operations the HWM has already advanced past the entry; the replay surfaces this as `Applied=false`, which is terminal for inspection — the entry is still removed.
+- **Replay** when you have fixed the upstream cause of the apply failure (config drift, schema mismatch, transient infra fault) and want the entry back in the apply path. Emits `reason=replayed`. Note that for point operations the HWM has already advanced past the entry; the replay surfaces this as `Applied=false`, which is terminal for inspection - the entry is still removed.
 
 ## Bootstrap under concurrent load
 
@@ -126,12 +126,12 @@ The window during which the third and fourth rows are reachable is bounded: it l
 
 ### Operator playbook for `reason=hlc_skew` after a bootstrap
 
-1. **Wait for the catch-up window to close.** Watch `apply.buffered_entries{tree}` — once it returns to zero (or near zero), every origin's diagonal has caught up to the snapshot frontier and the steady-state apply path is back in control. Replaying DLQ entries before this point is safe but pointless: the missing predecessors might still be in flight.
+1. **Wait for the catch-up window to close.** Watch `apply.buffered_entries{tree}` - once it returns to zero (or near zero), every origin's diagonal has caught up to the snapshot frontier and the steady-state apply path is back in control. Replaying DLQ entries before this point is safe but pointless: the missing predecessors might still be in flight.
 2. **List parked entries.** `await dlq.ListAsync(treeName, ct)` enumerates every entry the receiver parked since the bootstrap. Filter by `EnqueuedAtTicks` to scope to the bootstrap window if other DLQ traffic is mixed in.
 3. **Replay each entry.** `await dlq.ReplayAsync(treeName, entryId, ct)` routes the entry through the canonical applier (which bypasses the failure-tracking decorator). Two terminal outcomes:
-   - `ApplyResult.Applied = true` — the entry's deps are now satisfied, the apply landed, and the entry is removed from the DLQ with `reason=replayed`.
-   - `ApplyResult.Applied = false` — the entry's deps were satisfied via in-flight transport delivery while it sat in the DLQ; the canonical applier short-circuits as a re-delivery and the entry is still removed with `reason=replayed`. **This is the expected case** for any entry that landed in the DLQ purely because it lost the FIFO eviction race.
-4. **Discard only after validation.** If `ReplayAsync` throws repeatedly (e.g. the entry references a tree configuration that no longer exists), fall back to `DiscardAsync`. Replication continues regardless — the dead-letter store never blocks the apply stream.
+   - `ApplyResult.Applied = true` - the entry's deps are now satisfied, the apply landed, and the entry is removed from the DLQ with `reason=replayed`.
+   - `ApplyResult.Applied = false` - the entry's deps were satisfied via in-flight transport delivery while it sat in the DLQ; the canonical applier short-circuits as a re-delivery and the entry is still removed with `reason=replayed`. **This is the expected case** for any entry that landed in the DLQ purely because it lost the FIFO eviction race.
+4. **Discard only after validation.** If `ReplayAsync` throws repeatedly (e.g. the entry references a tree configuration that no longer exists), fall back to `DiscardAsync`. Replication continues regardless - the dead-letter store never blocks the apply stream.
 
 A persistent rate of `reason=hlc_skew` long after every bootstrap completes signals a structural problem (sustained authoring load above the receiver's apply throughput, transport reordering breaking per-origin FIFO, an undersized `CausalBufferMaxEntries` for the tree's fan-in). Treat it as the cue to raise `CausalBufferMaxEntries` / `CausalBufferMaxBytes` for the affected tree, or to investigate the producer-side write rate.
 

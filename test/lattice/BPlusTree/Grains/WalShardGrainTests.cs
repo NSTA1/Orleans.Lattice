@@ -286,7 +286,7 @@ public class WalShardGrainTests
         // (with WalMaxBatchEntries=4 cutover) and persists every entry
         // exactly once. Concurrent (non-awaited) calls into a non-Orleans
         // host would race on the grain's intentionally turn-local
-        // mutable state — the grain's contract is single-threaded
+        // mutable state - the grain's contract is single-threaded
         // execution per Orleans turn semantics.
         // <para>
         // The append loop is wrapped in <see cref="Task.Run(Func{Task})"/>

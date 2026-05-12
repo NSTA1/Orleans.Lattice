@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Tests;
 /// Unit tests for the public <see cref="LatticeAtomicBatchContext"/> helper
 /// that stamps atomic-batch <c>(Size, Index)</c> metadata onto mutations via
 /// the ambient Orleans <c>RequestContext</c>. Mirrors the shape of
-/// <c>LatticeVectorClockContextTests</c> — the two helpers share the
+/// <c>LatticeVectorClockContextTests</c> - the two helpers share the
 /// "Current get/set + With(...) IDisposable scope" contract and the same
 /// per-test reset hygiene.
 /// </summary>
@@ -53,16 +53,16 @@ public class LatticeAtomicBatchContextTests
     [Test]
     public void With_restores_previous_value_on_dispose()
     {
-        // Outer saga-wide ambient — mirrors AtomicWriteGrain.RunSagaAsync's
+        // Outer saga-wide ambient - mirrors AtomicWriteGrain.RunSagaAsync's
         // saga-wide `(Size, 0)` stamp.
         LatticeAtomicBatchContext.Current = (5, 0);
         using (LatticeAtomicBatchContext.With((5, 3)))
         {
-            // Per-key override — mirrors ExecutePhaseAsync's per-step scope.
+            // Per-key override - mirrors ExecutePhaseAsync's per-step scope.
             Assert.That(LatticeAtomicBatchContext.Current,
                 Is.EqualTo(((int Size, int Index)?)(5, 3)));
         }
-        // Saga-wide stamp restored on disposal — the contract
+        // Saga-wide stamp restored on disposal - the contract
         // ExecutePhaseAsync relies on so the stamp survives a per-key
         // exception thrown out of the using block.
         Assert.That(LatticeAtomicBatchContext.Current,
@@ -109,7 +109,7 @@ public class LatticeAtomicBatchContextTests
         Assert.That(LatticeAtomicBatchContext.Current,
             Is.EqualTo(((int Size, int Index)?)(5, 0)));
 
-        // Second dispose must not re-apply the restore — otherwise it would
+        // Second dispose must not re-apply the restore - otherwise it would
         // overwrite any value set after the first dispose returned.
         LatticeAtomicBatchContext.Current = (9, 1);
         scope.Dispose();
@@ -122,7 +122,7 @@ public class LatticeAtomicBatchContextTests
     {
         // The "not-in-a-saga" sentinel a publish helper reads is
         // `null` (ambient unset). An explicit `(0, 0)` pair stored via
-        // `Current = (0, 0)` is a *different* state — the publish
+        // `Current = (0, 0)` is a *different* state - the publish
         // helper would still default both wire slots to 0, but the
         // ambient itself round-trips faithfully and is observably
         // non-null. Pin the distinction so a future refactor that

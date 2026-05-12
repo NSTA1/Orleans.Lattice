@@ -298,7 +298,7 @@ public class EntriesPrefetchTests
     [Test]
     public async Task Entries_prefetch_false_disables_even_when_option_enabled()
     {
-        // prefetch: false should work the same as default — verifies the parameter
+        // prefetch: false should work the same as default - verifies the parameter
         // override path doesn't break anything.
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("epf-disabled");
 

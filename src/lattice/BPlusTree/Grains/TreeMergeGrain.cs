@@ -203,8 +203,8 @@ internal sealed class TreeMergeGrain(
     ///   retry counter, and advance the cursor. The shard is considered poisoned
     ///   and is logged at Warning level.</item>
     ///   <item>Increment <c>ShardRetries</c> and persist BEFORE attempting the
-    ///   merge. This ensures that a non-throwing failure — a process crash or
-    ///   silo restart mid-merge — still counts against the retry budget on
+    ///   merge. This ensures that a non-throwing failure - a process crash or
+    ///   silo restart mid-merge - still counts against the retry budget on
     ///   reactivation, preventing an infinite retry loop against a shard that
     ///   deterministically kills the silo.</item>
     ///   <item>Run the merge. On success, reset <c>ShardRetries</c> to 0 and

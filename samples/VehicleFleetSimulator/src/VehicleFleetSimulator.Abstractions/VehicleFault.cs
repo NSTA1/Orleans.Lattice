@@ -4,7 +4,7 @@ namespace VehicleFleetSimulator.Abstractions;
 /// <remarks>
 /// Faults are intentionally coarse: they map to existing simulator state transitions rather than
 /// introducing brand-new failure modes. That keeps the simulator's recovery logic (refuel,
-/// reroute) responsible for clean-up — an injected <see cref="OutOfFuel"/> simply drains the
+/// reroute) responsible for clean-up - an injected <see cref="OutOfFuel"/> simply drains the
 /// tank and lets the existing low-fuel handler take over.
 /// </remarks>
 [GenerateSerializer]

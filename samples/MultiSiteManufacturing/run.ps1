@@ -33,7 +33,7 @@
   stopping the containers.
 
 .PARAMETER NoBuild
-  Skip "docker compose build" — reuse the cached msmfg-host:dev image.
+  Skip "docker compose build" - reuse the cached msmfg-host:dev image.
 
 .PARAMETER Service
   Restrict -Logs to a single compose service, e.g. silo-us-a.
@@ -50,7 +50,7 @@
 .EXAMPLE
   ./run.ps1 -Down
     Tear everything down including the Azurite volumes (seeded state
-    is deleted — next ./run.ps1 will re-seed).
+    is deleted - next ./run.ps1 will re-seed).
 
 .EXAMPLE
   ./run.ps1 -Clean

@@ -435,7 +435,7 @@ public class ResilientScanExtensionsTests
             }
         });
         Assert.That(callIndex, Is.EqualTo(1),
-            "Negative budget clamps to zero — no reconnects attempted.");
+            "Negative budget clamps to zero - no reconnects attempted.");
     }
 
     [Test]

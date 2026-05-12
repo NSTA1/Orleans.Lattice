@@ -208,7 +208,7 @@ internal sealed class MultiSiteClusterFixture
     /// Applies the per-cluster silo-side customiser registered on the
     /// fixture (if any). Runs as a separate post-configure so it
     /// always observes the cluster id that
-    /// <see cref="ChaosClusterIdPostConfigure"/> mirrored — letting
+    /// <see cref="ChaosClusterIdPostConfigure"/> mirrored - letting
     /// the customiser fan out per cluster id without re-resolving
     /// the cluster options itself.
     /// </summary>

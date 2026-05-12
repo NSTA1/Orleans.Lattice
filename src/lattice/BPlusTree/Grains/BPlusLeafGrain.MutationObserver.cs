@@ -13,7 +13,7 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Publishes a <see cref="MutationKind.Set"/> notification for the given
     /// key / committed LWW entry. The <see cref="LatticeMutation.IsTombstone"/>
-    /// flag mirrors the entry — a <c>Set</c> may carry a tombstone when an
+    /// flag mirrors the entry - a <c>Set</c> may carry a tombstone when an
     /// externally-supplied value loses LWW to an existing tombstone.
     /// </summary>
     private Task PublishSetAsync(string key, LwwValue<byte[]> committed)

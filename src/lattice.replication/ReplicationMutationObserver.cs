@@ -144,7 +144,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
 
         // Vector-clock capture priority:
         //   1. mutation.VectorClock when supplied via
-        //      LatticeVectorClockContext.With(...) — preserves the
+        //      LatticeVectorClockContext.With(...) - preserves the
         //      caller-supplied frontier verbatim. This is the path
         //      structural rewrites (shard-split shadow-forward, saga
         //      compensate, atomic multi-key writes) take so the
@@ -191,7 +191,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             // the caller-supplied clone or the cache's defensive copy)
             // so the entry is detached from any post-emit mutation of
             // the producer's frontier source. Both slots share the
-            // single instance — the dependency summary slot is
+            // single instance - the dependency summary slot is
             // reserved for a future Bloom-filter shape but starts
             // identical to the absolute frontier so a receiver
             // consulting either slot sees the same value.
@@ -214,8 +214,8 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             // saga-wide capture-once stamp inside AtomicWriteGrain is
             // wired today, so saga emits carry (Size=N, Index=0..N-1);
             // single-key writes outside a saga emit (0, 0) by default.
-            // No shipped receiver-side path consumes the slots — every
-            // entry applies as a point write — but the slots are
+            // No shipped receiver-side path consumes the slots - every
+            // entry applies as a point write - but the slots are
             // preserved on the wire as observability metadata for a
             // future host-facing receiver-side primitive.
             AtomicBatchSize = mutation.AtomicBatchSize,

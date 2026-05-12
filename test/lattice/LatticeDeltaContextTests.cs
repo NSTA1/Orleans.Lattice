@@ -87,7 +87,7 @@ public class LatticeDeltaContextTests
         scope.Dispose();
         Assert.That(LatticeDeltaContext.Current!.Value.Kind, Is.EqualTo("outer"));
 
-        // Second dispose must not re-apply the restore — otherwise it would
+        // Second dispose must not re-apply the restore - otherwise it would
         // overwrite any value set after the first dispose returned.
         LatticeDeltaContext.Current = ("after", new byte[] { 3 });
         scope.Dispose();

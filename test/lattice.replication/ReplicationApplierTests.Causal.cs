@@ -210,7 +210,7 @@ public partial class ReplicationApplierTests
         };
         var h = CreateCausalHarness(options);
 
-        // All three entries are blocked on site-c@99 — they all park.
+        // All three entries are blocked on site-c@99 - they all park.
         for (var i = 0; i < 3; i++)
         {
             var entry = SetEntry($"k{i}", Hlc(100 + i)) with
@@ -347,7 +347,7 @@ public partial class ReplicationApplierTests
         var parkResult = await h.Applier.ApplyAsync(blocked);
         Assert.That(parkResult.Applied, Is.False);
 
-        // Deliver the satisfier — its successful apply advances the
+        // Deliver the satisfier - its successful apply advances the
         // local VC past site-c@50 and triggers the drain of k1. Both
         // the satisfier and the drained k1 land within the satisfier's
         // single ApplyAsync call, so the histogram observes exactly

@@ -15,8 +15,8 @@ namespace MultiSiteManufacturing.Tests.Lattice;
 /// partition-awareness: writes during partition land in a silo-local
 /// shadow key in each tree, cross-silo reads diverge, and
 /// <see cref="PartCrdtStore.HealLocalShadowAsync"/> promotes the
-/// shadow into the shared key — for the operator via a plain shared-key
-/// Set, for labels via the OR-Set's natural causal merge — so LWW /
+/// shadow into the shared key - for the operator via a plain shared-key
+/// Set, for labels via the OR-Set's natural causal merge - so LWW /
 /// OR-Set convergence becomes visible from every silo.
 /// </summary>
 [TestFixture]
@@ -97,7 +97,7 @@ public class PartCrdtStoreTests
     {
         // OR-Set adds produce a fresh causal dot every time, but live
         // element membership (the `Elements()` projection) is
-        // unchanged — that's the user-observable idempotence the store
+        // unchanged - that's the user-observable idempotence the store
         // exposes through `GetLabelsAsync`.
         var serial = new PartSerialNumber("HPT-CRDT-2028-91003");
         await _store.AddLabelAsync(serial, "first-article");
@@ -184,7 +184,7 @@ public class PartCrdtStoreTests
         await SetPartitionedAsync(true);
         try
         {
-            // Silo A's partition-era write lands in shadow/a/… — silo B
+            // Silo A's partition-era write lands in shadow/a/… - silo B
             // should still see the pre-partition shared value because
             // its own shadow is empty and the shared register is
             // untouched.

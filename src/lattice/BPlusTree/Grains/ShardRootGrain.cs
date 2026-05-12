@@ -185,14 +185,14 @@ internal sealed partial class ShardRootGrain(
                 var forwardTask = TrackShadowForward((key, value), static (t, s) => t.GetOrSetAsync(s.key, s.value));
                 var result = await TraverseForGetOrSetAsync(key, value);
 
-                // If the key was already live, no write occurred — return existing value.
+                // If the key was already live, no write occurred - return existing value.
                 if (result.ExistingValue is not null)
                 {
                     await forwardTask;
                     return result.ExistingValue;
                 }
 
-                // A write occurred — propagate any split.
+                // A write occurred - propagate any split.
                 var splitResult = result.Split;
                 while (splitResult is not null)
                 {
@@ -238,7 +238,7 @@ internal sealed partial class ShardRootGrain(
                     return false;
                 }
 
-                // A write occurred — propagate any split.
+                // A write occurred - propagate any split.
                 var splitResult = result.Split;
                 while (splitResult is not null)
                 {
@@ -372,7 +372,7 @@ internal sealed partial class ShardRootGrain(
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
             {
-                // Retry — same rationale as SetAsync.
+                // Retry - same rationale as SetAsync.
             }
         }
     }
@@ -677,11 +677,11 @@ internal sealed partial class ShardRootGrain(
         }
 
         // Group entries by target leaf so each leaf is called exactly once.
-        // Per-leaf WriteStateAsync collapses from O(entries) to O(leaves) —
+        // Per-leaf WriteStateAsync collapses from O(entries) to O(leaves) -
         // the dominant storage-I/O win. Internal-node routing RPCs are still
         // paid during grouping and re-paid during apply (the apply phase
         // re-traverses so that a split produced by an earlier group is
-        // observed by later groups) — that cost is O((N+L)·D) lightweight
+        // observed by later groups) - that cost is O((N+L)·D) lightweight
         // in-memory reads against the persisted internal nodes, dominated
         // in practice by the O(L) storage writes.
         //
@@ -851,7 +851,7 @@ internal sealed partial class ShardRootGrain(
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             // Pass continuationToken as afterExclusive so the leaf filters
-            // at the source — avoids transferring keys that would be
+            // at the source - avoids transferring keys that would be
             // discarded here.
             var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, afterExclusive: continuationToken);
 
@@ -922,7 +922,7 @@ internal sealed partial class ShardRootGrain(
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             // Pass continuationToken as beforeExclusive so the leaf filters
-            // at the source — avoids transferring keys that would be
+            // at the source - avoids transferring keys that would be
             // discarded here.
             var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, beforeExclusive: continuationToken);
 
@@ -993,7 +993,7 @@ internal sealed partial class ShardRootGrain(
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             // Pass continuationToken as afterExclusive so the leaf filters
-            // at the source — avoids serializing byte[] values that would be
+            // at the source - avoids serializing byte[] values that would be
             // discarded here.
             var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, continuationToken);
 
@@ -1062,7 +1062,7 @@ internal sealed partial class ShardRootGrain(
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             // Pass continuationToken as beforeExclusive so the leaf filters
-            // at the source — avoids serializing byte[] values that would be
+            // at the source - avoids serializing byte[] values that would be
             // discarded here.
             var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, beforeExclusive: continuationToken);
 

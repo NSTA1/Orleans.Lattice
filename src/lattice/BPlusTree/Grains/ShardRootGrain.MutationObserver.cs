@@ -14,7 +14,7 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// Publishes a single <see cref="MutationKind.DeleteRange"/> notification
     /// for the completed range-delete walk. Emitted <b>unconditionally</b>
-    /// — observers see every user-initiated range delete, including those
+    /// - observers see every user-initiated range delete, including those
     /// that matched zero live keys. This is intentional: replication
     /// consumers must propagate the range to peer clusters regardless of
     /// whether it deleted anything locally, because peers may hold keys in
@@ -41,8 +41,8 @@ internal sealed partial class ShardRootGrain
             // Observers that need per-key resolution must synthesize deletes
             // from the tree's current key set.
             Timestamp = HybridLogicalClock.Zero,
-            // Range deletes read the ambient origin at publish time — there
-            // is no per-key LwwValue to pull from — so replication consumers
+            // Range deletes read the ambient origin at publish time - there
+            // is no per-key LwwValue to pull from - so replication consumers
             // can skip re-forwarding ranges that originated on another cluster.
             OriginClusterId = LatticeOriginContext.Current,
             // Range deletes likewise read the ambient vector-clock context
@@ -53,11 +53,11 @@ internal sealed partial class ShardRootGrain
             // per-shard fan-out emit so consumers that dedup or
             // batch-correlate observe one transaction per user call.
             TransactionId = LatticeTransactionContext.Current,
-            // Category mirrors the ambient maintenance flag — a structural
+            // Category mirrors the ambient maintenance flag - a structural
             // rewrite that fan-outs a range delete inside a maintenance
             // scope produces Maintenance emits, otherwise User.
             Category = LatticeMaintenanceContext.Current,
-            // Author's pre-merge delta — opaque bytes the producer
+            // Author's pre-merge delta - opaque bytes the producer
             // attached via LatticeDeltaContext, propagated verbatim to
             // observers. Range deletes have a natural typed-delta shape
             // (start + end + HLC + origin) that consumers may choose to

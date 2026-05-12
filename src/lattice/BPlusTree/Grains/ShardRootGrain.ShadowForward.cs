@@ -10,7 +10,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// on <c>ShadowForwardState.DestinationPhysicalTreeId</c>. The destination
 /// tree is constrained by the coordinator to share this tree's
 /// <see cref="ShardMap"/>, so the shadow target is always at the same shard
-/// index — <c>{DestinationPhysicalTreeId}/{MyShardIndex}</c>.
+/// index - <c>{DestinationPhysicalTreeId}/{MyShardIndex}</c>.
 /// </para>
 /// <para>
 /// The three phases <see cref="ShadowForwardPhase.Draining"/>,
@@ -21,7 +21,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <item><description>
 /// <c>Draining</c> / <c>Drained</c>: every accepted mutation is forwarded
 /// in parallel via <see cref="Task.WhenAll(Task[])"/>. Correctness relies on
-/// LWW commutativity — concurrent forwards and background-drain writes
+/// LWW commutativity - concurrent forwards and background-drain writes
 /// converge to the same final state on the destination shard regardless of
 /// interleaving because the highest HLC wins on every key.
 /// </description></item>
@@ -148,7 +148,7 @@ internal sealed partial class ShardRootGrain
 
         if (sf.Phase == ShadowForwardPhase.Drained || sf.Phase == ShadowForwardPhase.Rejecting)
         {
-            // Idempotent — already past Draining.
+            // Idempotent - already past Draining.
             return;
         }
 
@@ -184,7 +184,7 @@ internal sealed partial class ShardRootGrain
         var sf = state.State.ShadowForward;
         if (sf is null)
         {
-            return; // Idempotent — already cleared.
+            return; // Idempotent - already cleared.
         }
         if (!string.Equals(sf.OperationId, operationId, StringComparison.Ordinal))
             throw new InvalidOperationException(

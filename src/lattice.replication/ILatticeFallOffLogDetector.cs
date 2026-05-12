@@ -47,7 +47,7 @@ public interface ILatticeFallOffLogDetector
     /// <paramref name="sourceClusterId"/>, and (when configured)
     /// triggers
     /// <see cref="ILatticeBootstrapCoordinator.BootstrapAsync"/> on
-    /// detection. Idempotent — re-issuing the call with the same
+    /// detection. Idempotent - re-issuing the call with the same
     /// arguments while a bootstrap is in flight is a no-op at the
     /// coordinator and observable here as
     /// <see cref="FallOffLogDecision.BootstrapTriggered"/> on every

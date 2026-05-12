@@ -74,7 +74,7 @@ public sealed record ChaosOverview
 }
 
 /// <summary>
-/// Divergence state change for a single part — pushed whenever its
+/// Divergence state change for a single part - pushed whenever its
 /// baseline-vs-lattice agreement status flips (enters divergence, stays
 /// divergent with new states, or resolves). Consumed by the
 /// <c>WatchDivergence</c> gRPC stream.

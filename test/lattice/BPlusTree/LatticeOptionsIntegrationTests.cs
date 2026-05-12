@@ -51,7 +51,7 @@ public class LatticeOptionsIntegrationTests
         // A tree with no per-name override should still work at default capacity.
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("default-options-tree");
 
-        // Insert a handful of keys — well under the default 128 limit, no split expected.
+        // Insert a handful of keys - well under the default 128 limit, no split expected.
         for (int i = 0; i < 10; i++)
         {
             await tree.SetAsync($"d-{i}", Encoding.UTF8.GetBytes($"v-{i}"));

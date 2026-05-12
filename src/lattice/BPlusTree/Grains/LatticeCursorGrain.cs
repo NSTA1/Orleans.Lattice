@@ -7,7 +7,7 @@ using Orleans.Timers;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Implementation of <see cref="ILatticeCursorGrain"/> — a stateful cursor
+/// Implementation of <see cref="ILatticeCursorGrain"/> - a stateful cursor
 /// grain that checkpoints scan progress server-side. Each
 /// <c>NextAsync</c> / <c>DeleteRangeStepAsync</c> call runs a bounded
 /// sub-scan through the tree's public <see cref="ILattice"/> API using the
@@ -25,7 +25,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <b>Self-cleanup.</b> The grain registers an idle-TTL reminder
 /// (<c>cursor-ttl</c>) on every successful call. If the reminder fires
 /// without any intervening activity, the grain clears its persisted state,
-/// unregisters the reminder, and deactivates — protecting against cursor
+/// unregisters the reminder, and deactivates - protecting against cursor
 /// leaks from clients that forget to call
 /// <see cref="ILattice.CloseCursorAsync"/>. The interval is configured by
 /// <see cref="LatticeOptions.CursorIdleTtl"/> (default 48h); set to

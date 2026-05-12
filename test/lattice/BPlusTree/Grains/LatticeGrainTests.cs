@@ -26,7 +26,7 @@ public partial class LatticeGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions());
 
-        // Setup registry mock for alias resolution (returns treeId itself — no alias).
+        // Setup registry mock for alias resolution (returns treeId itself - no alias).
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ResolveAsync(Arg.Any<string>()).Returns(callInfo => Task.FromResult(callInfo.Arg<string>()));

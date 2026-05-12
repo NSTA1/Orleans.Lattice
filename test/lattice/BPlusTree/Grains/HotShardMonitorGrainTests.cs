@@ -272,7 +272,7 @@ public partial class HotShardMonitorGrainTests
 
         await splitGrain.Received(1).SplitAsync(1); // hottest
         await splitGrain.Received(1).SplitAsync(0); // second hottest
-        await splitGrain.DidNotReceive().SplitAsync(2); // third — over cap
+        await splitGrain.DidNotReceive().SplitAsync(2); // third - over cap
     }
 
     [Test]

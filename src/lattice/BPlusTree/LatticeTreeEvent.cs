@@ -4,14 +4,14 @@ namespace Orleans.Lattice;
 /// A metadata-only notification about a change to a Lattice tree. Published on
 /// the Orleans stream <c>orleans.lattice.events</c> (per-tree stream id =
 /// <see cref="TreeId"/>) when <see cref="LatticeOptions.PublishEvents"/> is
-/// enabled. Does <em>not</em> carry the written value — consumers call
+/// enabled. Does <em>not</em> carry the written value - consumers call
 /// <c>GetAsync</c> / <c>GetWithVersionAsync</c> to read the current state.
 /// <para>
 /// Delivery is Orleans-provider-dependent: the <c>MemoryStreams</c> provider
 /// gives best-effort at-most-once delivery with no durability (events are lost
 /// if an agent is not attached when publication occurs); <c>EventHub</c> /
 /// <c>AzureQueue</c> providers give durable at-least-once. Events are not
-/// guaranteed to arrive in HLC order — consumers that need causal ordering
+/// guaranteed to arrive in HLC order - consumers that need causal ordering
 /// should sort by <see cref="AtUtc"/> within a small window or re-read via
 /// <c>GetWithVersionAsync</c>.
 /// </para>
@@ -21,7 +21,7 @@ namespace Orleans.Lattice;
 [Immutable]
 public readonly record struct LatticeTreeEvent
 {
-    /// <summary>Classification of the change — see <see cref="LatticeTreeEventKind"/>.</summary>
+    /// <summary>Classification of the change - see <see cref="LatticeTreeEventKind"/>.</summary>
     [Id(0)] public LatticeTreeEventKind Kind { get; init; }
 
     /// <summary>The logical tree id that produced this event. Matches the stream id.</summary>
@@ -31,7 +31,7 @@ public readonly record struct LatticeTreeEvent
     /// The key affected by this event, or <c>null</c> for tree-level events.
     /// For <see cref="LatticeTreeEventKind.DeleteRange"/> this carries the literal
     /// <c>"startInclusive..endExclusive"</c> range string. For
-    /// <see cref="LatticeTreeEventKind.AtomicWriteCompleted"/> this is <c>null</c> —
+    /// <see cref="LatticeTreeEventKind.AtomicWriteCompleted"/> this is <c>null</c> -
     /// individual saga writes emit per-key <see cref="LatticeTreeEventKind.Set"/> /
     /// <see cref="LatticeTreeEventKind.Delete"/> events stamped with the
     /// <see cref="OperationId"/>.

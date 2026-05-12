@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Replication;
 /// registered as a singleton, so all apply paths share the same
 /// counter within a silo. A silo restart resets the counters,
 /// effectively giving every entry another <c>MaxApplyRetries</c>
-/// attempts after a failover — this is the desired behaviour because
+/// attempts after a failover - this is the desired behaviour because
 /// silo restart usually correlates with the very transient failure
 /// the retry budget is meant to absorb.
 /// </para>
@@ -47,7 +47,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         }
         catch (OperationCanceledException)
         {
-            // Cancellation is not a poison-entry signal — surface it
+            // Cancellation is not a poison-entry signal - surface it
             // to the caller without touching the failure counter.
             throw;
         }
@@ -173,7 +173,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         var max = options.Get(entry.TreeId).MaxApplyRetries;
         if (attempts < max)
         {
-            // Below the threshold — surface the original failure to
+            // Below the threshold - surface the original failure to
             // the caller so the transport can apply its own
             // backoff/redelivery policy on top of our local counter.
             throw failure;
@@ -237,7 +237,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
     /// <remarks>
     /// <list type="bullet">
     ///   <item>
-    ///     <see cref="ArgumentException"/> — surfaced by
+    ///     <see cref="ArgumentException"/> - surfaced by
     ///     <see cref="ReplicationApplier"/> for malformed entries
     ///     (null <see cref="WalRecord.Value"/> on a
     ///     <see cref="MutationKind.Set"/>, missing <see cref="WalRecord.EndExclusiveKey"/>,
@@ -245,7 +245,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
     ///     <see cref="LatticeReplicationMetrics.ReasonSchema"/>.
     ///   </item>
     ///   <item>
-    ///     <see cref="InvalidOperationException"/> — surfaced for
+    ///     <see cref="InvalidOperationException"/> - surfaced for
     ///     unrecognised <see cref="LatticeMergeMode"/> dispatch and
     ///     CAS-budget exhaustion on state-merge applies. Both are
     ///     payload-shape faults from the receiver's perspective and
@@ -253,7 +253,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
     ///     <see cref="LatticeReplicationMetrics.ReasonSchema"/>.
     ///   </item>
     ///   <item>
-    ///     Anything else — tagged
+    ///     Anything else - tagged
     ///     <see cref="LatticeReplicationMetrics.ReasonUnknown"/>.
     ///     Future iterations may decorate the applier to surface
     ///     <see cref="LatticeReplicationMetrics.ReasonOversized"/> /

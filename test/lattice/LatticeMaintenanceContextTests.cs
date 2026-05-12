@@ -16,7 +16,7 @@ public class LatticeMaintenanceContextTests
     [SetUp]
     public void EnsureCleanContext()
     {
-        // Sibling tests may have leaked context — clear it so each test
+        // Sibling tests may have leaked context - clear it so each test
         // starts from the documented default.
         RequestContext.Remove("ol.maint");
     }

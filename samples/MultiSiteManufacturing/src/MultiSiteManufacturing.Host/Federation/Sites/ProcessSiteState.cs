@@ -5,7 +5,7 @@ namespace MultiSiteManufacturing.Host.Federation;
 /// <summary>
 /// Persistent state for <see cref="ProcessSiteGrain"/>. Holds both the
 /// chaos configuration and the queue of facts currently held because of
-/// it — so a process restart preserves both the operator's chaos choices
+/// it - so a process restart preserves both the operator's chaos choices
 /// and any in-flight facts that were caught mid-pause.
 /// </summary>
 [GenerateSerializer]

@@ -148,7 +148,7 @@ internal abstract class TtlGrain<TSelf>(
     /// clamps values below <see cref="MinimumTtl"/>. When
     /// <see cref="SlideDebounce"/> is non-zero, consecutive slides inside
     /// the debounce window are silently skipped. Exceptions are swallowed
-    /// and logged — reminder-service hiccups must never fail user
+    /// and logged - reminder-service hiccups must never fail user
     /// operations.
     /// </summary>
     protected async Task SlideTtlAsync()

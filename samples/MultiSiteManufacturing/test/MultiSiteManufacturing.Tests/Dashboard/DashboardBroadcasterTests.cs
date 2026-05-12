@@ -223,7 +223,7 @@ public sealed class DashboardBroadcasterTests
         var moveTask = subscriber.MoveNextAsync().AsTask();
         await Task.Delay(50, cts.Token);
 
-        // Sneak a Critical NC into the lattice backend only — baseline stays
+        // Sneak a Critical NC into the lattice backend only - baseline stays
         // empty. Then trigger a FactRouted via the router so the broadcaster
         // re-reads both backends, spots the mismatch, and emits a divergence
         // event.
@@ -252,7 +252,7 @@ public sealed class DashboardBroadcasterTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var subscriber = broadcaster.SubscribeDivergence(cts.Token).GetAsyncEnumerator(cts.Token);
 
-        // Step 1 — drive the part into a divergent state.
+        // Step 1 - drive the part into a divergent state.
         await lattice.EmitAsync(Nc(serial, tick: 1, "NC-1", NcSeverity.Critical, ProcessSite.ToulouseNdtLab), cts.Token);
         var move1 = subscriber.MoveNextAsync().AsTask();
         await Task.Delay(50, cts.Token);
@@ -260,7 +260,7 @@ public sealed class DashboardBroadcasterTests
         Assert.That(await move1, Is.True);
         Assert.That(subscriber.Current.Resolved, Is.False);
 
-        // Step 2 — replay the missing NC into the baseline so both backends
+        // Step 2 - replay the missing NC into the baseline so both backends
         // agree again, then trigger another FactRouted.
         await baseline.EmitAsync(Nc(serial, tick: 1, "NC-1", NcSeverity.Critical, ProcessSite.ToulouseNdtLab), cts.Token);
         var move2 = subscriber.MoveNextAsync().AsTask();
@@ -370,7 +370,7 @@ public sealed class DashboardBroadcasterTests
     {
         // A peer-originated fact must appear on the activity feed so a
         // user watching a site sub-tab on the receiving cluster sees
-        // replicated activity immediately — the whole point of wiring
+        // replicated activity immediately - the whole point of wiring
         // both FactRouted and FactReplicated into the activity fan-out.
         var (router, _, _) = _fixture.NewRouter();
         await using var broadcaster = NewBroadcaster(router);
@@ -454,7 +454,7 @@ public sealed class DashboardBroadcasterTests
     /// router must reach a subscriber attached to broadcaster B when
     /// both broadcasters share the same stream id. This is the actual
     /// mechanism that lets a Blazor circuit pinned to silo B see a
-    /// fact that landed on silo A — broadcaster A publishes to the
+    /// fact that landed on silo A - broadcaster A publishes to the
     /// cluster-wide stream, broadcaster B (subscribed to the same
     /// stream) fans it out into its local channels.
     /// </summary>
@@ -509,7 +509,7 @@ public sealed class DashboardBroadcasterTests
     /// attached to broadcaster B when both broadcasters share the
     /// same stream id. This is the mechanism that lets a Blazor
     /// circuit pinned to silo B see a label add or operator
-    /// assignment whose underlying CRDT mutation landed on silo A —
+    /// assignment whose underlying CRDT mutation landed on silo A -
     /// broadcaster A publishes the serial to the cluster-wide
     /// part-change stream, broadcaster B (subscribed to the same
     /// stream) re-runs the per-circuit
@@ -550,7 +550,7 @@ public sealed class DashboardBroadcasterTests
         var moveTask = subscriberB.MoveNextAsync().AsTask();
         await Task.Delay(100, cts.Token);
 
-        // Mutation lands on broadcaster A's CRDT store — emulates a
+        // Mutation lands on broadcaster A's CRDT store - emulates a
         // local label add on silo A, or a cross-cluster OR-Set apply
         // landing on silo A. broadcasterA publishes the serial to
         // the cluster-wide part-change stream; broadcasterB receives

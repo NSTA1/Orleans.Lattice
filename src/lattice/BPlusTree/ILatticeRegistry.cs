@@ -2,7 +2,7 @@
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Internal grain that manages the tree registry — a Lattice tree
+/// Internal grain that manages the tree registry - a Lattice tree
 /// (<see cref="LatticeConstants.RegistryTreeId"/>) whose keys are user tree IDs
 /// and whose values are serialized <see cref="State.TreeRegistryEntry"/> records.
 /// <para>
@@ -11,7 +11,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// <see cref="LatticeConstants.SystemTreePrefix"/> and is excluded from
 /// self-registration.
 /// </para>
-/// Key format: singleton — use <see cref="LatticeConstants.RegistryTreeId"/> as the grain key.
+/// Key format: singleton - use <see cref="LatticeConstants.RegistryTreeId"/> as the grain key.
 /// </summary>
 [Alias(TypeAliases.ILatticeRegistry)]
 internal interface ILatticeRegistry : IGrainWithStringKey
@@ -35,7 +35,7 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     Task UpdateAsync(string treeId, State.TreeRegistryEntry entry);
 
     /// <summary>
-    /// Removes a tree from the registry. Idempotent — no-op if the tree is not registered.
+    /// Removes a tree from the registry. Idempotent - no-op if the tree is not registered.
     /// </summary>
     Task UnregisterAsync(string treeId);
 
@@ -58,7 +58,7 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// <paramref name="physicalTreeId"/>. All subsequent reads and writes routed
     /// through <see cref="ILattice"/> will target the physical tree instead.
     /// <para>
-    /// Only a single level of indirection is allowed — <paramref name="physicalTreeId"/>
+    /// Only a single level of indirection is allowed - <paramref name="physicalTreeId"/>
     /// must not itself be aliased. Throws <see cref="InvalidOperationException"/> if
     /// this constraint would be violated.
     /// </para>

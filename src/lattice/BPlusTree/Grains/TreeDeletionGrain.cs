@@ -56,7 +56,7 @@ internal sealed class TreeDeletionGrain(
         state.State.DeletedAtUtc = DateTimeOffset.UtcNow;
         await state.WriteStateAsync();
 
-        // Unregister the tombstone compaction reminder — no longer needed.
+        // Unregister the tombstone compaction reminder - no longer needed.
         var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
         await compaction.UnregisterReminderAsync();
 
@@ -133,7 +133,7 @@ internal sealed class TreeDeletionGrain(
 
         // Remove the tree from the registry so TreeExistsAsync immediately
         // returns false. The reminder-driven CompletePurgeAsync path does
-        // the same (line 250-254) — keep the synchronous PurgeNowAsync path
+        // the same (line 250-254) - keep the synchronous PurgeNowAsync path
         // in lockstep so callers of the public PurgeTreeAsync API observe a
         // fully purged tree on return.
         if (!TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
@@ -154,7 +154,7 @@ internal sealed class TreeDeletionGrain(
 
         if (state.State.PurgeComplete)
         {
-            // Already done — unregister all reminders and deactivate.
+            // Already done - unregister all reminders and deactivate.
             await UnregisterAllRemindersAsync();
             this.DeactivateOnIdle();
             return;
@@ -165,7 +165,7 @@ internal sealed class TreeDeletionGrain(
             // Check if the soft-delete window has elapsed.
             var elapsed = DateTimeOffset.UtcNow - (state.State.DeletedAtUtc ?? DateTimeOffset.UtcNow);
             if (elapsed < Options.SoftDeleteDuration)
-                return; // Not yet — wait for the next tick.
+                return; // Not yet - wait for the next tick.
 
             if (_purgeTimer is not null) return;
             await StartPurgeAsync(startFromShard: 0);
@@ -273,7 +273,7 @@ internal sealed class TreeDeletionGrain(
 
     private async Task PublishTreeLifecycleEventAsync(LatticeTreeEventKind kind)
     {
-        // Emit lifecycle metrics unconditionally — operators need to see tree
+        // Emit lifecycle metrics unconditionally - operators need to see tree
         // deletions / recoveries / purges even when the event stream is disabled.
         var kindTag = kind switch
         {

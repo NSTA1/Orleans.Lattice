@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Tests.Docs;
 /// <summary>
 /// Compiles every <c>```csharp verify</c>-fenced snippet under <c>docs/</c> against
 /// the current <c>Orleans.Lattice</c> public surface. Any snippet that fails to
-/// compile fails this test — so a rename of a public type or method breaks the
+/// compile fails this test - so a rename of a public type or method breaks the
 /// build instead of silently rotting the docs.
 /// </summary>
 /// <remarks>
@@ -27,16 +27,20 @@ namespace Orleans.Lattice.Tests.Docs;
 ///   <item><description><c>CancellationToken cancellationToken</c></description></item>
 /// </list>
 /// An ambient <c>record User(string Name, int Age)</c> is also declared so typed
-/// helper examples compile without ceremony.
+/// helper examples compile without ceremony. Method-body snippets additionally
+/// see an ambient <c>MyReplicationObserver</c> stub so DI-registration examples
+/// for <c>IMutationObserver</c> compile in isolation.
 /// </remarks>
 [TestFixture]
 [Category("Docs")]
 public sealed class DocsSnippetCompilationTests
 {
-    /// <summary>Source cases: every verify-fenced snippet found under <c>docs/</c>.</summary>
+    /// <summary>Source cases: every verify-fenced snippet found under <c>docs/</c> and the repo-root <c>README.md</c>.</summary>
     public static IEnumerable<TestCaseData> VerifySnippets()
     {
         var docsRoot = FindDocsRoot();
+        var repoRoot = Directory.GetParent(docsRoot)!.FullName;
+
         foreach (var file in Directory.EnumerateFiles(docsRoot, "*.md", SearchOption.AllDirectories))
         {
             var text = File.ReadAllText(file);
@@ -48,6 +52,23 @@ public sealed class DocsSnippetCompilationTests
                 var name = $"{rel}#{i}";
                 yield return new TestCaseData(name, body)
                     .SetName($"Doc_snippet_compiles({rel}#{i})");
+            }
+        }
+
+        // Also scan the repo-root README.md so the project's front-page Quick
+        // Start snippets are held to the same compilation contract as the
+        // docs/ tree.
+        var readme = Path.Combine(repoRoot, "README.md");
+        if (File.Exists(readme))
+        {
+            var text = File.ReadAllText(readme);
+            var matches = VerifyFenceRegex.Matches(text);
+            for (int i = 0; i < matches.Count; i++)
+            {
+                var body = matches[i].Groups["body"].Value;
+                var name = $"README.md#{i}";
+                yield return new TestCaseData(name, body)
+                    .SetName($"Doc_snippet_compiles({name})");
             }
         }
     }
@@ -98,7 +119,17 @@ public sealed class DocsSnippetCompilationTests
         body = HoistUsings(body, extraUsings);
 
         // Detect the snippet shape so we can wrap it appropriately.
-        bool looksLikeClassMembers = Regex.IsMatch(body, @"^\s*\[", RegexOptions.Singleline);
+        // Class-members shape triggers on a leading attribute (e.g. [TestCase])
+        // OR on a top-level type declaration (class/interface/record/struct/enum)
+        // optionally preceded by `//` comment lines. This lets docs declare
+        // helper types (e.g. an IMutationObserver implementation) at the top of
+        // a snippet without forcing readers to wrap them in a method body.
+        bool looksLikeClassMembers =
+            Regex.IsMatch(body, @"^\s*\[", RegexOptions.Singleline)
+            || Regex.IsMatch(
+                body,
+                @"^\s*(//[^\n]*\r?\n\s*)*(?:(?:public|internal|private|protected|sealed|abstract|static|partial)\s+)*(?:class|interface|record|struct|enum)\s+\w",
+                RegexOptions.Singleline);
         bool looksLikeInterfaceMember = !looksLikeClassMembers
             && Regex.IsMatch(body, @"^\s*(public\s+|internal\s+|private\s+)?(async\s+)?(Task|ValueTask|IAsyncEnumerable|IEnumerable|void|int|bool|string|long|double|byte\[\])\b[^{;]*\)\s*;?\s*$",
                 RegexOptions.Singleline);
@@ -120,7 +151,12 @@ public sealed class DocsSnippetCompilationTests
             using Orleans.Hosting;
             using Orleans.Lattice;
             using Orleans.Lattice.BPlusTree;
+            using Orleans.Lattice.Storage.AzureTable;
+            using Orleans.Lattice.Replication;
+            using Orleans.Lattice.Replication.Grpc;
+            using Microsoft.AspNetCore.Builder;
             using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.Hosting;
             {{extraUsings}}
             public sealed record User(string Name, int Age);
             public sealed record Order(string Id, decimal Total);
@@ -166,7 +202,20 @@ public sealed class DocsSnippetCompilationTests
         bool declaresLattice = Regex.IsMatch(body, @"\b(var|ILattice)\s+lattice\b");
         var latticeParam = declaresLattice ? string.Empty : "ILattice lattice, ";
 
-        return header + $$"""
+        // Provide an ambient `MyReplicationObserver` stub so DI-registration
+        // snippets that reference the canonical observer name (as documented
+        // in api.md) compile as standalone method-body snippets. Class-members
+        // snippets declare their own and never see this stub.
+        var ambientObserver = """
+            public sealed class MyReplicationObserver : IMutationObserver
+            {
+                public Task OnMutationAsync(LatticeMutation mutation, CancellationToken ct)
+                    => Task.CompletedTask;
+            }
+
+            """;
+
+        return header + ambientObserver + $$"""
             public static class DocsSnippet
             {
                 public static async Task RunAsync(
@@ -219,6 +268,9 @@ public sealed class DocsSnippetCompilationTests
         _ = typeof(ISiloBuilder);                           // Orleans.Runtime / Hosting
         _ = typeof(Microsoft.Extensions.DependencyInjection.ServiceCollection);
         _ = typeof(ILattice);                               // Orleans.Lattice
+        _ = typeof(Microsoft.AspNetCore.Builder.WebApplication);          // Microsoft.AspNetCore (shared framework)
+        _ = typeof(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder);   // Microsoft.AspNetCore.Routing
+        _ = typeof(Microsoft.AspNetCore.Hosting.IWebHostEnvironment);     // Microsoft.AspNetCore.Hosting.Abstractions
 
         var refs = new List<MetadataReference>();
         var seen = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
@@ -233,7 +285,7 @@ public sealed class DocsSnippetCompilationTests
             refs.Add(MetadataReference.CreateFromFile(loc));
         }
 
-        // Also add every DLL sitting in the test output directory — this
+        // Also add every DLL sitting in the test output directory - this
         // picks up Orleans.Core, Orleans.Runtime and similar that may not
         // yet be loaded but are required to resolve doc-snippet API calls.
         var baseDir = System.AppContext.BaseDirectory;
@@ -243,6 +295,30 @@ public sealed class DocsSnippetCompilationTests
             {
                 try { refs.Add(MetadataReference.CreateFromFile(dll)); }
                 catch { /* skip non-managed / unreadable */ }
+            }
+        }
+
+        // Also add every DLL from the Microsoft.AspNetCore.App shared framework
+        // directory - the shared framework lives outside the test output dir
+        // and not every assembly is loaded into the AppDomain by default, but
+        // snippets that demonstrate web host wiring (WebApplication,
+        // IEndpointRouteBuilder, ...) need them to compile.
+        var aspNetCoreDir = Path.GetDirectoryName(typeof(Microsoft.AspNetCore.Builder.WebApplication).Assembly.Location);
+        if (!string.IsNullOrEmpty(aspNetCoreDir) && Directory.Exists(aspNetCoreDir))
+        {
+            foreach (var dll in Directory.EnumerateFiles(aspNetCoreDir, "*.dll"))
+            {
+                var name = Path.GetFileName(dll);
+                if (!name.StartsWith("Microsoft.AspNetCore", System.StringComparison.OrdinalIgnoreCase) &&
+                    !name.StartsWith("Microsoft.Extensions.", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                if (seen.Add(dll))
+                {
+                    try { refs.Add(MetadataReference.CreateFromFile(dll)); }
+                    catch { /* skip non-managed / unreadable */ }
+                }
             }
         }
 

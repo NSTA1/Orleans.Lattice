@@ -1,6 +1,6 @@
 # Orleans.Lattice.Dashboards
 
-`Orleans.Lattice.Dashboards` is a sibling package that ships pre-built Grafana dashboards and provisioning templates for the `orleans.lattice` and `orleans.lattice.replication` meters. Install it when you want operator dashboards bundled with the library version — the core library has no dependency on it.
+`Orleans.Lattice.Dashboards` is a sibling package that ships pre-built Grafana dashboards and provisioning templates for the `orleans.lattice` and `orleans.lattice.replication` meters. Install it when you want operator dashboards bundled with the library version - the core library has no dependency on it.
 
 > **Note:** v3.4.0 takes a direct project reference on `Orleans.Lattice.Replication` so the Replication dashboard always resolves. Splitting that into an optional reference (so local-only deployments can skip the replication meter entirely) is planned for a future minor version once both packages are published to NuGet.
 
@@ -52,7 +52,7 @@ The companion test project `Orleans.Lattice.Dashboards.Tests` parses every embed
 
 The package also ships two Grafana provisioning yaml templates under `Provisioning/` that are copied into the NuGet `contentFiles` directory at install time:
 
-- `datasources.yaml` — Prometheus data source declaration.
-- `dashboards.yaml` — file-system dashboard provider that picks up the JSONs your host writes to its dashboard directory.
+- `datasources.yaml` - Prometheus data source declaration.
+- `dashboards.yaml` - file-system dashboard provider that picks up the JSONs your host writes to its dashboard directory.
 
-Both are templates — review and customise the URLs and paths for your environment before applying.
+Both are templates - review and customise the URLs and paths for your environment before applying.

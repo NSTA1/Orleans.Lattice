@@ -26,7 +26,7 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// Shard-level digests are computed by chaining every leaf digest in the
-/// shard's leaf chain through XxHash128 — the shard digest's <see cref="Hash"/>
+/// shard's leaf chain through XxHash128 - the shard digest's <see cref="Hash"/>
 /// covers the concatenation <c>XxHash128(leaf_1.Hash || leaf_2.Hash || ...)</c>,
 /// <see cref="EntryCount"/> sums the per-leaf entry counts, and
 /// <see cref="CheckpointOffset"/> is the sum of the per-leaf checkpoint

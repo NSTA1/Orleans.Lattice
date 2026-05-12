@@ -152,7 +152,7 @@ public partial class BPlusLeafGrainTests
     {
         // Merge paths operate on LwwValue<byte[]> directly, so VectorClock
         // must flow through verbatim with no re-stamping or context lookup.
-        // This is the zero-cost passthrough invariant — replication
+        // This is the zero-cost passthrough invariant - replication
         // shadow-forward, snapshot/restore drain, and continuous-merge all
         // depend on it.
         var state = new FakePersistentState<LeafNodeState>();

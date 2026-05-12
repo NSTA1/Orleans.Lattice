@@ -23,7 +23,7 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     /// physical tree with the specified sizing. Once the snapshot completes,
     /// the tree alias is swapped and the old physical tree is soft-deleted.
     /// <para>
-    /// Idempotent — if a resize is already in progress with the same parameters,
+    /// Idempotent - if a resize is already in progress with the same parameters,
     /// the call is a no-op. If a resize is in progress with different parameters,
     /// an <see cref="InvalidOperationException"/> is thrown.
     /// </para>
@@ -36,7 +36,7 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren);
 
     /// <summary>
-    /// Runs the resize operation synchronously — processes all remaining phases
+    /// Runs the resize operation synchronously - processes all remaining phases
     /// in a single call. Intended for integration testing and manual triggers.
     /// Must be called after <see cref="ResizeAsync"/> to start the operation.
     /// </summary>
@@ -55,7 +55,7 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     Task UndoResizeAsync();
 
     /// <summary>
-    /// Returns <c>true</c> when the coordinator is idle — either no resize
+    /// Returns <c>true</c> when the coordinator is idle - either no resize
     /// has ever been initiated, or the last one has run to completion.
     /// Returns <c>false</c> while a resize is in flight.
     /// </summary>

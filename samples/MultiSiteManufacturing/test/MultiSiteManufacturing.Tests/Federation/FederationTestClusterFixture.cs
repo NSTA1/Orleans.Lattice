@@ -16,7 +16,7 @@ namespace MultiSiteManufacturing.Tests.Federation;
 /// providers the federation backends need (default + <c>msmfgGrainState</c>)
 /// and an in-memory <see cref="ILattice"/> tree. Tests construct the
 /// backends and router directly against <see cref="TestCluster.GrainFactory"/>
-/// — they're stateless wrappers, so there's no benefit to going through
+/// - they're stateless wrappers, so there's no benefit to going through
 /// the silo's DI container (and <see cref="TestCluster.ServiceProvider"/>
 /// is the <em>client</em> provider, which doesn't see silo registrations).
 /// </summary>
@@ -54,8 +54,8 @@ public sealed class FederationTestClusterFixture
     /// <summary>Convenience: new lattice backend over the cluster's grain factory.</summary>
     /// <remarks>
     /// Each call uses a unique tree id so tests in the same fixture don't
-    /// observe each other's writes (the test cluster — and therefore the
-    /// in-memory Lattice state — is shared across all tests).
+    /// observe each other's writes (the test cluster - and therefore the
+    /// in-memory Lattice state - is shared across all tests).
     /// </remarks>
     public LatticeFactBackend NewLatticeBackend() =>
         new(GrainFactory, NullLogger<LatticeFactBackend>.Instance, $"mfg-facts-{Guid.NewGuid():N}");
@@ -63,7 +63,7 @@ public sealed class FederationTestClusterFixture
     /// <summary>
     /// Convenience: a <see cref="PartCrdtStore"/> wired to the
     /// cluster's grain factory under silo identity
-    /// <c>("a", primary=true, cluster="us")</c> — matching
+    /// <c>("a", primary=true, cluster="us")</c> - matching
     /// <see cref="NewRouter"/>'s default. Used by the broadcaster
     /// tests, which need a real store to satisfy the broadcaster's
     /// ctor and to drive <see cref="PartCrdtStore.PartChanged"/>.
@@ -104,8 +104,8 @@ public sealed class FederationTestClusterFixture
     /// Registers the dashboard broadcast stream provider on the
     /// TestCluster's client-side DI container. The cluster client uses
     /// a DI container separate from the silo's, so
-    /// <see cref="DashboardBroadcaster"/> — which resolves the provider
-    /// through <see cref="IClusterClient"/> — needs the provider wired
+    /// <see cref="DashboardBroadcaster"/> - which resolves the provider
+    /// through <see cref="IClusterClient"/> - needs the provider wired
     /// here as well as on each silo.
     /// </summary>
     private sealed class ClientConfigurator : IClientBuilderConfigurator

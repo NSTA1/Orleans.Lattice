@@ -11,7 +11,7 @@ namespace Orleans.Lattice;
 /// against the new physical shard.
 /// <para>
 /// This exception is part of the internal coordination protocol between
-/// <c>LatticeGrain</c> and <c>ShardRootGrain</c> during shard splits — it is
+/// <c>LatticeGrain</c> and <c>ShardRootGrain</c> during shard splits - it is
 /// never surfaced to external callers because <c>LatticeGrain</c> always
 /// catches and recovers from it.
 /// </para>

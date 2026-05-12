@@ -59,7 +59,7 @@ public sealed partial class MutationObserverIntegrationTests
             Assert.That(m.AtomicBatchSize, Is.EqualTo(5));
         }
 
-        // Every per-key emit shares the same TransactionId — pin
+        // Every per-key emit shares the same TransactionId - pin
         // alongside the size to catch a regression that decouples
         // the saga ambient stamps.
         Assert.That(m2.TransactionId, Is.EqualTo(m1.TransactionId));
@@ -68,7 +68,7 @@ public sealed partial class MutationObserverIntegrationTests
         Assert.That(m5.TransactionId, Is.EqualTo(m1.TransactionId));
 
         // Indices cover 0..N-1 exactly once each (set equality, not
-        // ordering — saga execute order matches submission order
+        // ordering - saga execute order matches submission order
         // today, but the contract is "exactly-once-per-index").
         var indices = new[] { m1, m2, m3, m4, m5 }
             .Select(m => m.AtomicBatchIndex)
@@ -103,7 +103,7 @@ public sealed partial class MutationObserverIntegrationTests
         // Single-key non-saga delete: exercises the PublishDeleteAsync
         // helper on BPlusLeafGrain (separate publish site from the
         // commit-time emit and from PublishSetAsync). Ambient context
-        // is unset, both wire slots stamp 0 — the "not-in-a-saga"
+        // is unset, both wire slots stamp 0 - the "not-in-a-saga"
         // sentinel applies uniformly to every MutationKind a leaf
         // grain emits.
         var tree = await _fixture.CreateTreeAsync("obs-e2e-atomic-batch-non-saga-delete");

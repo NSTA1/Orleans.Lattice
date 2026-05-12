@@ -17,7 +17,7 @@ public sealed partial class DashboardBroadcaster
     /// <summary>
     /// Tuneable publish-retry policy. A publish hitting a transient
     /// Azure Storage Queue hiccup (throttling, 500, brief network
-    /// blip) should not silently drop a dashboard update — we retry
+    /// blip) should not silently drop a dashboard update - we retry
     /// with exponential backoff before logging and giving up. Values
     /// kept small: a dashboard update is time-sensitive, not worth
     /// holding onto for minutes.
@@ -49,7 +49,7 @@ public sealed partial class DashboardBroadcaster
     /// Subscribes to the broadcast stream with bounded exponential
     /// backoff. Also wires an <c>onError</c> handler so a mid-flight
     /// stream failure triggers a fresh subscribe attempt on a
-    /// background task — Azure Storage Queue streams can surface
+    /// background task - Azure Storage Queue streams can surface
     /// errors when the agent loses its lease or the queue is
     /// transiently unavailable.
     /// </summary>
@@ -110,7 +110,7 @@ public sealed partial class DashboardBroadcaster
     /// Stream <c>onError</c> callback. Logs the failure and kicks off
     /// a background resubscribe so a transient queue-agent fault
     /// doesn't permanently silence the feed on this silo. The
-    /// existing handle is dropped — <see cref="SubscribeWithRetryAsync"/>
+    /// existing handle is dropped - <see cref="SubscribeWithRetryAsync"/>
     /// will allocate a fresh one.
     /// </summary>
     private Task OnSubscriptionError(Exception ex)
@@ -125,12 +125,12 @@ public sealed partial class DashboardBroadcaster
 
     /// <summary>
     /// Publishes the fact to the cluster-wide broadcast stream so
-    /// every silo's broadcaster — including this one — can fan it out
+    /// every silo's broadcaster - including this one - can fan it out
     /// to its locally-attached Blazor circuits. Fire-and-forget from
     /// the router's perspective: a publish failure must not propagate
     /// back into the router's synchronous fan-out. Retries transient
     /// storage-queue failures with bounded exponential backoff before
-    /// giving up — a dropped publish means one Blazor update is lost,
+    /// giving up - a dropped publish means one Blazor update is lost,
     /// not a persistent feed outage.
     /// </summary>
     private async Task PublishToBroadcastStreamAsync(Fact fact)
@@ -224,7 +224,7 @@ public sealed partial class DashboardBroadcaster
     /// <summary>
     /// Subscribes to the cluster-wide part-change stream with bounded
     /// exponential backoff. Mirrors <see cref="SubscribeWithRetryAsync"/>
-    /// for the parallel <see cref="PartSerialNumber"/> stream — a
+    /// for the parallel <see cref="PartSerialNumber"/> stream - a
     /// failure here means CRDT-card live updates on this silo's
     /// circuits are limited to mutations that landed on this silo,
     /// which we tolerate gracefully (a page reload falls back to the
@@ -300,8 +300,8 @@ public sealed partial class DashboardBroadcaster
 
     /// <summary>
     /// Publishes a part-change notification to the cluster-wide
-    /// part-change stream so every silo's broadcaster — including
-    /// this one — can fan out a fresh <see cref="PartSummaryUpdate"/>
+    /// part-change stream so every silo's broadcaster - including
+    /// this one - can fan out a fresh <see cref="PartSummaryUpdate"/>
     /// to its locally-attached Blazor circuits. Fire-and-forget;
     /// retries transient storage-queue failures with bounded
     /// exponential backoff before giving up.

@@ -77,14 +77,23 @@ Implementations are required to be safe for concurrent invocation across distinc
 
 `AddLatticeReplication` registers the default `IReplicationTransport` implementation as a silo-side singleton:
 
-```text
+```csharp verify
 siloBuilder.AddLatticeReplication(o => o.ClusterId = "site-a");
 ```
 
 The default registration is `NoOpReplicationTransport` - it validates routing fields, discards the payload, and returns `default(ReplicationAck)` (i.e. `Accepted = false, HighestAppliedHlc = HybridLogicalClock.Zero`). The sender's cursor stays put, which is exactly the right behaviour while the rest of the replication pipeline is being wired up but no real transport is configured. Production hosts replace it via standard DI:
 
-```text
-services.AddSingleton<IReplicationTransport, MyTransport>();
+```csharp verify
+sealed class MyTransport : IReplicationTransport
+{
+    public Task<ReplicationAck> SendAsync(ReplicationBatch batch, CancellationToken cancellationToken)
+        => Task.FromResult(default(ReplicationAck));
+}
+
+static void Configure(IServiceCollection services)
+{
+    services.AddSingleton<IReplicationTransport, MyTransport>();
+}
 ```
 
 ## Future implementations
@@ -93,7 +102,7 @@ The single-method seam is the contract upcoming binary-framing and gRPC-streamin
 
 The wire format inside `Payload` is the concern of [`IReplicationBatchEncoder`](wire-format.md). The default registration is the Orleans-serializer-backed binary encoder; hosts swap to a different framing (JSON for HTTP debuggability, content-hash-prefixed for deduplication) by replacing the encoder registration via DI. Transports remain agnostic about which encoder produced the bytes.
 
-The canonical sender + receiver pair ships in the `Orleans.Lattice.Replication.Grpc` sub-package — see [`grpc-push-transport.md`](grpc-push-transport.md) for topology, registration, and operations notes.
+The canonical sender + receiver pair ships in the `Orleans.Lattice.Replication.Grpc` sub-package - see [`grpc-push-transport.md`](grpc-push-transport.md) for topology, registration, and operations notes.
 
 ## Caveats
 
@@ -104,8 +113,8 @@ The canonical sender + receiver pair ships in the `Orleans.Lattice.Replication.G
 
 The transport stays dumb about the entries it carries. Specifically, every `IReplicationTransport` implementation must preserve the causal-plus metadata slots on every `WalRecord` verbatim across a round-trip:
 
-- `WalRecord.VectorClock` — the sparse `{originClusterId → HybridLogicalClock}` frontier captured at commit time.
-- `WalRecord.DependencySummary` — initially aliased one-to-one with `VectorClock`; reserved as a distinct slot so a future Bloom-filter-shaped summary can ship without re-numbering the wire format.
+- `WalRecord.VectorClock` - the sparse `{originClusterId → HybridLogicalClock}` frontier captured at commit time.
+- `WalRecord.DependencySummary` - initially aliased one-to-one with `VectorClock`; reserved as a distinct slot so a future Bloom-filter-shaped summary can ship without re-numbering the wire format.
 
 The transport must not reorder entries, mutate either slot, synthesise an empty frontier when the producer left the slot `null` (legacy peers and pre-causal-plus entries decode `null` and the receiver treats that as the empty frontier), or merge the two slots together. Any normalisation, summary derivation, or merge belongs in the producer / receiver, never in the wire layer.
 

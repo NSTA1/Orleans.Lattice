@@ -12,22 +12,22 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// The resize flow is:
 /// <list type="number">
-/// <item><description><see cref="ResizePhase.Snapshot"/> — online snapshot of the logical
+/// <item><description><see cref="ResizePhase.Snapshot"/> - online snapshot of the logical
 /// tree to a new physical tree with the desired sizing. The source tree remains
 /// fully available for reads and writes; every accepted mutation is
 /// shadow-forwarded to the destination.</description></item>
-/// <item><description><see cref="ResizePhase.Swap"/> — set alias so the logical tree ID
+/// <item><description><see cref="ResizePhase.Swap"/> - set alias so the logical tree ID
 /// points to the new physical tree.</description></item>
-/// <item><description><see cref="ResizePhase.Reject"/> — transition every shard on the old
+/// <item><description><see cref="ResizePhase.Reject"/> - transition every shard on the old
 /// physical tree to the Rejecting phase so any lingering client request to the old
 /// tree throws <see cref="StaleTreeRoutingException"/> and retries against the new
 /// alias target.</description></item>
-/// <item><description><see cref="ResizePhase.Cleanup"/> — soft-delete the old physical
+/// <item><description><see cref="ResizePhase.Cleanup"/> - soft-delete the old physical
 /// tree to reclaim storage.</description></item>
 /// </list>
 /// During the <see cref="LatticeOptions.SoftDeleteDuration"/> window, the resize
 /// can be undone with <see cref="UndoResizeAsync"/>. Undo is also available
-/// before the alias swap (during the drain) — in that case the destination
+/// before the alias swap (during the drain) - in that case the destination
 /// tree is deleted and shadow-forward cleared without touching the source.
 /// </para>
 /// Key format: <c>{treeId}</c>.
@@ -159,7 +159,7 @@ internal sealed class TreeResizeGrain(
         // throughout the resize via the shadow-forwarding primitive. The
         // resize's operationId is threaded into the snapshot so both
         // coordinators stamp the same id onto the source shards' shadow-
-        // forward state — the resize can then later call
+        // forward state - the resize can then later call
         // EnterRejectingAsync / ClearShadowForwardAsync with this same id.
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(currentPhysical);
         await snapshot.SnapshotWithOperationIdAsync(snapshotTreeId, SnapshotMode.Online,
@@ -196,13 +196,13 @@ internal sealed class TreeResizeGrain(
     public async Task UndoResizeAsync()
     {
         // Undo is available in two windows:
-        //   1. Before swap — while the online snapshot is draining and the
+        //   1. Before swap - while the online snapshot is draining and the
         //      alias has not yet been updated. Shadow-forwarding is active
         //      but discardable: clearing it and deleting the draft
         //      destination tree leaves the source fully intact. This window
         //      corresponds strictly to Phase == Snapshot; once Swap begins
         //      the alias has been flipped and the destination is live.
-        //   2. After swap — during the SoftDeleteDuration window, or mid
+        //   2. After swap - during the SoftDeleteDuration window, or mid
         //      Swap/Reject/Cleanup. Recover the old physical tree, remove
         //      the alias, restore registry entry, and delete the destination
         //      tree. Shadow-forward state on the old-tree shards must also
@@ -222,7 +222,7 @@ internal sealed class TreeResizeGrain(
 
         // Drain-window undo applies only while Phase == Snapshot. Phases Swap,
         // Reject, and Cleanup all occur after the alias flip, and must follow
-        // the after-swap recovery path — routing them through the drain
+        // the after-swap recovery path - routing them through the drain
         // branch would erroneously delete the live destination tree.
         var isBeforeSwap = state.State.InProgress && state.State.Phase == ResizePhase.Snapshot;
         if (isBeforeSwap)
@@ -236,7 +236,7 @@ internal sealed class TreeResizeGrain(
             // Race note: a ClearShadowForwardAsync that lands between a
             // shard's TryGetShadowTarget resolving and its forward task
             // running may still result in a write landing on the destination
-            // tree just before DeleteTreeAsync is processed. This is safe —
+            // tree just before DeleteTreeAsync is processed. This is safe -
             // the destination is being torn down, so the leaked write is
             // discarded, and forward writes are LWW-idempotent so no
             // source-tree state is corrupted even if that write is later
@@ -265,7 +265,7 @@ internal sealed class TreeResizeGrain(
 
         // ---- Undo after swap. ----
         // Defensively abort any snapshot activation that may have been
-        // resurrected by crash recovery — a no-op when the snapshot has
+        // resurrected by crash recovery - a no-op when the snapshot has
         // already completed or when the opId no longer matches.
         var postSwapSnapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(oldPhysical);
         await postSwapSnapshot.AbortAsync(opId);
@@ -420,7 +420,7 @@ internal sealed class TreeResizeGrain(
         var oldPhysical = state.State.OldPhysicalTreeId!;
 
         // The alias now repoints the logical tree to SnapshotTreeId, so the
-        // old physical tree receives no further public traffic — soft-delete
+        // old physical tree receives no further public traffic - soft-delete
         // it to reclaim storage. The SoftDeleteDuration window keeps the
         // data intact so UndoResizeAsync can still restore it.
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(oldPhysical);

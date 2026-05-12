@@ -98,7 +98,7 @@ public class ChaosIntegrationTests
     private static bool IsTransient(Exception ex) =>
         ex.GetType().Name is "EnumerationAbortedException"
             or "StaleShardRoutingException"
-        // Saga rollback on a transient routing fault during a mid-saga split —
+        // Saga rollback on a transient routing fault during a mid-saga split -
         // the envelope/count invariants are preserved (compensation restores
         // pre-saga values which also satisfy the v-{idx}-* envelope).
         || (ex is InvalidOperationException
@@ -116,7 +116,7 @@ public class ChaosIntegrationTests
     /// invariant scan is long enough that the stateless-worker
     /// <c>LatticeGrain</c> activation hosting the async enumerator may be
     /// collected by Orleans' idle-activation GC between <c>MoveNextAsync</c>
-    /// calls on CI runners under memory pressure — even though the tree
+    /// calls on CI runners under memory pressure - even though the tree
     /// itself is quiescent by this point. The wrapper tracks the last
     /// yielded key and transparently reopens the enumerator, so a fresh
     /// enumeration converges without any caller-side retry loop.
@@ -224,7 +224,7 @@ public class ChaosIntegrationTests
         }
 
         // ---- Atomic writers: SetManyAtomicAsync with batches of 2 random keys.
-        // Exercises the saga path under concurrent splits — envelope and
+        // Exercises the saga path under concurrent splits - envelope and
         // count invariants must hold whether the saga commits or rolls back.
         // Kept at a small batch and single-worker count because each saga
         // serialises ~8 round-trips (4 pre-saga reads + 4 writes).

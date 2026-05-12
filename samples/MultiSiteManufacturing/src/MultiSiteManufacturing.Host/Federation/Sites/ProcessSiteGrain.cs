@@ -79,7 +79,7 @@ internal sealed class ProcessSiteGrain(
     private static IReadOnlyList<Fact> Shuffle(IReadOnlyList<Fact> source)
     {
         var buffer = source.ToArray();
-        // Fisher–Yates with Random.Shared; deterministic order is not required —
+        // Fisher–Yates with Random.Shared; deterministic order is not required -
         // the sample only needs the arrival order to differ from the emission order
         // so the baseline backend can demonstrably diverge from the HLC-ordered lattice.
         for (var i = buffer.Length - 1; i > 0; i--)

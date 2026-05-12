@@ -182,7 +182,7 @@ public class CrdtAccessorIntegrationTests
         await c.IncrementAsync("r1", 5);
 
         var remote = new PnCounter();
-        remote.Increment("r1", 3); // lower than local — must not regress
+        remote.Increment("r1", 3); // lower than local - must not regress
         remote.Increment("r2", 4);
         await c.MergeAsync(remote);
 

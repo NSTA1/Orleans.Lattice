@@ -14,7 +14,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 //
 // Two delivery channels carry the terminal mark, in this order:
 //
-//   1. WAL append via ICommitLogWriter — the terminal mutation is
+//   1. WAL append via ICommitLogWriter - the terminal mutation is
 //      stamped with Kind=TxCommit/TxAbort and Key=ShardIndex.ToString()
 //      and dispatched to the writer adapter, which maps the stamped
 //      shard index to a WAL partition (typically by modulo against the
@@ -27,7 +27,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 //      from the same WAL, and the leaf's ILeafProjection.Apply switch
 //      flips the per-leaf pending-tx bucket exactly as it would have
 //      flipped on the foreground RPC.
-//   2. Foreground RPC fan-out to the saga's affected leaves —
+//   2. Foreground RPC fan-out to the saga's affected leaves -
 //      best-effort immediate visibility for live leaves so a continuous
 //      reader observes the post-saga state without waiting for a
 //      replay-coordinator pull. The fan-out targets the precise subset
@@ -39,9 +39,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 //      visible projection (committed=true) or drop it (committed=false);
 //      the per-leaf _recentlyTerminal HashSet dedups a terminal that
 //      arrives via both channels (RPC then WAL replay, or vice versa).
-//      When the per-saga affected-leaves map is missing — the
+//      When the per-saga affected-leaves map is missing - the
 //      shard-root deactivated between prepare and terminal, or the
-//      call arrived via a path that bypasses the routing layer — the
+//      call arrived via a path that bypasses the routing layer - the
 //      code falls back to walking the full chain so correctness is
 //      preserved at the cost of the broader fan-out.
 //
@@ -57,12 +57,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 // the terminal-HLC ordering invariant established below: the terminal
 // is stamped with an HLC strictly greater than every prepare's stamp
 // on this shard's chain (computed by fanning out GetClockAsync over
-// the affected-leaves subset and Tick-ing once over the max — for the
+// the affected-leaves subset and Tick-ing once over the max - for the
 // untouched leaves contribute no prepare for this saga, so their
 // clocks are irrelevant to the invariant). Receivers merge inbound
 // records by HLC across WAL partitions, so this invariant guarantees
 // every prepare on a shard is observed before the terminal that
-// resolves it — without which a Zero-stamped terminal would always
+// resolves it - without which a Zero-stamped terminal would always
 // sort ahead of non-Zero prepares and flush an empty pending bucket.
 internal sealed partial class ShardRootGrain
 {
@@ -72,7 +72,7 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// Lazily resolves the commit-log writer from the activation's
     /// service provider. Returns <see langword="null"/> when no adapter
-    /// has been registered (the single-node / unit-test path) — in
+    /// has been registered (the single-node / unit-test path) - in
     /// that case the saga relies entirely on the foreground RPC
     /// fan-out for terminal delivery and there is no replay-coordinator
     /// recovery path to seed.
@@ -105,7 +105,7 @@ internal sealed partial class ShardRootGrain
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Step 1 (target resolution) — prefer the per-saga
+        // Step 1 (target resolution) - prefer the per-saga
         // affected-leaves set recorded during prepare-routed writes
         // (see ShardRootGrain.TxAffectedLeaves). When present, the
         // fan-out targets only the leaves that genuinely hold a
@@ -117,7 +117,7 @@ internal sealed partial class ShardRootGrain
         //
         // The cross-migration LWW backstop (committedValues) is
         // applied in step 4 to a UNION of trackedAffected and the
-        // set of leaves that own a saga key NOW — leaves outside
+        // set of leaves that own a saga key NOW - leaves outside
         // trackedAffected but holding a saga key are exactly the
         // Bug B exposure surface that the backstop is designed to
         // cover, so the fan-out must reach them too.
@@ -139,7 +139,7 @@ internal sealed partial class ShardRootGrain
             hlcLeaves = await CollectChainLeavesAsync(cancellationToken);
         }
 
-        // Step 2 (terminal HLC) — fan out GetClockAsync across the
+        // Step 2 (terminal HLC) - fan out GetClockAsync across the
         // target subset and Tick once over the max so the resulting
         // terminal HLC is strictly greater than every prepare's HLC
         // stamped on this shard during this saga. Querying only the
@@ -150,18 +150,18 @@ internal sealed partial class ShardRootGrain
         // WAL records by HLC across partitions, so a Zero-stamped
         // terminal would always sort ahead of non-Zero prepares and
         // flush an empty pending bucket on too-early arrival.
-        // Honours LatticeHlcOverrideContext.Current — when set (e.g.
+        // Honours LatticeHlcOverrideContext.Current - when set (e.g.
         // a receiver-side relay stamping a source-cluster terminal
         // verbatim) the override wins so the receiver's local record
         // matches the authoring cluster's HLC bit-identically.
         var terminalHlc = await ComputeTerminalHlcAsync(hlcLeaves);
 
-        // Step 3 (durability) — append the terminal mark to this
+        // Step 3 (durability) - append the terminal mark to this
         // shard's WAL partition before any in-memory delivery. The
         // adapter bypasses the FNV key-hash for TxCommit/TxAbort kinds
         // and routes by Key=ShardIndex.ToString(). When no replication
         // adapter is registered (single-node / unit-test path), the
-        // writer resolves to null and the WAL append is skipped — the
+        // writer resolves to null and the WAL append is skipped - the
         // RPC fan-out below remains the only delivery channel for
         // such configurations, which is sufficient because there is
         // no replay-coordinator recovery seam to seed.
@@ -178,7 +178,7 @@ internal sealed partial class ShardRootGrain
                 VectorClock = LatticeVectorClockContext.Current,
                 TransactionId = transactionId,
                 Category = LatticeMaintenanceContext.Current,
-                // IsPrepared is false on terminals — the terminal IS
+                // IsPrepared is false on terminals - the terminal IS
                 // the resolution, not the prepare phase.
                 IsPrepared = false,
                 // Stamp the authoritative chain-shard index slot in
@@ -194,7 +194,7 @@ internal sealed partial class ShardRootGrain
             await writer.AppendAsync(terminal, cancellationToken);
         }
 
-        // Step 4 (immediate visibility) — fan out the terminal mark
+        // Step 4 (immediate visibility) - fan out the terminal mark
         // to the resolved target subset in parallel. Each leaf is
         // idempotent (the per-leaf _recentlyTerminal HashSet dedups
         // a terminal that arrives via both channels). The
@@ -219,7 +219,7 @@ internal sealed partial class ShardRootGrain
         //       Without (b), a saga whose prepare straddles a shard
         //       split would leave the destination's pending-tx bucket
         //       orphaned forever once AtomicWriteGrain calls
-        //       ITxRegistryGrain.ForgetAsync — readers routing to the
+        //       ITxRegistryGrain.ForgetAsync - readers routing to the
         //       destination after the swap would consult the registry,
         //       see TxStatus.InFlight (the registry's default for
         //       forgotten ids), hide the pending entry, and surface
@@ -286,7 +286,7 @@ internal sealed partial class ShardRootGrain
     /// the receiver's local WAL record matches the authoring cluster's
     /// HLC bit-identically. Otherwise fans out
     /// <see cref="IBPlusLeafGrain.GetClockAsync"/> across the chain in
-    /// parallel, takes the max, and ticks once — guaranteeing the
+    /// parallel, takes the max, and ticks once - guaranteeing the
     /// returned HLC is strictly greater than every prepare's stamp on
     /// this shard during the saga. Empty chains return
     /// <c>Tick(Zero)</c> so a non-Zero HLC always lands on the WAL even
@@ -323,7 +323,7 @@ internal sealed partial class ShardRootGrain
     /// prepare-phase write under this saga on this shard) and (b) every
     /// leaf that currently owns a key in <paramref name="committedValues"/>
     /// (the set of saga keys this shard routes to NOW). Each targeted
-    /// leaf receives ONLY its own per-key subset of the backstop dict —
+    /// leaf receives ONLY its own per-key subset of the backstop dict -
     /// the shard root performs the per-key-to-leaf grouping via
     /// <see cref="TraverseToLeafAsync"/> so the leaf does not have to
     /// perform a range-ownership check. Each leaf invocation is
@@ -332,7 +332,7 @@ internal sealed partial class ShardRootGrain
     /// replay channels). When both sources are empty, falls back to a
     /// chain walk so a saga that touched no keys on this shard (e.g. an
     /// abort whose prepare never reached us) still propagates the
-    /// terminal — historic pre-backstop behaviour.
+    /// terminal - historic pre-backstop behaviour.
     /// </summary>
     private async Task BroadcastTerminalToLeavesAsync(
         HashSet<GrainId>? trackedAffected,
@@ -409,7 +409,7 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// Mirrors <see cref="AppendTxTerminalAsync(Guid, bool, IReadOnlyDictionary{string, byte[]}, CancellationToken)"/>
     /// onto the destination shard(s) of any shard split this shard has
-    /// participated in as the source — both an in-flight split (read
+    /// participated in as the source - both an in-flight split (read
     /// from <see cref="ShardRootState.SplitInProgress"/>) and every
     /// completed split whose moved-away slots still record the
     /// destination shard index in
@@ -431,9 +431,9 @@ internal sealed partial class ShardRootGrain
     /// where the destination's leaf buckets the value into its own
     /// <c>_pendingTx[txid]</c>. If the saga's terminal broadcast then
     /// lands on this source shard *after* the split has progressed to
-    /// <see cref="ShardSplitPhase.Reject"/> — or after the split has
+    /// <see cref="ShardSplitPhase.Reject"/> - or after the split has
     /// fully completed and <see cref="ShardRootState.SplitInProgress"/>
-    /// has been cleared — the destination's pending bucket is orphaned
+    /// has been cleared - the destination's pending bucket is orphaned
     /// forever (or until aged out by the replay coordinator), and a
     /// reader routed to the destination after the swap surfaces the
     /// destination's pre-saga value indefinitely. Forwarding the terminal
@@ -477,7 +477,7 @@ internal sealed partial class ShardRootGrain
 
         if (targets.Count == 1)
         {
-            // Fast path: single destination (the common case — one
+            // Fast path: single destination (the common case - one
             // split per shard at a time, or one completed split that
             // moved every migrated slot to the same target).
             var only = targets.First();

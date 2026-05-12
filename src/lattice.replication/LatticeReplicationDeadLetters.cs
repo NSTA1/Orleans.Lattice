@@ -56,7 +56,7 @@ internal sealed class LatticeReplicationDeadLetters(
         var result = await inner.ApplyAsync(parked.Value.Entry, cancellationToken).ConfigureAwait(false);
 
         // Successful apply (or filtered re-delivery) is terminal for
-        // inspection — remove the entry and tag the metric with
+        // inspection - remove the entry and tag the metric with
         // reason=replayed so dashboards can distinguish operator replay
         // from explicit discard.
         await grain.RemoveReplayedAsync(entryId, cancellationToken).ConfigureAwait(false);

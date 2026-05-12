@@ -11,7 +11,7 @@ namespace MultiSiteManufacturing.Host.Federation;
 /// <remarks>
 /// Read paths (<see cref="GetStateAsync"/>,
 /// <see cref="GetFactsAsync"/>, <see cref="ListPartsAsync"/>) pass
-/// straight through to the inner backend — chaos only affects writes,
+/// straight through to the inner backend - chaos only affects writes,
 /// mirroring real storage failure modes (partial writes, retry
 /// amplification, and latency) without corrupting the read layer.
 /// </remarks>
@@ -127,7 +127,7 @@ public sealed class ChaosFactBackend : IFactBackend
         catch (OperationCanceledException)
         {
             // No cancellation token is threaded into the flush timer on
-            // purpose — individual entries carry their own tokens below.
+            // purpose - individual entries carry their own tokens below.
         }
 
         List<ReorderEntry> batch;

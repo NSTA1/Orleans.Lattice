@@ -32,13 +32,13 @@ before calling `AddLatticeReplication`.
   high-water-mark dedupe in `IReplicationApplier` makes the handoff
   exactly-once across the snapshot/incremental boundary.
 - **`CausalStableFrontier`** is the producer's causal-stable frontier
-  at snapshot time — the pointwise minimum `VersionVector` across
+  at snapshot time - the pointwise minimum `VersionVector` across
   every consumer that has reported a vector through
   `IWalCursorRegistry.GetCausalStableAsync`. When no
   consumer has reported a VC-shaped cursor (single-peer cluster, fresh
   deployment, host using the legacy HLC-only overload), the provider
   falls back to the producer's per-tree local vector clock from
-  `IReplicationHighWaterMarkGrain.GetVectorAsync` — a strict superset
+  `IReplicationHighWaterMarkGrain.GetVectorAsync` - a strict superset
   of the meet that is safe as a snapshot cut-point. Receivers pin
   this on `IReplicationHighWaterMarkGrain.PinSnapshotAsync(asOfHlc, frontier)`
 
@@ -63,8 +63,10 @@ that need a faster export today can register their own
 
 ## Sample usage
 
-```csharp
-ISnapshotProvider provider = new LatticeSnapshotProvider(grainFactory);
+```csharp verify
+using Orleans.Lattice.Primitives;
+
+ISnapshotProvider provider = client.ServiceProvider.GetRequiredService<ISnapshotProvider>();
 SnapshotStream snapshot = await provider.ExportAsync("orders", HybridLogicalClock.Zero, cancellationToken);
 
 await foreach (SnapshotEntry entry in snapshot.Entries.WithCancellation(cancellationToken))
@@ -111,7 +113,7 @@ Idle
   └─► RequestingSnapshot     (BootstrapAsync invoked; ExportAsync issued)
         └─► ApplyingSnapshot (snapshot stream open; draining Entries)
               └─► IncrementalHandoff (entries drained; pinning AsOfHlc + CausalStableFrontier)
-                    └─► LiveIncremental (terminal — incremental replication is live)
+                    └─► LiveIncremental (terminal - incremental replication is live)
 
 Any state ──► Failed         (any thrown exception; restart is a fresh BootstrapAsync call)
 ```
@@ -133,7 +135,7 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   entry: a concurrent call from the same source cluster is a no-op
   (idempotent retry); a concurrent call from a different source
   cluster throws `InvalidOperationException`. No distributed lock
-  or external coordination is required — Orleans' single-activation
+  or external coordination is required - Orleans' single-activation
   invariant plus the durable in-progress flag is the synchronisation
   primitive. Concurrent bootstraps of different trees route to
   different activations and run in parallel.
@@ -147,7 +149,7 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   from the persisted phase. During `ApplyingSnapshot` the cursor
   is persisted every 100 entries; on resume, the snapshot stream
   is re-opened at `LastAppliedHlc` (not `Zero`), so the cost
-  of a crash is bounded re-application of at most ~100 entries — 
+  of a crash is bounded re-application of at most ~100 entries - 
   and the per-origin HWM dedupe makes that re-application a
   correctness no-op.
 - **`Failed` is restartable.** On any thrown exception inside the
@@ -174,7 +176,7 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
 
 ### Sample usage
 
-```csharp
+```csharp verify
 ILatticeBootstrapCoordinator coordinator = client.ServiceProvider
     .GetRequiredService<ILatticeBootstrapCoordinator>();
 
@@ -204,7 +206,7 @@ Beyond the receiver-driven auto-bootstrap path (`ILatticeFallOffLogDetector`), t
 
 ### Sample usage
 
-```csharp
+```csharp verify
 ILatticeReplicationAdmin admin = client.ServiceProvider
     .GetRequiredService<ILatticeReplicationAdmin>();
 
@@ -232,7 +234,7 @@ _ = state;
 
 A snapshot export reads the producer's committed
 tree state at the moment `ExportAsync` is invoked. The snapshot
-captures only the per-leaf `Entries` projection — the per-tx pending
+captures only the per-leaf `Entries` projection - the per-tx pending
 bucket that holds an in-flight saga's prepared writes is **not**
 exported, because prepared entries are deliberately invisible to
 readers and to the snapshot exporter. After bootstrap apply, the

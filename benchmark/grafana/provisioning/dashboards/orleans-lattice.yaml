@@ -1,4 +1,4 @@
-# Grafana dashboard provider — file-system provisioning rooted at
+# Grafana dashboard provider - file-system provisioning rooted at
 # /var/lib/grafana/dashboards/orleans-lattice (mounted by benchmark/docker-compose.yml
 # from benchmark/grafana/dashboards/, which benchmark.ps1 populates with the embedded
 # Orleans.Lattice.Dashboards JSON files at startup).

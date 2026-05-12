@@ -72,7 +72,7 @@ jobs:
       - name: Build
         run: dotnet build --no-restore --configuration Release -p:Version=${{ steps.parse.outputs.VERSION }}
 
-      - name: Test (chaos first — isolate flaky-prone surface)
+      - name: Test (chaos first - isolate flaky-prone surface)
         if: steps.parse.outputs.TEST_PROJECT != ''
         run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory=Chaos"
 

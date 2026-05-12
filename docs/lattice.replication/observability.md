@@ -2,10 +2,10 @@
 
 `Orleans.Lattice.Replication` publishes every instrument on a single meter, `orleans.lattice.replication`. An OpenTelemetry pipeline (or any `MeterListener`) subscribes once and receives every replication metric. The instruments fall into four shapes:
 
-- **Per-peer gauges** — `entries_behind`, `bytes_behind`, `consecutive_errors`, `last_contact_seconds`. Owned by `ReplicationPeerStats`. Tagged `tree` + `peer`.
-- **Per-operation histograms** — `ship.duration`, `apply.duration`, `apply.lag`. Reported in milliseconds.
-- **Throughput counters** — `wal.entries_appended`, `wal.entries_shipped`, `wal.entries_trimmed`. Used to compute growth-rate vs. ship-rate ratios.
-- **DLQ counters** — `dead_letter.enqueued`, `dead_letter.removed`. Tagged `tree` + `reason`.
+- **Per-peer gauges** - `entries_behind`, `bytes_behind`, `consecutive_errors`, `last_contact_seconds`. Owned by `ReplicationPeerStats`. Tagged `tree` + `peer`.
+- **Per-operation histograms** - `ship.duration`, `apply.duration`, `apply.lag`. Reported in milliseconds.
+- **Throughput counters** - `wal.entries_appended`, `wal.entries_shipped`, `wal.entries_trimmed`. Used to compute growth-rate vs. ship-rate ratios.
+- **DLQ counters** - `dead_letter.enqueued`, `dead_letter.removed`. Tagged `tree` + `reason`.
 
 ## Replication-lag histogram (`apply.lag`)
 
@@ -17,14 +17,14 @@
 | Unit | `ms` |
 | Tags | `tree`, `peer` |
 
-The `peer` tag carries the entry's `OriginClusterId` — i.e. the **authoring** cluster of the replicated mutation, not the immediate transport hop the receiver pulled it from. Under transitive replication (A &#8594; B &#8594; C) an entry shipped from B to C still records `peer=A`, mirroring the producer-side `WalRecord.OriginClusterId` slot. Operators filtering inbound apply lag by the source-of-truth replica use this tag value directly; queries that need transport-hop attribution join the `tree` + `peer` pair against the cluster's known replication topology.
+The `peer` tag carries the entry's `OriginClusterId` - i.e. the **authoring** cluster of the replicated mutation, not the immediate transport hop the receiver pulled it from. Under transitive replication (A &#8594; B &#8594; C) an entry shipped from B to C still records `peer=A`, mirroring the producer-side `WalRecord.OriginClusterId` slot. Operators filtering inbound apply lag by the source-of-truth replica use this tag value directly; queries that need transport-hop attribution join the `tree` + `peer` pair against the cluster's known replication topology.
 
 The histogram is intentionally not recorded for:
 
-- **`MutationKind.DeleteRange`** — range deletes carry `HybridLogicalClock.Zero` by design (a range walk produces many per-leaf HLCs that cannot be faithfully collapsed into one), so the lag would be a meaningless multi-decade value.
-- **HWM-deduped re-deliveries** — the entry never reached the merge step, so reporting lag would conflate "applied" and "filtered" samples.
-- **Local-origin entries** — the apply path short-circuits at the local-origin no-op gate before touching the receiver-side merge.
-- **Source HLC equal to `Zero`** — protects against a malformed entry that would otherwise publish a garbage "now - 0" sample.
+- **`MutationKind.DeleteRange`** - range deletes carry `HybridLogicalClock.Zero` by design (a range walk produces many per-leaf HLCs that cannot be faithfully collapsed into one), so the lag would be a meaningless multi-decade value.
+- **HWM-deduped re-deliveries** - the entry never reached the merge step, so reporting lag would conflate "applied" and "filtered" samples.
+- **Local-origin entries** - the apply path short-circuits at the local-origin no-op gate before touching the receiver-side merge.
+- **Source HLC equal to `Zero`** - protects against a malformed entry that would otherwise publish a garbage "now - 0" sample.
 
 A receiver that operates entirely under HWM dedupe (i.e. every entry it sees has already been applied locally) reports an empty `apply.lag` distribution. That is the correct signal: there is no replication progress to measure.
 
@@ -38,14 +38,14 @@ A receiver that operates entirely under HWM dedupe (i.e. every entry it sees has
 | Unit | `ms` |
 | Tags | `tree`, `peer`, `outcome` |
 
-The `peer` tag carries the same value as `apply.lag`'s `peer` tag — the entry's `OriginClusterId`, identifying the authoring cluster rather than the transport hop. The batch path's `ApplyOriginRunAsync` groups entries into contiguous same-`(treeId, originClusterId)` runs and records each per-entry duration with the run's shared `peer` value, so multi-origin batches surface as one `peer` per run rather than collapsing into a single dominant value.
+The `peer` tag carries the same value as `apply.lag`'s `peer` tag - the entry's `OriginClusterId`, identifying the authoring cluster rather than the transport hop. The batch path's `ApplyOriginRunAsync` groups entries into contiguous same-`(treeId, originClusterId)` runs and records each per-entry duration with the run's shared `peer` value, so multi-origin batches surface as one `peer` per run rather than collapsing into a single dominant value.
 
 The `outcome` tag partitions the histogram into four mutually-exclusive buckets:
 
 | Value | Constant | When |
 |---|---|---|
-| `success` | `LatticeReplicationMetrics.OutcomeSuccess` | The entry was applied successfully — both directly applied point operations (`Set` / `Delete`) and range deletes contribute. Each `ApplyAsync` invocation records exactly one `apply.duration` sample regardless of how many entries the call drains from the causal-apply buffer: a drain cascade triggered by an arriving satisfier contributes its drained-entry work to the satisfier's own `success` sample, and the originally parked entries do not generate additional samples on drain. |
-| `dedup` | `LatticeReplicationMetrics.OutcomeDedup` | The entry was short-circuited before merge — either the per-origin high-water-mark already covers `entry.Timestamp`, or the local-origin defence-in-depth gate detected an entry that must not loop back onto its authoring cluster. |
+| `success` | `LatticeReplicationMetrics.OutcomeSuccess` | The entry was applied successfully - both directly applied point operations (`Set` / `Delete`) and range deletes contribute. Each `ApplyAsync` invocation records exactly one `apply.duration` sample regardless of how many entries the call drains from the causal-apply buffer: a drain cascade triggered by an arriving satisfier contributes its drained-entry work to the satisfier's own `success` sample, and the originally parked entries do not generate additional samples on drain. |
+| `dedup` | `LatticeReplicationMetrics.OutcomeDedup` | The entry was short-circuited before merge - either the per-origin high-water-mark already covers `entry.Timestamp`, or the local-origin defence-in-depth gate detected an entry that must not loop back onto its authoring cluster. |
 | `failure` | `LatticeReplicationMetrics.OutcomeFailure` | The apply attempt threw. Recorded in the `finally` path before the exception unwinds. Includes payload-shape faults (`ArgumentException`, `InvalidOperationException`), `OperationCanceledException` from a cancelled `cancellationToken` (graceful shutdown traffic appears here), transport / IO failures, and any other unhandled exception out of the apply pipeline. |
 | `parked-causal-buffer` | `LatticeReplicationMetrics.OutcomeParkedCausalBuffer` | The entry parked on the causal-apply buffer because its declared `VectorClock` was not yet dominated by the local vector clock. The original delivery did not advance the high-water-mark; the entry re-enters the apply pipeline through the buffer drain when its dependencies arrive. |
 
@@ -57,7 +57,7 @@ The two counters are deliberately a pair:
 
 | Counter | Tags | Recorded |
 |---|---|---|
-| `orleans.lattice.replication.wal.entries_appended` | `tree` | After a successful WAL append at the `ShardedReplogSink` seam — counts entries the producer durably committed to the local WAL. A throwing append does **not** contribute. |
+| `orleans.lattice.replication.wal.entries_appended` | `tree` | After a successful WAL append at the `ShardedReplogSink` seam - counts entries the producer durably committed to the local WAL. A throwing append does **not** contribute. |
 | `orleans.lattice.replication.wal.entries_shipped` | `tree`, `peer` | After a successful Push acknowledgement at the gRPC transport. Incremented by the count of entries inside the acknowledged envelope; a heartbeat / keep-alive (zero-entry) batch contributes zero. |
 
 Operators monitor `rate(wal_entries_appended) / rate(wal_entries_shipped)` per tree-peer pair. Steady-state replication keeps the ratio close to `1`. A persistently rising ratio indicates the local WAL is growing faster than the sender can ship, which is the signal the min-acked-cursor WAL GC predicate and a future health check both consume.
@@ -79,7 +79,9 @@ The mapping lives in `DeadLetterTrackingReplicationApplier.ClassifyFailure` and 
 
 Wire `LatticeReplicationMetrics.MeterName` into an OpenTelemetry `MeterProviderBuilder.AddMeter(...)` call, or attach a `MeterListener` directly:
 
-```text
+```csharp verify
+using System.Diagnostics.Metrics;
+
 using var listener = new MeterListener
 {
     InstrumentPublished = (instrument, l) =>
@@ -97,19 +99,19 @@ listener.Start();
 
 ## Causal+ instruments
 
-Four instruments surface the receiver-side causal-apply buffer (`CausalApplyBuffer`) used by the causal-plus dependency check. They share the meter and tag conventions of the rest of the package — `tree` always identifies the logical tree, and `shard` is reserved as a second tag dimension on the buffer-state instruments so a future per-shard buffer partitioning can populate it without a wire-format break. The current implementation is one-buffer-per-tree, so `shard` is always `"0"`.
+Four instruments surface the receiver-side causal-apply buffer (`CausalApplyBuffer`) used by the causal-plus dependency check. They share the meter and tag conventions of the rest of the package - `tree` always identifies the logical tree, and `shard` is reserved as a second tag dimension on the buffer-state instruments so a future per-shard buffer partitioning can populate it without a wire-format break. The current implementation is one-buffer-per-tree, so `shard` is always `"0"`.
 
 | Instrument | Kind | Tags | Recorded when |
 |---|---|---|---|
 | `orleans.lattice.replication.apply.buffered_entries` | `UpDownCounter<long>` | `tree`, `shard` | Increments by 1 on every successful park (including overflow-evicting parks); decrements by 1 per evicted entry inside the same park; decrements by the count of drained entries on each successful drain pass. |
 | `orleans.lattice.replication.apply.buffer_bytes` | `UpDownCounter<long>` | `tree`, `shard` | Tracks the same lifecycle as `buffered_entries` but in cumulative serialised bytes (key length × 2 + end-key length × 2 + value length + 128 envelope overhead). |
-| `orleans.lattice.replication.apply.dependency_wait_ms` | `Histogram<double>` (ms) | `tree` | One sample per drained entry: `now - parked_at`, clamped non-negative. Evicted entries do not contribute — only successful waits are observed. |
+| `orleans.lattice.replication.apply.dependency_wait_ms` | `Histogram<double>` (ms) | `tree` | One sample per drained entry: `now - parked_at`, clamped non-negative. Evicted entries do not contribute - only successful waits are observed. |
 | `orleans.lattice.replication.apply.causal_violations_blocked` | `Counter<long>` | `tree` | Incremented once per successful park. Duplicate-tuple parks do not count. An alert on `rate > 0` flags causal-skew health regardless of whether buffered entries eventually drain or evict. |
 
 Operators monitor the four together:
 
 - A steady-state replicating peer keeps `buffered_entries` near zero and emits `dependency_wait_ms` samples close to the round-trip-time of a single ack cycle.
-- A persistent rise in `buffered_entries` or `buffer_bytes` paired with a low or zero `causal_violations_blocked` rate is the classic "bounded buffer absorbing transient skew, then draining" pattern — healthy.
+- A persistent rise in `buffered_entries` or `buffer_bytes` paired with a low or zero `causal_violations_blocked` rate is the classic "bounded buffer absorbing transient skew, then draining" pattern - healthy.
 - A sustained nonzero `causal_violations_blocked` rate paired with `apply.dependency_wait_ms` distributions in the seconds-to-minutes range indicates structural causal skew the bounded buffer is masking; pair with the DLQ enqueue rate (`dead_letter.enqueued{reason="hlc_skew"}`) to detect overflow.
 - A sudden buffer drain that does not advance the local high-water-mark (visible as a spike in `dependency_wait_ms` with no matching `apply.lag` improvement) suggests a CRDT-merge regression rather than a transport-side issue.
 
@@ -125,9 +127,9 @@ The receiver-side apply pipeline relies on a per-origin FIFO contract for its ca
 
 The canonical `ReplicationApplier` records the most recently applied source HLC per `(treeId, originClusterId)` in process-local memory and increments `apply.fifo_violations` when a successfully applied entry's HLC is **strictly less** than the prior recorded value for the same pair. The counter is recorded:
 
-- **After a successful apply** (direct or drained from the causal-apply buffer) — never on park. The invariant tracks "what has been merged" rather than "what has been observed", so a transient park of a higher-HLC entry that drains after a lower-HLC arrival does not falsely register a violation.
-- **For point operations only** (`Set` / `Delete`). `DeleteRange` carries `HybridLogicalClock.Zero` by design and is excluded — it neither records a violation nor overwrites the recorded HLC.
+- **After a successful apply** (direct or drained from the causal-apply buffer) - never on park. The invariant tracks "what has been merged" rather than "what has been observed", so a transient park of a higher-HLC entry that drains after a lower-HLC arrival does not falsely register a violation.
+- **For point operations only** (`Set` / `Delete`). `DeleteRange` carries `HybridLogicalClock.Zero` by design and is excluded - it neither records a violation nor overwrites the recorded HLC.
 
-A violation **does not change apply behaviour**: the entry is still applied, the HWM is still advanced. This is purely an observability surface — an alert on `rate > 0` flags a transport-side regression that broke the per-origin order, not a correctness defect on the receiver. Operators triage by joining the `tree` and `origin` tags against the producer-side topology to identify which sender path regressed.
+A violation **does not change apply behaviour**: the entry is still applied, the HWM is still advanced. This is purely an observability surface - an alert on `rate > 0` flags a transport-side regression that broke the per-origin order, not a correctness defect on the receiver. Operators triage by joining the `tree` and `origin` tags against the producer-side topology to identify which sender path regressed.
 
 Cross-shard interleaving for the same origin is permitted by design and is **not** a FIFO violation under this contract: entries that have a genuine cross-shard causal dependency carry it in their `VectorClock` and route through the causal-apply buffer's dependency-check path instead. The current implementation tracks one entry per `(tree, origin)` because the canonical applier is one-instance-per-tree; a future per-shard applier partitioning will key the tracker by `(tree, shard, origin)` without changing the metric's tag dimensionality.

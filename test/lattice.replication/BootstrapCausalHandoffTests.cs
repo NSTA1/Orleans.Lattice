@@ -46,7 +46,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// These tests pin the post-handoff contract: with a frontier already
 /// pinned (simulating the bootstrap state machine's transition into
 /// <c>LiveIncremental</c>), incremental entries follow one of four
-/// paths — HWM-dedup for entries whose VC is dominated by the
+/// paths - HWM-dedup for entries whose VC is dominated by the
 /// frontier, direct apply for entries whose declared dependencies are
 /// already satisfied by the pinned frontier, park-then-unblock for
 /// entries whose dependencies are not yet satisfied, and DLQ-with-tag
@@ -183,7 +183,7 @@ public partial class BootstrapCausalHandoffTests
             });
 
         // PinSnapshotAsync overwrites both the per-origin diagonal rows
-        // and the local vector clock — exactly the persistence behaviour
+        // and the local vector clock - exactly the persistence behaviour
         // R-081's IReplicationHighWaterMarkGrain.PinSnapshotAsync does
         // against real grain state.
         hwm.PinSnapshotAsync(
@@ -238,7 +238,7 @@ public partial class BootstrapCausalHandoffTests
     /// Behaviour 1 (spec): incremental entries whose
     /// <see cref="WalRecord.VectorClock"/> is dominated by the
     /// pinned frontier are HWM-deduplicated as
-    /// already-applied-via-snapshot — no buffering, no re-merge. Pins
+    /// already-applied-via-snapshot - no buffering, no re-merge. Pins
     /// the cross-origin VC-dominated case routes through the same fast
     /// path the per-origin HWM check already provides for the
     /// diagonal.
@@ -253,7 +253,7 @@ public partial class BootstrapCausalHandoffTests
 
         // Entry from origin-A at HLC 50 (below the pinned diagonal of
         // 100) carrying a VC slot at or below the frontier on every
-        // origin — i.e. the snapshot already covers it.
+        // origin - i.e. the snapshot already covers it.
         var entry = SetEntry("k1", Hlc(50), OriginA, Vector((OriginA, Hlc(50)), (OriginB, Hlc(150))));
 
         var result = await h.Applier.ApplyAsync(entry);
@@ -267,7 +267,7 @@ public partial class BootstrapCausalHandoffTests
         });
 
         // The applier must short-circuit before reaching the apply
-        // grain — otherwise the cross-origin VC-dominated path would
+        // grain - otherwise the cross-origin VC-dominated path would
         // re-merge work the snapshot already covered.
         await h.Apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
     }
@@ -275,7 +275,7 @@ public partial class BootstrapCausalHandoffTests
     /// <summary>
     /// Behaviour 2 (spec): incremental entries with at least one origin
     /// component above the pinned frontier whose dependencies are
-    /// satisfied by the frontier apply directly — no buffering, no
+    /// satisfied by the frontier apply directly - no buffering, no
     /// DLQ. This is the steady-state path immediately after handoff.
     /// </summary>
     [Test]
@@ -287,7 +287,7 @@ public partial class BootstrapCausalHandoffTests
 
         // Entry from origin-A at HLC 150 (above origin-A's diagonal of
         // 100) whose declared dep on origin-B (200) is exactly the
-        // pinned diagonal — satisfied.
+        // pinned diagonal - satisfied.
         var entry = SetEntry("k2", Hlc(150), OriginA, Vector((OriginA, Hlc(150)), (OriginB, Hlc(200))));
 
         var result = await h.Applier.ApplyAsync(entry);
@@ -322,7 +322,7 @@ public partial class BootstrapCausalHandoffTests
 
         // First entry: from origin-A at HLC 150 with a forward
         // dependency on origin-B(500). The pinned frontier has
-        // origin-B at 200, so the dependency is unsatisfied — entry
+        // origin-B at 200, so the dependency is unsatisfied - entry
         // must park.
         var blocked = SetEntry("k3", Hlc(150), OriginA, Vector((OriginA, Hlc(150)), (OriginB, Hlc(500))));
 
@@ -354,10 +354,10 @@ public partial class BootstrapCausalHandoffTests
 
     /// <summary>
     /// Behaviour 4 (spec): overflow during the transient catch-up
-    /// window — the bounded buffer hits
+    /// window - the bounded buffer hits
     /// <see cref="LatticeReplicationOptions.CausalBufferMaxEntries"/>
     /// while the peer is still draining the gap between snapshot and
-    /// live — routes the oldest parked entry through the DLQ with
+    /// live - routes the oldest parked entry through the DLQ with
     /// reason tag <see cref="LatticeReplicationMetrics.ReasonHlcSkew"/>.
     /// Pins the last contract bullet: the operator playbook for
     /// "I bootstrapped under heavy concurrent write load" is to
@@ -379,7 +379,7 @@ public partial class BootstrapCausalHandoffTests
         // Park three entries from origin-B (so the per-origin HWM
         // diagonal stays at zero for origin-B; HWM-dedup never fires)
         // each declaring a forward dep on origin-A above the pinned
-        // diagonal — all three are unsatisfied. The third forces an
+        // diagonal - all three are unsatisfied. The third forces an
         // eviction of the oldest blocked entry to the DLQ.
         var e1 = SetEntry("k-overflow-1", Hlc(10), OriginB, Vector((OriginA, Hlc(999, 1)), (OriginB, Hlc(10))));
         var e2 = SetEntry("k-overflow-2", Hlc(20), OriginB, Vector((OriginA, Hlc(999, 2)), (OriginB, Hlc(20))));
@@ -400,7 +400,7 @@ public partial class BootstrapCausalHandoffTests
         });
 
         // The two surviving parked entries (k-overflow-2, k-overflow-3)
-        // are still buffered — none of the three has reached the apply
+        // are still buffered - none of the three has reached the apply
         // grain.
         await h.Apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
     }

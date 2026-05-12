@@ -45,7 +45,7 @@ internal sealed class BootstrapCoordinatorState
     /// <see cref="ILatticeBootstrapCoordinatorGrain.BootstrapAsync"/>.
     /// Used both as the origin tag for every applied entry (so transitive
     /// replication paths preserve the originating HLC) and to make the
-    /// kickoff RPC idempotent — a second call with the same id while
+    /// kickoff RPC idempotent - a second call with the same id while
     /// <see cref="InProgress"/> is a no-op; a different id throws.
     /// </summary>
     [Id(2)] public string SourceClusterId { get; set; } = "";

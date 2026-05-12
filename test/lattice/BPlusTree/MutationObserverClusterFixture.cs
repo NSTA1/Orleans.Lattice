@@ -66,7 +66,7 @@ public sealed class MutationObserverClusterFixture
         return Cluster.Client.GetGrain<ILattice>(treeId);
     }
 
-    /// <summary>Drains all captured mutations — call between tests.</summary>
+    /// <summary>Drains all captured mutations - call between tests.</summary>
     public static IReadOnlyList<LatticeMutation> Drain()
     {
         var list = new List<LatticeMutation>();

@@ -391,7 +391,7 @@ public class ShardRootGrainMergeManyTests
         var h = CreateTwoLeafHarness();
         var leftLeaf = h.Leaves.First().Value;
 
-        // Always throws transient — retry budget is MaxRetries=2 so the leaf
+        // Always throws transient - retry budget is MaxRetries=2 so the leaf
         // is called 3 times (attempt 0 + 2 retries) before giving up.
         leftLeaf.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
             .Returns<Task<SplitResult?>>(_ => throw new IOException("persistent-transient"));

@@ -91,7 +91,7 @@ public class ShardedReplogSinkLocalVectorClockCacheTests
     {
         // Foreign-origin entries (replays of a remote write that the
         // receiver chose to forward back into its WAL) must not
-        // advance the local diagonal — only AdvanceForeign on apply
+        // advance the local diagonal - only AdvanceForeign on apply
         // touches foreign entries. This test asserts the routing
         // discipline: an inbound replay flowing through the sink
         // does not silently bump the producer cache for the wrong
@@ -114,14 +114,14 @@ public class ShardedReplogSinkLocalVectorClockCacheTests
             Assert.That(snapshot.GetClock(LocalCluster), Is.EqualTo(HybridLogicalClock.Zero),
                 "Foreign-origin append must not advance the local diagonal.");
             Assert.That(snapshot.GetClock(RemoteCluster), Is.EqualTo(HybridLogicalClock.Zero),
-                "Sink must not stamp foreign entries — that is AdvanceForeign's job on the apply path.");
+                "Sink must not stamp foreign entries - that is AdvanceForeign's job on the apply path.");
         });
     }
 
     [Test]
     public async Task WriteAsync_throwing_append_does_not_advance_diagonal()
     {
-        // A failed WAL append must not advance the producer cache —
+        // A failed WAL append must not advance the producer cache -
         // the cache mirrors what is actually persisted, so a thrown
         // AppendAsync must surface to the caller without a phantom
         // diagonal bump.

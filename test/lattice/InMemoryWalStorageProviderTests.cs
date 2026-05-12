@@ -70,7 +70,7 @@ public class InMemoryWalStorageProviderTests
             async () => await sut.AppendBatchAsync(Tree, 0, batch, CancellationToken.None),
             Throws.InvalidOperationException);
 
-        // Validation runs ahead of mutation — no entry from the rejected
+        // Validation runs ahead of mutation - no entry from the rejected
         // batch survives. Head must still report -1.
         var head = await sut.GetHighestOffsetAsync(Tree, 0, CancellationToken.None);
         Assert.That(head, Is.EqualTo(-1L));

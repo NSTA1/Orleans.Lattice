@@ -180,7 +180,7 @@ public sealed class VehicleGrain : Grain, IVehicleGrain
                 break;
 
             case VehicleFault.EngineStall:
-                // Park the vehicle and clear the running flag. Resume requires Start() — same
+                // Park the vehicle and clear the running flag. Resume requires Start() - same
                 // contract as a manual stop, but the operator sees a discrete event in the feed.
                 _timer?.Dispose();
                 _timer = null;
@@ -256,7 +256,7 @@ public sealed class VehicleGrain : Grain, IVehicleGrain
 
         // Apply the global simulation TimeScale: 1.0 = realtime, >1 advances the sim N× faster
         // without changing telemetry rate. Read straight from the silo-shared SimulationRuntimeState
-        // so slider changes propagate to every vehicle on the next tick — single volatile load, no
+        // so slider changes propagate to every vehicle on the next tick - single volatile load, no
         // grain calls, no staleness window.
         var timeScale = _runtime.TimeScale;
         var effectiveConfig = _persistent.State.Config;
@@ -328,7 +328,7 @@ public sealed class VehicleGrain : Grain, IVehicleGrain
             FuelLitres: state.FuelLitres,
             Status: state.Status,
             FuelCapacityLitres: _persistent.State.Config.FuelCapacityLitres);
-        // Return the sink's ValueTask directly — no async modifier, no extra state-machine box per
+        // Return the sink's ValueTask directly - no async modifier, no extra state-machine box per
         // tick. The default FanOutTelemetrySink targets a [OneWay] grain method so the underlying
         // await completes once the message is enqueued, with no response round-trip on the wire.
         return _telemetrySink.PublishTelemetryAsync(telemetry);

@@ -125,7 +125,7 @@ public static class LatticeReplicationServiceCollectionExtensions
         // seams (formerly in this package, promoted in v3.5.0). Calling
         // AddWalCursorRegistry registers the in-memory default plus the
         // leaf-as-materialiser reporter; AddLatticeWalGc registers the
-        // GC. Both extension calls are idempotent — a host that already
+        // GC. Both extension calls are idempotent - a host that already
         // wired them up directly is unaffected.
         builder.AddWalCursorRegistry();
         builder.AddLatticeWalGc();

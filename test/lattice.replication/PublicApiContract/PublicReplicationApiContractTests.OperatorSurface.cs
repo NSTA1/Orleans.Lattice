@@ -58,7 +58,7 @@ public partial class PublicReplicationApiContractTests
             .ServicesFor(PublicReplicationApiClusterFixture.SiteBClusterId)
             .GetRequiredService<ILatticeFallOffLogDetector>();
 
-        // Pass HLC.Zero as the "sender's oldest available" — the
+        // Pass HLC.Zero as the "sender's oldest available" - the
         // receiver's HWM is strictly newer than Zero, so the local
         // HWM cannot be older than the sender's oldest. Result:
         // FellOffLog=false.

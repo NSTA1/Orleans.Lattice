@@ -17,8 +17,8 @@ namespace MultiSiteManufacturing.Host.Replication;
 /// </summary>
 /// <remarks>
 /// Wraps the package's gRPC push transport so the Tier 4b chaos
-/// disconnect surface — exposed via <see cref="ChaosPreset.ReplicationDisconnect"/>
-/// in the dashboard fly-out — can pause outbound replication at the
+/// disconnect surface - exposed via <see cref="ChaosPreset.ReplicationDisconnect"/>
+/// in the dashboard fly-out - can pause outbound replication at the
 /// canonical transport seam without touching the package internals.
 /// Tier 5 (<c>docker network disconnect</c>) is transport-agnostic and
 /// remains untouched.

@@ -97,7 +97,7 @@ public partial class ReplicationShipperGrainTests
     /// <see cref="ThrowOnRead"/> simulates a transient WAL read
     /// failure on the next <see cref="ReadAsync"/> call.
     /// <see cref="ReadCalls"/> records how many reads have happened
-    /// — used by partition-resume tests to assert the shipper does not
+    /// - used by partition-resume tests to assert the shipper does not
     /// rescan from sequence 0 each tick.
     /// </para>
     /// </summary>
@@ -241,7 +241,7 @@ public partial class ReplicationShipperGrainTests
     [Test]
     public void Constructor_throws_when_options_monitor_is_null() =>
         Assert.That(() => ConstructWith(monitor: null!),
-            Throws.Nothing);  // sanity — substitute fallback works
+            Throws.Nothing);  // sanity - substitute fallback works
     // Note: ConstructWith accepts a null monitor by handing in a substitute fallback.
     // Dedicated null-arg tests below pass null! directly bypassing the fallback.
 
@@ -688,7 +688,7 @@ public partial class ReplicationShipperGrainTests
     [Test]
     public async Task PumpOnceAsync_advances_cursor_to_source_hlc_when_ack_lower()
     {
-        // Receiver returned a frontier below the batch's last entry —
+        // Receiver returned a frontier below the batch's last entry -
         // the shipper still advances to the last-shipped HLC so it
         // does not re-ship the same batch on the next tick.
         var (grain, state, feed, transport, _, _, _) = Create();
@@ -1175,7 +1175,7 @@ public partial class ReplicationShipperGrainTests
     public async Task PumpOnceAsync_does_not_record_peer_error_on_drain_throw()
     {
         // Drain failures (local WAL read errors) must NOT bump the
-        // per-peer consecutive_errors gauge — the peer is fine; the
+        // per-peer consecutive_errors gauge - the peer is fine; the
         // local source is down. The shipper still increments its own
         // ConsecutiveFailures backoff counter, but the peer-stats
         // surface stays clean.
@@ -1199,7 +1199,7 @@ public partial class ReplicationShipperGrainTests
             ShipBatchSize = 64,
         };
         var (grain, feed, _, stats) = CreateWithStats(opts);
-        // Single entry — the drain returns 1 < ShipBatchSize so
+        // Single entry - the drain returns 1 < ShipBatchSize so
         // hitBatchCap is false and the recorded backlog is zero.
         feed.Append(MakeEntry("k", ticks: 1));
 
@@ -1224,7 +1224,7 @@ public partial class ReplicationShipperGrainTests
         };
         var (grain, feed, _, stats) = CreateWithStats(opts);
         // Three entries forces the drain to fill the buffer to the
-        // ShipBatchSize cap — _drainBuffer.Count >= maxPerBatch is
+        // ShipBatchSize cap - _drainBuffer.Count >= maxPerBatch is
         // the lower-bound signal that the WAL has at least one full
         // batch's worth of entries past the cursor.
         feed.Append(MakeEntry("k1", ticks: 1));
@@ -1239,7 +1239,7 @@ public partial class ReplicationShipperGrainTests
             // entries_behind reports the just-shipped count (>=
             // ShipBatchSize) as a floor.
             Assert.That(snap.EntriesBehind, Is.GreaterThanOrEqualTo(opts.ShipBatchSize));
-            // bytes_behind is the encoded payload size — TestEncoder
+            // bytes_behind is the encoded payload size - TestEncoder
             // writes 3 bytes per encode so bytes_behind is at least 1.
             Assert.That(snap.BytesBehind, Is.GreaterThan(0L));
         });

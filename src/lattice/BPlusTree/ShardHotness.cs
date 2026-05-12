@@ -4,7 +4,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// <summary>
 /// Volatile hotness counters for a single shard. Tracks the number of read and
 /// write operations processed since the grain was activated (or counters were
-/// last reset). Counters are in-memory only — they reset on grain deactivation
+/// last reset). Counters are in-memory only - they reset on grain deactivation
 /// and are never persisted. Used by split coordinators to detect hot shards.
 /// </summary>
 [GenerateSerializer]

@@ -20,7 +20,7 @@ namespace MultiSiteManufacturing.Host.Federation;
 /// consults <see cref="IPartitionChaosGrain"/>: each silo accepts only
 /// the half of the serial-hash space assigned to it (silo A keeps
 /// <c>hash % 2 == 0</c>, silo B keeps <c>hash % 2 == 1</c>). Dropped
-/// facts are logged but otherwise invisible to the caller — the
+/// facts are logged but otherwise invisible to the caller - the
 /// <see cref="EmitAsync"/> return value is <c>false</c> just as it
 /// would be for a fact held at a paused site.
 /// </para>
@@ -98,7 +98,7 @@ public sealed class FederationRouter(
     /// backends (fan-out ran and <see cref="FactRouted"/> was raised);
     /// <see langword="false"/> if the site grain held it (paused or
     /// buffered for reorder), the silo-partition preset dropped it, or
-    /// any other ingress filter suppressed fan-out — in which case no
+    /// any other ingress filter suppressed fan-out - in which case no
     /// downstream side effects occur until a later unpause or reorder
     /// flush.
     /// </returns>
@@ -268,7 +268,7 @@ public sealed class FederationRouter(
 
         // Deterministic hash-based partition filter. Silo A
         // (IsPrimary == true) keeps even-hash serials; silo B keeps
-        // odd. Using string.GetHashCode is fine for a demo — we only
+        // odd. Using string.GetHashCode is fine for a demo - we only
         // need the same answer on every call, not cryptographic
         // quality. Ordinal hash keeps the split stable across runs
         // (string.GetHashCode() is randomized per process).

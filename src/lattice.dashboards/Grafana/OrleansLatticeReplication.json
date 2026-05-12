@@ -106,7 +106,7 @@
     "from": "now-1h",
     "to": "now"
   },
-  "title": "Orleans.Lattice — Replication",
+  "title": "Orleans.Lattice - Replication",
   "uid": "orleans-lattice-replication",
   "version": 1,
   "panels": [
@@ -226,8 +226,8 @@
     },
     {
       "id": 4,
-      "title": "Dependency wait p95 (ms) — causal-consistency staging",
-      "description": "Wait time for entries parked in the causal-apply buffer awaiting dependency satisfaction. Only emits samples when causal staging is enabled AND at least one entry parks. Flat-zero (no series) is the healthy steady state — the 'or vector(0)' guard renders zero rather than 'No data'.",
+      "title": "Dependency wait p95 (ms) - causal-consistency staging",
+      "description": "Wait time for entries parked in the causal-apply buffer awaiting dependency satisfaction. Only emits samples when causal staging is enabled AND at least one entry parks. Flat-zero (no series) is the healthy steady state - the 'or vector(0)' guard renders zero rather than 'No data'.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -375,7 +375,7 @@
     {
       "id": 8,
       "title": "Peer fell-off-log events (count over range)",
-      "description": "Receiver fell-off-log detections per peer. Nonzero means the receiver's high-water-mark is older than the sender's oldest WAL entry — i.e. the receiver missed the catch-up window. Flat-zero is the healthy steady state.",
+      "description": "Receiver fell-off-log detections per peer. Nonzero means the receiver's high-water-mark is older than the sender's oldest WAL entry - i.e. the receiver missed the catch-up window. Flat-zero is the healthy steady state.",
       "type": "stat",
       "datasource": {
         "type": "prometheus",

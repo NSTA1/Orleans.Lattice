@@ -73,7 +73,7 @@ internal sealed class FleetStreamHub : IFleetStreamHub
     /// Raised with <c>true</c> when the first subscriber arrives (0 → ≥1) and with <c>false</c>
     /// when the last subscriber leaves (≥1 → 0). Fired outside <c>_gate</c> so handlers may do work
     /// without risk of deadlock. <see cref="TelemetryFanOutService"/> uses this to attach the
-    /// upstream Orleans observer only while at least one downstream client is connected — without
+    /// upstream Orleans observer only while at least one downstream client is connected - without
     /// it the silo would keep pushing 1000 msg/s to an empty hub indefinitely.
     /// </summary>
     public event Action<bool>? ActiveSubscribersChanged;

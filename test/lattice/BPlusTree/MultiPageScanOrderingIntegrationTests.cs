@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <summary>
 /// multi-page / range / prefetch ordering tests. The default
 /// <see cref="FourShardClusterFixture"/> uses <c>KeysPageSize=512</c>,
-/// which means a 400-key seed set fits in a single page per shard — the
+/// which means a 400-key seed set fits in a single page per shard - the
 /// in-line reconciliation path never fires on a non-first page. This
 /// fixture forces <c>KeysPageSize=16</c> so moved-slot reports arrive
 /// mid-scan, exercising the real reconciliation code path.
@@ -90,7 +90,7 @@ public class MultiPageScanOrderingIntegrationTests
                 catch (InvalidOperationException ex) when (ex.Message.Contains("retries while topology kept changing"))
                 {
                     // MaxScanRetries exhaustion is a valid outcome under
-                    // tight retry caps — count as completed for liveness.
+                    // tight retry caps - count as completed for liveness.
                     Interlocked.Increment(ref completedScans);
                 }
                 catch (Exception ex) { failures.Add($"threw {ex.GetType().Name}: {ex.Message}"); }

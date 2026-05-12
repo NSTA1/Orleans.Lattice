@@ -73,7 +73,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// the same registry decision view (linearizable scan over the
     /// registry's transition moment). Decisions not present in the
     /// returned map default to <see cref="TxStatus.InFlight"/> at the
-    /// caller — consistent with "decision not yet recorded as of this
+    /// caller - consistent with "decision not yet recorded as of this
     /// snapshot's wall-clock moment".
     /// </summary>
     Task<Dictionary<Guid, TxStatus>> SnapshotAsync();
@@ -83,7 +83,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// after every touched leaf has applied its terminal so the
     /// registry's persisted footprint stays bounded. After this call
     /// <see cref="GetStatusAsync"/> returns <see cref="TxStatus.InFlight"/>
-    /// — by which point no leaf has the txid in its pending bucket
+    /// - by which point no leaf has the txid in its pending bucket
     /// anymore so that observation is consistent with the absence of
     /// any pending mutation.
     /// </summary>

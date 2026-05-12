@@ -30,7 +30,7 @@ public readonly record struct ApplyResult
 | `ApplyResult` member | Semantics |
 |---|---|
 | `Applied` | `true` when the entry was merged onto the local tree; `false` when the entry was filtered out as a re-delivery (its `Timestamp` was at or below the per-origin high-water-mark) or rejected as inapplicable (its `OriginClusterId` matched the local cluster id and would have looped). For batch calls, `true` if **any** entry in the batch was newly merged. |
-| `HighWaterMark` | For point applies (`Set` / `Delete`) this is the per-origin HWM after the call — equal to `entry.Timestamp` when `Applied` is `true`, or the HWM that suppressed the apply when `Applied` is `false`. For range deletes and local-origin no-op rejections — neither of which consults the HWM — this is `HybridLogicalClock.Zero`. For batch calls, the pointwise maximum HWM across every distinct origin in the batch. |
+| `HighWaterMark` | For point applies (`Set` / `Delete`) this is the per-origin HWM after the call - equal to `entry.Timestamp` when `Applied` is `true`, or the HWM that suppressed the apply when `Applied` is `false`. For range deletes and local-origin no-op rejections - neither of which consults the HWM - this is `HybridLogicalClock.Zero`. For batch calls, the pointwise maximum HWM across every distinct origin in the batch. |
 
 ## Apply semantics
 
@@ -38,21 +38,21 @@ Three concerns the applier composes for every call:
 
 ### 1. Source-HLC and origin preservation
 
-For `LwwRegister` mode point applies route through the core library's apply seam, which persists the entry's `LwwValue<byte[]>` with the supplied `Timestamp` and `OriginClusterId` **verbatim** — no fresh local HLC is stamped. This is what unlocks transitive replication (A → B → C with A's HLC intact) and deterministic LWW resolution against concurrent local writes.
+For `LwwRegister` mode point applies route through the core library's apply seam, which persists the entry's `LwwValue<byte[]>` with the supplied `Timestamp` and `OriginClusterId` **verbatim** - no fresh local HLC is stamped. This is what unlocks transitive replication (A → B → C with A's HLC intact) and deterministic LWW resolution against concurrent local writes.
 
-For typed CRDT modes (`OrSet`, `PnCounter`, `VersionVector`) the applier deserialises the captured value bytes as the typed primitive, reads the locally-stored state under optimistic concurrency, calls the primitive's in-place `MergeFrom` operation, and writes the merged state back. The merge is wrapped in a `LatticeOriginContext.With(originClusterId)` scope so the receiver's commit-time observer publishes the foreign origin and the producer-side ship loop filters the resulting entry out. The persisted `HybridLogicalClock` is a fresh local tick (representing the merge point) — this is correct for state-based CRDTs, where the data structure itself carries the per-replica causal context.
+For typed CRDT modes (`OrSet`, `PnCounter`, `VersionVector`) the applier deserialises the captured value bytes as the typed primitive, reads the locally-stored state under optimistic concurrency, calls the primitive's in-place `MergeFrom` operation, and writes the merged state back. The merge is wrapped in a `LatticeOriginContext.With(originClusterId)` scope so the receiver's commit-time observer publishes the foreign origin and the producer-side ship loop filters the resulting entry out. The persisted `HybridLogicalClock` is a fresh local tick (representing the merge point) - this is correct for state-based CRDTs, where the data structure itself carries the per-replica causal context.
 
 Range deletes carry `HybridLogicalClock.Zero` by design (a range walk produces many per-leaf HLCs that cannot be faithfully collapsed into a single timestamp). The receiver walks the leaf chain locally and stamps each tombstone with a freshly-ticked local HLC; the remote `OriginClusterId` rides through an ambient `LatticeOriginContext` scope so the receiver-side change-feed observer publishes it on every emitted `LatticeMutation`.
 
 ### 2. Per-origin high-water-mark dedupe
 
-The applier resolves a per-origin high-water-mark for every `(TreeId, OriginClusterId)` pair it sees. Before applying a point entry it reads the current HWM; if `entry.Timestamp <= hwm` the call is a no-op (`Applied = false`). After a successful point apply it advances the HWM monotonically — concurrent appliers that race ahead leave the HWM higher and the laggard's advance becomes a no-op, exactly the semantics at-most-once apply requires. Typed CRDT modes consult and advance the HWM the same way, even though state-based merge is naturally idempotent — the dedupe just short-circuits redundant grain calls.
+The applier resolves a per-origin high-water-mark for every `(TreeId, OriginClusterId)` pair it sees. Before applying a point entry it reads the current HWM; if `entry.Timestamp <= hwm` the call is a no-op (`Applied = false`). After a successful point apply it advances the HWM monotonically - concurrent appliers that race ahead leave the HWM higher and the laggard's advance becomes a no-op, exactly the semantics at-most-once apply requires. Typed CRDT modes consult and advance the HWM the same way, even though state-based merge is naturally idempotent - the dedupe just short-circuits redundant grain calls.
 
 Range deletes bypass the HWM by design. Range applies are naturally idempotent at the leaf layer: re-running a range delete on already-tombstoned keys merges to the same state, so dedupe is unnecessary.
 
 ### 3. Local-origin defence-in-depth
 
-A `WalRecord` whose `OriginClusterId` matches the local cluster id is rejected as a no-op (`Applied = false`). The outbound ship loop's origin filter already prevents this in steady state, but hand-built apply pipelines and tests can still hand the applier such an entry — surfacing it as an explicit rejection rather than silently merging it into the same cluster's state is the safer default.
+A `WalRecord` whose `OriginClusterId` matches the local cluster id is rejected as a no-op (`Applied = false`). The outbound ship loop's origin filter already prevents this in steady state, but hand-built apply pipelines and tests can still hand the applier such an entry - surfacing it as an explicit rejection rather than silently merging it into the same cluster's state is the safer default.
 
 ### 4. Shadow-forward dedupe cache
 
@@ -60,7 +60,7 @@ A structural rewrite (shard split, shard merge, saga compensate) that shadow-for
 
 The applier holds a per-tree bounded FIFO cache of recently-applied identity tuples (`LatticeReplicationOptions.ShadowForwardDedupeCacheSize`, default `4096`, validator floor `64`). The cache is consulted *after* the per-origin HWM dedupe so HWM-deduped entries do not pollute it (which preserves operator-driven re-pin semantics where lowering the per-origin frontier must re-admit previously-deduped identity tuples). On cache hit the apply is suppressed with `Applied = false` and the apply-duration histogram is tagged `outcome=shadow-forward-dedup`. Range deletes bypass the cache because they carry `HybridLogicalClock.Zero` (ambiguous identity); the leaf layer is naturally idempotent for range applies.
 
-Correctness is still bounded by the HWM. The cache is a fast-path optimisation: it suppresses the duplicate-emit pair before the apply grain hop even when the HWM round-trip would otherwise admit both. Cache eviction under sustained churn cannot cause a re-merge — the HWM remains the authoritative dedupe key for any entry the cache has evicted.
+Correctness is still bounded by the HWM. The cache is a fast-path optimisation: it suppresses the duplicate-emit pair before the apply grain hop even when the HWM round-trip would otherwise admit both. Cache eviction under sustained churn cannot cause a re-merge - the HWM remains the authoritative dedupe key for any entry the cache has evicted.
 
 ## Validation
 
@@ -82,11 +82,11 @@ Correctness is still bounded by the HWM. The cache is a fast-path optimisation: 
 
 `AddLatticeReplication` registers the default `IReplicationApplier` implementation as a silo-side singleton:
 
-```text
+```csharp verify
 siloBuilder.AddLatticeReplication(o => o.ClusterId = "site-a");
 ```
 
-Resolve it from inside a silo-side service (typically a transport adapter or a hosted-service inbound pipeline) via constructor injection on `IReplicationApplier`. The applier is not exposed on the cluster client — it is a silo-local seam by design, because the apply path must run inside the cluster that owns the receiving tree.
+Resolve it from inside a silo-side service (typically a transport adapter or a hosted-service inbound pipeline) via constructor injection on `IReplicationApplier`. The applier is not exposed on the cluster client - it is a silo-local seam by design, because the apply path must run inside the cluster that owns the receiving tree.
 
 ## Threading and concurrency
 
@@ -103,7 +103,7 @@ The per-origin high-water-mark is the explicit handoff contract for the bootstra
 
 ## Batch apply path
 
-Inbound transports deliver batches of `WalRecord` records, not single entries: a 256-entry gRPC push from a single producer is one network round-trip carrying 256 mutations. `ApplyBatchAsync` is the seam that lets the receiver process such a batch as one logical operation rather than 256 independent `ApplyAsync` calls — it collapses the per-entry per-origin HWM grain RPCs to one `GetAsync` + one `TryAdvanceAsync` per distinct origin per batch and drains the causal-apply buffer once at the end of the batch instead of after every successful apply.
+Inbound transports deliver batches of `WalRecord` records, not single entries: a 256-entry gRPC push from a single producer is one network round-trip carrying 256 mutations. `ApplyBatchAsync` is the seam that lets the receiver process such a batch as one logical operation rather than 256 independent `ApplyAsync` calls - it collapses the per-entry per-origin HWM grain RPCs to one `GetAsync` + one `TryAdvanceAsync` per distinct origin per batch and drains the causal-apply buffer once at the end of the batch instead of after every successful apply.
 
 The default-interface-method body provides backward-compatible semantics: it loops over `ApplyAsync` and aggregates the per-entry results, so any custom `IReplicationApplier` written before the batch seam existed continues to work without changes. The shipped `ReplicationApplier` overrides the batch path with the optimised implementation described below.
 
@@ -117,7 +117,7 @@ The optimised batch path walks the inbound list and identifies maximal contiguou
 - A single `TryAdvanceAsync` advances the persisted HWM to the highest applied HLC at the end of the run.
 - A single `DrainBufferAsync` drains the causal-apply buffer once if the run advanced the persisted HWM.
 
-For a 256-entry single-origin batch this collapses ~3·256 = 768 grain round-trips (per-entry `GetAsync` + `ApplyPointAsync` + `TryAdvanceAsync`) to 256 + 2 = 258 — the dominant receiver-side cost on every inbound push.
+For a 256-entry single-origin batch this collapses ~3·256 = 768 grain round-trips (per-entry `GetAsync` + `ApplyPointAsync` + `TryAdvanceAsync`) to 256 + 2 = 258 - the dominant receiver-side cost on every inbound push.
 
 ### Preserved per-entry semantics
 
@@ -132,9 +132,9 @@ Every classification the per-entry path produces survives the batch path:
 
 ### Failure model
 
-Per-entry failures inside the batch surface as `ApplyAsync`-equivalent exceptions. The `LatticeReplicationGrpcService.Push` receiver wraps the batch call in a transport-level exception so the sender's backoff/retry loop kicks in for the whole batch — partial-batch acceptance is not a guarantee the seam offers. A `DeadLetterTrackingReplicationApplier` decorator detects retry history on any entry in the batch and falls back to per-entry routing so its DLQ accounting is exact.
+Per-entry failures inside the batch surface as `ApplyAsync`-equivalent exceptions. The `LatticeReplicationGrpcService.Push` receiver wraps the batch call in a transport-level exception so the sender's backoff/retry loop kicks in for the whole batch - partial-batch acceptance is not a guarantee the seam offers. A `DeadLetterTrackingReplicationApplier` decorator detects retry history on any entry in the batch and falls back to per-entry routing so its DLQ accounting is exact.
 
-## Cross-cluster atomic visibility — receiver seam
+## Cross-cluster atomic visibility - receiver seam
 
 `SetManyAtomicAsync` sagas authored on the source cluster ride the
 standard WAL replication transport: every prepared per-key write

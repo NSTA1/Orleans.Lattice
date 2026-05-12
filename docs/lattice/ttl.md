@@ -22,7 +22,7 @@ await lattice.SetAsync("session:42", session, TimeSpan.FromMinutes(30), serializ
 
 Behavior:
 
-- **Absolute UTC expiry, resolved server-side.** The silo handling the `SetAsync` call computes `DateTimeOffset.UtcNow.Add(ttl).UtcTicks` and stores that absolute instant on the entry. Client clock skew does **not** shift individual entry lifetimes — all entries expire relative to the server that accepted them.
+- **Absolute UTC expiry, resolved server-side.** The silo handling the `SetAsync` call computes `DateTimeOffset.UtcNow.Add(ttl).UtcTicks` and stores that absolute instant on the entry. Client clock skew does **not** shift individual entry lifetimes - all entries expire relative to the server that accepted them.
 - **Validation.** `SetAsync` throws `ArgumentOutOfRangeException` if `ttl` is zero, negative, or large enough to overflow `DateTimeOffset.MaxValue` when added to `DateTimeOffset.UtcNow`.
 - **Non-TTL writes are unaffected.** Existing `SetAsync(key, value)` calls and bulk-load entries carry no expiry (`ExpiresAtTicks == 0`) and never expire on their own.
 - **Overwrite semantics.** A later `SetAsync` on the same key wins by hybrid-logical-clock timestamp regardless of whether either write carried a TTL. Writing a non-TTL value over a TTL value clears the expiry; writing a TTL value over a non-TTL value introduces one.
@@ -36,7 +36,7 @@ Every entry is stored as an `LwwValue<byte[]>`:
 | `Value` | The stored bytes (or tombstone marker). |
 | `Timestamp` | HLC timestamp used for last-writer-wins conflict resolution. |
 | `Deleted` | Tombstone flag. |
-| `ExpiresAtTicks` | Absolute UTC ticks at which the entry expires. `0` means "no expiry" — this is the default and keeps pre-TTL snapshots wire-compatible. |
+| `ExpiresAtTicks` | Absolute UTC ticks at which the entry expires. `0` means "no expiry" - this is the default and keeps pre-TTL snapshots wire-compatible. |
 
 `LwwValue<T>.IsExpired(long nowUtcTicks)` is the single predicate used by every read path to decide whether to hide an entry.
 
@@ -61,7 +61,7 @@ The effective "now" is captured once per grain call so all keys in a single `Get
 |---|---|
 | `ScanKeysAsync` / `ScanEntriesAsync` | Expired entries are omitted. |
 | `CountAsync` / `CountPerShardAsync` | Expired entries are excluded from the count. |
-| `DeleteRangeAsync` | Expired entries are skipped (no tombstone is written for them — compaction will reap them). |
+| `DeleteRangeAsync` | Expired entries are skipped (no tombstone is written for them - compaction will reap them). |
 
 ## Durable cursors
 
@@ -77,9 +77,9 @@ The effective "now" is captured once per grain call so all keys in a single `Get
 
 TTL preservation is end-to-end:
 
-- `Prepare` reads the full `LwwValue` (including `ExpiresAtTicks`) via the guarded internal `IShardRootGrain.GetRawEntryAsync` — not the filtered `VersionedValue` surface.
+- `Prepare` reads the full `LwwValue` (including `ExpiresAtTicks`) via the guarded internal `IShardRootGrain.GetRawEntryAsync` - not the filtered `VersionedValue` surface.
 - `Compensate` restores each pre-image through the TTL-aware `SetAsync(key, value, TimeSpan)` overload, reconstructing the original expiry relative to the pre-image's absolute expiry instant.
-- If a pre-image's expiry has already passed by compensation time, it is restored as a tombstone rather than a live value — matching what a read would have seen.
+- If a pre-image's expiry has already passed by compensation time, it is restored as a tombstone rather than a live value - matching what a read would have seen.
 
 ## Shard splits
 
@@ -100,7 +100,7 @@ See [Shard Splitting](shard-splitting.md) for the full split lifecycle.
 
 ## Merge (`MergeAsync`)
 
-Merging one tree into another flows entries through `GetDeltaSinceAsync` + `MergeManyAsync`. Conflict resolution is LWW by HLC timestamp; the winning `LwwValue` carries its `ExpiresAtTicks` unchanged. If the winner was written without a TTL, the target entry ends up with no expiry — even if the loser had one.
+Merging one tree into another flows entries through `GetDeltaSinceAsync` + `MergeManyAsync`. Conflict resolution is LWW by HLC timestamp; the winning `LwwValue` carries its `ExpiresAtTicks` unchanged. If the winner was written without a TTL, the target entry ends up with no expiry - even if the loser had one.
 
 ## Tombstone compaction
 
@@ -110,10 +110,10 @@ Expired live entries past the configured `TombstoneGracePeriod` are reaped along
 
 Expired entries are **intentionally preserved** on the replication-layer code paths:
 
-- `BPlusLeafGrain.GetDeltaSinceAsync` — returns expired entries to requesting peers.
-- `BPlusLeafGrain.MergeEntriesAsync` / `MergeManyAsync` — stores expired entries received from peers.
+- `BPlusLeafGrain.GetDeltaSinceAsync` - returns expired entries to requesting peers.
+- `BPlusLeafGrain.MergeEntriesAsync` / `MergeManyAsync` - stores expired entries received from peers.
 
-This is required for CRDT convergence: two replicas with different views of "now" must still agree on the last-writer-wins value for a key, and that resolution needs access to the entry's HLC timestamp even after its `ExpiresAtTicks` has passed. User-facing read paths apply the expiry filter; the replication layer does not. Read-cache deltas (`StateDelta` from the primary to `LeafCacheGrain`) follow the same rule — the cache receives expired entries verbatim and filters them at read time.
+This is required for CRDT convergence: two replicas with different views of "now" must still agree on the last-writer-wins value for a key, and that resolution needs access to the entry's HLC timestamp even after its `ExpiresAtTicks` has passed. User-facing read paths apply the expiry filter; the replication layer does not. Read-cache deltas (`StateDelta` from the primary to `LeafCacheGrain`) follow the same rule - the cache receives expired entries verbatim and filters them at read time.
 
 ## Bulk load
 
@@ -121,6 +121,6 @@ This is required for CRDT convergence: two replicas with different views of "now
 
 ## Operational notes
 
-- **Clock skew.** Because expiry is resolved on the silo that accepts the write, TTL consistency depends on reasonably synchronised silo clocks — not client clocks. Two writes with the same `ttl` made simultaneously from different clients will expire at nearly the same instant regardless of client time, provided the silos they land on share the same wall clock.
+- **Clock skew.** Because expiry is resolved on the silo that accepts the write, TTL consistency depends on reasonably synchronised silo clocks - not client clocks. Two writes with the same `ttl` made simultaneously from different clients will expire at nearly the same instant regardless of client time, provided the silos they land on share the same wall clock.
 - **Grace period.** Tune `LatticeOptions.TombstoneGracePeriod` to be at least the worst-case clock drift plus replication delay you expect between silos. Setting it too low risks a lagging replica resurrecting an expired entry; setting it too high delays physical space reclamation.
 - **`CacheTtl` is independent of entry TTL.** `CacheTtl` controls how long a `LeafCacheGrain` may serve reads without re-polling the primary for a delta; it has no effect on an entry's own expiry. An expired entry is filtered at the cache regardless of `CacheTtl`.

@@ -20,7 +20,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// <b>Failures are never propagated to the caller.</b> Missing-provider,
 /// serialization, and downstream queue exceptions are logged at <c>Warning</c>
-/// level and swallowed — the write path must never fail because nobody is
+/// level and swallowed - the write path must never fail because nobody is
 /// listening. Subscribers that never see an event should investigate via the
 /// </para>
 /// </summary>

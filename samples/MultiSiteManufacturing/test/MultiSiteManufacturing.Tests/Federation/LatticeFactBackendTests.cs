@@ -48,7 +48,7 @@ public class LatticeFactBackendTests
         var first = Nc(serial, 10, "NC-A", NcSeverity.Minor, ProcessSite.ToulouseNdtLab);
         var second = Mrb(serial, 20, "NC-A", MrbDispositionKind.UseAsIs, ProcessSite.CincinnatiMrb);
 
-        // Arrive reversed — lattice key bakes in HLC so the scan still orders correctly.
+        // Arrive reversed - lattice key bakes in HLC so the scan still orders correctly.
         await _backend.EmitAsync(second);
         await _backend.EmitAsync(first);
 

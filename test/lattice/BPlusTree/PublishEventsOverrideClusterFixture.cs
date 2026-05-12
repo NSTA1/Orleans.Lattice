@@ -50,7 +50,7 @@ public sealed class PublishEventsOverrideClusterFixture
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddMemoryStreams("Default");
             siloBuilder.AddMemoryGrainStorage("PubSubStore");
-            // Silo default is OFF — publication only happens when a tree opts in.
+            // Silo default is OFF - publication only happens when a tree opts in.
             siloBuilder.ConfigureLattice(opts => opts.PublishEvents = false);
         }
     }

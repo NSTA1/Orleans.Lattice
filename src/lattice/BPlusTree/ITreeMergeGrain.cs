@@ -20,7 +20,7 @@ internal interface ITreeMergeGrain : IGrainWithStringKey
     /// Initiates a merge of all entries from <paramref name="sourceTreeId"/>
     /// into this grain's target tree.
     /// <para>
-    /// Idempotent — if a merge is already in progress from the same source,
+    /// Idempotent - if a merge is already in progress from the same source,
     /// this is a no-op. Calling with a different source while a merge is
     /// in progress throws <see cref="InvalidOperationException"/>.
     /// </para>
@@ -35,7 +35,7 @@ internal interface ITreeMergeGrain : IGrainWithStringKey
     Task RunMergePassAsync();
 
     /// <summary>
-    /// Returns <c>true</c> if no merge is in progress — either the most recent
+    /// Returns <c>true</c> if no merge is in progress - either the most recent
     /// merge has completed or no merge has ever been initiated (vacuously complete).
     /// </summary>
     Task<bool> IsCompleteAsync();

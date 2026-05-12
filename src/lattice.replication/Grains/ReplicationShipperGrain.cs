@@ -72,7 +72,7 @@ internal sealed class ReplicationShipperGrain(
 
     /// <summary>
     /// Random source for backoff jitter. Aliased to the process-wide
-    /// thread-safe singleton (<see cref="Random.Shared"/>) — shared
+    /// thread-safe singleton (<see cref="Random.Shared"/>) - shared
     /// across every shipper activation on this silo. Sufficient for
     /// jitter purposes; not cryptographically random.
     /// </summary>
@@ -112,25 +112,25 @@ internal sealed class ReplicationShipperGrain(
     //
     // Index range: [0, _partitionCount).
     //
-    //   _partitionPages[p]    — current page entries from partition p,
+    //   _partitionPages[p]    - current page entries from partition p,
     //                           or null when that partition is "drained
     //                           for this tick" (no more entries past
     //                           the saved cursor right now).
-    //   _partitionPageIndex[p]— next entry index inside the page;
+    //   _partitionPageIndex[p]- next entry index inside the page;
     //                           equals _partitionPages[p].Count when
     //                           the page is exhausted and a refill is
     //                           required to advance further.
-    //   _partitionNextSeq[p]  — fromSequence to pass on the next
+    //   _partitionNextSeq[p]  - fromSequence to pass on the next
     //                           ReadAsync call; mirrors
     //                           state.PartitionCursors[p] but kept as a
     //                           primitive long to avoid dictionary
     //                           lookups inside the merge loop.
-    //   _partitionMaxReadSeq[p] — highest sequence we have *consumed*
+    //   _partitionMaxReadSeq[p] - highest sequence we have *consumed*
     //                           (shipped or filtered) from partition p
     //                           this tick. -1 means "none consumed yet";
     //                           on positive ack the partition cursor
     //                           advances to this value + 1.
-    //   _partitionAdvanced[p] — whether the current tick consumed at
+    //   _partitionAdvanced[p] - whether the current tick consumed at
     //                           least one entry from partition p (used
     //                           to bound the cursor write to changed
     //                           partitions on ack).
@@ -172,13 +172,13 @@ internal sealed class ReplicationShipperGrain(
     /// Read once at activation via <see cref="IOptionsMonitor{TOptions}.CurrentValue"/>.
     /// The Orleans timer infrastructure registers the period at
     /// <see cref="CoordinatorGrain{TSelf}.StartPhaseTimer"/> time, so a runtime
-    /// option change does not propagate until the activation is recycled —
+    /// option change does not propagate until the activation is recycled -
     /// which is the same scope as "silo restart picks up the new value".
     /// </remarks>
     protected override TimeSpan PhaseTimerPeriod => _optionsMonitor.CurrentValue.ShipPhaseTimerPeriod;
 
     /// <inheritdoc />
-    protected override bool InProgress => true; // The shipper is steady-state — always running.
+    protected override bool InProgress => true; // The shipper is steady-state - always running.
 
     /// <inheritdoc />
     protected override string LogContext => $"shipper {_treeName}/{_peerClusterId}";
@@ -196,7 +196,7 @@ internal sealed class ReplicationShipperGrain(
 
     /// <summary>
     /// Flushes any pending deferred-persist cursor on graceful
-    /// deactivation. Crash deactivations bypass this hook by design —
+    /// deactivation. Crash deactivations bypass this hook by design -
     /// the receiver's HLC dedupe bounds the replay cost in that case
     /// (at most <see cref="LatticeReplicationOptions.ShipCursorWriteInterval"/>
     /// &#xD7; <see cref="LatticeReplicationOptions.ShipBatchSize"/>
@@ -294,7 +294,7 @@ internal sealed class ReplicationShipperGrain(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Drain failure is transient by definition — back off and retry.
+            // Drain failure is transient by definition - back off and retry.
             ApplyBackoff(options, ex, "drain");
             return;
         }
@@ -529,7 +529,7 @@ internal sealed class ReplicationShipperGrain(
             // Defer the durable write. Receiver-side apply is
             // HLC-monotonic and dedupes on (originClusterId, originHlc),
             // so a silo crash inside this window replays at most
-            // (interval × ShipBatchSize) entries — the receiver no-ops
+            // (interval × ShipBatchSize) entries - the receiver no-ops
             // the duplicates. The WAL GC's view of this peer is
             // pinned at the last reported cursor (_lastReportedCursor)
             // until the flush completes, so the trim frontier never
@@ -545,7 +545,7 @@ internal sealed class ReplicationShipperGrain(
     /// Persists <see cref="state"/> via
     /// <see cref="IPersistentState{TState}.WriteStateAsync"/> and then
     /// (only on success) reports the durable HLC cursor to the
-    /// registry. Idempotent — safe to call when no in-memory advance
+    /// registry. Idempotent - safe to call when no in-memory advance
     /// is pending. The persistence-then-report ordering is
     /// load-bearing: the WAL GC consumes the reported cursor to
     /// compute the trim frontier, so reporting before persistence
@@ -564,7 +564,7 @@ internal sealed class ReplicationShipperGrain(
         var durableCursor = state.State.Cursor;
         if (durableCursor.CompareTo(_lastReportedCursor) <= 0)
         {
-            // Only partition cursors changed since the last flush —
+            // Only partition cursors changed since the last flush -
             // nothing new for the GC.
             return;
         }
@@ -598,7 +598,7 @@ internal sealed class ReplicationShipperGrain(
     /// partition cursor actually moved forward (so the caller knows
     /// whether a <c>WriteStateAsync</c> is required).
     /// <para>
-    /// Resets the scratch arrays' "advanced" flag once consumed —
+    /// Resets the scratch arrays' "advanced" flag once consumed -
     /// the next pump tick starts from a clean slate.
     /// </para>
     /// </summary>
@@ -619,7 +619,7 @@ internal sealed class ReplicationShipperGrain(
             // computed next-seq is strictly greater than what's
             // already there. (Guards against a degenerate case where
             // _partitionAdvanced[p] flips true but no entry was
-            // actually consumed past the prior cursor — should not
+            // actually consumed past the prior cursor - should not
             // happen given the merge-loop semantics, but the guard
             // is cheap and removes a sharp edge.)
             if (state.State.PartitionCursors.TryGetValue(p, out var existing) && existing >= nextSeq)
@@ -629,7 +629,7 @@ internal sealed class ReplicationShipperGrain(
             state.State.PartitionCursors[p] = nextSeq;
             changed = true;
             // Reset the per-tick flag; _partitionMaxReadSeq stays as
-            // the last value (fine — it gets overwritten on the next
+            // the last value (fine - it gets overwritten on the next
             // consume from this partition).
             _partitionAdvanced[p] = false;
         }
@@ -644,7 +644,7 @@ internal sealed class ReplicationShipperGrain(
     /// consumed-but-not-shipped (their sequence still advances the
     /// partition cursor on ack so the next tick does not re-read them).
     /// <para>
-    /// O(P) per emitted entry — collapses to O(1) for the canonical
+    /// O(P) per emitted entry - collapses to O(1) for the canonical
     /// single-partition case. Allocates nothing on the hot path beyond
     /// the per-page DTOs the shard grain returns; the scratch arrays
     /// and the drain buffer are activation-scoped.
@@ -708,7 +708,7 @@ internal sealed class ReplicationShipperGrain(
                 }
                 if (_partitionPageIndex[p] >= page.Count)
                 {
-                    // Page exhausted — try to refill. We already advanced
+                    // Page exhausted - try to refill. We already advanced
                     // _partitionNextSeq on the prior consume so the
                     // refill picks up where we left off.
                     await TryRefillPartitionAsync(p, pageSize, cancellationToken);
@@ -779,7 +779,7 @@ internal sealed class ReplicationShipperGrain(
     /// <see cref="_partitionNextSeq"/> to the page's
     /// <see cref="WalShardPage.NextSequence"/>. An empty result
     /// leaves <see cref="_partitionPages"/> at <see langword="null"/>
-    /// for that partition — the caller treats that as "drained this
+    /// for that partition - the caller treats that as "drained this
     /// tick" and stops considering the partition for the rest of the
     /// merge loop.
     /// </summary>
@@ -803,7 +803,7 @@ internal sealed class ReplicationShipperGrain(
     /// <summary>
     /// Grows the activation-scoped scratch arrays in lockstep when the
     /// configured <see cref="LatticeReplicationOptions.ReplogPartitions"/>
-    /// changes (or on first activation). Idempotent — a no-op when the
+    /// changes (or on first activation). Idempotent - a no-op when the
     /// arrays are already at the requested size.
     /// </summary>
     private void EnsureScratchSized(int partitions)
@@ -843,7 +843,7 @@ internal sealed class ReplicationShipperGrain(
 
         // Per-peer error tally: only count failures that are attributable
         // to the peer round-trip (transport throw, receiver ack rejection).
-        // "drain" failures are local WAL read errors — the peer is fine,
+        // "drain" failures are local WAL read errors - the peer is fine,
         // so they must not bump the consecutive_errors gauge for that peer.
         if (string.Equals(reason, "transport", StringComparison.Ordinal)
             || string.Equals(reason, "ack-rejected", StringComparison.Ordinal))
@@ -869,7 +869,7 @@ internal sealed class ReplicationShipperGrain(
     /// Routes every entry in the current drain buffer to the per-tree
     /// dead-letter queue, tagged with
     /// <see cref="LatticeReplicationMetrics.ReasonSchema"/>. A
-    /// best-effort enqueue failure is logged and swallowed — the
+    /// best-effort enqueue failure is logged and swallowed - the
     /// cursor still advances past the batch so a deterministically-
     /// failing DLQ does not pin the ship loop forever; the WAL
     /// retains the originals until the GC pass trims them, so an

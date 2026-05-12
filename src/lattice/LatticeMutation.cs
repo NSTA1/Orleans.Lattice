@@ -73,7 +73,7 @@ public readonly record struct LatticeMutation
     /// observers can skip re-forwarding mutations that originated
     /// elsewhere and avoid replication loops. Always <c>null</c> on
     /// <see cref="MutationKind.DeleteRange"/> unless the range-delete call
-    /// was itself stamped with an origin — range deletes read the context
+    /// was itself stamped with an origin - range deletes read the context
     /// at publish time rather than pulling from a per-key <c>LwwValue</c>.
     /// </summary>
     [Id(8)] public string? OriginClusterId { get; init; }
@@ -113,7 +113,7 @@ public readonly record struct LatticeMutation
     /// across every per-shard <see cref="MutationKind.DeleteRange"/> emit.
     /// An atomic-write saga (<c>SetManyAtomicAsync</c>) shares a single,
     /// persisted id across every per-key emit produced by both the
-    /// execute and compensate phases — replication consumers can therefore
+    /// execute and compensate phases - replication consumers can therefore
     /// capture vector-clock frontier (or any other batch-wide invariant)
     /// once per transaction and apply it identically to every emit.
     /// Defaults to <see cref="Guid.Empty"/> for wire compatibility with
@@ -129,7 +129,7 @@ public readonly record struct LatticeMutation
     /// observers skip the WAL append for
     /// <see cref="MutationCategory.Maintenance"/> emits on replicated
     /// trees so structural maintenance does not cross cluster boundaries.
-    /// Independent of <see cref="OriginClusterId"/> — a remote-origin
+    /// Independent of <see cref="OriginClusterId"/> - a remote-origin
     /// maintenance emit would still be
     /// <see cref="MutationCategory.Maintenance"/>. Defaults to
     /// <see cref="MutationCategory.User"/> for wire compatibility with
@@ -144,7 +144,7 @@ public readonly record struct LatticeMutation
     /// alias of a typed delta record from the replication package
     /// (<c>LwwRegisterDelta</c>, <c>OrSetDelta</c>, <c>PnCounterDelta</c>,
     /// <c>VersionVectorDelta</c>, <c>MvRegisterDelta</c>). The lattice
-    /// library itself never opens the payload — consumers (the
+    /// library itself never opens the payload - consumers (the
     /// replication observer in particular) decode based on this slot.
     /// Defaults to <see langword="null"/> for wire compatibility with
     /// observers persisted before this field existed.
@@ -155,7 +155,7 @@ public readonly record struct LatticeMutation
     /// Pre-merge author's delta in opaque-bytes form, or
     /// <see langword="null"/> when the producer did not supply one. The
     /// minimal record the producer would replay against an in-memory
-    /// projection to reach the same converged state — distinct from
+    /// projection to reach the same converged state - distinct from
     /// <see cref="Value"/>, which always carries the post-merge committed
     /// bytes. Carrying the author's delta lets a deterministic replay path
     /// (e.g. a future leaf-projection rebuild from the WAL) reach the
@@ -213,7 +213,7 @@ public readonly record struct LatticeMutation
     [Id(16)] public bool IsPrepared { get; init; }
 
     /// <summary>
-    /// Logical chain-shard index that authored this mutation — i.e. the
+    /// Logical chain-shard index that authored this mutation - i.e. the
     /// <c>shardIndex</c> half of the originating
     /// <c>ShardRootGrain</c>'s <c>{treeId}/{shardIndex}</c> grain key.
     /// Stamped at commit time by the foreground commit path (the
@@ -221,7 +221,7 @@ public readonly record struct LatticeMutation
     /// the saga terminal writer reads it from the shard root's parsed
     /// key). Used by activation-time WAL replay on the leaf to filter
     /// out records authored by sibling chain shards that share a WAL
-    /// partition — without this slot a leaf in shard <c>5</c> reading
+    /// partition - without this slot a leaf in shard <c>5</c> reading
     /// the same WAL partition as a leaf in shard <c>2</c> would absorb
     /// the sibling shard's keys into its own projection on every
     /// reactivation. Independent of <see cref="OriginClusterId"/> (which
@@ -244,8 +244,8 @@ public readonly record struct LatticeMutation
     /// <c>orleans.lattice.leaf.write.duration</c> histogram, where the
     /// backstop is tagged <c>kind=backstop</c> so operators can size
     /// backstop traffic against ordinary writes. Semantically the
-    /// backstop is just a Set at the projection level — receiver-side
-    /// LWW resolution treats it identically — but carrying the flag
+    /// backstop is just a Set at the projection level - receiver-side
+    /// LWW resolution treats it identically - but carrying the flag
     /// lets downstream consumers filter, count, or alert on the
     /// failure mode independently. Defaults to <c>false</c> for wire
     /// compatibility with mutations persisted before this field

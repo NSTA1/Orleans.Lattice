@@ -27,7 +27,7 @@ public class StreamSubscriberOrderTests(ClusterFixture fixture)
 
         var collected = new ConcurrentQueue<VehicleTelemetryEvent>();
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        // Filter to just the vehicle under test — the shard carries traffic for many vehicles.
+        // Filter to just the vehicle under test - the shard carries traffic for many vehicles.
         var observer = new OrderObserver(collected, targetCount, done, id);
         var observerRef = fixture.Cluster.Client.CreateObjectReference<IFleetStreamObserver>(observer);
         await shard.Subscribe(observerRef);

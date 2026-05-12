@@ -14,7 +14,7 @@ public readonly record struct ShardDiagnosticReport
     [Id(0)] public int ShardIndex { get; init; }
 
     /// <summary>
-    /// B+ tree depth for this shard — <c>1</c> when the root is a leaf,
+    /// B+ tree depth for this shard - <c>1</c> when the root is a leaf,
     /// <c>2</c> with one internal level, and so on.
     /// </summary>
     [Id(1)] public int Depth { get; init; }

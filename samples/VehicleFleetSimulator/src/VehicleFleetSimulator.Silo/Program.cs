@@ -28,7 +28,7 @@ builder.Services.AddSingleton<ITelemetrySink, FanOutTelemetrySink>();
 
 // Silo-scoped runtime state: shared in-process between SimulationConfigGrain (writer) and every
 // VehicleGrain (reader) so slider changes propagate to thousands of grains in the time it takes
-// a volatile field to flush — no polling, no streams, no per-tick grain calls.
+// a volatile field to flush - no polling, no streams, no per-tick grain calls.
 builder.Services.AddSingleton<SimulationRuntimeState>();
 
 var azuriteConnection = builder.Configuration["Persistence:ConnectionString"] ?? "UseDevelopmentStorage=true";

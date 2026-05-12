@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
 /// Integration tests for <see cref="ILattice.KeysAsync"/> using the default cluster
-/// (default shard count, default max leaf keys — no splits expected for small data sets).
+/// (default shard count, default max leaf keys - no splits expected for small data sets).
 /// </summary>
 [TestFixture]
 public class KeysDefaultClusterTests
@@ -331,7 +331,7 @@ public class KeysFourShardTests
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("4s-pagination");
 
-        // 200 keys across 4 shards with max 4 leaf keys — forces many splits
+        // 200 keys across 4 shards with max 4 leaf keys - forces many splits
         // and multiple pages per shard.
         var expected = Enumerable.Range(0, 200)
             .Select(i => $"pg-{i:D4}")
@@ -498,7 +498,7 @@ public class KeysPrefetchTests
     [Test]
     public async Task Keys_prefetch_false_disables_even_when_option_enabled()
     {
-        // prefetch: false should work the same as default — verifies the parameter
+        // prefetch: false should work the same as default - verifies the parameter
         // override path doesn't break anything.
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("pf-disabled");
 

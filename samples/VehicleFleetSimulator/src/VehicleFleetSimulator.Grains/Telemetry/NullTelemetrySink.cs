@@ -4,7 +4,7 @@ namespace VehicleFleetSimulator.Grains.Telemetry;
 
 /// <summary>
 /// <see cref="ITelemetrySink"/> that discards every publish. Use this to isolate the simulator's
-/// producer-side cost from any downstream sink — benchmark scenarios simulator-baseline (no downstream) and observer-no-peer
+/// producer-side cost from any downstream sink - benchmark scenarios simulator-baseline (no downstream) and observer-no-peer
 /// (observer-off control) both run against this sink.
 /// </summary>
 public sealed class NullTelemetrySink : ITelemetrySink

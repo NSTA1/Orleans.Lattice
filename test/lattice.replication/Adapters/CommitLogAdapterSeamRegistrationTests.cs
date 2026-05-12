@@ -7,10 +7,10 @@ using Orleans.Lattice.Replication.Adapters;
 namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
-/// the dormant seam — confirms that <c>AddLatticeReplication</c> registers the
+/// the dormant seam - confirms that <c>AddLatticeReplication</c> registers the
 /// three commit-log adapter seams the core library resolves through
-/// <see cref="System.IServiceProvider"/>. The seams are dormant — no
-/// foreground site invokes them in the dormant seam — but the resolution shape
+/// <see cref="System.IServiceProvider"/>. The seams are dormant - no
+/// foreground site invokes them in the dormant seam - but the resolution shape
 /// is the gate the future foreground caller/c will rely on.
 /// </summary>
 [TestFixture]
@@ -76,7 +76,7 @@ public class CommitLogAdapterSeamRegistrationTests
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
-        // AddLatticeReplication now layers on top of AddLattice — the
+        // AddLatticeReplication now layers on top of AddLattice - the
         // commit-log adapter seams (ICommitLogWriter / ICommitLogReader /
         // IWalStorageProvider) are core registrations that AddLattice
         // owns. The replication add-on wires the snapshot provider and

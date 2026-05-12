@@ -52,7 +52,7 @@ public class TreeShardSplitGrainTests
                 ShardCount = physicalShardCount,
             }));
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory);
-        // Default allocation hands back currentMaxFromMap + 1 — matches the
+        // Default allocation hands back currentMaxFromMap + 1 - matches the
         // previous max-existing+1 behavior for unit-test expectations.
         registry.AllocateNextShardIndexAsync(TreeId, Arg.Any<int>())
             .Returns(ci => Task.FromResult(((int)ci[1]) + 1));
@@ -118,11 +118,11 @@ public class TreeShardSplitGrainTests
         Assert.That(state.State.InProgress, Is.True);
         Assert.That(state.State.SourceShardIndex, Is.EqualTo(0));
         Assert.That(state.State.TargetShardIndex, Is.EqualTo(2),
-            "Default map (0,1) — new physical shard index should be max+1 = 2.");
+            "Default map (0,1) - new physical shard index should be max+1 = 2.");
         Assert.That(state.State.Phase, Is.EqualTo(ShardSplitPhase.Drain),
             "After successful BeginSplit on source, phase advances to Drain.");
         Assert.That(state.State.MovedSlots.Count, Is.EqualTo(4),
-            "Source owns slots 0,2,4,6,8,10,12,14 (8 slots) — upper half is 4 slots.");
+            "Source owns slots 0,2,4,6,8,10,12,14 (8 slots) - upper half is 4 slots.");
         Assert.That(state.State.OperationId, Is.Not.Null.And.Not.Empty);
         Assert.That(state.State.OriginalShardMap, Is.Not.Null);
 

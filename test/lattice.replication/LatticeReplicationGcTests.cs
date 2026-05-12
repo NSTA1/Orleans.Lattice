@@ -21,7 +21,7 @@ public class LatticeReplicationGcTests
     {
         // Translate from the test-time replication options shape into the
         // core LatticeOptions surface that LatticeWalGc reads after the
-        // cursor-registry / WAL GC promotion to the core library — partition
+        // cursor-registry / WAL GC promotion to the core library - partition
         // count from LatticeOptions.WalPartitions (was ReplogPartitions),
         // retention from LatticeOptions.WalRetention, and the per-tree
         // storage provider from LatticeOptions.WalStorageProvider (the
@@ -532,7 +532,7 @@ public class LatticeReplicationGcTests
     public async Task RunOnceAsync_blocks_trim_at_blocked_floor_strict_less_clause()
     {
         // Strict-less: an entry whose Timestamp equals the blocked-floor
-        // is NOT eligible — the buffered entry itself must survive a
+        // is NOT eligible - the buffered entry itself must survive a
         // trim pass so it can be re-shipped if the receiver's buffer
         // state is lost (e.g. via orphan-timeout eviction).
         var provider = new InMemoryWalStorageProvider();

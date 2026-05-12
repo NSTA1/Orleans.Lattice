@@ -6,7 +6,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// dispatches per-shard <see cref="ITreeShardSplitGrain"/> operations
 /// against the largest-slot-owning physical shards until the tree's
 /// <see cref="ShardMap"/> contains at least the target number of distinct
-/// physical shards. All work happens online — the tree continues to serve
+/// physical shards. All work happens online - the tree continues to serve
 /// reads and writes throughout, and virtual-slot routing is swapped
 /// atomically by each underlying split.
 /// <para>
@@ -41,7 +41,7 @@ internal interface ITreeReshardGrain : IGrainWithStringKey
     Task RunReshardPassAsync();
 
     /// <summary>
-    /// Returns <c>true</c> when the coordinator is idle — either no reshard
+    /// Returns <c>true</c> when the coordinator is idle - either no reshard
     /// has ever been initiated, or the last one has run to completion.
     /// Returns <c>false</c> while a reshard is in flight.
     /// </summary>

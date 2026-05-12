@@ -2,7 +2,7 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Classifies a <see cref="LatticeTreeEvent"/>. Consumers filter by
-/// <see cref="LatticeTreeEvent.Kind"/> client-side — all events for a tree
+/// <see cref="LatticeTreeEvent.Kind"/> client-side - all events for a tree
 /// flow through a single Orleans stream regardless of kind.
 /// </summary>
 [GenerateSerializer]

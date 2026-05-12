@@ -18,11 +18,11 @@ processed.
 
 Each shard follows a three-phase pattern:
 
-1. **Lock** (once) — mark all source shards as deleted. The intent is persisted
+1. **Lock** (once) - mark all source shards as deleted. The intent is persisted
    before marking so that a crash mid-lock can be recovered.
-2. **Copy** — drain live entries from the source shard's leaf chain, sort them,
+2. **Copy** - drain live entries from the source shard's leaf chain, sort them,
    and bulk-load into the corresponding destination shard.
-3. **Unmark** — restore the source shard to normal operation.
+3. **Unmark** - restore the source shard to normal operation.
 
 Shards are processed sequentially. Earlier shards become readable again before
 later shards are copied.
@@ -40,10 +40,10 @@ source at the drain's completion instant.
 ```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 
-// Offline snapshot — source tree locked during copy
+// Offline snapshot - source tree locked during copy
 await tree.SnapshotAsync("my-tree-backup", SnapshotMode.Offline);
 
-// Online snapshot — source tree remains available
+// Online snapshot - source tree remains available
 await tree.SnapshotAsync("my-tree-fork", SnapshotMode.Online);
 
 // Snapshot with custom sizing for the destination tree
@@ -96,12 +96,12 @@ its own tombstone compaction reminder registered upon snapshot completion.
 ## Grain Interface
 
 The snapshot is orchestrated by `ITreeSnapshotGrain`, keyed by the source tree
-ID. This grain interface is **declared `internal`** — external callers
+ID. This grain interface is **declared `internal`** - external callers
 cannot reference or invoke it. The `ILattice` interface delegates to it via
 `SnapshotAsync`:
 
 ```csharp verify
-// Public API — use this
+// Public API - use this
 await lattice.SnapshotAsync("my-snapshot", SnapshotMode.Offline);
 ```
 
@@ -116,5 +116,5 @@ with the desired sizing. After the snapshot completes, a tree alias is set to
 redirect reads and writes to the new tree. This reuses the entire snapshot
 infrastructure (crash safety, per-shard bulk load, idempotent operation IDs)
 and avoids duplicating drain/rebuild logic. See
-[Tree Sizing — Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree)
+[Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree)
 for details.

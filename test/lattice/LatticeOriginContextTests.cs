@@ -91,7 +91,7 @@ public class LatticeOriginContextTests
         scope.Dispose();
         Assert.That(LatticeOriginContext.Current, Is.EqualTo("outer"));
 
-        // Second dispose must not re-apply the restore — otherwise it would
+        // Second dispose must not re-apply the restore - otherwise it would
         // overwrite any value set after the first dispose returned.
         LatticeOriginContext.Current = "after";
         scope.Dispose();

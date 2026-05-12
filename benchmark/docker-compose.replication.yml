@@ -1,4 +1,4 @@
-# Replication overlay — adds a second silo cluster (vfs-replica) acting as the
+# Replication overlay - adds a second silo cluster (vfs-replica) acting as the
 # downstream peer for current-state-single-peer (single replica), replication-backpressure (silo crash chaos), receiver-crash
 # (network partition chaos), bidirectional-replication (bidirectional). The base stack already runs
 # the origin silo with Replication:Enabled=true; this overlay brings up the
@@ -48,13 +48,13 @@ services:
       Orleans__ServiceId: ${BENCH_SERVICE_ID:-VehicleFleetSimulator}
       Persistence__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-replica:10000/devstoreaccount1;QueueEndpoint=http://azurite-replica:10001/devstoreaccount1;TableEndpoint=http://azurite-replica:10002/devstoreaccount1;"
       # Replica cluster runs the same lattice sink so bidirectional-replication (bidirectional) can produce
-      # writes here too. For current-state-single-peer/replication-backpressure/receiver-crash the replica's sink is null — it only consumes
+      # writes here too. For current-state-single-peer/replication-backpressure/receiver-crash the replica's sink is null - it only consumes
       # replicated writes from the origin.
       Telemetry__Sink: ${BENCH_REPLICA_TELEMETRY_SINK:-null}
       Telemetry__Prometheus__Endpoint: "http://0.0.0.0:9090/metrics/"
       LatticeSink__TreeId: ${BENCH_TREE_ID:-vehicle-fleet}
       LatticeSink__KeyShape: ${BENCH_KEY_SHAPE:-CurrentStateByVehicleId}
-      # WAL storage provider switch — see docker-compose.yml for the full comment.
+      # WAL storage provider switch - see docker-compose.yml for the full comment.
       # The replica points at its own dedicated azurite-replica instance, so it can
       # safely use the same table name as the origin. Bidirectional-replication-azuretable
       # sets BENCH_WAL_PROVIDER=azuretable so both silos exercise the durable-WAL append
@@ -76,7 +76,7 @@ services:
       # vfs-bench. For single-direction scenarios (current-state-single-peer / replication-backpressure /
       # receiver-crash / replication-key-filter) the var is unset and the value resolves to an
       # empty string, which Bench.Silo's `GetSection("Replication:GrpcPeers").GetChildren()`
-      # filter discards — leaving the no-op transport in place on the back-channel.
+      # filter discards - leaving the no-op transport in place on the back-channel.
       Replication__GrpcPeers__vfs-bench: ${BENCH_REPLICA_PEER_ENDPOINT:-}
       # Per-(tree, peer) shipper grain phase-timer period in ms. Mirrors the origin-side
       # docker-compose.yml override so the bidirectional scenario applies the same cadence
@@ -100,7 +100,7 @@ services:
       WriteDriver__WarmupDelay: ${BENCH_REPLICA_WRITE_DRIVER_WARMUP:-00:00:15}
       # Atomic-saga driver on the replica (atomic-write-replication only). Mirrors the
       # origin-side AtomicSagaDriver block so both clusters generate SetManyAtomicAsync
-      # sagas concurrently — exercises the cross-cluster atomic-visibility path under
+      # sagas concurrently - exercises the cross-cluster atomic-visibility path under
       # symmetric saga load. Defaults off so non-atomic replication scenarios stay unaffected.
       # Per-worker key prefix already includes a w## suffix in the driver, so the replica
       # uses a distinct top-level prefix (atomic-replica-) to keep cross-cluster keysets

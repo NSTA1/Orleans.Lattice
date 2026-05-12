@@ -119,7 +119,7 @@ public partial class ReplicationShipperGrainTests
             feed.Append(MakeEntry($"k{i}", ticks: i + 1));
         }
         // Receiver returns a low ack so the shipper falls back to
-        // sourceHlc (last entry HLC) — exercises the partition-cursor
+        // sourceHlc (last entry HLC) - exercises the partition-cursor
         // path independent of the ack branch.
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(c => new ReplicationAck
@@ -143,7 +143,7 @@ public partial class ReplicationShipperGrainTests
         for (var i = 1; i < feed.ReadFromSequences.Count; i++)
         {
             Assert.That(feed.ReadFromSequences[i], Is.GreaterThan(0L),
-                $"Read #{i} must resume past sequence 0 — rescanning from zero would reproduce the partition-resume throughput bug.");
+                $"Read #{i} must resume past sequence 0 - rescanning from zero would reproduce the partition-resume throughput bug.");
         }
     }
 
@@ -337,7 +337,7 @@ public partial class ReplicationShipperGrainTests
         await grain.OnDoorbellAsync(CancellationToken.None);
 
         Assert.That(captured, Is.Not.Null,
-            "An empty partition must not pin the drain — the merge must still emit entries from the populated partition.");
+            "An empty partition must not pin the drain - the merge must still emit entries from the populated partition.");
     }
 
     [Test]
@@ -361,10 +361,10 @@ public partial class ReplicationShipperGrainTests
         {
             Assert.That(state.State.PartitionCursors.TryGetValue(0, out var c0), Is.True);
             Assert.That(c0, Is.EqualTo(2L));
-            // Partition 1 contributed nothing — its cursor must NOT be
+            // Partition 1 contributed nothing - its cursor must NOT be
             // recorded (would be a phantom advance to 0 otherwise).
             Assert.That(state.State.PartitionCursors.ContainsKey(1), Is.False,
-                "An empty partition must not advance its cursor — recording 0 would mask the true cold-start state.");
+                "An empty partition must not advance its cursor - recording 0 would mask the true cold-start state.");
         });
     }
 
@@ -472,14 +472,14 @@ public partial class ReplicationShipperGrainTests
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
         // The partition cursor was NOT advanced because no batch was
-        // shipped — but ReadFromSequences confirms the read happened.
+        // shipped - but ReadFromSequences confirms the read happened.
         // (The batch never reached AdvanceCursorAsync because
         // _drainBuffer.Count == 0 after filtering.) On the next tick
-        // the read would re-scan from sequence 0 again — this is the
+        // the read would re-scan from sequence 0 again - this is the
         // behaviour the partition-resume design tolerates: filtered-only ticks
         // are bounded by ShipPartitionPageSize, not by the WAL size.
         Assert.That(state.State.PartitionCursors, Is.Empty,
-            "Filtered-only ticks legitimately do not flush — the page-bounded re-read is acceptable per partition-resume.");
+            "Filtered-only ticks legitimately do not flush - the page-bounded re-read is acceptable per partition-resume.");
         Assert.That(feed.ReadFromSequences, Is.Not.Empty);
     }
 
@@ -495,7 +495,7 @@ public partial class ReplicationShipperGrainTests
             ShipBatchSize = 1,
         };
         var (grain, state, feed, transport, _, _, _) = Create(opts);
-        // Three entries, three pump ticks — never reaches the flush threshold.
+        // Three entries, three pump ticks - never reaches the flush threshold.
         for (var i = 0; i < 3; i++)
         {
             feed.Append(MakeEntry($"k{i}", ticks: i + 1));
@@ -548,7 +548,7 @@ public partial class ReplicationShipperGrainTests
                 };
             });
 
-        // Advance 1, 2 — no flush yet. Advance 3 — first flush.
+        // Advance 1, 2 - no flush yet. Advance 3 - first flush.
         await grain.OnDoorbellAsync(CancellationToken.None);
         Assert.That(state.WriteCount, Is.EqualTo(0));
         await grain.OnDoorbellAsync(CancellationToken.None);
@@ -579,7 +579,7 @@ public partial class ReplicationShipperGrainTests
         await grain.OnDoorbellAsync(CancellationToken.None);
         await grain.OnDoorbellAsync(CancellationToken.None);
 
-        // Three acks at interval=4 means zero registry reports so far —
+        // Three acks at interval=4 means zero registry reports so far -
         // the registry feeds the WAL GC trim frontier and must never
         // advance past the durably-recoverable cursor.
         await registry.DidNotReceive().ReportCursorAsync(
@@ -724,7 +724,7 @@ public partial class ReplicationShipperGrainTests
         // Arm the next WriteStateAsync call to fail.
         state.ThrowOnWrite = new InvalidOperationException("storage-down");
 
-        // OnDeactivate must NOT propagate the exception — a storage
+        // OnDeactivate must NOT propagate the exception - a storage
         // failure during deactivation is logged and the pending advance
         // is recovered on the next activation by re-shipping from the
         // last durable cursor (receiver dedupes).
@@ -764,7 +764,7 @@ public partial class ReplicationShipperGrainTests
     /// <summary>
     /// When the receiver's <see cref="ReplicationAck.HighestAppliedHlc"/>
     /// is strictly greater than the last shipped entry's HLC (the
-    /// cross-shipper-HWM scenario — another shipper to the same tree
+    /// cross-shipper-HWM scenario - another shipper to the same tree
     /// already advanced the receiver's frontier past ours), the
     /// shipper must trust the ack and jump <c>state.Cursor</c> to the
     /// receiver's frontier. The defensive HLC filter at the top of the
@@ -779,7 +779,7 @@ public partial class ReplicationShipperGrainTests
         // Ship one entry at HLC=2.
         feed.Append(MakeEntry("k0", ticks: 2));
         // Receiver claims a higher HWM (50) than the shipped batch's
-        // last HLC (2) — models a cross-shipper convergence where
+        // last HLC (2) - models a cross-shipper convergence where
         // another peer already pushed the receiver past 2.
         var ackFrontier = new HybridLogicalClock { WallClockTicks = 50, Counter = 0 };
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
@@ -788,14 +788,14 @@ public partial class ReplicationShipperGrainTests
         await grain.OnDoorbellAsync(CancellationToken.None);
 
         Assert.That(state.State.Cursor, Is.EqualTo(ackFrontier),
-            "Receiver returned a frontier > sourceHlc — shipper must trust the ack and jump the cursor.");
+            "Receiver returned a frontier > sourceHlc - shipper must trust the ack and jump the cursor.");
     }
 
     /// <summary>
     /// Follow-on for the cross-shipper-HWM scenario: after the cursor
     /// jumps to the receiver's frontier, subsequent WAL entries with
     /// HLC at-or-below that frontier must be filtered out by the
-    /// defensive HLC predicate inside the merge loop — they are work
+    /// defensive HLC predicate inside the merge loop - they are work
     /// the receiver already has and re-shipping would waste a round
     /// trip.
     /// </summary>

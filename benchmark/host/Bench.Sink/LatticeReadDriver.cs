@@ -56,20 +56,20 @@ public sealed class LatticeReadDriver(
         // ~1ms absorb hrtimer slack and per-tick async overhead collapses the effective tick
         // rate from a nominal 1000 Hz to ~250 Hz. At BENCH_READ_RATE_PER_SECOND=38000 with
         // perTick=38 that capped observed throughput at ~9.4k reads/s regardless of the
-        // configured rate or concurrency. Bumping concurrency 32→128 produced ~0% gain —
+        // configured rate or concurrency. Bumping concurrency 32→128 produced ~0% gain -
         // textbook signature of a pacer upstream of the gate, not a saturated downstream.
         //
         // The replacement model spawns `Concurrency` persistent worker tasks, each pacing
         // itself to `RatePerSecond / Concurrency` reads/s using `Stopwatch`-based deadline
         // arithmetic. A worker can have only one outstanding read at a time, so worker count
-        // IS the inflight cap — the explicit semaphore gate dissolves. Phase-staggering by
+        // IS the inflight cap - the explicit semaphore gate dissolves. Phase-staggering by
         // `workerId × perWorkerInterval / workerCount` distributes issuance evenly across
         // each per-worker interval rather than producing N-sized bursts in lockstep. Worker 0
         // owns keyspace refresh so concurrent refreshers don't stomp on `_keyspace`.
         //
         // For the calibrated bench config (38000/s × 128 workers), each worker targets
         // 297 reads/s = one read every 3.37 ms. Observed p50 GetAsync latency is 0.34 ms,
-        // so a worker spends ~90% of its wall-clock budget in `Task.Delay` — well-clear of
+        // so a worker spends ~90% of its wall-clock budget in `Task.Delay` - well-clear of
         // the hrtimer-slack regime that broke the original PeriodicTimer pacer.
         var workerCount = Math.Max(1, opts.Concurrency);
         var perWorkerInterval = TimeSpan.FromSeconds(workerCount / (double)opts.RatePerSecond);
@@ -94,7 +94,7 @@ public sealed class LatticeReadDriver(
         }
         catch (OperationCanceledException)
         {
-            // Normal shutdown — swallow.
+            // Normal shutdown - swallow.
         }
     }
 
@@ -137,7 +137,7 @@ public sealed class LatticeReadDriver(
             if (keyspace.Length == 0)
             {
                 // Simulator hasn't published anything yet (or the refresh failed). Short-sleep
-                // and retry. Don't advance `issued` — we don't want the deadline arithmetic
+                // and retry. Don't advance `issued` - we don't want the deadline arithmetic
                 // to think we're catching up on absent reads.
                 try { await Task.Delay(TimeSpan.FromMilliseconds(100), stoppingToken); }
                 catch (OperationCanceledException) { return; }
@@ -152,7 +152,7 @@ public sealed class LatticeReadDriver(
                 _ => keyspace[rng.Next(keyspace.Length)],
             };
 
-            // Inline await — no fire-and-forget. workerCount workers each issuing one read at
+            // Inline await - no fire-and-forget. workerCount workers each issuing one read at
             // a time = exactly workerCount inflight at peak, which is the desired cap.
             await IssueReadInlineAsync(lattice, key, stoppingToken);
             issued++;

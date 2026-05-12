@@ -2,7 +2,7 @@ namespace MultiSiteManufacturing.Host.Federation;
 
 /// <summary>
 /// Chaos knobs for a single <see cref="IFactBackend"/>. All defaults are
-/// "nominal" — no jitter, no failures, no duplicates — so a decorated
+/// "nominal" - no jitter, no failures, no duplicates - so a decorated
 /// backend behaves identically to the undecorated one until the operator
 /// turns something on via the chaos fly-out.
 /// </summary>

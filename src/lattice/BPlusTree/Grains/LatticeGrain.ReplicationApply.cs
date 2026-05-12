@@ -78,7 +78,7 @@ internal sealed partial class LatticeGrain
         // stamped with the remote origin and the remote frontier. The
         // shard-root range-delete observer then publishes a single
         // per-shard mutation that carries both pieces of metadata, and the
-        // outbound ship loop filters the resulting WAL entries back out —
+        // outbound ship loop filters the resulting WAL entries back out -
         // preventing the range from looping back to the authoring cluster.
         using var originScope = LatticeOriginContext.With(originClusterId);
         using var vcScope = LatticeVectorClockContext.With(sourceVectorClock);
@@ -103,7 +103,7 @@ internal sealed partial class LatticeGrain
 
     /// <summary>
     /// Routes a single LWW entry through <see cref="IShardRootGrain.MergeManyAsync"/>
-    /// — the only entry point that preserves the source HLC end-to-end —
+    /// - the only entry point that preserves the source HLC end-to-end -
     /// retrying once for each of the three transient routing-staleness
     /// classes the public write paths handle (stale shard map, stale tree
     /// alias, and the <see cref="InvalidOperationException"/> the registry
@@ -335,7 +335,7 @@ internal sealed partial class LatticeGrain
                 var remainingTicks = expiresAtTicks - DateTimeOffset.UtcNow.UtcTicks;
                 if (remainingTicks <= 0)
                 {
-                    // Absolute expiry already elapsed — treat as absent
+                    // Absolute expiry already elapsed - treat as absent
                     // by routing as a tombstone, matching the
                     // public-read semantics for expired entries.
                     await DeleteAsync(key);
@@ -403,7 +403,7 @@ internal sealed partial class LatticeGrain
         }
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Step 1 (linearization point) — mark the per-tree TxRegistry
+        // Step 1 (linearization point) - mark the per-tree TxRegistry
         // with the saga's outcome. Receiver-side readers that find a
         // pending entry on a leaf dial back through the registry to
         // resolve their read against the already-recorded outcome,
@@ -419,13 +419,13 @@ internal sealed partial class LatticeGrain
             await registry.MarkAbortedAsync(transactionId);
         }
 
-        // Step 2 (foreground visibility + WAL re-stamp) — drive the
+        // Step 2 (foreground visibility + WAL re-stamp) - drive the
         // per-shard terminal-mark primitive under the source's HLC and
         // origin so the receiver's local WAL append re-stamps the
         // source cluster's terminal HLC and origin verbatim. The shard
         // root's ComputeTerminalHlcAsync honours
         // LatticeHlcOverrideContext.Current and returns the override
-        // unchanged — preserving the cross-cluster ordering invariant
+        // unchanged - preserving the cross-cluster ordering invariant
         // on receiver replays.
         using (LatticeOriginContext.With(originClusterId))
         using (LatticeHlcOverrideContext.With(terminalHlc))

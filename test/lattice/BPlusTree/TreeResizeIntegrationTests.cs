@@ -86,7 +86,7 @@ public class TreeResizeIntegrationTests
             expected[key] = value;
         }
 
-        // Resize to smaller leaf size (2 — minimum is >1).
+        // Resize to smaller leaf size (2 - minimum is >1).
         var resize = _cluster.GrainFactory.GetGrain<ITreeResizeGrain>(treeName);
         await resize.ResizeAsync(2, 3);
         await resize.RunResizePassAsync();

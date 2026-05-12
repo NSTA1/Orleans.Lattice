@@ -23,7 +23,7 @@ public class FleetBatchTelemetryTests(ClusterFixture fixture)
         var seen = new ConcurrentDictionary<Guid, byte>();
         var allSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // Telemetry-all is sharded — register an observer with every shard so we observe the whole fleet.
+        // Telemetry-all is sharded - register an observer with every shard so we observe the whole fleet.
         var observer = new TelemetryAllObserver(seen, ids, allSeen);
         var observerRef = fixture.Cluster.Client.CreateObjectReference<IFleetStreamObserver>(observer);
         var shards = new List<IFleetFanOutGrain>();

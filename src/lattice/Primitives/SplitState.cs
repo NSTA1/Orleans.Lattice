@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Primitives;
 /// <summary>
 /// Monotonically advancing lifecycle state for a B+ tree node split operation.
 /// The lattice order is Unsplit &lt; SplitInProgress &lt; SplitComplete.
-/// Merge is simply <c>max</c> — once a node reaches a higher state it can never go back.
+/// Merge is simply <c>max</c> - once a node reaches a higher state it can never go back.
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.SplitState)]

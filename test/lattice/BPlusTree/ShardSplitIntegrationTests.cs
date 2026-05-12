@@ -47,7 +47,7 @@ public class ShardSplitIntegrationTests
         await split.RunSplitPassAsync();
         Assert.That(await split.IsIdleAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");
 
-        // Read all keys back via the public API — LatticeGrain should refresh
+        // Read all keys back via the public API - LatticeGrain should refresh
         // its cached ShardMap on StaleShardRoutingException and route to the
         // new physical shard.
         foreach (var (key, value) in expected)
@@ -58,7 +58,7 @@ public class ShardSplitIntegrationTests
         }
 
         // Routing should now reference 5 physical shards (0..3 originals + 4 new)
-        // — query the registry directly to avoid stateless-worker activation cache effects.
+        // - query the registry directly to avoid stateless-worker activation cache effects.
         var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var persistedMap = await registry.GetShardMapAsync(treeId);
         Assert.That(persistedMap, Is.Not.Null, "Split must persist a custom shard map.");
@@ -75,7 +75,7 @@ public class ShardSplitIntegrationTests
 
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         await split.SplitAsync(sourceShardIndex: 0);
-        // Same source — must not throw.
+        // Same source - must not throw.
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
         Assert.That(await split.IsIdleAsync(), Is.True);
@@ -105,7 +105,7 @@ public class ShardSplitIntegrationTests
         var scansAborted = 0;
         using var cts = new CancellationTokenSource();
 
-        // 4 random-point readers — each picks random keys and verifies value.
+        // 4 random-point readers - each picks random keys and verifies value.
         var pointReaders = Enumerable.Range(0, 4).Select(workerId => Task.Run(async () =>
         {
             var rng = new Random(unchecked(workerId * 1_000_003));
@@ -133,7 +133,7 @@ public class ShardSplitIntegrationTests
             }
         })).ToArray();
 
-        // 2 full-range scanners — each iterates KeysAsync / EntriesAsync end-to-end.
+        // 2 full-range scanners - each iterates KeysAsync / EntriesAsync end-to-end.
         // Note: a scan that brackets the shard-map swap may transiently
         // under- or over-count (snapshot isolation across a topology change is
         // not promised by the public API), but every yielded key/value MUST
@@ -222,7 +222,7 @@ public class ShardSplitIntegrationTests
             Assert.That(scansCompleted + scansAborted, Is.GreaterThan(0), "At least one scan attempt should have executed during the split window.");
         });
 
-        // Final consistency check after split completes — both point reads
+        // Final consistency check after split completes - both point reads
         // and a full scan must show exactly the expected set.
         foreach (var (key, want) in expected)
         {
@@ -367,7 +367,7 @@ public class ShardSplitIntegrationTests
         }
 
         // Wait past the TTL. Every TTL'd key must now read null regardless of which
-        // physical shard serves it — previously, shadow-forwarded copies on the
+        // physical shard serves it - previously, shadow-forwarded copies on the
         // target shard had ExpiresAtTicks=0 and would remain live indefinitely.
         await Task.Delay(ttl + TimeSpan.FromMilliseconds(400));
 

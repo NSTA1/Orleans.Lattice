@@ -79,7 +79,7 @@ public partial class ReplicationApplierTests
             Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(40)));
         });
 
-        // The 4 LWW entries collapse to a single batched apply call —
+        // The 4 LWW entries collapse to a single batched apply call -
         // one ApplyMergeManyAsync per (treeId, origin) run instead of
         // four ApplySetAsync per-entry RPCs.
         await apply.Received(1).ApplyMergeManyAsync(

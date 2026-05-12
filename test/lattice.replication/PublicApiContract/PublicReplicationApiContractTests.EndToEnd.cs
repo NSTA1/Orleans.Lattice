@@ -85,7 +85,7 @@ public partial class PublicReplicationApiContractTests
                      && Str(await treeOnB.GetAsync("c")) == "c",
             "initial seed of 3 keys");
 
-        var deleted = await treeOnA.DeleteRangeAsync("a", "c"); // deletes a, b — c excluded
+        var deleted = await treeOnA.DeleteRangeAsync("a", "c"); // deletes a, b - c excluded
         Assert.That(deleted, Is.EqualTo(2));
 
         await PublicReplicationApiClusterFixture.WaitForConvergenceAsync(

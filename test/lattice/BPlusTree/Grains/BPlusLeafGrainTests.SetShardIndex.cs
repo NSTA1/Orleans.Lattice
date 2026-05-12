@@ -74,7 +74,7 @@ public partial class BPlusLeafGrainTests
 
         // The persisted slot is null until the shard root calls
         // SetShardIndexAsync. The apply-time filter treats null as
-        // "legacy / unowned" and bypasses the ownership check — see
+        // "legacy / unowned" and bypasses the ownership check - see
         // the materialiser tests for the behavioural side.
         Assert.That(state.State.ShardIndex, Is.Null);
         await Task.CompletedTask;

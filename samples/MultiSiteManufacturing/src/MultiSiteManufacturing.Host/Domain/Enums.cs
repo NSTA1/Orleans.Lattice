@@ -18,7 +18,7 @@ public enum ComplianceState
     /// <summary>Part has been dispositioned for rework; awaiting rework + re-inspection.</summary>
     Rework = 3,
 
-    /// <summary>Terminal state — part is scrapped.</summary>
+    /// <summary>Terminal state - part is scrapped.</summary>
     Scrap = 4,
 }
 

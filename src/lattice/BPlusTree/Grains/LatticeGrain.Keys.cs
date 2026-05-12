@@ -57,7 +57,7 @@ internal sealed partial class LatticeGrain
     /// changing after every step, the method throws
     /// <see cref="InvalidOperationException"/>. <b>Memory.</b> The dedup
     /// set and per-step reconciliation buffer are bounded by the number of
-    /// keys yielded plus the number of keys in reconciled slots — typically
+    /// keys yielded plus the number of keys in reconciled slots - typically
     /// small, since only slots that actually moved during the scan are
     /// reconciled.
     /// </para>
@@ -97,7 +97,7 @@ internal sealed partial class LatticeGrain
 
         IComparer<string> comparer = reverse ? ReverseOrdinal : StringComparer.Ordinal;
 
-        // Live shard cursors — one per start-of-scan physical shard.
+        // Live shard cursors - one per start-of-scan physical shard.
         var movedReported = isSystemTree ? null : new HashSet<int>();
         var cursors = new List<IKeyCursor>(physicalShards.Count);
         var initTasks = new Task[physicalShards.Count];
@@ -118,7 +118,7 @@ internal sealed partial class LatticeGrain
                 pq.Enqueue(i, cursors[i].Current!);
         }
 
-        // System trees never split — skip reconciliation entirely.
+        // System trees never split - skip reconciliation entirely.
         HashSet<string>? yielded = isSystemTree ? null : new HashSet<string>(StringComparer.Ordinal);
         var maxRetries = isSystemTree ? 0 : Math.Max(1, Options.MaxScanRetries);
         var retriesUsed = 0;
@@ -310,7 +310,7 @@ internal sealed partial class LatticeGrain
 
     /// <summary>
     /// Cursor backed by a pre-sorted in-memory list of keys produced by a
-    /// reconciliation step. Drained synchronously — <see cref="MoveNextAsync"/>
+    /// reconciliation step. Drained synchronously - <see cref="MoveNextAsync"/>
     /// never awaits.
     /// </summary>
     private sealed class MemoryKeyCursor(List<string> sortedKeys) : IKeyCursor

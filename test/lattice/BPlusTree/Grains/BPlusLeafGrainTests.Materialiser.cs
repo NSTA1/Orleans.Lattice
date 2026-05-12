@@ -322,7 +322,7 @@ public partial class BPlusLeafGrainTests
         var read = await grain.GetAsync("k1");
         Assert.That(read, Is.Not.Null);
         Assert.That(Encoding.UTF8.GetString(read!), Is.EqualTo("v1"));
-        // No unresolved prepare — checkpoint advances to the head.
+        // No unresolved prepare - checkpoint advances to the head.
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(2));
     }
 

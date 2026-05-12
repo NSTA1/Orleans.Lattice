@@ -280,7 +280,7 @@ public partial class ReplicationApplierTests
     public async Task ApplyAsync_returns_zero_high_water_mark_for_local_origin_no_op()
     {
         // Local-origin entries skip the HWM grain entirely (the row would
-        // never carry state) — verify the seam reports Zero rather than
+        // never carry state) - verify the seam reports Zero rather than
         // making a needless grain call.
         var (applier, _, _, hwm) = CreateApplier();
 
@@ -471,7 +471,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_state_merge_advances_high_water_mark()
     {
-        // Per-origin HWM is updated even for typed CRDT modes — re-delivery
+        // Per-origin HWM is updated even for typed CRDT modes - re-delivery
         // of the same (origin, hlc) pair must be a no-op.
         var (applier, _, _, hwm) = CreateTypedCrdtApplier();
         var ts = Hlc(99, 1);
@@ -568,7 +568,7 @@ public partial class ReplicationApplierTests
 
         await applier.ApplyAsync(entry);
 
-        // Typed CRDT Set must bypass IReplicationApplyGrain.ApplySetAsync —
+        // Typed CRDT Set must bypass IReplicationApplyGrain.ApplySetAsync -
         // that path stamps the source HLC verbatim, which is wrong for
         // state-merge semantics where the persisted HLC is a fresh local
         // tick representing the merge point.
@@ -669,7 +669,7 @@ public partial class ReplicationApplierTests
     }
 
     // ------------------------------------------------------------------
-    // R-068 — apply.duration histogram (per-outcome instrumentation)
+    // R-068 - apply.duration histogram (per-outcome instrumentation)
     // ------------------------------------------------------------------
 
     private static bool HasOutcome(IReadOnlyList<KeyValuePair<string, object?>> tags, string outcome) =>
@@ -797,7 +797,7 @@ public partial class ReplicationApplierTests
     [Test]
     public void ApplyAsync_does_not_record_apply_duration_when_tree_id_is_empty()
     {
-        // RecordApplyDuration skips emission when treeId is empty — a
+        // RecordApplyDuration skips emission when treeId is empty - a
         // validation throw on the tree-id guard must not publish a
         // sample with an empty `tree` tag (which would be unusable for
         // per-tree alerting). Pins the guard in the helper.

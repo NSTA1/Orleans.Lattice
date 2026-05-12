@@ -4,11 +4,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 //
 // Background. AppendTxTerminalAsync delivers the saga terminal mark
 // via two channels:
-//   1. A WAL append (durability — covers leaves that may have
+//   1. A WAL append (durability - covers leaves that may have
 //      deactivated between prepare and terminal; the leaf's
 //      ILeafProjection.Apply switch flips the per-leaf pending bucket
 //      on activation-time WAL replay).
-//   2. A foreground RPC fan-out — best-effort immediate visibility
+//   2. A foreground RPC fan-out - best-effort immediate visibility
 //      for already-live leaves so a continuous reader observes the
 //      post-saga state without waiting for replay.
 //
@@ -19,7 +19,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 // (a leaf with no pending bucket under the saga's transaction id
 // short-circuits inside ApplyTxTerminalAsync). The same waste applies
 // to ComputeTerminalHlcAsync, which fans GetClockAsync over the same
-// chain solely to compute a max HLC — for most leaves the clock is
+// chain solely to compute a max HLC - for most leaves the clock is
 // irrelevant because they hold no prepare for this saga.
 //
 // Optimisation. ShardRootGrain is the routing layer between
@@ -36,10 +36,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 // it fans Channel 2 only to the recorded subset, and ComputeTerminalHlcAsync
 // queries clocks only on that subset (the touched leaves are the only
 // ones holding prepare HLCs for this saga; untouched leaves contribute
-// nothing to the max). When the entry is missing — the shard-root
+// nothing to the max). When the entry is missing - the shard-root
 // deactivated between prepare and terminal, the saga touched no leaves
 // on this shard, or the call arrives via a path that bypasses the
-// routing layer — the code falls back to walking the full chain, which
+// routing layer - the code falls back to walking the full chain, which
 // is the pre-optimisation behaviour.
 //
 // Cross-shard participant tracking (closes the reshard-race orphaning).
@@ -50,7 +50,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 // prepared on this shard). AtomicWriteGrain.BroadcastTerminalsAsync
 // queries the registry for the authoritative participant set and
 // unions it into the saga's TouchedShards slot before fanning out
-// terminals — so a saga whose prepare-time routing snapshot is stale
+// terminals - so a saga whose prepare-time routing snapshot is stale
 // (e.g. an in-flight shard split landing between prepare and execute,
 // or between execute and broadcast) still has its terminal delivered
 // to every shard that holds a pending bucket. Without this seam, the
@@ -81,7 +81,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 //     transparently.
 //   * If a saga's coordinator fails between recording prepares and
 //     calling AppendTxTerminalAsync the entry leaks for the
-//     remaining lifetime of this activation — bounded by the
+//     remaining lifetime of this activation - bounded by the
 //     activation's collect-age. A future enhancement could add a
 //     TTL-based sweep, but the cost is small enough that it is not
 //     wired up in this commit.
@@ -167,7 +167,7 @@ internal sealed partial class ShardRootGrain
 
         try
         {
-            // First prepare for this saga on this shard — register
+            // First prepare for this saga on this shard - register
             // with the per-tree registry so the saga's terminal
             // broadcast can discover us authoritatively, regardless
             // of any routing flips between prepare and broadcast.

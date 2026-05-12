@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Replication;
 /// fast-path optimisation: it suppresses the duplicate-emit pair
 /// before the apply grain hop even when the HWM round-trip would
 /// otherwise admit both. Cache eviction under sustained churn cannot
-/// cause a re-merge — the HWM check is the authoritative dedupe key
+/// cause a re-merge - the HWM check is the authoritative dedupe key
 /// and remains in place for any entry the cache has evicted.
 /// </para>
 /// <para>
@@ -63,7 +63,7 @@ internal sealed class RecentApplyCache
         _capacity = capacity;
         // Pre-size the index to the steady-state working set so the
         // fill phase does not pay log(capacity) resize allocations.
-        // The cache is bounded — it never exceeds _capacity entries —
+        // The cache is bounded - it never exceeds _capacity entries -
         // so a single up-front sizing is exact, not a guess.
         _index = new Dictionary<EntryKey, LinkedListNode<EntryKey>>(capacity);
     }
@@ -91,7 +91,7 @@ internal sealed class RecentApplyCache
     /// the tuple was already present (a duplicate emit). On overflow
     /// the oldest tuple is evicted and its
     /// <see cref="LinkedListNode{T}"/> is recycled to host the new
-    /// tuple — steady-state miss-with-eviction is allocation-free.
+    /// tuple - steady-state miss-with-eviction is allocation-free.
     /// </summary>
     /// <param name="entry">
     /// The replog entry to dedupe. The cache key is built from
@@ -139,7 +139,7 @@ internal sealed class RecentApplyCache
     /// <see langword="false"/> when the tuple was not present (the
     /// call is idempotent). Used by <see cref="ReplicationApplier"/>
     /// to roll back a <see cref="TryAdd"/> reservation when the
-    /// subsequent apply fails — without rollback, a transient apply
+    /// subsequent apply fails - without rollback, a transient apply
     /// throw would leave a phantom cache entry that suppresses the
     /// transport's retry path and silently drops the entry until
     /// FIFO eviction.

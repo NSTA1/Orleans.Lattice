@@ -22,9 +22,9 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// The frontier is then preserved end-to-end across every lifecycle path
-/// the library guarantees for <see cref="LwwValue{T}.OriginClusterId"/> —
+/// the library guarantees for <see cref="LwwValue{T}.OriginClusterId"/> -
 /// shard-split shadow-forward, saga prepare / compensate, tree snapshot /
-/// restore, bulk-load, compaction, and merge — so a captured frontier
+/// restore, bulk-load, compaction, and merge - so a captured frontier
 /// travels with the value and survives transfer between shards or trees.
 /// </para>
 /// <para>

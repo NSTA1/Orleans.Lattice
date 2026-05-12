@@ -202,12 +202,12 @@ public class TreeSnapshotIntegrationTests
         // × snapshot: entries written with a TTL must retain their
         // absolute expiry when snapshot-copied to a new tree. The raw-drain /
         // raw-bulk-load path in CopyShardAsync carries LwwValue.ExpiresAtTicks
-        // verbatim — we verify this end-to-end by (a) confirming a
+        // verbatim - we verify this end-to-end by (a) confirming a
         // short-TTL entry disappears from destination reads after its
         // expiry elapses (proves ExpiresAtTicks survived the copy), and
         // (b) confirming a long-TTL entry and a non-TTL entry both remain
         // live (proves the copy did not drop liveness or truncate expiry).
-        // The raw LwwEntry is deliberately not inspected from the test —
+        // The raw LwwEntry is deliberately not inspected from the test -
         // that DTO lives on guarded internal grain interfaces and is not
         // reachable via the public ILattice surface.
         var sourceTree = $"snap-ttl-{Guid.NewGuid():N}";

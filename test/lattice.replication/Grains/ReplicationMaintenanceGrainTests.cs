@@ -164,7 +164,7 @@ public class ReplicationMaintenanceGrainTests
     public void EnsureActiveAsync_throws_when_grain_key_is_empty()
     {
         var ctx = Substitute.For<IGrainContext>();
-        // default GrainId has Key.ToString() == "" — exactly the
+        // default GrainId has Key.ToString() == "" - exactly the
         // empty-key shape the grain refuses to operate on.
         ctx.GrainId.Returns(default(GrainId));
         var grain = new ReplicationMaintenanceGrain(
@@ -193,7 +193,7 @@ public class ReplicationMaintenanceGrainTests
             Throws.InstanceOf<OperationCanceledException>());
     }
 
-    // --- ProcessNextPhaseAsync — first-tick fires both cadences ---
+    // --- ProcessNextPhaseAsync - first-tick fires both cadences ---
 
     [Test]
     public async Task ProcessNextPhaseAsync_runs_gc_on_first_tick()

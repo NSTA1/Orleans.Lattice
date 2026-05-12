@@ -85,7 +85,7 @@ public partial class TreeSnapshotGrainTests
         state.State.MaxLeafKeys = 256;
         state.State.MaxInternalChildren = 64;
 
-        // Same params including sizing — should not throw.
+        // Same params including sizing - should not throw.
         await grain.SnapshotAsync(DestTreeId, SnapshotMode.Offline, maxLeafKeys: 256, maxInternalChildren: 64);
 
         // Idempotent call must leave the in-progress marker and sizing unchanged.

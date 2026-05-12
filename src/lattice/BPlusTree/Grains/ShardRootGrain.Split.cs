@@ -27,7 +27,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </description></item>
 /// <item><description>
 /// The target shard <c>T</c> never holds a <see cref="ShardSplitInProgress"/>
-/// record, so neither hook fires there — this naturally prevents recursive
+/// record, so neither hook fires there - this naturally prevents recursive
 /// shadow-forwarding when <c>T</c> receives the mirrored
 /// <see cref="IShardRootGrain.MergeManyAsync"/> call. A defensive assertion in
 /// <c>TryForwardShadowWriteAsync</c> still guards against pathological
@@ -74,7 +74,7 @@ internal sealed partial class ShardRootGrain
             && existing.MovedSlots.Length == movedSlots.Length
             && (existing.Phase == ShardSplitPhase.BeginShadowWrite || existing.Phase == ShardSplitPhase.Drain))
         {
-            // Idempotent re-entry — verify slot set matches.
+            // Idempotent re-entry - verify slot set matches.
             if (SlotsEqual(existing.MovedSlots, movedSlots))
                 return;
         }
@@ -241,12 +241,12 @@ internal sealed partial class ShardRootGrain
     /// back the leaf's persisted <see cref="LwwValue{T}"/> so TTL metadata
     /// (<c>ExpiresAtTicks</c>) is preserved verbatim. For prepared writes the
     /// caller-supplied <paramref name="value"/> is forwarded directly via
-    /// <see cref="IShardRootGrain.SetAsync(string, byte[])"/> — the leaf read-back
+    /// <see cref="IShardRootGrain.SetAsync(string, byte[])"/> - the leaf read-back
     /// is skipped because during a prepare the leaf's <c>Entries</c> still holds
     /// the pre-saga value (the prepare routed into the per-leaf pending-tx
     /// map, not the visible projection), and forwarding that stale value would
     /// bucket the wrong value into the destination's <c>_pendingTx[txid][key]</c>
-    /// — which the saga's terminal mark would then flip into the destination's
+    /// - which the saga's terminal mark would then flip into the destination's
     /// <c>Entries</c>, leaving a reader routed to the destination after the
     /// shard-map swap surfacing the pre-saga value indefinitely (a saga
     /// atomic-visibility violation across the migrating slot).
@@ -261,7 +261,7 @@ internal sealed partial class ShardRootGrain
     /// </para>
     /// <para>
     /// <b>Race</b>: a concurrent write between this read-back and the forward
-    /// is benign — both writes' forwards will eventually arrive and CRDT LWW
+    /// is benign - both writes' forwards will eventually arrive and CRDT LWW
     /// (highest HLC wins) will converge to the correct value on the target.
     /// </para>
     /// </summary>
@@ -282,7 +282,7 @@ internal sealed partial class ShardRootGrain
         // Saga prepare-phase shadow-forward branch. When the local write is
         // a saga prepare (LatticePreparedContext active and a non-empty
         // transaction id is set), MergeManyAsync would land the value
-        // directly in the destination leaf's visible Entries — bypassing
+        // directly in the destination leaf's visible Entries - bypassing
         // the prepared / pending-tx semantics that BPlusLeafGrain.CommitSetAsync
         // applies on the foreground SetAsync path. The destination leaf
         // would then surface the prepared value to readers immediately
@@ -294,8 +294,8 @@ internal sealed partial class ShardRootGrain
         // the propagated LatticePreparedContext + LatticeTransactionContext
         // (via Orleans RequestContext) and bucket the value into its own
         // _pendingTx[txid][key], where it is correctly hidden from
-        // readers until the saga's terminal mark — forwarded by
-        // AppendTxTerminalAsync via the symmetric split-shadow forward —
+        // readers until the saga's terminal mark - forwarded by
+        // AppendTxTerminalAsync via the symmetric split-shadow forward -
         // flips it into Entries.
         //
         // Important: forward the caller-supplied value (the prepared
@@ -303,7 +303,7 @@ internal sealed partial class ShardRootGrain
         // the leaf's Entries still holds the pre-saga value (the prepare
         // wrote into _pendingTx, not Entries), so a leaf read-back here
         // would forward the stale pre-saga value and the destination's
-        // _pendingTx[txid][key] would carry the wrong value — which the
+        // _pendingTx[txid][key] would carry the wrong value - which the
         // saga's terminal would then commit into Entries, producing the
         // mid-saga atomic-visibility violation described in the method's
         // XML doc.
@@ -325,7 +325,7 @@ internal sealed partial class ShardRootGrain
             : await TraverseToLeafAsync(key);
         var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
         var raw = await leaf.GetRawEntryAsync(key);
-        if (raw is null || raw.Value.IsTombstone) return; // deleted/missing — handled by cleanup phase.
+        if (raw is null || raw.Value.IsTombstone) return; // deleted/missing - handled by cleanup phase.
 
         await target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = raw.Value.ToLwwValue() });
     }
@@ -342,7 +342,7 @@ internal sealed partial class ShardRootGrain
 
     /// <summary>
     /// Returns <c>true</c> when <paramref name="key"/> hashes to a virtual slot
-    /// that this shard no longer authoritatively owns — either because it has
+    /// that this shard no longer authoritatively owns - either because it has
     /// been permanently split away (<see cref="ShardRootState.MovedAwaySlots"/>),
     /// or because an active split has reached <see cref="ShardSplitPhase.Swap"/>
     /// or later (the registry's shard map already routes the slot to <c>T</c>
@@ -353,7 +353,7 @@ internal sealed partial class ShardRootGrain
     internal bool IsSlotMovedAway(string key)
     {
         // Active in-progress split: once swap has happened, S's copy is no
-        // longer authoritative for moved slots — scans must not yield it.
+        // longer authoritative for moved slots - scans must not yield it.
         var sip = state.State.SplitInProgress;
         if (sip is not null
             && (sip.Phase == ShardSplitPhase.Swap

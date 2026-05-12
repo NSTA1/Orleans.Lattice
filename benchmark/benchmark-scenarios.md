@@ -5,8 +5,8 @@ This document is the authoritative scenario catalogue for the
 `Orleans.Lattice.Replication` package. The Vehicle Fleet Simulator (under
 `samples/VehicleFleetSimulator/`) is used unmodified as a sustained, realistic
 workload generator: a large population of independent, long-lived vehicle
-grains, each emitting telemetry at a steady cadence. That shape — many
-key-disjoint producers writing small payloads at a fixed rate — is a close
+grains, each emitting telemetry at a steady cadence. That shape - many
+key-disjoint producers writing small payloads at a fixed rate - is a close
 match for the workloads Lattice is designed to absorb (sorted distributed B+
 tree, per-tree change feed, per-peer HLC replication cursor), and lets us
 exercise both the core primitive and the replication engine under the same
@@ -83,7 +83,7 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   `value = VehicleTelemetryEvent`, with a TTL of e.g. 1 hour via the F-016
   `SetAsync(ttl)` overload. Stresses ordered scans (`ScanKeysAsync` /
   `EntriesAsync`), continuous tombstone compaction, and the read-path
-  expiry filter. Run independently of throughput experiments — compaction
+  expiry filter. Run independently of throughput experiments - compaction
   will distort the latency tail and conflate signals if mixed with
   `current-state-no-replication` / `current-state-single-peer`.
 
@@ -104,7 +104,7 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
 - [x] **read-heavy-ordered: 95:5 read:write, sequential keyspace walk.**
   Same write topology as `read-heavy-random` but the read-driver walks the
   keyspace sequentially via `ScanKeysAsync`. Captures the cache/prefetch
-  signal that random access cannot — sequential reads should hit the leaf
+  signal that random access cannot - sequential reads should hit the leaf
   block cache more often, so the gap between this run and
   `read-heavy-random` is itself a regression metric.
 
@@ -172,7 +172,7 @@ These apply to every benchmark above and should be verified before kicking off a
 - Telemetry sink writes happen **off** the `VehicleGrain` turn, so
   grain-tick latency is attributable to the simulator and not to Lattice
   (see §4 below).
-- `FleetGrain.GetFleetStats` continues to use the in-grain aggregator —
+- `FleetGrain.GetFleetStats` continues to use the in-grain aggregator -
   never back it with a Lattice scatter-gather scan, which would dominate
   the measurement.
 - For any cross-cluster scenario (`current-state-single-peer`,
@@ -195,7 +195,7 @@ each scenario above can be wired up without modifying grain code. The seam
 is intentionally narrow: a single DI interface, registered once per silo.
 Tests in `VehicleFleetSimulator.Tests` lock in the contracts described
 below (`NullTelemetrySinkTests`, `FanOutTelemetrySinkRoutingTests`,
-`TelemetrySinkSwappabilityTests`) — any change here that breaks these
+`TelemetrySinkSwappabilityTests`) - any change here that breaks these
 contracts will fail CI.
 
 ### 1. The `ITelemetrySink` seam
@@ -214,7 +214,7 @@ completion callback. A `LatticeSink` implementation is expected to do its
 own batching, off-turn dispatch, and failure handling, because:
 
 - Returning `ValueTask` lets the sink complete synchronously when the work
-  is purely "enqueue to a bounded channel" — the steady-state hot path
+  is purely "enqueue to a bounded channel" - the steady-state hot path
   stays allocation-free.
 - The producer must not be blocked by a slow downstream. A correct sink
   MUST NOT couple its own latency to the `VehicleGrain` turn (see §4
@@ -234,7 +234,7 @@ silo (`benchmark/host/Bench.Silo/`) reads `BENCH_TELEMETRY_SINK` from the
 | `lattice`| `services.AddSingleton<ITelemetrySink, LatticeSink>();` (extension: `AddLatticeSink`)        | every Lattice scenario above   |
 
 `Program.cs` in `benchmark/host/Bench.Silo/` is the single registration
-point. The replacement must be exclusive — registering a second
+point. The replacement must be exclusive - registering a second
 `ITelemetrySink` does not chain (verified by
 `TelemetrySinkSwappabilityTests.The_default_FanOutTelemetrySink_is_overridden_not_chained`).
 
@@ -288,7 +288,7 @@ write latency, contaminating every scenario. Implementations MUST:
 - Apply backpressure by either bounding the channel and recording drops
   via a metric, or by using `BoundedChannelFullMode.Wait` with a hard
   timeout. Silently blocking the producer is a benchmark contamination
-  bug — surface it loudly.
+  bug - surface it loudly.
 - Handle `IClusterClient` / Lattice-side faults entirely inside the drain
   loop. The producer side never observes them.
 
@@ -301,7 +301,7 @@ of the sink. Per the package''s roadmap:
   it writes to, and the silo opts that tree into replication via
   `Orleans.Lattice.Replication`''s configuration surface.
 - The `OriginClusterId` MUST be unique per cluster in the deployment
-  topology — the `IConfiguration` value `Orleans:ClusterId` already used
+  topology - the `IConfiguration` value `Orleans:ClusterId` already used
   by `Program.cs` is a natural source.
 - Per-key replication filters (R-012) are configured against the
   replicator, not the sink. Scenario `replication-key-filter` enables a
@@ -350,15 +350,15 @@ configuration without forking the sink contract.
 
 Each benchmark scenario interprets three meter sources side-by-side:
 
-- `orleans.lattice` — Lattice''s published `System.Diagnostics.Metrics`
+- `orleans.lattice` - Lattice''s published `System.Diagnostics.Metrics`
   meter (shard counters, leaf-latency histograms, cache hit/miss;
-  replication WAL append, HWM, ack RTT — the replication histograms ride
+  replication WAL append, HWM, ack RTT - the replication histograms ride
   the same meter via `orleans.lattice.replication`).
-- `vehicle_fleet_simulator.sink` — sink-side counters and histograms:
+- `vehicle_fleet_simulator.sink` - sink-side counters and histograms:
   `published`, `dropped`, `queue_depth`, `flush_duration_ms`,
   `flush_batch_size`, `inline_publish_duration_ms` (target: bimodal at ~0
   and ~channel-write cost).
-- `vehicle_fleet_simulator.read_driver` — read-driver-side counters and
+- `vehicle_fleet_simulator.read_driver` - read-driver-side counters and
   histograms (only emitted by read-heavy and read/write-mix scenarios):
   `reads_total`, `duration_ms`, `errors_total`, `inflight`.
 
@@ -380,7 +380,7 @@ in a single dashboard.
 >   ~200 ms p99 with replication enabled, both at calibrated fleet) because
 >   each commit ripples through `WAL append → in-memory apply → ship to peer`.
 >   This widening is **expected** and does not surface as drops as long as the
->   bounded channel has spare depth — the queue absorbs it. A flush p99 that
+>   bounded channel has spare depth - the queue absorbs it. A flush p99 that
 >   keeps climbing run-over-run _without_ a corresponding drop in the
 >   commit-path tail (commit p99) is the regression signal; a flush p99 that
 >   widens once and then stabilises is the cost of a new replication path.
@@ -390,18 +390,18 @@ in a single dashboard.
 The following tests in `VehicleFleetSimulator.Tests` must continue to pass
 for any future change to the simulator integration:
 
-- `NullTelemetrySinkTests` — guarantees the producer-baseline sink is a
+- `NullTelemetrySinkTests` - guarantees the producer-baseline sink is a
   true no-op, completes synchronously, and tolerates a representative
   burst without throwing.
-- `FanOutTelemetrySinkRoutingTests.Telemetry_lands_on_the_shard_chosen_by_ShardForVehicle` —
+- `FanOutTelemetrySinkRoutingTests.Telemetry_lands_on_the_shard_chosen_by_ShardForVehicle` -
   guarantees the default sink''s per-vehicle shard mapping has not
   regressed (so the existing `FleetStreamHub` consumers continue to work
   in non-Lattice runs).
-- `FanOutTelemetrySinkRoutingTests.Events_always_land_on_shard_zero` —
+- `FanOutTelemetrySinkRoutingTests.Events_always_land_on_shard_zero` -
   guarantees discrete events do not leak across shards.
-- `TelemetrySinkSwappabilityTests.A_custom_sink_registered_in_DI_receives_every_vehicle_tick` —
+- `TelemetrySinkSwappabilityTests.A_custom_sink_registered_in_DI_receives_every_vehicle_tick` -
   guarantees the swap mechanism works end-to-end through `VehicleGrain`.
-- `TelemetrySinkSwappabilityTests.The_default_FanOutTelemetrySink_is_overridden_not_chained` —
+- `TelemetrySinkSwappabilityTests.The_default_FanOutTelemetrySink_is_overridden_not_chained` -
   guarantees a custom sink replaces, not augments, the fan-out path.
   Without this, `current-state-no-replication` /
   `current-state-single-peer` would silently double-write and produce

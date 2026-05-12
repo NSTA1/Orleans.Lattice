@@ -94,14 +94,14 @@ internal sealed class LeafNodeState
     [Id(12)] public byte[]? ProjectionHash { get; set; }
 
     /// <summary>
-    /// Logical chain-shard index this leaf belongs to — i.e. the
+    /// Logical chain-shard index this leaf belongs to - i.e. the
     /// <c>shardIndex</c> half of the owning
     /// <c>ShardRootGrain</c>'s <c>{treeId}/{shardIndex}</c> grain key.
     /// Persisted exactly once by <c>SetShardIndexAsync</c>, called by
     /// the shard-root coordinator alongside <see cref="TreeId"/> at
     /// every leaf-create site. Consulted by the activation-time WAL
     /// materialiser to filter out records authored by sibling chain
-    /// shards that share a WAL partition — without this slot a leaf
+    /// shards that share a WAL partition - without this slot a leaf
     /// reading a shared WAL partition would absorb every other shard's
     /// keys into its own projection on every reactivation. The slot is
     /// nullable for back-compat with the V1 single-shard layout: a leaf
@@ -119,11 +119,11 @@ internal sealed class LeafNodeState
     /// pre-dates this slot). Persisted exactly once at sibling-birth
     /// time by <c>SetKeyRangeAsync</c>, called from
     /// <c>CompleteSplitAsync</c> on the donor leaf. Donor leaves never
-    /// call <c>SetKeyRangeAsync</c> for their own slot — they update
+    /// call <c>SetKeyRangeAsync</c> for their own slot - they update
     /// <see cref="HighKeyExclusive"/> directly when a split narrows
     /// their range. Consulted by the activation-time WAL materialiser
     /// to filter out records whose key falls outside this leaf's
-    /// current ownership range — without this slot a leaf reading the
+    /// current ownership range - without this slot a leaf reading the
     /// shared shard WAL partition would absorb every sibling chain
     /// leaf's keys into its own projection on every reactivation. The
     /// slot is nullable for back-compat with the V1 single-leaf

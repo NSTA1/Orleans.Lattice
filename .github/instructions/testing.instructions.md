@@ -7,7 +7,7 @@ applyTo: "test/lattice/**"
 ## Framework
 
 - **NUnit 4.x** with `[TestFixture]` / `[Test]` attributes.
-- Global `using NUnit.Framework;` is declared in the project file — do not add per-file.
+- Global `using NUnit.Framework;` is declared in the project file - do not add per-file.
 - **NSubstitute** for mocks (`Substitute.For<T>()`).
 - **Orleans.TestingHost** for integration tests.
 

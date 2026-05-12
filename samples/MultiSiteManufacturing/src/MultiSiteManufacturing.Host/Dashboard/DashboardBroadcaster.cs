@@ -26,7 +26,7 @@ namespace MultiSiteManufacturing.Host.Dashboard;
 /// <see cref="SubscribeDivergence"/> or
 /// <see cref="SubscribeSiteActivity"/> in <c>OnInitializedAsync</c>
 /// and iterate until disposal. Back-pressure is handled by unbounded
-/// channels — the sample's update volume is modest (one fact per
+/// channels - the sample's update volume is modest (one fact per
 /// operator action plus seed traffic).
 /// <para>
 /// <b>Cluster-wide fan-out.</b> <see cref="FederationRouter"/> raises
@@ -88,8 +88,8 @@ public sealed partial class DashboardBroadcaster : IHostedService
     /// <summary>
     /// Stream namespace used for the cluster-wide per-part-change
     /// broadcast. Every <see cref="PartCrdtStore.PartChanged"/> event
-    /// — local CRDT mutation, shadow heal, or cross-cluster OR-Set
-    /// apply landing on any silo — is published to a single stream
+    /// - local CRDT mutation, shadow heal, or cross-cluster OR-Set
+    /// apply landing on any silo - is published to a single stream
     /// inside this namespace; every silo subscribes so the part-detail
     /// CRDT card refreshes on every Blazor circuit, not just the
     /// circuit attached to the silo that handled the mutation.
@@ -97,7 +97,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
     public const string PartChangeStreamNamespace = "msmfg.dashboard.part-changes";
 
     /// <summary>
-    /// Default singleton stream id — one logical stream per cluster.
+    /// Default singleton stream id - one logical stream per cluster.
     /// A fixed key lets every silo subscribe to and publish on the
     /// exact same stream instance without coordination. Tests may
     /// pass a custom <see cref="StreamId"/> to the test-only ctor
@@ -107,7 +107,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
         StreamId.Create(StreamNamespace, "broadcast");
 
     /// <summary>
-    /// Default singleton stream id for the part-change stream — one
+    /// Default singleton stream id for the part-change stream - one
     /// logical stream per cluster, parallel to
     /// <see cref="DefaultBroadcastStreamId"/>. Tests get an
     /// auto-derived sibling id from the test-only ctor's
@@ -132,7 +132,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
 
     // Remembers the last-published (baseline, lattice) state per part so
     // PublishPartAsync can decide whether a fresh summary should also
-    // raise a DivergenceEvent. Concurrent access is fine — the fan-out
+    // raise a DivergenceEvent. Concurrent access is fine - the fan-out
     // is serialised per fact inside PublishPartAsync.
     private readonly ConcurrentDictionary<PartSerialNumber, (ComplianceState Baseline, ComplianceState Lattice)> _lastStates = new();
 
@@ -217,7 +217,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
     /// <inheritdoc />
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        // Every fact — local or replicated — publishes to the cluster
+        // Every fact - local or replicated - publishes to the cluster
         // stream (see remarks on the class). The local-fan-out work
         // happens only in OnBroadcastReceived so it runs uniformly
         // across silos.
@@ -231,7 +231,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
         _partChangeStream = provider.GetStream<PartSerialNumber>(_partChangeStreamId);
 
         // Subscribe with bounded retry. A failure here means no live
-        // dashboard updates on this silo — we surface it loudly via
+        // dashboard updates on this silo - we surface it loudly via
         // Error but never throw back into the host's StartAsync
         // because the app is still functional without the live feed
         // (a page reload falls back to the initial snapshot path).

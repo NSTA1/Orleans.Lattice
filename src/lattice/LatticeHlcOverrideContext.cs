@@ -15,7 +15,7 @@ namespace Orleans.Lattice;
 /// <see cref="RequestContext"/> entry keyed <c>"ol.hlc"</c>. The leaf
 /// grain checks the context at every commit site
 /// (<c>SetCoreAsync</c> / <c>DeleteAsync</c> / <c>DeleteRangeAsync</c>)
-/// — when a value is present, the leaf advances its local clock past
+/// - when a value is present, the leaf advances its local clock past
 /// the override via <see cref="HybridLogicalClock.Merge(HybridLogicalClock, HybridLogicalClock)"/>
 /// (preserving local monotonicity for any subsequent foreground tick)
 /// and persists the <em>override verbatim</em> on the freshly-constructed
@@ -45,7 +45,7 @@ public static class LatticeHlcOverrideContext
     /// <summary>
     /// Gets or sets the HLC override on the ambient
     /// <see cref="RequestContext"/>. Setting <c>null</c> removes the key
-    /// rather than storing a null value, matching the "no override —
+    /// rather than storing a null value, matching the "no override -
     /// foreground tick" default.
     /// </summary>
     public static HybridLogicalClock? Current

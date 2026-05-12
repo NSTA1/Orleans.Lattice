@@ -167,7 +167,7 @@ public class LatticeReplicationAdminTests
         var firstAt = time.Now;
         await admin.RequestSnapshotAsync(Tree, Source);
 
-        // Advance 20s — still within the 60s rate-limit window.
+        // Advance 20s - still within the 60s rate-limit window.
         time.Now = firstAt + TimeSpan.FromSeconds(20);
 
         var second = await admin.RequestSnapshotAsync(Tree, Source);
@@ -306,7 +306,7 @@ public class LatticeReplicationAdminTests
         var coordinator = Substitute.For<ILatticeBootstrapCoordinator>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
 
-        // Initially zero interval (no rate limit) — request should be honoured.
+        // Initially zero interval (no rate limit) - request should be honoured.
         monitor.Get(Arg.Any<string>()).Returns(new LatticeReplicationOptions
         {
             ClusterId = "self",

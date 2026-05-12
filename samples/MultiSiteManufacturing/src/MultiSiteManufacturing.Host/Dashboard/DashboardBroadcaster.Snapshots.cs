@@ -45,7 +45,7 @@ public sealed partial class DashboardBroadcaster
     }
 
     /// <summary>
-    /// Returns every part currently in a divergent state — baseline
+    /// Returns every part currently in a divergent state - baseline
     /// disagrees with lattice. Used by the <c>WatchDivergence</c> gRPC
     /// stream to seed its initial snapshot before switching to the live
     /// subscription.
@@ -93,8 +93,8 @@ public sealed partial class DashboardBroadcaster
         // "Latest stage" reflects the part's furthest-along lifecycle
         // milestone, not just the last ProcessStepCompleted. The facts
         // list is HLC-ascending so the tail is the newest fact; map it
-        // to a ProcessStage by fact kind — InspectionRecorded → NDT,
-        // NCR/MRB/Rework → MRB, FinalAcceptance → FAI — otherwise a
+        // to a ProcessStage by fact kind - InspectionRecorded → NDT,
+        // NCR/MRB/Rework → MRB, FinalAcceptance → FAI - otherwise a
         // FAI-accepted part would still show Machining.
         var latestStage = facts.Count == 0 ? null : StageOf(facts[^1]);
 

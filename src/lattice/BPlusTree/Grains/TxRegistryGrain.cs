@@ -22,7 +22,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// so decision recording is a single atomic state-write per call.</description></item>
 /// <item><description>Idempotency: repeated calls with the same outcome are
 /// no-ops. Conflicting calls (commit-then-abort or abort-then-commit)
-/// throw <see cref="InvalidOperationException"/> — they indicate a saga
+/// throw <see cref="InvalidOperationException"/> - they indicate a saga
 /// implementation bug, not a recoverable transient.</description></item>
 /// <item><description><c>ForgetAsync</c> is the only operation that shrinks
 /// the persisted footprint. The saga grain calls it after every
@@ -128,7 +128,7 @@ internal sealed class TxRegistryGrain(
 
         if (!set.Add(shardIndex))
         {
-            // Already recorded — no-op, no state write. The shard-root
+            // Already recorded - no-op, no state write. The shard-root
             // dedup gate normally prevents this RPC entirely on a
             // stable activation; this branch only fires when the
             // shard-root deactivated and reactivated between two

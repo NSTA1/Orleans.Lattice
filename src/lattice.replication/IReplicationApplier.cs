@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Replication;
 /// subsequent re-delivery is suppressed.</item>
 /// </list>
 /// <para>
-/// The applier deliberately does not subscribe to a transport — it is
+/// The applier deliberately does not subscribe to a transport - it is
 /// the seam custom transports, integration tests, and the future
 /// inbound replication pipeline plug into.
 /// </para>
@@ -53,7 +53,7 @@ public interface IReplicationApplier
     /// per batch and drain the causal-apply buffer once at the end of
     /// the batch instead of after every successful apply. For a 256-entry
     /// batch authored by a single origin this collapses ~512 redundant
-    /// HWM grain RPCs to two — the dominant receiver-side cost on every
+    /// HWM grain RPCs to two - the dominant receiver-side cost on every
     /// inbound push.
     /// </para>
     /// <para>
@@ -62,7 +62,7 @@ public interface IReplicationApplier
     /// is <see langword="true"/> if at least one entry was newly merged
     /// (a fully-deduped batch returns <see langword="false"/>). Per-entry
     /// failures are surfaced as exceptions only when the implementation
-    /// has no recoverable per-entry failure handling — the
+    /// has no recoverable per-entry failure handling - the
     /// <see cref="LatticeReplicationGrpc.LatticeReplicationGrpcService"/>
     /// receiver wraps the batch call in a transport-level exception so
     /// the sender's backoff/retry loop kicks in for the whole batch.

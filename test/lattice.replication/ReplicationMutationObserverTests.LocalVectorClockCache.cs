@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// Coverage for the producer-side local vector clock cache fallback
 /// path on <see cref="ReplicationMutationObserver"/>. The observer
 /// reads <c>mutation.VectorClock</c> when supplied (preserves caller-
-/// authored frontiers — shadow-forward / saga / atomic-write paths)
+/// authored frontiers - shadow-forward / saga / atomic-write paths)
 /// and falls back to the cache snapshot when the mutation does not
 /// carry an explicit VC (ordinary local user writes).
 /// </summary>
@@ -173,7 +173,7 @@ public class ReplicationMutationObserverLocalVectorClockCacheTests
         }, CancellationToken.None);
 
         // Simulate a successful foreign apply on the receiver-side
-        // ReplicationApplier — the applier mirrors the advance into
+        // ReplicationApplier - the applier mirrors the advance into
         // the producer-side cache.
         cache.AdvanceForeign(Tree, "site-b", Hlc(75));
 

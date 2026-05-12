@@ -183,7 +183,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                 // BEFORE writing back so a no-op re-report (same cursor,
                 // no new vector, no blocked-floor delta) preserves the
                 // memoised causal-stable / blocked-floor caches. The
-                // alternative — invalidating unconditionally — paid an
+                // alternative - invalidating unconditionally - paid an
                 // O(consumers) recompute on the next GC pass for every
                 // idempotent ping the leaf reporter coalesces.
                 var cursorAdvanced = advancedCursor > existing.Cursor;
@@ -213,7 +213,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                     defensiveClone,
                     blockedAtHlcSpecified ? blockedAtHlc : null);
 
-                // A new consumer always affects the meet — its absence
+                // A new consumer always affects the meet - its absence
                 // was the previous floor. Invalidate unconditionally.
                 state.InvalidateCaches();
             }
@@ -420,7 +420,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
     /// Computes the pointwise-min <see cref="HybridLogicalClock"/>
     /// across every consumer that has reported a non-<see langword="null"/>
     /// blocked-floor pin. Consumers reporting <see langword="null"/>
-    /// (the majority — leaf materialisers, peer ship loops) are
+    /// (the majority - leaf materialisers, peer ship loops) are
     /// skipped. Returns <see langword="null"/> when no consumer
     /// currently reports a buffer pin.
     /// </summary>

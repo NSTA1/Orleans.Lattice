@@ -33,7 +33,7 @@ public sealed class SnapshotStream
 
     /// <summary>
     /// The producer's causal-stable frontier at the moment the
-    /// snapshot was produced — the pointwise minimum
+    /// snapshot was produced - the pointwise minimum
     /// <see cref="VersionVector"/> across every consumer that has
     /// reported a vector through
     /// <see cref="IWalCursorRegistry.GetCausalStableAsync"/>.
@@ -44,7 +44,7 @@ public sealed class SnapshotStream
     /// the first incremental entry is guaranteed to satisfy its
     /// declared dependencies. When no consumer has reported a
     /// VC-shaped cursor, the provider falls back to the producer's
-    /// per-tree local vector clock — a strict superset of the meet
+    /// per-tree local vector clock - a strict superset of the meet
     /// that is safe as a snapshot cut-point because no entry can have
     /// a VC component above the producer's own local VC at capture
     /// time. Always non-null; the snapshot of an unreplicated tree

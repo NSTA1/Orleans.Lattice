@@ -5,7 +5,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Tests for the receiver-side prepared-apply seam — installs saga
+/// Tests for the receiver-side prepared-apply seam - installs saga
 /// prepare-phase mutations authored on a remote cluster into this tree's
 /// per-leaf pending-tx bucket and then resolves the saga via the
 /// terminal-apply seam. Covers commit, abort, idempotency, and argument
@@ -27,12 +27,12 @@ public partial class LatticeGrainReplicationApplyTests
             expiresAtTicks: 0, transactionId: txid,
             atomicBatchSize: 1, atomicBatchIndex: 0);
 
-        // Pending — not yet visible: the registry has not been marked
+        // Pending - not yet visible: the registry has not been marked
         // and strict atomic visibility hides the pending entry.
         var midSaga = await lattice.GetAsync("k");
         Assert.That(midSaga, Is.Null, "Prepared write must not be visible before terminal mark.");
 
-        // Apply commit terminal — registry mark + per-leaf flip.
+        // Apply commit terminal - registry mark + per-leaf flip.
         await apply.ApplyTxTerminalAsync(
             txid, committed: true, shardIndex: 0,
             terminalHlc: hlc with { WallClockTicks = hlc.WallClockTicks + 1 },
@@ -82,7 +82,7 @@ public partial class LatticeGrainReplicationApplyTests
             "k", deleteHlc, "site-x", sourceVectorClock: null,
             transactionId: txid, atomicBatchSize: 1, atomicBatchIndex: 0);
 
-        // Pending tombstone — value still visible until terminal.
+        // Pending tombstone - value still visible until terminal.
         var midSaga = await lattice.GetAsync("k");
         Assert.That(midSaga, Is.EqualTo(new byte[] { 1 }), "Existing value must remain visible while delete is pending.");
 

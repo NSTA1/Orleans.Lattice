@@ -7,7 +7,7 @@ using Orleans.Lattice;
 namespace MultiSiteManufacturing.Host.Lattice;
 
 /// <summary>
-/// Lattice backend — appends every fact to a single Orleans.Lattice B+ tree
+/// Lattice backend - appends every fact to a single Orleans.Lattice B+ tree
 /// (keyed by <c>{serial}/{hlc}/{factId}</c> so a range scan over one prefix
 /// returns all facts for a part in HLC order) and computes state via
 /// <see cref="ComplianceFold"/> over the scan result.
@@ -96,7 +96,7 @@ public sealed class LatticeFactBackend(
 
     private static (string Start, string EndExclusive) PrefixRange(PartSerialNumber serial)
     {
-        // '/' = 0x2F, '0' = 0x30 — so {serial}0 is strictly greater than every
+        // '/' = 0x2F, '0' = 0x30 - so {serial}0 is strictly greater than every
         // key of the form {serial}/<anything>, giving a tight half-open range.
         var prefix = serial.Value + "/";
         var end = serial.Value + "0";

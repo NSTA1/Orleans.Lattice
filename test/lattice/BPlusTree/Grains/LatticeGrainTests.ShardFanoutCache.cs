@@ -339,7 +339,7 @@ public partial class LatticeGrainTests
             .Returns(shardRoot1);
 
         // Stub both forward and reverse page fetches to terminate the scan
-        // immediately — empty page, HasMore=false. This is the minimum
+        // immediately - empty page, HasMore=false. This is the minimum
         // wiring needed for the cursor-open path to run end-to-end.
         var emptyPage = new KeysPage { Keys = [], HasMore = false };
         shardRoot0.GetSortedKeysBatchAsync(

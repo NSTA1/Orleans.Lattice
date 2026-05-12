@@ -14,6 +14,6 @@ public interface IBaselinePartGrain : IGrainWithStringKey
     /// <summary>Returns the current state under the naïve (arrival-order) fold.</summary>
     Task<ComplianceState> GetStateAsync();
 
-    /// <summary>Returns the arrival-order fact log — useful for the evidence trail.</summary>
+    /// <summary>Returns the arrival-order fact log - useful for the evidence trail.</summary>
     Task<IReadOnlyList<Fact>> GetFactsAsync();
 }

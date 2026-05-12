@@ -17,7 +17,7 @@ namespace Orleans.Lattice;
 /// <para>
 /// The signal flows on an Orleans <see cref="RequestContext"/> entry
 /// keyed <c>"ol.cls"</c>. The flag is intentionally <em>not</em>
-/// surfaced as a slot on <see cref="LatticeMutation"/> — observers that
+/// surfaced as a slot on <see cref="LatticeMutation"/> - observers that
 /// need to honour the loop-prevention contract read
 /// <see cref="Current"/> directly inside their
 /// <see cref="IMutationObserver.OnMutationAsync"/> body, which runs

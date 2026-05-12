@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// captures the caller's ambient <see cref="LatticeDeltaContext"/> on
 /// the first <c>Prepare</c>, persists it on the saga state, and
 /// re-stamps it onto every per-key <c>SetAsync</c> / <c>DeleteAsync</c>
-/// the saga issues — including compensation rolls — so observers see
+/// the saga issues - including compensation rolls - so observers see
 /// <see cref="LatticeMutation.DeltaKind"/> /
 /// <see cref="LatticeMutation.DeltaPayload"/> populated identically on
 /// every emit.

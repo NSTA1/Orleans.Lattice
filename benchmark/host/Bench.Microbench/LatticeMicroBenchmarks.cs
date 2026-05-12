@@ -14,8 +14,8 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 
 /// <summary>
 /// BenchmarkDotNet workloads that exercise the public <see cref="ILattice"/>
-/// surface end-to-end — shard-map lookup, <see cref="IShardRootGrain"/>
-/// dispatch, and the leaf-grain primitive — through hand-instantiated grains
+/// surface end-to-end - shard-map lookup, <see cref="IShardRootGrain"/>
+/// dispatch, and the leaf-grain primitive - through hand-instantiated grains
 /// with NSubstitute mocks for the Orleans runtime seams. There is no silo
 /// and no grain dispatcher: the benchmark thread executes the entire vertical
 /// synchronously through the await chain, so the measurement isolates the
@@ -163,7 +163,7 @@ public class LatticeMicroBenchmarks
     //      records the global commit decision via ITxRegistryGrain.
     //   4. AtomicWriteGrain.CompleteSagaAsync emits the
     //      orleans.lattice.atomic_write.{completed,duration,batch_size}
-    //      instruments — the operator-visible signal for sustained
+    //      instruments - the operator-visible signal for sustained
     //      atomic-write throughput.
     // Every saga mints a fresh operationId, so each [Benchmark] iteration
     // creates a brand-new AtomicWriteGrain (and persisted state). The
@@ -181,15 +181,15 @@ public class LatticeMicroBenchmarks
     // The single-shard SetManyAtomic above measures the saga-vertical cost on the
     // best-case topology (one shard, one terminal-broadcast target). F-055's
     // acceptance text additionally requires:
-    //   (a) saga-RPS scales linearly with batch concurrency — measured by
+    //   (a) saga-RPS scales linearly with batch concurrency - measured by
     //       SetManyAtomic_Concurrent over [Arguments(1, 4, 16, 64)]; the per-saga
     //       grain RPS bound (rather than per-tree) means N independent sagas
     //       should achieve ~N× the throughput up to the activation budget.
     //   (b) the WAL-only prepare path is no slower than v3.4.0 single-key write
-    //       throughput multiplied by batch size — measured by the per-second
+    //       throughput multiplied by batch size - measured by the per-second
     //       slug ratio between SetManyAtomic and PointWrite.
     //   (c) GetAsync shows no measurable latency regression versus v3.4.0
-    //       baseline when no saga is in flight — measured by
+    //       baseline when no saga is in flight - measured by
     //       PointRead_AtomicTreeIdle, which routes through the same atomic-write
     //       code path but with empty per-leaf pending-tx buckets.
     // The 4-shard variant additionally exercises the multi-terminal-broadcast
@@ -323,7 +323,7 @@ public class LatticeMicroBenchmarks
         // Fire-and-forget auxiliary grains touched once per activation by
         // LatticeGrain.SetAsync. NSubstitute auto-mocks every Task-returning
         // method to Task.CompletedTask, which is exactly the no-op behaviour
-        // we want — the bench is not measuring tombstone compaction or hot
+        // we want - the bench is not measuring tombstone compaction or hot
         // shard monitoring.
         var compaction = Substitute.For<ITombstoneCompactionGrain>();
         _grainFactory.GetGrain<ITombstoneCompactionGrain>(Arg.Any<string>()).Returns(compaction);
@@ -334,7 +334,7 @@ public class LatticeMicroBenchmarks
         var stats = Substitute.For<ILatticeStats>();
         _grainFactory.GetGrain<ILatticeStats>(Arg.Any<string>()).Returns(stats);
 
-        // The resolver depends on the factory + monitor — same singleton
+        // The resolver depends on the factory + monitor - same singleton
         // shared by every grain layer.
         _optionsResolver = new LatticeOptionsResolver(_grainFactory, _optionsMonitor);
 
@@ -660,7 +660,7 @@ public class LatticeMicroBenchmarks
     /// against a depth-2 tree. Each invocation drives
     /// <see cref="ShardRootGrain"/>'s traversal through
     /// <c>grainFactory.GetGrain&lt;IBPlusInternalGrain&gt;(rootId)</c> exactly
-    /// once before reaching the target leaf — the call site this cycle
+    /// once before reaching the target leaf - the call site this cycle
     /// targets for caching.
     /// </summary>
     [Benchmark(Description = "Point write deep tree")]
@@ -688,7 +688,7 @@ public class LatticeMicroBenchmarks
     /// against the depth-3+ deeper tree. Each invocation drives
     /// <see cref="ShardRootGrain"/>'s read traversal through
     /// <c>grainFactory.GetGrain&lt;IBPlusInternalGrain&gt;(internalId)</c>
-    /// at every level above the leaves — at default sizing
+    /// at every level above the leaves - at default sizing
     /// (<see cref="DeeperMaxLeafKeysDefault"/> = 4,
     /// <see cref="DeeperMaxInternalChildrenDefault"/> = 4,
     /// <see cref="DeeperKeyCountDefault"/> = 256), three internal-grain
@@ -816,7 +816,7 @@ public class LatticeMicroBenchmarks
     /// regression versus v3.4.0 baseline when no saga is in flight. The
     /// atomic tree's leaves carry the same projection-cache + pending-tx
     /// structures the saga path populates, but the steady state has
-    /// empty <c>_pendingTx</c> buckets — this benchmark confirms the
+    /// empty <c>_pendingTx</c> buckets - this benchmark confirms the
     /// read fast-path skips the empty-bucket consultation cleanly.
     /// </summary>
     [Benchmark(Description = "Point read atomic tree (idle)")]
@@ -832,7 +832,7 @@ public class LatticeMicroBenchmarks
     /// against the single-shard atomic-write tree while a long-lived
     /// saga holds prepared mutations on a disjoint key set. Validates
     /// that an in-flight saga on one key partition does not regress
-    /// reads against the rest of the tree — the per-leaf pending-tx
+    /// reads against the rest of the tree - the per-leaf pending-tx
     /// consultation is keyed and short-circuits when the read key has
     /// no entry in <c>_pendingTx</c>. The pending mutations are
     /// installed in <see cref="GlobalSetup"/> via
@@ -1158,7 +1158,7 @@ public class LatticeMicroBenchmarks
     /// a synthetic transaction id. No terminal mark is ever broadcast,
     /// so the leaf's <c>_pendingTx</c> bucket stays non-empty across
     /// every <see cref="PointRead_AtomicTreeWithActiveSaga"/> iteration
-    /// — the read path's "is there a pending entry for this key?"
+    /// - the read path's "is there a pending entry for this key?"
     /// short-circuit is exercised continuously.
     /// </summary>
     private void BuildAtomicReadFixture()

@@ -48,18 +48,18 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
 
     /// <summary>
     /// Returns the raw persisted entry for <paramref name="key"/> exactly as
-    /// stored — including expiry metadata and tombstone flag — or
+    /// stored - including expiry metadata and tombstone flag - or
     /// <c>null</c> if the key has never been written to this leaf. Does
     /// <b>not</b> filter expired entries: this method is used by replication
     /// and split-shadow paths that must forward the authoritative record to
-    /// another shard without stripping its TTL. Not for general reads — use
+    /// another shard without stripping its TTL. Not for general reads - use
     /// <see cref="GetAsync"/> or <see cref="GetWithVersionAsync"/> instead.
     /// <para>
     /// Returns an <see cref="LwwEntry"/> rather than
     /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> directly because
     /// the Orleans type-alias encoder has a codec-generation race when a
     /// grain-interface signature uses
-    /// <c>Task&lt;LwwValue&lt;byte[]&gt;?&gt;</c> — it intermittently emits
+    /// <c>Task&lt;LwwValue&lt;byte[]&gt;?&gt;</c> - it intermittently emits
     /// malformed alias strings like <c>ol.lwv[[byte[]]]]]</c>. Wrapping in
     /// the flat <see cref="LwwEntry"/> DTO sidesteps the race.
     /// </para>
@@ -139,7 +139,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<string?> GetTreeIdAsync();
 
     /// <summary>
-    /// Persists the logical chain-shard index this leaf belongs to —
+    /// Persists the logical chain-shard index this leaf belongs to -
     /// the <c>shardIndex</c> half of the owning
     /// <c>ShardRootGrain</c>'s <c>{treeId}/{shardIndex}</c> grain key.
     /// Called once by the shard root after creating the grain (next to
@@ -156,7 +156,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Persists the [<paramref name="lowKeyInclusive"/>,
     /// <paramref name="highKeyExclusive"/>) ownership range for this
     /// leaf. Called exactly once at sibling-birth time by
-    /// <c>CompleteSplitAsync</c> on the donor leaf — the donor stamps
+    /// <c>CompleteSplitAsync</c> on the donor leaf - the donor stamps
     /// the split key as the sibling's low and the donor's pre-split
     /// high as the sibling's high. Idempotent: subsequent calls are
     /// no-ops once <see cref="State.LeafNodeState.LowKeyInclusive"/>
@@ -164,7 +164,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// activation time by the WAL materialiser to filter out records
     /// whose key falls outside this leaf's range (intra-shard
     /// sibling-leaf fanout regression). A <see langword="null"/>
-    /// bound means "no constraint on that side" — used both for the
+    /// bound means "no constraint on that side" - used both for the
     /// chain's leftmost leaf (low = null) and the chain's rightmost
     /// leaf (high = null), and for legacy state shapes that
     /// pre-date this slot.
@@ -204,7 +204,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <para>
     /// Used by <see cref="ILeafCacheGrain"/> to identify keys whose
     /// cached <see cref="LwwValue{T}"/> may differ from the strict
-    /// atomic-visibility outcome — those reads bypass the cache and
+    /// atomic-visibility outcome - those reads bypass the cache and
     /// dial back to the primary leaf, whose read paths consult the
     /// per-tree <see cref="ITxRegistryGrain"/> for the recorded saga
     /// outcome. Lightweight: returns the in-memory pending-key set
@@ -227,7 +227,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <summary>
     /// Bulk-merges entries (including tombstones) into this leaf using LWW semantics,
     /// preserving original timestamps. Used during splits to transfer entries without
-    /// re-stamping them. Idempotent — re-merging the same entries is a no-op.
+    /// re-stamping them. Idempotent - re-merging the same entries is a no-op.
     /// </summary>
     Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries);
 
@@ -309,7 +309,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <paramref name="committed"/> is <c>true</c> every prepared mutation
     /// recorded under the transaction is flipped into the visible
     /// projection via LWW merge; when <c>false</c> every prepared mutation
-    /// is dropped. Idempotent — replaying the same terminal mark for a
+    /// is dropped. Idempotent - replaying the same terminal mark for a
     /// leaf that holds no pending bucket under <paramref name="transactionId"/>
     /// is a no-op (the dedup guarantee survives until activation
     /// recycling, after which the WAL replay reseeds it).
@@ -324,7 +324,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// commit path), it carries the saga's committed (key, value) pairs that
     /// route to this leaf <em>at terminal-broadcast time</em>. The leaf
     /// applies the values as a LWW-safe backstop only when it holds no
-    /// pending bucket for <paramref name="transactionId"/> — i.e. when the
+    /// pending bucket for <paramref name="transactionId"/> - i.e. when the
     /// prepare-phase shadow-forward into this leaf was dropped by a mid-saga
     /// shard-split / drain race. In every other case the existing
     /// pending-flip path is the authoritative source and the backstop is a
@@ -358,8 +358,8 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <see cref="Primitives.HybridLogicalClock"/>. Used by
     /// <see cref="IShardRootGrain.AppendTxTerminalAsync"/> to compute a
     /// terminal-mark HLC strictly greater than every prepare's stamp in
-    /// the saga, so cross-cluster receivers — which merge inbound
-    /// records by HLC across WAL partitions — observe the saga's
+    /// the saga, so cross-cluster receivers - which merge inbound
+    /// records by HLC across WAL partitions - observe the saga's
     /// prepared writes <em>before</em> the terminal mark and never
     /// flush an empty pending bucket on a too-early terminal arrival.
     /// <para>

@@ -176,7 +176,7 @@ public partial class TreeMergeGrainTests
         state.State.InProgress = true;
         state.State.SourceTreeId = SourceTreeId;
 
-        // Should not throw — same source.
+        // Should not throw - same source.
         await grain.MergeAsync(SourceTreeId);
 
         // Idempotent call must leave the in-progress marker unchanged.

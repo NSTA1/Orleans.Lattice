@@ -9,7 +9,7 @@ namespace VehicleFleetSimulator.Abstractions;
 /// makes a 360 km segment a 4-hour wait.
 /// </para>
 /// <para>
-/// <see cref="IsPaused"/> is a global "freeze the simulation" flag — <c>VehicleGrain.TickAsync</c>
+/// <see cref="IsPaused"/> is a global "freeze the simulation" flag - <c>VehicleGrain.TickAsync</c>
 /// reads it via <c>SimulationRuntimeState</c> and short-circuits before touching the simulator
 /// when set. Distinct from per-vehicle <c>Stop()</c>: pause keeps every vehicle's running flag set
 /// so a single resume restarts everything in lockstep, while <c>Stop()</c> tears down the timer.

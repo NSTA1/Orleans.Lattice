@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// Regression test for audit bug #12: <see cref="HotShardMonitorGrain"/>
 /// maintains a private per-shard cooldown dictionary that was never pruned.
 /// When a shard was removed from the <see cref="ShardMap"/> (e.g. after a
-/// merge/resize), its entry remained in the dictionary forever — a slow but
+/// merge/resize), its entry remained in the dictionary forever - a slow but
 /// unbounded memory leak over the lifetime of a long-running monitor.
 /// </summary>
 public partial class HotShardMonitorGrainTests

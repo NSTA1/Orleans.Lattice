@@ -1,4 +1,4 @@
-# Orleans.Lattice — benchmark history stack.
+# Orleans.Lattice - benchmark history stack.
 #
 # Long-lived companion to docker-compose.yml. Stores summary scalars from every
 # scenario run (one data point per metric per run) so cross-run trends are

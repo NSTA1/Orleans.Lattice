@@ -112,7 +112,7 @@ public partial class BPlusLeafGrainTests
         };
         await grain.MergeManyAsync(existing);
 
-        // Merge with older timestamp — should be rejected.
+        // Merge with older timestamp - should be rejected.
         var older = new Dictionary<string, LwwValue<byte[]>>
         {
             ["key"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("old"), oldClock),

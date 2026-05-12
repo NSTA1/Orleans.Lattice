@@ -49,7 +49,7 @@ internal abstract class CoordinatorGrain<TSelf>(
     /// Hook invoked on graceful deactivation. Default is a no-op;
     /// derived classes override to flush deferred state, release
     /// pooled resources, etc. Crash deactivations bypass this hook
-    /// by design — derived classes must remain crash-safe without
+    /// by design - derived classes must remain crash-safe without
     /// it firing. A storage failure inside the hook must not block
     /// deactivation; derived classes are responsible for catching
     /// and logging their own exceptions.
@@ -68,7 +68,7 @@ internal abstract class CoordinatorGrain<TSelf>(
     /// <summary>Typed logger for derived classes.</summary>
     protected ILogger<TSelf> Logger => logger;
 
-    /// <summary>Grain context — exposes the <see cref="GrainId"/> used for reminder registration.</summary>
+    /// <summary>Grain context - exposes the <see cref="GrainId"/> used for reminder registration.</summary>
     protected IGrainContext Context => context;
 
     /// <summary>

@@ -1,8 +1,8 @@
 # Per-shard replication WAL (write-ahead log)
 
-Every replicated mutation in `Orleans.Lattice.Replication` is committed to a per-shard write-ahead log before any downstream replication consumer observes it. The WAL is the single source of truth for replication: shipping, snapshotting, and recovery all read from the WAL — never from the primary tree.
+Every replicated mutation in `Orleans.Lattice.Replication` is committed to a per-shard write-ahead log before any downstream replication consumer observes it. The WAL is the single source of truth for replication: shipping, snapshotting, and recovery all read from the WAL - never from the primary tree.
 
-> This document is the **replication-side overlay** — the per-shard sharded sink, the producer-side filters, the change-feed consumer model, and the replication-only configuration knobs. The cross-cutting WAL semantics shared with the core library — the WAL grain API, the commit pipeline, the durability boundary, the turn-safe batching protocol, recovery and rebuild, projection checkpointing, trim and GC, and origin-cluster-id stamping — all live in [`../lattice/wal.md`](../lattice/wal.md). The pluggable storage backend (in-memory vs Azure Table) lives in [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md). The causal+ entry-schema extension (vector clock + dependency summary slots on `WalRecord`) lives in [`../lattice/wal-causal-plus.md`](../lattice/wal-causal-plus.md).
+> This document is the **replication-side overlay** - the per-shard sharded sink, the producer-side filters, the change-feed consumer model, and the replication-only configuration knobs. The cross-cutting WAL semantics shared with the core library - the WAL grain API, the commit pipeline, the durability boundary, the turn-safe batching protocol, recovery and rebuild, projection checkpointing, trim and GC, and origin-cluster-id stamping - all live in [`../lattice/wal.md`](../lattice/wal.md). The pluggable storage backend (in-memory vs Azure Table) lives in [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md). The causal+ entry-schema extension (vector clock + dependency summary slots on `WalRecord`) lives in [`../lattice/wal-causal-plus.md`](../lattice/wal-causal-plus.md).
 
 ## Topology
 
@@ -32,7 +32,7 @@ For the `IWalShardGrain` API surface (`AppendAsync`, `ReadAsync`, `GetNextSequen
 
 ## Configuration
 
-```text
+```csharp verify
 siloBuilder.AddLatticeReplication(opts =>
 {
     opts.ClusterId = "site-a";
@@ -40,7 +40,7 @@ siloBuilder.AddLatticeReplication(opts =>
 });
 ```
 
-`ClusterId` is also the value the producer-side `ILatticeOriginClusterIdResolver` returns when the replication package is registered — every WAL record stamped on this silo carries `OriginClusterId = "site-a"` unless the originating mutation already carried a non-null `OriginClusterId` from upstream. See [`../lattice/wal.md`](../lattice/wal.md) for the resolver contract.
+`ClusterId` is also the value the producer-side `ILatticeOriginClusterIdResolver` returns when the replication package is registered - every WAL record stamped on this silo carries `OriginClusterId = "site-a"` unless the originating mutation already carried a non-null `OriginClusterId` from upstream. See [`../lattice/wal.md`](../lattice/wal.md) for the resolver contract.
 
 `ReplogPartitions` must be `>= 1`; the validator rejects lower values. The current implementation reads the partition count from `IOptionsMonitor<LatticeReplicationOptions>.CurrentValue`, so per-tree partition-count overrides are not honoured today.
 
@@ -54,7 +54,7 @@ Three options on `LatticeReplicationOptions` decide whether a mutation reaches t
 | `KeyFilter` | `null` | Optional `Func<string, bool>` evaluated against the mutation's key. `null` = accept every key. |
 | `KeyPrefixes` | `null` | Optional declarative prefix allowlist. `null` or empty = no prefix restriction; otherwise the key must start with at least one listed prefix (ordinal, case-sensitive). |
 
-The three filters combine with logical AND — a mutation must satisfy every configured filter to be appended. For `DeleteRange` mutations, `KeyFilter` and `KeyPrefixes` are evaluated against the inclusive start key.
+The three filters combine with logical AND - a mutation must satisfy every configured filter to be appended. For `DeleteRange` mutations, `KeyFilter` and `KeyPrefixes` are evaluated against the inclusive start key.
 
 Per-tree overrides are honoured: the observer resolves options via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeId)`, so `siloBuilder.ConfigureLatticeReplication("my-tree", o => o.KeyFilter = ...)` overrides the global default for that tree only.
 
@@ -62,15 +62,15 @@ Filters are precompiled per tree id and cached on the observer so the commit-tim
 
 ## Maintenance writes are skipped
 
-Beyond the per-tree / per-key filters above, the observer skips a second class of mutation entirely: writes classified as `MutationCategory.Maintenance` on the `LatticeMutation.Category` slot. These are library-internal structural rewrites — resize, rebalance, compaction, internal node splits / merges — that operate on state the user never authored directly and that every converged peer will run independently against its own copy of the data. Replicating them would (a) inflate every peer's vector clock with edges the writer never authored, (b) pollute the dependency graph with non-user-authored edges, and (c) generate wire traffic for events that have no semantic causal meaning.
+Beyond the per-tree / per-key filters above, the observer skips a second class of mutation entirely: writes classified as `MutationCategory.Maintenance` on the `LatticeMutation.Category` slot. These are library-internal structural rewrites - resize, rebalance, compaction, internal node splits / merges - that operate on state the user never authored directly and that every converged peer will run independently against its own copy of the data. Replicating them would (a) inflate every peer's vector clock with edges the writer never authored, (b) pollute the dependency graph with non-user-authored edges, and (c) generate wire traffic for events that have no semantic causal meaning.
 
-User-driven writes — `SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyAtomicAsync`, bulk-load, and saga compensation rolls — emit with `MutationCategory.User` (the default) and follow the existing per-tree / per-key filter path unchanged. The classification is stamped on the mutation at the producing leaf grain and arrives at the observer pre-stamped; users do not interact with the classification mechanism directly.
+User-driven writes - `SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyAtomicAsync`, bulk-load, and saga compensation rolls - emit with `MutationCategory.User` (the default) and follow the existing per-tree / per-key filter path unchanged. The classification is stamped on the mutation at the producing leaf grain and arrives at the observer pre-stamped; users do not interact with the classification mechanism directly.
 
-The maintenance gate runs **before** mode resolution and per-key filters: a maintenance emit pays nothing more than a single enum compare on the commit-time hot path. The classification is also independent of `OriginClusterId` — a remote-origin maintenance emit (from a peer's apply path that itself ran under maintenance) is still `Maintenance` and still skips the WAL.
+The maintenance gate runs **before** mode resolution and per-key filters: a maintenance emit pays nothing more than a single enum compare on the commit-time hot path. The classification is also independent of `OriginClusterId` - a remote-origin maintenance emit (from a peer's apply path that itself ran under maintenance) is still `Maintenance` and still skips the WAL.
 
 ## Sink failure semantics
 
-WAL-append failures propagate. A failure inside `IReplogSink.WriteAsync` flows back out of the commit-time observer, and because the observer fires inside the originating grain's write path, the failure surfaces as the same exception the underlying storage provider threw — the calling `ILattice.SetAsync` / `DeleteAsync` / `DeleteRangeAsync` observes it. This guarantees that every committed mutation is also captured for replication.
+WAL-append failures propagate. A failure inside `IReplogSink.WriteAsync` flows back out of the commit-time observer, and because the observer fires inside the originating grain's write path, the failure surfaces as the same exception the underlying storage provider threw - the calling `ILattice.SetAsync` / `DeleteAsync` / `DeleteRangeAsync` observes it. This guarantees that every committed mutation is also captured for replication.
 
 There is intentionally no opt-in "best-effort" mode that would catch the exception and let the primary write report success while silently dropping the change-feed record. Silent change-feed drops are exactly the hazard commit-time capture exists to remove; a host that wants different semantics for a specific tree should compose its own `IMutationObserver` rather than configure correctness away.
 
@@ -78,7 +78,7 @@ The append-time failure semantics inside the WAL grain itself (offset rollback, 
 
 ## Why a WAL grain rather than ship-time read
 
-This design fixes three sample-pipeline shortcuts called out in the [replication design](./replication-design.md):
+This design fixes three sample-pipeline shortcuts that the original outgoing-call-filter prototype exhibited:
 
 - **No ship-time value read.** The captured `WalRecord` already carries the value (or delta) at commit-time HLC; the ship loop never re-reads the primary.
 - **No host-level outgoing-call filter.** Capture happens grain-side via `IMutationObserver`, so the WAL append is atomic with the write rather than a best-effort post-write hook.
@@ -86,7 +86,7 @@ This design fixes three sample-pipeline shortcuts called out in the [replication
 
 ## Reading from the WAL
 
-Direct grain access is the low-level entry point; in-process consumers should use [`IChangeFeed`](./change-feed.md) instead. The change feed walks every WAL partition for a tree, filters by HLC cursor and origin, and merges the result in HLC ascending order — the seam the outbound shipper and the future local materialiser plug into.
+Direct grain access is the low-level entry point; in-process consumers should use [`IChangeFeed`](./change-feed.md) instead. The change feed walks every WAL partition for a tree, filters by HLC cursor and origin, and merges the result in HLC ascending order - the seam the outbound shipper and the future local materialiser plug into.
 
 ## Pluggable durability (replication-only override)
 
@@ -94,7 +94,8 @@ The replication WAL grain shape (`IWalShardGrain`) is the WAL's **logical** cont
 
 `LatticeReplicationOptions` adds one replication-only override on top of that seam: a per-tree resolver delegate that lets a host pick a different provider per tree.
 
-```text
+```csharp verify
+IWalStorageProvider myCustomProvider = new InMemoryWalStorageProvider();
 siloBuilder.AddLatticeReplication(opts =>
 {
     opts.ClusterId = "site-a";
@@ -111,6 +112,6 @@ The exchanged `WalEntry` carries the dense per-shard `Offset` and the captured `
 
 ## Testing
 
-- Unit tests against the grain (`ReplogShardGrainTests`) instantiate it with substituted `IGrainContext`/`IServiceProvider`/`IOptionsMonitor<LatticeReplicationOptions>` and an `InMemoryWalStorageProvider`, calling the internal `InitializeForTestingAsync` test seam to bypass Orleans activation.
-- Integration tests (`ReplogShardWalIntegrationTests`) bring up a single-silo `TestCluster` with `AddLattice` + `AddLatticeReplication` and assert that WAL entries appear after `ILattice.SetAsync` / `DeleteAsync`.
+- Unit tests against the grain (`WalShardGrainTests`) instantiate it with substituted `IGrainContext`/`IServiceProvider`/`IOptionsMonitor<LatticeReplicationOptions>` and an `InMemoryWalStorageProvider`, calling the internal `InitializeForTestingAsync` test seam to bypass Orleans activation.
+- Integration tests (`WalShardWalIntegrationTests`) bring up a single-silo `TestCluster` with `AddLattice` + `AddLatticeReplication` and assert that WAL entries appear after `ILattice.SetAsync` / `DeleteAsync`.
 
