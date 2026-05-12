@@ -92,7 +92,6 @@ public class ChaosReshardIntegrationTests
     }
 
     [Test]
-    [Ignore("Temporarily disabled to unblock CI; reshard-under-chaos flakes intermittently and is being stabilised separately.")]
     public async Task Chaos_reshard_under_concurrent_load_preserves_all_data()
     {
         var treeId = $"reshard-chaos-{Guid.NewGuid():N}";
