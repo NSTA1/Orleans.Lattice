@@ -93,7 +93,7 @@
                                     <button class="outline"
                                             disabled="@(_busy || !dirty)"
                                             @onclick="() => ApplySiteAsync(state.Site)"
-                                            title="@(dirty ? "Unsaved edits — click to apply." : "No pending edits.")">
+                                            title="@(dirty ? "Unsaved edits - click to apply." : "No pending edits.")">
                                         @(dirty ? "Apply *" : "Apply")
                                     </button>
                                 </td>
@@ -213,7 +213,7 @@
             {
                 // An out-of-band change (preset apply, another browser tab,
                 // grain lifecycle) means the authoritative state is the
-                // grain's — clobber any stale local edits so the UI reflects
+                // grain's - clobber any stale local edits so the UI reflects
                 // reality.
                 await RefreshAsync(forceReset: true);
                 await InvokeAsync(StateHasChanged);
@@ -279,7 +279,7 @@
 
     /// <summary>
     /// Fires from <c>@bind:after</c> on the boolean toggles (pause,
-    /// reorder). A checkbox is a binary decision — the operator should
+    /// reorder). A checkbox is a binary decision - the operator should
     /// not also have to remember to click "Apply" for the change to reach
     /// the <c>IProcessSiteGrain</c>. Numeric fields (delay) keep the
     /// explicit Apply semantics so mid-typing values don't round-trip.
@@ -313,8 +313,8 @@
         try
         {
             await Router.ApplyPresetAsync(preset);
-            _lastPresetDescription = $"Applied: {ChaosPresetInfo.GetDisplayName(preset)} — {ChaosPresetInfo.GetDescription(preset)}";
-            // A preset is an out-of-band, multi-site overwrite — stomp any
+            _lastPresetDescription = $"Applied: {ChaosPresetInfo.GetDisplayName(preset)} - {ChaosPresetInfo.GetDescription(preset)}";
+            // A preset is an out-of-band, multi-site overwrite - stomp any
             // stale local edits so the new config is visible immediately.
             await RefreshAsync(forceReset: true);
         }

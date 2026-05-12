@@ -97,7 +97,7 @@ public sealed class PublicApiContractClusterFixture
         Cluster = await BuildAndDeployAsync();
     }
 
-    /// <summary>Drains all captured mutations — call between tests that need observer assertions.</summary>
+    /// <summary>Drains all captured mutations - call between tests that need observer assertions.</summary>
     public static IReadOnlyList<LatticeMutation> DrainObserverEvents()
     {
         var list = new List<LatticeMutation>();

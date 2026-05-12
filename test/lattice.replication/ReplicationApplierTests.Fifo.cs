@@ -33,7 +33,7 @@ public partial class ReplicationApplierTests
             LatticeReplicationMetrics.ApplyFifoViolationsName);
 
         // GetAsync returns Zero throughout so HWM dedupe never short-circuits
-        // — this exposes the FIFO regression rather than masking it.
+        // - this exposes the FIFO regression rather than masking it.
         var (applier, _, apply, _) = CreateApplier();
 
         await applier.ApplyAsync(SetEntry("k", Hlc(20)));
@@ -64,8 +64,8 @@ public partial class ReplicationApplierTests
 
         var (applier, _, _, _) = CreateApplier();
 
-        // Origin "site-b": HLC 10 then HLC 20 — strictly increasing.
-        // Origin "site-c": HLC 5 — independent of "site-b"'s tracker;
+        // Origin "site-b": HLC 10 then HLC 20 - strictly increasing.
+        // Origin "site-c": HLC 5 - independent of "site-b"'s tracker;
         // must not record a violation against either origin.
         await applier.ApplyAsync(SetEntry("k", Hlc(10), origin: "site-b"));
         await applier.ApplyAsync(SetEntry("k", Hlc(5), origin: "site-c"));
@@ -96,7 +96,7 @@ public partial class ReplicationApplierTests
 
         await applier.ApplyAsync(SetEntry("k", Hlc(20)) with { TreeId = "tree-a" });
         // tree-b sees a "lower" HLC than tree-a's last apply, but it's a
-        // different tree — must not record a violation.
+        // different tree - must not record a violation.
         await applier.ApplyAsync(SetEntry("k", Hlc(5)) with { TreeId = "tree-b" });
 
         Assert.That(collector.Measurements, Is.Empty);
@@ -112,7 +112,7 @@ public partial class ReplicationApplierTests
         var (applier, _, _, _) = CreateApplier();
 
         await applier.ApplyAsync(SetEntry("k", Hlc(20)));
-        // A range delete carries HLC.Zero by design — must not register
+        // A range delete carries HLC.Zero by design - must not register
         // a violation despite Zero < 20, and must not overwrite the prior
         // recorded HLC for this origin.
         await applier.ApplyAsync(RangeDeleteEntry("a", "z"));
@@ -167,7 +167,7 @@ public partial class ReplicationApplierTests
     /// Drained entries pass through the same per-(tree, origin) FIFO
     /// tracker as direct applies. A parked entry that replays at a
     /// lower HLC than a previously-applied sibling from the same
-    /// origin must record a violation on the drain-side path —
+    /// origin must record a violation on the drain-side path -
     /// observability of transport-level FIFO regressions does not
     /// hinge on whether the entry took the direct or buffered apply
     /// path.
@@ -187,7 +187,7 @@ public partial class ReplicationApplierTests
 
         // Simulate a transport-level regression that desynchronises the
         // per-origin HWM diagonal from the applier's in-memory FIFO
-        // tracker — the tracker still holds 200, but the next delivery
+        // tracker - the tracker still holds 200, but the next delivery
         // from RemoteCluster passes the HWM check. Without this, the
         // HWM dedup would short-circuit the parked-entry path before it
         // could exercise the drain-side RecordFifoState branch.
@@ -202,13 +202,13 @@ public partial class ReplicationApplierTests
         var parkResult = await h.Applier.ApplyAsync(blocked);
         Assert.That(parkResult.Applied, Is.False, "Cross-origin dep is unsatisfied; entry must park.");
 
-        // No violation has been recorded yet — only successful applies
+        // No violation has been recorded yet - only successful applies
         // touch the tracker, and the parked entry has not applied.
         Assert.That(collector.Measurements, Is.Empty,
             "Parking must not record a FIFO violation; the entry has not yet applied.");
 
         // Satisfier from OriginC@500 applies directly and triggers a
-        // drain pass that replays "k-blocked" at HLC 150 — below the
+        // drain pass that replays "k-blocked" at HLC 150 - below the
         // tracker's 200 for (tree, RemoteCluster). The drain-side apply
         // must record a single FIFO violation tagged with the right
         // tree and origin.

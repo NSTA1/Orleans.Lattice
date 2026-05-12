@@ -1,4 +1,4 @@
-# MultiSiteManufacturing — approach
+# MultiSiteManufacturing - approach
 
 The reasoning and semantics behind the sample: the domain model and
 fold, the chaos-tier layering, seeder strategy, replication
@@ -11,8 +11,8 @@ view (topology, components, grains, trees, sequence diagrams) see
 
 ## 1. Process model and facts
 
-A turbine blade moves through six process stages — `Forge`,
-`HeatTreat`, `Machining`, `NDT`, `MRB`, `FAI` — distributed across
+A turbine blade moves through six process stages - `Forge`,
+`HeatTreat`, `Machining`, `NDT`, `MRB`, `FAI` - distributed across
 seven named sites (Ohio Forge, Nagoya Heat Treatment, Stuttgart
 Machining, Stuttgart CMM Lab, Toulouse NDT Lab, Cincinnati MRB,
 Bristol FAI).
@@ -46,14 +46,14 @@ The lattice is totally ordered. `ComplianceFold.Fold` sorts facts by
 `StateTransitions.Apply` as a running `Max`, with a `retestArmed` flag
 threaded through to gate `MRBDisposition(UseAsIs)` demotion of
 `Rework` → `Nominal`. The arrival-order baseline (`NaiveFold.Step`)
-delegates to the same `StateTransitions.Apply` — the **only**
+delegates to the same `StateTransitions.Apply` - the **only**
 difference between the two folds is the order in which facts are
 applied. Divergence in the dashboard is therefore purely an ordering
 artefact, which is the property the sample exists to demonstrate.
 
 `Scrap` is terminal: any fact applied to a part already in `Scrap` is
 a no-op. `ReworkCompleted(retestPassed=false)` escalates to
-`FlaggedForReview` and clears `retestArmed` — a failed retest is
+`FlaggedForReview` and clears `retestArmed` - a failed retest is
 defect evidence and must remain observable, even when a prior
 `UseAsIs` had demoted the part.
 
@@ -62,16 +62,16 @@ defect evidence and must remain observable, even when a prior
 `IFactBackend` has two implementations running side by side behind a
 fan-out `FederationRouter`:
 
-- **Baseline** — an Orleans grain per part that appends facts in
+- **Baseline** - an Orleans grain per part that appends facts in
   arrival order. Drifts under chaos-induced reorder. On peer
   clusters the baseline is *also* fed by the inbound replication
   endpoint (decoding every replicated `mfg-facts` Set entry and
   re-emitting it locally), which models naive event-log
-  replication — enough for cold-seed parity across clusters, but
+  replication - enough for cold-seed parity across clusters, but
   still vulnerable to divergence under concurrent writes because
   the peer applies replicated batches in HLC order while the
   originating cluster applied its local writes in arrival order.
-- **Lattice** — persists facts to the `mfg-facts` tree and computes
+- **Lattice** - persists facts to the `mfg-facts` tree and computes
   `ComplianceState` by scanning and folding in HLC order. Converges
   under reorder.
 
@@ -80,7 +80,7 @@ backend **independently**. Applying a 10 % transient-fault rate to
 only the lattice backend (or only the baseline) is the canonical way
 to surface divergence without a scripted saga. Storage-provider-level
 chaos (wrapping the `TableServiceClient` itself) is explicitly out of
-scope — the decorator tier exercises the same failure modes at a
+scope - the decorator tier exercises the same failure modes at a
 cleaner seam without coupling tests to the Azure SDK.
 
 ## 4. Fault-injection tiers
@@ -103,14 +103,14 @@ steady and the local WAL keeps growing. Once the flag clears,
 replication resumes from the stationary cursor and catches the peer
 up with the accumulated backlog.
 Tier 5 achieves the same effect at the transport layer without
-co-operation from the application — useful as a forcing function
+co-operation from the application - useful as a forcing function
 when proving the replicator's cursor and backoff behaviour.
 
 All chaos state lives in **durable** grains (`IProcessSiteGrain`,
 `IBackendChaosGrain`, `IPartitionChaosGrain`,
 `IReplicationDisconnectGrain`) persisted to Azure Table Storage. A
 host restart re-renders current chaos configuration from grain
-storage — only the UI's fly-out open/closed bit is process-local.
+storage - only the UI's fly-out open/closed bit is process-local.
 This matches how a real MES would persist site availability flags.
 
 ## 5. Bulk-load strategy
@@ -119,9 +119,9 @@ This matches how a real MES would persist site availability flags.
 singleton `IInventorySeedStateGrain` with a persisted `HasSeeded` flag
 gates the work, so only the first silo to win the race actually
 seeds. Five parts (one representative per reachable
-`ComplianceState` — `Nominal`, `Nominal` + FAI signed off,
+`ComplianceState` - `Nominal`, `Nominal` + FAI signed off,
 `FlaggedForReview`, `Rework`, `Scrap`) are emitted through
-`FederationRouter` — the same path operators use — so both backends
+`FederationRouter` - the same path operators use - so both backends
 agree before chaos is applied.
 
 `UnderInspection` is deliberately skipped: the fact grammar has no
@@ -177,7 +177,7 @@ Three sample-specific seams sit alongside the package:
   strip; without it, a Blazor circuit pinned to one silo would only
   see that silo's slice of replication activity.
 
-> **Known limitation — cross-cluster receiver catch-up.** When one
+> **Known limitation - cross-cluster receiver catch-up.** When one
 > cluster has been running long enough to GC old WAL entries and the
 > peer's cursor has fallen behind that point, auto-bootstrap fires
 > against the package's default `ISnapshotProvider` (which reads the
@@ -204,7 +204,7 @@ Storage Queues (provider `DashboardStreams`, namespace
 `msmfg.dashboard.facts`, single queue `msmfgdashboard-0`) and
 subscribes to the same stream on every silo. This is what lets a
 Blazor circuit pinned to silo B receive live updates for facts that
-landed on silo A — each silo's broadcaster is both publisher and
+landed on silo A - each silo's broadcaster is both publisher and
 subscriber, and the per-circuit `Channel<T>` fan-out runs only on the
 receiving side of the stream, so the same code path handles
 local-origin and peer-origin facts uniformly. The queue-backed
@@ -225,9 +225,9 @@ state genuinely requires operator choice (MRB disposition, NDT
 outcome, rework retest). A separate always-available form raises
 non-conformances at any lifecycle stage.
 
-The chaos fly-out is a single persistent side panel — clearly
+The chaos fly-out is a single persistent side panel - clearly
 labelled ("Simulate 4-second latency at Toulouse NDT Lab", not
-`delay=4000`) — with per-site rows, per-backend sliders, and canned
+`delay=4000`) - with per-site rows, per-backend sliders, and canned
 presets (*Transoceanic backhaul outage*, *Customs hold*, *MRB
 weekend*, *Lattice storage flakes*, *Cluster split*, *Replication
 disconnect*, *Clear all*). An active-chaos banner outside the
@@ -237,7 +237,7 @@ active injections.
 ## 8. Testing philosophy
 
 All tests run against Orleans `TestingHost` fixtures with in-memory
-storage — no Azurite dependency in the test suite, keeping CI fast
+storage - no Azurite dependency in the test suite, keeping CI fast
 and hermetic. The cross-cluster replication path itself is covered by
 the `Orleans.Lattice.Replication` and
 `Orleans.Lattice.Replication.Grpc` packages' own test suites; the
@@ -255,8 +255,8 @@ excluded from the iterative development filter:
 dotnet test --filter "TestCategory!=Chaos"
 ```
 
-The cross-cluster replication path itself — WAL, shipper, applier,
-gRPC push transport, dead-letter handling, bootstrap — is covered by
+The cross-cluster replication path itself - WAL, shipper, applier,
+gRPC push transport, dead-letter handling, bootstrap - is covered by
 the test suites of `Orleans.Lattice.Replication` and
 `Orleans.Lattice.Replication.Grpc`. The sample's tests stay focused on
 the sample-specific seams listed in §6.

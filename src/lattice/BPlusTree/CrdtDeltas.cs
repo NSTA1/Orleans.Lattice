@@ -11,7 +11,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// The strings are part of the <em>internal</em> producer/consumer
 /// contract between this assembly and <c>Orleans.Lattice.Replication</c>
 /// (which has <c>InternalsVisibleTo</c> on this assembly). They are not
-/// a public API surface — external observers should treat unknown kinds
+/// a public API surface - external observers should treat unknown kinds
 /// as opaque.
 /// </remarks>
 internal static class CrdtDeltaKinds

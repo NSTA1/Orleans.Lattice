@@ -236,7 +236,7 @@ public partial class LeafCacheGrainTests
             .Returns(DeltaWith(("k1", Encoding.UTF8.GetBytes("v1"))));
         await grain.GetAsync("k1");
 
-        // Second call returns empty delta — cached value should still be there.
+        // Second call returns empty delta - cached value should still be there.
         leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
 
         var result = await grain.GetAsync("k1");
@@ -301,7 +301,7 @@ public partial class LeafCacheGrainTests
         leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(delta1);
         await grain.GetAsync("k1");
 
-        // Second delta: k1 = "older" with lower clock — should be ignored by LWW merge.
+        // Second delta: k1 = "older" with lower clock - should be ignored by LWW merge.
         var delta2 = new StateDelta
         {
             Entries = new Dictionary<string, LwwValue<byte[]>>
@@ -352,7 +352,7 @@ public partial class LeafCacheGrainTests
                 ("z", Encoding.UTF8.GetBytes("3"))));
         await grain.GetAsync("a"); // triggers refresh
 
-        // Now the primary reports a split at "m" — entries >= "m" belong to the sibling.
+        // Now the primary reports a split at "m" - entries >= "m" belong to the sibling.
         var splitDelta = new StateDelta
         {
             Entries = new Dictionary<string, LwwValue<byte[]>>(),
@@ -379,7 +379,7 @@ public partial class LeafCacheGrainTests
             .Returns(DeltaWith(("a", Encoding.UTF8.GetBytes("1")), ("z", Encoding.UTF8.GetBytes("2"))));
         await grain.GetAsync("a");
 
-        // Report split key multiple times — should not crash or remove "a".
+        // Report split key multiple times - should not crash or remove "a".
         var splitDelta = new StateDelta
         {
             Entries = new Dictionary<string, LwwValue<byte[]>>
@@ -408,7 +408,7 @@ public partial class LeafCacheGrainTests
             .Returns(DeltaWith(("a", Encoding.UTF8.GetBytes("1")), ("z", Encoding.UTF8.GetBytes("2"))));
         await grain.GetAsync("a");
 
-        // Delta with no split key — nothing pruned.
+        // Delta with no split key - nothing pruned.
         leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
 
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("a"))!), Is.EqualTo("1"));
@@ -553,7 +553,7 @@ public partial class LeafCacheGrainTests
         var result = await grain.GetAsync("k1");
 
         Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("v1"));
-        // Only 1 delta call — the second was skipped due to TTL.
+        // Only 1 delta call - the second was skipped due to TTL.
         await leaf.Received(1).GetDeltaSinceAsync(Arg.Any<VersionVector>());
     }
 

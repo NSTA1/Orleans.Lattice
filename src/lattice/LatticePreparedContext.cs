@@ -5,7 +5,7 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Internal ambient prepare-phase flag used to stamp
 /// <see cref="LatticeMutation.IsPrepared"/> for the duration of a saga's
-/// prepare-phase write. Public callers do not interact with this type —
+/// prepare-phase write. Public callers do not interact with this type -
 /// the <c>AtomicWriteGrain</c> coordinator wraps its prepare-phase
 /// per-key writes in <see cref="BeginScope"/> so the leaf grain's commit
 /// pipeline routes the mutation into the per-leaf in-memory

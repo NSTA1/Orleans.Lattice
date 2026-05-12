@@ -26,7 +26,7 @@ internal sealed record TreeRegistryEntry
     /// Physical tree ID that this logical tree ID maps to, or <c>null</c> if the
     /// logical ID is the physical ID (the default). Used by tree aliasing to redirect
     /// reads and writes to a different physical tree after a resize operation.
-    /// Only a single level of indirection is supported — a physical tree must not
+    /// Only a single level of indirection is supported - a physical tree must not
     /// itself have a <see cref="PhysicalTreeId"/>.
     /// </summary>
     [Id(3)] public string? PhysicalTreeId { get; init; }
@@ -46,7 +46,7 @@ internal sealed record TreeRegistryEntry
     /// adaptive splits, or <c>null</c> if no split has yet occurred.
     /// Used by <see cref="ILatticeRegistry.AllocateNextShardIndexAsync"/> to
     /// hand out unique target shard indices when multiple splits run
-    /// concurrently for the same tree ( — <c>MaxConcurrentAutoSplits</c> &gt; 1).
+    /// concurrently for the same tree ( - <c>MaxConcurrentAutoSplits</c> &gt; 1).
     /// </summary>
     [Id(5)] public int? NextShardIndex { get; init; }
 

@@ -168,7 +168,7 @@ public class ComplianceFoldTests
     {
         // A failed retest arriving against a part the fold currently sees as
         // Nominal (e.g. after a prior UseAsIs demotion) must still be
-        // observable — a failed retest is defect evidence.
+        // observable - a failed retest is defect evidence.
         var facts = new Fact[]
         {
             new ReworkCompleted
@@ -185,7 +185,7 @@ public class ComplianceFoldTests
     [Test]
     public void ReworkCompleted_retestFailed_preserves_higher_Rework_state()
     {
-        // For a part already in Rework, a failed retest must not demote it —
+        // For a part already in Rework, a failed retest must not demote it -
         // Max(Rework, FlaggedForReview) = Rework.
         var facts = new Fact[]
         {

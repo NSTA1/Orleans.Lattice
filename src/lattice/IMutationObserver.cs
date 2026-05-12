@@ -20,7 +20,7 @@ namespace Orleans.Lattice;
 /// inline before the grain method returns. Every millisecond spent inside
 /// the observer is a millisecond added to the caller's write latency and
 /// a millisecond during which no other call to that grain can be
-/// dispatched. Implementations must return quickly — do not issue
+/// dispatched. Implementations must return quickly - do not issue
 /// synchronous network I/O, database writes, or external HTTP calls
 /// directly from the hook. The canonical safe pattern is to enqueue a
 /// copy of the <see cref="LatticeMutation"/> onto a
@@ -29,7 +29,7 @@ namespace Orleans.Lattice;
 /// path only pays the cost of a channel write.
 /// </para>
 /// <para><b>Failure semantics.</b> Exceptions thrown by the observer are
-/// caught, logged as a warning, and suppressed — the write has already
+/// caught, logged as a warning, and suppressed - the write has already
 /// been persisted and cannot be rolled back. Observers that need at-least-once
 /// delivery must durably record the mutation themselves (for example to a
 /// local WAL or outbox) before returning, and retry out-of-band. A silent
@@ -50,13 +50,13 @@ namespace Orleans.Lattice;
 /// rollback replays, and snapshot / restore bulk loads are silent because
 /// they are replays of mutations already published at their origin. In a
 /// multi-cluster topology the replication package is responsible for
-/// surfacing cross-cluster events — the core hook is local-origin only.
+/// surfacing cross-cluster events - the core hook is local-origin only.
 /// </para>
 /// <para><b>DeleteRange shape.</b> A <see cref="MutationKind.DeleteRange"/>
 /// event is published <b>once per shard</b> that received the range
 /// (<i>not</i> once per tombstoned key and <i>not</i> once per user call),
 /// and is emitted <b>even when a given shard matched zero live keys</b>
-/// — replication consumers must propagate the range to peer clusters
+/// - replication consumers must propagate the range to peer clusters
 /// unconditionally because peer clusters may hold keys in it. A single
 /// <c>ILattice.DeleteRangeAsync</c> invocation against an N-shard tree
 /// therefore produces up to N identical-payload
@@ -76,7 +76,7 @@ namespace Orleans.Lattice;
 /// <para><b>Ordering.</b> Within a single leaf grain, observer invocations
 /// for successive mutations on the same key are strictly ordered.
 /// Ordering across keys, across leaves, or across trees is <b>not</b>
-/// guaranteed — the hook fires on whichever grain committed the write,
+/// guaranteed - the hook fires on whichever grain committed the write,
 /// and different grains run on different schedulers. Consumers that need
 /// a global order must impose one downstream (for example via the HLC on
 /// each <see cref="LatticeMutation"/>).

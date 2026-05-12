@@ -9,7 +9,7 @@ namespace VehicleFleetSimulator.Api.Streams;
 /// <see cref="FleetStreamHub"/>. Subscriber-driven: only registers the upstream Orleans observer
 /// while at least one downstream gRPC client is connected. When the last client disconnects the
 /// observer is torn down so the silo stops shipping 1000 msg/s of telemetry to a hub that would
-/// just throw it away — the post-disconnect CPU + GC pressure on the API came from exactly that.
+/// just throw it away - the post-disconnect CPU + GC pressure on the API came from exactly that.
 /// </summary>
 internal sealed class TelemetryFanOutService : IHostedService, IDisposable
 {
@@ -50,7 +50,7 @@ internal sealed class TelemetryFanOutService : IHostedService, IDisposable
     private void OnActiveSubscribersChanged(bool hasSubscribers)
     {
         if (_stopped) return;
-        // Subscribe / unsubscribe involves cross-grain calls — never run them on the publisher's
+        // Subscribe / unsubscribe involves cross-grain calls - never run them on the publisher's
         // thread under FleetStreamHub._gate. Fire and forget; AttachAsync / DetachAsync are
         // serialised by _gate (the SemaphoreSlim) so transitions can't interleave.
         _ = Task.Run(async () =>

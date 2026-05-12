@@ -209,9 +209,9 @@ public sealed class OperatorActions(FederationRouter router, OperatorClock clock
     /// <c>Nominal → Flagged → Flagged → Nominal</c>. <c>NaiveFold</c>
     /// (baseline backend) applies facts in <i>arrival</i> order; whenever
     /// the three facts land in any order other than the emission order
-    /// — e.g. under the <see cref="ChaosPreset.BaselineReorderStorm"/>
+    /// - e.g. under the <see cref="ChaosPreset.BaselineReorderStorm"/>
     /// preset or when <see cref="SiteConfig.ReorderEnabled"/> flushes a
-    /// previously-paused site's queue — baseline cannot demote a flag
+    /// previously-paused site's queue - baseline cannot demote a flag
     /// that has not yet been raised, and the part diverges from lattice.
     /// This is the canonical UI-driven way to surface a red-highlighted
     /// row in the inventory grid.
@@ -278,7 +278,7 @@ public sealed class OperatorActions(FederationRouter router, OperatorClock clock
         // (Nominal -> Flagged -> Flagged -> Nominal). Baseline applies
         // facts in arrival order, so racing emissions + per-site delays
         // + (optionally) the backend reorder buffer can deliver the
-        // MRB or Inspection <i>before</i> the NCR — at which point
+        // MRB or Inspection <i>before</i> the NCR - at which point
         // baseline cannot demote a flag that has not yet been raised
         // and the part diverges from lattice.
         var tasks = new Task<bool>[facts.Length];
@@ -329,7 +329,7 @@ public sealed class OperatorActions(FederationRouter router, OperatorClock clock
     /// <see cref="RaceAsync"/> trio under chaos (baseline Flagged vs.
     /// lattice Nominal). It does <i>not</i> demote unarmed
     /// <see cref="ComplianceState.Rework"/> or terminal
-    /// <see cref="ComplianceState.Scrap"/> — those divergences require
+    /// <see cref="ComplianceState.Scrap"/> - those divergences require
     /// a proper retest + re-disposition sequence and are deliberately
     /// not auto-fixable from a single click.
     /// </para>
@@ -380,7 +380,7 @@ public sealed class OperatorActions(FederationRouter router, OperatorClock clock
 /// </summary>
 /// <param name="Forwarded">Count of facts that reached the backends and raised <c>FactRouted</c>.</param>
 /// <param name="Held">Count of facts held by an origin site grain's chaos config.</param>
-/// <param name="Site">Principal origin site for the race (Cincinnati MRB — the decisive disposition).</param>
+/// <param name="Site">Principal origin site for the race (Cincinnati MRB - the decisive disposition).</param>
 public readonly record struct RaceResult(int Forwarded, int Held, ProcessSite Site)
 {
     /// <summary>True when every emitted fact was held (no downstream side effects).</summary>

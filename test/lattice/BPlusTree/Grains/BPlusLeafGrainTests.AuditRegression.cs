@@ -8,12 +8,12 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <summary>
 /// Regression tests for audit findings:
 /// <list type="bullet">
-///   <item>Bug #3 — <see cref="BPlusTree.Grains.BPlusLeafGrain.MergeEntriesAsync"/> and
+///   <item>Bug #3 - <see cref="BPlusTree.Grains.BPlusLeafGrain.MergeEntriesAsync"/> and
 ///   <see cref="BPlusTree.Grains.BPlusLeafGrain.MergeManyAsync"/> must advance the local
 ///   <see cref="LeafNodeState.Clock"/> past the highest incoming timestamp, otherwise
 ///   a subsequent local <c>SetAsync</c> produces a stamp that still loses LWW against
 ///   the just-merged (possibly future-dated) entry, causing silent write loss.</item>
-///   <item>Bug #2 — <see cref="BPlusTree.Grains.BPlusLeafGrain.CompactTombstonesAsync"/>
+///   <item>Bug #2 - <see cref="BPlusTree.Grains.BPlusLeafGrain.CompactTombstonesAsync"/>
 ///   must not mark itself as "up-to-date" when tombstones were left behind because they
 ///   were still within the grace period. Doing so causes every subsequent pass to be
 ///   short-circuited, and the tombstones are never swept.</item>
@@ -62,7 +62,7 @@ public partial class BPlusLeafGrainTests
             ["k"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("remote"), futureClock)
         });
 
-        // A subsequent local write should be the latest value — but without
+        // A subsequent local write should be the latest value - but without
         // clock advancement, HLC.Tick returns a stamp lower than futureClock
         // and the local write is silently dropped by LWW.Merge.
         await grain.SetAsync("k", Encoding.UTF8.GetBytes("local"));
@@ -124,11 +124,11 @@ public partial class BPlusLeafGrainTests
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
 
-        // Insert a tombstone stamped "now" — within a 1h grace window.
+        // Insert a tombstone stamped "now" - within a 1h grace window.
         await grain.SetAsync("k", Encoding.UTF8.GetBytes("v"));
         await grain.DeleteAsync("k");
 
-        // First pass: grace not yet elapsed — nothing removed.
+        // First pass: grace not yet elapsed - nothing removed.
         var removed1 = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
         Assert.That(removed1, Is.EqualTo(0));
         Assert.That(state.State.Entries.ContainsKey("k"), Is.True,

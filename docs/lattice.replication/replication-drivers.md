@@ -1,8 +1,8 @@
 # Replication drivers
 
 This document describes the **production drivers** that turn the dormant
-replication primitives — the change feed, the WAL storage provider, the
-WAL garbage collector, and the fall-off-the-log detector — into a running
+replication primitives - the change feed, the WAL storage provider, the
+WAL garbage collector, and the fall-off-the-log detector - into a running
 end-to-end pipeline. Without these drivers, calling `AddLatticeReplication`
 yields the seam set but emits nothing on the wire and trims nothing from
 disk: every metric on `LatticeReplicationMetrics` other than
@@ -28,14 +28,14 @@ migration on silo loss without leader election.
 The shipper is per-peer because per-peer back-pressure isolation must not
 couple peers to each other; one slow peer cannot block any other.
 The maintenance grain is per-tree because GC and fall-off probing are
-tree-scoped, not peer-scoped — running them once per tree avoids
+tree-scoped, not peer-scoped - running them once per tree avoids
 N-fold-redundant work that scales with peer count.
 
 ### Activation
 
 A hosted background service (`ReplicationDriverActivationService`,
 `BackgroundService`) calls `EnsureActiveAsync` on the cluster-singleton
-grain for every replicated tree on startup. Calls are idempotent — Orleans
+grain for every replicated tree on startup. Calls are idempotent - Orleans
 deduplicates concurrent activations via grain identity, and
 `StartCoordinatorAsync` short-circuits when a reminder + phase timer are
 already wired.
@@ -49,7 +49,7 @@ only exits when every pending grain is active or the host's
 `stoppingToken` is cancelled.
 
 ```csharp
-// Hosts opt into the drivers transparently — registration is part
+// Hosts opt into the drivers transparently - registration is part
 // of AddLatticeReplication.
 siloBuilder.AddLatticeReplication(opts =>
 {
@@ -70,7 +70,7 @@ siloBuilder.AddLatticeReplication(opts =>
 
 Every phase tick (default 200 ms) the shipper:
 
-1. Honours the backoff budget set by the previous failed attempt — if
+1. Honours the backoff budget set by the previous failed attempt - if
    `_nextRetryAtUtc > now`, the tick returns immediately.
 2. Drains a batch up to `LatticeReplicationOptions.ShipBatchSize` entries
    past the persisted cursor from the change feed.
@@ -99,28 +99,28 @@ In addition to the phase timer, the shipper exposes
 rings the doorbell after every successful WAL append for the affected
 `(tree, peer)` activations, so steady-state ship latency is sub-second
 rather than waiting for the next 200 ms timer tick. The doorbell is
-best-effort — a missed call only delays the next ship by one timer tick.
+best-effort - a missed call only delays the next ship by one timer tick.
 
 ### Backoff schedule
 
 Transient failures (drain throw, transport throw, ack rejected) feed an
 exponential backoff sized by:
 
-- `ShipBackoffInitial` (default 100 ms) — base delay on the first failure.
-- `ShipBackoffMax` (default 30 s) — upper bound regardless of consecutive
+- `ShipBackoffInitial` (default 100 ms) - base delay on the first failure.
+- `ShipBackoffMax` (default 30 s) - upper bound regardless of consecutive
   failure count.
-- `ShipBackoffJitter` (default 0.2) — symmetric `[1 - jitter, 1 + jitter]`
+- `ShipBackoffJitter` (default 0.2) - symmetric `[1 - jitter, 1 + jitter]`
   multiplier applied to the computed delay so a fleet of shippers sharing
   a transient outage does not resynchronise on retry.
 
-`Random.Shared` is the jitter source — sufficient for distribution
+`Random.Shared` is the jitter source - sufficient for distribution
 purposes, not cryptographic.
 
 ### Permanent encode failure: dead-letter routing
 
 When `IReplicationBatchEncoder.Encode` throws an `ArgumentException` or
-`InvalidOperationException` — schema-shape failures the bytes can never
-recover from in their current form — the shipper:
+`InvalidOperationException` - schema-shape failures the bytes can never
+recover from in their current form - the shipper:
 
 1. Parks every entry in the offending batch on the per-tree
    `IReplicationDeadLetterGrain` tagged with
@@ -140,10 +140,10 @@ the DLQ is unavailable.
 The shipper maintains two activation-scoped buffers reused across pump
 ticks:
 
-- `_drainBuffer` (`List<WalRecord>`) — cleared in place at the start
+- `_drainBuffer` (`List<WalRecord>`) - cleared in place at the start
   of every `PumpOnceAsync`. The encoder consumes the list synchronously
   inside `Encode`, so reuse is safe (no aliasing past the call).
-- `_writeBuffer` (`ArrayBufferWriter<byte>`) — reset via
+- `_writeBuffer` (`ArrayBufferWriter<byte>`) - reset via
   `ResetWrittenCount()` between ticks, which keeps the underlying array
   and rewinds the write index to 0. A one-time spike that grows the
   buffer at-or-past 4 MB recreates the writer so a single outlier batch
@@ -198,7 +198,7 @@ configured interval (or on graceful deactivation). Receiver-side apply
 is HLC-monotonic and dedupes on `(originClusterId, originHlc)`, so a
 silo crash inside the deferred-persist window costs at most
 `ShipCursorWriteInterval × ShipBatchSize` entries of wasteful
-re-shipping — the receiver no-ops the duplicates and no data is lost.
+re-shipping - the receiver no-ops the duplicates and no data is lost.
 
 Setting `ShipCursorWriteInterval=1` recovers the persist-every-ack
 behaviour for hosts that prefer the smaller replay window over the
@@ -215,7 +215,7 @@ change: only flushes that durably advance the HLC cursor produce a new
 registry report.
 
 A registry-side failure during the report does not unwind the durable
-cursor advance and does not retry — the shipper updates
+cursor advance and does not retry - the shipper updates
 `_lastReportedCursor` to the durable value regardless. The
 suppression check inside `FlushCursorAsync` then skips the next
 report attempt until the durable cursor moves further forward, at
@@ -229,8 +229,8 @@ than immediately when the registry recovers.
 `OnDeactivateCoreAsync` flushes any pending cursor advance before the
 activation tears down so a clean shutdown (e.g. operator silo drain)
 eliminates the deferred-persist replay window entirely. A storage
-failure during the flush is logged and swallowed — deactivation must
-not block — and the next activation recovers by re-shipping at most
+failure during the flush is logged and swallowed - deactivation must
+not block - and the next activation recovers by re-shipping at most
 `ShipCursorWriteInterval × ShipBatchSize` entries the receiver
 dedupes.
 
@@ -251,17 +251,17 @@ and on multi-batch in-flight WAL flush landing first.
 The two scheduled passes run on independent cadences with their own
 last-run timestamps in persistent state:
 
-- **GC pass** — calls `ILatticeWalGc.RunOnceAsync(treeName)` every
+- **GC pass** - calls `ILatticeWalGc.RunOnceAsync(treeName)` every
   `MaintenanceGcInterval` (default 5 s). The GC consults the
   cursor registry for the slowest-ack frontier across `IChangeFeed`
   consumers and trims the WAL up to that frontier (or the
   `WalRetention` TTL ceiling, whichever is later).
-- **Fall-off-the-log probe** — calls
+- **Fall-off-the-log probe** - calls
   `ILatticeFallOffLogDetector.CheckAndTriggerAsync(treeName, peer, oldestHlc)`
   every `MaintenanceFallOffCheckInterval` (default 30 s) for each
   configured peer. The sender-oldest HLC is computed via
   `ILatticeWalIntrospection.GetOldestAvailableHlcAsync`. On positive
-  detection, the detector drives the bootstrap kickoff itself —
+  detection, the detector drives the bootstrap kickoff itself -
   the maintenance grain is a pure scheduler.
 
 ### Failure handling
@@ -272,7 +272,7 @@ next phase tick rather than waiting a full cadence interval. The keepalive
 reminder (60 s) is the backstop against a deterministically-failing pass
 so the activation cannot stall indefinitely.
 
-This is the opposite of "log and skip" — a steady-state maintenance error
+This is the opposite of "log and skip" - a steady-state maintenance error
 is visible in logs immediately and recovers as soon as the underlying
 condition clears.
 
@@ -289,7 +289,7 @@ condition clears.
 | `ShipBackoffJitter` | 0.2 | `[0.0, 1.0]` | Symmetric jitter multiplier. |
 | `MaintenanceGcInterval` | 5 s | `> TimeSpan.Zero` | Cadence between WAL GC passes. |
 | `MaintenanceFallOffCheckInterval` | 30 s | `> TimeSpan.Zero` | Cadence between per-peer fall-off-the-log probes. |
-| `ShipDoorbellEnabled` | `true` | — | Master switch for the writer-side doorbell. |
+| `ShipDoorbellEnabled` | `true` | - | Master switch for the writer-side doorbell. |
 
 All options resolve via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)`,
 so per-tree overrides are honoured.
@@ -317,7 +317,7 @@ shows which driver is the source of each.
 ## Local-apply materialiser reuses the same scheduler
 
 The shipper grain is the canonical scheduler skeleton for the
-**local-apply materialiser** in the core library — the
+**local-apply materialiser** in the core library - the
 same `IChangeFeed` consumer shape, the same per-consumer cursor on
 `IWalCursorRegistry`, the same phase-timer + doorbell +
 reminder triad. The materialiser is just another change-feed consumer

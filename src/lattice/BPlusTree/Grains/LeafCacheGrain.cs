@@ -41,7 +41,7 @@ internal sealed class LeafCacheGrain(
     /// leaf so the per-tree <see cref="ITxRegistryGrain"/> can apply
     /// the strict atomic-visibility verdict; the cache cannot make
     /// that decision itself because <see cref="_cache"/> only holds
-    /// committed (post-merge) state. Empty in steady state — the vast
+    /// committed (post-merge) state. Empty in steady state - the vast
     /// majority of keys are never covered by an in-flight saga, so the
     /// per-read <see cref="HashSet{T}.Contains"/> probe is O(1) and
     /// allocation-free.
@@ -51,7 +51,7 @@ internal sealed class LeafCacheGrain(
     /// <summary>
     /// Cached resolved <see cref="GrainId"/> of the primary leaf. The
     /// activation key is immutable for the activation's lifetime, so the
-    /// parsed value is invariant — caching it avoids re-running
+    /// parsed value is invariant - caching it avoids re-running
     /// <c>GrainId.Parse(context.GrainId.Key.ToString())</c> on every
     /// <see cref="RefreshAsync"/>, which allocated a string + a re-parsed
     /// GrainId per call. Lazily initialised on first use because the
@@ -67,7 +67,7 @@ internal sealed class LeafCacheGrain(
     /// to skip the cross-grain <see cref="IBPlusLeafGrain.GetDeltaSinceAsync"/>
     /// call when the primary leaf is on the same silo and has not
     /// advanced since this cache last refreshed. <c>0</c> means "never
-    /// successfully refreshed" — must take the cross-grain refresh path.
+    /// successfully refreshed" - must take the cross-grain refresh path.
     /// </summary>
     private long _lastSeenPrimaryRevision;
 
@@ -80,14 +80,14 @@ internal sealed class LeafCacheGrain(
     public async Task<byte[]?> GetAsync(string key)
     {
         // Always pull a delta from the primary. The VersionVector comparison
-        // makes this cheap — if nothing changed, the primary returns an empty
+        // makes this cheap - if nothing changed, the primary returns an empty
         // delta without scanning entries.
         await RefreshAsync();
 
         // Strict atomic-visibility delegation: if this key is covered by
         // a pending-tx prepare on the primary, the cache has no way to
         // decide whether to surface the prepared value, hide the key,
-        // or fall through to the pre-saga value — only the per-tree
+        // or fall through to the pre-saga value - only the per-tree
         // TxRegistry holds the recorded outcome, and only the primary
         // leaf's read path consults it. Delegate so the saga's
         // linearization point applies uniformly across cache and leaf.
@@ -168,11 +168,11 @@ internal sealed class LeafCacheGrain(
                 result[key] = delegatedValue;
                 continue;
             }
-            // Skip cache scoring for delegated keys — they were not
+            // Skip cache scoring for delegated keys - they were not
             // served from this cache, so they should not count as a
             // hit or a miss against this cache's metrics. Use the
             // O(1) HashSet membership check on _pendingKeys rather
-            // than O(n) List.Contains over `delegated` — `delegated`
+            // than O(n) List.Contains over `delegated` - `delegated`
             // is by construction a subset of `_pendingKeys`, so the
             // two predicates are equivalent for this branch.
             if (_pendingKeys.Contains(key))
@@ -209,7 +209,7 @@ internal sealed class LeafCacheGrain(
         // on every cache observing every revision change promptly:
         // if a saga's terminal mark drains the leaf's _pendingTx and
         // bumps the revision, the cache MUST refresh on the next read
-        // even if its TTL has not yet elapsed — otherwise the cache
+        // even if its TTL has not yet elapsed - otherwise the cache
         // continues serving the pre-saga value from _cache while a
         // sibling cache (whose own leaf drained earlier in the same
         // window) has already merged the post-saga value, producing
@@ -231,7 +231,7 @@ internal sealed class LeafCacheGrain(
             // First refresh on this cache OR the primary leaf is on
             // another silo (no revision cookie published locally).
             // Fall back to the TTL gate to cap cross-silo RPC traffic
-            // at the cost of bounded staleness — the cross-silo case
+            // at the cost of bounded staleness - the cross-silo case
             // already has a separate non-linearizable-scan window
             // bounded by network round-trip time.
             var ttl = await GetCacheTtlAsync();
@@ -250,7 +250,7 @@ internal sealed class LeafCacheGrain(
         // our forthcoming refresh will reflect. Capturing AFTER the
         // RPC returns leaves a window where the leaf can advance
         // between the delta's wall-clock observation moment and the
-        // cookie read — the cache would then record a cookie that
+        // cookie read - the cache would then record a cookie that
         // matches the leaf's NEW state while _cache and _pendingKeys
         // only reflect the older state, and the same-silo fast path
         // would short-circuit indefinitely without observing the
@@ -268,7 +268,7 @@ internal sealed class LeafCacheGrain(
         // these two RPCs flips a leaf from "_pendingTx[txX]={K},
         // Entries[K]=pre" to "_pendingTx empty, Entries[K]=post". If
         // we fetched delta first, we could observe (pendingKeys=
-        // empty, delta=pre) — the cache would then serve _cache[K]=
+        // empty, delta=pre) - the cache would then serve _cache[K]=
         // pre directly without delegating to the leaf, violating
         // strict per-tree atomic visibility against sibling caches
         // whose leaf drained in a different fan-out window. Fetching
@@ -285,7 +285,7 @@ internal sealed class LeafCacheGrain(
 
         // If the primary leaf has been split, prune any cached entries that
         // now belong to the new sibling (keys >= SplitKey). This is idempotent
-        // and safe to apply on every refresh — pruning a key that doesn't
+        // and safe to apply on every refresh - pruning a key that doesn't
         // exist is a no-operation.
         if (delta.SplitKey is not null)
         {
@@ -306,7 +306,7 @@ internal sealed class LeafCacheGrain(
         // short-circuit when no further state has accumulated. If the
         // cookie was absent (cross-silo primary), preFetchRevision is
         // 0 and the fast-path guard `_lastSeenPrimaryRevision > 0`
-        // keeps us on the cross-grain refresh path — same behaviour as
+        // keeps us on the cross-grain refresh path - same behaviour as
         // before this fix.
         _lastSeenPrimaryRevision = preFetchRevision;
 

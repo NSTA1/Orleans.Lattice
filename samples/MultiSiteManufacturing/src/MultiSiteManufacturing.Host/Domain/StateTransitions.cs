@@ -3,7 +3,7 @@ namespace MultiSiteManufacturing.Host.Domain;
 /// <summary>
 /// Per-fact state transition rules, factored out of <see cref="ComplianceFold"/>
 /// so the lattice (HLC-ordered) and baseline (arrival-ordered) folds share
-/// the same semantics — the <em>only</em> difference between them is the
+/// the same semantics - the <em>only</em> difference between them is the
 /// order in which facts are applied.
 /// </summary>
 /// <remarks>

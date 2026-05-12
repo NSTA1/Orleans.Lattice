@@ -12,6 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// points with the expected tags.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class LatticeMetricsIntegrationTests
 {
     private FourShardClusterFixture _fixture = null!;

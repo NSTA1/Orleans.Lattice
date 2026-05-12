@@ -31,7 +31,7 @@ public partial class TreeResizeGrainTests
     public void ResizeAsync_validates_arguments_before_consulting_reshard_interlock()
     {
         // Invalid argument must throw ArgumentOutOfRangeException even when
-        // a reshard is in flight — caller feedback on bad input must not be
+        // a reshard is in flight - caller feedback on bad input must not be
         // masked by an interlock check.
         var (grain, _, _, grainFactory, _) = CreateGrain();
         var reshard = grainFactory.GetGrain<ITreeReshardGrain>(TreeId);

@@ -5,7 +5,7 @@ namespace VehicleFleetSimulator.Ui.Rendering;
 /// <summary>
 /// Computes a stable 2-D position for every city in a graph. The layout is deterministic for a
 /// given input (seeded by city id), and is computed exactly once per graph snapshot. After
-/// <see cref="Compute"/> returns, no node ever moves — that is the contract the rendering loop
+/// <see cref="Compute"/> returns, no node ever moves - that is the contract the rendering loop
 /// depends on.
 /// </summary>
 /// <remarks>
@@ -83,7 +83,7 @@ public static class CityLayout
         }
 
         // Fruchterman-Reingold parameters. The constants are tuned for "looks reasonable
-        // at any reasonable fleet size up to a few hundred cities" — beyond that the linear
+        // at any reasonable fleet size up to a few hundred cities" - beyond that the linear
         // O(n^2) repulsion pass becomes the bottleneck and we'd want a quadtree approximation.
         const int Iterations = 250;
         var area = 1.0;

@@ -7,10 +7,10 @@ namespace MultiSiteManufacturing.Host.Lattice;
 
 /// <summary>
 /// CRDT-typed state for a part, backed by two <see cref="ILattice"/>
-/// B+ trees — one per CRDT type:
+/// B+ trees - one per CRDT type:
 /// <list type="bullet">
 ///   <item>
-///     <b>Current operator</b> — a last-writer-wins register stored in
+///     <b>Current operator</b> - a last-writer-wins register stored in
 ///     the <c>mfg-part-operator</c> tree, one key per serial. Concurrent
 ///     writes from silo A and silo B resolve to whichever write landed
 ///     with the higher
@@ -19,7 +19,7 @@ namespace MultiSiteManufacturing.Host.Lattice;
 ///     replication (LWW across clusters with disjoint HLCs is meaningless).
 ///   </item>
 ///   <item>
-///     <b>Process labels</b> — an observed-remove (OR) set CRDT stored in
+///     <b>Process labels</b> - an observed-remove (OR) set CRDT stored in
 ///     the <c>mfg-part-labels</c> tree, one OrSet per serial, accessed
 ///     through the package's
 ///     <see cref="OrSetAccessor"/>. Cross-cluster replicated as
@@ -29,7 +29,7 @@ namespace MultiSiteManufacturing.Host.Lattice;
 ///   </item>
 /// </list>
 /// This is the only surface in the sample where state is written
-/// <i>without</i> routing through the fact log — the CRDT convergence
+/// <i>without</i> routing through the fact log - the CRDT convergence
 /// story is independent of the arrival-order-vs-HLC-fold story told by
 /// the baseline and lattice fact backends.
 ///
@@ -38,13 +38,13 @@ namespace MultiSiteManufacturing.Host.Lattice;
 /// <see cref="IPartitionChaosGrain"/> reports the simulated inter-silo
 /// partition is active, every write from this silo is redirected to a
 /// silo-local shadow key (<c>shadow/{siloId}/{serial}</c>) instead of
-/// the shared key (<c>{serial}</c>) — in both trees. Reads always merge
+/// the shared key (<c>{serial}</c>) - in both trees. Reads always merge
 /// (shared ∪ local-silo-shadow), so divergence is observable in the UI:
 /// during partition silo A sees only its own recent writes, silo B sees
 /// only its own. On heal,
 /// <see cref="PartitionHealHostedService"/> invokes
 /// <see cref="HealLocalShadowAsync"/>, which promotes every shadow
-/// entry into its shared counterpart and deletes the shadow — for
+/// entry into its shared counterpart and deletes the shadow - for
 /// labels via the OrSet's natural merge, for the operator via a plain
 /// shared-key Set (LWW resolution by the tree's HLC).
 /// </para>
@@ -141,7 +141,7 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
     /// Assigns <paramref name="op"/> as the current operator for
     /// <paramref name="serial"/>. Under partition the write goes to
     /// this silo's shadow key in the operator tree; otherwise directly
-    /// to the shared key. Concurrent calls from multiple silos race —
+    /// to the shared key. Concurrent calls from multiple silos race -
     /// whichever lands last (by the lattice tree's internal HLC) wins.
     /// </summary>
     public async Task AssignOperatorAsync(PartSerialNumber serial, OperatorId op, CancellationToken cancellationToken = default)
@@ -158,7 +158,7 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
     /// <summary>
     /// Returns the current operator for <paramref name="serial"/>, or
     /// <c>null</c> if no operator has ever been assigned. Always merges
-    /// (shared, local-silo shadow) — during partition this surfaces
+    /// (shared, local-silo shadow) - during partition this surfaces
     /// the silo's own recent writes; after heal the shared key alone
     /// is authoritative.
     /// </summary>
@@ -176,7 +176,7 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
     /// <summary>
     /// Adds <paramref name="label"/> to the part's process-label OR-Set
     /// via <see cref="OrSetAccessor.AddAsync"/>. Idempotent at the set
-    /// level — re-adding the same label produces a fresh causal dot but
+    /// level - re-adding the same label produces a fresh causal dot but
     /// the live element-set membership is unchanged. Throws
     /// <see cref="ArgumentException"/> if the label is empty or contains
     /// <c>'/'</c> (reserved as the sub-key separator in the shadow key
@@ -201,7 +201,7 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
     /// <summary>
     /// Returns the current process-label set for <paramref name="serial"/>
     /// in lexicographic order. Union of (shared OR-Set, this silo's
-    /// shadow OR-Set) — so a silo always sees its own partition-era
+    /// shadow OR-Set) - so a silo always sees its own partition-era
     /// writes even before the heal promotes them.
     /// </summary>
     public async Task<IReadOnlyList<string>> GetLabelsAsync(PartSerialNumber serial, CancellationToken cancellationToken = default)
@@ -234,10 +234,10 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
     /// <para>
     /// Operator entries promote via a plain
     /// <see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/>
-    /// of the shadow value to the shared key — LWW resolution by the
+    /// of the shadow value to the shared key - LWW resolution by the
     /// tree's HLC. Label entries promote via
     /// <see cref="OrSetAccessor.MergeAsync"/> of the shadow OR-Set into
-    /// the shared OR-Set — preserving every causal dot from both sides
+    /// the shared OR-Set - preserving every causal dot from both sides
     /// and yielding deterministic union semantics.
     /// </para>
     /// </summary>
@@ -252,7 +252,7 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
         var touchedSerials = new HashSet<string>(StringComparer.Ordinal);
 
         // ---- Operator tree: byte-for-byte promote shadow → shared. ----
-        // Materialise the shadow keyspace first — we're going to mutate
+        // Materialise the shadow keyspace first - we're going to mutate
         // it (Set + Delete) during iteration, and resilient scans don't
         // guarantee stability under concurrent writes.
         var operatorEntries = new List<KeyValuePair<string, byte[]>>();
@@ -311,7 +311,7 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
 
     private static (string Start, string EndExclusive) ShadowRange(string siloId)
     {
-        // shadow/{siloId}/… — end-exclusive uses '0' (0x30) which sorts
+        // shadow/{siloId}/… - end-exclusive uses '0' (0x30) which sorts
         // just above '/' (0x2F).
         var prefix = ShadowPrefix + siloId + "/";
         var end = ShadowPrefix + siloId + "0";

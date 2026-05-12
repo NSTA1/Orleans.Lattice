@@ -8,10 +8,11 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <summary>
 /// integration tests: <see cref="ILattice.CountAsync"/>,
 /// <see cref="ILattice.KeysAsync"/>, and <see cref="ILattice.EntriesAsync"/>
-/// must produce strongly-consistent results — exact key set, exact count —
+/// must produce strongly-consistent results - exact key set, exact count -
 /// even when adaptive shard splits are happening concurrently.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class StronglyConsistentScanIntegrationTests
 {
     private FourShardClusterFixture _fixture = null!;
@@ -101,7 +102,7 @@ public class StronglyConsistentScanIntegrationTests
     /// <summary>
     /// Continuously scan via CountAsync / KeysAsync / EntriesAsync while a
     /// split runs concurrently. Every scan that completes must observe the
-    /// exact seeded set — not under-count, not over-count, no duplicates.
+    /// exact seeded set - not under-count, not over-count, no duplicates.
     /// </summary>
     [Test]
     public async Task Concurrent_scans_during_split_observe_exact_seeded_set()
@@ -378,7 +379,7 @@ public class StronglyConsistentScanIntegrationTests
     }
 
     // ==========================================================================
-    // — Scan ordering preservation under topology change.
+    // - Scan ordering preservation under topology change.
     // Output must be strictly sorted end-to-end even when a shard split commits
     // mid-scan. The current implementation injects reconciled keys as an
     // additional memory cursor into the same k-way merge priority queue, so
@@ -630,7 +631,7 @@ public class StronglyConsistentScanIntegrationTests
     {
         // Regression: the post-drain final-stability reconciliation path must
         // still yield in sorted order. The scan starts after the split
-        // commits, so no live cursor reports MovedAwaySlots — the only
+        // commits, so no live cursor reports MovedAwaySlots - the only
         // trigger is the ShardMap version diff.
         var treeId = $"sc-ord-post-{Guid.NewGuid():N}";
         var expected = await SeedAsync(treeId, 300);

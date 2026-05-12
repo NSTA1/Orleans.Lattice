@@ -1,8 +1,8 @@
-# Orleans.Lattice — Benchmark Stack
+# Orleans.Lattice - Benchmark Stack
 
 > **Why this exists.** The benchmark suite is the regression alarm for
 > `Orleans.Lattice`. Every scenario is a fixed, reproducible workload that
-> produces a small set of summary scalars — commit p99, commits/s, sink
+> produces a small set of summary scalars - commit p99, commits/s, sink
 > publish/drop rates, replication ship/apply latency, cache hit ratio, GC
 > pressure, microbench timings. Those scalars are pushed into the
 > [history stack](./history/README.md) and rendered as run-over-run trend
@@ -42,7 +42,7 @@ benchmark/
 │   │                                # LatticeReadDriver hosted service for read-* scenarios.
 │   └── Bench.Silo/                  # Benchmark silo: env-driven sink switch + Lattice /
 │                                    # Replication wiring.
-├── scenarios/                       # Per-scenario knobs — one .env per scenario slug.
+├── scenarios/                       # Per-scenario knobs - one .env per scenario slug.
 ├── prometheus/
 │   ├── prometheus.yml               # Scrape config (single cluster).
 │   └── prometheus-replication.yml   # Scrape config (both clusters under the overlay).
@@ -64,7 +64,7 @@ The benchmark stack does **not** modify the simulator. `host/Bench.Silo/` is a s
 silo project that references `samples/VehicleFleetSimulator/src/VehicleFleetSimulator.Grains`
 and `.Abstractions` unmodified, plus the new `host/Bench.Sink/` (the LatticeSink) and the
 core lattice projects under `src/`. The simulator's existing API project is reused
-verbatim — the benchmark `docker-compose.yml` invokes its unmodified Dockerfile from the
+verbatim - the benchmark `docker-compose.yml` invokes its unmodified Dockerfile from the
 simulator-local context.
 
 ## Topology
@@ -144,7 +144,7 @@ Per-scenario knobs live in `scenarios/<slug>.env`. Each file sets:
 
 Before any scenario can be run, the benchmark suite needs to know the fleet
 size that stresses _this_ host without saturating it. That number depends on
-your CPU, memory, and storage and has to be measured per host — running every
+your CPU, memory, and storage and has to be measured per host - running every
 scenario at a fixed `BENCH_FLEET_SIZE` (the old default of `2000`) would mean
 slow hosts overflow the simulator's bounded sink channel and fast hosts have
 so much spare capacity that real performance regressions hide in the noise.
@@ -164,12 +164,12 @@ The initialisation script:
    would distort the saturation signal). Default ladder: `500, 1000, 2000,
    4000, 8000, 16000`.
 3. After each rung, classifies it against three saturation signals:
-   - **Sink drops** — `sink_dropped_combined_increase > 0` means the producer's
+   - **Sink drops** - `sink_dropped_combined_increase > 0` means the producer's
      bounded channel overflowed; the rung is past the producer-side knee.
-   - **Throughput plateau** — if `commits_per_second` grew less than 10 %
+   - **Throughput plateau** - if `commits_per_second` grew less than 10 %
      between the previous rung and this one despite the fleet roughly doubling,
      the silo is past the commit-path knee (adding load no longer adds work).
-   - **Commit p99 growth** — if the leaf-commit tail jumped > 2× relative to
+   - **Commit p99 growth** - if the leaf-commit tail jumped > 2× relative to
      the smallest rung, the silo is past the latency knee.
 4. Stops climbing the ladder once the first knee rung is observed (provided at
    least one healthy rung was found below it), then **bisects** between the
@@ -195,7 +195,7 @@ The initialisation script:
    ```
 
 The total wall-clock cost is roughly _(rungs + bisection iterations) ×
-(warmup + duration + 60 s docker overhead)_ — the default 6-rung ladder plus
+(warmup + duration + 60 s docker overhead)_ - the default 6-rung ladder plus
 up to 4 bisection rungs typically completes in 10–15 minutes on commodity
 hardware (often less, because the ladder short-circuits as soon as the first
 knee is observed).
@@ -237,7 +237,7 @@ PowerShell 7+, plus a successful run of `./initialise.ps1` (see
 [Calibrating fleet size for this host](#calibrating-fleet-size-for-this-host)).
 
 ```powershell
-# Default — bring stack up, run, tear down.
+# Default - bring stack up, run, tear down.
 ./benchmark.ps1 current-state-no-replication
 
 # Keep the stack running so Grafana stays accessible afterwards.
@@ -264,10 +264,10 @@ The script:
    parallel, then `stop-all`s the fleet.
 8. Prints fleet stats and (unless `-KeepRunning`) tears the stack down.
 9. **Captures an auto-discovered panel of summary scalars** by listing every
-   meter under the configured prefixes (`orleans.lattice` — covers both the
-   core meter and `orleans.lattice.replication` — and `vehicle_fleet_simulator`
-   — covers `vehicle_fleet_simulator.sink` and the read-driver meter
-   `vehicle_fleet_simulator.read_driver` — plus a curated `dotnet.*`
+   meter under the configured prefixes (`orleans.lattice` - covers both the
+   core meter and `orleans.lattice.replication` - and `vehicle_fleet_simulator`
+   - covers `vehicle_fleet_simulator.sink` and the read-driver meter
+   `vehicle_fleet_simulator.read_driver` - plus a curated `dotnet.*`
    allow-list) and synthesising p50/p95/p99 / per-second / max+avg keys per
    instrument type. A short `$ScalarPanelExtra` block in `benchmark.ps1`
    overlays a handful of hand-curated headline metrics that win on key
@@ -331,7 +331,7 @@ Four configuration blocks at the top of `benchmark.ps1` drive it:
 
 | Variable                    | Purpose                                                                                                |
 |-----------------------------|--------------------------------------------------------------------------------------------------------|
-| `$AutoDiscoverPrefixes`     | Meter-name prefixes to walk (default: `orleans_lattice_` — covers core + replication — and `vehicle_fleet_simulator_` — covers sink + read-driver). |
+| `$AutoDiscoverPrefixes`     | Meter-name prefixes to walk (default: `orleans_lattice_` - covers core + replication - and `vehicle_fleet_simulator_` - covers sink + read-driver). |
 | `$AutoDiscoverDotnetAllow`  | Allow-list of `dotnet.*` instruments to include (the runtime meter is noisy, so we curate).            |
 | `$ScalarPanelExclude`       | Names to drop after discovery (e.g. duplicates of curated extras).                                     |
 | `$ScalarPanelExtra`         | Hand-curated headline metrics. Keys here **win on collision** with auto-discovered ones.               |
@@ -365,8 +365,8 @@ invocation.
 ```
 
 Then visit <http://localhost:3001>. The history Grafana hosts an
-**Overview dashboard** plus **seven persona dashboards** — one per
-lattice-usage profile — so each dashboard answers a single regression
+**Overview dashboard** plus **seven persona dashboards** - one per
+lattice-usage profile - so each dashboard answers a single regression
 question without templating-var juggling:
 
 | Persona dashboard         | Aggregates                                                          | Asks                                                           |
@@ -388,22 +388,22 @@ persona dashboard for trend strips and per-run barcharts.
 
 Each persona dashboard has the same **3-band** layout, top-to-bottom:
 
-1. **Headline KPIs** — three or four stat tiles with threshold-coloured
+1. **Headline KPIs** - three or four stat tiles with threshold-coloured
    backgrounds binding to short, stable aliases (e.g. `bench_lattice_commit_p99_ms`,
    `bench_replication_ship_p95_ms`). The stable-alias layer is curated in
    `benchmark.ps1`'s `$ScalarPanelExtra`; KPI metric-name resolution is
    validated at dashboard-generation time, so a typo or rename fails fast.
-2. **Trends across runs** — one timeseries per metric family (commit, cache,
+2. **Trends across runs** - one timeseries per metric family (commit, cache,
    sink, replication, process, microbench), points-mode with one line per
    `{__name__, scenario, git_sha}` so a regression appears as a visible step
    between commits.
-3. **Per-run history** — barchart per KPI, one bar per run, hover shows
+3. **Per-run history** - barchart per KPI, one bar per run, hover shows
    `{{scenario}} {{run_id}} @ {{git_sha}}` so the offending commit is one
    click away.
 
 Dashboards regenerate from `benchmark/history/Generate-Dashboards.ps1`. Adding
 a scenario or moving it between personas is a one-line edit to the `$Personas`
-table at the top of that script — re-run, wait ~30 s for Grafana's
+table at the top of that script - re-run, wait ~30 s for Grafana's
 file-provider rescan, done.
 
 See [`history/README.md`](./history/README.md) for the full data model, label
@@ -413,7 +413,7 @@ schema, and ad-hoc query path.
 
 Grafana provisions the embedded **Orleans.Lattice** dashboards (overview, commit
 path, replication) from `src/lattice.dashboards/Grafana/` automatically. Browse to
-<http://localhost:3000> — anonymous viewer access is enabled, admin
+<http://localhost:3000> - anonymous viewer access is enabled, admin
 credentials are `admin/admin`.
 
 The dashboards bind against the meters:
@@ -427,7 +427,7 @@ The dashboards bind against the meters:
 
 Prometheus is at <http://localhost:9090> for raw query access.
 
-## `microbench` — micro-benchmark path
+## `microbench` - micro-benchmark path
 
 `microbench` does not stand up the docker stack and does not boot an Orleans silo. It
 targets `ILattice` directly through a [BenchmarkDotNet](https://benchmarkdotnet.org/)

@@ -19,7 +19,7 @@ using VehicleFleetSimulator.Grains.Cities;
 using VehicleFleetSimulator.Grains.Telemetry;
 
 // We use WebApplication (Kestrel) so the OpenTelemetry Prometheus AspNetCore exporter can mount
-// `/metrics` cleanly on Linux containers — the HttpListener variant fails on Linux for `0.0.0.0`
+// `/metrics` cleanly on Linux containers - the HttpListener variant fails on Linux for `0.0.0.0`
 // prefix bindings. The HTTP surface only carries the scrape endpoint; Orleans clustering/gateway
 // listen on the standard 11111/30000 ports independently.
 var builder = WebApplication.CreateBuilder(args);
@@ -47,7 +47,7 @@ var serviceId = builder.Configuration["Orleans:ServiceId"] ?? "VehicleFleetSimul
 // ─── Replication gRPC wiring (off unless explicitly enabled) ───────────────────
 //
 // The library default registered by `AddLatticeReplication` is `NoOpReplicationTransport`
-// — the WAL appends, observers fire, but nothing is ever shipped to a peer. That's the
+// - the WAL appends, observers fire, but nothing is ever shipped to a peer. That's the
 // correct default for libraries (no surprise network egress) but it's wrong for the
 // replication-enabled benchmark scenarios (current-state-single-peer, replication-backpressure,
 // receiver-crash, bidirectional-replication, replication-key-filter), which are supposed
@@ -69,22 +69,22 @@ var serviceId = builder.Configuration["Orleans:ServiceId"] ?? "VehicleFleetSimul
 //     stays empty.
 //
 // The two "peers" knobs split by concern, on purpose:
-//   • `LatticeReplicationOptions.ReplicationPeers` — transport-agnostic membership list
+//   • `LatticeReplicationOptions.ReplicationPeers` - transport-agnostic membership list
 //     (the cluster ids); consumed by the production drivers in `Orleans.Lattice.Replication`.
-//   • `GrpcPushTransportOptions.PeerEndpoints` — transport-specific cluster-id-to-URL map;
+//   • `GrpcPushTransportOptions.PeerEndpoints` - transport-specific cluster-id-to-URL map;
 //     consumed by the gRPC push transport in `Orleans.Lattice.Replication.Grpc` to resolve
 //     a peer to a wire endpoint. The benchmark binds both from the same env-driven
 //     `Replication:GrpcPeers:<id>` configuration map so a single env var (e.g.
 //     `BENCH_ORIGIN_PEER_ENDPOINT=http://silo-replica:5001`) wires both sides coherently.
 //
 // Configuration knobs (read from env via the ASP.NET Core configuration binder):
-//   • Replication:GrpcServerEnabled  — register the receiver service and map the gRPC
+//   • Replication:GrpcServerEnabled  - register the receiver service and map the gRPC
 //                                      Push route on Kestrel. The receiver listens on
 //                                      Replication:GrpcPort with HTTP/2.
-//   • Replication:GrpcPort           — port the receiver binds (default 5001 inside the
+//   • Replication:GrpcPort           - port the receiver binds (default 5001 inside the
 //                                      container; the compose overlay maps host ports if
 //                                      external access is needed).
-//   • Replication:GrpcPeers:<id>     — peer endpoint map keyed by TargetClusterId. When
+//   • Replication:GrpcPeers:<id>     - peer endpoint map keyed by TargetClusterId. When
 //                                      non-empty, replaces the no-op transport with the
 //                                      gRPC push transport so the outbound shipper actually
 //                                      delivers batches to the peers. The keys also
@@ -113,7 +113,7 @@ var grpcPeers = builder.Configuration.GetSection("Replication:GrpcPeers")
 //   "lattice" → current-state-no-replication onward; AddLatticeSink registers the bounded-channel drain loop.
 //
 // All three branches register exactly one ITelemetrySink so the consumer (VehicleGrain) hits
-// a single sink — registering a second one would silently double-write and contaminate the
+// a single sink - registering a second one would silently double-write and contaminate the
 // measurement, per §2 of benchmark/benchmark-scenarios.md.
 var telemetrySink = (builder.Configuration["Telemetry:Sink"] ?? "fanout").Trim().ToLowerInvariant();
 var replicationEnabled = string.Equals(builder.Configuration["Replication:Enabled"], "true", StringComparison.OrdinalIgnoreCase);
@@ -194,7 +194,7 @@ builder.Host.UseOrleans(silo =>
     // Important: AddLattice/AddLatticeReplication run when EITHER the silo is producing
     // lattice telemetry (origin) OR is acting as a replication receiver (replica with
     // Telemetry:Sink=null but Replication:Enabled=true). Earlier this gating sat under
-    // `telemetrySink == "lattice"` alone, which silently disabled the receiver — the
+    // `telemetrySink == "lattice"` alone, which silently disabled the receiver - the
     // replica accepted incoming gRPC pushes but had no IReplicationApplier registered,
     // so every push deserialised the envelope and then dropped on the floor. Symptom:
     // results.json showed 0 replication metrics on every replication-overlay scenario.
@@ -206,7 +206,7 @@ builder.Host.UseOrleans(silo =>
         //
         //   "memory"      → default. The library falls through to InMemoryWalStorageProvider;
         //                   no AddWalStorage call is required. WAL state is process-scoped
-        //                   and lost on silo restart — fine for non-durability-sensitive
+        //                   and lost on silo restart - fine for non-durability-sensitive
         //                   benchmarks.
         //   "azuretable"  → AddAzureTableWalStorage points the WAL at the same Azurite
         //                   instance the silo already uses for clustering / reminders
@@ -215,7 +215,7 @@ builder.Host.UseOrleans(silo =>
         //                   throughput / tail-latency penalty vs. the in-memory baseline
         //                   is what the *-azuretable scenarios measure.
         //
-        // The provider is enabled regardless of replicationEnabled — current-state-no-replication-azuretable
+        // The provider is enabled regardless of replicationEnabled - current-state-no-replication-azuretable
         // exercises the WAL append path on a single silo with no downstream peer (the WAL
         // grain is engaged by every Set, the durability cost is the same).
         var walProvider = (builder.Configuration["Lattice:Wal:Provider"] ?? "memory")
@@ -250,7 +250,7 @@ builder.Host.UseOrleans(silo =>
                 [treeId] = LatticeMergeMode.LwwRegister,
             };
 
-            // replication-key-filter — per-key prefix filter. When Replication:KeyPrefixes is set the observer
+            // replication-key-filter - per-key prefix filter. When Replication:KeyPrefixes is set the observer
             // evaluates the prefix list inline before recording the WAL append. Empty/missing
             // means "ship everything".
             var prefixes = builder.Configuration["Replication:KeyPrefixes"];
@@ -265,7 +265,7 @@ builder.Host.UseOrleans(silo =>
             // activates one `IReplicationShipperGrain` per (tree, peer) on host startup.
             // Empty `grpcPeers` (sender-off scenarios such as observer-no-peer and the
             // receiver side of single-direction overlays) leaves `ReplicationPeers` null,
-            // which the activation service treats as "no shippers" — only the per-tree
+            // which the activation service treats as "no shippers" - only the per-tree
             // maintenance grain is activated, which is the correct shape for a
             // receiver-only silo.
             if (grpcPeers.Count > 0)
@@ -297,7 +297,7 @@ builder.Host.UseOrleans(silo =>
         // Sender-side: when peers are configured, swap the no-op transport for the
         // gRPC push transport so outbound batches actually hit the wire. The
         // dictionary is read once per peer on first dispatch (per the package
-        // contract) — adding peers at runtime is not supported, but since the
+        // contract) - adding peers at runtime is not supported, but since the
         // benchmark stack is brought up once per scenario this is fine.
         if (grpcPeers.Count > 0)
         {
@@ -319,7 +319,7 @@ builder.Host.UseOrleans(silo =>
 //
 // Histogram buckets: the OpenTelemetry .NET SDK's default boundaries for `Histogram<double>`
 // are `[0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]` ms. That's
-// far too coarse for the lattice/sink/read-driver latencies we measure here — at calibrated
+// far too coarse for the lattice/sink/read-driver latencies we measure here - at calibrated
 // fleet sizes, leaf-commit, sink inline-publish, and read-driver durations all sit in the
 // `[0, 5)` ms bucket, so every Prometheus `histogram_quantile(p, ...)` query for those
 // histograms reports ~4.95 ms regardless of the actual distribution. That defeats the whole
@@ -328,7 +328,7 @@ builder.Host.UseOrleans(silo =>
 // The view below applies a single set of finer boundaries to *every* `Histogram<double>` in
 // the four meters we own. Sub-ms resolution where the action is, plus a long tail up to 10 s
 // to keep the chaos/replication-lag tail visible. The change is purely additive from a
-// dashboards perspective — every panel under `src/lattice.dashboards/Grafana/`,
+// dashboards perspective - every panel under `src/lattice.dashboards/Grafana/`,
 // `benchmark/grafana/`, and `benchmark/history/grafana/` uses the canonical
 // `histogram_quantile(p, sum by (le) (rate(name_bucket[5m])))` pattern with no hardcoded
 // `le` literals, so finer boundaries simply produce more accurate quantiles without breaking
@@ -341,12 +341,12 @@ double[] latencyMsBuckets = new[]
     10.0, 15.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0
 };
 
-// `apply.lag` measures `now - entry.Timestamp.WallClockTicks` on the receiver — i.e. how
+// `apply.lag` measures `now - entry.Timestamp.WallClockTicks` on the receiver - i.e. how
 // long ago the entry was committed at the origin. Under healthy synchronous replication
 // it sits in the sub-second range; under backpressure / receiver-crash / WAL-full chaos
 // scenarios it can climb into the tens of seconds and beyond. The shared `latencyMsBuckets`
 // set above tops out at 10s, which means every saturated apply lands in the `+Inf` bucket
-// and `histogram_quantile(0.99, ...)` pins flat at 10000ms — the dashboard tile cannot
+// and `histogram_quantile(0.99, ...)` pins flat at 10000ms - the dashboard tile cannot
 // distinguish "10s lag" from "5min lag", and the chaos signal is invisible.
 //
 // Apply.lag gets its own boundary set extending the long tail to 5min so saturated states
@@ -412,7 +412,7 @@ builder.WebHost.ConfigureKestrel(opts =>
     // (a) gRPC requires HTTP/2 prior knowledge for plaintext (h2c) and the OTel
     // Prometheus exporter expects HTTP/1.1 GETs, and (b) keeping them on different
     // ports lets us limit external surface (e.g. expose only 9090 if the receiver isn't
-    // wanted). Only bind when the server is enabled — binding an unused HTTP/2 port
+    // wanted). Only bind when the server is enabled - binding an unused HTTP/2 port
     // wastes a socket and complicates the docker port maps.
     if (grpcServerEnabled)
     {
@@ -429,7 +429,7 @@ app.UseOpenTelemetryPrometheusScrapingEndpoint();
 // healthchecks can probe Kestrel cheaply.
 app.MapHealthChecks("/healthz");
 
-// Replication gRPC route — only when the server is enabled. The mapping is idempotent
+// Replication gRPC route - only when the server is enabled. The mapping is idempotent
 // against repeat host startups within the same process (only relevant in tests; the
 // benchmark binary always starts fresh).
 if (grpcServerEnabled)

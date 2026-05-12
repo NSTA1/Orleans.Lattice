@@ -31,7 +31,7 @@ internal sealed class ReplicationShipperState
     /// <strong>Best-effort durability.</strong> The field is declared
     /// at <c>[Id(1)]</c> so it round-trips through Orleans serialization
     /// when state is persisted, but the shipper writes state through
-    /// only on a successful cursor advance — a backoff path does not
+    /// only on a successful cursor advance - a backoff path does not
     /// itself flush state. A silo crash mid-backoff therefore loses
     /// the failure count and a freshly-activated shipper resumes from
     /// <c>0</c>, paying one full ramp through the exponential backoff
@@ -47,7 +47,7 @@ internal sealed class ReplicationShipperState
 
     /// <summary>
     /// Per-partition resume cursors keyed by partition index. Each value
-    /// is the next unread WAL sequence number for that partition — i.e.
+    /// is the next unread WAL sequence number for that partition - i.e.
     /// the value to pass as <c>fromSequence</c> on the next call to
     /// <see cref="Grains.IWalShardGrain.ReadAsync"/>
     /// </summary>
@@ -74,7 +74,7 @@ internal sealed class ReplicationShipperState
     /// <para>
     /// Persisted on every cursor advance via the same
     /// <see cref="IPersistentState{TState}.WriteStateAsync"/> call
-    /// that flushes the HLC cursor — one round-trip, atomic across
+    /// that flushes the HLC cursor - one round-trip, atomic across
     /// the two slots. A failed write rolls back both, preserving the
     /// pre-existing pump-side guarantee that a transient storage
     /// failure leaves the shipper at the prior durable resume point.

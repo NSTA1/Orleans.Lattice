@@ -37,7 +37,7 @@ internal sealed partial class ShardRootGrain
     // reference, keyed by the internal node's GrainId. Eliminates the
     // grainFactory.GetGrain<IBPlusInternalGrain>(currentId) materialisation
     // on every traversal step through an internal node. Mirrors the
-    // _cachedLeaf shape directly — a single-slot LRU keyed by GrainId
+    // _cachedLeaf shape directly - a single-slot LRU keyed by GrainId
     // equality. Hit rate per traversal:
     //   * depth-2 tree (root-internal + leaves): 100% after first miss,
     //     since every traversal calls GetGrain<IBPlusInternalGrain>(rootId)
@@ -59,7 +59,7 @@ internal sealed partial class ShardRootGrain
     // RoutingTableSnapshot (separator keys + child ids + ChildrenAreLeaves
     // flag) fetched once via IBPlusInternalGrain.GetRoutingTableAsync and
     // reused thereafter to perform key-to-child routing locally inside this
-    // grain — eliminating the per-traversal-step
+    // grain - eliminating the per-traversal-step
     // RouteWithMetadataAsync cross-grain RPC for every internal node ever
     // visited by this activation.
     //
@@ -72,7 +72,7 @@ internal sealed partial class ShardRootGrain
     // entry and therefore need no invalidation. The crash-recovery branch
     // inside BPlusInternalGrain.AcceptSplitAsync that nests a sibling
     // AcceptSplitAsync call is reachable only after a partial-split failure
-    // and is documented as a tolerated invalidation hole — the only effect
+    // and is documented as a tolerated invalidation hole - the only effect
     // of a stale entry there is one extra cross-grain hop on the next
     // routing query, which is negligible compared to the recovery cost
     // itself.
@@ -120,7 +120,7 @@ internal sealed partial class ShardRootGrain
     /// by <paramref name="internalId"/>. On cache hit (the common case
     /// after the first traversal through any given internal) this is a
     /// fully synchronous local lookup completing via
-    /// <see cref="ValueTask{T}"/> — no grain dispatch, no Task allocation.
+    /// <see cref="ValueTask{T}"/> - no grain dispatch, no Task allocation.
     /// On cache miss the snapshot is fetched once via
     /// <see cref="IBPlusInternalGrain.GetRoutingTableAsync"/> (one extra
     /// cross-grain call relative to today's
@@ -154,7 +154,7 @@ internal sealed partial class ShardRootGrain
     /// Invalidates the cached routing-table snapshot for
     /// <paramref name="internalId"/>. Must be called by every site that
     /// issues <see cref="IBPlusInternalGrain.AcceptSplitAsync"/> against an
-    /// internal node — that is the only call shape capable of mutating an
+    /// internal node - that is the only call shape capable of mutating an
     /// existing internal node's children list. The method is a no-op when
     /// the cache is unallocated or the entry is absent (e.g. the very
     /// first split before any read traversed through the parent).
@@ -417,7 +417,7 @@ internal sealed partial class ShardRootGrain
                 : ResolveLeafGrainSlow(leafId);
             var result = await leafGrain.GetOrSetAsync(key, value);
 
-            // If the key was already live, no write occurred — no splits to propagate.
+            // If the key was already live, no write occurred - no splits to propagate.
             if (result.ExistingValue is not null)
             {
                 return result;
@@ -481,7 +481,7 @@ internal sealed partial class ShardRootGrain
                 : ResolveLeafGrainSlow(leafId);
             var result = await leafGrain.SetIfVersionAsync(key, value, expectedVersion);
 
-            // If CAS failed, no write occurred — no splits to propagate.
+            // If CAS failed, no write occurred - no splits to propagate.
             if (!result.Success)
             {
                 return result;
@@ -517,14 +517,14 @@ internal sealed partial class ShardRootGrain
         // Sync fast path: every internal hop's routing snapshot is served
         // out of _routingTableCache (a Dictionary<GrainId, ...> populated
         // on first miss and only invalidated on AcceptSplitAsync). In the
-        // steady state — the workload that PointRead / GetWithVersion /
-        // Exists / BatchRead actually exercise after warmup — every
+        // steady state - the workload that PointRead / GetWithVersion /
+        // Exists / BatchRead actually exercise after warmup - every
         // GetRoutingTableSnapshotAsync call sync-completes via the
         // ValueTask<RoutingTableSnapshot> ctor at line 137, and the entire
         // traversal walks root → ... → leaf without yielding. Returning
         // a sync-completed ValueTask<GrainId> from this loop avoids the
         // async state-machine box and Task<GrainId> heap allocation that
-        // an `async Task<GrainId>` method would force on every caller —
+        // an `async Task<GrainId>` method would force on every caller -
         // measurable on PointRead_DeeperTree, where the loop runs N
         // times per call (N = internal-tree depth).
         //

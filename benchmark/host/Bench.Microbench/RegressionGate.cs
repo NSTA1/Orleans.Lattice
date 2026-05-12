@@ -12,13 +12,13 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// Direction is inferred from the metric-key suffix produced by
 /// <see cref="HarnessJsonExporter"/>:
 /// <list type="bullet">
-///   <item><description><c>_mean_ns</c>, <c>_p50_ns</c>, <c>_p95_ns</c>, <c>_p99_ns</c>, <c>_alloc_b</c> — lower-is-better;
+///   <item><description><c>_mean_ns</c>, <c>_p50_ns</c>, <c>_p95_ns</c>, <c>_p99_ns</c>, <c>_alloc_b</c> - lower-is-better;
 ///     a positive percentage delta is a regression.</description></item>
-///   <item><description><c>_per_second</c> — higher-is-better; a negative percentage delta is a regression.</description></item>
+///   <item><description><c>_per_second</c> - higher-is-better; a negative percentage delta is a regression.</description></item>
 /// </list>
 /// </para>
 /// <para>
-/// The gate is intentionally narrow by default — only the metrics enumerated
+/// The gate is intentionally narrow by default - only the metrics enumerated
 /// in <see cref="DefaultGatedMetrics"/> are evaluated, because broad-based
 /// gating against the full microbench surface produces too much false-positive
 /// noise (microbench jitter is real). The defaults cover the F-055 read-path
@@ -81,7 +81,7 @@ internal static class RegressionGate
             var hasBaseline = baseline.TryGetValue(key, out var baselineValue);
             var hasCurrent = current.TryGetValue(key, out var currentValue);
 
-            // Missing-on-either-side means the gate has no signal — record it as
+            // Missing-on-either-side means the gate has no signal - record it as
             // an "unknown" row so the caller can see what was skipped, but it does
             // not count as a regression. The most common case is the first run
             // against a baseline that pre-dates the metric.
@@ -173,7 +173,7 @@ internal static class RegressionGate
 /// <param name="BaselinePath">Path of the baseline file consumed.</param>
 /// <param name="CurrentPath">Path of the current-run file consumed.</param>
 /// <param name="TolerancePct">Tolerance band the comparison was evaluated under.</param>
-/// <param name="Rows">One row per gated metric — including rows skipped because the metric was missing on either side.</param>
+/// <param name="Rows">One row per gated metric - including rows skipped because the metric was missing on either side.</param>
 /// <param name="Violations">Subset of <paramref name="Rows"/> whose status is "regression".</param>
 internal sealed record RegressionReport(
     string BaselinePath,
@@ -183,7 +183,7 @@ internal sealed record RegressionReport(
     IReadOnlyList<MetricComparison> Violations);
 
 /// <summary>
-/// One row of a <see cref="RegressionReport"/> — a single metric's baseline vs current values plus the verdict.
+/// One row of a <see cref="RegressionReport"/> - a single metric's baseline vs current values plus the verdict.
 /// </summary>
 /// <param name="Key">The gated metric key (e.g. <c>microbench_point_read_p99_ns</c>).</param>
 /// <param name="BaselineValue">Baseline value, or null if the metric was missing in the baseline file.</param>

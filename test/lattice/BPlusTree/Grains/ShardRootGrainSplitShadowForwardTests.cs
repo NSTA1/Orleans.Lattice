@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// (<c>ShardRootGrain.ForwardLocalWriteToShadowIfNeededAsync</c>) is
 /// distinct from the resize-shadow path
 /// (<c>ShardRootGrain.ForwardShadowAsync</c> over
-/// <see cref="ShardRootState.ShadowForward"/>) — the former targets a
+/// <see cref="ShardRootState.ShadowForward"/>) - the former targets a
 /// peer shard within the same physical tree during an in-flight
 /// <see cref="ShardRootState.SplitInProgress"/>, while the latter
 /// targets a destination tree during an online resize.
@@ -25,7 +25,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <item><description>The split-shadow forward of a saga prepare-phase
 /// write went via <c>target.MergeManyAsync(...)</c>, which lands the
 /// value directly in the destination leaf's visible
-/// <c>Entries</c> — bypassing <c>BPlusLeafGrain.CommitSetAsync</c>'s
+/// <c>Entries</c> - bypassing <c>BPlusLeafGrain.CommitSetAsync</c>'s
 /// prepared-context branch that would otherwise bucket the value into
 /// the destination leaf's <c>_pendingTx[txid]</c>. The destination
 /// leaf surfaces the prepared value to readers immediately
@@ -36,7 +36,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <c>AppendTxTerminalAsync</c> only invoked
 /// <c>ForwardShadowAsync</c> (resize-shadow), so during a shard
 /// split the destination shard's affected-leaves bucket was never
-/// drained — its <c>_pendingTx[txid]</c> orphaned forever once
+/// drained - its <c>_pendingTx[txid]</c> orphaned forever once
 /// <c>AtomicWriteGrain</c> called
 /// <c>ITxRegistryGrain.ForgetAsync</c>.</description></item>
 /// </list>
@@ -77,7 +77,7 @@ public class ShardRootGrainSplitShadowForwardTests
         var leaf = Substitute.For<IBPlusLeafGrain>();
         leaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
-        // Leaf raw-entry stub — return a non-tombstone live value so
+        // Leaf raw-entry stub - return a non-tombstone live value so
         // ForwardLocalWriteToShadowIfNeededAsync proceeds past the
         // tombstone short-circuit.
         var hlc = new HybridLogicalClock { WallClockTicks = DateTimeOffset.UtcNow.UtcTicks, Counter = 0 };
@@ -117,7 +117,7 @@ public class ShardRootGrainSplitShadowForwardTests
     {
         // Choose moved-slots that cover every 16 virtual slots so any test
         // key forwards regardless of its hash. The split coordinator in
-        // production uses contiguous slot ranges — a "cover-all" set is
+        // production uses contiguous slot ranges - a "cover-all" set is
         // a faithful test fixture.
         var moved = Enumerable.Range(0, VirtualShardCount).ToArray();
         return new ShardSplitInProgress
@@ -130,7 +130,7 @@ public class ShardRootGrainSplitShadowForwardTests
     }
 
     // ============================================================================
-    // Fix 2 — prepared shadow-forward routes via SetAsync (preserves pending-tx)
+    // Fix 2 - prepared shadow-forward routes via SetAsync (preserves pending-tx)
     // ============================================================================
 
     [Test]
@@ -166,7 +166,7 @@ public class ShardRootGrainSplitShadowForwardTests
     public async Task SetAsync_outside_prepared_context_forwards_split_shadow_via_MergeManyAsync()
     {
         // Non-saga writes during a split must continue to use
-        // MergeManyAsync — preserves source HLC verbatim for LWW
+        // MergeManyAsync - preserves source HLC verbatim for LWW
         // convergence on the destination during drain races.
         var h = CreateHarness(NewSplit(ShardSplitPhase.BeginShadowWrite));
 
@@ -175,7 +175,7 @@ public class ShardRootGrainSplitShadowForwardTests
         await h.ShadowTarget.Received().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>());
         // SetAsync on the shadow target is acceptable as part of the
         // shadow-forward observed-task tracker (which calls SetAsync on
-        // the resize-shadow destination) — but no resize-shadow is
+        // the resize-shadow destination) - but no resize-shadow is
         // configured here, so it must not have been called.
         await h.ShadowTarget.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
     }
@@ -186,7 +186,7 @@ public class ShardRootGrainSplitShadowForwardTests
         // Defensive: if LatticePreparedContext is set but no
         // transaction id is bound, we cannot identify the saga to
         // route through pending-tx semantics. Fall back to the
-        // legacy MergeManyAsync path — same as a non-saga write.
+        // legacy MergeManyAsync path - same as a non-saga write.
         // This guards against a programmer error where prepared
         // scope is opened without first calling
         // LatticeTransactionContext.Set.
@@ -204,7 +204,7 @@ public class ShardRootGrainSplitShadowForwardTests
     }
 
     // ============================================================================
-    // Fix 3 — terminal-mark forwards to split shadow target
+    // Fix 3 - terminal-mark forwards to split shadow target
     // ============================================================================
 
     [Test]
@@ -262,7 +262,7 @@ public class ShardRootGrainSplitShadowForwardTests
         // forwarding here the destination's pending bucket is
         // orphaned, the saga's TouchedShards list points at the
         // OLD source shard index (so AtomicWriteGrain's stale-routing
-        // retry loop never re-routes to the destination — the source's
+        // retry loop never re-routes to the destination - the source's
         // AppendTxTerminalAsync does not throw stale-routing in
         // Reject), and a reader routed to the destination after the
         // swap surfaces the destination's pre-saga value
@@ -288,7 +288,7 @@ public class ShardRootGrainSplitShadowForwardTests
         // so the hot-path reject gate continues to throw stale-routing
         // for moved virtual slots. A saga whose prepare straddled
         // the split window may now have its terminal arrive AFTER
-        // the source's SplitInProgress was cleared — without
+        // the source's SplitInProgress was cleared - without
         // consulting MovedAwaySlots there is no record of the
         // destination shard index and the destination's pending-tx
         // bucket is orphaned forever. ForwardSplitTerminalAsync
@@ -365,7 +365,7 @@ public class ShardRootGrainSplitShadowForwardTests
     public async Task AppendTxTerminalAsync_does_not_forward_to_split_shadow_with_empty_transaction_id()
     {
         // A defensive empty-txid call short-circuits before any
-        // forwarding — verified by both the source's no-op behaviour
+        // forwarding - verified by both the source's no-op behaviour
         // and no shadow-target call.
         var h = CreateHarness(NewSplit(ShardSplitPhase.BeginShadowWrite));
 

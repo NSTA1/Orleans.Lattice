@@ -224,7 +224,7 @@ public class ReplicationMutationObserverTests
     }
 
     // ------------------------------------------------------------------
-    // R-032 — declared replication mode is the gate
+    // R-032 - declared replication mode is the gate
     // ------------------------------------------------------------------
 
     [Test]
@@ -278,7 +278,7 @@ public class ReplicationMutationObserverTests
     }
 
     // ------------------------------------------------------------------
-    // R-012 — producer-side per-key filters (mode resolver permissive)
+    // R-012 - producer-side per-key filters (mode resolver permissive)
     // ------------------------------------------------------------------
 
     [Test]
@@ -457,7 +457,7 @@ public class ReplicationMutationObserverTests
     }
 
     // ------------------------------------------------------------------
-    // R-012 — compiled-filter cache
+    // R-012 - compiled-filter cache
     // ------------------------------------------------------------------
 
     [Test]
@@ -695,7 +695,7 @@ public class ReplicationMutationObserverTests
         // null frontier. With a fresh cache (no prior local writes,
         // no prior foreign applies, an empty cold-start snapshot
         // from the substituted grain factory) the snapshot is a
-        // non-null empty VersionVector — exactly what a remote
+        // non-null empty VersionVector - exactly what a remote
         // receiver's dep-check expects when no causal predecessors
         // have been declared.
         var sink = new CapturingSink();

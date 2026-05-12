@@ -80,7 +80,7 @@ public class FederationRouterChaosTests
     [Test]
     public async Task ApplyPresetAsync_returns_snapshots_and_releases_facts()
     {
-        // Pause a site, queue a fact, then apply ClearAll — the preset should
+        // Pause a site, queue a fact, then apply ClearAll - the preset should
         // unpause the site and release the queued fact through the backends.
         await _router.ConfigureSiteAsync(ProcessSite.CincinnatiMrb, new SiteConfig { IsPaused = true });
 

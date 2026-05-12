@@ -33,7 +33,7 @@ siloBuilder.ConfigureLattice("my-tree", o =>
 });
 ```
 
-> Structural sizing (`MaxLeafKeys`, `MaxInternalChildren`, `ShardCount`) is **not** configured here — those values are pinned per-tree in the registry. See [Tree Sizing](tree-sizing.md) for how to set them on a new or existing tree.
+> Structural sizing (`MaxLeafKeys`, `MaxInternalChildren`, `ShardCount`) is **not** configured here - those values are pinned per-tree in the registry. See [Tree Sizing](tree-sizing.md) for how to set them on a new or existing tree.
 
 > Prefer a runnable end-to-end example? See [Samples](samples.md) for in-process console apps that stand up a silo and exercise the tree.
 
@@ -42,7 +42,7 @@ siloBuilder.ConfigureLattice("my-tree", o =>
 Once Lattice is registered on the silo, resolve an `ILattice` grain from the client's (or a grain's) `IGrainFactory` using the tree's logical name as the string key, then call its methods directly:
 
 ```csharp verify
-// Resolve the tree (idempotent — the same logical name always routes to the same tree).
+// Resolve the tree (idempotent - the same logical name always routes to the same tree).
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 
 // Write a value.
@@ -51,7 +51,7 @@ await tree.SetAsync("user:1", "Alice"u8.ToArray());
 // Read it back (returns null if the key is absent or tombstoned).
 byte[]? value = await tree.GetAsync("user:1");
 
-// Conditional write — only insert if the key is not already present.
+// Conditional write - only insert if the key is not already present.
 byte[]? existing = await tree.GetOrSetAsync("user:1", "Bob"u8.ToArray());
 
 // Delete (tombstones the key; returns true if it was live).
@@ -64,7 +64,7 @@ await foreach (var key in tree.ScanKeysAsync(startInclusive: "user:", endExclusi
 }
 ```
 
-Keys are `string`; values are `byte[]`. For typed payloads (POCOs, records, DTOs) use the serializer-aware overloads in [`TypedLatticeExtensions`](#typedlatticeextensions) — they accept any `T` and default to `JsonLatticeSerializer<T>`:
+Keys are `string`; values are `byte[]`. For typed payloads (POCOs, records, DTOs) use the serializer-aware overloads in [`TypedLatticeExtensions`](#typedlatticeextensions) - they accept any `T` and default to `JsonLatticeSerializer<T>`:
 
 ```csharp verify
 await tree.SetAsync("user:1", new User("Alice", 30));
@@ -80,18 +80,18 @@ Obtain an `ILattice` grain from the grain factory using the tree's logical name 
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 ```
 
-> For the consistency contract of each method below — linearizable,
-> strongly consistent, snapshot, or eventually consistent — see the
+> For the consistency contract of each method below - linearizable,
+> strongly consistent, snapshot, or eventually consistent - see the
 > per-operation matrix in [Consistency](consistency.md). Per-row notes
 > here describe behaviour under specific conditions (e.g. concurrent
 > shard splits); they do not replace the classification in that doc.
 
 ### Cancellation
 
-Every method on `ILattice` — including scans (via the
+Every method on `ILattice` - including scans (via the
 `ScanKeysAsync` / `ScanEntriesAsync` extension wrappers),
 range deletes, counts, fan-out batch operations, bulk load, stateful
-cursors, and all tree-lifecycle orchestrators — accepts an optional
+cursors, and all tree-lifecycle orchestrators - accepts an optional
 trailing `CancellationToken cancellationToken = default` parameter. The
 signatures in the tables below omit the parameter for readability. The
 orchestrator checks the token at method entry, inside retry
@@ -100,7 +100,7 @@ pre-cancelled token fails fast without contacting any shard. Scan
 iterators apply `[EnumeratorCancellation]` so
 `await foreach (...).WithCancellation(ct)` propagates into the
 orchestrator. Cooperative cancellation is scoped to the `LatticeGrain`
-orchestrator — once a long-running coordinator (saga, resize, snapshot,
+orchestrator - once a long-running coordinator (saga, resize, snapshot,
 merge) has accepted a request it drives itself to a terminal state via
 reminders and is not cooperatively cancelled.
 
@@ -129,20 +129,20 @@ These methods are used during normal application flow to read, write, and enumer
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `GetManyAsync` | `Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)` | Fetches multiple keys in parallel across shards. Missing/tombstoned keys are omitted from the result. |
-| `SetManyAsync` | `Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)` | Inserts or updates multiple entries in parallel across shards. **Not atomic** — a partial failure leaves the batch half-applied with no compensating rollback. Use `SetManyAtomicAsync` when all-or-nothing semantics are required. |
-| `SetManyAtomicAsync` | `Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries)` | Atomically writes multiple entries via a saga coordinator grain. Reads each key's pre-saga value up front (including any TTL via `GetRawEntryAsync`), applies writes sequentially, and compensates (reverts) already-committed entries if a subsequent write fails — pre-saga values with a TTL are restored through the TTL-aware `SetAsync(key, value, TimeSpan)` overload so `ExpiresAtTicks` survives the rollback; pre-saga entries whose TTL has already elapsed are tombstoned; previously-absent keys are tombstoned. Crash-recovery is reminder-driven. Throws `ArgumentException` on duplicate keys or null values, and `InvalidOperationException` after compensation completes for a failed write. **Partial-visibility window:** readers between the first and last committed write may see a partial view of the batch; layer version-guarded reads (`GetWithVersionAsync` + `SetIfVersionAsync`) on top for strict isolation. After completion, saga state is retained for `LatticeOptions.AtomicWriteRetention` (default 48h) for idempotent re-invocation, then automatically cleared by a retention reminder. |
-| `SetManyAtomicAsync` (idempotency key) | `Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, string operationId)` | Caller-supplied idempotency-key overload. The saga grain is keyed `{treeId}/{operationId}`; re-submitting the same `operationId` re-attaches to the original saga and inherits its outcome, turning a transport-level failure (silo restart, client timeout) into a safe client retry. The `operationId` is bound to the exact sorted key set submitted on its first call via a persisted SHA-256 fingerprint; mismatched key sets throw `InvalidOperationException`. Reordering keys or changing values is allowed. `operationId` must be non-empty and must not contain `'/'` (reserved grain-key separator) — throws `ArgumentException` otherwise. See [Atomic Writes — Caller-supplied idempotency keys](atomic-writes.md#caller-supplied-idempotency-keys). |
+| `SetManyAsync` | `Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)` | Inserts or updates multiple entries in parallel across shards. **Not atomic** - a partial failure leaves the batch half-applied with no compensating rollback. Use `SetManyAtomicAsync` when all-or-nothing semantics are required. |
+| `SetManyAtomicAsync` | `Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries)` | Atomically writes multiple entries via a saga coordinator grain. Reads each key's pre-saga value up front (including any TTL via `GetRawEntryAsync`), applies writes sequentially, and compensates (reverts) already-committed entries if a subsequent write fails - pre-saga values with a TTL are restored through the TTL-aware `SetAsync(key, value, TimeSpan)` overload so `ExpiresAtTicks` survives the rollback; pre-saga entries whose TTL has already elapsed are tombstoned; previously-absent keys are tombstoned. Crash-recovery is reminder-driven. Throws `ArgumentException` on duplicate keys or null values, and `InvalidOperationException` after compensation completes for a failed write. **Partial-visibility window:** readers between the first and last committed write may see a partial view of the batch; layer version-guarded reads (`GetWithVersionAsync` + `SetIfVersionAsync`) on top for strict isolation. After completion, saga state is retained for `LatticeOptions.AtomicWriteRetention` (default 48h) for idempotent re-invocation, then automatically cleared by a retention reminder. |
+| `SetManyAtomicAsync` (idempotency key) | `Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, string operationId)` | Caller-supplied idempotency-key overload. The saga grain is keyed `{treeId}/{operationId}`; re-submitting the same `operationId` re-attaches to the original saga and inherits its outcome, turning a transport-level failure (silo restart, client timeout) into a safe client retry. The `operationId` is bound to the exact sorted key set submitted on its first call via a persisted SHA-256 fingerprint; mismatched key sets throw `InvalidOperationException`. Reordering keys or changing values is allowed. `operationId` must be non-empty and must not contain `'/'` (reserved grain-key separator) - throws `ArgumentException` otherwise. See [Atomic Writes - Caller-supplied idempotency keys](atomic-writes.md#caller-supplied-idempotency-keys). |
 | `DeleteRangeAsync` | `Task<int> DeleteRangeAsync(string startInclusive, string endExclusive)` | Tombstones all live keys in the lexicographic range [`startInclusive`, `endExclusive`] by walking the leaf chain in each shard. Returns the total number of keys tombstoned. |
-| `CountAsync` | `Task<int> CountAsync()` | Returns the total number of live (non-tombstoned) keys across all shards. **Strongly consistent during shard splits**: each physical shard is asked to count only the virtual slots it currently owns per the authoritative `ShardMap` (via `IShardRootGrain.CountForSlotsAsync`), then the map version is re-read and the count is retried on any version change. Every virtual slot is therefore counted exactly once — against whichever shard the map identifies as its current owner — regardless of where the split coordinator is in its per-phase machine. Bounded by `LatticeOptions.MaxScanRetries` (default 3); throws `InvalidOperationException` if the topology keeps mutating beyond the retry budget. |
+| `CountAsync` | `Task<int> CountAsync()` | Returns the total number of live (non-tombstoned) keys across all shards. **Strongly consistent during shard splits**: each physical shard is asked to count only the virtual slots it currently owns per the authoritative `ShardMap` (via `IShardRootGrain.CountForSlotsAsync`), then the map version is re-read and the count is retried on any version change. Every virtual slot is therefore counted exactly once - against whichever shard the map identifies as its current owner - regardless of where the split coordinator is in its per-phase machine. Bounded by `LatticeOptions.MaxScanRetries` (default 3); throws `InvalidOperationException` if the topology keeps mutating beyond the retry budget. |
 | `CountPerShardAsync` | `Task<IReadOnlyList<int>> CountPerShardAsync()` | Returns the number of live keys in each shard as an ordered list (index = shard index). Uses the same per-slot routing as `CountAsync` so the per-shard counts are also topology-consistent with the observed `ShardMap` snapshot. Useful for diagnostics and load-balancing analysis. |
 
 #### Enumeration
 
 Long-running scans use the resilient extension wrappers
 `ScanKeysAsync` / `ScanEntriesAsync` on `ILattice`. The wrapper tracks
-the last yielded key and — if the remote enumerator on the
+the last yielded key and - if the remote enumerator on the
 orchestrator grain is reclaimed mid-scan (silo failover, cold start,
-idle expiry, scale-down) — transparently reopens with a tightened
+idle expiry, scale-down) - transparently reopens with a tightened
 bound and resumes. Because the tree is strongly consistent and
 key-ordered, the result stream is deterministic: no duplicates, no
 gaps, original order preserved. The retry budget defaults to
@@ -154,7 +154,7 @@ immediate, subsequent reconnects apply a short linear backoff
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `ScanKeysAsync` | `IAsyncEnumerable<string> ScanKeysAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live keys in strict lexicographic order via paginated k-way merge across shards. When `prefetch` is `true` (or `null` with `PrefetchKeysScan` enabled), the next page from each shard is fetched in parallel while the current page is consumed. **Strongly consistent and strictly ordered during shard splits**: when a shard reports moved-away slots or the `ShardMap` version advances mid-scan, the orchestrator drains the affected slots from their current owners into a sorted in-memory cursor and injects it into the same k-way merge priority queue, so output remains globally sorted end-to-end. A per-call `HashSet<string>` suppresses duplicates across pre- and post-swap views. Reconciliation is bounded by `LatticeOptions.MaxScanRetries`; throws `InvalidOperationException` if the topology keeps mutating beyond that budget (see [`docs/lattice/shard-splitting.md`](shard-splitting.md)). |
-| `ScanEntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live key-value entries in strict lexicographic key order. When `prefetch` is `true` (or `null` with `PrefetchEntriesScan` enabled), the next page from each shard is fetched in parallel while the current page is consumed. Because entries carry `byte[]` values, pre-fetched pages hold extra in-flight memory proportional to `shardCount × KeysPageSize × avgValueSize`, so this flag is gated separately from `PrefetchKeysScan`. Useful for exports, migrations, and analytics without a separate `GetAsync` per key. **Strongly consistent and strictly ordered during shard splits** with the same reconciliation-cursor injection algorithm as `ScanKeysAsync`. Subject to the same `InvalidOperationException` contract on retry exhaustion — see [Scan reliability](#scan-reliability). |
+| `ScanEntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live key-value entries in strict lexicographic key order. When `prefetch` is `true` (or `null` with `PrefetchEntriesScan` enabled), the next page from each shard is fetched in parallel while the current page is consumed. Because entries carry `byte[]` values, pre-fetched pages hold extra in-flight memory proportional to `shardCount × KeysPageSize × avgValueSize`, so this flag is gated separately from `PrefetchKeysScan`. Useful for exports, migrations, and analytics without a separate `GetAsync` per key. **Strongly consistent and strictly ordered during shard splits** with the same reconciliation-cursor injection algorithm as `ScanKeysAsync`. Subject to the same `InvalidOperationException` contract on retry exhaustion - see [Scan reliability](#scan-reliability). |
 
 ### Scan reliability
 
@@ -173,7 +173,7 @@ budget. Point operations (`GetAsync` / `SetAsync` / `DeleteAsync` /
 during shard-map swaps and never surface this exception to callers.
 
 The resilient scan wrappers additionally recover from
-`Orleans.Runtime.EnumerationAbortedException` — raised when the
+`Orleans.Runtime.EnumerationAbortedException` - raised when the
 remote enumerator on the orchestrator grain is reclaimed mid-scan
 (silo failover, idle expiry). This is distinct from topology churn
 and is bounded separately by the `maxAttempts` parameter on
@@ -183,12 +183,12 @@ and is bounded separately by the `maxAttempts` parameter on
 Callers running multi-minute export scans in aggressively split-prone
 workloads have three options:
 
-1. Raise `LatticeOptions.MaxScanRetries` — cheap, addresses transient
+1. Raise `LatticeOptions.MaxScanRetries` - cheap, addresses transient
    topology churn.
 2. Wrap the scan in an application-level retry with exponential backoff
    and resume from the last successfully yielded key (using
    `startInclusive`).
-3. Use **stateful cursors** — `OpenKeyCursorAsync` / `OpenEntryCursorAsync` return a server-side checkpointed iterator
+3. Use **stateful cursors** - `OpenKeyCursorAsync` / `OpenEntryCursorAsync` return a server-side checkpointed iterator
    that survives topology changes, silo failover, and client restarts
    without caller retry code. See
    [Stateful cursors](#stateful-cursors) below.
@@ -198,8 +198,8 @@ workloads have three options:
 `ILattice` exposes a stateful cursor API for long-running scans and
 resumable range deletes that survive silo failovers, client restarts,
 and topology changes (shard splits). Unlike the stateless
-`ScanKeysAsync` / `ScanEntriesAsync` / `DeleteRangeAsync` methods — 
-bounded by `LatticeOptions.MaxScanRetries` — a cursor checkpoints its
+`ScanKeysAsync` / `ScanEntriesAsync` / `DeleteRangeAsync` methods - 
+bounded by `LatticeOptions.MaxScanRetries` - a cursor checkpoints its
 progress server-side after every page: a new grain activation reads
 its persisted state and resumes from the last yielded key.
 
@@ -215,11 +215,11 @@ next-step range from that checkpoint and continues.
 |--------|-----------|-------------|
 | `OpenKeyCursorAsync` | `Task<string> OpenKeyCursorAsync(string? startInclusive, string? endExclusive, bool reverse)` | Opens a key-enumeration cursor and returns a server-assigned opaque cursor ID (GUID). `startInclusive` / `endExclusive` may be `null` for unbounded; `reverse=true` walks keys in descending lex order. |
 | `OpenEntryCursorAsync` | `Task<string> OpenEntryCursorAsync(string? startInclusive, string? endExclusive, bool reverse)` | Opens an entry-enumeration cursor (key + value pairs). Same bounds / direction semantics as `OpenKeyCursorAsync`. |
-| `OpenDeleteRangeCursorAsync` | `Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive)` | Opens a resumable range-delete cursor. Both bounds are **required** (non-null). Reverse is not supported — range deletes are always forward. Throws `ArgumentException` for null bounds or a reverse spec. |
+| `OpenDeleteRangeCursorAsync` | `Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive)` | Opens a resumable range-delete cursor. Both bounds are **required** (non-null). Reverse is not supported - range deletes are always forward. Throws `ArgumentException` for null bounds or a reverse spec. |
 | `NextKeysAsync` | `Task<LatticeCursorKeysPage> NextKeysAsync(string cursorId, int pageSize)` | Returns up to `pageSize` keys and advances the cursor. Throws `ArgumentOutOfRangeException` for non-positive `pageSize`; throws `InvalidOperationException` if the cursor was opened for a different kind (e.g. `Entries` or `DeleteRange`), or if it has been closed. `HasMore=false` signals exhaustion. |
 | `NextEntriesAsync` | `Task<LatticeCursorEntriesPage> NextEntriesAsync(string cursorId, int pageSize)` | Returns up to `pageSize` key-value entries and advances the cursor. Same error surface as `NextKeysAsync` with the expected kind `Entries`. |
 | `DeleteRangeStepAsync` | `Task<LatticeCursorDeleteProgress> DeleteRangeStepAsync(string cursorId, int maxToDelete)` | Deletes up to `maxToDelete` keys in a single step and returns progress. `IsComplete=true` when the full range has been drained; subsequent calls are idempotent no-ops returning `DeletedThisStep=0`. Throws `InvalidOperationException` if the cursor is not of kind `DeleteRange`. |
-| `CloseCursorAsync` | `Task CloseCursorAsync(string cursorId)` | Closes the cursor, clears its persisted state, unregisters its idle-TTL reminder, and deactivates the grain. Idempotent — safe to call on an already-closed or never-opened cursor. |
+| `CloseCursorAsync` | `Task CloseCursorAsync(string cursorId)` | Closes the cursor, clears its persisted state, unregisters its idle-TTL reminder, and deactivates the grain. Idempotent - safe to call on an already-closed or never-opened cursor. |
 
 #### Return types
 
@@ -240,7 +240,7 @@ next-step range from that checkpoint and continues.
   effective range strictly excludes every previously-yielded key
   (`startInclusive = LastYieldedKey + "\0"` for forward scans,
   `endExclusive = LastYieldedKey` for reverse scans).
-- Values are snapshot-as-read per step, not per cursor — a value
+- Values are snapshot-as-read per step, not per cursor - a value
   updated between two steps will reflect the new value when the entry
   is re-visited on a subsequent open of a new cursor, but once a key
   has been yielded by a cursor it is never re-yielded by the same
@@ -264,7 +264,7 @@ granularity); smaller values are clamped to the floor. Set
 `CursorIdleTtl = Timeout.InfiniteTimeSpan` to disable automatic
 cleanup (cursors then live until `CloseCursorAsync` is called).
 
-#### Example — resumable export across a silo failover
+#### Example - resumable export across a silo failover
 
 ```csharp verify
 var cursorId = await tree.OpenEntryCursorAsync();
@@ -279,10 +279,10 @@ await tree.CloseCursorAsync(cursorId);
 ```
 
 If the client crashes mid-export it can persist the `cursorId` and
-resume on restart — the cursor grain reactivates on demand and
+resume on restart - the cursor grain reactivates on demand and
 continues from its persisted last-yielded key.
 
-#### Example — bounded, resumable range delete
+#### Example - bounded, resumable range delete
 
 ```csharp verify
 var cursorId = await tree.OpenDeleteRangeCursorAsync("2024/", "2025/");
@@ -310,13 +310,13 @@ Console.WriteLine($"Deleted {total} keys.");
 
 ### Maintenance Operations
 
-These methods manage tree structure and lifecycle. Several of them **take the tree offline** — reads and writes will throw `InvalidOperationException` while the operation is in progress. Plan maintenance windows accordingly.
+These methods manage tree structure and lifecycle. Several of them **take the tree offline** - reads and writes will throw `InvalidOperationException` while the operation is in progress. Plan maintenance windows accordingly.
 
 #### Bulk Loading
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `BulkLoadAsync` | `Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries)` | One-shot bottom-up bulk load into an **empty** tree. Entries are sorted internally. Throws `InvalidOperationException` on the second and subsequent calls (every shard must still be empty) — not safe to use as a streaming-append primitive. For continuous ingestion, use `SetAsync` or the streaming `BulkLoadAsync` extension on `LatticeExtensions` (which routes to `ShardRootGrain.BulkAppendAsync`). See [Bulk Loading](bulk-loading.md). |
+| `BulkLoadAsync` | `Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries)` | One-shot bottom-up bulk load into an **empty** tree. Entries are sorted internally. Throws `InvalidOperationException` on the second and subsequent calls (every shard must still be empty) - not safe to use as a streaming-append primitive. For continuous ingestion, use `SetAsync` or the streaming `BulkLoadAsync` extension on `LatticeExtensions` (which routes to `ShardRootGrain.BulkAppendAsync`). See [Bulk Loading](bulk-loading.md). |
 
 #### Tree Lifecycle
 
@@ -324,44 +324,44 @@ These methods manage tree structure and lifecycle. Several of them **take the tr
 |--------|-----------|-------------|
 | `TreeExistsAsync` | `Task<bool> TreeExistsAsync()` | Returns `true` if this tree is registered in the internal [tree registry](tree-registry.md). |
 | `GetAllTreeIdsAsync` | `Task<IReadOnlyList<string>> GetAllTreeIdsAsync()` | Returns all registered tree IDs in sorted order. System trees (prefixed with `_lattice_`) are excluded. Physical trees created by `ResizeAsync` and `SnapshotAsync` are included. |
-| `DeleteTreeAsync` | `Task DeleteTreeAsync()` | Soft-deletes the tree. Data is retained for `SoftDeleteDuration` before purge. Idempotent. ⚠️ **Takes the tree offline** — all reads and writes will throw `InvalidOperationException` until the tree is recovered. See [Tree Deletion](tree-deletion.md). |
+| `DeleteTreeAsync` | `Task DeleteTreeAsync()` | Soft-deletes the tree. Data is retained for `SoftDeleteDuration` before purge. Idempotent. ⚠️ **Takes the tree offline** - all reads and writes will throw `InvalidOperationException` until the tree is recovered. See [Tree Deletion](tree-deletion.md). |
 | `RecoverTreeAsync` | `Task RecoverTreeAsync()` | Recovers a soft-deleted tree before purge completes. |
-| `PurgeTreeAsync` | `Task PurgeTreeAsync()` | Immediately purges a soft-deleted tree without waiting for the retention window. ⚠️ **Permanently destroys all data** — this cannot be undone. |
+| `PurgeTreeAsync` | `Task PurgeTreeAsync()` | Immediately purges a soft-deleted tree without waiting for the retention window. ⚠️ **Permanently destroys all data** - this cannot be undone. |
 
 #### Resize
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `ResizeAsync` | `Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)` | **Online** — resizes the tree's node fan-out by draining every live entry into a newly-provisioned destination physical tree while mirroring live writes end-to-end via the shadow-forward primitive, then atomically swapping the registry alias. Reads and writes remain available throughout; the per-shard `Rejecting` phase at swap is absorbed transparently by the stateless-worker `LatticeGrain` via `StaleTreeRoutingException` retry. Zero data loss under concurrent load (LWW commutativity). Undoable within the `SoftDeleteDuration` retention window. Crash-safe via reminder-anchored `TreeResizeGrain`. See [Tree Sizing](tree-sizing.md#resizing-an-existing-tree). |
-| `UndoResizeAsync` | `Task UndoResizeAsync()` | Undoes the most recent resize. Behaviour depends on when undo is invoked: **before swap** — aborts the snapshot coordinator, clears every source shard's `ShadowForwardState`, and returns the source tree to a fully-writable state; **after swap** — recovers the old physical tree, removes the alias, restores the original registry configuration, clears any residual `Rejecting` phase on source shards, defensively aborts any post-swap snapshot still attached, and deletes the new snapshot tree. Only available while the old tree is still within its `SoftDeleteDuration` window (before purge completes). |
-| `ReshardAsync` | `Task ReshardAsync(int newShardCount, CancellationToken cancellationToken = default)` | **Online** — grows the tree's physical shard count to at least `newShardCount` while the tree continues to serve reads and writes. Internally dispatches up to `LatticeOptions.MaxConcurrentMigrations` (default 4) concurrent per-shard splits, each of which atomically grows the `ShardMap` via its own shadow-write + swap phases. Grow-only: `newShardCount` must be strictly greater than the current distinct-shard count and ≤ `LatticeConstants.DefaultVirtualShardCount` (4096, compile-time constant) (`ArgumentOutOfRangeException` otherwise). Idempotent for the same target while in progress; `InvalidOperationException` when a different target is already running. Returns once the intent is persisted — use `IsReshardCompleteAsync` to poll for completion. Crash-safe via reminder-anchored coordinator. See [Online Reshard](online-reshard.md). |
+| `ResizeAsync` | `Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)` | **Online** - resizes the tree's node fan-out by draining every live entry into a newly-provisioned destination physical tree while mirroring live writes end-to-end via the shadow-forward primitive, then atomically swapping the registry alias. Reads and writes remain available throughout; the per-shard `Rejecting` phase at swap is absorbed transparently by the stateless-worker `LatticeGrain` via `StaleTreeRoutingException` retry. Zero data loss under concurrent load (LWW commutativity). Undoable within the `SoftDeleteDuration` retention window. Crash-safe via reminder-anchored `TreeResizeGrain`. See [Tree Sizing](tree-sizing.md#resizing-an-existing-tree). |
+| `UndoResizeAsync` | `Task UndoResizeAsync()` | Undoes the most recent resize. Behaviour depends on when undo is invoked: **before swap** - aborts the snapshot coordinator, clears every source shard's `ShadowForwardState`, and returns the source tree to a fully-writable state; **after swap** - recovers the old physical tree, removes the alias, restores the original registry configuration, clears any residual `Rejecting` phase on source shards, defensively aborts any post-swap snapshot still attached, and deletes the new snapshot tree. Only available while the old tree is still within its `SoftDeleteDuration` window (before purge completes). |
+| `ReshardAsync` | `Task ReshardAsync(int newShardCount, CancellationToken cancellationToken = default)` | **Online** - grows the tree's physical shard count to at least `newShardCount` while the tree continues to serve reads and writes. Internally dispatches up to `LatticeOptions.MaxConcurrentMigrations` (default 4) concurrent per-shard splits, each of which atomically grows the `ShardMap` via its own shadow-write + swap phases. Grow-only: `newShardCount` must be strictly greater than the current distinct-shard count and ≤ `LatticeConstants.DefaultVirtualShardCount` (4096, compile-time constant) (`ArgumentOutOfRangeException` otherwise). Idempotent for the same target while in progress; `InvalidOperationException` when a different target is already running. Returns once the intent is persisted - use `IsReshardCompleteAsync` to poll for completion. Crash-safe via reminder-anchored coordinator. See [Online Reshard](online-reshard.md). |
 
 #### Merge
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `MergeAsync` | `Task MergeAsync(string sourceTreeId)` | Merges all entries from `sourceTreeId` into this tree using LWW semantics, preserving original timestamps. For each key present in both trees, the entry with the higher `HybridLogicalClock` timestamp wins. Tombstones are also merged, ensuring deletes propagate correctly. The source tree remains unmodified. Source and target trees may have different shard counts — entries are re-hashed to the correct target shard during merge. See [Architecture](architecture.md) for details on the CRDT merge primitives. |
+| `MergeAsync` | `Task MergeAsync(string sourceTreeId)` | Merges all entries from `sourceTreeId` into this tree using LWW semantics, preserving original timestamps. For each key present in both trees, the entry with the higher `HybridLogicalClock` timestamp wins. Tombstones are also merged, ensuring deletes propagate correctly. The source tree remains unmodified. Source and target trees may have different shard counts - entries are re-hashed to the correct target shard during merge. See [Architecture](architecture.md) for details on the CRDT merge primitives. |
 
 #### Snapshots
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `SnapshotAsync` | `Task SnapshotAsync(string destinationTreeId, SnapshotMode mode, int? maxLeafKeys, int? maxInternalChildren)` | Creates a point-in-time copy of the tree into `destinationTreeId`. In `Offline` mode the source is locked during the copy; in `Online` mode it remains available (best-effort consistency). Optional sizing overrides apply to the destination tree. TTL metadata (`ExpiresAtTicks`) and source HLC versions are preserved verbatim on the destination — a key with remaining TTL reappears on the destination with the same absolute expiry, not a fresh zero-expiry entry. ⚠️ **`Offline` mode takes the tree offline** — all reads and writes throw `InvalidOperationException` until the snapshot completes and shards are unmarked. See [Snapshots](snapshots.md). |
+| `SnapshotAsync` | `Task SnapshotAsync(string destinationTreeId, SnapshotMode mode, int? maxLeafKeys, int? maxInternalChildren)` | Creates a point-in-time copy of the tree into `destinationTreeId`. In `Offline` mode the source is locked during the copy; in `Online` mode it remains available (best-effort consistency). Optional sizing overrides apply to the destination tree. TTL metadata (`ExpiresAtTicks`) and source HLC versions are preserved verbatim on the destination - a key with remaining TTL reappears on the destination with the same absolute expiry, not a fresh zero-expiry entry. ⚠️ **`Offline` mode takes the tree offline** - all reads and writes throw `InvalidOperationException` until the snapshot completes and shards are unmarked. See [Snapshots](snapshots.md). |
 
 #### Operation Status
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `IsMergeCompleteAsync` | `Task<bool> IsMergeCompleteAsync()` | Returns `true` if no merge operation is in progress — either the most recent merge has completed or no merge has ever been initiated (vacuously complete). |
-| `IsSnapshotCompleteAsync` | `Task<bool> IsSnapshotCompleteAsync()` | Returns `true` if no snapshot operation is in progress — either the most recent snapshot has completed or no snapshot has ever been initiated (vacuously complete). |
-| `IsResizeCompleteAsync` | `Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default)` | Returns `true` if no resize operation is in progress — either the most recent resize has completed or no resize has ever been initiated (vacuously complete). |
-| `IsReshardCompleteAsync` | `Task<bool> IsReshardCompleteAsync(CancellationToken cancellationToken = default)` | Returns `true` if no online reshard operation is in progress — either the most recent reshard has completed or no reshard has ever been initiated (vacuously complete). |
+| `IsMergeCompleteAsync` | `Task<bool> IsMergeCompleteAsync()` | Returns `true` if no merge operation is in progress - either the most recent merge has completed or no merge has ever been initiated (vacuously complete). |
+| `IsSnapshotCompleteAsync` | `Task<bool> IsSnapshotCompleteAsync()` | Returns `true` if no snapshot operation is in progress - either the most recent snapshot has completed or no snapshot has ever been initiated (vacuously complete). |
+| `IsResizeCompleteAsync` | `Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default)` | Returns `true` if no resize operation is in progress - either the most recent resize has completed or no resize has ever been initiated (vacuously complete). |
+| `IsReshardCompleteAsync` | `Task<bool> IsReshardCompleteAsync(CancellationToken cancellationToken = default)` | Returns `true` if no online reshard operation is in progress - either the most recent reshard has completed or no reshard has ever been initiated (vacuously complete). |
 
 #### Diagnostics
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `DiagnoseAsync` | `Task<TreeDiagnosticReport> DiagnoseAsync(bool deep = false, CancellationToken cancellationToken = default)` | Returns a per-shard health snapshot — depth, root-is-leaf, live-key count, tombstone count (deep only), hotness counters, ops/sec, and split/bulk state — plus a bounded ring buffer of recent adaptive-split events. Repeated calls within `LatticeOptions.DiagnosticsCacheTtl` (default 5 s) are served from an in-memory cache; shallow and deep reports are cached independently. When `deep: true`, each shard walks its leaf chain to aggregate tombstone counts (one RPC per leaf). See [Diagnostics](diagnostics.md) for the full DTO reference and [Consistency](consistency.md#maintenance-operations) for the consistency classification. |
+| `DiagnoseAsync` | `Task<TreeDiagnosticReport> DiagnoseAsync(bool deep = false, CancellationToken cancellationToken = default)` | Returns a per-shard health snapshot - depth, root-is-leaf, live-key count, tombstone count (deep only), hotness counters, ops/sec, and split/bulk state - plus a bounded ring buffer of recent adaptive-split events. Repeated calls within `LatticeOptions.DiagnosticsCacheTtl` (default 5 s) are served from an in-memory cache; shallow and deep reports are cached independently. When `deep: true`, each shard walks its leaf chain to aggregate tombstone counts (one RPC per leaf). See [Diagnostics](diagnostics.md) for the full DTO reference and [Consistency](consistency.md#maintenance-operations) for the consistency classification. |
 
 ```csharp verify
 var report = await tree.DiagnoseAsync(deep: true, cancellationToken);
@@ -376,7 +376,7 @@ foreach (var shard in report.Shards)
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `SetPublishEventsEnabledAsync` | `Task SetPublishEventsEnabledAsync(bool? enabled, CancellationToken cancellationToken = default)` | Sets or clears the per-tree override for event publication. `true` forces publication on, `false` forces it off, `null` removes the override so the tree inherits the silo-wide `LatticeOptions.PublishEvents` default. The override is persisted on the tree's registry entry and survives silo restarts. Propagation is best-effort: the handling activation observes the change immediately; other activations refresh within a few seconds. See [Events — Per-tree override](events.md#per-tree-override) and [Configuration → `PublishEvents`](configuration.md#publishevents). |
+| `SetPublishEventsEnabledAsync` | `Task SetPublishEventsEnabledAsync(bool? enabled, CancellationToken cancellationToken = default)` | Sets or clears the per-tree override for event publication. `true` forces publication on, `false` forces it off, `null` removes the override so the tree inherits the silo-wide `LatticeOptions.PublishEvents` default. The override is persisted on the tree's registry entry and survives silo restarts. Propagation is best-effort: the handling activation observes the change immediately; other activations refresh within a few seconds. See [Events - Per-tree override](events.md#per-tree-override) and [Configuration → `PublishEvents`](configuration.md#publishevents). |
 
 ```csharp verify
 // Force events on for this tree regardless of the silo default:
@@ -394,14 +394,14 @@ For subscribing to the published events on the cluster client, see `SubscribeToE
 
 > **Mutation observers vs. [tree events](events.md).** Both surface "something changed" notifications, but they target different consumers:
 >
-> - **`IMutationObserver` is in-process, synchronous, and carries the full value bytes.** It runs on the grain's scheduler before the write returns, so the caller's latency is the observer's latency. Use it when a downstream component (replication WAL, outbox) must see the *value* at commit time and must be on the write path — typically another library, not application code.
-> - **Tree events are out-of-process, asynchronous, and metadata-only** (key + kind + HLC — *no value bytes*). They ride Orleans Streams and are fire-and-forget from the grain's perspective. Use them for UI updates, cache invalidation, dashboards, audit projections — anything that can tolerate at-most-once delivery and is willing to `GetAsync` the value itself if needed.
+> - **`IMutationObserver` is in-process, synchronous, and carries the full value bytes.** It runs on the grain's scheduler before the write returns, so the caller's latency is the observer's latency. Use it when a downstream component (replication WAL, outbox) must see the *value* at commit time and must be on the write path - typically another library, not application code.
+> - **Tree events are out-of-process, asynchronous, and metadata-only** (key + kind + HLC - *no value bytes*). They ride Orleans Streams and are fire-and-forget from the grain's perspective. Use them for UI updates, cache invalidation, dashboards, audit projections - anything that can tolerate at-most-once delivery and is willing to `GetAsync` the value itself if needed.
 >
 > A single write typically fires both: the observer first (inline, with value), then an event (post-commit, metadata-only). Choose observers when you need the value and the write path; choose events for everything else.
 
-Register one or more observers in the silo DI container — they are resolved as `IEnumerable<IMutationObserver>`, so multiple can coexist. When no observer is registered the hook is zero-cost: the grain checks `HasObservers` and short-circuits before allocating the payload.
+Register one or more observers in the silo DI container - they are resolved as `IEnumerable<IMutationObserver>`, so multiple can coexist. When no observer is registered the hook is zero-cost: the grain checks `HasObservers` and short-circuits before allocating the payload.
 
-```csharp
+```csharp verify
 // Implement IMutationObserver as a singleton service:
 public sealed class MyReplicationObserver : IMutationObserver
 {
@@ -419,7 +419,7 @@ public sealed class MyReplicationObserver : IMutationObserver
 
 Register it on the silo:
 
-```csharp
+```csharp verify
 siloBuilder.ConfigureServices(services =>
     services.AddSingleton<IMutationObserver, MyReplicationObserver>());
 ```
@@ -437,18 +437,18 @@ siloBuilder.ConfigureServices(services =>
 Every emit carries a `Guid TransactionId` that lets observers detect when several `LatticeMutation` payloads belong to the same enclosing user call or saga and capture per-transaction metadata (vector clocks, audit records, replication batch ids) exactly once for the batch:
 
 - **Single-key writes** (`SetAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `DeleteAsync`) get a fresh `Guid` per public call. Two successive `SetAsync` calls on the same key produce two distinct `TransactionId` values.
-- **Atomic batches** (`SetManyAtomicAsync`) share a single `Guid` across every per-key emit — the saga grain mints once during prepare, persists it on its state, and re-stamps the ambient context on every replay so the id survives crash recovery and compensation.
+- **Atomic batches** (`SetManyAtomicAsync`) share a single `Guid` across every per-key emit - the saga grain mints once during prepare, persists it on its state, and re-stamps the ambient context on every replay so the id survives crash recovery and compensation.
 - **Per-shard fan-out** (`DeleteRangeAsync`) shares a single `Guid` across every per-shard emit. A range-delete against an N-shard tree produces up to N `DeleteRange` mutations, all carrying the same `TransactionId`.
 - **Multi-key writes** (`SetManyAsync`) share a single `Guid` across every per-key emit produced for that one call.
-- **Convergence paths** (`MergeEntriesAsync` / `MergeManyAsync`, shard-split shadow-forward, snapshot restore) do not stamp a transaction id and emit `Guid.Empty` — these paths normally do not publish at all, but if they ever do (custom observer instrumentation), `Guid.Empty` is the documented sentinel for "no enclosing transaction".
+- **Convergence paths** (`MergeEntriesAsync` / `MergeManyAsync`, shard-split shadow-forward, snapshot restore) do not stamp a transaction id and emit `Guid.Empty` - these paths normally do not publish at all, but if they ever do (custom observer instrumentation), `Guid.Empty` is the documented sentinel for "no enclosing transaction".
 
 The id is computed at the public `ILattice` surface and propagated downstream via the ambient Orleans `RequestContext`. Observers that batch by transaction can group on `TransactionId`; observers that do not care can simply ignore the field.
 
 #### Pre-merge author's delta (`DeltaKind` / `DeltaPayload`)
 
-Every emit also carries an optional pair of slots — `string? DeltaKind` and `byte[]? DeltaPayload` — that lets a producer attach the **author's pre-merge delta** alongside the post-merge committed value. The lattice library never opens the payload itself; consumers (the replication observer in particular) decode it based on `DeltaKind`. Carrying the author's delta lets a deterministic replay path (e.g. a future leaf-projection rebuild from the WAL) reach the same convergence the originating writer reached, which the post-merge `Value` bytes alone cannot guarantee for non-LWW CRDTs.
+Every emit also carries an optional pair of slots - `string? DeltaKind` and `byte[]? DeltaPayload` - that lets a producer attach the **author's pre-merge delta** alongside the post-merge committed value. The lattice library never opens the payload itself; consumers (the replication observer in particular) decode it based on `DeltaKind`. Carrying the author's delta lets a deterministic replay path (e.g. a future leaf-projection rebuild from the WAL) reach the same convergence the originating writer reached, which the post-merge `Value` bytes alone cannot guarantee for non-LWW CRDTs.
 
-The delta is stamped via the `LatticeDeltaContext` ambient helper — a public static class exposing `Current { get; set; }` and a scoped `With(string kind, byte[] payload)` disposable that mirrors the `LatticeOriginContext` / `LatticeVectorClockContext` pattern. A forwarding caller wraps the call in:
+The delta is stamped via the `LatticeDeltaContext` ambient helper - a public static class exposing `Current { get; set; }` and a scoped `With(string kind, byte[] payload)` disposable that mirrors the `LatticeOriginContext` / `LatticeVectorClockContext` pattern. A forwarding caller wraps the call in:
 
 ```csharp verify
 using (LatticeDeltaContext.With("my.delta.kind", new byte[] { 1, 2, 3 }))
@@ -459,7 +459,7 @@ using (LatticeDeltaContext.With("my.delta.kind", new byte[] { 1, 2, 3 }))
 
 before reaching the public `ILattice` surface, and the leaf grain reads the context at the HLC-tick site and stamps it onto the freshly-constructed `LatticeMutation`. Local writes that leave the context unset produce `DeltaKind = null` and `DeltaPayload = null`, the documented default for observers persisted before this field existed.
 
-The CRDT value-surface accessors (`OrSet`, `PnCounter`, `VersionVector`) and the atomic-write saga set the context on the caller's behalf — observers downstream of those producers see typed delta payloads automatically. The saga additionally **persists** the captured carry on `AtomicWriteState` so a crash mid-execute and a reminder-driven reactivation re-stamps the original delta on every resumed per-key write.
+The CRDT value-surface accessors (`OrSet`, `PnCounter`, `VersionVector`) and the atomic-write saga set the context on the caller's behalf - observers downstream of those producers see typed delta payloads automatically. The saga additionally **persists** the captured carry on `AtomicWriteState` so a crash mid-execute and a reminder-driven reactivation re-stamps the original delta on every resumed per-key write.
 
 #### Atomic-batch metadata (`AtomicBatchSize` / `AtomicBatchIndex`)
 
@@ -469,7 +469,7 @@ Every emit produced by an in-flight atomic transaction (a `SetManyAtomicAsync` s
 using (LatticeAtomicBatchContext.With((5, 2)))
 {
     // A producer forwarding a remote saga emit can stamp the
-    // ambient pair directly; the typical caller does not — the
+    // ambient pair directly; the typical caller does not - the
     // SetManyAtomicAsync saga owns the stamping.
 }
 ```
@@ -478,7 +478,7 @@ The saga's stamping is independent of `OriginClusterId`, `VectorClock`, and `Cat
 
 ## Leaf-projection digest
 
-`ILattice.GetLeafProjectionDigestAsync(int shardIndex, CancellationToken)` returns a deterministic XxHash128 fingerprint of a single physical shard's leaf-chain projection. The shard hash chains every leaf's per-leaf hash through XxHash128 (`XxHash128(leaf_1.Hash || leaf_2.Hash || ...)`); the per-leaf hash folds in `(key, hlc.WallClockTicks, hlc.Counter, isTombstone, expiresAtTicks, originClusterId, vector-clock-fingerprint, length-prefixed-value)` for every entry plus the leaf's entry count and persisted projection-checkpoint offset. Operators running multiple silos can poll the digest on each silo and compare bytes — equality is the strongest cross-silo state-equivalence check the library provides. Returned as `LeafProjectionDigest { byte[] Hash; long EntryCount; long CheckpointOffset; }` (alias `ol.lpd`).
+`ILattice.GetLeafProjectionDigestAsync(int shardIndex, CancellationToken)` returns a deterministic XxHash128 fingerprint of a single physical shard's leaf-chain projection. The shard hash chains every leaf's per-leaf hash through XxHash128 (`XxHash128(leaf_1.Hash || leaf_2.Hash || ...)`); the per-leaf hash folds in `(key, hlc.WallClockTicks, hlc.Counter, isTombstone, expiresAtTicks, originClusterId, vector-clock-fingerprint, length-prefixed-value)` for every entry plus the leaf's entry count and persisted projection-checkpoint offset. Operators running multiple silos can poll the digest on each silo and compare bytes - equality is the strongest cross-silo state-equivalence check the library provides. Returned as `LeafProjectionDigest { byte[] Hash; long EntryCount; long CheckpointOffset; }` (alias `ol.lpd`).
 
 ```csharp verify
 LeafProjectionDigest digest = await tree.GetLeafProjectionDigestAsync(
@@ -531,7 +531,7 @@ Each method also has a parameterless overload that defaults to `JsonLatticeSeria
 
 ## CRDT value-surface accessors
 
-`ILattice.OrSet(key)`, `ILattice.PnCounter(key)`, and `ILattice.VersionVector(key)` return lightweight, allocation-free accessors that read and write a single key under optimistic concurrency. Each accessor exposes the primitive's natural mutation API — add/remove, increment/decrement, tick/merge — instead of forcing callers to hand-roll byte arrays and CAS retry loops. The underlying state types (`OrSet`, `PnCounter`, `VersionVector`) are CRDTs whose `Merge` operation is commutative, associative, and idempotent, so concurrent updates from multiple replicas converge on the same final state without coordination.
+`ILattice.OrSet(key)`, `ILattice.PnCounter(key)`, and `ILattice.VersionVector(key)` return lightweight, allocation-free accessors that read and write a single key under optimistic concurrency. Each accessor exposes the primitive's natural mutation API - add/remove, increment/decrement, tick/merge - instead of forcing callers to hand-roll byte arrays and CAS retry loops. The underlying state types (`OrSet`, `PnCounter`, `VersionVector`) are CRDTs whose `Merge` operation is commutative, associative, and idempotent, so concurrent updates from multiple replicas converge on the same final state without coordination.
 
 ```csharp verify
 // Observed-remove set: concurrent adds and removes converge.
@@ -580,7 +580,7 @@ Implement this interface to provide a custom serialization strategy. The library
 
 See [Configuration](configuration.md) for detailed guidance on each option, immutability constraints, and per-tree overrides via the [tree registry](tree-registry.md).
 
-> **Structural sizing is pinned per-tree in the registry, not in `LatticeOptions`.** `MaxLeafKeys`, `MaxInternalChildren`, and `ShardCount` are seeded into the `TreeRegistryEntry` on first tree use from the canonical defaults in `LatticeConstants` (128 / 128 / 64). After seeding, they are mutable only through `ILattice.ResizeAsync` (leaf / internal capacity) and `ILattice.ReshardAsync` (shard count), both of which run online and update the pin atomically. Callers who want non-default sizing should either (a) call `ResizeAsync` / `ReshardAsync` on a freshly-created tree (empty-tree fast-path — no coordinator machinery) or (b) pre-register the pin via `ILatticeRegistry.RegisterAsync` before first use.
+> **Structural sizing is pinned per-tree in the registry, not in `LatticeOptions`.** `MaxLeafKeys`, `MaxInternalChildren`, and `ShardCount` are seeded into the `TreeRegistryEntry` on first tree use from the canonical defaults in `LatticeConstants` (128 / 128 / 64). After seeding, they are mutable only through `ILattice.ResizeAsync` (leaf / internal capacity) and `ILattice.ReshardAsync` (shard count), both of which run online and update the pin atomically. Callers who want non-default sizing should either (a) call `ResizeAsync` / `ReshardAsync` on a freshly-created tree (empty-tree fast-path - no coordinator machinery) or (b) pre-register the pin via `ILatticeRegistry.RegisterAsync` before first use.
 
 > **The virtual shard space is also not a runtime option.** It is a compile-time constant, `LatticeConstants.DefaultVirtualShardCount = 4096`. Persisted `ShardMap` instances index into this space by integer slot, so changing it would invalidate every stored map. The pinned `ShardCount` must divide this constant evenly (enforced by `ShardMap.CreateDefault`).
 
@@ -605,9 +605,9 @@ See [Configuration](configuration.md) for detailed guidance on each option, immu
 
 ## Serializable Types
 
-All serializable types — and every grain interface, including the public `ILattice` — carry stable `[Alias]` attributes (prefixed with `ol.`) to ensure wire-format and grain-manifest compatibility across versions and prevent collisions when Lattice is hosted alongside other Orleans grains. Alias constants live in `TypeAliases` and must never be renamed or removed: they are part of the public wire format.
+All serializable types - and every grain interface, including the public `ILattice` - carry stable `[Alias]` attributes (prefixed with `ol.`) to ensure wire-format and grain-manifest compatibility across versions and prevent collisions when Lattice is hosted alongside other Orleans grains. Alias constants live in `TypeAliases` and must never be renamed or removed: they are part of the public wire format.
 
-Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Never)]` — they remain `public` for Orleans code generation but are hidden from IntelliSense because they are internal implementation details not intended for direct use.
+Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Never)]` - they remain `public` for Orleans code generation but are hidden from IntelliSense because they are internal implementation details not intended for direct use.
 
 | Type | Alias | Visibility | Description |
 |------|-------|------------|-------------|
@@ -634,10 +634,10 @@ Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Nev
 | `RoutingInfo` | `ol.ri` | public (hidden) | Per-activation routing snapshot returned by `ILattice.GetRoutingAsync()`: physical tree id plus the resolved `ShardMap`. Used by infrastructure (e.g. streaming bulk load) that must route to the same physical shards as `LatticeGrain`. |
 | `ShardCountResult` | `ol.scr` | internal | Per-shard count plus the set of virtual slots the shard observed in its `MovedAwaySlots` table during the count. Used by `IShardRootGrain.CountWithMovedAwayAsync` to coordinate strongly-consistent scans during shard splits. |
 | `LeafProjectionDigest` | `ol.lpd` | public | `readonly record struct` returned by `ILattice.GetLeafProjectionDigestAsync`. Carries the XxHash128 hash bytes (16 bytes), entry count (live + tombstoned), and summed projection-checkpoint offset of a shard's leaf chain. See [Projection Rebuild](projection-rebuild.md). |
-| `ProjectionRebuildPolicy` | — | public | Enum: `SnapshotThenWal` (default), `FullRebuildFromWal`, `Fail`. Selects the activation-time recovery strategy when a leaf falls off the WAL. See [Configuration](configuration.md#projectionrebuildpolicy). |
+| `ProjectionRebuildPolicy` | - | public | Enum: `SnapshotThenWal` (default), `FullRebuildFromWal`, `Fail`. Selects the activation-time recovery strategy when a leaf falls off the WAL. See [Configuration](configuration.md#projectionrebuildpolicy). |
 
 ## Internal Grain Access Control
 
-Lattice exposes a single public entry-point — `ILattice`. All other grain interfaces (`IShardRootGrain`, `IBPlusLeafGrain`, `IBPlusInternalGrain`, `ILeafCacheGrain`, `ILeafReplayCoordinatorGrain`, `ILatticeRegistry`, `ITombstoneCompactionGrain`, `ITreeDeletionGrain`, `ITreeResizeGrain`, `ITreeSnapshotGrain`, `ITreeMergeGrain`, `ITreeShardSplitGrain`, `IHotShardMonitorGrain`, `IAtomicWriteGrain`, `ILatticeCursorGrain`, `ITreeReshardGrain`, `ILatticeStats`, `ITxRegistryGrain`, `IWalShardGrain`, `IReplicationApplyGrain`) are declared `internal` and are not visible to consumer assemblies. The C# type system enforces the boundary at compile time — external code cannot name, reference, or invoke these interfaces. Internal DTOs associated with these interfaces (e.g. `SplitResult`, `KeysPage`, `EntriesPage`, `LatticeConstants`) are also `internal`.
+Lattice exposes a single public entry-point - `ILattice`. All other grain interfaces (`IShardRootGrain`, `IBPlusLeafGrain`, `IBPlusInternalGrain`, `ILeafCacheGrain`, `ILeafReplayCoordinatorGrain`, `ILatticeRegistry`, `ITombstoneCompactionGrain`, `ITreeDeletionGrain`, `ITreeResizeGrain`, `ITreeSnapshotGrain`, `ITreeMergeGrain`, `ITreeShardSplitGrain`, `IHotShardMonitorGrain`, `IAtomicWriteGrain`, `ILatticeCursorGrain`, `ITreeReshardGrain`, `ILatticeStats`, `ITxRegistryGrain`, `IWalShardGrain`, `IReplicationApplyGrain`) are declared `internal` and are not visible to consumer assemblies. The C# type system enforces the boundary at compile time - external code cannot name, reference, or invoke these interfaces. Internal DTOs associated with these interfaces (e.g. `SplitResult`, `KeysPage`, `EntriesPage`, `LatticeConstants`) are also `internal`.
 
 A small number of types remain `public` because they appear directly on the `ILattice` surface or its typed extensions: `HybridLogicalClock`, `VersionedValue`, `Versioned<T>`, `RoutingInfo`, and `ShardMap` (transitively via `RoutingInfo`).

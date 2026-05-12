@@ -140,7 +140,7 @@ public class VehicleSimulatorTests
             elapsed: TimeSpan.FromHours(0.1),
             nowUtc: state.LastUpdatedUtc + TimeSpan.FromMinutes(6), random: rng);
 
-        // Still driving — no RouteCompleted status, just an event.
+        // Still driving - no RouteCompleted status, just an event.
         Assert.Equal(VehicleStatus.Driving, result.State.Status);
         Assert.Equal(0, result.State.RouteIndex);
         Assert.Equal(0, result.State.SegmentProgressKm);

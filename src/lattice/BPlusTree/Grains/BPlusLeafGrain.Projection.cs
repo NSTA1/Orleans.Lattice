@@ -100,7 +100,7 @@ internal sealed partial class BPlusLeafGrain
         // prepare. Advancing the persisted checkpoint past the WAL
         // offset of an unresolved prepare would silently lose the
         // saga's writes if the leaf crashes before the terminal mark
-        // replays — crash recovery would resume from offset+1 and
+        // replays - crash recovery would resume from offset+1 and
         // never see the prepare again. The clamp floor is
         // (min unresolved prepare offset) - 1 so a future replay
         // re-emits the prepare exactly once. Foreground commits leave

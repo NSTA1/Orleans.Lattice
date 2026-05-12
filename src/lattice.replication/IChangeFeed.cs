@@ -5,8 +5,8 @@ namespace Orleans.Lattice.Replication;
 
 /// <summary>
 /// Pure-pull, cursor-driven subscriber API over the per-shard
-/// write-ahead log. Lets in-process consumers (the outbound ship loop
-/// in later phases, custom bridges, integration tests) read every
+/// write-ahead log. Lets in-process consumers (the outbound ship loop,
+/// custom bridges, integration tests, in-process projections) read every
 /// captured <see cref="WalRecord"/> for a tree without touching the
 /// primary state and without depending on transport-shaped acks.
 /// <para>
@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// <b>Scope: locally-authored writes only.</b> The feed surfaces the
 /// WAL, and the WAL is appended <i>only</i> by mutations that
-/// originate as fresh user-authored writes on this cluster — i.e.
+/// originate as fresh user-authored writes on this cluster - i.e.
 /// calls reaching <see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/>, 
 /// <see cref="ILattice.SetAsync(string, byte[], TimeSpan, CancellationToken)"/>, 
 /// <see cref="ILattice.DeleteAsync(string, CancellationToken)"/>, and
@@ -30,20 +30,20 @@ namespace Orleans.Lattice.Replication;
 /// (<see cref="IReplicationApplier"/> / <c>IReplicationApplyGrain</c>),
 /// by shard-split shadow-forward, by tree-merge / online-resize
 /// forwards, or by snapshot / bootstrap bulk-load are deliberately
-/// <b>not</b> WAL-appended on the destination — re-emitting them
+/// <b>not</b> WAL-appended on the destination - re-emitting them
 /// would cause the producer-side ship loop to re-ship them as
 /// local-origin writes, looping the cluster (the
 /// <c>includeLocalOrigin=false</c> filter on <see cref="Subscribe"/>
 /// is a wire-shape cycle-break for the remote shipper, not the
 /// authority on what enters the feed in the first place). The
 /// <see cref="IMutationObserver"/> hook in the core library has the
-/// same scope by design — its "Coverage gaps" remarks describe the
+/// same scope by design - its "Coverage gaps" remarks describe the
 /// same boundary.
 /// </para>
 /// <para>
 /// <b>Reading the feed for "every observable state change" is wrong.</b>
 /// In a multi-cluster topology, a value installed on this cluster by a
-/// remote apply will <i>not</i> appear in this feed — even though the
+/// remote apply will <i>not</i> appear in this feed - even though the
 /// state is now visible to local readers. Consumers that need to react
 /// to every observable state change (audit projections, anti-entropy
 /// verifiers, dashboards that surface peer-cluster activity, sample
@@ -101,12 +101,12 @@ public interface IChangeFeed
     /// <see cref="WalRecord.OriginClusterId"/> matches the configured
     /// local <see cref="LatticeReplicationOptions.ClusterId"/> are
     /// filtered out - the cursor-driven cycle-break used by remote
-    /// shippers. Defaults to <see langword="true"/> because the future
-    /// local materialiser (and any in-process projection) needs to
-    /// observe local-origin mutations. Note that this flag filters
+    /// shippers. Defaults to <see langword="true"/> because in-process
+    /// projections and background materialisers need to observe
+    /// local-origin mutations. Note that this flag filters
     /// <i>within</i> the locally-authored feed; it does not surface
     /// remote-apply installations (those never enter the WAL on this
-    /// cluster — see the type-level remarks).
+    /// cluster - see the type-level remarks).
     /// </param>
     /// <param name="cancellationToken">Cancellation token observed between every page read and every yielded entry.</param>
     IAsyncEnumerable<WalRecord> Subscribe(

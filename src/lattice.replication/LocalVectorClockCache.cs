@@ -175,7 +175,7 @@ internal sealed class LocalVectorClockCache(IGrainFactory grainFactory)
                 // state-machine box (~80–100 B) on the dominant hot path
                 // (every emit after the first one per (silo, tree)).
                 // The clone is taken under the lock for the same reason
-                // the await-path's clone is — a concurrent Advance must
+                // the await-path's clone is - a concurrent Advance must
                 // not race with the dictionary copy.
                 if (coldStart.IsCompletedSuccessfully && !cancellationToken.IsCancellationRequested)
                 {

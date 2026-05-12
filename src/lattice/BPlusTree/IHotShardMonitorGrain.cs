@@ -17,7 +17,7 @@ namespace Orleans.Lattice.BPlusTree;
 internal interface IHotShardMonitorGrain : IGrainWithStringKey
 {
     /// <summary>
-    /// Ensures the monitor is active for this tree. Idempotent — repeated
+    /// Ensures the monitor is active for this tree. Idempotent - repeated
     /// calls are no-ops once the monitor is running.
     /// </summary>
     Task EnsureRunningAsync();

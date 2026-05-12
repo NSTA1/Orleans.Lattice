@@ -69,7 +69,7 @@ public class ShardRootGrainShadowForwardTests
         factory.GetGrain<ILeafCacheGrain>(Arg.Any<string>()).Returns(cache);
 
         // The shadow target is resolved via GetGrain<IShardRootGrain>("{DestTreeId}/{ShardIndex}")
-        // — return the same mock for any string key so we can verify call reception.
+        // - return the same mock for any string key so we can verify call reception.
         var shadowTarget = Substitute.For<IShardRootGrain>();
         shadowTarget.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.CompletedTask);
         shadowTarget.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<long>()).Returns(Task.CompletedTask);
@@ -172,7 +172,7 @@ public class ShardRootGrainShadowForwardTests
     [Test]
     public async Task BeginShadowForwardAsync_is_idempotent_across_phase_transitions()
     {
-        // Re-entry during Drained is legal — returns silently without regressing the phase.
+        // Re-entry during Drained is legal - returns silently without regressing the phase.
         var h = CreateHarness();
         await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
         await h.Grain.MarkDrainedAsync(OperationId);
@@ -181,7 +181,7 @@ public class ShardRootGrainShadowForwardTests
         await h.Grain.BeginShadowForwardAsync(DestTreeId, OperationId, "logical-tree");
 
         Assert.That(h.State.State.ShadowForward!.Phase, Is.EqualTo(ShadowForwardPhase.Drained));
-        Assert.That(h.State.WriteCount, Is.EqualTo(writesBefore), "idempotent — no phase regression");
+        Assert.That(h.State.WriteCount, Is.EqualTo(writesBefore), "idempotent - no phase regression");
     }
 
     [Test]
@@ -386,7 +386,7 @@ public class ShardRootGrainShadowForwardTests
     }
 
     // ============================================================================
-    // Reject gate — every read / write throws in Rejecting phase
+    // Reject gate - every read / write throws in Rejecting phase
     // ============================================================================
 
     [Test]
@@ -480,7 +480,7 @@ public class ShardRootGrainShadowForwardTests
     }
 
     // ============================================================================
-    // Mutation forwarding — every write path mirrors to the destination
+    // Mutation forwarding - every write path mirrors to the destination
     // ============================================================================
 
     [Test]
@@ -656,7 +656,7 @@ public class ShardRootGrainShadowForwardTests
 
         // PrepareForOperationAsync universally rejects in the Rejecting phase.
         // DeleteRangeAsync skips per-key routing but still goes through the
-        // shared preamble — confirming uniform behaviour across all writes.
+        // shared preamble - confirming uniform behaviour across all writes.
         Assert.That(
             async () => await h.Grain.DeleteRangeAsync("a", "z"),
             Throws.InstanceOf<StaleTreeRoutingException>());
@@ -703,7 +703,7 @@ public class ShardRootGrainShadowForwardTests
     [Test]
     public void Get_throws_InvalidOperationException_when_deleted_without_rejecting()
     {
-        // User-initiated DeleteTreeAsync — ShadowForward is null, so the
+        // User-initiated DeleteTreeAsync - ShadowForward is null, so the
         // Rejecting check is a no-op and the deleted check correctly fires.
         var h = CreateHarness();
         h.State.State.IsDeleted = true;

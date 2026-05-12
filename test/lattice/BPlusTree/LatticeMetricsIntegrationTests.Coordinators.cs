@@ -10,6 +10,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// completion, tree lifecycle, and event publisher health.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class LatticeMetricsCoordinatorIntegrationTests
 {
     private FourShardClusterFixture _fixture = null!;

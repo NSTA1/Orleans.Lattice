@@ -99,10 +99,10 @@ internal enum ShardSplitPhase
 /// <list type="bullet">
 /// <item><description><see cref="ShardSplitPhase.BeginShadowWrite"/> /
 /// <see cref="ShardSplitPhase.Drain"/> /
-/// <see cref="ShardSplitPhase.Swap"/> — writes to keys whose virtual slot is
+/// <see cref="ShardSplitPhase.Swap"/> - writes to keys whose virtual slot is
 /// in <see cref="MovedSlots"/> are mirrored to <see cref="ShadowTargetShardIndex"/>
 /// in addition to being written locally.</description></item>
-/// <item><description><see cref="ShardSplitPhase.Reject"/> — operations on
+/// <item><description><see cref="ShardSplitPhase.Reject"/> - operations on
 /// keys whose virtual slot is in <see cref="MovedSlots"/> throw
 /// <see cref="StaleShardRoutingException"/>.</description></item>
 /// </list>

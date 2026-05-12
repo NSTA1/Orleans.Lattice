@@ -231,7 +231,7 @@ internal sealed partial class LatticeGrain(
         // some leaves after their drain will see drained leaves return
         // post-saga Entries (no pending entry to gate visibility) while
         // sibling undrained leaves consult snap1.InFlight and fall
-        // through to pre-saga Entries — split-observation that defeats
+        // through to pre-saga Entries - split-observation that defeats
         // strict per-tree atomic visibility. Retrying with snap2 (now
         // reflecting the committed transition) makes the next fan-out
         // observe the saga as Committed everywhere, so undrained
@@ -333,7 +333,7 @@ internal sealed partial class LatticeGrain(
         var nowUtc = DateTimeOffset.UtcNow;
         if (ttl > DateTimeOffset.MaxValue - nowUtc)
             throw new ArgumentOutOfRangeException(nameof(ttl),
-                "TTL is too large — absolute expiry would exceed DateTimeOffset.MaxValue.");
+                "TTL is too large - absolute expiry would exceed DateTimeOffset.MaxValue.");
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -658,7 +658,7 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap.GetPhysicalShardIndices();
 
-        // Fan out to all physical shards in parallel — any may contain keys in the range.
+        // Fan out to all physical shards in parallel - any may contain keys in the range.
         var tasks = new Task<int>[physicalShards.Count];
         for (int i = 0; i < physicalShards.Count; i++)
         {
@@ -752,7 +752,7 @@ internal sealed partial class LatticeGrain(
             // linearizable scan over the InFlight->Committed
             // transition). snap2, taken after the fan-out, is checked
             // against snap1 alongside the shard-map version stability
-            // check below — either an InFlight->Committed transition or
+            // check below - either an InFlight->Committed transition or
             // a topology change forces a retry. The single-shot
             // snapshot pattern (snap1 only, fixed for the lifetime of
             // the call) is insufficient because per-leaf drain into
@@ -761,12 +761,12 @@ internal sealed partial class LatticeGrain(
             // reaches some leaves after their drain observes drained
             // leaves returning post-saga Entries while sibling
             // undrained leaves consult snap1.InFlight and fall through
-            // to pre-saga Entries — split observation that defeats
+            // to pre-saga Entries - split observation that defeats
             // strict per-tree atomic visibility.
             var snap1 = await FetchRegistrySnapshotAsync();
 
             // Fast path: Version == 0 means the default identity map is in
-            // effect — no split has ever been persisted for this tree.
+            // effect - no split has ever been persisted for this tree.
             // ShardMap.Version is monotonically incremented on every persist,
             // so if it is still 0 at the end of the call, no split can have
             // started during our fan-out. Use the cheap leaf.CountAsync()
@@ -983,7 +983,7 @@ internal sealed partial class LatticeGrain(
             var versionAtStart = shardMap.Version;
             var virtualShardCount = shardMap.Slots.Length;
 
-            // Per-attempt double-checked TxRegistry snapshot — same
+            // Per-attempt double-checked TxRegistry snapshot - same
             // rationale as CountAsyncCore. Per-shard counts must apply
             // a single registry decision view across every shard so
             // the totals reconcile against CountAsync; snap1/snap2
@@ -1091,7 +1091,7 @@ internal sealed partial class LatticeGrain(
     {
         if (_physicalTreeId is not null) return _physicalTreeId;
 
-        // System trees (e.g. _lattice_trees) must not resolve aliases — the
+        // System trees (e.g. _lattice_trees) must not resolve aliases - the
         // registry itself is backed by an ILattice tree, so calling ResolveAsync
         // here would create a circular call chain and deadlock.
         if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
@@ -1148,7 +1148,7 @@ internal sealed partial class LatticeGrain(
             // GetShardGrainByIndex is invoked from inside loops keyed by
             // physicalShards, which itself comes from _shardMap). _shardMap
             // therefore must be non-null on this path. The defensive
-            // `shardIndex + 1` floor is kept for crash-safety only — a
+            // `shardIndex + 1` floor is kept for crash-safety only - a
             // null _shardMap would indicate a programming error elsewhere.
             var map = _shardMap;
             int size = shardIndex + 1;
@@ -1171,7 +1171,7 @@ internal sealed partial class LatticeGrain(
             // map is invariant per-activation (both invalidation hooks null
             // _cachedShards alongside _shardMap, so a fresh map gets a fresh
             // cache). A larger shardIndex therefore means the map has been
-            // mutated from under us — copy old entries forward into a grown
+            // mutated from under us - copy old entries forward into a grown
             // array so we do not silently drop previously cached references.
             var grown = new IShardRootGrain?[shardIndex + 1];
             Array.Copy(cache, grown, cache.Length);
@@ -1186,8 +1186,8 @@ internal sealed partial class LatticeGrain(
     /// Returns an <see cref="IShardRootGrain"/> reference for the given shard
     /// index against the resolved physical tree id. Reuses the array-keyed
     /// per-activation cache populated by <see cref="GetShardGrainAsync"/>
-    /// (cycle 11) so multi-shard fanout sites — bulk batch, cursor, range
-    /// scan, k-way-merge — that already have <c>physicalTreeId</c> and
+    /// (cycle 11) so multi-shard fanout sites - bulk batch, cursor, range
+    /// scan, k-way-merge - that already have <c>physicalTreeId</c> and
     /// <c>shardIndex</c> in hand do not pay the
     /// <c>GetGrain&lt;IShardRootGrain&gt;(string)</c> materialisation cost on
     /// any repeat-shard hit, even when consecutive calls alternate across
@@ -1212,7 +1212,7 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     public ValueTask<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default)
     {
-        // NOTE: intentionally NOT guarded — `GetRoutingAsync` is called by the
+        // NOTE: intentionally NOT guarded - `GetRoutingAsync` is called by the
         // library's own internal coordinator grains (saga compensation, stats,
         // cursor) which sometimes resolve routing for their owning tree before
         // dispatching further internal calls. It does not read or mutate user
@@ -1308,7 +1308,7 @@ internal sealed partial class LatticeGrain(
     /// a split observation across drained vs undrained leaves.
     /// <para>
     /// Defensive: if the registry RPC fails the call returns
-    /// <c>null</c> so the scan still proceeds — leaves fall back to
+    /// <c>null</c> so the scan still proceeds - leaves fall back to
     /// their per-leaf <c>GetStatusManyAsync</c> RPC, which reintroduces
     /// the original non-linearizable-scan race but keeps reads
     /// available. The matching <see cref="IsSnapshotStable"/> check
@@ -1331,7 +1331,7 @@ internal sealed partial class LatticeGrain(
     /// <summary>
     /// Returns <c>true</c> when a fan-out result computed under
     /// <paramref name="snap1"/> is still consistent given a fresh
-    /// <paramref name="snap2"/> taken after the fan-out — that is, no
+    /// <paramref name="snap2"/> taken after the fan-out - that is, no
     /// saga transitioned <see cref="TxStatus.InFlight"/>-&gt;
     /// <see cref="TxStatus.Committed"/> during the fan-out window. The
     /// check is asymmetric: every <see cref="TxStatus.Committed"/>
@@ -1339,7 +1339,7 @@ internal sealed partial class LatticeGrain(
     /// <para>
     /// The asymmetry is the whole point. Per-leaf drain into
     /// <c>state.State.Entries</c> on
-    /// <see cref="MutationKind.TxCommit"/> is irreversible — once a
+    /// <see cref="MutationKind.TxCommit"/> is irreversible - once a
     /// leaf has flipped a saga's prepared keys into Entries it has no
     /// record they came from a saga, so a stale
     /// <see cref="TxStatus.InFlight"/> snapshot can no longer gate
@@ -1347,7 +1347,7 @@ internal sealed partial class LatticeGrain(
     /// <c>MarkCommittedAsync</c> but whose fan-out reaches some leaves
     /// after their drain therefore observes drained leaves serving
     /// post-saga Entries while sibling undrained leaves consult
-    /// snap1.InFlight and fall through to pre-saga Entries — split
+    /// snap1.InFlight and fall through to pre-saga Entries - split
     /// observation. snap2.Committed reveals the transition; the
     /// caller retries with the fresh snapshot in scope so the next
     /// fan-out observes the saga as Committed everywhere (drained

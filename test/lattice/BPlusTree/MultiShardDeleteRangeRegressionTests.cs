@@ -11,6 +11,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// zero-delete leaf.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class MultiShardDeleteRangeRegressionTests
 {
     private MultiPageFourShardClusterFixture _fixture = null!;

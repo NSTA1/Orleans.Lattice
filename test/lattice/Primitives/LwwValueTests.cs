@@ -94,7 +94,7 @@ public class LwwValueTests
     [Test]
     public void IsExpired_returns_false_for_tombstones_even_with_expiry_set()
     {
-        // Tombstones are already "deleted" — expiry is only meaningful for live values.
+        // Tombstones are already "deleted" - expiry is only meaningful for live values.
         var tomb = LwwValue<string>.Tombstone(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
         Assert.That(tomb.IsExpired(long.MaxValue), Is.False);
     }

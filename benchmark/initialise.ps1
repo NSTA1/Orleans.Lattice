@@ -264,7 +264,7 @@ foreach ($fleetSize in $Ladder) {
     Write-Host ("----- Rung {0}/{1}: fleet={2} -----" -f $rungIndex, $Ladder.Count, $fleetSize) -ForegroundColor Cyan
 
     # Invoke benchmark.ps1 with explicit named parameters. We deliberately do NOT
-    # use array splatting (`& $benchmarkPs1 @argList`) here — when the splat array
+    # use array splatting (`& $benchmarkPs1 @argList`) here - when the splat array
     # mixes named-string args, values, and switches, PowerShell's parameter binder
     # has been observed to surface a misleading "A positional parameter cannot be
     # found ..." error against the calling script. Explicit named-parameter
@@ -327,13 +327,13 @@ foreach ($fleetSize in $Ladder) {
     $tpsGrowth = if ($prev -and $prev.Tps -gt 0) { $rung.Tps / $prev.Tps } else { $null }
 
     # Saturation predicates (in order of strength):
-    #   1. drops > 0       — hard producer-side signal: the LatticeSink channel
+    #   1. drops > 0       - hard producer-side signal: the LatticeSink channel
     #                        overflowed, so we're past the producer-side knee.
-    #   2. tps plateau     — throughput grew < 10% despite the fleet roughly
+    #   2. tps plateau     - throughput grew < 10% despite the fleet roughly
     #                        doubling (geometric ladder), meaning adding load
     #                        no longer adds work done. This is the headline
     #                        commit-path saturation signal.
-    #   3. p99 explosion   — leaf commit tail jumped > 2x relative to the
+    #   3. p99 explosion   - leaf commit tail jumped > 2x relative to the
     #                        baseline rung, meaning we're past the latency
     #                        cliff even if throughput is still climbing.
     #

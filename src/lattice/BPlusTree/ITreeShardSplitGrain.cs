@@ -39,7 +39,7 @@ internal interface ITreeShardSplitGrain : IGrainWithStringKey
     Task RunSplitPassAsync();
 
     /// <summary>
-    /// Returns <c>true</c> when the coordinator is idle — either no split
+    /// Returns <c>true</c> when the coordinator is idle - either no split
     /// has ever been initiated, or the last one has run to completion.
     /// Returns <c>false</c> while a split is in flight.
     /// </summary>

@@ -1,7 +1,7 @@
 namespace MultiSiteManufacturing.Host;
 
 /// <summary>
-/// Identifies the current silo instance — used by services that
+/// Identifies the current silo instance - used by services that
 /// partition behaviour by silo (for example the silo-partition
 /// chaos preset) and by the cross-cluster replication subsystem,
 /// which needs the cluster name to stamp replog keys and to select
@@ -18,7 +18,7 @@ namespace MultiSiteManufacturing.Host;
 /// storage account. With cross-cluster replication, seeding is
 /// additionally restricted to the primary silo of the
 /// <see cref="MultiSiteManufacturing.Host.SiloIdentity.ClusterName"/>
-/// == <c>"us"</c> cluster — cluster <c>eu</c> receives its
+/// == <c>"us"</c> cluster - cluster <c>eu</c> receives its
 /// seed via replication.
 /// </param>
 /// <param name="ClusterName">

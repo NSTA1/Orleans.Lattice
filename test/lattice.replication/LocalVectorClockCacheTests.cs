@@ -142,7 +142,7 @@ public class LocalVectorClockCacheTests
         var factory = Substitute.For<IGrainFactory>();
         var grain = Substitute.For<IReplicationHighWaterMarkGrain>();
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(grain);
-        // Default behaviour — no Returns() configured — so the grain
+        // Default behaviour - no Returns() configured - so the grain
         // returns Task.FromResult<VersionVector>(null!).
         var cache = new LocalVectorClockCache(factory);
 
@@ -312,7 +312,7 @@ public class LocalVectorClockCacheTests
     public async Task Concurrent_advances_produce_pointwise_max()
     {
         // Multiple threads racing to advance the same origin diagonal
-        // must converge to the maximum HLC across every advance —
+        // must converge to the maximum HLC across every advance -
         // pointwise-max under the per-tree lock, not last-writer-wins.
         var (cache, _, _) = CreateCache();
         await cache.GetSnapshotAsync(TreeId);

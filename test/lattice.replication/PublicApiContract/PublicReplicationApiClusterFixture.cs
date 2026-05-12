@@ -145,7 +145,7 @@ internal sealed class PublicReplicationApiClusterFixture
         // both directions. The production driver
         // (ReplicationDriverActivationService) only iterates
         // ReplicatedTrees at silo-start, but the contract suite
-        // exercises arbitrary per-test tree ids — they cannot be
+        // exercises arbitrary per-test tree ids - they cannot be
         // pre-listed. Activating the shippers explicitly here gives
         // the same eventual delivery without the driver knowing the
         // tree id ahead of time.
@@ -243,7 +243,7 @@ internal sealed class PublicReplicationApiClusterFixture
             // Force the shipper to flush its cursor to the
             // IWalCursorRegistry after every batch
             // (default is 16) so contract tests that observe
-            // cursor-driven state — registry snapshots, GC reports —
+            // cursor-driven state - registry snapshots, GC reports -
             // converge on a small write count.
             opts.ShipCursorWriteInterval = 1;
         });

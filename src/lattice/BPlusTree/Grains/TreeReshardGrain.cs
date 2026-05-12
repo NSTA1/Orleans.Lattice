@@ -12,19 +12,19 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Phase machine:
 /// </para>
 /// <list type="number">
-/// <item><description><see cref="ReshardPhase.Planning"/> — persist the
+/// <item><description><see cref="ReshardPhase.Planning"/> - persist the
 /// target shard count and transition to
 /// <see cref="ReshardPhase.Migrating"/>.</description></item>
-/// <item><description><see cref="ReshardPhase.Migrating"/> — each tick
+/// <item><description><see cref="ReshardPhase.Migrating"/> - each tick
 /// inspects the current <see cref="ShardMap"/>, counts distinct physical
-/// shards, and — while below target — dispatches up to
+/// shards, and - while below target - dispatches up to
 /// <see cref="LatticeOptions.MaxConcurrentMigrations"/> per-shard
 /// <see cref="ITreeShardSplitGrain.SplitAsync"/> calls against the
 /// largest-slot-owning eligible shards (those owning at least two virtual
 /// slots and not already splitting). Every completed split atomically
 /// grows the map by one distinct physical shard via its swap phase; the
 /// next tick simply re-evaluates.</description></item>
-/// <item><description><see cref="ReshardPhase.Complete"/> — target
+/// <item><description><see cref="ReshardPhase.Complete"/> - target
 /// reached; coordinator clears <see cref="TreeReshardState.InProgress"/>,
 /// unregisters its keepalive, and deactivates.</description></item>
 /// </list>
@@ -251,7 +251,7 @@ internal sealed class TreeReshardGrain(
         catch (InvalidOperationException ex)
         {
             // Split already in progress for a different parameter set, or
-            // source owns fewer than two slots — skip this shard and let the
+            // source owns fewer than two slots - skip this shard and let the
             // next tick try another candidate.
             Logger.LogDebug(ex,
                 "Could not dispatch split for shard {ShardIndex} during reshard of tree {TreeId}",

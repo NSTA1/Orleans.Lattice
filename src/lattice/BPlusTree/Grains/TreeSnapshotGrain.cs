@@ -290,7 +290,7 @@ internal sealed class TreeSnapshotGrain(
     /// Drains live entries from the source shard's leaf chain into the
     /// destination shard. Uses the raw-LwwValue drain path so TTL
     /// (<c>ExpiresAtTicks</c>) and source HLC metadata are preserved on the
-    /// destination tree — a snapshot of a key with remaining TTL reappears
+    /// destination tree - a snapshot of a key with remaining TTL reappears
     /// on the destination with the same absolute expiry, not a fresh
     /// zero-expiry entry.
     /// <para>
@@ -303,7 +303,7 @@ internal sealed class TreeSnapshotGrain(
     /// destination shard via
     /// <see cref="IShardRootGrain.MergeManyAsync"/> before drain's batch
     /// arrives. We therefore use <see cref="IShardRootGrain.MergeManyAsync"/>
-    /// for online mode too — its LWW semantics guarantee convergence
+    /// for online mode too - its LWW semantics guarantee convergence
     /// regardless of which write wins the race: whichever carries the
     /// higher HLC is observable in the final destination state.
     /// </para>
@@ -332,7 +332,7 @@ internal sealed class TreeSnapshotGrain(
         {
             // Online drain: destination shard may already have entries from
             // concurrent shadow-forward writes. Use LWW MergeManyAsync so
-            // the two populate streams converge — whichever entry carries
+            // the two populate streams converge - whichever entry carries
             // the higher HLC wins, per the CRDT invariant.
             var merge = new Dictionary<string, LwwValue<byte[]>>(entries.Count);
             foreach (var e in entries)
@@ -370,7 +370,7 @@ internal sealed class TreeSnapshotGrain(
             ?? throw new InvalidOperationException(
                 $"Snapshot state for tree '{SourceTreeId}' has no DestinationTreeId; cannot begin shadow forward.");
 
-        // Fall back to SourceTreeId when no logical name was threaded in —
+        // Fall back to SourceTreeId when no logical name was threaded in -
         // preserves offline/standalone-snapshot behaviour where the source
         // grain key already IS the user-visible name.
         var logicalTreeId = string.IsNullOrEmpty(state.State.LogicalTreeId)
@@ -484,7 +484,7 @@ internal sealed class TreeSnapshotGrain(
     {
         ArgumentException.ThrowIfNullOrEmpty(operationId);
 
-        // Idempotent — nothing to abort.
+        // Idempotent - nothing to abort.
         if (!state.State.InProgress) return;
 
         // Refuse to abort a snapshot started under a different operationId.

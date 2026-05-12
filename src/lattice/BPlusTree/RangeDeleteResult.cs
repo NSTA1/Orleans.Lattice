@@ -7,7 +7,7 @@ namespace Orleans.Lattice;
 /// <see cref="Deleted"/> is the number of live entries that were tombstoned
 /// inside the leaf. <see cref="PastRange"/> is <c>true</c> when the leaf
 /// has observed at least one key whose ordinal comparison is
-/// <c>&gt;= endExclusive</c> — i.e. all subsequent leaves in the chain
+/// <c>&gt;= endExclusive</c> - i.e. all subsequent leaves in the chain
 /// are guaranteed to lie strictly beyond the delete range and do not need
 /// to be walked.
 /// </para>

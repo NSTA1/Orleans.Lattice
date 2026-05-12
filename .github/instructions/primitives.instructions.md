@@ -6,7 +6,7 @@ applyTo: "src/lattice/Primitives/**"
 
 ## Design Principles
 
-All primitive types in this folder are **CRDT building blocks** — they must be:
+All primitive types in this folder are **CRDT building blocks** - they must be:
 
 - **Commutative**: `merge(a, b) == merge(b, a)`
 - **Associative**: `merge(merge(a, b), c) == merge(a, merge(b, c))`
@@ -16,7 +16,7 @@ Document these properties in the `<summary>` of every merge method.
 
 ## Type Shape
 
-**Immutable value types** — use `readonly record struct` with `[Immutable]`:
+**Immutable value types** - use `readonly record struct` with `[Immutable]`:
 
 ```csharp
 [GenerateSerializer]
@@ -29,7 +29,7 @@ public readonly record struct MyType
 }
 ```
 
-**Mutable aggregate types** (e.g. `VersionVector`) — use `sealed class` without `[Immutable]`:
+**Mutable aggregate types** (e.g. `VersionVector`) - use `sealed class` without `[Immutable]`:
 
 ```csharp
 [GenerateSerializer]
@@ -49,8 +49,8 @@ public sealed class MyAggregate
 | Type | Purpose |
 |---|---|
 | `HybridLogicalClock` | Totally-ordered timestamp (wall clock + counter) |
-| `LwwValue<T>` | Last-writer-wins register resolved by HLC. Carries optional `ExpiresAtTicks` ( TTL) — `0` means no expiry; reads filter entries where `IsExpired(nowUtcTicks)` returns `true`. Carries optional `OriginClusterId` (cluster-of-origin stamp, authored from the ambient `LatticeOriginContext`) and optional `VectorClock` (sparse `{originClusterId → HLC}` commit-time frontier, authored from the ambient `LatticeVectorClockContext`); both default to `null` for legacy persisted state. |
-| `VersionVector` | Per-replica version tracking for delta extraction. **Public** — also exposed through `ILattice.VersionVector(key)` as a value-surface CRDT accessor. |
+| `LwwValue<T>` | Last-writer-wins register resolved by HLC. Carries optional `ExpiresAtTicks` ( TTL) - `0` means no expiry; reads filter entries where `IsExpired(nowUtcTicks)` returns `true`. Carries optional `OriginClusterId` (cluster-of-origin stamp, authored from the ambient `LatticeOriginContext`) and optional `VectorClock` (sparse `{originClusterId → HLC}` commit-time frontier, authored from the ambient `LatticeVectorClockContext`); both default to `null` for legacy persisted state. |
+| `VersionVector` | Per-replica version tracking for delta extraction. **Public** - also exposed through `ILattice.VersionVector(key)` as a value-surface CRDT accessor. |
 | `OrSet` | Observed-remove set CRDT (public). State-level merge unions both sides' adds and tombstones; concurrent adds and removes survive a later remove that did not observe them. Exposed through `ILattice.OrSet(key)`. |
 | `OrSetDot` | `(replicaId, counter)` dot tagged on each `OrSet` add. |
 | `PnCounter` | Positive-negative counter CRDT (public). Per-replica monotonic positive/negative components; merge is pointwise-max per side. Exposed through `ILattice.PnCounter(key)`. |

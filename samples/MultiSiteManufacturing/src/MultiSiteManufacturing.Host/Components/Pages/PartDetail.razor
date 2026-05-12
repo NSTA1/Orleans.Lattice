@@ -84,7 +84,7 @@ else
                 disjoint cluster HLC ID spaces is semantically arbitrary.
                 Labels are an OR-Set replicated <strong>cross-cluster</strong>
                 as typed <code>add</code> / <code>remove</code> / <code>merge</code>
-                deltas — adds on any silo in either cluster union without
+                deltas - adds on any silo in either cluster union without
                 conflict.
             </small>
         </article>
@@ -97,7 +97,7 @@ else
             }
             else
             {
-                <p><em>@_facts.Count fact(s) — see trail below.</em></p>
+                <p><em>@_facts.Count fact(s) - see trail below.</em></p>
             }
         </article>
     </div>
@@ -107,13 +107,13 @@ else
     @switch (_suggestion.Action)
     {
         case NextAction.Terminal:
-            <p><em>No further actions — part is in a terminal state.</em></p>
+            <p><em>No further actions - part is in a terminal state.</em></p>
             break;
 
         case NextAction.IssueMrb:
             <article>
                 <header>
-                    <strong>Open NCR: <code>@_suggestion.OpenNcNumber</code></strong> — choose MRB disposition:
+                    <strong>Open NCR: <code>@_suggestion.OpenNcNumber</code></strong> - choose MRB disposition:
                 </header>
                 <div role="group">
                     <button type="button" disabled="@_busy"
@@ -138,7 +138,7 @@ else
 
         case NextAction.RecordNdtInspection:
             <article>
-                <header><strong>NDT inspection pending</strong> — record outcome:</header>
+                <header><strong>NDT inspection pending</strong> - record outcome:</header>
                 <div role="group">
                     <button type="button" disabled="@_busy"
                             @onclick="() => RecordNdtAsync(InspectionOutcome.Pass)">
@@ -149,13 +149,13 @@ else
                         Record NDT Fail
                     </button>
                 </div>
-                <small>A Fail does not auto-raise an NCR — use the form below if a defect warrants one.</small>
+                <small>A Fail does not auto-raise an NCR - use the form below if a defect warrants one.</small>
             </article>
             break;
 
         case NextAction.CompleteRework:
             <article>
-                <header><strong>Rework ordered</strong> — record completion + retest outcome:</header>
+                <header><strong>Rework ordered</strong> - record completion + retest outcome:</header>
                 <div role="group">
                     <button type="button" disabled="@_busy"
                             @onclick="() => CompleteReworkAsync(true)">

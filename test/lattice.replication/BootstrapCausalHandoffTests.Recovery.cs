@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Replication.Tests;
 public partial class BootstrapCausalHandoffTests
 {
     /// <summary>
-    /// Recovery 6: pinning the same frontier twice is idempotent —
+    /// Recovery 6: pinning the same frontier twice is idempotent -
     /// the second pin neither admits previously-deduped entries nor
     /// changes the dedup verdict for incremental traffic.
     /// </summary>
@@ -28,7 +28,7 @@ public partial class BootstrapCausalHandoffTests
         await h.Hwm.PinSnapshotAsync(Hlc(100), frontier, CancellationToken.None);
 
         // Below-diagonal entry must still be HWM-deduped after the
-        // second pin — the second pin is a no-op for dedup behaviour.
+        // second pin - the second pin is a no-op for dedup behaviour.
         var below = SetEntry("k-below", Hlc(50), OriginA);
         var belowResult = await h.Applier.ApplyAsync(below);
 
@@ -53,7 +53,7 @@ public partial class BootstrapCausalHandoffTests
     {
         var h = CreateHarness();
 
-        // First pin at HLC 200 — a subsequent entry at HLC 50 dedups.
+        // First pin at HLC 200 - a subsequent entry at HLC 50 dedups.
         await h.Hwm.PinSnapshotAsync(Hlc(200), Vector((OriginA, Hlc(200))), CancellationToken.None);
         var firstResult = await h.Applier.ApplyAsync(SetEntry("k-replay", Hlc(50), OriginA));
         Assert.That(firstResult.Applied, Is.False, "Below-diagonal entry dedups under the higher pin.");
@@ -61,7 +61,7 @@ public partial class BootstrapCausalHandoffTests
         // Operator rolls back: re-pin at HLC 25.
         await h.Hwm.PinSnapshotAsync(Hlc(25), Vector((OriginA, Hlc(25))), CancellationToken.None);
 
-        // The same HLC 50 entry now applies — it is above the new
+        // The same HLC 50 entry now applies - it is above the new
         // diagonal of 25.
         var secondResult = await h.Applier.ApplyAsync(SetEntry("k-replay", Hlc(50), OriginA));
 
@@ -78,7 +78,7 @@ public partial class BootstrapCausalHandoffTests
     /// Recovery 8: the per-applier causal-apply buffer is in-memory
     /// and per-instance. A fresh <see cref="ReplicationApplier"/>
     /// constructed over the same factory + options + already-pinned
-    /// HWM grain has an empty buffer — a previously-parked entry
+    /// HWM grain has an empty buffer - a previously-parked entry
     /// re-delivered to the new applier re-parks (no apply, no DLQ).
     /// This pins the recovery contract for a silo restart that
     /// re-activates the applier singleton from clean state.
@@ -114,7 +114,7 @@ public partial class BootstrapCausalHandoffTests
 
     /// <summary>
     /// Recovery 9: a snapshot pin overwrites the prior incrementally-
-    /// built local vector clock — origins that were previously tracked
+    /// built local vector clock - origins that were previously tracked
     /// by incremental traffic but are absent from the new frontier
     /// disappear from both the per-origin diagonal and the local VC.
     /// This is the "snapshot is authoritative" contract.
@@ -143,14 +143,14 @@ public partial class BootstrapCausalHandoffTests
             Assert.That(h.HwmRows.ContainsKey(OriginB), Is.False,
                 "Origin-B was not in the pinned frontier and must no longer appear in the diagonal table.");
             Assert.That(h.LocalVc.Entries.ContainsKey(OriginB), Is.False,
-                "Origin-B must also drop from the local vector clock — the snapshot is authoritative.");
+                "Origin-B must also drop from the local vector clock - the snapshot is authoritative.");
         });
     }
 
     /// <summary>
     /// Recovery: <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
     /// mutates the per-origin diagonal and the local vector clock but does
-    /// NOT drain the causal-apply buffer — drain is triggered solely by a
+    /// NOT drain the causal-apply buffer - drain is triggered solely by a
     /// successful <see cref="IReplicationHighWaterMarkGrain.TryAdvanceAsync"/>.
     /// Pre-pin parked entries survive the pin overwrite and drain on the
     /// next post-pin successful apply when the pinned frontier satisfies
@@ -175,7 +175,7 @@ public partial class BootstrapCausalHandoffTests
 
         // Pin a frontier that already satisfies the parked entry's dep
         // on origin-B@500. The pin overwrites rows + localVc but must
-        // NOT, by itself, trigger a drain — drain is gated on
+        // NOT, by itself, trigger a drain - drain is gated on
         // TryAdvanceAsync returning advanced=true.
         var frontier = Vector((OriginA, Hlc(100)), (OriginB, Hlc(500)));
         await h.Hwm.PinSnapshotAsync(Hlc(100), frontier, CancellationToken.None);
@@ -186,7 +186,7 @@ public partial class BootstrapCausalHandoffTests
         // Post-pin advance via an unrelated satisfier from a third
         // origin (no VC, takes direct-apply path). The TryAdvance this
         // triggers fires the drain that finally releases the pre-pin
-        // parked entry — the pinned frontier already covers its
+        // parked entry - the pinned frontier already covers its
         // origin-B@500 dep, and origin-A is its own origin so the dep
         // check skips it.
         var advancer = SetEntry("k-advance", Hlc(700), OriginD);

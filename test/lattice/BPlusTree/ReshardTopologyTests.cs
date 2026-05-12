@@ -175,8 +175,8 @@ public class ReshardTopologyTests
             try { await reader; } catch (OperationCanceledException) { }
         }
 
-        // Drain any residual reshard work — both the coordinator itself
-        // and any per-shard split it spawned — against a quiescent saga
+        // Drain any residual reshard work - both the coordinator itself
+        // and any per-shard split it spawned - against a quiescent saga
         // loop.
         while (!await reshard.IsIdleAsync())
         {

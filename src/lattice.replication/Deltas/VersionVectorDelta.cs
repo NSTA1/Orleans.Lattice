@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Replication;
 /// per-replica <see cref="HybridLogicalClock"/> entries that have
 /// advanced on the originator since the receiver's cursor. Version
 /// vectors merge by pointwise-max, so a delta is structurally identical
-/// to a full vector — the difference is only that callers ship the
+/// to a full vector - the difference is only that callers ship the
 /// minimum advancing subset to keep payload sizes bounded.
 /// <para>
 /// Apply semantics on the receiver: for every <c>(replicaId, clock)</c>

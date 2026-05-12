@@ -17,6 +17,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// most-recent applied timestamp keyed by <c>{treeId}/{originClusterId}</c>.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class ReplicationApplyIntegrationTests
 {
     private TwoSiteClusterFixture _fixture = null!;
@@ -58,7 +59,7 @@ public class ReplicationApplyIntegrationTests
         // Cycle-break: a value applied on Site B with origin "site-a"
         // must NOT generate a new outbound replog entry on Site B's sink
         // (because the change-feed observer filters local-origin only,
-        // and the persisted entry's origin must remain "site-a" — proving
+        // and the persisted entry's origin must remain "site-a" - proving
         // the apply seam preserved it verbatim).
         const string tree = "ri-set-cycle";
         var apply = _fixture.SiteB.Client.GetGrain<IReplicationApplyGrain>(tree);
@@ -110,7 +111,7 @@ public class ReplicationApplyIntegrationTests
     [Test]
     public async Task ApplySetAsync_older_source_hlc_does_not_overwrite_newer_local_value()
     {
-        // LWW guarantee — proves the source HLC is honoured (not rewritten
+        // LWW guarantee - proves the source HLC is honoured (not rewritten
         // to a fresh local one) when the apply seam persists the value.
         const string tree = "ri-lww";
         var apply = _fixture.SiteB.Client.GetGrain<IReplicationApplyGrain>(tree);
@@ -230,7 +231,7 @@ public class ReplicationApplyIntegrationTests
 
         Assert.That(result.Applied, Is.True);
 
-        // Both adds must survive the merge — that is the whole point of OR-Set.
+        // Both adds must survive the merge - that is the whole point of OR-Set.
         var merged = await lattice.OrSet(key).GetAsync();
         Assert.Multiple(() =>
         {
@@ -319,7 +320,7 @@ public class ReplicationApplyIntegrationTests
         var applier = CreateSiteBApplier();
         var hwm = _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>(tree);
 
-        // Pin HWM above the entry timestamp — re-delivery of a typed CRDT
+        // Pin HWM above the entry timestamp - re-delivery of a typed CRDT
         // entry must short-circuit on the HWM check just like LWW does.
         var pinFrontier = new VersionVector();
         pinFrontier.Entries[TwoSiteClusterFixture.SiteAClusterId] = Hlc(5_000);

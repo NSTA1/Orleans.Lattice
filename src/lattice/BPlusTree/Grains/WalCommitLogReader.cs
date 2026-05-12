@@ -103,7 +103,7 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
         var page = await grain.ReadAsync(0, 1, cancellationToken).ConfigureAwait(false);
         if (page.Entries.Count == 0)
         {
-            // Empty (or fully trimmed) WAL — tail collapses to head so
+            // Empty (or fully trimmed) WAL - tail collapses to head so
             // a checkpoint at head is not flagged as fallen-off.
             return await grain.GetNextSequenceAsync(cancellationToken).ConfigureAwait(false);
         }

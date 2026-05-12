@@ -27,9 +27,9 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <c>Entries</c>: every <c>fullPrePolls</c> count those fixtures emit
 /// is itself a witness that readers never see prepared-but-uncommitted
 /// state, regardless of whether the saga ultimately commits or rolls
-/// back. The TxAbort fan-out is the genuinely novel assertion — without
+/// back. The TxAbort fan-out is the genuinely novel assertion - without
 /// it, a saga rollback would orphan pending entries on every touched
-/// shard, breaking convergence on the abandoned writes — so it is
+/// shard, breaking convergence on the abandoned writes - so it is
 /// covered here as a focused unit test against the saga grain's
 /// terminal-broadcast path.
 /// </para>
@@ -53,7 +53,7 @@ public class CompensationContinuousReaderTests
         var lattice = Substitute.For<ILattice>();
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
 
-        // Single shared shard substitute — every grainFactory.GetGrain<IShardRootGrain>(...)
+        // Single shared shard substitute - every grainFactory.GetGrain<IShardRootGrain>(...)
         // returns it, so every per-shard fan-out call (one per distinct
         // physical shard the touched-set resolves to) lands on the same
         // mock and is observable via Received().
@@ -136,7 +136,7 @@ public class CompensationContinuousReaderTests
             Arg.Any<CancellationToken>());
 
         // Defensive: no committed terminal must escape on the rollback
-        // path — the abort and commit terminals are mutually exclusive
+        // path - the abort and commit terminals are mutually exclusive
         // for a single saga.
         await shard.DidNotReceive().AppendTxTerminalAsync(
             Arg.Any<Guid>(),
@@ -147,7 +147,7 @@ public class CompensationContinuousReaderTests
 
     /// <summary>
     /// On the happy path, every touched shard receives a
-    /// <see cref="MutationKind.TxCommit"/> terminal — included here so
+    /// <see cref="MutationKind.TxCommit"/> terminal - included here so
     /// the abort fan-out assertion above is paired with its complement
     /// and a regression on either side fails this fixture.
     /// </summary>
@@ -178,7 +178,7 @@ public class CompensationContinuousReaderTests
 
     /// <summary>
     /// Empty-batch sagas don't touch any shard and therefore must emit
-    /// no terminal — closing the corner case where a fan-out loop on
+    /// no terminal - closing the corner case where a fan-out loop on
     /// <c>TouchedShards</c> with zero entries could still issue a stray
     /// call against the routing's default shard.
     /// </summary>

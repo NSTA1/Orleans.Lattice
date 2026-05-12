@@ -202,12 +202,12 @@ public partial class TreeDeletionGrainTests
 
         await grain.BeginPurgeStateAsync(0);
 
-        // First attempt — retry counter incremented.
+        // First attempt - retry counter incremented.
         await grain.ProcessNextShardAsync();
         Assert.That(state.State.NextShardIndex, Is.EqualTo(0));
         Assert.That(state.State.ShardRetries, Is.EqualTo(1));
 
-        // Second attempt — retries exhausted, skip to next shard.
+        // Second attempt - retries exhausted, skip to next shard.
         await grain.ProcessNextShardAsync();
         Assert.That(state.State.NextShardIndex, Is.EqualTo(1));
         Assert.That(state.State.ShardRetries, Is.EqualTo(0));

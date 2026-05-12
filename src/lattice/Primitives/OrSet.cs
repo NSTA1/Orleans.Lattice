@@ -195,7 +195,7 @@ public sealed class OrSet
                 target[key] = [.. dots];
                 continue;
             }
-            // O(n+m) dedup via a transient HashSet — replaces the previous
+            // O(n+m) dedup via a transient HashSet - replaces the previous
             // O(n*m) List<>.Contains scan that would degrade quadratically
             // when an element accumulates many concurrent adds.
             var seen = new HashSet<OrSetDot>(existing);

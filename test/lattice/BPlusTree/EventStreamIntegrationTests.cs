@@ -10,6 +10,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// memory streams registered and <c>PublishEvents = true</c>.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public sealed class EventStreamIntegrationTests
 {
     private EventStreamClusterFixture _fixture = null!;

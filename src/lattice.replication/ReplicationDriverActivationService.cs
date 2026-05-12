@@ -43,7 +43,7 @@ namespace Orleans.Lattice.Replication;
 /// gauges (<c>peer.entries_behind</c>, <c>peer.bytes_behind</c>,
 /// <c>peer.consecutive_errors</c>, <c>peer.last_contact_seconds</c>)
 /// on the shared meter, and a <c>TryAddSingleton</c> with no consumer
-/// would otherwise leave the singleton lazy — the gauges would never
+/// would otherwise leave the singleton lazy - the gauges would never
 /// be observed because <c>_current</c> stays null until the first
 /// resolution. Holding a reference here makes the DI graph resolve
 /// the singleton during <see cref="IHostedService.StartAsync"/>, so
@@ -64,7 +64,7 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
     /// (<c>peer.entries_behind</c>, <c>peer.bytes_behind</c>,
     /// <c>peer.consecutive_errors</c>, <c>peer.last_contact_seconds</c>)
     /// on the shared meter, and a <c>TryAddSingleton</c> with no consumer
-    /// would otherwise leave the singleton lazy — the gauges would never
+    /// would otherwise leave the singleton lazy - the gauges would never
     /// fire because <c>_current</c> stays null until first resolution.
     /// Resolving the parameter (even though we never read it inside this
     /// class) wires the gauge registration into the silo's first scrape.
@@ -86,7 +86,7 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
 
     /// <summary>
     /// Initial delay between retry passes when at least one
-    /// activation is still pending. Tuned for fast-silo startup —
+    /// activation is still pending. Tuned for fast-silo startup -
     /// the silo is typically ready within a few hundred ms after
     /// <see cref="BackgroundService.ExecuteAsync"/> begins running.
     /// </summary>
@@ -115,7 +115,7 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
         // Build the pending work list once. Each work item carries a
         // closure that performs the activation call, plus a
         // human-readable label for diagnostics. The closure captures
-        // the IGrainFactory and the grain key — re-issuing it after
+        // the IGrainFactory and the grain key - re-issuing it after
         // the silo finishes startup is safe because Orleans grain
         // proxies are cheap and the second EnsureActiveAsync after a
         // first success is a no-op (RegisterOrUpdateReminder is
@@ -161,7 +161,7 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
         // pending item once; successful items are removed in-place
         // and any per-item success resets the inter-pass delay back
         // to the initial value (a transient failure followed by a
-        // success means the cluster has finished coming up — start
+        // success means the cluster has finished coming up - start
         // the next failure from a fresh budget).
         var delay = InitialRetryDelay;
         var pass = 0;
@@ -182,7 +182,7 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
-                    // Host shutdown — propagate.
+                    // Host shutdown - propagate.
                     throw;
                 }
                 catch (Exception ex)
@@ -218,7 +218,7 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
             // Exponential backoff with a hard cap. Doubling without
             // jitter is fine here because there is exactly one
             // activation service per silo and at most a small handful
-            // of pending items — there is no thundering-herd seam.
+            // of pending items - there is no thundering-herd seam.
             var nextTicks = Math.Min(MaxRetryDelay.Ticks, delay.Ticks * 2);
             delay = TimeSpan.FromTicks(nextTicks);
         }

@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Replication;
 /// pair in <see cref="Increments"/>, set the local positive component
 /// for that replica to <c>max(local, value)</c>; do the same for
 /// <see cref="Decrements"/> against the negative component. Never
-/// subtract — the value is the cumulative count, not a delta.
+/// subtract - the value is the cumulative count, not a delta.
 /// </para>
 /// <para>
 /// Emitters always populate both maps (use an empty <see cref="Dictionary{TKey, TValue}"/>

@@ -74,7 +74,7 @@ public partial class AtomicWriteGrainTests
     /// <summary>
     /// Stubs <see cref="IShardRootGrain.GetRawEntryAsync"/> for the given key
     /// to return an <see cref="LwwEntry"/> carrying <paramref name="value"/>
-    /// with a fresh HLC and no TTL — the non-TTL equivalent of the old
+    /// with a fresh HLC and no TTL - the non-TTL equivalent of the old
     /// <c>lattice.GetAsync(key).Returns(value)</c> stub.
     /// </summary>
     private static void StubPreValue(IShardRootGrain shard, string key, byte[]? value)
@@ -253,7 +253,7 @@ public partial class AtomicWriteGrainTests
     [Test]
     public async Task ExecuteAsync_captures_OriginClusterId_and_VectorClock_from_pre_saga_entry()
     {
-        // PrepareAsync is private — drive it through a successful ExecuteAsync
+        // PrepareAsync is private - drive it through a successful ExecuteAsync
         // and inspect the captured pre-value snapshot afterwards.
         var (grain, state, _, lattice, shard) = CreateGrain();
         var hlc = new HybridLogicalClock { WallClockTicks = DateTimeOffset.UtcNow.UtcTicks, Counter = 0 };
@@ -572,7 +572,7 @@ public partial class AtomicWriteGrainTests
         // Must not throw; the completed saga is observed as idempotent success.
         await grain.ExecuteAsync(TreeId, retry);
 
-        // Completed saga state must remain Completed with the original entries —
+        // Completed saga state must remain Completed with the original entries -
         // a reentry on a finished saga is a pure no-op.
         Assert.That(seeded.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
         Assert.That(seeded.State.Entries, Is.EqualTo(original));
@@ -638,7 +638,7 @@ public partial class AtomicWriteGrainTests
     public async Task ExecuteAsync_re_stamps_persisted_VectorClock_on_every_per_key_SetAsync()
     {
         // The saga's purpose: every per-key SetAsync the saga issues must
-        // observe the saga-wide VC ambient at the time it executes — i.e.
+        // observe the saga-wide VC ambient at the time it executes - i.e.
         // before the leaf grain reads LatticeVectorClockContext.Current
         // and stamps LwwValue.VectorClock. We capture the ambient inside
         // each SetAsync callback and assert all observations equal the
@@ -673,7 +673,7 @@ public partial class AtomicWriteGrainTests
         // its original Prepare must re-stamp the persisted frontier on
         // every resumed per-key write so observers continue to see the
         // identical batch-wide VC after silo restart. Caller-side ambient
-        // context is deliberately *unset* here — the value must come from
+        // context is deliberately *unset* here - the value must come from
         // persisted AtomicWriteState alone.
         var persistedVc = new VersionVector();
         persistedVc.Tick("origin-peer");
@@ -714,7 +714,7 @@ public partial class AtomicWriteGrainTests
     {
         // Reminder-driven replay must reuse the persisted frontier even if
         // the activation environment somehow leaks a non-null ambient
-        // context — capture-once is honoured.
+        // context - capture-once is honoured.
         var originalVc = new VersionVector();
         originalVc.Tick("origin-peer");
         var contaminatingVc = new VersionVector();

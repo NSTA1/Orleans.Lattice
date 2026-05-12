@@ -237,7 +237,7 @@ public class NextActionResolverTests
     [Test]
     public void Resolve_sorts_facts_by_hlc_before_resolving()
     {
-        // Identical facts, shuffled — resolver must sort internally.
+        // Identical facts, shuffled - resolver must sort internally.
         var forge = Step(ProcessStage.Forge);
         var ht = Step(ProcessStage.HeatTreat);
         var mach = Step(ProcessStage.Machining);

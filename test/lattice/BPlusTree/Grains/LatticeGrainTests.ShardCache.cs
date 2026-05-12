@@ -63,7 +63,7 @@ public partial class LatticeGrainTests
         // Cycle-11 contract: the cache is array-keyed by physical shard
         // index, so each distinct shard is materialised exactly ONCE per
         // activation regardless of call interleaving. Alternation between
-        // keyA and keyB no longer thrashes the cache — every call after the
+        // keyA and keyB no longer thrashes the cache - every call after the
         // first per-shard miss is a hit.
         await grain.GetAsync(keyA);
         await grain.GetAsync(keyA); // cache hit on shardA
@@ -118,7 +118,7 @@ public partial class LatticeGrainTests
         // Initial resolution materialised under the OLD physical tree id.
         factory.Received(1).GetGrain<IShardRootGrain>(
             $"{oldPhysical}/{shardIndex}", Arg.Any<string>());
-        // Retry must have materialised under the NEW physical tree id —
+        // Retry must have materialised under the NEW physical tree id -
         // proving _cachedShard was cleared by TryInvalidateStaleAlias.
         factory.Received(1).GetGrain<IShardRootGrain>(
             $"{newPhysical}/{shardIndex}", Arg.Any<string>());
@@ -163,7 +163,7 @@ public partial class LatticeGrainTests
         Assert.That(result, Is.EqualTo(new byte[] { 7 }));
         // Initial materialisation routed to shard 0 (per map0).
         factory.Received(1).GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string>());
-        // Retry must have materialised shard 1 (per map1) — proving
+        // Retry must have materialised shard 1 (per map1) - proving
         // _cachedShard was cleared by InvalidateShardMap. Without the
         // clear, the cache hit would return shardRoot0 again and the
         // outer await would surface StaleShardRoutingException to the caller.

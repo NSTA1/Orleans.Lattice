@@ -13,7 +13,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// adapter the seam yields it, otherwise the resolution returns
 /// <see langword="null"/> and the leaf grain operates from its
 /// in-memory projection alone (suitable for unit tests and
-/// non-replicated single-cluster deployments). Internal by design —
+/// non-replicated single-cluster deployments). Internal by design -
 /// the seam is the contract between the core library and a single
 /// library-internal adapter, not a public extensibility surface for
 /// third-party producers.

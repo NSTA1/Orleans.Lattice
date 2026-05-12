@@ -14,9 +14,9 @@ namespace Orleans.Lattice.Replication;
 /// Default <see cref="IReplicationApplier"/> implementation. Resolves
 /// the per-origin high-water-mark for the entry's
 /// <c>(treeId, originClusterId)</c> pair, filters re-delivery, runs
-/// the causal-plus dependency check — parking entries whose
+/// the causal-plus dependency check - parking entries whose
 /// declared <see cref="WalRecord.VectorClock"/> is not yet
-/// dominated by the local vector clock — and routes the entry through
+/// dominated by the local vector clock - and routes the entry through
 /// the core library's <see cref="IReplicationApplyGrain"/> seam so
 /// the persisted <c>LwwValue&lt;byte[]&gt;</c> carries the remote
 /// cluster's HLC and origin id verbatim. The HWM is advanced only
@@ -35,7 +35,7 @@ internal sealed partial class ReplicationApplier(
 
     /// <summary>
     /// Per-tree causal-apply buffers, lazily created on first park.
-    /// Each tree's buffer is independent — there is no cross-tree
+    /// Each tree's buffer is independent - there is no cross-tree
     /// coordination. The map itself is concurrent because Orleans
     /// grain calls into a singleton applier may interleave across
     /// trees; per-buffer concurrency is enforced by the buffer's
@@ -55,7 +55,7 @@ internal sealed partial class ReplicationApplier(
     /// delivery, both duplicate emits can otherwise observe the same
     /// pre-advance per-origin high-water-mark and both pass the HWM
     /// check before either advances it. Correctness is still bounded
-    /// by the HWM — cache eviction under sustained churn cannot
+    /// by the HWM - cache eviction under sustained churn cannot
     /// cause a re-merge.
     /// </summary>
     private readonly ConcurrentDictionary<string, RecentApplyCache> _dedupeCaches =
@@ -70,8 +70,8 @@ internal sealed partial class ReplicationApplier(
     /// than the previous successful apply for that origin (the producer's
     /// partitioned change feed yields per-shard in WAL-offset order and
     /// each shard's WAL is HLC-monotonic per origin). A violation does
-    /// not change apply behaviour — the entry is still applied and the
-    /// HWM is still advanced — it only increments the
+    /// not change apply behaviour - the entry is still applied and the
+    /// HWM is still advanced - it only increments the
     /// <see cref="LatticeReplicationMetrics.ApplyFifoViolations"/>
     /// counter so an alert on <c>rate &gt; 0</c> flags the regression.
     /// Updated on successful apply (not on park) so the invariant tracks
@@ -117,7 +117,7 @@ internal sealed partial class ReplicationApplier(
                 // back onto its authoring cluster. The outbound ship loop's
                 // origin filter already prevents this in the steady state, but
                 // hand-built apply pipelines and tests can still hand us such
-                // an entry — surface it as an explicit no-op rather than
+                // an entry - surface it as an explicit no-op rather than
                 // silently merging into the same cluster's state.
                 outcome = LatticeReplicationMetrics.OutcomeDedup;
                 return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
@@ -131,7 +131,7 @@ internal sealed partial class ReplicationApplier(
             {
                 // Defence-in-depth: a DeleteRange entry tagged with
                 // atomic-batch metadata (AtomicBatchSize > 0) is a
-                // producer-contract violation — the producer's
+                // producer-contract violation - the producer's
                 // SetManyAtomicAsync surface emits only Set/Delete, never
                 // DeleteRange, so atomic-batch stamps on a range op are
                 // intrinsic ambiguity (no consistent saga key, no
@@ -140,7 +140,7 @@ internal sealed partial class ReplicationApplier(
                 // than the receiver silently applying a non-atomic range
                 // delete that carries an unfulfilled atomic-batch
                 // promise. The violation is producer-shaped, not
-                // receiver-shaped — the wire slot remains additive on
+                // receiver-shaped - the wire slot remains additive on
                 // every WalRecord so the receiver-side prepared-Set /
                 // prepared-Delete primitive can route Set/Delete entries
                 // through the per-tx pending bucket while DeleteRange
@@ -173,7 +173,7 @@ internal sealed partial class ReplicationApplier(
             // back through) and the addressed shard's
             // AppendTxTerminalAsync under a LatticeHlcOverrideContext
             // so the receiver's local WAL append re-stamps the source
-            // cluster's terminal HLC verbatim — preserving the
+            // cluster's terminal HLC verbatim - preserving the
             // cross-cluster ordering invariant on receiver replays.
             if (entry.Op is MutationKind.TxCommit or MutationKind.TxAbort)
             {
@@ -223,7 +223,7 @@ internal sealed partial class ReplicationApplier(
             // the retry would observe TryAdd=false (cache hit), classify
             // the call as Applied=false (shadow-forward-dedup), and the
             // dead-letter decorator's retry-counter contract would clear
-            // the failure counter on what looks like a filtered call —,
+            // the failure counter on what looks like a filtered call -,
             // silently dropping the entry until FIFO eviction admits a
             // future retry. The park branch returns normally inside the
             // try, so its cache reservation is correctly retained: the
@@ -234,7 +234,7 @@ internal sealed partial class ReplicationApplier(
             try
             {
                 // Causal-plus dependency check. Skip the fetch entirely
-                // when the entry carries no declared dependencies — legacy
+                // when the entry carries no declared dependencies - legacy
                 // peers and pre-causal-plus entries decode VectorClock as null
                 // and must continue to apply unconditionally on the existing
                 // HWM-only path so this code is wire-compatible with the
@@ -262,7 +262,7 @@ internal sealed partial class ReplicationApplier(
 
                 // The advance may have unblocked entries parked by an earlier
                 // delivery whose deps included this origin's diagonal. Drain
-                // FIFO until the buffer reaches a fixed point — each drained
+                // FIFO until the buffer reaches a fixed point - each drained
                 // apply may itself advance the local vector clock, so re-fetch
                 // before each pass.
                 if (advanced)
@@ -401,7 +401,7 @@ internal sealed partial class ReplicationApplier(
                         // producer-side cache so the next local emit
                         // observes it. The drain loop's next pass
                         // re-fetches localVc from the grain and may
-                        // unblock further entries — the producer cache
+                        // unblock further entries - the producer cache
                         // is updated independently here so a concurrent
                         // commit-time observer sees the advance even
                         // before the drain loop completes.
@@ -442,7 +442,7 @@ internal sealed partial class ReplicationApplier(
                     // contract would then silently drop the entry
                     // until FIFO eviction. The HWM was never advanced
                     // for this entry (apply threw before TryAdvance),
-                    // so HWM dedupe will not suppress the retry — the
+                    // so HWM dedupe will not suppress the retry - the
                     // cache rollback is the only step required.
                     if (_dedupeCaches.TryGetValue(ent.TreeId, out var cache))
                     {
@@ -463,7 +463,7 @@ internal sealed partial class ReplicationApplier(
         // projection. The terminal record arriving subsequently via
         // ApplyTxTerminalAsync is the per-shard linearization point
         // that flips pending into visible (or drops on abort). Only
-        // LwwRegister mode is supported — the saga surface
+        // LwwRegister mode is supported - the saga surface
         // (SetManyAtomicAsync) emits only Set/Delete in that mode;
         // CRDT modes have no saga-prepared shape on the wire.
         if (entry.IsPrepared && entry.Op is MutationKind.Set or MutationKind.Delete)
@@ -699,7 +699,7 @@ internal sealed partial class ReplicationApplier(
     /// Records the receiver-side replication-lag sample for a successfully
     /// applied point operation. Lag is computed as
     /// <c>now - entry.Timestamp.WallClockTicks</c> in milliseconds and
-    /// clamped at zero — a future-dated source HLC (the producing cluster's
+    /// clamped at zero - a future-dated source HLC (the producing cluster's
     /// wall clock leads the receiver's) reports as <c>0</c> rather than a
     /// negative sample, which would corrupt downstream histograms.
     /// </summary>
@@ -733,7 +733,7 @@ internal sealed partial class ReplicationApplier(
     /// and increments
     /// <see cref="LatticeReplicationMetrics.ApplyFifoViolations"/> when
     /// the entry's HLC is strictly less than the previously recorded
-    /// value — surfacing a transport-side regression that broke the
+    /// value - surfacing a transport-side regression that broke the
     /// per-origin FIFO invariant. The recorded value is the pointwise
     /// max so a benign re-delivery (which the HWM check already filters
     /// upstream) does not silently downgrade the tracker on the rare
@@ -742,7 +742,7 @@ internal sealed partial class ReplicationApplier(
     private void RecordFifoState(WalRecord entry)
     {
         // Skip range deletes (carry HLC.Zero) and entries with a missing
-        // origin (defensive — the caller-side guard rejects empty origins
+        // origin (defensive - the caller-side guard rejects empty origins
         // before we get here).
         if (entry.Op == MutationKind.DeleteRange || string.IsNullOrEmpty(entry.OriginClusterId))
         {

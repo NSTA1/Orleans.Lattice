@@ -6,7 +6,7 @@
 @{
     // Snapshot into a stable list so concurrent mutation of the parent's
     // backing dictionary (DashboardBroadcaster pushes on every FactRouted)
-    // can't throw "Collection was modified" during enumeration — which
+    // can't throw "Collection was modified" during enumeration - which
     // previously broke the Blazor circuit mid-click and made the row
     // appear to "jump" without emitting facts.
     var rows = Parts.OrderBy(p => p.Serial.Value).ToList();
@@ -57,19 +57,19 @@
                         <tr @key="serial.Value" class="@(part.Diverges ? "divergent-row" : null)">
                             <td class="inventory-nowrap"><code><a href="/parts/@serial.Value">@serial.Value</a></code></td>
                             <td class="inventory-nowrap">@part.Family</td>
-                            <td>@(part.LatestStage?.ToString() ?? "—")</td>
+                            <td>@(part.LatestStage?.ToString() ?? "-")</td>
                             <td><StateBadge State="@part.BaselineState" /></td>
                             <td><StateBadge State="@part.LatticeState" /></td>
                             <td>@part.FactCount</td>
                             <td>
-                                @* Scrap is terminal on both folds — no fact can move a scrapped
+                                @* Scrap is terminal on both folds - no fact can move a scrapped
                                    part, so neither Race nor Fix would have any effect. Hide the
                                    action cell entirely (including a diverged Scrap-vs-non-Scrap
                                    row, which Fix can't reconcile either). *@
                                 @if (part.BaselineState == ComplianceState.Scrap
                                      || part.LatticeState == ComplianceState.Scrap)
                                 {
-                                    <small class="race-status race-status-held">—</small>
+                                    <small class="race-status race-status-held">-</small>
                                 }
                                 else if (part.Diverges)
                                 {
@@ -77,7 +77,7 @@
                                             class="outline race-button fix-button"
                                             disabled="@busy"
                                             aria-busy="@(busy ? "true" : "false")"
-                                            title="Fix the baseline ↔ lattice divergence on @serial.Value by emitting a single MRB(UseAsIs) with a fresh HLC. Works for the common Flagged-vs-Nominal divergence (both folds see UseAsIs last and demote to Nominal). Will not fix terminal Scrap or unarmed Rework divergence — those require a full retest sequence."
+                                            title="Fix the baseline ↔ lattice divergence on @serial.Value by emitting a single MRB(UseAsIs) with a fresh HLC. Works for the common Flagged-vs-Nominal divergence (both folds see UseAsIs last and demote to Nominal). Will not fix terminal Scrap or unarmed Rework divergence - those require a full retest sequence."
                                             @onclick="() => FixAsync(serial)">
                                         ✓ Fix
                                     </button>
@@ -88,7 +88,7 @@
                                             class="outline race-button"
                                             disabled="@busy"
                                             aria-busy="@(busy ? "true" : "false")"
-                                            title="Race an order-sensitive three-fact trio for @serial.Value — NCR(Minor) → Inspection(Pass) → MRB(UseAsIs) — emitted concurrently. Lattice always folds by HLC back to Nominal; the arrival-order baseline applies the trio in whichever order the scheduler delivers them, so concurrent emission alone is often enough to land on Flagged."
+                                            title="Race an order-sensitive three-fact trio for @serial.Value - NCR(Minor) → Inspection(Pass) → MRB(UseAsIs) - emitted concurrently. Lattice always folds by HLC back to Nominal; the arrival-order baseline applies the trio in whichever order the scheduler delivers them, so concurrent emission alone is often enough to land on Flagged."
                                             @onclick="() => RaceAsync(serial)">
                                         ⚠ Race
                                     </button>
@@ -160,7 +160,7 @@
         {
             return $"Race for {serial.Value}: {r.Forwarded}/3 trio facts forwarded, {r.Held} held";
         }
-        return $"Race for {serial.Value}: NCR → Pass → MRB(UseAsIs) trio forwarded — baseline and lattice may now disagree (row turns red if they do)";
+        return $"Race for {serial.Value}: NCR → Pass → MRB(UseAsIs) trio forwarded - baseline and lattice may now disagree (row turns red if they do)";
     }
 
     private async Task FixAsync(PartSerialNumber serial)
@@ -189,7 +189,7 @@
     private static string BuildFixMessage(PartSerialNumber serial, FixResult r) =>
         r.Held
             ? $"Fix for {serial.Value}: MRB UseAsIs held at {r.Site} (site paused or delayed)"
-            : $"Fix for {serial.Value}: MRB UseAsIs forwarded through {r.Site} — divergence should clear";
+            : $"Fix for {serial.Value}: MRB UseAsIs forwarded through {r.Site} - divergence should clear";
 
     private sealed record RaceStatus(string Message, bool AllHeld);
 }

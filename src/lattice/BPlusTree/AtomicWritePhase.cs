@@ -9,7 +9,7 @@ namespace Orleans.Lattice.BPlusTree;
 [Alias(TypeAliases.AtomicWritePhase)]
 internal enum AtomicWritePhase
 {
-    /// <summary>Initial state — the saga has not yet started.</summary>
+    /// <summary>Initial state - the saga has not yet started.</summary>
     NotStarted = 0,
 
     /// <summary>Reading pre-saga values for each key so compensation can roll back.</summary>
@@ -21,6 +21,6 @@ internal enum AtomicWritePhase
     /// <summary>A write failed; rolling back previously-committed keys with fresh HLC ticks.</summary>
     Compensate = 3,
 
-    /// <summary>Saga finished — either all writes committed or compensation completed.</summary>
+    /// <summary>Saga finished - either all writes committed or compensation completed.</summary>
     Completed = 4,
 }

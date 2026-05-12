@@ -17,7 +17,7 @@ public sealed class LatticeSinkOptions
     /// <summary>Default drain batch size.</summary>
     public const int DefaultBatchSize = 256;
 
-    /// <summary>Default flush interval — caps end-to-end producer→Lattice latency.</summary>
+    /// <summary>Default flush interval - caps end-to-end producer→Lattice latency.</summary>
     public static readonly TimeSpan DefaultFlushInterval = TimeSpan.FromMilliseconds(50);
 
     /// <summary>Default TTL for the event-log key shape (event-log-with-ttl).</summary>

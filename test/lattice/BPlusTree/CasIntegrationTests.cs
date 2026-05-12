@@ -7,6 +7,7 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 [TestFixture]
+[Category("Integration")]
 public class CasIntegrationTests
 {
     private ClusterFixture _fixture = null!;

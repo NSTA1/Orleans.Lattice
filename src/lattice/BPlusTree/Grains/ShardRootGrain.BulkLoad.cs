@@ -89,7 +89,7 @@ internal sealed partial class ShardRootGrain
         GrainId? prevLeafId = null;
         int leafIndex = 0;
 
-        // Identical B+ tree assembly to BulkLoadAsync — the only difference is
+        // Identical B+ tree assembly to BulkLoadAsync - the only difference is
         // that every entry's LwwValue (HLC version AND ExpiresAtTicks /
         // TTL) flows through verbatim instead of being re-stamped with a fresh
         // zero-based clock. Used by snapshot / restore (TreeSnapshotGrain) so

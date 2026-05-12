@@ -1,4 +1,4 @@
-# MultiSiteManufacturing — architecture
+# MultiSiteManufacturing - architecture
 
 Structural view of the sample: physical and network topology, how a
 single silo is wired internally, how Orleans grains depend on each
@@ -20,8 +20,8 @@ link is the peer Traefik, multi-homed onto both cluster networks.
 ```mermaid
 flowchart TB
     subgraph host["Developer host"]
-        browser1["Browser — US UI<br/>localhost:5001"]
-        browser2["Browser — EU UI<br/>localhost:5002"]
+        browser1["Browser - US UI<br/>localhost:5001"]
+        browser2["Browser - EU UI<br/>localhost:5002"]
     end
 
     subgraph usNet["us-net"]
@@ -70,9 +70,9 @@ Reachability matrix:
 |---|---|---|
 | `silo-us-a` → `silo-us-b` | `us-net` | Yes (same cluster) |
 | `silo-us-*` → `traefik-eu` | `us-net` (Traefik multi-homed) | Yes |
-| `silo-us-*` → `silo-eu-*` | — | **No shared network — blocked** |
-| `silo-eu-*` → `silo-us-*` | — | **No shared network — blocked** |
-| `azurite-us` ↔ `azurite-eu` | — | **No shared network — blocked** |
+| `silo-us-*` → `silo-eu-*` | - | **No shared network - blocked** |
+| `silo-eu-*` → `silo-us-*` | - | **No shared network - blocked** |
+| `azurite-us` ↔ `azurite-eu` | - | **No shared network - blocked** |
 
 Three host ports are published:
 
@@ -80,7 +80,7 @@ Three host ports are published:
 |---|---|---|
 | 5001 | `traefik-us:80` | US UI (sticky) + replication gRPC inbound (round-robin). Open <http://localhost:5001>. |
 | 5002 | `traefik-eu:80` | EU UI (sticky) + replication gRPC inbound (round-robin). Open <http://localhost:5002>. |
-| 3000 | `grafana:3000` | Cross-cluster Grafana — Prometheus-backed, multi-homed onto both cluster networks. Open <http://localhost:3000> (anonymous Viewer; `admin`/`admin` for edit). |
+| 3000 | `grafana:3000` | Cross-cluster Grafana - Prometheus-backed, multi-homed onto both cluster networks. Open <http://localhost:3000> (anonymous Viewer; `admin`/`admin` for edit). |
 
 Silo HTTP (`:8080`), Orleans silo (`:11111`), gateway (`:30000`),
 and Prometheus (`:9090`) ports are internal-only.

@@ -17,6 +17,7 @@ using Orleans.Serialization;
 namespace Orleans.Lattice.Replication.Grpc.Tests;
 
 [TestFixture]
+[Category("Integration")]
 public class GrpcPushTransportIntegrationTests
 {
     private IHost _host = null!;

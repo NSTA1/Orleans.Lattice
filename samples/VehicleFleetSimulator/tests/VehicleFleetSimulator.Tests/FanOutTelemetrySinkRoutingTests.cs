@@ -9,7 +9,7 @@ namespace VehicleFleetSimulator.Tests;
 /// depends on:
 /// <list type="bullet">
 ///   <item><description>Telemetry is dispatched to the shard chosen by
-///     <see cref="StreamConstants.ShardForVehicle"/> — never to a different shard.</description></item>
+///     <see cref="StreamConstants.ShardForVehicle"/> - never to a different shard.</description></item>
 ///   <item><description>Discrete events are dispatched to the singleton events-feed activation
 ///     (<see cref="IFleetFanOutGrain.EventsKey"/>) and never to any telemetry shard, so a
 ///     backed-up events queue can't block control-plane Subscribe / Unsubscribe on a telemetry
@@ -70,7 +70,7 @@ public class FanOutTelemetrySinkRoutingTests(ClusterFixture fixture)
             }
 
             // Allow ObserverManager.Notify to flush; observers run on the silo, not in-line with
-            // the publish caller. A short bounded wait is sufficient — every shard is independent.
+            // the publish caller. A short bounded wait is sufficient - every shard is independent.
             await WaitUntil(() => perShardSeen.Count == idsByShard.Length, TimeSpan.FromSeconds(10));
 
             for (var shard = 0; shard < idsByShard.Length; shard++)

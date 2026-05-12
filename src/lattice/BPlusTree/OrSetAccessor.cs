@@ -6,7 +6,7 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Typed value-surface accessor for an <see cref="Primitives.OrSet"/>
 /// stored under a single key in an <see cref="ILattice"/>. The accessor
-/// is a lightweight, allocation-free wrapper — construct it once via
+/// is a lightweight, allocation-free wrapper - construct it once via
 /// <see cref="CrdtLatticeExtensions.OrSet(ILattice, string)"/> and reuse
 /// it for any number of operations on the same key.
 /// <para>

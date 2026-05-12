@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Tests.Fakes;
 /// <summary>
 /// Test helpers for building <see cref="MutationObserverDispatcher"/>
 /// instances without a DI container. Most grain unit tests do not care
-/// about mutation observers — <see cref="NoObservers"/> returns a zero-
+/// about mutation observers - <see cref="NoObservers"/> returns a zero-
 /// observer dispatcher that satisfies the ctor requirement and
 /// short-circuits on the hot path.
 /// </summary>

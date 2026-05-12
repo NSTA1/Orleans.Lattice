@@ -16,6 +16,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// frontier.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class LatticeSnapshotProviderTests
 {
     private const string ClusterId = "snap-site";

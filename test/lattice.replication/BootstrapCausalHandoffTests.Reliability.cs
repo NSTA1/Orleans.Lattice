@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
 /// Reliability gaps on the post-pin causal handoff path. These tests
-/// pin behaviours that — independently of the four spec bullets — must
+/// pin behaviours that - independently of the four spec bullets - must
 /// hold for the receiver to be safe to ship: drained-apply failure
 /// classification, defence-in-depth against local-origin loops,
 /// range-delete bypass of HWM and dep-check, cancellation propagation,
@@ -38,7 +38,7 @@ public partial class BootstrapCausalHandoffTests
         await h.Applier.ApplyAsync(blocked);
 
         // Configure the apply grain so the drained re-apply throws an
-        // ArgumentException — the schema-shaped fault classification
+        // ArgumentException - the schema-shaped fault classification
         // path. The predecessor (origin-B@500, no deps) applies
         // successfully so the drain pass actually fires for "k-fail".
         h.Apply.ApplySetAsync("k-fail", Arg.Any<byte[]>(), Hlc(150), OriginA, Arg.Any<VersionVector?>(), Arg.Any<long>())
@@ -120,7 +120,7 @@ public partial class BootstrapCausalHandoffTests
     /// Reliability 2: an entry whose origin matches the local cluster
     /// id is rejected by the defence-in-depth guard before the HWM
     /// lookup ever fires. This holds even when the entry's HLC is
-    /// above the pinned diagonal — the guard is unconditional on
+    /// above the pinned diagonal - the guard is unconditional on
     /// origin equality, not on causal ordering.
     /// </summary>
     [Test]
@@ -199,7 +199,7 @@ public partial class BootstrapCausalHandoffTests
     /// <summary>
     /// Reliability 5: pinning an empty frontier (no origins) is the
     /// degenerate case at the start of a fresh peer's lifecycle. Every
-    /// subsequent incremental entry must apply via the normal path —
+    /// subsequent incremental entry must apply via the normal path -
     /// no entry is dominated by the empty frontier on any origin.
     /// </summary>
     [Test]
@@ -223,7 +223,7 @@ public partial class BootstrapCausalHandoffTests
     /// <summary>
     /// Reliability 14: a DLQ failure during overflow eviction surfaces
     /// to the caller as the original exception. Buffer state is
-    /// best-effort under this fault — the contract pinned here is that
+    /// best-effort under this fault - the contract pinned here is that
     /// subsequent normal applies on the same applier still succeed
     /// (the applier is not poisoned by a single transient DLQ outage).
     /// </summary>
@@ -288,7 +288,7 @@ public partial class BootstrapCausalHandoffTests
         var frontier = Vector((LocalCluster, Hlc(100)), (OriginA, Hlc(50)));
         await h.Hwm.PinSnapshotAsync(Hlc(100), frontier, CancellationToken.None);
 
-        // Above the local-cluster diagonal — would dedup-pass on HWM if
+        // Above the local-cluster diagonal - would dedup-pass on HWM if
         // the guard were missing. The guard returns Applied=false /
         // HWM=Zero, distinguishable from HWM dedup which would return
         // HWM=100.
@@ -310,8 +310,8 @@ public partial class BootstrapCausalHandoffTests
     /// from the dependency frontier (the per-origin HWM table is the
     /// authoritative dedup key for the diagonal; including the
     /// diagonal here would deadlock it). An entry whose VC carries a
-    /// dep on the local frontier — but whose own origin is not in
-    /// the local VC at all — applies cleanly when the cross-origin
+    /// dep on the local frontier - but whose own origin is not in
+    /// the local VC at all - applies cleanly when the cross-origin
     /// dep is satisfied.
     /// </summary>
     [Test]
@@ -322,7 +322,7 @@ public partial class BootstrapCausalHandoffTests
         await h.Hwm.PinSnapshotAsync(Hlc(200), frontier, CancellationToken.None);
 
         // Origin-A entry whose VC carries only a dep on origin-B(200)
-        // — origin-A itself is not in the local VC. Dep is satisfied
+        // - origin-A itself is not in the local VC. Dep is satisfied
         // by the pinned frontier; the entry must apply.
         var entry = SetEntry("k-cross", Hlc(50), OriginA, Vector((OriginB, Hlc(200))));
 

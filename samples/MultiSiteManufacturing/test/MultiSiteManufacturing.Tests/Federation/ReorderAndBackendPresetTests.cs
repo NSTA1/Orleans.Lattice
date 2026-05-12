@@ -36,7 +36,7 @@ public class ReorderAndBackendPresetTests
 
         var serial = new PartSerialNumber("HPT-BLD-S1-2028-97001");
 
-        // Three facts: below the window size (ReorderWindowSize = 4) — held, no delivery yet.
+        // Three facts: below the window size (ReorderWindowSize = 4) - held, no delivery yet.
         for (var i = 1; i <= 3; i++)
         {
             await _router.EmitAsync(Step(serial, i, ProcessStage.Forge, ProcessSite.OhioForge));

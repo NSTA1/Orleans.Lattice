@@ -62,7 +62,7 @@ public interface ILatticeBootstrapCoordinator
     /// cluster-wide by the underlying grain activation. A concurrent
     /// invocation against the same tree throws
     /// <see cref="InvalidOperationException"/> immediately rather
-    /// than queueing — including when the second invocation
+    /// than queueing - including when the second invocation
     /// originates on a different silo from the first.
     /// </para>
     /// </summary>

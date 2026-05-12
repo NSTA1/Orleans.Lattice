@@ -7,7 +7,7 @@ namespace VehicleFleetSimulator.Abstractions;
 /// <see cref="PositionOverrides"/> carries operator-supplied 2-D coordinates for cities the user
 /// has dragged around in the UI. When empty (the default for a fresh silo) the client is expected
 /// to fall back to its own deterministic layout. When present, the dictionary is the authoritative
-/// source for those city ids only — un-overridden cities still take their layout-computed
+/// source for those city ids only - un-overridden cities still take their layout-computed
 /// positions, so a partial drag-set is rendered consistently.
 /// </remarks>
 [GenerateSerializer, Immutable]

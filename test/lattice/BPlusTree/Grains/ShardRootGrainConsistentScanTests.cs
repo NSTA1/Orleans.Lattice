@@ -81,7 +81,7 @@ public class ShardRootGrainConsistentScanTests
     /// <summary>Builds a small list of keys with deterministic virtual slots.</summary>
     private static List<string> KeysWithSlots(int count)
     {
-        // We only need a stable batch — the actual slots vary by hash but are
+        // We only need a stable batch - the actual slots vary by hash but are
         // deterministic for the tests below.
         return Enumerable.Range(0, count).Select(i => $"k{i:D4}").ToList();
     }
@@ -266,7 +266,7 @@ public class ShardRootGrainConsistentScanTests
     }
 
     // ============================================================================
-    // GetSortedKeysBatchAsync — MovedAwaySlots reporting
+    // GetSortedKeysBatchAsync - MovedAwaySlots reporting
     // ============================================================================
 
     [Test]

@@ -33,7 +33,7 @@ public readonly record struct ApplyResult
     /// this equals the entry's <see cref="WalRecord.Timestamp"/>; when
     /// the entry was filtered out as a re-delivery this is the HWM that
     /// suppressed the apply. For range deletes and local-origin no-op
-    /// rejections — neither of which consults the HWM — this is
+    /// rejections - neither of which consults the HWM - this is
     /// <see cref="HybridLogicalClock.Zero"/>.
     /// </summary>
     [Id(1)] public HybridLogicalClock HighWaterMark { get; init; }

@@ -4,7 +4,7 @@ Orleans.Lattice supports two bulk-loading modes for efficiently populating a tre
 
 ## One-Shot Bulk Load (`ILattice.BulkLoadAsync`)
 
-Builds the tree bottom-up from a list of key-value pairs (sorted internally). This is a **one-shot initial-import primitive**: every shard must be empty when called, so the second and subsequent calls always throw `InvalidOperationException` unless the operation id matches a previously-completed call (in which case the call is an idempotent no-op). For continuous append-style ingestion, use `SetAsync` or the [streaming extension](#streaming-bulk-load-extension-method) below — which routes to `ShardRootGrain.BulkAppendAsync` and is the intended path for any pipeline that re-flushes batches over time.
+Builds the tree bottom-up from a list of key-value pairs (sorted internally). This is a **one-shot initial-import primitive**: every shard must be empty when called, so the second and subsequent calls always throw `InvalidOperationException` unless the operation id matches a previously-completed call (in which case the call is an idempotent no-op). For continuous append-style ingestion, use `SetAsync` or the [streaming extension](#streaming-bulk-load-extension-method) below - which routes to `ShardRootGrain.BulkAppendAsync` and is the intended path for any pipeline that re-flushes batches over time.
 
 ```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
@@ -24,10 +24,10 @@ Internally, `LatticeGrain` partitions entries by shard, sorts each partition, an
 
 **How it works:**
 
-1. **Create leaves** — entries are divided into leaf-sized chunks. Each leaf gets a **deterministic `GrainId`** derived from the operation ID and index, so crash-retries reuse the same grains instead of creating orphans.
-2. **Wire sibling links** — leaves are connected in a doubly-linked list for range scans.
-3. **Build internal nodes** — internal nodes are created bottom-up, layer by layer, also with deterministic IDs.
-4. **Atomic commit** — the shard's root pointer is updated in a single `WriteStateAsync` call. This is the commit point: if a crash occurs before this write, the shard is still empty and the entire operation can be retried safely.
+1. **Create leaves** - entries are divided into leaf-sized chunks. Each leaf gets a **deterministic `GrainId`** derived from the operation ID and index, so crash-retries reuse the same grains instead of creating orphans.
+2. **Wire sibling links** - leaves are connected in a doubly-linked list for range scans.
+3. **Build internal nodes** - internal nodes are created bottom-up, layer by layer, also with deterministic IDs.
+4. **Atomic commit** - the shard's root pointer is updated in a single `WriteStateAsync` call. This is the commit point: if a crash occurs before this write, the shard is still empty and the entire operation can be retried safely.
 
 **Idempotency:** Each shard call carries a unique `operationId`. If the same operation is retried after success, `LastCompletedBulkOperationId` matches and the call is a no-op. If the shard already has data from a *different* operation, an `InvalidOperationException` is thrown (bulk load requires an empty shard).
 
@@ -72,7 +72,7 @@ sequenceDiagram
     Caller->>SR: BulkAppendAsync(operationId, entries)
 
     rect rgb(240, 248, 255)
-    Note over SR: Phase 1 — Build in isolation
+    Note over SR: Phase 1 - Build in isolation
     SR->>EL: Fill remaining space (MergeEntriesAsync)
     SR->>NL1: Create with deterministic ID, load data
     SR->>NL2: Create with deterministic ID, load data
@@ -81,13 +81,13 @@ sequenceDiagram
     end
 
     rect rgb(255, 248, 240)
-    Note over SR: Phase 2 — Persist intent (atomic commit point)
+    Note over SR: Phase 2 - Persist intent (atomic commit point)
     SR->>SR: PendingBulkGraft = { operationId, leaves, rightmostLeafId }
     SR->>SR: WriteStateAsync()
     end
 
     rect rgb(240, 255, 240)
-    Note over SR: Phase 3 — Execute graft
+    Note over SR: Phase 3 - Execute graft
     SR->>EL: SetNextSiblingAsync(newLeaf1)
     SR->>NL1: SetPrevSiblingAsync(existingLeaf)
     loop For each new leaf

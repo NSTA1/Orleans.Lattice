@@ -169,7 +169,7 @@ public partial class LatticeGrainTests
             foreach (var key in keys)
             {
                 if (key == "k1") result[key] = Encoding.UTF8.GetBytes("v1");
-                // k2 is "missing" — not added to result
+                // k2 is "missing" - not added to result
             }
             return result;
         });

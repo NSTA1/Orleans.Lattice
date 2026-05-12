@@ -257,7 +257,7 @@ public class LatticeReplicationOptionsTests
 
     // ------------------------------------------------------------------
     // Production replication driver options (per-(tree, peer) shipper +
-    // per-tree maintenance grain — see ReplicationShipperGrain /
+    // per-tree maintenance grain - see ReplicationShipperGrain /
     // ReplicationMaintenanceGrain)
     // ------------------------------------------------------------------
 

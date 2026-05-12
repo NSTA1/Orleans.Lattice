@@ -3,9 +3,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.PublicApiContract;
 public partial class PublicApiContractTests
 {
     // The Is*CompleteAsync surface returns `true` when the named operation
-    // is not currently in progress for the tree — either it has never been
+    // is not currently in progress for the tree - either it has never been
     // initiated, or the most recent invocation has completed. Each method
-    // is independent — completion of a resize does not affect the
+    // is independent - completion of a resize does not affect the
     // merge / snapshot / reshard "done" answer, and so on.
     //
     // The "in progress" state of these flags is exercised by the dedicated

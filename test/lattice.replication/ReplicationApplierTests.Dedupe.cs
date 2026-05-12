@@ -25,7 +25,7 @@ public partial class ReplicationApplierTests
 
         var first = await applier.ApplyAsync(entry);
         // Reset HWM mock so the second call cannot be deduped on HWM
-        // alone — only the in-memory cache can suppress it. (The HWM
+        // alone - only the in-memory cache can suppress it. (The HWM
         // grain returned 0 the first time; reset it back to 0 here so
         // the cache is the sole defence.)
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
@@ -125,7 +125,7 @@ public partial class ReplicationApplierTests
         // defence before the cache check. They must not pollute the
         // cache (otherwise an unrelated remote-origin entry sharing
         // the same (hlc, key, op) but with a remote origin tag would
-        // still collide on the cache key — except origins differ, so
+        // still collide on the cache key - except origins differ, so
         // they would not collide; the test is here to assert the
         // defence-in-depth invariant that the cache never even sees
         // a local-origin entry).
@@ -143,7 +143,7 @@ public partial class ReplicationApplierTests
 
         var localResult = await applier.ApplyAsync(local);
         // A subsequent remote-origin entry with the SAME (key, ts, op)
-        // must apply — the local entry should not have leaked into the
+        // must apply - the local entry should not have leaked into the
         // cache to suppress it.
         var remote = SetEntry("k", ts, origin: RemoteCluster);
         var remoteResult = await applier.ApplyAsync(remote);
@@ -218,7 +218,7 @@ public partial class ReplicationApplierTests
 
         Assert.ThrowsAsync<InvalidOperationException>(async () => await applier.ApplyAsync(entry));
 
-        // HWM remains 0 on the retry — the failed attempt did not
+        // HWM remains 0 on the retry - the failed attempt did not
         // advance it. Cache rollback must allow the retry to proceed.
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
 
@@ -257,7 +257,7 @@ public partial class ReplicationApplierTests
         Assert.That(retry.Applied, Is.True, "retry must apply after cache rollback");
         // Apply grain reached twice: once for the throwing attempt,
         // once for the retry. (The first apply did write the value
-        // before the HWM advance threw — that is a separate
+        // before the HWM advance threw - that is a separate
         // idempotence concern handled by the apply grain's own
         // source-HLC guard.)
         await apply.Received(2).ApplySetAsync("k", Arg.Any<byte[]>(), ts, RemoteCluster, null, Arg.Any<long>());
@@ -266,7 +266,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_rolls_back_cache_when_cancelled_during_apply()
     {
-        // Cancellation mid-apply leaves the entry un-applied — the
+        // Cancellation mid-apply leaves the entry un-applied - the
         // cache reservation must be rolled back so a retry under a
         // fresh token can succeed. Without rollback, the retry's
         // TryAdd would fail and the entry would be silently
@@ -334,7 +334,7 @@ public partial class ReplicationApplierTests
         var second = await applier.ApplyAsync(entry);
 
         Assert.That(second.Applied, Is.False, "duplicate of parked entry must be suppressed by cache");
-        // ApplyPointAsync was never called — both deliveries either
+        // ApplyPointAsync was never called - both deliveries either
         // parked (first) or were cache-suppressed (second).
         await apply.DidNotReceive().ApplySetAsync(
             Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(),

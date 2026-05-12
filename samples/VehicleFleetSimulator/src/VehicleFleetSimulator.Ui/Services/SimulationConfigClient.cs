@@ -6,7 +6,7 @@ namespace VehicleFleetSimulator.Ui.Services;
 
 /// <summary>
 /// Thin HTTP client over <c>/api/config/simulation</c>. Exposes only the fields the UI needs to
-/// read and write — the full simulator config surface is intentionally not modelled here so the
+/// read and write - the full simulator config surface is intentionally not modelled here so the
 /// abstractions package doesn't have to be referenced by the WASM project.
 /// </summary>
 public sealed class SimulationConfigClient

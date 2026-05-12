@@ -52,7 +52,7 @@ public partial class TombstoneCompactionGrainTests
     public async Task Compaction_iterates_physical_shards_from_ShardMap_not_option_count()
     {
         // Simulate a tree that has been adaptively split so physical shard
-        // indices are {0, 5} — not contiguous and not bounded by options.ShardCount.
+        // indices are {0, 5} - not contiguous and not bounded by options.ShardCount.
         var customMap = new ShardMap
         {
             Slots = [0, 0, 0, 0, 5, 5, 5, 5],
@@ -76,7 +76,7 @@ public partial class TombstoneCompactionGrainTests
 
         await grain.BeginCompactionStateAsync(startFromShard: 0);
 
-        // Two physical shards — must tick twice to cover {0, 5} before completing.
+        // Two physical shards - must tick twice to cover {0, 5} before completing.
         await grain.ProcessNextShardAsync();
         await grain.ProcessNextShardAsync();
         await grain.ProcessNextShardAsync(); // triggers completion

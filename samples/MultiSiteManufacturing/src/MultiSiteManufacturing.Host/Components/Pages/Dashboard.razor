@@ -15,7 +15,7 @@
 <hgroup>
     <h1 style="user-select: none; outline: none;" tabindex="-1">Inventory</h1>
     <p style="padding:10px;">
-        Live view of every turbine-engine part in flight — from raw forging
+        Live view of every turbine-engine part in flight - from raw forging
         through heat treatment, machining, NDT, MRB, and final acceptance.
         <br/>Create a part, advance it through each process stage, record
         inspections, raise non-conformances, or sign off FAI; the grid
@@ -151,7 +151,7 @@
     /// site's results. Scans that complete inside this window render
     /// straight to the new result set with no visible flicker. The first
     /// scan in a tab session bypasses this debounce because there's no
-    /// previous data to hold on to — an aria-busy indicator is better
+    /// previous data to hold on to - an aria-busy indicator is better
     /// than a blank pane.
     /// </summary>
     private static readonly TimeSpan ScanBusyDebounce = TimeSpan.FromMilliseconds(200);
@@ -240,7 +240,7 @@
         }
         catch (InvalidOperationException)
         {
-            // Prerender pass — JS interop unavailable; URL will be set
+            // Prerender pass - JS interop unavailable; URL will be set
             // correctly on the interactive pass via the @page routes.
         }
         catch (JSDisconnectedException)
@@ -365,14 +365,14 @@
         }
 
         // Drop the result if the operator has clicked another site in
-        // the meantime — the newer scan owns the UI.
+        // the meantime - the newer scan owns the UI.
         if (mySeq != _scanSeq)
         {
             return;
         }
 
         // Merge any live entries that landed during the scan on top of
-        // the scan result, then stop buffering — subsequent live
+        // the scan result, then stop buffering - subsequent live
         // entries go straight into _siteEntries.
         var merged = new List<SiteActivityIndexEntry>(result);
         foreach (var pending in _pendingActivity)
@@ -393,7 +393,7 @@
     /// Routes the entry to the currently-selected site's view (merging
     /// into the committed result) or to the pending buffer if the
     /// initial range scan hasn't landed yet. Entries for other sites
-    /// or while the Activity tab is hidden are dropped — re-selecting
+    /// or while the Activity tab is hidden are dropped - re-selecting
     /// the site re-runs the full range scan.
     /// </summary>
     private async Task OnActivityEntry(SiteActivityIndexEntry entry)
@@ -438,7 +438,7 @@
 
             if (entries[i].Hlc >= entry.Hlc)
             {
-                // Stale or duplicate — nothing to do.
+                // Stale or duplicate - nothing to do.
                 return false;
             }
 
@@ -489,15 +489,15 @@
         var ticks = hlc.WallClockTicks;
         if (ticks <= 0 || ticks > DateTime.MaxValue.Ticks)
         {
-            return "—";
+            return "-";
         }
         var when = new DateTime(ticks, DateTimeKind.Utc);
         // Anything older than 2000 is a synthetic / uninitialised HLC
-        // (test fixtures, early seeds) — don't render a nonsensical
+        // (test fixtures, early seeds) - don't render a nonsensical
         // "700000d ago".
         if (when.Year < 2000)
         {
-            return "—";
+            return "-";
         }
         var delta = DateTime.UtcNow - when;
         if (delta.TotalSeconds < 0) return "just now";

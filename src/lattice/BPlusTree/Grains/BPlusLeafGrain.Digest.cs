@@ -208,7 +208,7 @@ internal sealed partial class BPlusLeafGrain
         var hasher = _entryHasher;
         Span<byte> scratch = stackalloc byte[8];
 
-        // (key) — UTF-8 bytes, length-prefixed so adjacent fields cannot collide.
+        // (key) - UTF-8 bytes, length-prefixed so adjacent fields cannot collide.
         FeedString(hasher, key, scratch);
 
         // (hlc.WallClockTicks, hlc.Counter)
@@ -225,13 +225,13 @@ internal sealed partial class BPlusLeafGrain
         BinaryPrimitives.WriteInt64LittleEndian(scratch, lww.ExpiresAtTicks);
         hasher.Append(scratch[..8]);
 
-        // (originClusterId) — null encoded as length 0xFFFFFFFF, distinct from empty string.
+        // (originClusterId) - null encoded as length 0xFFFFFFFF, distinct from empty string.
         FeedNullableString(hasher, lww.OriginClusterId, scratch);
 
-        // (vector-clock fingerprint) — sorted (replicaId, hlc) pairs.
+        // (vector-clock fingerprint) - sorted (replicaId, hlc) pairs.
         FeedVectorClock(hasher, lww.VectorClock, scratch);
 
-        // (value) — only for live, non-tombstone entries; tombstones encode -1.
+        // (value) - only for live, non-tombstone entries; tombstones encode -1.
         if (!lww.IsTombstone && lww.Value is not null)
         {
             BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], lww.Value.Length);

@@ -55,7 +55,7 @@ public sealed class TelemetrySinkSwappabilityTests : IAsyncLifetime
         Assert.True(captured.Length >= 2,
             $"Expected at least 2 telemetry samples on the custom sink for vehicle {vehicleId}; got {captured.Length}.");
 
-        // Stopping the vehicle through the same DI-routed path must keep working — the swap
+        // Stopping the vehicle through the same DI-routed path must keep working - the swap
         // doesn't affect anything other than the sink target.
         await fleet.RemoveVehicle(vehicleId);
     }
@@ -114,7 +114,7 @@ public sealed class TelemetrySinkSwappabilityTests : IAsyncLifetime
             {
                 services.AddSingleton<ICityGraphProvider>(new StaticCityGraphProvider(TestGraph.BuildSimple()));
                 services.AddSingleton<SimulationRuntimeState>();
-                // Custom sink only — no FanOutTelemetrySink registration. This is exactly the
+                // Custom sink only - no FanOutTelemetrySink registration. This is exactly the
                 // swap pattern a benchmark run will use to redirect to a LatticeSink.
                 services.AddSingleton<ITelemetrySink, CapturingTelemetrySink>();
             });

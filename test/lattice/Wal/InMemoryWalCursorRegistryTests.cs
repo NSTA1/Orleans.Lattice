@@ -35,7 +35,7 @@ public sealed class InMemoryWalCursorRegistryTests
         var first = await registry.GetCausalStableAsync(Tree, CancellationToken.None);
         Assert.That(first, Is.Not.Null);
 
-        // Mutate the returned vector — a defensive registry must not
+        // Mutate the returned vector - a defensive registry must not
         // observe the mutation on the next call.
         first!.Entries["origin-evil"] = Hlc(9_999);
 

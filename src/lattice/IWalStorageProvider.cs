@@ -29,7 +29,7 @@ namespace Orleans.Lattice;
 /// <b>Cross-package consumer.</b> The contract is identical between
 /// today's replication-only WAL consumer and the future log-first
 /// commit-point model in which the WAL is the sole durability mechanism
-/// — see <c>docs/future.md</c>. Implementations authored against this
+/// - see <c>docs/future.md</c>. Implementations authored against this
 /// interface today are reusable in v2 without API change.
 /// </para>
 /// </summary>
@@ -87,8 +87,8 @@ public interface IWalStorageProvider
     /// <summary>
     /// Trims every entry with offset less than or equal to
     /// <paramref name="throughOffsetInclusive"/> from the WAL. Called by
-    /// the GC predicate (later phase) once every consumer has acked
-    /// past that point. Idempotent — trimming through an offset that
+    /// the GC predicate (<see cref="ILatticeWalGc"/>) once every consumer
+    /// has acked past that point. Idempotent - trimming through an offset that
     /// has already been trimmed is a no-op. Trimming through an offset
     /// that does not yet exist is permitted and reserves the trim point
     /// for a future append.

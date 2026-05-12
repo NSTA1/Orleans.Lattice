@@ -25,7 +25,7 @@ public partial class PublicApiContractTests
     public async Task BulkLoadAsync_sorts_entries_internally()
     {
         var tree = await _fixture.CreateSmallTreeAsync("pac-bulk-unsorted");
-        // Unsorted input — implementation must sort internally.
+        // Unsorted input - implementation must sort internally.
         var entries = new List<KeyValuePair<string, byte[]>>
         {
             Kvp("z", "26"), Kvp("a", "1"), Kvp("m", "13"),

@@ -45,7 +45,7 @@ public partial class LatticeRegistryGrainTests
 
         await grain.SetShardMapAsync("my-tree", map);
 
-        // Roundtrip — Set should have been called and the persisted entry
+        // Roundtrip - Set should have been called and the persisted entry
         // should contain the shard map.
         await tree.Received().SetAsync("my-tree", Arg.Any<byte[]>());
         tree.GetAsync("my-tree").Returns(Task.FromResult(captured));
@@ -152,7 +152,7 @@ public partial class LatticeRegistryGrainTests
         await tree.SetAsync(Arg.Any<string>(), Arg.Do<byte[]>(b => captured = b));
         tree.GetAsync("my-tree").Returns(Task.FromResult<byte[]?>(null));
 
-        // Caller supplies a stale/forged Version — registry must overwrite it.
+        // Caller supplies a stale/forged Version - registry must overwrite it.
         var map = ShardMap.CreateDefault(8, 4);
         map.Version = 9999L;
         await grain.SetShardMapAsync("my-tree", map);

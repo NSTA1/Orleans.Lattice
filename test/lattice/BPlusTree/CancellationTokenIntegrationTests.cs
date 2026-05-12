@@ -11,6 +11,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// before the orchestrator performs any work.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class CancellationTokenIntegrationTests
 {
     private ClusterFixture _fixture = null!;

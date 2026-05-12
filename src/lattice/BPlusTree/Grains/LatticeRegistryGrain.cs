@@ -30,7 +30,7 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         ThrowIfReservedPrefix(treeId, nameof(treeId));
 
-        // Idempotent — if already registered, preserve existing config.
+        // Idempotent - if already registered, preserve existing config.
         if (await Registry.ExistsAsync(treeId))
             return;
 
@@ -40,7 +40,7 @@ internal sealed class LatticeRegistryGrain(
         // source of structural truth; IOptionsMonitor<LatticeOptions> no
         // longer exposes these fields. ResizeAsync / ReshardAsync are the
         // only legitimate mutation paths. System trees are intentionally
-        // not special-cased — they use the same defaults so their leaves,
+        // not special-cased - they use the same defaults so their leaves,
         // internals, and shard maps share the same invariants as user
         // trees.
         var seeded = SeedStructuralDefaults(entry);
@@ -63,7 +63,7 @@ internal sealed class LatticeRegistryGrain(
     /// <summary>
     /// Rejects user-supplied tree IDs whose names collide with the library's
     /// reserved system-tree namespace. The <see cref="LatticeConstants.SystemTreePrefix"/>
-    /// check is the umbrella guard — it subsumes
+    /// check is the umbrella guard - it subsumes
     /// <see cref="LatticeConstants.WalTreePrefix"/> and the registry tree
     /// itself (<see cref="LatticeConstants.RegistryTreeId"/>). Internal
     /// callers that legitimately bootstrap system trees bypass

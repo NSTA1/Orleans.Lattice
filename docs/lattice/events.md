@@ -2,9 +2,9 @@
 
 Orleans.Lattice publishes metadata-only event notifications on a per-tree Orleans stream so that caches, projections, audit pipelines, and dashboards can react to tree mutations without polling.
 
-Publication is opt-in (`LatticeOptions.PublishEvents` silo-wide default, overridable per tree via `ILattice.SetPublishEventsEnabledAsync`), **fire-and-forget**, and never affects the write-path outcome: a missing stream provider or a downstream queue failure is logged at `Warning` and swallowed. Events carry only metadata — **key name and operation kind, never the value bytes** — so subscribers that need the new value must `GetAsync` it themselves.
+Publication is opt-in (`LatticeOptions.PublishEvents` silo-wide default, overridable per tree via `ILattice.SetPublishEventsEnabledAsync`), **fire-and-forget**, and never affects the write-path outcome: a missing stream provider or a downstream queue failure is logged at `Warning` and swallowed. Events carry only metadata - **key name and operation kind, never the value bytes** - so subscribers that need the new value must `GetAsync` it themselves.
 
-> **Tree events vs. [mutation observers](api.md#mutation-observers).** Pick events when you need out-of-process, fire-and-forget, metadata-only notifications for UI updates, cache invalidation, dashboards, or audit projections. Pick [`IMutationObserver`](api.md#mutation-observers) when you need an in-process, synchronous hook with the full value bytes on the write path — typically to feed a replication WAL or transactional outbox in another library. Observers add latency to every write in the silo; events do not.
+> **Tree events vs. [mutation observers](api.md#mutation-observers).** Pick events when you need out-of-process, fire-and-forget, metadata-only notifications for UI updates, cache invalidation, dashboards, or audit projections. Pick [`IMutationObserver`](api.md#mutation-observers) when you need an in-process, synchronous hook with the full value bytes on the write path - typically to feed a replication WAL or transactional outbox in another library. Observers add latency to every write in the silo; events do not.
 
 ## Event shape
 
@@ -50,8 +50,8 @@ When a `SetManyAtomicAsync` saga fails and compensates, each compensating write 
 
 The following APIs intentionally skip event publication to keep their bulk I/O profile predictable:
 
-- `ILattice.BulkLoadAsync` — bulk-import path is optimised for throughput and assumes the importer already knows the full keyset.
-- `ILattice.DeleteRangeStepAsync` — stateful cursor-driven range delete advances one batch at a time; only the coordinating `ILattice.DeleteRangeAsync` (executed as a single logical range operation) emits a `DeleteRange` event.
+- `ILattice.BulkLoadAsync` - bulk-import path is optimised for throughput and assumes the importer already knows the full keyset.
+- `ILattice.DeleteRangeStepAsync` - stateful cursor-driven range delete advances one batch at a time; only the coordinating `ILattice.DeleteRangeAsync` (executed as a single logical range operation) emits a `DeleteRange` event.
 
 ## Delivery semantics
 
@@ -98,7 +98,7 @@ await handle.UnsubscribeAsync();
 
 ### Missing provider
 
-If the silo has `PublishEvents = true` but no matching `IStreamProvider` registered, `SubscribeToEventsAsync` throws `InvalidOperationException` with an actionable message ("register one via siloBuilder.AddMemoryStreams/AddEventHubStreams/etc."). This is the one hard-fail in the pipeline — publication itself continues to noop, but subscribing on a mis-configured client is treated as a programming error.
+If the silo has `PublishEvents = true` but no matching `IStreamProvider` registered, `SubscribeToEventsAsync` throws `InvalidOperationException` with an actionable message ("register one via siloBuilder.AddMemoryStreams/AddEventHubStreams/etc."). This is the one hard-fail in the pipeline - publication itself continues to noop, but subscribing on a mis-configured client is treated as a programming error.
 
 ## Per-tree override
 
@@ -122,7 +122,7 @@ The override is persisted on the tree's registry entry (`TreeRegistryEntry.Publi
 
 **Propagation.** The activation that handled the call observes the change immediately. Other activations (on other silos, or other stateless-worker instances on the same silo) refresh their cached value within ~5 seconds, so writes landing on a different silo may emit under the previous setting for a brief window. This is intentional: the per-site cache keeps publication latency negligible and avoids a registry round-trip on every write.
 
-**System trees.** Trees whose id starts with `_lattice_` (e.g. the internal registry tree) never consult the registry for their own override — doing so would deadlock the non-reentrant registry activation that is currently servicing the write. For system trees the silo-wide `LatticeOptions.PublishEvents` is always authoritative.
+**System trees.** Trees whose id starts with `_lattice_` (e.g. the internal registry tree) never consult the registry for their own override - doing so would deadlock the non-reentrant registry activation that is currently servicing the write. For system trees the silo-wide `LatticeOptions.PublishEvents` is always authoritative.
 
 ## What **not** to rely on
 
@@ -132,7 +132,7 @@ The override is persisted on the tree's registry entry (`TreeRegistryEntry.Publi
 
 ## See also
 
-- [Configuration](configuration.md#publishevents) — option reference.
-- [Atomic Writes](atomic-writes.md) — how `SetManyAtomicAsync` stamps `OperationId` on every per-entry event.
-- [Mutation observers](api.md#mutation-observers) — the in-process, synchronous, value-carrying alternative for write-path integrations.
-- [`ILattice` API reference](api.md#ilattice) — full method surface.
+- [Configuration](configuration.md#publishevents) - option reference.
+- [Atomic Writes](atomic-writes.md) - how `SetManyAtomicAsync` stamps `OperationId` on every per-entry event.
+- [Mutation observers](api.md#mutation-observers) - the in-process, synchronous, value-carrying alternative for write-path integrations.
+- [`ILattice` API reference](api.md#ilattice) - full method surface.

@@ -35,7 +35,7 @@ public enum LatticeMergeMode
     /// state carried by the value bytes (the producer authored the value
     /// through <see cref="CrdtLatticeExtensions.OrSet(ILattice, string)"/>,
     /// which serialises the post-write set state). State-based merge is
-    /// commutative, associative, and idempotent — concurrent active-active
+    /// commutative, associative, and idempotent - concurrent active-active
     /// adds and removes from multiple clusters survive convergence with
     /// their causal dot context preserved.
     /// </summary>

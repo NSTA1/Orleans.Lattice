@@ -116,7 +116,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
 
         if (state.State.InProgress)
         {
-            // Idempotent: same source cluster — caller is retrying the
+            // Idempotent: same source cluster - caller is retrying the
             // kickoff, the in-flight work continues unchanged.
             if (string.Equals(state.State.SourceClusterId, sourceClusterId, StringComparison.Ordinal))
             {
@@ -164,7 +164,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 case LatticeBootstrapState.LiveIncremental:
                 case LatticeBootstrapState.Failed:
                 default:
-                    // Terminal / unexpected — stop the pump.
+                    // Terminal / unexpected - stop the pump.
                     state.State.InProgress = false;
                     await state.WriteStateAsync().ConfigureAwait(true);
                     await CompleteCoordinatorAsync().ConfigureAwait(true);
@@ -230,7 +230,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
 
         // Update the durable handoff metadata to whatever the latest
         // export reports. On crash recovery this overwrites the prior
-        // export's metadata — safe because the receiver will have
+        // export's metadata - safe because the receiver will have
         // applied every entry up through the new export's AsOfHlc by
         // the time it reaches IncrementalHandoff, and the per-origin
         // HWM dedupe makes any overlap a no-op.

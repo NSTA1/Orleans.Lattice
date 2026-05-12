@@ -20,7 +20,7 @@ public interface IPartitionChaosGrain : IGrainWithIntegerKey
 }
 
 /// <summary>
-/// Trivial implementation — a single boolean flag, persisted so a silo
+/// Trivial implementation - a single boolean flag, persisted so a silo
 /// restart doesn't accidentally "heal" the partition without an
 /// operator asking for it.
 /// </summary>

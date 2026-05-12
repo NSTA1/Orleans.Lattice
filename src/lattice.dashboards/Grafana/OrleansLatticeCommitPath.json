@@ -92,13 +92,13 @@
     "from": "now-1h",
     "to": "now"
   },
-  "title": "Orleans.Lattice — Commit Path",
+  "title": "Orleans.Lattice - Commit Path",
   "uid": "orleans-lattice-commit-path",
   "version": 1,
   "panels": [
     {
       "id": 1,
-      "title": "Commit-step latency p95 (ms) — wal / apply / observer",
+      "title": "Commit-step latency p95 (ms) - wal / apply / observer",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",

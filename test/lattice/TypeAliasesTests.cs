@@ -87,7 +87,7 @@ public class TypeAliasesTests
             .GroupBy(x => x.Alias, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(x => x.Type.FullName ?? x.Type.Name).ToList(), StringComparer.Ordinal);
 
-        // (1) No orphan usages — every used alias must be declared in TypeAliases.
+        // (1) No orphan usages - every used alias must be declared in TypeAliases.
         var declared = new HashSet<string>(constantValues.Values, StringComparer.Ordinal);
         var orphans = usageByAlias.Keys
             .Where(a => !declared.Contains(a))
@@ -96,7 +96,7 @@ public class TypeAliasesTests
         Assert.That(orphans, Is.Empty,
             $"[Alias(...)] values not declared in TypeAliases: {string.Join(", ", orphans)}");
 
-        // (2) No dead constants — every declared alias must be used by at
+        // (2) No dead constants - every declared alias must be used by at
         // least one type.
         var dead = constantValues
             .Where(kvp => !usageByAlias.ContainsKey(kvp.Value))
@@ -106,7 +106,7 @@ public class TypeAliasesTests
         Assert.That(dead, Is.Empty,
             $"TypeAliases constants unreferenced by any [Alias(...)] attribute: {string.Join(", ", dead)}");
 
-        // (3) No duplicate usages — each alias must map to exactly one type.
+        // (3) No duplicate usages - each alias must map to exactly one type.
         var duplicates = usageByAlias
             .Where(kvp => kvp.Value.Count > 1)
             .Select(kvp => $"\"{kvp.Key}\" used by {string.Join(", ", kvp.Value)}")

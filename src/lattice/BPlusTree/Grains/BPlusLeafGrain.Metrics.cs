@@ -60,7 +60,7 @@ internal sealed partial class BPlusLeafGrain
     /// Cached typed logger resolved on first use. Used by the foreground
     /// commit paths that route through <see cref="ICommitLogWriter"/>
     /// to log diagnostic context when the optional post-WAL bookkeeping
-    /// (e.g. metric tagging, observer dispatch) throws — the caller
+    /// (e.g. metric tagging, observer dispatch) throws - the caller
     /// still observes success because the WAL append already established
     /// the durable boundary.
     /// </summary>
@@ -106,7 +106,7 @@ internal sealed partial class BPlusLeafGrain
     /// service provider. Returns <see langword="null"/> when no adapter
     /// has been registered (the legacy-only commit path) <em>or</em>
     /// while the leaf's <see cref="LeafNodeState.TreeId"/> is still
-    /// unset — a leaf created without going through
+    /// unset - a leaf created without going through
     /// <see cref="ILattice"/> (e.g. a unit-test harness that grabs a
     /// leaf grain by raw <see cref="Guid"/>) cannot dispatch to a WAL
     /// shard whose grain key requires a non-empty tree id. Once

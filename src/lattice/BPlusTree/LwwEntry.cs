@@ -12,7 +12,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// a nested <c>LwwValue&lt;byte[]&gt;</c> property) because the Orleans
 /// type-alias encoder has a codec-generation race when a DTO used in a
 /// grain-interface signature embeds <c>LwwValue&lt;byte[]&gt;</c> as a
-/// field — it intermittently produces malformed alias strings like
+/// field - it intermittently produces malformed alias strings like
 /// <c>ol.lwv[[byte[]]]]]</c>. Flat scalar fields sidestep the race while
 /// preserving all LWW metadata.
 /// </para>

@@ -82,7 +82,7 @@ public class ChaosWithFaultsIntegrationTests
             : -1;
 
     /// <summary>
-    /// During the chaos window ANY exception is tolerated and simply counted —
+    /// During the chaos window ANY exception is tolerated and simply counted -
     /// storage faults cascade into many shapes (split failures, state
     /// corruption reports, stale routing, aborted enumerations). The real
     /// correctness check happens after quiescence.
@@ -180,7 +180,7 @@ public class ChaosWithFaultsIntegrationTests
                         }
                         catch (ArgumentException)
                         {
-                            // Fault already armed for this target — skip.
+                            // Fault already armed for this target - skip.
                             Bump(stats, "faults-already-armed");
                         }
                     }
@@ -484,8 +484,8 @@ public class ChaosWithFaultsIntegrationTests
             // Atomic writes must have executed at every fault level. In the
             // no-fault baseline the saga's success rate must be ≥ 70% (same
             // threshold as the split-only chaos test). Under fault injection
-            // the saga is intrinsically more vulnerable — any injected fault
-            // in any of the saga's N writes rolls the whole batch back — so
+            // the saga is intrinsically more vulnerable - any injected fault
+            // in any of the saga's N writes rolls the whole batch back - so
             // the baseline-rate assertion does not apply; we only require
             // that the workload did not completely starve.
             var atomicOk = stats.GetValueOrDefault("atomic-writes", 0);

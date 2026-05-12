@@ -99,7 +99,7 @@ public class CausalApplyBufferTests
     {
         // Each entry is ~131 bytes (key=1ch×2 + value=1 + 128 overhead).
         // With a 300-byte cap, a+b coexist at 262, but adding c (which
-        // would push to 393) must evict the head — a — first.
+        // would push to 393) must evict the head - a - first.
         var buffer = new CausalApplyBuffer();
         buffer.TryAdd(Entry("a", Hlc(1), valueSize: 1), 16, 300, out _);
         buffer.TryAdd(Entry("b", Hlc(2), valueSize: 1), 16, 300, out _);

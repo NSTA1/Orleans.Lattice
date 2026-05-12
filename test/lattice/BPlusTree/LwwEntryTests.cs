@@ -4,7 +4,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// Unit tests for the <see cref="LwwEntry"/> raw DTO — focused on the
+/// Unit tests for the <see cref="LwwEntry"/> raw DTO - focused on the
 /// <see cref="LwwValue{T}"/> round-trip that underpins every bulk-load,
 /// snapshot, and saga-pre-value path.
 /// </summary>

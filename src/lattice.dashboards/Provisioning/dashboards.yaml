@@ -1,4 +1,4 @@
-# Grafana provisioning template — file-system dashboard provider for Orleans.Lattice dashboards.
+# Grafana provisioning template - file-system dashboard provider for Orleans.Lattice dashboards.
 # Copy to /etc/grafana/provisioning/dashboards/ and write the JSON files emitted by
 # Orleans.Lattice.Dashboards.LatticeDashboards.GetGrafanaDashboardJson(...) to the
 # directory referenced by `path` below.

@@ -5,7 +5,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// Internal per-tree diagnostics aggregator. One activation per tree, keyed
 /// by <c>treeId</c>. Fans out to every physical shard on cache-miss and
 /// caches the result for <see cref="LatticeOptions.DiagnosticsCacheTtl"/>.
-/// Not part of the public API — callers use <see cref="ILattice.DiagnoseAsync"/>.
+/// Not part of the public API - callers use <see cref="ILattice.DiagnoseAsync"/>.
 /// </summary>
 [Alias(TypeAliases.ILatticeStats)]
 internal interface ILatticeStats : IGrainWithStringKey

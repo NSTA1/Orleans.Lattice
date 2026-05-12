@@ -1,7 +1,7 @@
 apiVersion: 1
 
 # VictoriaMetrics speaks PromQL, so we register it as a Prometheus-type
-# datasource. Same query language as the per-run dashboards — this keeps the
+# datasource. Same query language as the per-run dashboards - this keeps the
 # history dashboard consistent with the live Lattice ones.
 datasources:
   - name: VictoriaMetrics

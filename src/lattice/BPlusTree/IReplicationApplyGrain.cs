@@ -6,8 +6,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// Internal apply-side seam used by <c>Orleans.Lattice.Replication</c> to
 /// install a remote mutation onto the local tree while preserving the
 /// authoring cluster's <see cref="HybridLogicalClock"/> and origin-cluster
-/// id verbatim. Unlike the public <see cref="ILattice"/> write surface —
-/// which always stamps a fresh local HLC at commit time — these methods
+/// id verbatim. Unlike the public <see cref="ILattice"/> write surface -
+/// which always stamps a fresh local HLC at commit time - these methods
 /// route the incoming entry through the LWW-merge path so the persisted
 /// <see cref="LwwValue{T}"/> carries the source HLC and source
 /// <see cref="LwwValue{T}.OriginClusterId"/> exactly as authored on the
@@ -23,8 +23,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// </para>
 /// <para>
 /// Set / Delete apply paths route via
-/// <see cref="IShardRootGrain.MergeManyAsync"/> — the same primitive used
-/// by shard-split shadow-forward and tree-merge — because that is the
+/// <see cref="IShardRootGrain.MergeManyAsync"/> - the same primitive used
+/// by shard-split shadow-forward and tree-merge - because that is the
 /// only entry point that preserves the source HLC end-to-end. Range
 /// applies route via the standard <see cref="IShardRootGrain.DeleteRangeAsync"/>
 /// wrapped in a <see cref="LatticeOriginContext"/> scope so the
@@ -93,7 +93,7 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// Installs a range delete authored on the remote cluster identified
     /// by <paramref name="originClusterId"/>. The receiver walks the leaf
     /// chain locally and stamps each tombstone with a freshly-ticked local
-    /// HLC — range deletes do not carry a single source HLC because the
+    /// HLC - range deletes do not carry a single source HLC because the
     /// remote walk produced many per-leaf timestamps. The
     /// <see cref="LatticeOriginContext"/> and
     /// <see cref="LatticeVectorClockContext"/> scopes ensure every
@@ -128,7 +128,7 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// <see cref="ApplyMergeItem.SourceVectorClock"/>, 
     /// <see cref="ApplyMergeItem.ExpiresAtTicks"/>) so the persisted
     /// <see cref="LwwValue{T}"/> matches the authoring cluster
-    /// bit-identically — semantics are equivalent to invoking
+    /// bit-identically - semantics are equivalent to invoking
     /// <see cref="ApplySetAsync"/> / <see cref="ApplyDeleteAsync"/> for
     /// each item in order, only with the per-item dictionary allocation
     /// and the per-item shard-RPC fan-out elided.

@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 /// <summary>
 /// Diagnostic smoke tests for <see cref="MultiSiteClusterFixture"/> +
 /// <see cref="ChaosDeliveryPump"/>. These are not chaos tests themselves
-/// (no random partitions, no concurrent workload) — they exist to
+/// (no random partitions, no concurrent workload) - they exist to
 /// short-circuit failure analysis of the convergence chaos suite by
 /// pinning the simpler invariants the suite relies on:
 /// <list type="bullet">

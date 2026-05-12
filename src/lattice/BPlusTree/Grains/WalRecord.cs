@@ -203,7 +203,7 @@ public readonly record struct WalRecord
 
     /// <summary>
     /// <c>true</c> when this entry is a saga prepare-phase per-key
-    /// write — a <see cref="MutationKind.Set"/> or <see cref="MutationKind.Delete"/>
+    /// write - a <see cref="MutationKind.Set"/> or <see cref="MutationKind.Delete"/>
     /// authored inside a <c>SetManyAtomicAsync</c> saga whose terminal
     /// mark has not yet been appended on its WAL partition. Mirrored
     /// verbatim from the producing
@@ -214,7 +214,7 @@ public readonly record struct WalRecord
     /// <see cref="MutationKind.TxAbort"/> terminal mark replays through
     /// the standard projection path. <see cref="MutationKind.TxCommit"/>
     /// and <see cref="MutationKind.TxAbort"/> entries always carry
-    /// <see cref="IsPrepared"/> as <c>false</c> — terminals are the
+    /// <see cref="IsPrepared"/> as <c>false</c> - terminals are the
     /// resolution, not the prepare. Strictly additive on the wire:
     /// legacy peers and entries authored before this slot existed
     /// decode as <c>false</c>, which preserves the legacy
@@ -223,7 +223,7 @@ public readonly record struct WalRecord
     [Id(17)] public bool IsPrepared { get; init; }
 
     /// <summary>
-    /// Logical chain-shard index that authored this entry — mirrored
+    /// Logical chain-shard index that authored this entry - mirrored
     /// verbatim from <see cref="LatticeMutation.ShardIndex"/>. Stamped
     /// at commit time by the foreground commit path. Used by
     /// activation-time WAL replay on the receiving leaf to filter out

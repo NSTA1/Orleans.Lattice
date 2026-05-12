@@ -71,7 +71,7 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrainWithObserver(observer, treeId: "tree-del");
 
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
-        observer.Mutations.ToList().Clear(); // irrelevant — Mutations returns a copy
+        observer.Mutations.ToList().Clear(); // irrelevant - Mutations returns a copy
 
         // Capture mutation count after the set, then delete.
         var countAfterSet = observer.Mutations.Count;
@@ -118,7 +118,7 @@ public partial class BPlusLeafGrainTests
     public async Task MergeEntriesAsync_does_not_publish_mutations()
     {
         // Merge paths are internal coordination (split drain, replication
-        // apply) — the replication package's observer intercepts originating
+        // apply) - the replication package's observer intercepts originating
         // writes, not re-applications.
         var observer = new RecordingMutationObserver();
         var grain = CreateGrainWithObserver(observer);

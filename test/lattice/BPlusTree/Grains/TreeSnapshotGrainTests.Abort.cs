@@ -52,7 +52,7 @@ public partial class TreeSnapshotGrainTests
 
             await grain.AbortAsync("op-different");
 
-            // State must remain unchanged — a stale coordinator must not tear
+            // State must remain unchanged - a stale coordinator must not tear
             // down a newer operation.
             Assert.That(state.State.InProgress, Is.True);
             Assert.That(state.State.OperationId, Is.EqualTo("op-original"));

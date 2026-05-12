@@ -23,7 +23,7 @@ internal sealed class ShadowForwardState
     /// <summary>
     /// Physical tree ID of the destination tree. Each mutation on the source
     /// shard is mirrored to <c>{DestinationPhysicalTreeId}/{shardIndex}</c>
-    /// where <c>shardIndex</c> matches the source shard's own index — the
+    /// where <c>shardIndex</c> matches the source shard's own index - the
     /// destination tree is constrained to share the source's
     /// <c>ShardMap</c> so this projection is identity.
     /// </summary>

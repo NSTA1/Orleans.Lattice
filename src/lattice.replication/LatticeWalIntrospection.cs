@@ -35,7 +35,7 @@ internal sealed class LatticeWalIntrospection(
             return null;
         }
 
-        // Fan out one ReadAsync(0, 1) per partition in parallel — for hosts
+        // Fan out one ReadAsync(0, 1) per partition in parallel - for hosts
         // configured with a high partition count this turns N sequential
         // grain round-trips into a single concurrent batch.
         var pageTasks = new Task<WalShardPage>[partitions];

@@ -11,7 +11,7 @@ public interface ILatticeReplicationDeadLetters
     /// <summary>
     /// Returns every parked entry for <paramref name="treeId"/> in
     /// ascending <see cref="DeadLetterEntry.EntryId"/> order. Empty list
-    /// when nothing is parked. Pure read — no state changes.
+    /// when nothing is parked. Pure read - no state changes.
     /// </summary>
     Task<IReadOnlyList<DeadLetterEntry>> ListAsync(string treeId, CancellationToken cancellationToken = default);
 
@@ -36,7 +36,7 @@ public interface ILatticeReplicationDeadLetters
     /// <see cref="LatticeReplicationOptions.MaxApplyRetries"/>. The
     /// entry is removed from the queue when the replay returns
     /// successfully (regardless of the resulting
-    /// <see cref="ApplyResult.Applied"/> flag — a re-delivery filter is
+    /// <see cref="ApplyResult.Applied"/> flag - a re-delivery filter is
     /// considered terminal for inspection purposes); replay failures
     /// leave the entry parked so the operator can decide whether to
     /// retry or discard. Returns <c>null</c> when no entry with that id

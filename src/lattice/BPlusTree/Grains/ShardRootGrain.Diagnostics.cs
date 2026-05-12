@@ -15,7 +15,7 @@ internal sealed partial class ShardRootGrain
         // Ensure persistent state is loaded before inspection.
         if (state.RecordExists == false)
         {
-            // Nothing persisted yet — treat as empty leaf-only shard.
+            // Nothing persisted yet - treat as empty leaf-only shard.
         }
 
         var rootIsLeaf = state.State.RootIsLeaf;
@@ -29,7 +29,7 @@ internal sealed partial class ShardRootGrain
 
         if (rootNodeId is null)
         {
-            // No root yet — empty shard.
+            // No root yet - empty shard.
             depth = 0;
         }
         else if (rootIsLeaf)

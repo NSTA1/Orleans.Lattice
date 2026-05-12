@@ -77,7 +77,7 @@ public class AuditHygieneRegressionTests
     /// <c>BPlusLeafGrain</c> class for <c>state.WriteStateAsync(</c>
     /// call sites (after stripping comments) and asserts the only
     /// surviving site is the dedicated <c>PersistAsync</c> seam in
-    /// <c>BPlusLeafGrain.Metrics.cs</c> — which is the
+    /// <c>BPlusLeafGrain.Metrics.cs</c> - which is the
     /// projection-checkpoint flush helper invoked from
     /// <c>OnDeactivateAsync</c> and coalesced checkpoint paths, both
     /// orthogonal to the foreground commit path. Any new
@@ -112,14 +112,14 @@ public class AuditHygieneRegressionTests
         Assert.That(grainsDir, Is.Not.Null, "could not locate src/lattice/BPlusTree/Grains directory");
         Assert.That(Directory.Exists(grainsDir!), Is.True);
 
-        // Scan EVERY partial of the BPlusLeafGrain class — the backstop
+        // Scan EVERY partial of the BPlusLeafGrain class - the backstop
         // path is split across multiple files, and a future refactor
         // could re-introduce the legacy persist on a sibling partial.
         var partials = Directory.GetFiles(grainsDir!, "BPlusLeafGrain*.cs");
         Assert.That(partials, Is.Not.Empty,
             "expected at least one BPlusLeafGrain*.cs partial under src/lattice/BPlusTree/Grains");
 
-        // Legitimate sites: exactly one — the `PersistAsync` helper in
+        // Legitimate sites: exactly one - the `PersistAsync` helper in
         // BPlusLeafGrain.Metrics.cs. Every other code path that needs
         // to flush the state row routes through that helper so the
         // LeafWriteDuration histogram observes a uniform emission.

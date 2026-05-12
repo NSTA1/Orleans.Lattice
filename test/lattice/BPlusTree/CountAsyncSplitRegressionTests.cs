@@ -28,6 +28,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </para>
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class CountAsyncSplitRegressionTests
 {
     private FourShardClusterFixture _fixture = null!;

@@ -1,6 +1,6 @@
-# WAL Design — Causal+ Ready (with Performance Notes)
+# WAL Design - Causal+ Ready (with Performance Notes)
 
-> **Status:** partially shipped — the entry-schema seam is live as of the
+> **Status:** partially shipped - the entry-schema seam is live as of the
 > first causal-plus delivery; receiver-side dep-check, GC predicate, and
 > snapshot cut-point remain forward-looking. The shipped pieces are the
 > two additive `[Id]` slots on `WalRecord` (`VectorClock`,
@@ -50,7 +50,7 @@ A per-origin vector clock representing the full causal frontier at commit time.
 - Encoded compactly (delta-encoded relative to the previous entry on the same shard).
 - Backwards compatible: missing field decodes to an empty map.
 
-**Performance note (avoid Mistake 1 — full VC bloat):**
+**Performance note (avoid Mistake 1 - full VC bloat):**
 
 - Store vector clocks **per shard as a baseline**, and encode each entry's VC as a **delta from the previous entry**.
 - Use a compact representation (e.g. sorted `(origin, hlc)` pairs with varint encoding).
@@ -73,8 +73,8 @@ A compact representation of the causal predecessors of this entry.
 
 Two purely additive `[Id]` slots on `WalRecord` (and the corresponding `LatticeMutation` slots on the observer-side surface) that carry the size and zero-based index of the enclosing atomic transaction.
 
-- `AtomicBatchSize` — total number of entries in the enclosing atomic transaction. `0` for non-atomic single-key writes and non-atomic batches; `N` on every per-key emit produced by a `SetManyAtomicAsync` saga of size `N`, including compensation rolls.
-- `AtomicBatchIndex` — zero-based position of this entry within the enclosing batch; `0` for non-atomic writes. Within a batch the index covers `0..Size-1` exactly once each, derived deterministically from the saga's per-operation iteration order.
+- `AtomicBatchSize` - total number of entries in the enclosing atomic transaction. `0` for non-atomic single-key writes and non-atomic batches; `N` on every per-key emit produced by a `SetManyAtomicAsync` saga of size `N`, including compensation rolls.
+- `AtomicBatchIndex` - zero-based position of this entry within the enclosing batch; `0` for non-atomic writes. Within a batch the index covers `0..Size-1` exactly once each, derived deterministically from the saga's per-operation iteration order.
 - Sibling membership is keyed by the existing `TransactionId` slot (Core F-044). The receiver detects a complete batch by counting siblings that share an `(originClusterId, transactionId)` against the declared `Size`.
 - There is deliberately **no** separate "commit marker" entry. A partially-shipped batch that loses a sibling surfaces as the orphan-timeout case the receiver-side staging buffer already handles, not an indefinite stall waiting on a commit row that never arrives.
 - Strictly additive on the wire: legacy peers and entries authored before these slots existed decode both fields as `0`. The slots remain on `WalRecord` as additive metadata; no shipped receiver-side path consumes them today.
@@ -130,7 +130,7 @@ for entry in WAL in offset order:
         buffer(entry);
 ```
 
-**Performance note (avoid Mistake 2 — global locks):**
+**Performance note (avoid Mistake 2 - global locks):**
 
 - This loop runs **per shard**, inside the shard's single-threaded grain.
 - Do **not** introduce cross-shard locks or global coordination here.
@@ -155,7 +155,7 @@ This ensures:
 - If B arrives before A, B is buffered.
 - If A arrives later, A applies, then B becomes eligible.
 
-**Performance note (avoid Mistake 4 — recomputing closure):**
+**Performance note (avoid Mistake 4 - recomputing closure):**
 
 - Maintain `local_vector_clock` **incrementally**; never recompute from WAL history.
 - The dependency check is just a **map lookup + integer comparison per origin**.
@@ -175,7 +175,7 @@ Blocked entries are keyed by:
 
 When local clocks advance, blocked entries are re-evaluated.
 
-**Performance note (avoid Mistake 3 — unbounded buffering):**
+**Performance note (avoid Mistake 3 - unbounded buffering):**
 
 - Enforce a **per-shard buffer size cap** (e.g. max N blocked entries or max M bytes).
 - When the cap is hit, either:
@@ -193,7 +193,7 @@ Each shard maintains a local vector clock:
 local_vc[origin] = highest applied HLC from that origin
 ```
 
-This is the natural generalisation of the existing per-origin high-water-mark table — the HWM is the diagonal of the local VC, keyed by the entry's own origin only. Causal+ widens the check to consult **every** origin in the entry's VC, not just the authoring origin.
+This is the natural generalisation of the existing per-origin high-water-mark table - the HWM is the diagonal of the local VC, keyed by the entry's own origin only. Causal+ widens the check to consult **every** origin in the entry's VC, not just the authoring origin.
 
 Updated only after a successful apply. Persisted in the same grain state as the HWM table.
 
@@ -258,7 +258,7 @@ An entry is GC-eligible when:
 - The number of peers and origins is small; computing `min_over_all_peers` is cheap.
 - Cache the computed `causal_stable` frontier and recompute only on **ack updates**, not per entry.
 
-The predicate must consult **every** change-feed consumer's VC — including any future local materialiser — not just remote peers. A lagging consumer must pin the log identically regardless of whether it is remote or in-process.
+The predicate must consult **every** change-feed consumer's VC - including any future local materialiser - not just remote peers. A lagging consumer must pin the log identically regardless of whether it is remote or in-process.
 
 ---
 
@@ -284,7 +284,7 @@ Incremental replication begins at:
 start = snapshot_frontier
 ```
 
-The receiver pins both the as-of HLC and the snapshot's VC frontier in its persistent metadata, then resumes incremental delivery from that VC. The dependency check in §4 runs from the pinned frontier on the first incremental entry — exactly-once across the snapshot/incremental boundary.
+The receiver pins both the as-of HLC and the snapshot's VC frontier in its persistent metadata, then resumes incremental delivery from that VC. The dependency check in §4 runs from the pinned frontier on the first incremental entry - exactly-once across the snapshot/incremental boundary.
 
 **Performance note:**
 
@@ -355,14 +355,14 @@ Causal+ only adds:
 
 With the performance notes above, the design avoids the four common failure modes:
 
-1. **Full vector clock bloat** — use delta encoding with absolute anchors at batch / post-trim boundaries.
-2. **Global locks or cross-shard contention** — keep apply per-shard.
-3. **Unbounded buffering** — cap, backpressure, and route overflow through the existing dead-letter pipeline with classified reason tags.
-4. **Recomputing dependency closure** — maintain the local VC incrementally.
+1. **Full vector clock bloat** - use delta encoding with absolute anchors at batch / post-trim boundaries.
+2. **Global locks or cross-shard contention** - keep apply per-shard.
+3. **Unbounded buffering** - cap, backpressure, and route overflow through the existing dead-letter pipeline with classified reason tags.
+4. **Recomputing dependency closure** - maintain the local VC incrementally.
 
 ---
 
-## 12. Completeness wave — full coverage of structural & atomic write paths
+## 12. Completeness wave - full coverage of structural & atomic write paths
 
 Sections 1–11 cover the point-write, single-tree, single-shard-per-mutation path. The five replication items R-089–R-093 (and their core-side dependencies F-043–F-046) extend the same causal+ guarantee to every write path the core library exposes, so a host that enables any one of those features still gets full causal+ semantics rather than dropping back to per-origin LWW for that specific path. Cross-tree causality is intentionally out of scope.
 
@@ -388,15 +388,15 @@ Every item in the completeness wave is constrained by the same rules that bound 
 
 ### 12.2.1 R-089 shipped mechanism
 
-The atomic-transaction boundary (`TransactionId`, F-044) is the per-emit signal a future causal+ consumer reads to detect that several entries belong to the same enclosing batch. The producer-side VC capture is the **batch-wide consistency** half: a new `[Id(11)] AtomicWriteState.VectorClock` slot persists the caller's ambient frontier on the saga's first `Prepare` (capture-once, mirroring the `KeyFingerprint` / `TransactionId` / `DeltaKind` precedent — wire-compatible, missing field on legacy persisted state decodes to `null`); the saga grain re-stamps the persisted slot onto `LatticeVectorClockContext.Current` at the head of every `RunSagaAsync` so every per-key `SetAsync` issued during `Execute` reads the identical ambient and the leaf grain stamps it onto the freshly-constructed `LwwValue`. The saga-wide stamp survives crash recovery because the persisted slot is the single source of truth. Compensation rolls override the saga-wide stamp per-key with each `AtomicPreValue.VectorClock` so a rolled-back key re-lands with its original frontier.
+The atomic-transaction boundary (`TransactionId`, F-044) is the per-emit signal a future causal+ consumer reads to detect that several entries belong to the same enclosing batch. The producer-side VC capture is the **batch-wide consistency** half: a new `[Id(11)] AtomicWriteState.VectorClock` slot persists the caller's ambient frontier on the saga's first `Prepare` (capture-once, mirroring the `KeyFingerprint` / `TransactionId` / `DeltaKind` precedent - wire-compatible, missing field on legacy persisted state decodes to `null`); the saga grain re-stamps the persisted slot onto `LatticeVectorClockContext.Current` at the head of every `RunSagaAsync` so every per-key `SetAsync` issued during `Execute` reads the identical ambient and the leaf grain stamps it onto the freshly-constructed `LwwValue`. The saga-wide stamp survives crash recovery because the persisted slot is the single source of truth. Compensation rolls override the saga-wide stamp per-key with each `AtomicPreValue.VectorClock` so a rolled-back key re-lands with its original frontier.
 
 ### 12.2.2 R-093 shipped mechanism
 
-The intra-cluster snapshot/restore path (operator snapshots a tree, restores it later — same cluster, possibly different timestamp) is the dual of the cross-cluster bootstrap path covered by R-050 / R-084. Cross-cluster bootstrap pins the snapshot's `causalStableFrontier` directly via `PinSnapshotAsync((HLC, VectorClock))` because the wire envelope carries the frontier verbatim from sender to receiver. Intra-cluster restore has no such envelope: the operator workflow tears down the live tree state (including the per-tree `IReplicationHighWaterMarkGrain` rows that compose the local vector clock) and rehydrates the values from a snapshot artefact, but the frontier metadata that drove R-082's dependency check is gone.
+The intra-cluster snapshot/restore path (operator snapshots a tree, restores it later - same cluster, possibly different timestamp) is the dual of the cross-cluster bootstrap path covered by R-050 / R-084. Cross-cluster bootstrap pins the snapshot's `causalStableFrontier` directly via `PinSnapshotAsync((HLC, VectorClock))` because the wire envelope carries the frontier verbatim from sender to receiver. Intra-cluster restore has no such envelope: the operator workflow tears down the live tree state (including the per-tree `IReplicationHighWaterMarkGrain` rows that compose the local vector clock) and rehydrates the values from a snapshot artefact, but the frontier metadata that drove R-082's dependency check is gone.
 
-R-093 reconstructs that frontier from the values themselves. Core F-043 added `[Id(6)] LwwEntry.VectorClock` (default empty for legacy persisted state) and the core library preserves the slot end-to-end through every persistence / merge / snapshot / restore / bulk-load / compaction path with the same discipline F-036 applied to `OriginClusterId`. The replication package ships `IReplicationLocalVcSeeder.SeedFromTreeAsync(treeName, ct)`: walks every shard's leaf chain via `IShardRootGrain.GetLeftmostLeafIdAsync` → `IBPlusLeafGrain.GetLiveRawEntriesAsync` → `GetNextSiblingAsync` (the canonical leaf-walk pattern from `TreeSnapshotGrain.CopyShardAsync`), accumulates `frontier.MergeFrom(entry.VectorClock)` for every non-null VC slot (pointwise-max — the same accumulator R-082's bounded buffer uses), and seeds both halves of the local vector clock. The durable half goes to `IReplicationHighWaterMarkGrain.PinSnapshotAsync(HybridLogicalClock.Zero, frontier)` so receiver-side `GetVectorAsync` reads the reconstructed frontier across silo restarts; the in-memory half goes to `LocalVectorClockCache.AdvanceForeign(treeName, origin, hlc)` for every `(origin, hlc)` pair in the frontier, so the producer-side cache (R-092) does not require a fresh cold-start RPC after the seed. The pin uses `HybridLogicalClock.Zero` as the `asOfHlc` argument because intra-cluster restore has no snapshot timestamp — the frontier is the authoritative seed; the `asOfHlc` slot is preserved in the call shape only for symmetry with the cross-cluster path.
+R-093 reconstructs that frontier from the values themselves. Core F-043 added `[Id(6)] LwwEntry.VectorClock` (default empty for legacy persisted state) and the core library preserves the slot end-to-end through every persistence / merge / snapshot / restore / bulk-load / compaction path with the same discipline F-036 applied to `OriginClusterId`. The replication package ships `IReplicationLocalVcSeeder.SeedFromTreeAsync(treeName, ct)`: walks every shard's leaf chain via `IShardRootGrain.GetLeftmostLeafIdAsync` → `IBPlusLeafGrain.GetLiveRawEntriesAsync` → `GetNextSiblingAsync` (the canonical leaf-walk pattern from `TreeSnapshotGrain.CopyShardAsync`), accumulates `frontier.MergeFrom(entry.VectorClock)` for every non-null VC slot (pointwise-max - the same accumulator R-082's bounded buffer uses), and seeds both halves of the local vector clock. The durable half goes to `IReplicationHighWaterMarkGrain.PinSnapshotAsync(HybridLogicalClock.Zero, frontier)` so receiver-side `GetVectorAsync` reads the reconstructed frontier across silo restarts; the in-memory half goes to `LocalVectorClockCache.AdvanceForeign(treeName, origin, hlc)` for every `(origin, hlc)` pair in the frontier, so the producer-side cache (R-092) does not require a fresh cold-start RPC after the seed. The pin uses `HybridLogicalClock.Zero` as the `asOfHlc` argument because intra-cluster restore has no snapshot timestamp - the frontier is the authoritative seed; the `asOfHlc` slot is preserved in the call shape only for symmetry with the cross-cluster path.
 
-Non-replicated trees (`ILatticeMergeModeResolver.Resolve(treeName)` returns `null`) are a no-op: the seeder returns `LocalVcSeedReport { SeedApplied = false, EntriesScanned = 0, Frontier = null }` without consulting the tree. Empty trees pin an empty frontier — even an empty tree's HWM grain is consistent post-seed. Partial restores (where the operator restores a subset of values) seed correctly from the surviving subset because the pointwise-max accumulator handles missing-origin components as zero. The seeder is **not** automatic — restore tooling is host-defined and the seeder is a single-call public API the operator runs once per restored tree as a post-restore step, mutually exclusive with the cross-cluster bootstrap path per restore event.
+Non-replicated trees (`ILatticeMergeModeResolver.Resolve(treeName)` returns `null`) are a no-op: the seeder returns `LocalVcSeedReport { SeedApplied = false, EntriesScanned = 0, Frontier = null }` without consulting the tree. Empty trees pin an empty frontier - even an empty tree's HWM grain is consistent post-seed. Partial restores (where the operator restores a subset of values) seed correctly from the surviving subset because the pointwise-max accumulator handles missing-origin components as zero. The seeder is **not** automatic - restore tooling is host-defined and the seeder is a single-call public API the operator runs once per restored tree as a post-restore step, mutually exclusive with the cross-cluster bootstrap path per restore event.
 
 ---
 

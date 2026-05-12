@@ -80,15 +80,15 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 
 `MaxLeafKeys`, `MaxInternalChildren`, and `ShardCount` used to live on `LatticeOptions` but are now pinned per-tree on the `TreeRegistryEntry`. They are seeded from `LatticeConstants` on first tree use (defaults 128 / 128 / 64) and can be changed through:
 
-- `ILattice.ResizeAsync(newMaxLeafKeys, newMaxInternalChildren)` — see [Tree Sizing](tree-sizing.md#resizing-an_existing_tree). Runs online; empty-tree fast-path if no data exists.
-- `ILattice.ReshardAsync(newShardCount)` — see [Online Reshard](online-reshard.md). Grow-only unless the tree is empty (fast-path).
+- `ILattice.ResizeAsync(newMaxLeafKeys, newMaxInternalChildren)` - see [Tree Sizing](tree-sizing.md#resizing-an_existing_tree). Runs online; empty-tree fast-path if no data exists.
+- `ILattice.ReshardAsync(newShardCount)` - see [Online Reshard](online-reshard.md). Grow-only unless the tree is empty (fast-path).
 - Pre-registering the pin explicitly before first use via `ILatticeRegistry.RegisterAsync(treeId, new TreeRegistryEntry { MaxLeafKeys = …, MaxInternalChildren = …, ShardCount = … })`.
 
 ### Virtual shard space (constant)
 
 The virtual shard space is fixed at `LatticeConstants.DefaultVirtualShardCount = 4096` for every tree. Keys hash into `[0, 4096)` and the per-tree [`ShardMap`](tree-registry.md#shard-map) collapses ranges of virtual slots onto physical shards. This indirection decouples logical key routing from the physical shard count, enabling adaptive shard splitting without rehashing existing keys.
 
-The pinned `ShardCount` must divide 4096 evenly for the default identity map to preserve `hash % ShardCount` routing exactly; this invariant is validated at use time by `ShardMap.CreateDefault`. The value is a compile-time constant — changing it in source would invalidate every persisted `ShardMap` and is treated as a breaking wire-format change.
+The pinned `ShardCount` must divide 4096 evenly for the default identity map to preserve `hash % ShardCount` routing exactly; this invariant is validated at use time by `ShardMap.CreateDefault`. The value is a compile-time constant - changing it in source would invalidate every persisted `ShardMap` and is treated as a breaking wire-format change.
 
 ### `KeysPageSize`
 
@@ -117,7 +117,7 @@ This option can be changed freely at any time. The new grace period takes effect
 
 ### `SoftDeleteDuration`
 
-How long a soft-deleted tree's data is retained in storage before being permanently purged. During this window the tree is inaccessible — all reads and writes throw `InvalidOperationException` — but its grain state still exists in the storage provider. After the duration elapses, a grain reminder triggers a full purge that walks every shard, clears all leaf and internal node state, and deactivates each grain.
+How long a soft-deleted tree's data is retained in storage before being permanently purged. During this window the tree is inaccessible - all reads and writes throw `InvalidOperationException` - but its grain state still exists in the storage provider. After the duration elapses, a grain reminder triggers a full purge that walks every shard, clears all leaf and internal node state, and deactivates each grain.
 
 Set to `TimeSpan.Zero` for immediate purge on the next reminder tick (clamped to a 1-minute minimum by the Orleans reminder floor).
 
@@ -136,7 +136,7 @@ This option can be changed freely at any time. The new duration takes effect on 
 
 ### `CacheTtl`
 
-Minimum time between consecutive delta refreshes from the primary leaf in the `LeafCacheGrain`. When set to `TimeSpan.Zero` (the default), every read triggers a delta refresh — the version-vector comparison on the primary is cheap but the RPC overhead remains. Setting a non-zero value allows the cache to serve reads from its local dictionary without contacting the primary, trading freshness for lower read latency.
+Minimum time between consecutive delta refreshes from the primary leaf in the `LeafCacheGrain`. When set to `TimeSpan.Zero` (the default), every read triggers a delta refresh - the version-vector comparison on the primary is cheap but the RPC overhead remains. Setting a non-zero value allows the cache to serve reads from its local dictionary without contacting the primary, trading freshness for lower read latency.
 
 ```csharp verify
 // Allow up to 100 ms of staleness for lower read latency
@@ -259,7 +259,7 @@ This option can be changed freely at any time.
 
 ### `CursorIdleTtl`
 
-Sliding idle timeout for stateful cursors opened via `OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `OpenDeleteRangeCursorAsync` (default: 48 hours). Each successful cursor step refreshes the reminder; if it fires without intervening activity the cursor grain clears its persisted state, unregisters the reminder, and deactivates. Minimum effective interval is **1 minute** (Orleans reminder granularity); smaller values are clamped to the floor. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup — cursors then live until `CloseCursorAsync` is called. See [Durable Cursors](durable-cursors.md).
+Sliding idle timeout for stateful cursors opened via `OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `OpenDeleteRangeCursorAsync` (default: 48 hours). Each successful cursor step refreshes the reminder; if it fires without intervening activity the cursor grain clears its persisted state, unregisters the reminder, and deactivates. Minimum effective interval is **1 minute** (Orleans reminder granularity); smaller values are clamped to the floor. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup - cursors then live until `CloseCursorAsync` is called. See [Durable Cursors](durable-cursors.md).
 
 This option can be changed freely at any time.
 
@@ -281,7 +281,7 @@ How long the internal diagnostics grain caches a `TreeDiagnosticReport` before a
 
 Shallow (`deep: false`) and deep (`deep: true`) reports are cached independently. The cache is invalidated immediately when an adaptive split commits, so the next call after a topology change always returns a fresh report.
 
-Set to `TimeSpan.Zero` to disable caching entirely — every call assembles a new report. This is useful in tests or for tight polling scenarios where staleness is unacceptable.
+Set to `TimeSpan.Zero` to disable caching entirely - every call assembles a new report. This is useful in tests or for tight polling scenarios where staleness is unacceptable.
 
 ```csharp verify
 // Disable caching for a debug tree
@@ -292,7 +292,7 @@ This option can be changed freely at any time. The new TTL takes effect on the n
 
 ### `MaterialiserCheckpointInterval`
 
-How long the leaf-projection materialiser may defer persisting an advancing checkpoint offset before flushing it to durable storage (default: 1 second). Combined with `MaterialiserCheckpointEntries`, this controls coalescing of materialiser-side high-water-mark writes: the checkpoint is persisted as soon as **either** threshold is met. Set to `TimeSpan.Zero` to persist on every advance (every-entry mode — strict RTO at the cost of one extra storage write per commit). Set to `Timeout.InfiniteTimeSpan` to disable time-based flushing and rely solely on the entry-count threshold.
+How long the leaf-projection materialiser may defer persisting an advancing checkpoint offset before flushing it to durable storage (default: 1 second). Combined with `MaterialiserCheckpointEntries`, this controls coalescing of materialiser-side high-water-mark writes: the checkpoint is persisted as soon as **either** threshold is met. Set to `TimeSpan.Zero` to persist on every advance (every-entry mode - strict RTO at the cost of one extra storage write per commit). Set to `Timeout.InfiniteTimeSpan` to disable time-based flushing and rely solely on the entry-count threshold.
 
 A graceful deactivation always force-flushes a pending checkpoint, so a clean silo shutdown loses no progress regardless of interval. A worst-case crash loses up to `MaterialiserCheckpointInterval` × steady-state apply rate of replay work on restart.
 

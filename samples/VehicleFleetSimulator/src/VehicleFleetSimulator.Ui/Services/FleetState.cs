@@ -10,7 +10,7 @@ namespace VehicleFleetSimulator.Ui.Services;
 /// </summary>
 /// <remarks>
 /// Telemetry arrives at ~1 Hz per vehicle from a single foreground task per stream, so the
-/// thread-safety surface is "single writer, single reader" — we still use a
+/// thread-safety surface is "single writer, single reader" - we still use a
 /// <see cref="ConcurrentDictionary{TKey, TValue}"/> because the WASM threading model can change
 /// in the future and the cost is negligible relative to drawing.
 /// </remarks>

@@ -16,14 +16,14 @@ namespace Orleans.Lattice.Replication;
 /// Instruments fall into two shapes:
 /// <list type="bullet">
 ///   <item>
-///     <b>Per-peer gauges</b> — <c>entries_behind</c>, <c>bytes_behind</c>,
+///     <b>Per-peer gauges</b> - <c>entries_behind</c>, <c>bytes_behind</c>,
 ///     <c>consecutive_errors</c>, <c>last_contact_seconds</c>. Implemented as
 ///     <see cref="ObservableGauge{T}"/> instruments backed by a singleton
 ///     <see cref="ReplicationPeerStats"/>. Tagged with <see cref="TagTree"/>
 ///     and <see cref="TagPeer"/>.
 ///   </item>
 ///   <item>
-///     <b>Per-operation histograms</b> — <c>ship_duration</c>,
+///     <b>Per-operation histograms</b> - <c>ship_duration</c>,
 ///     <c>apply_duration</c>. Reported in milliseconds as <c>double</c>.
 ///     Tagged with <see cref="TagTree"/>, <see cref="TagPeer"/>, and (for
 ///     terminal outcomes) <see cref="TagOutcome"/>.
@@ -64,7 +64,7 @@ public static class LatticeReplicationMetrics
 
     /// <summary>
     /// <see cref="TagOutcome"/> value: the entry was short-circuited by
-    /// the receiver before merge — either the per-origin high-water-mark
+    /// the receiver before merge - either the per-origin high-water-mark
     /// already covers <see cref="WalRecord.Timestamp"/>, or a
     /// defence-in-depth gate detected a local-origin entry that must
     /// not loop back onto its authoring cluster.
@@ -191,9 +191,9 @@ public static class LatticeReplicationMetrics
 
     /// <summary>
     /// Histogram of outbound ship-batch durations. Recorded by the sender
-    /// after each batch attempt — both successful sends (<see cref="TagOutcome"/>
+    /// after each batch attempt - both successful sends (<see cref="TagOutcome"/>
     /// = <c>ok</c>) and failed sends (<see cref="TagOutcome"/> = <c>error</c>)
-    /// — so operators can distinguish steady-state ship latency from
+    /// - so operators can distinguish steady-state ship latency from
     /// failure-path latency.
     /// </summary>
     public static readonly Histogram<double> ShipDuration =
@@ -233,7 +233,7 @@ public static class LatticeReplicationMetrics
     /// Counter of <see cref="WalRecord"/> records appended to the
     /// per-tree write-ahead log on the local cluster. Incremented once
     /// per successful append at the
-    /// <see cref="ShardedReplogSink"/> seam — i.e. counts entries that
+    /// <see cref="ShardedReplogSink"/> seam - i.e. counts entries that
     /// have committed durably onto the WAL, not entries the producer
     /// merely attempted to capture. Tagged by <see cref="TagTree"/>.
     /// <para>
@@ -253,7 +253,7 @@ public static class LatticeReplicationMetrics
     /// successfully shipped to a remote peer. Incremented once per
     /// entry inside an acknowledged outbound batch (i.e. by the count
     /// of entries in the batch envelope, summed only on successful
-    /// ack). A failed ship — exception, RPC error, transport disposal —
+    /// ack). A failed ship - exception, RPC error, transport disposal -
     /// does not contribute. Tagged by <see cref="TagTree"/> and
     /// <see cref="TagPeer"/>.
     /// </summary>
@@ -377,7 +377,7 @@ public static class LatticeReplicationMetrics
     /// successful drain. Recorded once per drained entry; clamped to a
     /// non-negative value. Tagged by <see cref="TagTree"/>. An entry that
     /// is evicted (overflow) instead of drained does not contribute to
-    /// this histogram — only successful waits are observed.
+    /// this histogram - only successful waits are observed.
     /// </summary>
     public static readonly Histogram<double> ApplyDependencyWaitMs =
         Meter.CreateHistogram<double>("orleans.lattice.replication.apply.dependency_wait_ms",
@@ -434,7 +434,7 @@ public static class LatticeReplicationMetrics
     /// flags a transport-side regression that broke that invariant.
     /// <para>
     /// The counter is recorded after a successful apply (direct or drained)
-    /// — never on park — so the underlying invariant tracks "what has
+    /// - never on park - so the underlying invariant tracks "what has
     /// been merged" rather than "what has been observed". A violation
     /// does not change apply behaviour: the entry is still applied, the
     /// HWM is still advanced. This is purely an observability surface.
@@ -461,7 +461,7 @@ public static class LatticeReplicationMetrics
     /// Counter incremented once per call to
     /// <see cref="ILatticeFallOffLogDetector.CheckAndTriggerAsync"/>
     /// that detected a fall-off-the-log condition for a
-    /// <c>(treeName, sourceClusterId)</c> pair — i.e. the receiver's
+    /// <c>(treeName, sourceClusterId)</c> pair - i.e. the receiver's
     /// per-origin high-water-mark was strictly less than the sender's
     /// oldest available WAL entry HLC. Increments fire regardless of
     /// whether

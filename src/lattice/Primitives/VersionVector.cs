@@ -135,7 +135,7 @@ public sealed class VersionVector
     /// Pruning prevents unbounded growth of this vector when replicas
     /// enter and leave the cluster over long time horizons. Because a
     /// pruned entry is dropped entirely, the next merge with a replica
-    /// whose clock still lives before the cutoff will reinstate it —
+    /// whose clock still lives before the cutoff will reinstate it -
     /// pruning must therefore be applied consistently across all
     /// replicas (typically via a per-tree option on continuous-merge
     /// pipelines) to avoid oscillation.

@@ -84,7 +84,7 @@ public class ReplicationApplierLocalVectorClockCacheTests
     {
         // TryAdvanceAsync returning false means the entry was a benign
         // re-delivery already covered by the HWM. The cache must mirror
-        // exactly what the grain reports — no shadow advance.
+        // exactly what the grain reports - no shadow advance.
         var (applier, _, _, cache) = CreateApplier(tryAdvanceReturns: false);
 
         await applier.ApplyAsync(SetEntry("k", Hlc(50)));
@@ -97,7 +97,7 @@ public class ReplicationApplierLocalVectorClockCacheTests
     public async Task ApplyAsync_does_not_advance_cache_for_local_origin_entry()
     {
         // Local-origin entries short-circuit before HWM and never
-        // call TryAdvanceAsync — they must not bleed into the cache
+        // call TryAdvanceAsync - they must not bleed into the cache
         // via this code path. The local diagonal is advanced by
         // ShardedReplogSink instead.
         var (applier, _, _, cache) = CreateApplier();
@@ -112,7 +112,7 @@ public class ReplicationApplierLocalVectorClockCacheTests
     public async Task ApplyAsync_does_not_advance_cache_when_HWM_already_dedupes()
     {
         // entry.Timestamp <= existing HWM short-circuits the apply
-        // entirely (Applied=false, dedup outcome) — no TryAdvanceAsync
+        // entirely (Applied=false, dedup outcome) - no TryAdvanceAsync
         // call, therefore no cache advance.
         var (applier, _, hwm, cache) = CreateApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));

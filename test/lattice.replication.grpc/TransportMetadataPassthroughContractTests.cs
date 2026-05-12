@@ -25,6 +25,7 @@ namespace Orleans.Lattice.Replication.Grpc.Tests;
 /// against the producer-side originals.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class TransportMetadataPassthroughContractTests
 {
     private IHost _host = null!;

@@ -6,7 +6,7 @@ namespace Orleans.Lattice;
 /// <see cref="LatticeMutation.OriginClusterId"/> is <c>null</c> (i.e. the
 /// foreground commit path on a single-cluster host or a not-yet-stamped
 /// observer-driven write). The mutation's own origin still wins when present
-/// — this resolver only supplies the fallback so multi-site hosts can record
+/// - this resolver only supplies the fallback so multi-site hosts can record
 /// "this WAL entry was authored locally by &lt;cluster-id&gt;" without forcing
 /// every commit-time call site to thread the cluster id through.
 /// <para>

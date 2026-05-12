@@ -57,7 +57,7 @@ internal sealed class TreeSnapshotState
     /// User-visible logical tree ID that this snapshot is being taken on
     /// behalf of. In offline snapshots this equals <c>SourceTreeId</c>
     /// (the source grain's key). In online resize, the source tree is a
-    /// physical tree whose logical alias is the user-facing name — the
+    /// physical tree whose logical alias is the user-facing name - the
     /// coordinator passes the logical name here so each source shard's
     /// shadow-forward state carries the correct logical ID for
     /// <see cref="StaleTreeRoutingException"/> diagnostics after the alias
@@ -75,7 +75,7 @@ internal enum SnapshotPhase
 {
     /// <summary>
     /// All source shards need to be marked as deleted (offline mode only).
-    /// This is the initial phase for offline snapshots — persisted before any
+    /// This is the initial phase for offline snapshots - persisted before any
     /// external side effects so that a crash before shard marking can be recovered.
     /// </summary>
     Lock = 0,
@@ -95,7 +95,7 @@ internal enum SnapshotPhase
     /// <summary>
     /// All source shards need to begin shadow-forwarding to the destination
     /// tree (online mode only). This is the initial phase for online
-    /// snapshots — every shard must transition to
+    /// snapshots - every shard must transition to
     /// <c>ShadowForwardPhase.Draining</c> before any drain reader starts,
     /// so that live writes landing during drain are mirrored to the
     /// destination.

@@ -137,8 +137,8 @@ internal sealed class AtomicWriteState
     /// the <c>SetManyAtomicAsync</c> call in a
     /// <see cref="LatticeDeltaContext.With"/> scope. Re-stamped onto
     /// Orleans <see cref="Runtime.RequestContext"/> on every per-key
-    /// <c>SetAsync</c> / <c>DeleteAsync</c> the saga issues — including
-    /// compensation rewrites — so every emitted
+    /// <c>SetAsync</c> / <c>DeleteAsync</c> the saga issues - including
+    /// compensation rewrites - so every emitted
     /// <see cref="LatticeMutation"/> carries the same author-delta as
     /// the original batch. Wire-compatible: missing field on legacy
     /// persisted state decodes to <see langword="null"/>.
@@ -164,7 +164,7 @@ internal sealed class AtomicWriteState
     /// per-key <c>SetAsync</c> the saga issues during
     /// <see cref="AtomicWritePhase.Execute"/> so every emitted
     /// <see cref="LatticeMutation"/> in the batch carries the
-    /// identical <see cref="LatticeMutation.VectorClock"/> — closing
+    /// identical <see cref="LatticeMutation.VectorClock"/> - closing
     /// the per-key VC drift a remote receiver would otherwise see as
     /// a partial-set state where the writer's frontier said all N
     /// should be visible together. Compensation rewrites override the
@@ -180,8 +180,8 @@ internal sealed class AtomicWriteState
     /// <summary>
     /// Total entry count of the enclosing atomic transaction, captured
     /// once on the first <see cref="AtomicWritePhase.Prepare"/> from
-    /// <see cref="Entries"/>'s <c>Count</c> and re-stamped — together
-    /// with each per-key index — onto Orleans
+    /// <see cref="Entries"/>'s <c>Count</c> and re-stamped - together
+    /// with each per-key index - onto Orleans
     /// <see cref="Runtime.RequestContext"/> via
     /// <see cref="LatticeAtomicBatchContext.With"/> on every per-key
     /// call the saga issues during
@@ -207,7 +207,7 @@ internal sealed class AtomicWriteState
     /// terminal broadcast loop in
     /// <see cref="Grains.AtomicWriteGrain"/>: one
     /// <see cref="IShardRootGrain.AppendTxTerminalAsync(Guid, bool, CancellationToken)"/>
-    /// call per index — never per key — produces the saga's per-shard
+    /// call per index - never per key - produces the saga's per-shard
     /// linearization point. Persisted so a crash-resume re-broadcasts
     /// terminals to the same shard set; the leaf-side
     /// <c>_recentlyTerminal</c> dedup makes re-delivery idempotent.

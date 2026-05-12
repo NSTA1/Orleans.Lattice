@@ -1,6 +1,6 @@
 # Orleans.Lattice
 
-A distributed [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree) library built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/), designed for scalable ordered key-value storage across a cluster.
+A distributed [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree) library built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/) - a sorted, durable key-value store that runs entirely as a set of Orleans grains.
 
 ![CI](https://github.com/NSTA1/Orleans.Lattice/actions/workflows/ci.yml/badge.svg)
 ![Publish](https://github.com/NSTA1/Orleans.Lattice/actions/workflows/publish.yml/badge.svg)
@@ -8,170 +8,109 @@ A distributed [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree) library built o
 
 ## What is it?
 
-Orleans.Lattice gives you a **sorted, durable key-value store** that runs
-entirely as a set of Orleans grains — no external database, no coordinator
-service, no external queue. Keys are `string` and values are `byte[]` at
-the core API; typed value helpers (see `TypedLatticeExtensions`) layer
-automatic serialization on top — `System.Text.Json` by default, or any
-`ILatticeSerializer<T>` you supply — so callers never have to hand-roll
-`byte[]` conversions. You get
-point lookups, deletes, ordered key scans (forward, reverse, and
-range-bounded), bulk loading, snapshots, and tree aliasing, all
-horizontally distributed across a cluster of silos.
+Orleans.Lattice is a **sorted, durable, horizontally-scalable key-value store** embedded in your Orleans cluster. Keys are `string`, values are `byte[]`, and typed-value helpers layer automatic serialization on top. No external database, no coordinator service, no external queue.
 
-The name comes from its use of **lattice-based state primitives** —
-mathematical structures where merges are commutative, associative, and
-idempotent. This is what makes operations conflict-free and recoverable
-without distributed locks or coordination protocols.
+It supports:
 
-**Cross-cluster replication is optional and ships in a sibling package.**
-`Orleans.Lattice.Replication` layers gRPC-push transport, snapshot/bootstrap,
-dead-letter handling, and causal+ apply over the core write-ahead log. Causal+
-is shipped end-to-end for point writes (single-shard mutations); multi-key
-atomic, structural-rewrite, and snapshot/restore causal+ paths are scheduled
-for subsequent releases. See the [`Orleans.Lattice.Replication` roadmap](src/lattice.replication/roadmap.md) for the current feature status and the [design notes](docs/lattice.replication/replication-design.md) for the architecture.
+- Point reads, writes, deletes, and per-entry TTL.
+- Ordered key and entry scans - forward, reverse, and range-bounded.
+- Multi-key atomic writes with all-or-nothing visibility.
+- Bulk loading from one-shot batches or streaming `IAsyncEnumerable` sources.
+- Durable, resumable cursors that survive silo failovers and client restarts.
+- Online resize, online reshard, and online snapshots (offline mode also available).
+- Soft delete with a configurable retention window, and undo of resize/snapshot within the window.
+- Per-tree event stream, diagnostics, and `System.Diagnostics.Metrics` instruments.
+- Optional cross-cluster replication via the sibling [`Orleans.Lattice.Replication`](src/lattice.replication/roadmap.md) package.
 
-The system is designed around a few core properties:
+The name comes from its use of **lattice-based state primitives** - mathematical structures where merges are commutative, associative, and idempotent - which is what makes the system conflict-free and recoverable without distributed locks or consensus.
 
-* **Self-organising under load.** Keys are hash-sharded across a virtual
-  slot space mapped onto physical shards. When a shard gets hot, an
-  autonomic monitor splits it online — no downtime, no lost writes, no
-  coordination protocol. Cold shards stay cheap.
-* **Strongly consistent from the outside.** Point reads, writes, and
-  ordered scans always see a consistent view of the data, even while
-  shards are splitting underneath. A concurrent `CountAsync` during a
-  mid-split workload will return the exact number of live keys.
-  See [Consistency](docs/lattice/consistency.md) for the per-operation
-  guarantee matrix.
-* **Crash-safe by construction.** Every multi-step operation — splits,
-  promotions, bulk grafts, snapshots — persists its intent before any
-  side effect. A silo crash mid-operation is recovered by the next
-  reminder tick, replaying the exact same idempotent work.
-* **Eventually convergent under failure.** State merges use hybrid
-  logical clocks and last-writer-wins CRDTs. Storage faults, stale
-  routing, and interrupted splits cannot corrupt data; once the fault
-  window closes, the tree converges to the correct state.
-* **No locks, no consensus round-trips.** All conflict resolution is
-  algebraic (commutative, associative, idempotent merges). There is no
-  Paxos, no Raft, no distributed lock manager.
+## Core Properties
 
-Behavior is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos-tests.md)
-that hammer a live cluster with concurrent reads, writes, scans, and
-shard splits — optionally with random storage-write faults, and
-separately under online resize and online reshard — and assert
-both live consistency and eventual convergence.
+- **Self-organising under load.** Hot regions of the keyspace re-balance themselves online - no downtime, no lost writes, no coordination protocol. Cold regions stay cheap.
+- **Strongly consistent from the outside.** Point reads, writes, and ordered scans always see a consistent view of the data, even while the cluster is rebalancing underneath. See [Consistency](docs/lattice/consistency.md) for the per-operation guarantee matrix.
+- **Crash-safe by construction.** A silo crash at any point - mid-write, mid-split, mid-snapshot, mid-bulk-load - is recovered without operator intervention and without data loss.
+- **Eventually convergent under failure.** Storage faults, stale routing, and interrupted operations cannot corrupt data; once the fault window closes, the tree converges to the correct state.
+- **No locks, no consensus round-trips.** No Paxos, no Raft, no distributed lock manager. All conflict resolution is algebraic.
 
-## Key Features
+Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos-tests.md) that hammer a live cluster with concurrent reads, writes, scans, splits, resizes, and reshards - optionally with random storage-write faults - and assert both live consistency and eventual convergence.
 
-| Feature | How |
-|---|---|
-| **Adaptive shard splitting** | Hot shards split online via shadow-write + drain + swap + reject phases. Fully transparent: no downtime, no dropped writes, no coordination protocol. An autonomic monitor detects hot shards and triggers splits; shard splitting is not part of the public API and cannot be invoked externally. |
-| **Atomic writes** | `SetManyAtomicAsync` provides all-or-nothing guarantees across multiple keys. If a write fails, the system automatically compensates using last-writer-wins with hybrid logical clocks. |
-| **Atomic visibility (universal)** | Strict atomic visibility for `SetManyAtomicAsync` across leaves, shards, **and clusters**. The per-tree `ITxRegistryGrain` is the single tree-wide linearization point for the saga's commit/abort decision; every read path consults it before exposing prepared values. Receiver-side replication routes prepared writes through `IReplicationApplyGrain.ApplyPreparedSetAsync` / `ApplyPreparedDeleteAsync` into the same per-leaf pending-tx bucket the local saga uses, and the per-shard `ApplyTxTerminalAsync` apply-hop flips visibility under the source cluster's HLC verbatim. No reader — local or remote — ever observes a partial-set state. See [Consistency](docs/lattice/consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster). |
-| **Bulk loading** | One-shot bottom-up build or streaming `IAsyncEnumerable` ingestion with per-shard parallel flushing. Both modes are idempotent and retryable. |
-| **Conflict-free** | All state merges are monotonic. Concurrent writes to the same key resolve via last-writer-wins with hybrid logical clocks. |
-| **Crash-safe splits** | Every node split uses a two-phase pattern with persisted intent. Interrupted splits resume automatically on the next access. |
-| **Durable cursors** | `OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `OpenDeleteRangeCursorAsync` return a server-side checkpointed iterator that survives silo failovers, client restarts, and topology changes. Progress is persisted after every page; a new activation resumes from the last yielded key. Self-cleaning via sliding idle-TTL reminder. |
-| **Events** | Per-tree `LatticeTreeEvent` Orleans stream: event kinds, `OperationId` correlation for atomic writes, delivery semantics, setup |
-| **Metrics** | `System.Diagnostics.Metrics` instruments published on the `orleans.lattice` meter: shard counters, leaf latency histograms, cache hit/miss, OpenTelemetry registration |
-| **Fast reads** | A `[StatelessWorker]` cache grain per silo serves reads via delta replication from the primary leaf. Cache misses cost a single version-vector comparison. |
-| **Fault-tolerant** | Validated end-to-end by a parametrized fault-injection chaos test: random storage-write failures during concurrent reads, writes, scans, and splits converge to the correct state once faults stop. |
-| **Online Reshard** | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
-| **Projection Rebuild** | `GetLeafProjectionDigestAsync` cross-silo divergence detection, `ProjectionRebuildPolicy` recovery strategies, fall-off-log triggers, activation-time WAL replay |
-| **Read Caching** | Delta-based `[StatelessWorker]` cache, split-aware pruning |
-| **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on an existing tree. Takes an offline snapshot to a new physical tree, swaps the alias, and soft-deletes the old data. The tree is unavailable during the snapshot phase but immediately accessible after the swap. Undoable within the retention window. |
-| **Scalable writes** | Keys are hash-sharded across a configurable number of independent sub-trees (default 64). No single-root bottleneck. Shards split further at runtime as load grows. |
-| **Strongly-consistent scans** | `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` return the exact live key set even during concurrent adaptive shard splits, via per-slot reconciliation against a monotonic `ShardMap.Version` and bounded optimistic retry. See [Consistency](docs/lattice/consistency.md). |
-| **Snapshots** | Create a point-in-time copy of a tree: offline (source locked — tree unavailable during copy) or online (source available, strictly consistent via shadow-forward + LWW drain), with optional sizing overrides for the destination. |
-| **Soft delete & recovery** | Trees can be soft-deleted with a configurable retention window. Recovery restores full access; purge permanently removes all data. |
-| **Tombstone cleanup** | Reminder-driven compaction removes expired tombstones shard-by-shard, with crash-safe progress tracking. |
-| **Tree registry** | An internal registry tree tracks all user trees, per-tree config overrides, and tree aliasing — enabling enumeration, resize, and snapshot without external metadata. |
-| **TTL on `SetAsync`** | Per-entry time-to-live via `SetAsync(key, value, TimeSpan)`. Absolute UTC expiry is resolved server-side so client clock skew does not shift individual entry lifetimes. Expired entries are hidden from every read path and reaped by tombstone compaction after a configurable grace period. TTL metadata is preserved verbatim across shard splits, snapshots, resize, merges, and saga compensation. |
+## Features
+
+| Feature | What it gives you | Docs |
+|---|---|---|
+| **Adaptive shard splitting** | Hot shards rebalance themselves online, transparently to callers. No downtime, no dropped writes, no externally-visible API. | [Shard Splitting](docs/lattice/shard-splitting.md) |
+| **Atomic writes** | `SetManyAtomicAsync` provides all-or-nothing semantics across multiple keys - locally, across shards, and across replicating clusters. No reader ever observes a partial-set state. | [Atomic Writes](docs/lattice/atomic-writes.md) |
+| **Bulk loading** | One-shot bottom-up build or streaming `IAsyncEnumerable` ingestion. Idempotent and retryable. | [Bulk Loading](docs/lattice/bulk-loading.md) |
+| **Conflict-free merges** | Concurrent writes converge deterministically. | [State Primitives](docs/lattice/state-primitives.md) |
+| **Cross-cluster replication** | Active-active replication between Orleans clusters. Any cluster can write to any tree; concurrent updates converge deterministically, and atomic multi-key writes remain all-or-nothing on every peer. | [Replication](docs/lattice.replication/replication.md) |
+| **Diagnostics** | `DiagnoseAsync` returns a per-tree health snapshot: per-shard depth, live keys, tombstones, hotness, and recent splits. | [Diagnostics](docs/lattice/diagnostics.md) |
+| **Durable cursors** | Server-checkpointed iterators that survive silo failovers, client restarts, and topology changes. Resume from the last yielded key automatically. | [Durable Cursors](docs/lattice/durable-cursors.md) |
+| **Events** | Per-tree `LatticeTreeEvent` Orleans stream with operation-id correlation. | [Events](docs/lattice/events.md) |
+| **Fast reads** | Per-silo read cache served via delta replication from the primary leaf. | [Read Caching](docs/lattice/caching.md) |
+| **Fault-tolerant** | Validated end-to-end against parametrised fault injection. | [Chaos Tests](docs/lattice/chaos-tests.md) |
+| **Metrics** | `System.Diagnostics.Metrics` instruments published on the `orleans.lattice` meter, with OpenTelemetry registration. | [Metrics](docs/lattice/metrics.md) |
+| **Online reshard** | Grow-only online migration of the physical shard count. | [Online Reshard](docs/lattice/online-reshard.md) |
+| **Projection rebuild** | Cross-silo divergence detection with policy-driven recovery. | [Projection Rebuild](docs/lattice/projection-rebuild.md) |
+| **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on a live tree, undoable within the retention window. | [Tree Sizing](docs/lattice/tree-sizing.md) |
+| **Scalable writes** | Keys are sharded across many independent sub-trees. No single-root bottleneck. | [Architecture](docs/lattice/architecture.md) |
+| **Snapshots** | Point-in-time copy of a tree - offline (source locked) or online (source available). | [Snapshots](docs/lattice/snapshots.md) |
+| **Soft delete & recovery** | Trees can be soft-deleted with a configurable retention window. Recovery restores full access; purge permanently removes all data. | [Tree Deletion](docs/lattice/tree-deletion.md) |
+| **Strongly-consistent scans** | `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` return the exact live key set even during concurrent rebalancing. | [Consistency](docs/lattice/consistency.md) |
+| **Tombstone cleanup** | Background reaping of expired tombstones with crash-safe progress tracking. | [Tombstone Compaction](docs/lattice/tombstone-compaction.md) |
+| **Tree registry** | Built-in enumeration of all user trees and their per-tree config overrides - no external metadata store required. | [Tree Registry](docs/lattice/tree-registry.md) |
+| **TTL on `SetAsync`** | Per-entry time-to-live with absolute server-side expiry, preserved verbatim across splits, snapshots, resize, and replication. | [TTL](docs/lattice/ttl.md) |
 
 ## Quick Start
 
-Register Lattice on a silo. The minimum durable configuration calls
-`AddLattice` (registers the grain catalogue and storage provider) and
-`AddWalStorage` (registers the durability backend behind the per-shard
-write-ahead log — the sole foreground-commit durability boundary):
+Register Lattice on a silo. `AddLattice` registers the grain catalogue, the grain storage provider (via the supplied callback), and the in-memory write-ahead-log backend in a single call:
 
-```csharp
-var builder = WebApplication.CreateBuilder(args);
+```csharp verify
+siloBuilder.AddLattice((silo, storageName) =>
+    silo.AddMemoryGrainStorage(storageName));
 
-builder.Host.UseOrleans(silo =>
-{
-    silo
-        .AddMemoryGrainStorage(LatticeOptions.StorageProviderName)
-        .AddLattice()
-        .AddWalStorage();           // in-memory default; swap for a durable backend in production.
-});
+// AddLattice registers the in-memory WAL by default - swap for a durable backend in production.
 
-var app = builder.Build();
-
-// resolve a tree by name and write a key:
-var lattice = app.Services.GetRequiredService<IGrainFactory>().GetGrain<ILattice>("my-tree");
+// elsewhere - on the client or inside a grain - resolve a tree by name and write a key:
+var lattice = grainFactory.GetGrain<ILattice>("my-tree");
 await lattice.SetAsync("hello", "world"u8.ToArray());
 ```
 
-For production, swap the in-memory WAL for a durable backend — e.g.
-Azure Table Storage from the sibling package:
+For production, swap the in-memory WAL for a durable backend - e.g. Azure Table Storage from the sibling package:
 
-```csharp
-silo
-    .AddLattice()
-    .AddLatticeAzureTableWalStorage(connectionString: "DefaultEndpointsProtocol=https;...");
+```csharp verify
+siloBuilder
+    .AddLattice((silo, storageName) => silo.AddMemoryGrainStorage(storageName))
+    .AddAzureTableWalStorage(opts =>
+    {
+        opts.ConnectionString = "DefaultEndpointsProtocol=https;...";
+    });
 ```
 
-Add cross-cluster replication on top by registering
-`AddLatticeReplication(...)` alongside the WAL — the replication
-package consumes the same `IWalStorageProvider` registration as the
-core library, so a single durable backend serves both layers. See the
-[`Orleans.Lattice.Replication` quick start](docs/lattice.replication/replication-design.md)
-for the full multi-cluster setup.
+Add cross-cluster replication on top by registering `AddLatticeReplication(...)` alongside the WAL. See the [`Orleans.Lattice.Replication` overview](docs/lattice.replication/replication.md) for the full multi-cluster setup.
 
-For full setup details, silo configuration options, and complete
-usage examples, see the [API Reference](docs/lattice/api.md). For
-runnable sample projects exercising `ILattice`, see
-[Samples](docs/lattice/samples.md).
+For full setup details, silo configuration options, and complete usage examples, see the [API Reference](docs/lattice/api.md). For runnable sample projects exercising `ILattice`, see [Samples](docs/lattice/samples.md).
 
-## Documentation
+## Reference
 
-Detailed design documentation is split by concept:
+Use these documents for day-to-day use and operations:
 
-| Document | Contents |
-|---|---|
-| [API Reference](docs/lattice/api.md) | Public `ILattice` interface, batch operations, options, serializable types |
-| [Architecture](docs/lattice/architecture.md) | Grain layers, sharding, root promotion, bounded retry, grain mapping, capacity |
-| [Atomic Writes](docs/lattice/atomic-writes.md) | `SetManyAtomicAsync` all-or-nothing guarantees, saga coordinator, compensation via LWW, crash recovery |
-| [Benchmarks](docs/lattice/benchmarks.md) | Prerequisites, running benchmarks, interpreting results |
-| [Bulk Loading](docs/lattice/bulk-loading.md) | One-shot build, streaming ingestion, two-phase graft, recovery guarantees |
-| [Chaos Tests](docs/lattice/chaos-tests.md) | Happy-path, fault-injection, online-resize, and online-reshard chaos integration tests; invariants proven; recovery surfaces exercised |
-| [Configuration](docs/lattice/configuration.md) | Options reference, per-tree overrides, immutability constraints, storage provider |
-| [Consistency](docs/lattice/consistency.md) | Per-operation consistency guarantees for every `ILattice` method: linearizable, strongly consistent, snapshot, and eventually consistent classifications |
-| [Diagnostics](docs/lattice/diagnostics.md) | `ILattice.DiagnoseAsync` tree health snapshot: per-shard depth/live-keys/tombstones/hotness, shallow vs deep mode, caching, recent-splits ring buffer |
-| [Durable Cursors](docs/lattice/durable-cursors.md) | Stateful `ILatticeCursorGrain` design, grain lifecycle, effective-range resumption, idle-TTL self-cleanup, performance characteristics |
-| [Events](docs/lattice/events.md) | Per-tree `LatticeTreeEvent` Orleans stream: event kinds, `OperationId` correlation for atomic writes, delivery semantics, setup |
-| [Metrics](docs/lattice/metrics.md) | `System.Diagnostics.Metrics` instruments published on the `orleans.lattice` meter: shard counters, leaf latency histograms, cache hit/miss, OpenTelemetry registration |
-| [Online Reshard](docs/lattice/online-reshard.md) | `ReshardAsync` grow-only online shard-count migration, coordinator phase machine, interaction with autonomic splits, tuning |
-| [Projection Rebuild](docs/lattice/projection-rebuild.md) | `GetLeafProjectionDigestAsync` cross-silo divergence detection, `ProjectionRebuildPolicy` recovery strategies, fall-off-log triggers, WAL-replay-driven recovery |
-| [Read Caching](docs/lattice/caching.md) | Delta-based `[StatelessWorker]` cache, split-aware pruning |
-| [Shard Splitting](docs/lattice/shard-splitting.md) | Adaptive online splits, shadow-write design, autonomic monitor, suppression rules, scan semantics during splits, tunables |
-| [Snapshots](docs/lattice/snapshots.md) | Offline and online snapshot modes, crash safety, sizing overrides |
-| [State Primitives](docs/lattice/state-primitives.md) | Hybrid logical clocks, LWW registers, monotonic split state, version vectors, state deltas |
-| [Tombstone Compaction](docs/lattice/tombstone-compaction.md) | Reminder-driven cleanup, grace periods, configuration |
-| [Tree Deletion](docs/lattice/tree-deletion.md) | Soft delete, recovery, manual purge, deferred purge |
-| [Tree Registry](docs/lattice/tree-registry.md) | Internal registry tree, automatic registration, config priority, tree enumeration |
-| [Tree Sizing](docs/lattice/tree-sizing.md) | Resizing an existing tree: `ResizeAsync` phase machine, shadow-forwarding drain, alias swap, undo window, operational considerations |
-| [Tree Storage](docs/lattice/tree-storage.md) | Per-provider storage limits, leaf/internal node size estimation, per-provider sizing recommendations, default-configuration assessment, key trade-offs |
-| [Tree Structure](docs/lattice/tree-structure.md) | Internal/leaf node layout, two-phase leaf splits, idempotent split propagation |
-| [TTL](docs/lattice/ttl.md) | Per-entry time-to-live: `SetAsync(ttl)`, server-side absolute expiry, read-path filtering, preservation across splits / snapshots / resize / merge / saga compensation, CRDT replication invariant |
-| [WAL](docs/lattice/wal.md) | Write-ahead log as the sole foreground-commit durability boundary: per-shard envelope, build → wal → apply → observer commit pipeline, replay-on-activation recovery, projection checkpoint, trim/GC predicate, origin-cluster-id stamping seam, turn-safe batching protocol, replication relationship |
-| [WAL Causal+](docs/lattice/wal-causal-plus.md) | Causal+ entry-schema extension on `WalRecord` (vector clock and dependency summary slots), producer-side stamping, receiver-side dependency satisfaction, snapshot semantics, retired atomic-batch delivery historical context |
-| [WAL Storage Providers](docs/lattice/wal-storage-providers.md) | `IWalStorageProvider` durability seam, in-memory default, optional Azure Table Storage backend, configuration / capacity / operational notes |
+- [API Reference](docs/lattice/api.md) - the public `ILattice` interface, batch operations, options, and serializable types.
+- [Configuration](docs/lattice/configuration.md) - options reference, per-tree overrides, immutability constraints, storage provider.
+- [Samples](docs/lattice/samples.md) - runnable sample projects exercising `ILattice`.
+- [Benchmarks](docs/lattice/benchmarks.md) - prerequisites, running benchmarks, interpreting results.
+
+For internals (the "how"):
+
+- [Architecture](docs/lattice/architecture.md) - grain layers, sharding, root promotion, grain mapping, capacity.
+- [Tree Structure](docs/lattice/tree-structure.md) - internal/leaf node layout, two-phase leaf splits, idempotent split propagation.
+- [Tree Storage](docs/lattice/tree-storage.md) - per-provider storage limits, node size estimation, sizing recommendations.
+- [WAL](docs/lattice/wal.md) - write-ahead log as the sole foreground-commit durability boundary.
+- [WAL Causal+](docs/lattice/wal-causal-plus.md) - causal+ entry-schema extension, dependency satisfaction, snapshot semantics.
+- [WAL Storage Providers](docs/lattice/wal-storage-providers.md) - `IWalStorageProvider` durability seam, in-memory default, optional Azure Table backend.
 
 ## Releases
 
-Each publishable package is released by pushing a Git tag whose prefix is the literal folder name under `src/`, joined to the version with `-v`. The publish workflow auto-discovers the matching csproj and test project — adding a new package only requires creating `src/<name>/` and (optionally) `test/<name>/`, no workflow edits.
+Each publishable package is released by pushing a Git tag whose prefix is the literal folder name under `src/`, joined to the version with `-v`. The publish workflow auto-discovers the matching csproj and test project - adding a new package only requires creating `src/<name>/` and (optionally) `test/<name>/`, no workflow edits.
 
 | Source folder | Tag pattern | NuGet package id |
 |---|---|---|
@@ -196,18 +135,16 @@ The publish workflow then runs the chaos and deterministic test suites for that 
 
 Orleans.Lattice inherits the asymptotic properties of a [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree). In a single shard containing *n* keys with branching factor *b*:
 
-| Operation | Time Complexity | What it means |
-|---|---|---|
-| Point read (`GetAsync`) | O(log<sub>b</sub> n) | Finding a key requires visiting one grain per tree level — typically 1–3 hops for millions of keys. |
-| Insert / update (`SetAsync`) | O(log<sub>b</sub> n) | Same traversal as a read, plus an occasional split that propagates upward (amortised O(1) extra work). |
-| Delete (`DeleteAsync`) | O(log<sub>b</sub> n) | Writes a tombstone at the leaf; no rebalancing. Tombstones are compacted in the background. |
-| Ordered scan (`ScanKeysAsync`) | O(n) | Leaves are linked — once the first leaf is found, iteration walks sibling pointers without revisiting internal nodes. |
-| Count (`CountAsync`) | O(n / b) | Visits every leaf across all shards but skips internal nodes. |
-| Space | O(n) | Each key-value pair is stored exactly once in a leaf node. Internal nodes hold only separator keys. |
+| Operation | Time Complexity |
+|---|---|
+| Point read (`GetAsync`) | O(log<sub>b</sub> n) |
+| Insert / update (`SetAsync`) | O(log<sub>b</sub> n) |
+| Delete (`DeleteAsync`) | O(log<sub>b</sub> n) |
+| Ordered scan (`ScanKeysAsync`) | O(n) |
+| Count (`CountAsync`) | O(n / b) |
+| Space | O(n) |
 
-**In plain terms:** because each node can hold ~128 children (the default branching factor), the tree is extremely shallow. A shard with two million keys is only three levels deep, so a single-key lookup crosses just three grains. Adding more data makes the tree wider, not deeper — doubling the key count adds at most one extra level. Scans are efficient because all values live in the leaves, which are chained together, so iterating a range never backtracks.
-
-With sharding, the *n* in each shard is reduced by a factor of `ShardCount` (default 64), making per-shard trees even shallower. The trade-off is that cross-shard operations (`CountAsync`, `ScanKeysAsync`, `ScanEntriesAsync`) scatter-gather across all shards and merge the results.
+With the default branching factor (~128 children per node), a shard with two million keys is only three levels deep, so a single-key lookup crosses just three grains. Sharding (default 64) reduces per-shard *n* further; cross-shard operations scatter-gather across all shards.
 
 ## Contributing
 

@@ -8,7 +8,7 @@ namespace Orleans.Lattice;
 /// <para>
 /// This is the public provider-boundary type. Replication-package wire
 /// envelopes (e.g. <c>WalRecord</c>) and any other ship-time enrichment
-/// shapes are intentionally distinct — the durability contract a host
+/// shapes are intentionally distinct - the durability contract a host
 /// plugs into stays in core so it can be consumed by single-cluster
 /// deployments that do not reference the replication package.
 /// </para>

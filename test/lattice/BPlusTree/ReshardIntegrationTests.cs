@@ -6,6 +6,7 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 [TestFixture]
+[Category("Integration")]
 public class ReshardIntegrationTests
 {
     private FourShardClusterFixture _fixture = null!;
@@ -74,7 +75,7 @@ public class ReshardIntegrationTests
             await reshard.RunReshardPassAsync();
 
             // Drive every per-shard split coordinator to completion. Until
-            // the first split commits, the registry has no persisted map —
+            // the first split commits, the registry has no persisted map -
             // fall back to the default layout so we still reach the shard
             // coordinators that were just dispatched.
             var map = await registry.GetShardMapAsync(treeId)

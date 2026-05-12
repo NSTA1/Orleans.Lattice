@@ -118,7 +118,7 @@ public partial class LatticeGrainTests
         var result = await grain.GetAsync("k1");
 
         Assert.That(result, Is.EqualTo(new byte[] { 1 }));
-        // Map fetched twice — once initially, once after invalidation.
+        // Map fetched twice - once initially, once after invalidation.
         await registry.Received(2).GetShardMapAsync(treeId);
     }
 
@@ -132,7 +132,7 @@ public partial class LatticeGrainTests
             virtualShardCount: LatticeConstants.DefaultShardCount);
         SetupShardRoot(factory);
 
-        // The public ILattice surface rejects system-tree ids — the registry
+        // The public ILattice surface rejects system-tree ids - the registry
         // grain bootstraps through the internal ISystemLattice bypass. This
         // test exercises the same routing logic via that bypass.
         await ((ISystemLattice)grain).GetAsync("k1");

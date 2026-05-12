@@ -130,7 +130,7 @@ public class BPlusInternalGrainTests
         var grain = CreateGrain(state);
         await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
-        // Insert out of order — "ant" < "fox", should go before "fox".
+        // Insert out of order - "ant" < "fox", should go before "fox".
         await grain.AcceptSplitAsync("ant", Child2);
 
         Assert.That(state.State.Children.Count, Is.EqualTo(3));
@@ -246,7 +246,7 @@ public class BPlusInternalGrainTests
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.PromotedKey, Is.EqualTo("fox"));
         Assert.That(result.NewSiblingId, Is.EqualTo(siblingId));
-        // The promotion was NOT inserted locally — only Child0 remains.
+        // The promotion was NOT inserted locally - only Child0 remains.
         Assert.That(state.State.Children, Has.Count.EqualTo(1));
     }
 

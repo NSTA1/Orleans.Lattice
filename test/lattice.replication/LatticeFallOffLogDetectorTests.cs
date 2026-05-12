@@ -255,7 +255,7 @@ public class LatticeFallOffLogDetectorTests
     [Test]
     public async Task CheckAndTriggerAsync_detects_fall_off_for_cold_start_receiver_with_zero_local_hwm()
     {
-        // A fresh receiver has never applied anything from this origin —
+        // A fresh receiver has never applied anything from this origin -
         // its HWM grain returns HybridLogicalClock.Zero. If the sender's
         // oldest available WAL entry is anywhere past zero, the receiver
         // has implicitly fallen off the log and needs a bootstrap.

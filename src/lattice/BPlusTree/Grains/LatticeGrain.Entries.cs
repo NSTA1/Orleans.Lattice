@@ -29,7 +29,7 @@ internal sealed partial class LatticeGrain
     /// a streaming k-way merge with in-line reconciliation. When any shard
     /// reports newly-moved slots, the orchestrator queries their current
     /// owners, sorts the reconciled entries, and injects them as an
-    /// additional cursor into the same priority queue — so output remains
+    /// additional cursor into the same priority queue - so output remains
     /// globally sorted even when an adaptive split commits mid-scan.
     /// Duplicates (keys visible in both pre- and post-swap views) are
     /// suppressed by a per-call <c>HashSet&lt;string&gt;</c>. Liveness is

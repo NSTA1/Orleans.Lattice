@@ -80,7 +80,7 @@ internal static class WalRecordConverter
     /// <see cref="LatticeMutation.AtomicBatchIndex"/>) which the
     /// replication wire format carries on every entry. The
     /// translation does not introduce a fresh
-    /// <see cref="MutationCategory"/> — it defaults to
+    /// <see cref="MutationCategory"/> - it defaults to
     /// <see cref="MutationCategory.User"/> because the replication
     /// wire format does not carry the category today.
     /// </summary>

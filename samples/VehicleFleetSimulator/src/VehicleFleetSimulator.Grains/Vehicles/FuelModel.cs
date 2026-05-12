@@ -24,7 +24,7 @@ public static class FuelModel
     /// cruise-rate at <see cref="VehicleConfig.OptimalSpeedKph"/> plus
     /// <see cref="VehicleConfig.FuelSafetyMargin"/>. Vehicles settle around the optimal speed
     /// in steady-state (that is the basin of the U-shaped consumption curve), so budgeting at
-    /// the max-speed rate would be massively over-conservative — its quadratic high-speed
+    /// the max-speed rate would be massively over-conservative - its quadratic high-speed
     /// penalty would make typical inter-city segments unaffordable on a single tank and
     /// deadlock the refuel/depart loop. The safety margin absorbs deviations toward the
     /// extremes; low-speed rates near cities only apply over the small approach window.

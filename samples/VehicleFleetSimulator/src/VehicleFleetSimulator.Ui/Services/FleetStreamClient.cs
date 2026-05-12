@@ -25,7 +25,7 @@ public enum FleetConnectionState
 /// <para>
 /// The supervisor loop fetches the city graph (HTTP), opens the gRPC-Web stream, and reads it
 /// to completion. Any failure transitions the state to <see cref="FleetConnectionState.Error"/>,
-/// then the loop sleeps a fixed <see cref="ReconnectInterval"/> and retries — forever, until
+/// then the loop sleeps a fixed <see cref="ReconnectInterval"/> and retries - forever, until
 /// the component disposes us. The 5-second cadence is intentionally constant (no exponential
 /// backoff); the simulator and UI are expected to live on the same private network during a
 /// benchmark run, so quick recovery beats politeness.

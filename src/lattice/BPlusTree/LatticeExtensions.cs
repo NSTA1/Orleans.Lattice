@@ -33,7 +33,7 @@ public static class LatticeExtensions
     /// Routing is resolved up front via <see cref="ILattice.GetRoutingAsync"/>,
 
 /// so entries are correctly partitioned by the tree's persisted
-    /// <see cref="ShardMap"/> — including non-default maps produced by adaptive
+    /// <see cref="ShardMap"/> - including non-default maps produced by adaptive
     /// shard splits.
     /// </para>
     /// </summary>
@@ -127,7 +127,7 @@ public static class LatticeExtensions
     /// <para>
     /// The silo must have <see cref="LatticeOptions.PublishEvents"/> enabled
     /// and the client must be connected to a cluster that has the same
-    /// stream provider registered. Events are metadata-only — they carry
+    /// stream provider registered. Events are metadata-only - they carry
     /// <see cref="LatticeTreeEvent.Kind"/>, <see cref="LatticeTreeEvent.TreeId"/>,
 
     /// <see cref="LatticeTreeEvent.Key"/>, <see cref="LatticeTreeEvent.ShardIndex"/>,
@@ -142,7 +142,7 @@ public static class LatticeExtensions
     /// <param name="tree">The tree to subscribe to.</param>
     /// <param name="client">The Orleans cluster client that hosts the stream provider.</param>
     /// <param name="onEvent">Callback invoked for every received event. Exceptions
-    /// propagate back into the Orleans stream pipeline — wrap in a try/catch if
+    /// propagate back into the Orleans stream pipeline - wrap in a try/catch if
     /// your consumer should be tolerant of its own faults.</param>
     /// <param name="providerName">Orleans stream provider name. Must match
     /// <see cref="LatticeOptions.EventStreamProviderName"/>. Defaults to
@@ -190,7 +190,7 @@ public static class LatticeExtensions
     /// and transparently recovers from <c>Orleans.Runtime.EnumerationAbortedException</c>
     /// (raised when the remote enumerator on the orchestrator grain is reclaimed
     /// mid-scan due to silo failover, cold start, idle expiry, or scale-down).
-    /// The wrapper tracks the last yielded key and — on abort — reopens the
+    /// The wrapper tracks the last yielded key and - on abort - reopens the
     /// underlying scan with a tightened bound so the result stream is
     /// deterministic: no duplicates, no gaps, original ordering preserved.
     /// For forward scans the resume lower bound is the successor of the last
@@ -202,7 +202,7 @@ public static class LatticeExtensions
     /// a tight loop against a persistently-faulting orchestrator. If the
     /// retry budget is exhausted the last <c>EnumerationAbortedException</c>
     /// is rethrown verbatim. This is the recommended client API for long-running
-    /// scans — <see cref="ILattice.KeysAsync"/> is retained for short,
+    /// scans - <see cref="ILattice.KeysAsync"/> is retained for short,
     /// single-page reads and for internal orchestration.
     /// </para>
     /// </summary>

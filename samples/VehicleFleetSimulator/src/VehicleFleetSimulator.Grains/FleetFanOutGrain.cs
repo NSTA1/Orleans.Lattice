@@ -19,7 +19,7 @@ namespace VehicleFleetSimulator.Grains;
 ///   telemetry shard.</item>
 /// </list>
 ///
-/// Marked <see cref="ReentrantAttribute"/> so many publish calls can interleave concurrently — a
+/// Marked <see cref="ReentrantAttribute"/> so many publish calls can interleave concurrently - a
 /// non-reentrant turn-based grain caps this dispatch path at ~1000 msg/sec per shard. The body
 /// only sets a field and calls <see cref="ObserverManager{T}"/> (which is internally thread-safe)
 /// fully synchronously, so reentrancy is benign here (no awaits → no turn boundary where another

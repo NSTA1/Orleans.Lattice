@@ -247,7 +247,7 @@ public class ReplicationDriverActivationServiceTests
     {
         // Two trees: alpha succeeds on first call, beta fails
         // permanently. The retry loop must not re-issue alpha's
-        // activation on every pass — once it succeeds, alpha is
+        // activation on every pass - once it succeeds, alpha is
         // removed from the pending set and never called again.
         // This guards against an "always retry every grain"
         // implementation that would slow the cluster's steady
@@ -340,7 +340,7 @@ public class ReplicationDriverActivationServiceTests
         // activation of the singleton so its constructor-side gauge
         // registrations fire on silo Start. The ctor still validates
         // the parameter even though it is never read after
-        // construction — passing null here is a wiring bug and must
+        // construction - passing null here is a wiring bug and must
         // throw to surface it at startup rather than silently lose
         // the gauge registration.
         Assert.That(

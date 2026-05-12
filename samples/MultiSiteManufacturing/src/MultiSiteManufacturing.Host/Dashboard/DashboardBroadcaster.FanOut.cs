@@ -10,7 +10,7 @@ namespace MultiSiteManufacturing.Host.Dashboard;
 /// the corresponding <see cref="PartSummaryUpdate"/> /
 /// <see cref="DivergenceEvent"/> / <see cref="SiteActivityIndexEntry"/>
 /// values, and writes them to every active per-circuit channel.
-/// Errors are logged but never thrown — the cluster-wide stream
+/// Errors are logged but never thrown - the cluster-wide stream
 /// agent must keep moving even if a single fact's fan-out fails.
 /// </summary>
 public sealed partial class DashboardBroadcaster
@@ -20,8 +20,8 @@ public sealed partial class DashboardBroadcaster
     /// <summary>
     /// Subscribed to <see cref="PartCrdtStore.PartChanged"/> in
     /// <see cref="StartAsync"/>. Forwards the carried serial onto the
-    /// cluster-wide part-change stream so every silo's broadcaster —
-    /// including this one — re-runs the per-circuit fan-out
+    /// cluster-wide part-change stream so every silo's broadcaster -
+    /// including this one - re-runs the per-circuit fan-out
     /// (<see cref="PublishPartAsync"/>) for whichever Blazor sessions
     /// it hosts. Without this stream hop a CRDT mutation handled on
     /// silo A would be invisible to a circuit pinned to silo B,

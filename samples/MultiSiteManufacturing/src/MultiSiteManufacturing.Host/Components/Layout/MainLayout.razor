@@ -102,7 +102,7 @@
 
     private static string FormatRelative(System.DateTime? whenUtc)
     {
-        if (whenUtc is null) return "—";
+        if (whenUtc is null) return "-";
         var elapsed = System.DateTime.UtcNow - whenUtc.Value;
         if (elapsed < System.TimeSpan.Zero) elapsed = System.TimeSpan.Zero;
         if (elapsed.TotalSeconds < 1) return "just now";
@@ -163,7 +163,7 @@
     .repl-stale   { color: var(--pico-muted-color); margin-left: 0.25rem; }
     .repl-error   { color: #b83a3a; font-weight: 600; margin-left: 0.25rem; }
 
-    /* Widen the default Pico container — at standard widths Pico caps at
+    /* Widen the default Pico container - at standard widths Pico caps at
        ~1130px which wraps the Serial / Family columns hard on a 1080p
        display. Give the dashboard real estate up to 1800px while keeping
        a small gutter on ultra-wide monitors. */
@@ -196,7 +196,7 @@
         background-color: rgba(184, 58, 58, 0.08);
     }
     /* Serial numbers (`HPT-BLD-S1-2028-00001`) and family codes are
-       identifiers — never wrap them mid-token. */
+       identifiers - never wrap them mid-token. */
     .inventory-nowrap {
         white-space: nowrap;
     }
@@ -276,7 +276,7 @@
         white-space: nowrap;
         /* Reserve room for Pico's aria-busy spinner so toggling it on/off
            doesn't reflow the column. Pico injects a ::before pseudo-element
-           sized roughly 1em — we hard-allocate the width via a fixed
+           sized roughly 1em - we hard-allocate the width via a fixed
            box model below. */
         box-sizing: border-box;
         width: 7.5rem;

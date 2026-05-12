@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.PublicApiContract;
 /// The fixture-scope <c>InMemoryWalStorageProvider</c> outlives the
 /// cluster lifecycle, while per-silo memory grain storage does not.
 /// After <c>RestartClusterAsync</c>, every leaf grain is in the
-/// pristine "no grain state" condition — its first activation must
+/// pristine "no grain state" condition - its first activation must
 /// reconstruct its in-memory page from the WAL or the read returns
 /// null. These tests assert reads return the original values, which
 /// is only possible if the activation-time materialiser ran.
@@ -77,7 +77,7 @@ public partial class PublicApiContractTests
         await _fixture.RestartClusterAsync();
         var rehydrated = await _fixture.CreateSmallTreeAsync(treeId);
 
-        // The materialiser must apply WAL entries in HLC order — the
+        // The materialiser must apply WAL entries in HLC order - the
         // post-restart read must observe the latest write, not any
         // earlier one.
         Assert.That(Str(await rehydrated.GetAsync("k")), Is.EqualTo("third"));
@@ -326,7 +326,7 @@ public partial class PublicApiContractTests
         var treeId = "pac-walreact-ttl-" + Guid.NewGuid().ToString("N")[..8];
         var tree = await _fixture.CreateSmallTreeAsync(treeId);
 
-        // Long TTL — must not have expired by the time we read post-restart.
+        // Long TTL - must not have expired by the time we read post-restart.
         await tree.SetAsync("temp", Bytes("ttl-value"), TimeSpan.FromMinutes(30));
         Assert.That(Str(await tree.GetAsync("temp")), Is.EqualTo("ttl-value"));
 
@@ -353,7 +353,7 @@ public partial class PublicApiContractTests
         var phase3 = await _fixture.CreateSmallTreeAsync(treeId);
 
         // Both pre- and post-first-restart writes must be present after
-        // the second restart — the WAL is the canonical record across
+        // the second restart - the WAL is the canonical record across
         // any number of activations.
         Assert.That(Str(await phase3.GetAsync("phase-1")), Is.EqualTo("v1"));
         Assert.That(Str(await phase3.GetAsync("phase-2")), Is.EqualTo("v2"));

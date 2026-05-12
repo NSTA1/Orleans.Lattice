@@ -10,7 +10,7 @@ using VehicleFleetSimulator.Grains.Telemetry;
 // [Collection] attribute and therefore race the cluster-fixture tests for CPU, starving the
 // shared TestCluster's reminder/timer cadence. Empirically, that races StreamSubscriberOrderTests
 // against its 15s telemetry-collection budget. Disabling assembly-level collection parallelism
-// keeps the whole suite single-threaded — the suite runs in ~3s end-to-end so we lose nothing.
+// keeps the whole suite single-threaded - the suite runs in ~3s end-to-end so we lose nothing.
 [assembly: CollectionBehavior(DisableTestParallelization = true)]
 
 namespace VehicleFleetSimulator.Tests;

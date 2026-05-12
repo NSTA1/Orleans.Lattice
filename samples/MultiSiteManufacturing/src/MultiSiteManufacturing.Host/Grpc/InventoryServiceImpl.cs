@@ -13,7 +13,7 @@ namespace MultiSiteManufacturing.Host.Grpc;
 /// </summary>
 /// <remarks>
 /// <c>WatchPart</c> and <c>WatchInventory</c> currently emit a single
-/// snapshot then await cancellation — real-time push lands in M7/M8
+/// snapshot then await cancellation - real-time push lands in M7/M8
 /// alongside the Blazor dashboard wiring.
 /// </remarks>
 public sealed class InventoryServiceImpl(FederationRouter router)
@@ -136,7 +136,7 @@ public sealed class InventoryServiceImpl(FederationRouter router)
         var state = await lattice.GetStateAsync(serial, cancellationToken);
         var facts = await lattice.GetFactsAsync(serial, cancellationToken);
 
-        // See DashboardBroadcaster.StageOf — "latest stage" is the
+        // See DashboardBroadcaster.StageOf - "latest stage" is the
         // lifecycle milestone of the newest fact (HLC-ascending list,
         // so facts[^1]), not merely the last ProcessStepCompleted.
         var latestStage = facts.Count == 0

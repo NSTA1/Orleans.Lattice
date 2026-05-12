@@ -7,7 +7,7 @@ namespace Orleans.Lattice;
 /// <see cref="LatticeMutation.Category"/> as
 /// <see cref="MutationCategory.Maintenance"/> for the duration of a
 /// library-internal structural mutation (resize / rebalance / compaction /
-/// internal rewrite). Public callers do not interact with this type —
+/// internal rewrite). Public callers do not interact with this type -
 /// observers read <see cref="LatticeMutation.Category"/> directly.
 /// </summary>
 /// <remarks>

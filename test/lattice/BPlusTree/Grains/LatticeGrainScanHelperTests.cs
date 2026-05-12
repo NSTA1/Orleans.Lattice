@@ -76,7 +76,7 @@ public class LatticeGrainScanHelperTests
         var result = LatticeGrain.ToSortedArray(input);
 
         Assert.That(result, Is.EqualTo(new[] { 1, 2, 4, 5, 8 }));
-        // Must be a copy — input is unchanged.
+        // Must be a copy - input is unchanged.
         Assert.That(input, Is.EqualTo(new List<int> { 5, 2, 8, 1, 4 }));
     }
 

@@ -2,7 +2,7 @@
 
 `ILattice.SetManyAtomicAsync(entries)` commits a batch of key-value pairs with
 all-or-nothing semantics: either every entry in the batch is durably written,
-or — on any failure — every already-committed entry in that batch is rolled
+or - on any failure - every already-committed entry in that batch is rolled
 back to its pre-saga value. The feature is implemented as a saga coordinator
 grain that wraps the existing per-key `SetAsync` path.
 
@@ -12,8 +12,8 @@ cases where partial application on failure is acceptable.
 ## Atomicity Guarantees
 
 This section describes the **atomicity** contract of the saga. For the
-reader-visibility model — the per-tree `ITxRegistryGrain` linearization
-point and how each read path consults it — see
+reader-visibility model - the per-tree `ITxRegistryGrain` linearization
+point and how each read path consults it - see
 [Consistency: Atomic visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster).
 The atomicity guarantee is **universal**: it holds within a single
 tree on the local cluster *and* across every cluster the tree
@@ -21,13 +21,13 @@ replicates to. Receiver-side replication routes prepared writes and
 the per-shard terminal mark through the same `ITxRegistryGrain`
 linearization point used locally, so a remote reader concurrent with
 replication of a `SetManyAtomicAsync` observes either zero or all of
-the saga's keys — never a partial view (see Consistency for details).
+the saga's keys - never a partial view (see Consistency for details).
 
 Given a batch `[(k₀, v₀), (k₁, v₁), …, (kₙ₋₁, vₙ₋₁)]`, a successful
 `SetManyAtomicAsync` call guarantees:
 
 1. **All-or-nothing commit.** On successful return every `kᵢ` holds `vᵢ` as
-   its last-writer-wins (LWW) value, or — if the saga failed — every `kᵢ`
+   its last-writer-wins (LWW) value, or - if the saga failed - every `kᵢ`
    holds the value it had before the saga started (its pre-saga value; for
    keys that did not exist before the saga, the key is tombstoned).
 2. **Sequential per-key ordering.** Each key is written at most once by the
@@ -52,10 +52,10 @@ Given a batch `[(k₀, v₀), (k₁, v₁), …, (kₙ₋₁, vₙ₋₁)]`, a s
   of atomic visibility. A `SetManyAtomicAsync` call is bound to a single
   tree (`ILattice`) and gives strict atomic visibility *within* that
   tree only. Operations that span multiple trees (separate `ILattice`
-  instances) require application-level coordination — Lattice does not
+  instances) require application-level coordination - Lattice does not
   offer a cross-tree saga primitive.
 - **Ordering across distinct sagas.** Two concurrent `SetManyAtomicAsync`
-  calls touching overlapping keys are resolved pairwise by LWW — the later
+  calls touching overlapping keys are resolved pairwise by LWW - the later
   HLC tick wins per key. There is no global transaction order.
 - **Compensation durability in every failure mode.** If compensation itself
   fails persistently (every retry attempt throws), the saga is marked
@@ -111,7 +111,7 @@ visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cl
 the terminal fan-out is best-effort lazy GC of each touched leaf's
 pending-tx bucket.
 
-### Phase 1 — Prepare
+### Phase 1 - Prepare
 
 The coordinator registers a **keepalive reminder** (1-minute period) so that a
 silo crash during any subsequent phase triggers reactivation and resumption
@@ -121,13 +121,13 @@ the batch and records each pre-saga value (including absence) in
 any write is the prerequisite for bounded-time compensation. The phase ends
 with a `WriteStateAsync` that flips the persisted phase to `Execute`.
 
-### Phase 2 — Execute
+### Phase 2 - Execute
 
 The coordinator walks the batch in order, calling `ILattice.SetAsync(key,
 value)` for each entry under an ambient `LatticePreparedContext.BeginScope()`.
 The leaf grain's commit pipeline observes the prepared-context flag and
 routes each per-key write into its in-memory `_pendingTx[txid]` bucket
-rather than into the visible `Entries` projection — so prepared writes
+rather than into the visible `Entries` projection - so prepared writes
 are **invisible to concurrent readers** for the duration of the
 prepare window. `NextIndex` is incremented and persisted after every
 successful step, so crash-resume can pick up exactly where it left off
@@ -135,7 +135,7 @@ without replaying committed prepares. Each step has a bounded retry
 budget (`MaxRetriesPerStep = 1`); a persistent fault pivots the saga
 into `Compensate` without re-throwing.
 
-### Phase 3 — Compensate (failure path only)
+### Phase 3 - Compensate (failure path only)
 
 The coordinator walks already-committed entries in **reverse** order. For
 each previously-existing key it calls `SetAsync(key, preValue)`; for each
@@ -159,7 +159,7 @@ lifecycle at which any reader, anywhere in the tree, can observe the
 saga's effect: every read path that finds a key in a leaf's pending-tx
 bucket dials back through the registry and resolves the read against
 the recorded outcome. There is no inter-leaf coordination beyond the
-registry write — the post-decision / pre-fan-out window is invisible
+registry write - the post-decision / pre-fan-out window is invisible
 to readers because the registry is the single tree-wide linearization
 point.
 
@@ -168,12 +168,12 @@ After the registry write the saga broadcasts `MutationKind.TxCommit`
 shard root the saga touched (`ShardRootGrain.AppendTxTerminalAsync`
 → per-leaf `ApplyTxCommit` / `ApplyTxAbort`). The terminals drain
 each leaf's pending-tx bucket into visible `Entries` (commit) or drop
-the prepared values (abort) — this is **best-effort lazy GC of the
+the prepared values (abort) - this is **best-effort lazy GC of the
 pending bucket**, not the visibility primitive. Readers that race the
 fan-out continue to observe the registry-recorded outcome via
 dial-back until their pending entries are drained.
 
-### Phase 4 — Complete
+### Phase 4 - Complete
 
 Whether the saga succeeds or rolls back, it ends by writing `Phase =
 Completed`, unregistering the keepalive reminder, arming the retention
@@ -184,7 +184,7 @@ that every touched leaf has applied its terminal, and calling
 `DeactivateOnIdle`. Failed sagas preserve `FailureMessage` so a client
 that re-invokes the same grain key receives the original failure via
 `InvalidOperationException`. The `ForgetAsync` cleanup is best-effort
-— a transient failure leaves a tombstone in the registry that
+- a transient failure leaves a tombstone in the registry that
 amortises against the next saga on the same tree.
 
 ## Crash-Recovery Timeline
@@ -200,7 +200,7 @@ amortises against the next saga on the same tree.
 
 - A saga of size *N* issues approximately *2N* + 3 Orleans calls: *N*
   pre-saga reads, *N* writes, and 3 `WriteStateAsync` calls on the saga's own
-  state — plus one registry write (`MarkCommittedAsync` /
+  state - plus one registry write (`MarkCommittedAsync` /
   `MarkAbortedAsync`), one per-shard terminal fan-out RPC, and one
   registry `ForgetAsync` cleanup. For large batches where atomicity is
   not required, prefer the parallel `SetManyAsync`.
@@ -213,7 +213,7 @@ amortises against the next saga on the same tree.
   single-key reads, a single batched `GetStatusManyAsync` per leaf for
   scans, or a single `SnapshotAsync` per multi-shard fan-out (stamped
   onto an ambient context so every leaf in the scan reuses it). The
-  coordinator does not block, lock, or serialise reads — the registry
+  coordinator does not block, lock, or serialise reads - the registry
   RPC is the entire visibility cost.
 
 ## Caller-supplied idempotency keys
@@ -222,7 +222,7 @@ The default `SetManyAtomicAsync(entries)` overload generates a fresh
 `Guid` per call as the saga's `operationId`. On a transport-level failure
 (silo restart mid-call, client-side timeout, transient network error) the
 client has no way to re-attach to the in-flight saga and must treat the
-call as failed — the original saga may still commit server-side.
+call as failed - the original saga may still commit server-side.
 
 The `SetManyAtomicAsync(entries, operationId)` overload takes a stable
 caller-supplied idempotency key, which maps directly to the saga grain
@@ -230,13 +230,13 @@ identity (`{treeId}/{operationId}`). Re-submitting the same
 `operationId` re-attaches to the original saga:
 
 - If it has already reached a terminal state, the second call returns
-  immediately (or rethrows the original terminal failure) — the client
+  immediately (or rethrows the original terminal failure) - the client
   observes the original outcome.
 - If it is still in flight, the second call awaits the saga's terminal
   state.
 
 This turns a transport-level failure into a recoverable client-side retry
-— the caller simply calls again with the same `operationId`.
+- the caller simply calls again with the same `operationId`.
 
 ```csharp verify
 string orderId = "42";
@@ -262,14 +262,14 @@ first call. The saga persists a SHA-256 fingerprint of the sorted key
 set during `Prepare`; a subsequent call reusing the same `operationId`
 with a different key set (added, removed, or renamed keys) throws
 `InvalidOperationException`. Reordering keys or changing their values
-is allowed — the fingerprint hashes the sorted key list only, so the
+is allowed - the fingerprint hashes the sorted key list only, so the
 same logical retry with a slightly-different serialized payload is
 accepted as idempotent.
 
 ### Validation
 
 - `operationId` must be non-null, non-empty, and non-whitespace.
-- `operationId` must not contain `'/'` — reserved as the grain-key
+- `operationId` must not contain `'/'` - reserved as the grain-key
   separator between tree ID and operation ID.
 
 Both constraints throw `ArgumentException` at submission time.
@@ -280,7 +280,7 @@ Completed saga state is retained for
 `LatticeOptions.AtomicWriteRetention` (default 48 hours) so delayed
 retries within the window still observe the original outcome. After
 the window, the saga grain's state is cleared and its activation
-deactivates — the same `operationId` then becomes eligible for a fresh
+deactivates - the same `operationId` then becomes eligible for a fresh
 saga. Set the option to `Timeout.InfiniteTimeSpan` to disable
 retention cleanup (completed saga state then lives forever, at the
 cost of unbounded storage growth).
@@ -291,7 +291,7 @@ A caller that wraps `SetManyAtomicAsync` in
 `LatticeVectorClockContext.With(...)` (or `LatticeOriginContext.With(...)`)
 has the ambient frontier captured **once** on the saga's first `Prepare`
 and re-stamped onto every per-key write the saga issues during `Execute`
-— including any compensation rewrites, which restore each key's
+- including any compensation rewrites, which restore each key's
 pre-saga origin and frontier captured alongside its pre-saga value. The
 saga guarantees that every emit in the batch carries the **identical**
 `VectorClock` (and identical `OriginClusterId`), closing per-key drift a
@@ -330,13 +330,13 @@ batch). The size is captured once on the first `Prepare` from
 `Operations.Count`, persisted on the saga grain's state alongside the
 existing capture-once slots, and re-stamped onto Orleans
 `RequestContext` via the ambient `LatticeAtomicBatchContext` helper at
-the head of every per-key call the saga issues — including
+the head of every per-key call the saga issues - including
 compensation rolls, which inherit the original prepare's index for
 each key. Single-key writes outside a saga emit `0` / `0` (the
 "not-in-a-saga" sentinel).
 
 These two slots are **observability metadata about the saga's shape**
-— they let a downstream observer (a change-feed consumer, a
+- they let a downstream observer (a change-feed consumer, a
 mutation-observer pipeline, an audit log) recognise that several
 mutations belong to the same enclosing batch and reason about
 batch-level invariants without coordinating with the producer. They
@@ -359,9 +359,9 @@ but are not consumed by the current apply path. See
 
 ## Related
 
-- [API Reference](api.md) — full `SetManyAtomicAsync` signature and typed
+- [API Reference](api.md) - full `SetManyAtomicAsync` signature and typed
   extensions.
-- [State Primitives](state-primitives.md) — HLC and LWW semantics the saga
+- [State Primitives](state-primitives.md) - HLC and LWW semantics the saga
   relies on for compensation correctness.
-- [Chaos Tests](chaos-tests.md) — atomic-write workload exercised under
+- [Chaos Tests](chaos-tests.md) - atomic-write workload exercised under
   concurrent splits and fault injection.

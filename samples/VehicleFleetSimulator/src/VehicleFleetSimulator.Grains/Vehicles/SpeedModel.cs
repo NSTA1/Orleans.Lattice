@@ -23,8 +23,8 @@ public static class SpeedModel
     /// <summary>
     /// Fraction of the segment length on each side that counts as "near a city". Using a fraction
     /// rather than a fixed kilometre value makes the slow-down/ease-out behaviour scale naturally
-    /// with segment distance — a 30 km hop has a 3 km approach window, a 500 km cruise has a 50 km
-    /// one — so vehicles spend a similar proportion of every leg in the approach regime.
+    /// with segment distance - a 30 km hop has a 3 km approach window, a 500 km cruise has a 50 km
+    /// one - so vehicles spend a similar proportion of every leg in the approach regime.
     /// </summary>
     public const double NearCityFraction = 0.10;
 

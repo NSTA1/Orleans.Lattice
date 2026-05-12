@@ -55,7 +55,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// reactivation), so the activation hook surfaces the exception
 /// rather than swallowing it. Cursor-publish errors remain swallowed
 /// (the cursor is monotonic and the next foreground flush retries
-/// via the lazy-on-flush path) — that contract did not change.
+/// via the lazy-on-flush path) - that contract did not change.
 /// </para>
 /// <para>
 /// V1 single-partition assumption: the materialiser reads WAL
@@ -101,7 +101,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
     {
-        // Step 1 — drive the dormant ILeafProjection.Apply seam over
+        // Step 1 - drive the dormant ILeafProjection.Apply seam over
         // the WAL slice between the persisted checkpoint and the
         // current head. Failures propagate: a leaf that comes online
         // with a stale projection silently violates the saga
@@ -110,7 +110,7 @@ internal sealed partial class BPlusLeafGrain
         // from a half-applied state.
         var advanced = await ReplayWalSinceCheckpointAsync(cancellationToken);
 
-        // Step 2 — eagerly publish the cursor IFF the materialiser did
+        // Step 2 - eagerly publish the cursor IFF the materialiser did
         // not already advance the checkpoint. SetCheckpointOffsetAsync
         // routes through FlushPendingCheckpointAsync which already
         // publishes the cursor on every persist; an explicit publish
@@ -140,7 +140,7 @@ internal sealed partial class BPlusLeafGrain
             // monotonic so the next successful foreground flush
             // catches up via the lazy-on-flush path. Materialiser
             // failures, in contrast, are fatal (they propagate above)
-            // because correctness — not progress — is at stake.
+            // because correctness - not progress - is at stake.
             var logger = context.ActivationServices?
                 .GetService<ILoggerFactory>()?
                 .CreateLogger<BPlusLeafGrain>();
@@ -180,7 +180,7 @@ internal sealed partial class BPlusLeafGrain
     /// [<see cref="State.LeafNodeState.LowKeyInclusive"/>,
     /// <see cref="State.LeafNodeState.HighKeyExclusive"/>) range. The
     /// filter is keyed on persisted ownership identity, not on
-    /// authorship — a leaf born from a split must apply WAL entries
+    /// authorship - a leaf born from a split must apply WAL entries
     /// that fall in its current range even when those entries were
     /// authored by the donor pre-split (the rebuild-from-WAL
     /// scenario). DeleteRange / TxCommit / TxAbort are applied
@@ -356,7 +356,7 @@ internal sealed partial class BPlusLeafGrain
     ///     the leaf's owning shard <em>and</em> the entry's
     ///     <see cref="LatticeMutation.Key"/> falls in the leaf's
     ///     persisted ownership range. The range check is open on
-    ///     either side — a <see langword="null"/> bound means "no
+    ///     either side - a <see langword="null"/> bound means "no
     ///     constraint on that side", used for the chain's leftmost
     ///     and rightmost leaves and for legacy state shapes that
     ///     pre-date the slot. Keying on key-range (not on authoring
@@ -367,7 +367,7 @@ internal sealed partial class BPlusLeafGrain
     ///     leaves whose <see cref="State.LeafNodeState.ShardIndex"/>
     ///     slot is null apply unconditionally on the shard axis;
     ///     leaves with both range bounds null apply unconditionally
-    ///     on the range axis — both axes preserve the legacy V1
+    ///     on the range axis - both axes preserve the legacy V1
     ///     single-leaf-per-shard semantics so a legacy-shaped state
     ///     must not start dropping its own writes after a binary
     ///     upgrade.
@@ -388,7 +388,7 @@ internal sealed partial class BPlusLeafGrain
     ///     pending bucket is empty a trivial no-op.
     ///   </item>
     ///   <item>
-    ///     Unknown <see cref="MutationKind"/> values are dropped —
+    ///     Unknown <see cref="MutationKind"/> values are dropped -
     ///     defensive forward-compat against future kinds whose replay
     ///     semantics the materialiser has not been taught.
     ///   </item>

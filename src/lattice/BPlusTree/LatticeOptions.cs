@@ -9,8 +9,8 @@ namespace Orleans.Lattice;
 /// The unnamed (default) instance applies to all trees that do not have a
 /// named override.
 /// <para>
-/// Structural sizing — the number of keys per leaf, the number of children
-/// per internal node, and the shard count — is <em>not</em> configured here.
+/// Structural sizing - the number of keys per leaf, the number of children
+/// per internal node, and the shard count - is <em>not</em> configured here.
 /// Those values are pinned in the internal tree registry at first-use
 /// (seeded from the canonical defaults in
 /// <see cref="Orleans.Lattice.BPlusTree.LatticeConstants"/>) and are mutable
@@ -55,7 +55,7 @@ public class LatticeOptions
     /// <summary>
     /// Minimum time between consecutive delta refreshes from the primary leaf
     /// in the <c>LeafCacheGrain</c>. When set to <see cref="TimeSpan.Zero"/>
-    /// (the default), every read triggers a delta refresh — the version-vector
+    /// (the default), every read triggers a delta refresh - the version-vector
     /// comparison on the primary is cheap but the RPC overhead remains. Setting
     /// a non-zero value (e.g. 100 ms) allows the cache to serve reads from its
     /// local dictionary without contacting the primary, trading freshness for
@@ -72,7 +72,7 @@ public class LatticeOptions
     /// <summary>Default value for <see cref="KeysPageSize"/>.</summary>
     public const int DefaultKeysPageSize = 512;
 
-    /// <summary>Default value for <see cref="CacheTtl"/> (zero — refresh on every read).</summary>
+    /// <summary>Default value for <see cref="CacheTtl"/> (zero - refresh on every read).</summary>
     public static readonly TimeSpan DefaultCacheTtl = TimeSpan.Zero;
 
     /// <summary>
@@ -110,7 +110,7 @@ public class LatticeOptions
     /// polls each physical shard's hotness counters (<see cref="IShardRootGrain.GetHotnessAsync"/>)
     /// and triggers an online adaptive split when the observed
     /// operations-per-second exceeds <see cref="HotShardOpsPerSecondThreshold"/>.
-    /// Splits happen fully online via shadow-writing — no shard is ever taken
+    /// Splits happen fully online via shadow-writing - no shard is ever taken
     /// offline. Set to <c>false</c> to disable autonomic splitting entirely.
     /// </summary>
     public bool AutoSplitEnabled { get; set; } = DefaultAutoSplitEnabled;
@@ -154,7 +154,7 @@ public class LatticeOptions
     /// <summary>
     /// Maximum number of autonomic splits that can be in flight concurrently
     /// for a single tree. The monitor refuses to start a new split while this
-    /// many are already active. Defaults to 2 — splits are I/O-bounded by the
+    /// many are already active. Defaults to 2 - splits are I/O-bounded by the
     /// drain phase but small enough that two parallel splits typically saturate
     /// neither storage nor the coordinator silo. Set to <c>1</c> for the most
     /// conservative behavior, or higher when many shards are simultaneously
@@ -173,7 +173,7 @@ public class LatticeOptions
     /// in parallel shortens total reshard time at the cost of proportionally
     /// higher background drain I/O. Splits dispatched by the reshard
     /// coordinator operate independently of those triggered autonomically
-    /// by <c>HotShardMonitorGrain</c> — the two caps compose additively.
+    /// by <c>HotShardMonitorGrain</c> - the two caps compose additively.
     /// </summary>
     public int MaxConcurrentMigrations { get; set; } = DefaultMaxConcurrentMigrations;
 
@@ -189,7 +189,7 @@ public class LatticeOptions
     /// Higher values shorten total snapshot duration at the cost of
     /// proportionally higher background drain I/O and memory on the
     /// coordinator silo. The snapshot remains crash-safe and idempotent
-    /// under any cap — re-running converges via CRDT LWW.
+    /// under any cap - re-running converges via CRDT LWW.
     /// </summary>
     public int MaxConcurrentDrains { get; set; } = DefaultMaxConcurrentDrains;
 
@@ -202,7 +202,7 @@ public class LatticeOptions
     /// target shard during drain. Larger values reduce per-call overhead;
     /// smaller values bound peak memory on the coordinator silo and the size
     /// of the Orleans grain message. The drain phase remains idempotent under
-    /// any chunking — re-running converges via CRDT LWW.
+    /// any chunking - re-running converges via CRDT LWW.
     /// </summary>
     public int SplitDrainBatchSize { get; set; } = DefaultSplitDrainBatchSize;
 
@@ -293,7 +293,7 @@ public class LatticeOptions
     /// <summary>
     /// Practical lower bound for <see cref="VersionVectorRetention"/> below
     /// which pruning may drop entries that are still causally relevant. Not
-    /// enforced — provided as a reference constant.
+    /// enforced - provided as a reference constant.
     /// </summary>
     public static readonly TimeSpan DefaultMinVersionVectorRetention = TimeSpan.FromHours(1);
 
@@ -344,7 +344,7 @@ public class LatticeOptions
     /// persisted projection checkpoint and the current write-ahead-log
     /// head exceeds this budget.
     /// <para>
-    /// The seam itself ships dormant — the leaf grain still writes through
+    /// The seam itself ships dormant - the leaf grain still writes through
     /// its existing storage provider on every commit. This budget becomes
     /// observable when the WAL-as-sole-commit-point promotion lands and
     /// the activation path begins consulting the persisted checkpoint.
@@ -436,7 +436,7 @@ public class LatticeOptions
     /// Number of WAL partitions per tree. Each partition is an independent
     /// per-shard append-only log; the foreground commit-log writer hashes
     /// the mutation key modulo this value to pick the partition. Defaults
-    /// to <see cref="DefaultWalPartitions"/> (1) — the dominant
+    /// to <see cref="DefaultWalPartitions"/> (1) - the dominant
     /// single-cluster shape. Increase to fan out WAL throughput across
     /// independent grains when a single partition becomes the bottleneck.
     /// </summary>
@@ -479,7 +479,7 @@ public class LatticeOptions
     /// WAL garbage collector (<see cref="ILatticeWalGc"/>) trims entries
     /// whose <see cref="Orleans.Lattice.Primitives.HybridLogicalClock.WallClockTicks"/>
     /// is older than <c>now - WalRetention</c> regardless of consumer
-    /// cursor position — bounding worst-case disk usage even when a
+    /// cursor position - bounding worst-case disk usage even when a
     /// registered consumer is hopelessly behind. The lagging consumer
     /// then "falls off the log" on its next read, surfacing the gap to
     /// the auto-bootstrap trigger (replication-side concern).

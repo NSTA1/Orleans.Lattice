@@ -23,7 +23,7 @@
     /// <summary>
     /// Authoritative starting value. The component snapshots this on first render and again
     /// any time it changes (e.g. when the server-side value is loaded asynchronously after
-    /// the page first renders). It is *not* a continuous binding — once the user starts
+    /// the page first renders). It is *not* a continuous binding - once the user starts
     /// dragging, the parent must not echo each intermediate value back through this parameter.
     /// </summary>
     [Parameter, EditorRequired] public int InitialValue { get; set; }

@@ -42,7 +42,7 @@
         @if (Client.ConnectionState is FleetConnectionState.Error or FleetConnectionState.Disconnected)
         {
             <div class="fleet-banner">
-                Connection lost — retrying every @((int)FleetStreamClient.ReconnectInterval.TotalSeconds) seconds.
+                Connection lost - retrying every @((int)FleetStreamClient.ReconnectInterval.TotalSeconds) seconds.
             </div>
         }
         else if (Client.ConnectionState == FleetConnectionState.Connecting && _layout is null)
@@ -291,7 +291,7 @@
                 // The canvas is updated every tick by the JS side, but the Razor markup that
                 // displays the live vehicle count only re-renders when we ask it to. Without
                 // this, the pill is stuck at "0 vehicles" forever even though the canvas is
-                // happily drawing dots — there is no implicit signal from FleetState to Blazor.
+                // happily drawing dots - there is no implicit signal from FleetState to Blazor.
                 var currentCount = Fleet.Count;
                 if (currentCount != lastRenderedCount)
                 {

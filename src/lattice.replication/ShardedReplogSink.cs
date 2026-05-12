@@ -23,8 +23,8 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// On a successful append, the sink rings each per-<c>(tree, peer)</c>
 /// shipper grain's <see cref="IReplicationShipperGrain.OnDoorbellAsync"/>
-/// — gated on <see cref="LatticeReplicationOptions.ShipDoorbellEnabled"/>
-/// — so the outbound ship loop short-circuits its next steady-state
+/// - gated on <see cref="LatticeReplicationOptions.ShipDoorbellEnabled"/>
+/// - so the outbound ship loop short-circuits its next steady-state
 /// timer wait and pumps immediately. Doorbell fan-out is best-effort:
 /// any per-peer failure is logged at <c>Trace</c> and swallowed so the
 /// commit path never fails on a doorbell ring failure. A missed
@@ -69,7 +69,7 @@ internal sealed class ShardedReplogSink(
         // its own cluster id". A subsequent emit (range delete fan-out,
         // multi-leaf saga, follow-on write) reads the advanced value
         // when it stamps its VectorClock from the cache. Range deletes
-        // (HLC.Zero) never advance the diagonal — pointwise-max in the
+        // (HLC.Zero) never advance the diagonal - pointwise-max in the
         // cache leaves it unchanged. Skipped entirely for foreign-origin
         // entries because foreign origins are advanced post-apply via
         // AdvanceForeign, not post-WAL-append.
@@ -82,7 +82,7 @@ internal sealed class ShardedReplogSink(
 
         // Doorbell fan-out: wake every configured shipper for
         // this tree so newly-committed entries reach peers at
-        // sub-second latency. Best-effort and fire-and-forget — the
+        // sub-second latency. Best-effort and fire-and-forget - the
         // commit-path semantics never depend on a doorbell ring.
         if (resolved.ShipDoorbellEnabled
             && resolved.ReplicationPeers is { } peers

@@ -8,10 +8,10 @@ namespace Orleans.Lattice;
 /// </summary>
 /// <remarks>
 /// <para>
-/// User-driven writes — <c>SetAsync</c>, <c>DeleteAsync</c>,
+/// User-driven writes - <c>SetAsync</c>, <c>DeleteAsync</c>,
 /// <c>DeleteRangeAsync</c>, <c>SetIfVersionAsync</c>, <c>GetOrSetAsync</c>,
 /// <c>SetManyAsync</c>, <c>SetManyAtomicAsync</c>, <c>BulkLoadAsync</c>,
-/// and saga compensation rolls — emit with
+/// and saga compensation rolls - emit with
 /// <see cref="MutationCategory.User"/> (the default).
 /// </para>
 /// <para>
@@ -25,7 +25,7 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// This classification is independent of
-/// <see cref="LatticeMutation.OriginClusterId"/> — a remote-origin
+/// <see cref="LatticeMutation.OriginClusterId"/> - a remote-origin
 /// maintenance mutation would still be
 /// <see cref="MutationCategory.Maintenance"/> and still skip the WAL.
 /// </para>

@@ -17,7 +17,7 @@ public class LatticeReplicationDeadLettersTests
 
         // ReplicationApplier is sealed; Substitute.ForPartsOf is impossible
         // here because it has no parameterless ctor. We construct it with
-        // substituted dependencies — the inner is only invoked by ReplayAsync,
+        // substituted dependencies - the inner is only invoked by ReplayAsync,
         // which our tests cover by stubbing TryGetAsync to return null (so
         // the inner is never called) for the unit-level tests.
         var innerFactory = Substitute.For<IGrainFactory>();

@@ -1,4 +1,4 @@
-# Grafana provisioning template — Prometheus datasource for Orleans.Lattice dashboards.
+# Grafana provisioning template - Prometheus datasource for Orleans.Lattice dashboards.
 # Copy to /etc/grafana/provisioning/datasources/ and customise the URL for your environment.
 apiVersion: 1
 datasources:

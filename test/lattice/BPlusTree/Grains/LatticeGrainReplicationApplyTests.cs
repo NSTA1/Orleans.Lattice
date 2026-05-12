@@ -11,6 +11,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// verbatim on the persisted <see cref="Primitives.LwwValue{T}"/>.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public partial class LatticeGrainReplicationApplyTests
 {
     private ClusterFixture _fixture = null!;
@@ -257,7 +258,7 @@ public partial class LatticeGrainReplicationApplyTests
     }
 
     // ------------------------------------------------------------------
-    // Batched apply path — IReplicationApplyGrain.ApplyMergeManyAsync.
+    // Batched apply path - IReplicationApplyGrain.ApplyMergeManyAsync.
     // Mirrors the per-entry test surface above so the bit-identical
     // contract claimed by BuildApplyMergeLww is exercised end-to-end on
     // a real cluster: validation guards, persisted shape, VC / origin /
@@ -595,7 +596,7 @@ public partial class LatticeGrainReplicationApplyTests
             }
         }
         Assume.That(otherKey, Is.Not.Null,
-            "ClusterFixture's default shard count is 1 — multi-shard fan-out cannot be exercised here");
+            "ClusterFixture's default shard count is 1 - multi-shard fan-out cannot be exercised here");
 
         var items = new[]
         {

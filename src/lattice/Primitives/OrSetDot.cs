@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Primitives;
 /// A single causally-tagged add in an <see cref="OrSet"/>: a unique
 /// <c>(<see cref="ReplicaId"/>, <see cref="Counter"/>)</c> dot stamped at
 /// the moment the add was authored. The dot context is what gives an OR-Set
-/// its convergence under concurrent active-active updates — a remove deletes
+/// its convergence under concurrent active-active updates - a remove deletes
 /// only the dots it observed, so a concurrent add on another replica with a
 /// distinct dot survives the merge.
 /// </summary>

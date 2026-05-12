@@ -2,8 +2,8 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// An immutable, point-in-time snapshot of an internal node's routing
-/// table — the parallel <see cref="SeparatorKeys"/> / <see cref="ChildIds"/>
-/// arrays plus the <see cref="ChildrenAreLeaves"/> flag — produced by
+/// table - the parallel <see cref="SeparatorKeys"/> / <see cref="ChildIds"/>
+/// arrays plus the <see cref="ChildrenAreLeaves"/> flag - produced by
 /// <c>IBPlusInternalGrain.GetRoutingTableAsync</c> and cached per
 /// <c>ShardRootGrain</c> activation. The snapshot enables the shard root
 /// to perform key-to-child routing locally instead of paying a cross-grain
@@ -11,7 +11,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// </summary>
 /// <remarks>
 /// The snapshot is invalidated by the shard root after every
-/// <c>AcceptSplitAsync</c> call — the only path that mutates an internal
+/// <c>AcceptSplitAsync</c> call - the only path that mutates an internal
 /// node's children list outside of fresh-construction (which has no prior
 /// cache entry to invalidate). Cache miss is always safe: the snapshot
 /// is simply re-fetched on demand.
@@ -38,7 +38,7 @@ internal readonly record struct RoutingTableSnapshot
     /// <summary>
     /// Routes a key to its child grain by finding the rightmost separator ≤ key.
     /// Mirrors <c>InternalNodeState.Route</c>; the two implementations must
-    /// stay in lockstep — any change to the routing semantics on the server
+    /// stay in lockstep - any change to the routing semantics on the server
     /// side requires the same change here, otherwise the local cache lookup
     /// and the cross-grain fallback diverge.
     /// </summary>

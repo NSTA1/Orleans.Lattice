@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// Test cluster fixture that forces multi-page scans by setting a very small
 /// <c>KeysPageSize</c>. Used by tests to exercise the in-line reconciliation
 /// path where <c>MovedAwaySlots</c> is reported on a non-first page of a
-/// scan — a code path that the default 512-page-size fixture cannot reach
+/// scan - a code path that the default 512-page-size fixture cannot reach
 /// with small seed sets.
 /// </summary>
 public sealed class MultiPageFourShardClusterFixture

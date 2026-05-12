@@ -13,11 +13,11 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <summary>
 /// Regression tests for audit bugs #4 and #5:
 /// <list type="bullet">
-///   <item>Bug #4 — <see cref="TreeMergeGrain"/> drains an entire source shard's leaf chain
+///   <item>Bug #4 - <see cref="TreeMergeGrain"/> drains an entire source shard's leaf chain
 ///   into a single in-memory dictionary before fanning out to target shards, which can OOM
 ///   on shards holding millions of keys. The merge must flush each leaf's delta to target
 ///   shards before loading the next leaf.</item>
-///   <item>Bug #5 — <see cref="TreeMergeGrain"/> constructs source and target shard-root grain
+///   <item>Bug #5 - <see cref="TreeMergeGrain"/> constructs source and target shard-root grain
 ///   keys from the logical tree ids and iterates <c>0..options.ShardCount</c>, bypassing the
 ///   registry alias + current <see cref="ShardMap"/>. The merge must resolve aliases on both
 ///   sides and iterate physical shard indices from the map.</item>
@@ -207,7 +207,7 @@ public partial class TreeMergeGrainTests
 
         state.State.InProgress = true;
         state.State.SourceTreeId = SourceTreeId;
-        // With the fix, SourceShardCount is irrelevant — the grain must discover
+        // With the fix, SourceShardCount is irrelevant - the grain must discover
         // physical shards from the map. We intentionally set it to a value that
         // would skip shard 7 under the old iteration.
         state.State.SourceShardCount = 2;
@@ -225,7 +225,7 @@ public partial class TreeMergeGrainTests
         // Regression: when a source shard's merge has failed and
         // <see cref="TreeMergeState.ShardRetries"/> has reached the poison
         // cap (MaxRetriesPerShard = 2), the next tick must SKIP the shard,
-        // advance the cursor, and reset the retry counter — without
+        // advance the cursor, and reset the retry counter - without
         // running another merge attempt. Before the fix, the grain's
         // cursor advanced past failing shards immediately on the first
         // exception, so a single transient storage hiccup silently
@@ -245,7 +245,7 @@ public partial class TreeMergeGrainTests
         // Throwing from GetLeftmostLeafIdAsync would normally burn a retry,
         // but we seed ShardRetries at the cap so the grain must NOT call it.
         sourceShard.GetLeftmostLeafIdAsync().Returns<Task<GrainId?>>(
-            _ => throw new InvalidOperationException("should not be called — shard is poisoned"));
+            _ => throw new InvalidOperationException("should not be called - shard is poisoned"));
         grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/0").Returns(sourceShard);
         SetupTargetShardMocks(grainFactory, TargetTreeId, ShardCount);
 

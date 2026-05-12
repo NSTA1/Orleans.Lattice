@@ -1,7 +1,7 @@
 namespace MultiSiteManufacturing.Host.Domain;
 
 /// <summary>
-/// Metadata for <see cref="ProcessSite"/> enum values — display names, stage
+/// Metadata for <see cref="ProcessSite"/> enum values - display names, stage
 /// affinity, and the ordered list used by UI surfaces.
 /// </summary>
 public static class ProcessSiteInfo

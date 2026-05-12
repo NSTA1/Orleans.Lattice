@@ -112,11 +112,11 @@ if (gateRequested && !summary.HasCriticalValidationErrors)
 
     if (!File.Exists(baselinePath))
     {
-        Console.WriteLine($"[regression-gate] baseline file not found: {baselinePath} — skipping gate.");
+        Console.WriteLine($"[regression-gate] baseline file not found: {baselinePath} - skipping gate.");
     }
     else if (!File.Exists(resultsPath))
     {
-        Console.WriteLine($"[regression-gate] current results not found: {resultsPath} — skipping gate.");
+        Console.WriteLine($"[regression-gate] current results not found: {resultsPath} - skipping gate.");
     }
     else
     {

@@ -1,4 +1,4 @@
-# Vehicle Fleet Simulator — full local stack (Azurite + Silo + Api + Ui).
+# Vehicle Fleet Simulator - full local stack (Azurite + Silo + Api + Ui).
 #
 # Usage:
 #   docker compose up --build
@@ -7,7 +7,7 @@
 # The Silo and Api both reach Azurite via the "azurite" service hostname; the
 # UseDevelopmentStorage=true shortcut targets 127.0.0.1, so we set explicit
 # endpoints in the connection-string env vars below. The Ui is a Blazor WASM
-# SPA served by nginx — it talks to the Api from the user's browser at
+# SPA served by nginx - it talks to the Api from the user's browser at
 # http://localhost:8080 (the host-side mapping), not over the compose network.
 
 services:
@@ -72,7 +72,7 @@ services:
       - "8081:8081"
 
   ui:
-    # Blazor WebAssembly client served by nginx. Pure static hosting — the gRPC-Web
+    # Blazor WebAssembly client served by nginx. Pure static hosting - the gRPC-Web
     # connection is opened from the user's browser straight at the api container's
     # host-mapped port (8080), so the ui service has no network dependency on the
     # api beyond depends_on for predictable startup ordering.

@@ -11,6 +11,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// pinned to shard 0 is a no-op and the routing assertion is vacuous.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class BulkLoadShardMapRoutingTests
 {
     private FourShardClusterFixture _fixture = null!;
@@ -71,7 +72,7 @@ public class BulkLoadShardMapRoutingTests
             keys.Add(k);
         Assert.That(keys, Has.Count.EqualTo(count));
 
-        // Every entry landed on the pinned shard — proves the custom map was
+        // Every entry landed on the pinned shard - proves the custom map was
         // used for routing during streaming bulk-load. Under the default 4-shard
         // hashed map, CountPerShardAsync would return length 4 with values
         // spread across all shards. Under the pinned map, GetPhysicalShardIndices

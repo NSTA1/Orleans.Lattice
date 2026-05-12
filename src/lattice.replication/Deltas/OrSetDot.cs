@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Replication;
 /// A single entry in an observed-remove (OR) set delta: a unique
 /// (replica id, counter) "dot" attached to an element. The dot context
 /// allows concurrent adds and removes of the same element across
-/// clusters to converge — a remove cancels exactly the dots it observed,
+/// clusters to converge - a remove cancels exactly the dots it observed,
 /// so a concurrent add on another replica with a different dot survives
 /// the merge.
 /// <para>

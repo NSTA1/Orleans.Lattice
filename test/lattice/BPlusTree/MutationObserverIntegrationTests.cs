@@ -11,6 +11,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <c>ShardRootGrain</c> → <c>BPlusLeafGrain</c> pipeline.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public sealed partial class MutationObserverIntegrationTests
 {
     private MutationObserverClusterFixture _fixture = null!;
@@ -103,7 +104,7 @@ public sealed partial class MutationObserverIntegrationTests
 
         // DeleteRange fires once per shard (not per user call). With a 4-shard
         // tree, we expect between 1 and ShardCount identical-payload events,
-        // all with the same Key / EndExclusiveKey — this is the documented
+        // all with the same Key / EndExclusiveKey - this is the documented
         // per-shard fan-out contract that replication consumers dedup on.
         LatticeMutation[] ranges = [];
         var deadline = DateTime.UtcNow.AddSeconds(3);
@@ -354,7 +355,7 @@ public sealed partial class MutationObserverIntegrationTests
         var m = await WaitForAsync(m =>
             m.Kind == MutationKind.Set && m.Key == "k" && m.TreeId == "obs-e2e-category");
         Assert.That(m.Category, Is.EqualTo(MutationCategory.User),
-            "Public ILattice write paths must default to User category — no internal site should be wrapping them in a maintenance scope.");
+            "Public ILattice write paths must default to User category - no internal site should be wrapping them in a maintenance scope.");
     }
 
     // ------------------------------------------------------------------

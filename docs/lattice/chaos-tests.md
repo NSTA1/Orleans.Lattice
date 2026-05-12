@@ -4,9 +4,9 @@ Orleans.Lattice ships a suite of integration tests that bombard a running
 cluster with concurrent reads, writes, scans, and topology mutations,
 then assert that the system's public correctness guarantees hold. They
 act as the end-to-end contract for the properties described in
-[Consistency](consistency.md) — specifically that the public `ILattice`
+[Consistency](consistency.md) - specifically that the public `ILattice`
 API is strongly consistent across arbitrary concurrent shard splits,
-online resizes, and online reshards — and that the recovery protocols
+online resizes, and online reshards - and that the recovery protocols
 (resumable splits, two-phase root promotion, shadow-write atomicity,
 shadow-forwarding, registry version stamping, idempotent bulk graft)
 converge correctly even when storage writes fail at random.
@@ -22,7 +22,7 @@ filter (`dotnet test --filter "TestCategory!=Chaos"`) skips them.
 | Chaos + storage faults | `ChaosWithFaultsIntegrationTests.cs` | Parametrized theory that injects random storage faults; asserts eventual convergence after the fault window closes. |
 | Chaos + online resize | `ChaosResizeIntegrationTests.cs` | Full-workload chaos while `ResizeAsync` changes fan-out in the background under `SnapshotMode.Online`. Exercises the `TreeResizeGrain` phase machine (Snapshot → Swap → Reject → Cleanup), shadow-forwarding on every source shard, and the alias swap. |
 | Chaos + online reshard | `ChaosReshardIntegrationTests.cs` | Full-workload chaos while `ReshardAsync` grows the physical shard count (4 → 8) in the background. Exercises the `TreeReshardGrain` migration loop, dispatch-budget clamping, `HotShardMonitorGrain` interlock, and `ShardMap` convergence when reshard-dispatched splits race with workload writes. |
-| Atomic-write reader isolation | `AtomicVisibilityChaosTests.cs` | Strict reader isolation: a continuous reader concurrent with `SetManyAtomicAsync` always observes either the full pre-saga snapshot, the full post-saga snapshot, or all keys hidden — never a partial view. |
+| Atomic-write reader isolation | `AtomicVisibilityChaosTests.cs` | Strict reader isolation: a continuous reader concurrent with `SetManyAtomicAsync` always observes either the full pre-saga snapshot, the full post-saga snapshot, or all keys hidden - never a partial view. |
 | Digest determinism under load | `ChaosDigestIntegrationTests.cs` | `ILattice.GetLeafProjectionDigestAsync` is byte-stable across repeated calls in a write-quiescent window after concurrent writer / scanner load, and per-shard `EntryCount` sums equal `CountAsync`. |
 
 ## The workload
@@ -62,19 +62,19 @@ flowchart LR
     Chaos --> Assert[Assert invariants]
 ```
 
-Worker categories (exact mix varies per test — see the runtime table):
+Worker categories (exact mix varies per test - see the runtime table):
 
-* **Point writers** — `SetAsync` on random universe keys.
-* **Bulk writers** — `SetManyAsync` with batches of 8 random keys
+* **Point writers** - `SetAsync` on random universe keys.
+* **Bulk writers** - `SetManyAsync` with batches of 8 random keys
   (happy-path / faults only).
-* **Point readers** — `GetAsync`; validates envelope if a value is returned.
-* **Bulk readers** — `GetManyAsync` for 16 random keys (happy-path /
+* **Point readers** - `GetAsync`; validates envelope if a value is returned.
+* **Bulk readers** - `GetManyAsync` for 16 random keys (happy-path /
   faults only).
-* **Scanners** — rotating `ScanKeysAsync`, `ScanEntriesAsync`, reverse scan,
+* **Scanners** - rotating `ScanKeysAsync`, `ScanEntriesAsync`, reverse scan,
   range scan. Each full-tree scan must yield exactly the universe with
   no duplicates and no unknown keys.
-* **Counters** — `CountAsync` must always equal the pinned universe size.
-* **Topology mutator** — test-specific:
+* **Counters** - `CountAsync` must always equal the pinned universe size.
+* **Topology mutator** - test-specific:
   * happy-path: every ~500 ms drives
     `ITreeShardSplitGrain.SplitAsync` + `RunSplitPassAsync` on a
     non-empty shard.
@@ -85,7 +85,7 @@ Worker categories (exact mix varies per test — see the runtime table):
   * reshard: initiates `ReshardAsync(8)` once at the window start and
     pumps `RunReshardPassAsync` + per-shard split passes to completion.
 
-## Test 1 — Happy-path chaos (`ChaosIntegrationTests`)
+## Test 1 - Happy-path chaos (`ChaosIntegrationTests`)
 
 This test establishes that `ILattice`'s consistency guarantees hold
 *during* the chaos window, not just after it closes. Every operation
@@ -108,9 +108,9 @@ observes a fully consistent view of the tree.
 These exception types surface from Orleans' streaming internals and are
 treated as retry signals, not failures:
 
-* `EnumerationAbortedException` — a stream cursor grain deactivated
+* `EnumerationAbortedException` - a stream cursor grain deactivated
   mid-iteration. The caller re-issues the scan.
-* `StaleShardRoutingException` — a `LatticeGrain` activation used a
+* `StaleShardRoutingException` - a `LatticeGrain` activation used a
   cached shard map after a concurrent split committed its swap. The
   framework retries once against the fresh map.
 
@@ -128,11 +128,11 @@ After the chaos window closes:
   schedule).
 * Zero envelope violations were observed *during* the window.
 
-## Test 2 — Chaos + storage faults theory (`ChaosWithFaultsIntegrationTests`)
+## Test 2 - Chaos + storage faults theory (`ChaosWithFaultsIntegrationTests`)
 
 This parametrized theory layers random storage faults on top of the same
 workload. Unlike the happy-path test, per-operation invariants are
-*weakened* during the fault window — arbitrary exceptions are tolerated
+*weakened* during the fault window - arbitrary exceptions are tolerated
 because a failed `WriteStateAsync` legitimately cascades into split
 aborts, stale routing, and count drift. Instead, the test asserts
 **eventual convergence**: once faults stop and the cluster quiesces,
@@ -190,7 +190,7 @@ storage fault cascades into many observable shapes:
   has an armed fault pending (skipped).
 
 Envelope violations (a value that doesn't start with `v-{index}-`) are
-**not** tolerated — CRDT LWW is supposed to preserve atomicity of the
+**not** tolerated - CRDT LWW is supposed to preserve atomicity of the
 value payload even when the wrapping write fails.
 
 ### Healing phase (`DrainAndHealAsync`)
@@ -205,7 +205,7 @@ passes complete exception-free**, bounded by a 15 s timeout. This loop:
 * Gives resumable splits and pending root promotions time to reach
   their `RunSplitPassAsync` keepalive tick and replay.
 * Exercises idempotent apply of `BulkGraft` and shadow `MergeManyAsync`
-  — a healing retry that re-writes the same value is a no-op under LWW.
+  - a healing retry that re-writes the same value is a no-op under LWW.
 
 ### Pass criteria (post-quiescence)
 
@@ -220,21 +220,21 @@ After healing:
 * Every workload category performed at least one operation; the
   injector armed at least one fault (for `p > 0`).
 
-## Test 3 — Chaos + online resize (`ChaosResizeIntegrationTests`)
+## Test 3 - Chaos + online resize (`ChaosResizeIntegrationTests`)
 
 This test targets the online resize path. A full concurrent workload
 runs against a seeded tree while `ResizeAsync` changes the B+ fan-out
 to `MaxLeafKeys = 16` / `MaxInternalChildren = 16` under
-`SnapshotMode.Online`. The entire resize — snapshot drain, alias swap,
-per-shard reject phase, cleanup — happens inside the chaos window.
+`SnapshotMode.Online`. The entire resize - snapshot drain, alias swap,
+per-shard reject phase, cleanup - happens inside the chaos window.
 
 ### Recovery surfaces exercised
 
 * `TreeResizeGrain` phase machine (Snapshot → Swap → Reject → Cleanup)
   under sustained traffic.
-* Shadow-forwarding on every source shard — live writes during the
+* Shadow-forwarding on every source shard - live writes during the
   drain must be mirrored to the destination with their original HLCs.
-* Alias swap — mid-flight `GetAsync` / `SetAsync` on a stateless-worker
+* Alias swap - mid-flight `GetAsync` / `SetAsync` on a stateless-worker
   `LatticeGrain` activation holding a stale alias must transparently
   re-resolve and retry.
 * Strongly-consistent `CountAsync` / `ScanKeysAsync` during the online
@@ -256,9 +256,9 @@ After the chaos window closes:
   was driven to completion.
 * Zero envelope violations observed during the window.
 
-## Test 4 — Chaos + online reshard (`ChaosReshardIntegrationTests`)
+## Test 4 - Chaos + online reshard (`ChaosReshardIntegrationTests`)
 
-This test targets the online reshard path — growing the physical shard
+This test targets the online reshard path - growing the physical shard
 count from 4 to 8 while the tree continues to serve traffic. The
 reshard is kicked off synchronously before the chaos timer starts (so
 cold-activation cost doesn't burn the window on slow Release CI
@@ -267,10 +267,10 @@ completion.
 
 ### Recovery surfaces exercised
 
-* `TreeReshardGrain` migration loop under sustained traffic —
+* `TreeReshardGrain` migration loop under sustained traffic -
   eligibility filtering, dispatch-budget clamping
   (`MaxConcurrentMigrations`), re-evaluation across ticks.
-* `HotShardMonitorGrain` interlock — the autonomic monitor must
+* `HotShardMonitorGrain` interlock - the autonomic monitor must
   suppress its own passes while a reshard is in flight.
 * `ShardMap` convergence when reshard-dispatched splits race with
   workload writes (shadow-write, drain, swap, reject, permanent
@@ -294,12 +294,12 @@ After the chaos window closes:
 * Every worker category performed at least one operation.
 * Zero envelope violations observed during the window.
 
-## Test 5 — Atomic-write reader isolation (`AtomicVisibilityChaosTests`)
+## Test 5 - Atomic-write reader isolation (`AtomicVisibilityChaosTests`)
 
 This test asserts the **universal reader-isolation invariant** for
 `SetManyAtomicAsync`: every poll of a continuous reader concurrent
 with an in-flight saga must observe either the full pre-saga snapshot,
-the full post-saga snapshot, or all keys hidden — never a partial view.
+the full post-saga snapshot, or all keys hidden - never a partial view.
 The invariant holds **per poll**, with no bounded-window caveat, across
 50 sequential saga rounds at a 10 ms reader cadence.
 
@@ -313,9 +313,9 @@ The invariant holds **per poll**, with no bounded-window caveat, across
 
 ### Workload
 
-* **Seed phase** — `SetAsync` for each of 16 keys (`atomic-00` … `atomic-15`) at round 0, followed by a single `SetManyAtomicAsync` at round 0 to land all keys through the saga path before reader rounds begin.
-* **Saga rounds** — 50 sequential rounds. Each round starts a continuous reader task that polls all 16 keys via `GetManyAsync` every 10 ms, and concurrently issues `SetManyAtomicAsync` with the post-round value envelope.
-* **Reader classification** — every poll is bucketed: `fullPre` (every key at the previous round's value), `fullPost` (every key at the new round's value), `fullHidden` (every key missing during the prepare → terminal window), or **split** (any mixed observation, which fails the test).
+* **Seed phase** - `SetAsync` for each of 16 keys (`atomic-00` … `atomic-15`) at round 0, followed by a single `SetManyAtomicAsync` at round 0 to land all keys through the saga path before reader rounds begin.
+* **Saga rounds** - 50 sequential rounds. Each round starts a continuous reader task that polls all 16 keys via `GetManyAsync` every 10 ms, and concurrently issues `SetManyAtomicAsync` with the post-round value envelope.
+* **Reader classification** - every poll is bucketed: `fullPre` (every key at the previous round's value), `fullPost` (every key at the new round's value), `fullHidden` (every key missing during the prepare → terminal window), or **split** (any mixed observation, which fails the test).
 
 ### Pass criteria
 
@@ -325,13 +325,13 @@ The invariant holds **per poll**, with no bounded-window caveat, across
 
 ### Tolerated transients
 
-The reader's `GetManyAsync` may observe `OperationCanceledException` at the round boundary; saga writes are not expected to surface any transient — the saga's own retry-on-stale-routing logic absorbs split / resize / reshard activity at the API layer.
+The reader's `GetManyAsync` may observe `OperationCanceledException` at the round boundary; saga writes are not expected to surface any transient - the saga's own retry-on-stale-routing logic absorbs split / resize / reshard activity at the API layer.
 
 ### Companion observability
 
 The `orleans.lattice.atomic_write.duration` (`Histogram<double>`, ms) and `orleans.lattice.atomic_write.batch_size` (`Histogram<int>`, `{entry}`) instruments are emitted on every saga terminal transition tagged `outcome=committed` / `compensated` / `failed`; pair them with `orleans.lattice.atomic_write.completed` to derive saga ops/sec and SLO percentiles when this fixture is run repeatedly. See [Metrics](metrics.md#saga--coordinator--lifecycle).
 
-## Test 6 — Digest determinism under load (`ChaosDigestIntegrationTests`)
+## Test 6 - Digest determinism under load (`ChaosDigestIntegrationTests`)
 
 This test exercises `ILattice.GetLeafProjectionDigestAsync` under
 sustained concurrent load and asserts two determinism invariants that
@@ -345,13 +345,13 @@ gate the digest's value as a cross-silo divergence detector:
 |---|---|
 | Digest hash is byte-stable across repeated calls when no writes occur in between | Hash function fed by a deterministically-ordered key+value enumeration over the leaf projection |
 | Sum of per-shard `EntryCount` equals `CountAsync` | Shard-level digest counts are accountable against the tree's own population view |
-| Digest computation is safe to call concurrently with foreground writer / scanner traffic | No exception is observed on any worker — digest rendering does not block or interfere with the read / write path |
+| Digest computation is safe to call concurrently with foreground writer / scanner traffic | No exception is observed on any worker - digest rendering does not block or interfere with the read / write path |
 
 ### Workload
 
-* **Seed phase** — 200 keys (`chaos-digest-{i:D5}`) preloaded with `SetAsync`.
-* **Chaos window (~8 s)** — 4 writer tasks rewriting random keys, 2 scanner tasks calling `KeysAsync`, 1 digest poller calling `GetLeafProjectionDigestAsync` for every shard in a tight loop.
-* **Quiesce phase** — after the chaos window closes, the digest is sampled twice in succession with no intervening writes.
+* **Seed phase** - 200 keys (`chaos-digest-{i:D5}`) preloaded with `SetAsync`.
+* **Chaos window (~8 s)** - 4 writer tasks rewriting random keys, 2 scanner tasks calling `KeysAsync`, 1 digest poller calling `GetLeafProjectionDigestAsync` for every shard in a tight loop.
+* **Quiesce phase** - after the chaos window closes, the digest is sampled twice in succession with no intervening writes.
 
 ### Pass criteria
 
@@ -364,7 +364,7 @@ gate the digest's value as a cross-silo divergence detector:
 
 * `EnumerationAbortedException` from the scanner's `KeysAsync` enumeration when a stream cursor grain deactivates mid-iteration.
 
-## Test 7 — Cross-cluster atomic-visibility chaos (`CrossClusterAtomicVisibilityChaosTests`)
+## Test 7 - Cross-cluster atomic-visibility chaos (`CrossClusterAtomicVisibilityChaosTests`)
 
 This test asserts the **cross-cluster receiver-side reader-isolation
 invariant** for `SetManyAtomicAsync`: a saga authored on one site and
@@ -418,21 +418,21 @@ The table below covers the four topology-mutation chaos fixtures (Tests 1–4). 
 
 | Surface | Happy path | Faults | Resize | Reshard |
 |---|:---:|:---:|:---:|:---:|
-| Concurrent reads/writes during split shadow phase | ✅ | ✅ | — | ✅ |
+| Concurrent reads/writes during split shadow phase | ✅ | ✅ | - | ✅ |
 | `ScanKeysAsync` / `ScanEntriesAsync` in-line reconciliation | ✅ | ✅ | ✅ | ✅ |
 | `CountAsync` per-slot routing + version stability + bounded retry | ✅ | ✅ | ✅ | ✅ |
-| `StaleShardRoutingException` transparent retry | ✅ | ✅ | — | ✅ |
-| `StaleTreeRoutingException` transparent retry across alias swap | — | — | ✅ | — |
-| Permanent `MovedAwaySlots` rejection after split completion | ✅ | ✅ | — | ✅ |
-| Resumable `SplitInProgress` intent replay across crashes | — | ✅ | — | — |
-| Two-phase root promotion (`PendingPromotion`) replay | — | ✅ | — | — |
-| Shadow `MergeManyAsync` atomicity under failed source write | — | ✅ | — | — |
-| Registry `ShardMap.Version` stamping under retry | — | ✅ | — | ✅ |
-| Idempotent `BulkGraft` and drain chunks | — | ✅ | ✅ | ✅ |
-| `TreeResizeGrain` phase machine under live traffic | — | — | ✅ | — |
-| Per-source-shard shadow-forwarding under live traffic | — | — | ✅ | — |
-| `TreeReshardGrain` migration loop + dispatch-budget clamping | — | — | — | ✅ |
-| `HotShardMonitorGrain` ↔ reshard interlock | — | — | — | ✅ |
+| `StaleShardRoutingException` transparent retry | ✅ | ✅ | - | ✅ |
+| `StaleTreeRoutingException` transparent retry across alias swap | - | - | ✅ | - |
+| Permanent `MovedAwaySlots` rejection after split completion | ✅ | ✅ | - | ✅ |
+| Resumable `SplitInProgress` intent replay across crashes | - | ✅ | - | - |
+| Two-phase root promotion (`PendingPromotion`) replay | - | ✅ | - | - |
+| Shadow `MergeManyAsync` atomicity under failed source write | - | ✅ | - | - |
+| Registry `ShardMap.Version` stamping under retry | - | ✅ | - | ✅ |
+| Idempotent `BulkGraft` and drain chunks | - | ✅ | ✅ | ✅ |
+| `TreeResizeGrain` phase machine under live traffic | - | - | ✅ | - |
+| Per-source-shard shadow-forwarding under live traffic | - | - | ✅ | - |
+| `TreeReshardGrain` migration loop + dispatch-budget clamping | - | - | - | ✅ |
+| `HotShardMonitorGrain` ↔ reshard interlock | - | - | - | ✅ |
 
 ## Runtime characteristics
 
@@ -447,15 +447,15 @@ The table below covers the four topology-mutation chaos fixtures (Tests 1–4). 
 
 ## See also
 
-* [Consistency](consistency.md) — the per-operation guarantees these
+* [Consistency](consistency.md) - the per-operation guarantees these
   tests verify against the public API under topology mutation.
-* [Adaptive Shard Splitting](shard-splitting.md) — the split protocol
+* [Adaptive Shard Splitting](shard-splitting.md) - the split protocol
   exercised by the happy-path, faults, and reshard tests.
-* [Online Reshard](online-reshard.md) — the reshard coordinator and
+* [Online Reshard](online-reshard.md) - the reshard coordinator and
   its interaction with autonomic splits.
-* [Tree Sizing](tree-sizing.md#resizing-an_existing_tree) — the online
+* [Tree Sizing](tree-sizing.md#resizing-an_existing_tree) - the online
   resize path exercised by `ChaosResizeIntegrationTests`.
-* [Architecture](architecture.md) — grain layers, root promotion,
+* [Architecture](architecture.md) - grain layers, root promotion,
   bounded retry, and the invariants the chaos tests verify.
-* [State Primitives](state-primitives.md) — HLC and LWW, which
+* [State Primitives](state-primitives.md) - HLC and LWW, which
   guarantee the value envelope holds even under concurrent rewrites.

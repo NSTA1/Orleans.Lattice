@@ -17,7 +17,7 @@ RUN dotnet publish src/VehicleFleetSimulator.Ui/VehicleFleetSimulator.Ui.csproj 
     -c Release -o /publish /p:UseAppHost=false
 
 # Bake the docker-compose API URL into the published SPA. Because Blazor WASM
-# runs in the browser, this URL must be what the *user's browser* can reach —
+# runs in the browser, this URL must be what the *user's browser* can reach -
 # i.e. the host-side port mapping, not an in-network compose service name.
 RUN printf '{\n  "Api": {\n    "BaseAddress": "http://localhost:8080"\n  }\n}\n' \
     > /publish/wwwroot/appsettings.json

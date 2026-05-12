@@ -6,11 +6,11 @@ namespace VehicleFleetSimulator.Abstractions;
 /// modifying grain code:
 ///
 /// <list type="bullet">
-///   <item><description><c>FanOutTelemetrySink</c> — current behavior, dispatches to the sharded
+///   <item><description><c>FanOutTelemetrySink</c> - current behavior, dispatches to the sharded
 ///     <see cref="IFleetFanOutGrain"/> relay (used by <c>FleetStreamHub</c> + load harness).</description></item>
-///   <item><description><c>NullTelemetrySink</c> — discards every publish, for isolating producer-side
+///   <item><description><c>NullTelemetrySink</c> - discards every publish, for isolating producer-side
 ///     cost (benchmark scenario simulator-baseline baseline / observer-off control).</description></item>
-///   <item><description>Future <c>LatticeSink</c> — writes telemetry to an <c>Orleans.Lattice</c> tree
+///   <item><description>Future <c>LatticeSink</c> - writes telemetry to an <c>Orleans.Lattice</c> tree
 ///     (benchmark scenarios current-state-no-replication and onward).</description></item>
 /// </list>
 ///

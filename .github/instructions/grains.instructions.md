@@ -27,8 +27,8 @@ Grain identity is embedded in the string key with `/` as separator:
 |---|---|---|
 | `LatticeGrain` | `{treeId}` | `"my-tree"` |
 | `ShardRootGrain` | `{treeId}/{shardIndex}` | `"my-tree/0"` |
-| `BPlusLeafGrain` | Opaque grain-assigned ID | — |
-| `BPlusInternalGrain` | Opaque grain-assigned ID | — |
+| `BPlusLeafGrain` | Opaque grain-assigned ID | - |
+| `BPlusInternalGrain` | Opaque grain-assigned ID | - |
 | `LeafCacheGrain` | `{leafGrainId}` | `"leaf/abc"` |
 | `LatticeRegistryGrain` | Singleton (`_lattice_trees`) | `"_lattice_trees"` |
 | `TombstoneCompactionGrain` | `{treeId}` | `"my-tree"` |
@@ -46,7 +46,7 @@ Parse the tree ID from the key using `key[..key.LastIndexOf('/')]` when needed.
 
 - Each grain owns a single `IPersistentState<T>` injected via `[PersistentState]`.
 - All state classes live in `BPlusTree/State/` and carry `[GenerateSerializer]` + `[Alias]`.
-- Always call `state.WriteStateAsync()` after mutations — group writes when possible.
+- Always call `state.WriteStateAsync()` after mutations - group writes when possible.
 
 ## Options Access
 
@@ -64,4 +64,4 @@ private LatticeOptions Options => optionsMonitor.Get(TreeId);
 
 ## StatelessWorker
 
-`LatticeGrain` is annotated `[StatelessWorker]` — it holds no persistent state and routes requests to the correct `IShardRootGrain` via `LatticeSharding`.
+`LatticeGrain` is annotated `[StatelessWorker]` - it holds no persistent state and routes requests to the correct `IShardRootGrain` via `LatticeSharding`.

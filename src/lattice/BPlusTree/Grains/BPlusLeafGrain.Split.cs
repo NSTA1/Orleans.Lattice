@@ -45,10 +45,10 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Completes (or resumes) a split whose intent has already been persisted.
-    /// Safe to call multiple times — MergeEntriesAsync is idempotent (LWW merge).
+    /// Safe to call multiple times - MergeEntriesAsync is idempotent (LWW merge).
     /// On the recovery path (caller does not hold a captured WAL head) the
     /// optional <paramref name="walHeadAtSplit"/> is omitted; the recovery
-    /// branch reads the current WAL head fresh, which is still safe — a
+    /// branch reads the current WAL head fresh, which is still safe - a
     /// later head only causes the sibling to skip more replay, never less.
     /// </summary>
     private async Task<SplitResult> CompleteSplitAsync(long? walHeadAtSplit = null)
@@ -65,7 +65,7 @@ internal sealed partial class BPlusLeafGrain
 
         // Fresh WAL-head read on the recovery path (no captured head
         // from the original SplitAsync invocation). A larger head is
-        // still safe — it only causes the sibling to skip more
+        // still safe - it only causes the sibling to skip more
         // replay, never less.
         var resolvedWalHead = walHeadAtSplit;
         if (resolvedWalHead is null)

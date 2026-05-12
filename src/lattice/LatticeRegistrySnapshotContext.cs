@@ -19,7 +19,7 @@ namespace Orleans.Lattice;
 /// transition can fall mid-fan-out, so leaf A returns the pre-saga
 /// value (status InFlight at the time of its query) while leaf B
 /// returns the prepared (post-saga) value (status Committed at the
-/// time of its query) — the same split observation strict per-tree
+/// time of its query) - the same split observation strict per-tree
 /// atomic visibility is meant to prevent.
 /// </para>
 /// <para>
@@ -30,7 +30,7 @@ namespace Orleans.Lattice;
 /// leaves share a single decision view and the scan is linearizable
 /// against the registry's transition moment. Decisions not present in
 /// the snapshot default to <see cref="TxStatus.InFlight"/> at the
-/// caller — consistent with "decision not yet recorded as of this
+/// caller - consistent with "decision not yet recorded as of this
 /// snapshot's wall-clock moment".
 /// </para>
 /// <para>

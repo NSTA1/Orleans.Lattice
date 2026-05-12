@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Replication;
 /// The buffer is a single per-tree instance owned by the applier
 /// singleton; concurrent receiver-side calls into the same applier
 /// serialize through the buffer's private lock. There is no
-/// cross-tree coordination — each tree's buffer is independent. Each
+/// cross-tree coordination - each tree's buffer is independent. Each
 /// instance carries its own pre-built tag arrays (tagged
 /// <see cref="LatticeReplicationMetrics.TagTree"/> and
 /// <see cref="LatticeReplicationMetrics.TagShard"/>) so the
@@ -216,7 +216,7 @@ internal sealed class CausalApplyBuffer
     /// <paramref name="entry"/>'s vector-clock frontier is
     /// dominated-or-equal by the corresponding component on
     /// <paramref name="localVc"/>. The entry's own origin diagonal
-    /// is excluded — the per-origin high-water-mark table is the
+    /// is excluded - the per-origin high-water-mark table is the
     /// authoritative dedup key for that component, and including it
     /// here would deadlock the diagonal.
     /// </summary>

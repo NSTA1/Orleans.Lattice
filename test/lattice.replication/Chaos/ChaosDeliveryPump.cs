@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 /// Network partitions are simulated by gating delivery on a
 /// <c>(sender, receiver)</c> partition matrix. While partitioned,
 /// the pump still polls the sender's WAL but does not advance the
-/// cursor — when the partition heals, the next iteration ships
+/// cursor - when the partition heals, the next iteration ships
 /// every entry that accumulated during the outage. This faithfully
 /// models a transport whose connection drops and resumes from the
 /// last acked offset.
@@ -41,7 +41,7 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
     /// local HLC at the receiver and emits a new WAL entry stamped with
     /// the foreign origin. That entry then ships onward, gets applied on
     /// the next hop (HWM dedupe sees a newer HLC and lets it through),
-    /// and the cycle repeats — an infinite ping-pong even after values
+    /// and the cycle repeats - an infinite ping-pong even after values
     /// have converged. Skipping bytes-identical re-deliveries breaks the
     /// loop without touching production dispatch: convergent CRDT merge
     /// is value-idempotent, so identical bytes carry no new state.
@@ -57,7 +57,7 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
 
     /// <summary>
     /// Creates a delivery pump bound to <paramref name="fixture"/>'s
-    /// sites. <paramref name="pollInterval"/> defaults to 50 ms — short
+    /// sites. <paramref name="pollInterval"/> defaults to 50 ms - short
     /// enough that chaos workloads run in seconds, long enough to
     /// avoid grain-RPC saturation.
     /// </summary>
@@ -183,7 +183,7 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
     /// Waits for every healed edge to ship every committed entry from its
     /// sender. The drain criterion is "every edge's cursor has reached its
     /// sender's WAL tail HLC for <see cref="DrainStabilityWindow"/>
-    /// consecutive polls" — multi-poll stability guards against a transient
+    /// consecutive polls" - multi-poll stability guards against a transient
     /// race where the (i→j) pump's <c>ApplyAsync</c> has returned (so
     /// <c>cursor[i,j]</c> caught up to the entry's HLC) but the entry has
     /// not yet been re-emitted on site <c>j</c>'s change feed (so the
@@ -225,7 +225,7 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
 
                     if (partitioned)
                     {
-                        // Partitioned edges are not a drain blocker — heal first.
+                        // Partitioned edges are not a drain blocker - heal first.
                         continue;
                     }
 
@@ -399,7 +399,7 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                // Chaos pumps are best-effort — a transient grain failure
+                // Chaos pumps are best-effort - a transient grain failure
                 // simply retries on the next iteration. Surface the error
                 // to PumpErrors for diagnostic inspection without aborting
                 // the loop. The convergence assertion at the end of the

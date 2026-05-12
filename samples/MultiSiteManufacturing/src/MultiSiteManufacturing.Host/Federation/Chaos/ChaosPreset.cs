@@ -24,7 +24,7 @@ public enum ChaosPreset
 
     /// <summary>
     /// Opens a 300 ms reorder window on the <c>baseline</c> backend
-    /// only — incoming writes are buffered and flushed in shuffled
+    /// only - incoming writes are buffered and flushed in shuffled
     /// order. Combined with the <b>Race</b> row action, this is the
     /// canonical way to force baseline into an arrival-order fold that
     /// disagrees with lattice's HLC-order fold, highlighting the
@@ -36,15 +36,15 @@ public enum ChaosPreset
     /// Simulates an inter-silo network partition between the two silos
     /// inside a single Orleans cluster. When active, each silo accepts
     /// only writes for parts whose serial hashes to its own "half" of
-    /// the cluster — silo A keeps the even-hash parts, silo B keeps the
-    /// odd-hash parts — and drops the rest on the floor at router
+    /// the cluster - silo A keeps the even-hash parts, silo B keeps the
+    /// odd-hash parts - and drops the rest on the floor at router
     /// ingress. The split is simulation-only: the shared lattice tree
     /// still reflects every accepted write, so on heal (ClearAll or a
     /// direct ConfigurePartitionAsync call) both silos converge
     /// immediately. This is <i>not</i> a true Orleans transport-level
     /// partition; it exists to let a demo show "two browser tabs write
     /// different subsets during a split, both sets are visible after
-    /// heal". Scope: intra-cluster only — has no effect on cross-cluster
+    /// heal". Scope: intra-cluster only - has no effect on cross-cluster
     /// HTTP replication (use <see cref="ReplicationDisconnect"/> for
     /// that).
     /// </summary>
@@ -59,7 +59,7 @@ public enum ChaosPreset
     /// on <see cref="ClearAll"/> the flag clears and replication
     /// resumes from the current cursor, catching the peer up with the
     /// accumulated backlog. This is the app-level equivalent of
-    /// <c>docker network disconnect msmfg_wan</c> — it lets the
+    /// <c>docker network disconnect msmfg_wan</c> - it lets the
     /// operator demonstrate cross-cluster divergence and
     /// convergence-on-heal from the browser without touching the
     /// compose CLI.

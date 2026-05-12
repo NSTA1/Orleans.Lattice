@@ -4,7 +4,7 @@ namespace VehicleFleetSimulator.Grains;
 /// Silo-scoped, in-process shared state for runtime simulation parameters that need to take effect
 /// across thousands of grains the instant they change. Lives in DI as a singleton so both the
 /// authoritative writer (<see cref="SimulationConfigGrain"/>) and the high-frequency readers
-/// (<see cref="VehicleGrain"/>) share a single field load — no cross-grain calls, no polling, no
+/// (<see cref="VehicleGrain"/>) share a single field load - no cross-grain calls, no polling, no
 /// stream subscriptions.
 /// </summary>
 /// <remarks>
@@ -19,7 +19,7 @@ namespace VehicleFleetSimulator.Grains;
 /// <para>
 /// <see cref="TimeScale"/> is a <c>volatile</c> <c>double</c> via <see cref="System.Threading.Volatile"/>
 /// reads/writes so a writer on one thread is observed by a reader on any other thread without a
-/// lock — torn 64-bit reads are not a correctness concern on x64/arm64 .NET, but the volatile
+/// lock - torn 64-bit reads are not a correctness concern on x64/arm64 .NET, but the volatile
 /// barrier guarantees the change is visible promptly to the grain timer threads.
 /// </para>
 /// </remarks>
@@ -37,7 +37,7 @@ public sealed class SimulationRuntimeState
     /// <summary>
     /// Global pause flag. When <c>true</c>, <see cref="VehicleGrain"/> tick handlers short-circuit
     /// before advancing the simulator or publishing telemetry. The grain timer keeps firing so
-    /// resume is instant — no per-grain timer churn for thousands of activations.
+    /// resume is instant - no per-grain timer churn for thousands of activations.
     /// </summary>
     public bool IsPaused
     {

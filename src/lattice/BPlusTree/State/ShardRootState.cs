@@ -38,7 +38,7 @@ internal sealed class ShardRootState
 
     /// <summary>
     /// The operation ID of the last successfully completed bulk operation on this shard.
-    /// Used for idempotency — if a retry arrives with the same ID, it is a no-op.
+    /// Used for idempotency - if a retry arrives with the same ID, it is a no-op.
     /// </summary>
     [Id(5)] public string? LastCompletedBulkOperationId { get; set; }
 
@@ -97,7 +97,7 @@ internal sealed class ShardRootState
     /// Cleared by the coordinator after the destination tree has been
     /// promoted to the primary alias and the source is safe to tear down.
     /// <para>
-    /// A <c>null</c> value is the steady state — no online operation is in
+    /// A <c>null</c> value is the steady state - no online operation is in
     /// flight for this shard. Adding this slot is backward-compatible with
     /// Orleans serialization: activations persisted before this field was
     /// introduced deserialize with <c>ShadowForward = null</c>, which is
@@ -131,7 +131,7 @@ internal sealed record PendingBulkGraft
 }
 
 /// <summary>
-/// A single leaf in a pending bulk graft — its separator key and grain identity.
+/// A single leaf in a pending bulk graft - its separator key and grain identity.
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.GraftEntry)]

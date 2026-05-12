@@ -34,7 +34,7 @@ public readonly record struct LatticeCursorSpec
 
     /// <summary>
     /// When <c>true</c>, the cursor walks keys in descending lexicographic
-    /// order. Not applicable to <see cref="LatticeCursorKind.DeleteRange"/> —
+    /// order. Not applicable to <see cref="LatticeCursorKind.DeleteRange"/> -
     /// range deletes are always forward.
     /// </summary>
     [Id(3)] public bool Reverse { get; init; }

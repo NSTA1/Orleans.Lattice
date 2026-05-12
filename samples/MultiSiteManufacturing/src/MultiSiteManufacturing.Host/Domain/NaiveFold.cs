@@ -3,7 +3,7 @@ namespace MultiSiteManufacturing.Host.Domain;
 /// <summary>
 /// Naïve fold: applies facts in the order supplied, without re-sorting by
 /// hybrid logical clock. Used by the baseline backend to model the behaviour
-/// of a system that trusts arrival order — so under chaos-induced reorder
+/// of a system that trusts arrival order - so under chaos-induced reorder
 /// it disagrees with <see cref="ComplianceFold"/>, which is the whole point
 /// of the demo.
 /// </summary>

@@ -22,6 +22,7 @@ namespace Orleans.Lattice.Replication.Tests.PublicApiContract;
 /// </para>
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 [Category("API")]
 public partial class PublicReplicationApiContractTests
 {

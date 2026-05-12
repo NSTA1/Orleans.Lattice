@@ -9,7 +9,7 @@
     private string CssClass => $"state-{State.ToString().ToLowerInvariant()}";
 
     // Display shortening: "FlaggedForReview" is too long for the chip and
-    // reads as operator jargon anyway — surface it as just "Review".
+    // reads as operator jargon anyway - surface it as just "Review".
     private string Label => State switch
     {
         ComplianceState.FlaggedForReview => "Review",

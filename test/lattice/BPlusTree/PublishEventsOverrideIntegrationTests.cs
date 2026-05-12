@@ -10,6 +10,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// only arrive on trees that explicitly opt in via the per-tree override.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public sealed class PublishEventsOverrideIntegrationTests
 {
     private PublishEventsOverrideClusterFixture _fixture = null!;
@@ -63,7 +64,7 @@ public sealed class PublishEventsOverrideIntegrationTests
     public async Task Override_null_with_silo_default_disabled_emits_no_events()
     {
         var tree = await _fixture.CreateTreeAsync($"override-null-{Guid.NewGuid():N}");
-        // No SetPublishEventsEnabledAsync call — registry entry has PublishEvents = null.
+        // No SetPublishEventsEnabledAsync call - registry entry has PublishEvents = null.
 
         var (sink, handle) = await SubscribeAsync(tree);
         try
@@ -126,7 +127,7 @@ public sealed class PublishEventsOverrideIntegrationTests
                 await Task.Delay(50);
             Assert.That(sink.Any(e => e.Key == "seed"), Is.True);
 
-            // Clear override — falls back to silo default (false).
+            // Clear override - falls back to silo default (false).
             await tree.SetPublishEventsEnabledAsync(null);
 
             var eventsBefore = sink.Count;

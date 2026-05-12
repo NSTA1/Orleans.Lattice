@@ -65,7 +65,7 @@ public partial class PublicApiContractTests
     {
         var treeId = "pac-digest-empty-" + Guid.NewGuid().ToString("N")[..8];
         var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
-        // No data — but we still have to register the tree, so do a
+        // No data - but we still have to register the tree, so do a
         // single write/delete to bring the shard online.
         await tree.SetAsync("k", Bytes("v"));
         await tree.DeleteAsync("k");

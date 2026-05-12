@@ -198,7 +198,7 @@ public class LatticeReplicationOptions
     /// rejects smaller values at first-resolve time so a single
     /// pathological burst cannot evict the cache faster than it
     /// fills. Cache eviction under sustained churn cannot cause a
-    /// re-merge — the per-origin HWM check is the authoritative
+    /// re-merge - the per-origin HWM check is the authoritative
     /// dedupe key and remains in place for any entry the cache has
     /// evicted.
     /// </para>
@@ -214,7 +214,7 @@ public class LatticeReplicationOptions
     /// position - bounding worst-case disk usage even when a
     /// registered consumer is hopelessly behind. The lagging consumer
     /// then "falls off the log" on its next read, surfacing the gap
-    /// to the auto-bootstrap trigger (later phase).
+    /// to the auto-bootstrap trigger (<see cref="ILatticeFallOffLogDetector"/>).
     /// <para>
     /// <see langword="null"/> (the default) disables the ceiling: the
     /// GC predicate is purely <c>min(consumer cursors)</c>, and a
@@ -316,7 +316,7 @@ public class LatticeReplicationOptions
     /// per-partition page read; <see cref="ShipBatchSize"/> caps the
     /// merged output batch. With <c>P</c> partitions the worst-case
     /// in-memory drain footprint is <c>P × ShipPartitionPageSize</c>
-    /// entries — <c>ShipBatchSize</c> bounds the wire batch but not
+    /// entries - <c>ShipBatchSize</c> bounds the wire batch but not
     /// the post-drain working set, so size <c>ShipPartitionPageSize</c>
     /// for one comfortable batch's worth of page-read work
     /// (default <see cref="DefaultShipPartitionPageSize"/>).
@@ -341,7 +341,7 @@ public class LatticeReplicationOptions
     /// HLC-monotonic and dedupes on <c>(originClusterId, originHlc)</c>,
     /// so a crash inside the deferred-persist window replays at most
     /// <see cref="ShipCursorWriteInterval"/> &#xD7; <see cref="ShipBatchSize"/>
-    /// entries on recovery — the receiver no-ops the duplicates. No
+    /// entries on recovery - the receiver no-ops the duplicates. No
     /// data is lost.
     /// </para>
     /// <para>
@@ -394,7 +394,7 @@ public class LatticeReplicationOptions
 
     /// <summary>
     /// Period of the per-(tree, peer) shipper grain's phase timer
-    /// — the wall-clock cadence at which the shipper polls the WAL
+    /// - the wall-clock cadence at which the shipper polls the WAL
     /// for new entries to ship to the peer. A shorter period reduces
     /// the worst-case latency between a write being appended to the
     /// WAL and the next ship attempt picking it up; a longer period
@@ -585,7 +585,7 @@ public class LatticeReplicationOptions
     /// configuration (<see cref="DefaultShipBatchSize"/>=256, ~10 ms
     /// ack RTT, ~10 ms persist RTT) this lifts the per-batch persist
     /// round-trip out of the steady-state hot path (one persist per
-    /// 16 batches instead of one per batch — ~94% reduction in
+    /// 16 batches instead of one per batch - ~94% reduction in
     /// storage write amplification) while keeping the
     /// crash-recovery re-ship window to ~4 096 entries (under 1 MB
     /// at typical entry sizes; on the order of a few seconds of

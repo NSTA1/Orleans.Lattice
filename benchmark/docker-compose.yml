@@ -1,4 +1,4 @@
-# Orleans.Lattice — benchmark stack (base topology).
+# Orleans.Lattice - benchmark stack (base topology).
 #
 # Two build contexts in play:
 #   * The benchmark silo (`silo`) builds from the lattice repo root (`..`) so it can pull in
@@ -48,7 +48,7 @@ services:
       Orleans__ClusterId: ${BENCH_CLUSTER_ID:-vfs-bench}
       Orleans__ServiceId: ${BENCH_SERVICE_ID:-VehicleFleetSimulator}
       Persistence__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;"
-      # Producer pipeline switch — fanout (default), null (simulator-baseline/observer-no-peer control), lattice.
+      # Producer pipeline switch - fanout (default), null (simulator-baseline/observer-no-peer control), lattice.
       Telemetry__Sink: ${BENCH_TELEMETRY_SINK:-fanout}
       Telemetry__Prometheus__Endpoint: "http://0.0.0.0:9090/metrics/"
       # LatticeSink bindings (only consumed when Telemetry__Sink=lattice).
@@ -101,7 +101,7 @@ services:
       ReadDriver__KeyspaceRefreshInterval: ${BENCH_READ_KEYSPACE_REFRESH:-00:00:10}
       ReadDriver__KeyspaceSampleSize: ${BENCH_READ_KEYSPACE_SAMPLE:-4096}
       # Atomic-saga driver bindings (only consumed when Telemetry__Sink=lattice). Drives the
-      # atomic-write and atomic-write-replication scenarios — generates a steady stream of
+      # atomic-write and atomic-write-replication scenarios - generates a steady stream of
       # SetManyAtomicAsync sagas into the replicated tree to exercise the WAL-only prepare
       # path and the per-saga AtomicWriteGrain RPS ceiling. Defaults are off so non-atomic
       # scenarios stay unaffected.
@@ -121,7 +121,7 @@ services:
       - "5001"
 
   api:
-    # Simulator API used unmodified — its existing Dockerfile expects the simulator-local context.
+    # Simulator API used unmodified - its existing Dockerfile expects the simulator-local context.
     build:
       context: ../samples/VehicleFleetSimulator
       dockerfile: src/VehicleFleetSimulator.Api/Dockerfile

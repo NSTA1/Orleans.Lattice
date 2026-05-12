@@ -103,7 +103,7 @@ public class ShardRootGrainSplitTests
     }
 
     // ============================================================================
-    // BeginSplitAsync — input validation + idempotency
+    // BeginSplitAsync - input validation + idempotency
     // ============================================================================
 
     [Test]
@@ -243,7 +243,7 @@ public class ShardRootGrainSplitTests
     }
 
     // ============================================================================
-    // MovedAwaySlots — permanent rejection after Complete (stale-cache safety)
+    // MovedAwaySlots - permanent rejection after Complete (stale-cache safety)
     // ============================================================================
 
     [Test]
@@ -289,7 +289,7 @@ public class ShardRootGrainSplitTests
         await h.Grain.BeginSplitAsync(targetShardIndex: 7, movedSlots: [movedSlot], VirtualShardCount);
         await h.Grain.CompleteSplitAsync();
 
-        // Sanity — split state cleared but slot is permanently rejected.
+        // Sanity - split state cleared but slot is permanently rejected.
         Assert.That(h.State.State.SplitInProgress, Is.Null);
         var ex = Assert.ThrowsAsync<StaleShardRoutingException>(async () => await h.Grain.GetAsync("x"));
         Assert.That(ex!.TargetShardIndex, Is.EqualTo(7));
@@ -330,7 +330,7 @@ public class ShardRootGrainSplitTests
         await h.Grain.BeginSplitAsync(targetShardIndex: 1, movedSlots: [slotA], VirtualShardCount);
         await h.Grain.CompleteSplitAsync();
 
-        // Must not throw — the key's slot is not moved-away.
+        // Must not throw - the key's slot is not moved-away.
         Assert.DoesNotThrowAsync(async () => await h.Grain.GetAsync(otherKey!));
     }
 
@@ -355,7 +355,7 @@ public class ShardRootGrainSplitTests
         var slot = ShardMap.GetVirtualSlot("k", VirtualShardCount);
         await h.Grain.BeginSplitAsync(targetShardIndex: 1, movedSlots: [slot], VirtualShardCount);
 
-        // Phase is BeginShadowWrite — S still authoritative; scans must include it.
+        // Phase is BeginShadowWrite - S still authoritative; scans must include it.
         Assert.That(h.State.State.SplitInProgress!.Phase, Is.EqualTo(ShardSplitPhase.BeginShadowWrite));
         Assert.That(h.Grain.IsSlotMovedAway("k"), Is.False);
     }

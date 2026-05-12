@@ -205,8 +205,8 @@ internal sealed class WalShardGrain(
             // record's OriginClusterId is empty too.
             // The mutation's own OriginClusterId wins when present (a
             // remote-replay path stamped it before reaching the WAL).
-            // When it is null — i.e. a foreground commit on a host
-            // where the replication observer has not yet stamped — the
+            // When it is null - i.e. a foreground commit on a host
+            // where the replication observer has not yet stamped - the
             // resolver supplies the local cluster id. Single-cluster
             // hosts get string.Empty from the default resolver and the
             // resulting record's OriginClusterId is empty.

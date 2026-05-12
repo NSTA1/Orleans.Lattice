@@ -65,7 +65,7 @@ finally {
     Pop-Location
 }
 
-# Poll Grafana's /api/health endpoint — it returns HTTP 200 once provisioning is far enough along to serve.
+# Poll Grafana's /api/health endpoint - it returns HTTP 200 once provisioning is far enough along to serve.
 $grafanaHealth = "$historyGrafanaUrl/api/health"
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $ready    = $false

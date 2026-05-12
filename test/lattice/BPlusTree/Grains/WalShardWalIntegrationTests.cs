@@ -12,6 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// and verifies every committed mutation flows through the real WAL grain.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class WalShardWalIntegrationTests
 {
     private const string ClusterId = "wal-site";

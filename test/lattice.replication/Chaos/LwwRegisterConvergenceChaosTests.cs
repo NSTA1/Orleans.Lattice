@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 /// single key while a partition isolates one site mid-workload; after
 /// the partition heals and the delivery pump drains, every site must
 /// observe identical <see cref="VersionedValue.Value"/> and
-/// <see cref="VersionedValue.Version"/> — the lexicographic
+/// <see cref="VersionedValue.Version"/> - the lexicographic
 /// <c>(HLC, originClusterId)</c> winner. LWW under concurrent writes
 /// is deterministic by design: the highest <see cref="HybridLogicalClock"/>
 /// wins, with origin id breaking ties, so every site that has seen the
@@ -67,7 +67,7 @@ public class LwwRegisterConvergenceChaosTests
 
         // Pull every site's final state and assert pointwise equality.
         // LWW convergence is deterministic on (HLC, origin), so all sites
-        // — having seen the same union of authored writes — must agree.
+        // - having seen the same union of authored writes - must agree.
         var states = new VersionedValue[SiteCount];
         for (var i = 0; i < SiteCount; i++)
         {

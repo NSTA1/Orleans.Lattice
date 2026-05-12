@@ -18,7 +18,7 @@ internal interface ITreeSnapshotGrain : IGrainWithStringKey
     /// <summary>
     /// Initiates a snapshot of this tree into <paramref name="destinationTreeId"/>.
     /// <para>
-    /// Idempotent — if a snapshot is already in progress to the same destination
+    /// Idempotent - if a snapshot is already in progress to the same destination
     /// with the same mode, this is a no-op. Calling with different parameters
     /// while a snapshot is in progress throws <see cref="InvalidOperationException"/>.
     /// </para>
@@ -57,7 +57,7 @@ internal interface ITreeSnapshotGrain : IGrainWithStringKey
     /// that manage the snapshot's lifetime and need to tear it down before it
     /// completes. Disposes the snapshot's internal timer, unregisters the
     /// keepalive reminder, and clears all snapshot state so the grain
-    /// deactivates. Idempotent — a no-op if no snapshot is in progress or if
+    /// deactivates. Idempotent - a no-op if no snapshot is in progress or if
     /// the in-progress snapshot's <c>OperationId</c> doesn't match (so a stale
     /// coordinator cannot abort a newer operation).
     /// </summary>
@@ -72,7 +72,7 @@ internal interface ITreeSnapshotGrain : IGrainWithStringKey
     Task RunSnapshotPassAsync();
 
     /// <summary>
-    /// Returns <c>true</c> when the coordinator is idle — either no snapshot
+    /// Returns <c>true</c> when the coordinator is idle - either no snapshot
     /// has ever been initiated, or the last one has run to completion.
     /// Returns <c>false</c> while a snapshot is in flight.
     /// </summary>

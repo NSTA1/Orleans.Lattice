@@ -6,7 +6,7 @@ using Orleans.Lattice.Primitives;
 /// Public entry point for a distributed B+ tree.
 /// A stateless-worker grain that routes requests to the correct shard
 /// based on a stable hash of the key.
-/// Key format: <c>{treeId}</c> — the tree this grain manages.
+/// Key format: <c>{treeId}</c> - the tree this grain manages.
 /// </summary>
 [Alias(TypeAliases.ILattice)]
 public interface ILattice : IGrainWithStringKey
@@ -87,7 +87,7 @@ public interface ILattice : IGrainWithStringKey
     /// Atomically writes <paramref name="entries"/> as a saga: reads each key's
     /// pre-saga value up front, applies the writes sequentially, and
     /// compensates (reverts) any already-committed entries if a subsequent
-    /// write fails — so the batch is either fully applied or fully rolled back
+    /// write fails - so the batch is either fully applied or fully rolled back
     /// from the caller's perspective. Crash-recovery is reminder-driven: a
     /// silo failure mid-saga reactivates the coordinator grain on another silo
     /// which resumes from its persisted progress, optionally compensating.
@@ -103,7 +103,7 @@ public interface ILattice : IGrainWithStringKey
     /// Throws <see cref="ArgumentException"/> when <paramref name="entries"/>
     /// contains duplicate keys or null values. Throws
     /// <see cref="InvalidOperationException"/> if a write fails and compensation
-    /// completes — the original failure's message is included.
+    /// completes - the original failure's message is included.
     /// </para>
     /// </summary>
     /// <param name="entries">The key-value pairs to write atomically.</param>
@@ -118,7 +118,7 @@ public interface ILattice : IGrainWithStringKey
     /// original saga: if it has already completed the call returns
     /// immediately; if it is still in flight the call awaits its terminal
     /// state. This turns a transport-level timeout or silo crash mid-call
-    /// into a recoverable retry — the client simply calls again with the
+    /// into a recoverable retry - the client simply calls again with the
     /// same <paramref name="operationId"/>.
     /// <para>
     /// <b>Key-set stability.</b> An <paramref name="operationId"/> is bound
@@ -126,7 +126,7 @@ public interface ILattice : IGrainWithStringKey
     /// the same <paramref name="operationId"/> with a different set of keys
     /// (added, removed, or renamed) throws
     /// <see cref="InvalidOperationException"/>. Reordering the keys or
-    /// changing their values is allowed — the fingerprint hashes the
+    /// changing their values is allowed - the fingerprint hashes the
     /// sorted key set only.
     /// </para>
     /// <para>
@@ -219,7 +219,7 @@ public interface ILattice : IGrainWithStringKey
     /// causing subsequent reads and writes to throw <see cref="InvalidOperationException"/>.
     /// A grain reminder is registered to permanently purge all tree data after the
     /// configured <see cref="LatticeOptions.SoftDeleteDuration"/> has elapsed.
-    /// Idempotent — calling on an already-deleted tree is a no-op.
+    /// Idempotent - calling on an already-deleted tree is a no-op.
     /// </summary>
     Task DeleteTreeAsync(CancellationToken cancellationToken = default);
 
@@ -248,7 +248,7 @@ public interface ILattice : IGrainWithStringKey
     /// physical tree is soft-deleted and will be purged after the configured
     /// <see cref="LatticeOptions.SoftDeleteDuration"/>.
     /// <para>
-    /// The tree ID is preserved — it becomes an alias to the new physical tree.
+    /// The tree ID is preserved - it becomes an alias to the new physical tree.
     /// During the snapshot phase, the tree is temporarily locked (offline snapshot).
     /// After the alias swap, the tree is immediately available with the new sizing.
     /// Cache invalidation is automatic: different physical trees produce different
@@ -282,7 +282,7 @@ public interface ILattice : IGrainWithStringKey
     /// (marked deleted) during the copy, guaranteeing a consistent snapshot.
     /// In <see cref="SnapshotMode.Online"/> mode, the source tree remains
     /// available for reads and writes throughout; the result is strictly
-    /// consistent via shadow forwarding — every write accepted on the source
+    /// consistent via shadow forwarding - every write accepted on the source
     /// before the snapshot completes is reflected on the destination.
     /// </para>
     /// <para>
@@ -338,7 +338,7 @@ public interface ILattice : IGrainWithStringKey
     /// timestamp wins. Tombstones are also merged, ensuring deletes propagate correctly.
     /// <para>
     /// The source tree remains unmodified. Source and target trees may have different
-    /// shard counts — entries are re-hashed to the correct target shard during merge.
+    /// shard counts - entries are re-hashed to the correct target shard during merge.
     /// </para>
     /// </summary>
     /// <param name="sourceTreeId">The tree to merge from. Must exist and differ from this tree.</param>
@@ -346,25 +346,25 @@ public interface ILattice : IGrainWithStringKey
     Task MergeAsync(string sourceTreeId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns <c>true</c> if no merge operation is in progress for this tree —
+    /// Returns <c>true</c> if no merge operation is in progress for this tree -
     /// either the most recent merge has completed or no merge has ever been initiated.
     /// </summary>
     Task<bool> IsMergeCompleteAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns <c>true</c> if no snapshot operation is in progress for this tree —
+    /// Returns <c>true</c> if no snapshot operation is in progress for this tree -
     /// either the most recent snapshot has completed or no snapshot has ever been initiated.
     /// </summary>
     Task<bool> IsSnapshotCompleteAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns <c>true</c> if no resize operation is in progress for this tree —
+    /// Returns <c>true</c> if no resize operation is in progress for this tree -
     /// either the most recent resize has completed or no resize has ever been initiated.
     /// </summary>
     Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Online reshard — grows the tree to <paramref name="newShardCount"/>
+    /// Online reshard - grows the tree to <paramref name="newShardCount"/>
     /// distinct physical shards by iteratively splitting the largest-slot-owning
     /// existing shards. The tree continues to serve reads and writes throughout;
     /// every underlying split drains moved virtual slots online and then
@@ -391,13 +391,13 @@ public interface ILattice : IGrainWithStringKey
     Task ReshardAsync(int newShardCount, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns <c>true</c> if no reshard operation is in progress for this tree —
+    /// Returns <c>true</c> if no reshard operation is in progress for this tree -
     /// either the most recent reshard has completed or no reshard has ever been initiated.
     /// </summary>
     Task<bool> IsReshardCompleteAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the effective routing context for this tree — the resolved
+    /// Returns the effective routing context for this tree - the resolved
     /// physical tree ID (after registry alias resolution) and the per-tree
     /// <see cref="ShardMap"/>. Used by infrastructure helpers (e.g. the
     /// streaming bulk loader) that need to address shard grains directly
@@ -410,13 +410,13 @@ public interface ILattice : IGrainWithStringKey
 
     /// <summary>
     /// Returns a <see cref="TreeDiagnosticReport"/> aggregating per-shard
-    /// health — depth, live-key count, hotness, split/bulk state — plus a
+    /// health - depth, live-key count, hotness, split/bulk state - plus a
     /// bounded ring buffer of recent adaptive-split events. Repeated calls
     /// are served from a short in-memory cache configured via
     /// <see cref="LatticeOptions.DiagnosticsCacheTtl"/> (default 5 seconds).
     /// <para>
     /// When <paramref name="deep"/> is <c>true</c>, each shard walks its leaf
-    /// chain to aggregate tombstone-and-expired counts — populating
+    /// chain to aggregate tombstone-and-expired counts - populating
     /// <see cref="TreeDiagnosticReport.TotalTombstones"/> and the per-shard
     /// <see cref="ShardDiagnosticReport.Tombstones"/> /
     /// <see cref="ShardDiagnosticReport.TombstoneRatio"/> fields. Deep mode
@@ -501,7 +501,7 @@ public interface ILattice : IGrainWithStringKey
     /// <summary>
     /// Advances a delete-range cursor by up to <paramref name="maxToDelete"/>
     /// keys and returns the resulting progress. Safe to call again after
-    /// <see cref="LatticeCursorDeleteProgress.IsComplete"/> becomes <c>true</c> —
+    /// <see cref="LatticeCursorDeleteProgress.IsComplete"/> becomes <c>true</c> -
     /// subsequent calls are idempotent no-ops.
     /// </summary>
     Task<LatticeCursorDeleteProgress> DeleteRangeStepAsync(string cursorId, int maxToDelete, CancellationToken cancellationToken = default);
@@ -509,7 +509,7 @@ public interface ILattice : IGrainWithStringKey
     /// <summary>
     /// Closes the cursor identified by <paramref name="cursorId"/>, clears
     /// its persisted state, and releases the underlying grain activation.
-    /// Idempotent — calling on an unknown or already-closed cursor is a
+    /// Idempotent - calling on an unknown or already-closed cursor is a
     /// no-op.
     /// </summary>
     Task CloseCursorAsync(string cursorId, CancellationToken cancellationToken = default);

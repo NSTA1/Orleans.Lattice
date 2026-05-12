@@ -9,7 +9,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// Singleton-per-tree grain that owns a single reminder for tombstone compaction.
 /// When the reminder fires, a grain timer is started that processes one shard per
-/// tick — avoiding a long-running grain call that could hit Orleans timeouts for
+/// tick - avoiding a long-running grain call that could hit Orleans timeouts for
 /// large trees. Failed shards are retried once before being skipped.
 /// <para>
 /// Compaction progress is persisted so that a silo restart mid-compaction can
@@ -86,13 +86,13 @@ internal sealed class TombstoneCompactionGrain(
                     period: desired);
             }
 
-            // Periodic compaction trigger — start a new pass if idle.
+            // Periodic compaction trigger - start a new pass if idle.
             if (_compactionTimer is not null) return;
             await StartCompactionAsync(startFromShard: 0);
         }
         else if (reminderName == KeepaliveReminderName)
         {
-            // Keepalive fired — either resume a persisted in-flight pass or
+            // Keepalive fired - either resume a persisted in-flight pass or
             // clean up if compaction already finished.
             if (state.State.InProgress && _compactionTimer is null)
             {
@@ -165,7 +165,7 @@ internal sealed class TombstoneCompactionGrain(
         var physicalShards = state.State.PhysicalShardIndices;
         if (physicalShards is null || physicalShards.Length == 0)
         {
-            // State pre-dates the fix — refresh from the registry.
+            // State pre-dates the fix - refresh from the registry.
             var (physTreeId, shards) = await ResolveShardTopologyAsync();
             state.State.PhysicalTreeId = physTreeId;
             state.State.PhysicalShardIndices = [.. shards];
@@ -198,7 +198,7 @@ internal sealed class TombstoneCompactionGrain(
             }
             else
             {
-                // Exhausted retries for this shard — skip to next.
+                // Exhausted retries for this shard - skip to next.
                 state.State.NextShardIndex++;
                 state.State.ShardRetries = 0;
                 await state.WriteStateAsync();
@@ -226,7 +226,7 @@ internal sealed class TombstoneCompactionGrain(
 
         await PublishCompactionCompletedAsync();
 
-        // This grain does no work between passes — free the activation.
+        // This grain does no work between passes - free the activation.
         // The next reminder tick will reactivate it.
         this.DeactivateOnIdle();
     }
@@ -251,7 +251,7 @@ internal sealed class TombstoneCompactionGrain(
         }
         catch (Exception ex)
         {
-            // Best effort — the keepalive will be cleaned up on the next tick
+            // Best effort - the keepalive will be cleaned up on the next tick
             // if it fires while InProgress is false.
             logger.LogWarning(ex, "Failed to unregister keepalive reminder for tree {TreeId}", TreeId);
         }

@@ -12,26 +12,26 @@ namespace Orleans.Lattice;
 /// Instruments fall into five tiers:
 /// <list type="bullet">
 ///   <item>
-///     <b>Shard-level</b> — per-shard read / write / split counters, sourced from
+///     <b>Shard-level</b> - per-shard read / write / split counters, sourced from
 ///     <c>ShardRootGrain</c>. Tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
 ///   </item>
 ///   <item>
-///     <b>Leaf-level</b> — write-state latency, scan latency, compaction duration,
+///     <b>Leaf-level</b> - write-state latency, scan latency, compaction duration,
 ///     tombstone churn (explicit deletes + TTL expiries reported separately),
 ///     and leaf-split counters sourced from <c>BPlusLeafGrain</c>. Tagged with
 ///     <see cref="TagTree"/> (leaf grain ids are too high-cardinality to publish directly).
 ///   </item>
 ///   <item>
-///     <b>Cache</b> — hit / miss counters from <c>LeafCacheGrain</c>.
+///     <b>Cache</b> - hit / miss counters from <c>LeafCacheGrain</c>.
 ///   </item>
 ///   <item>
-///     <b>Saga / coordinator / lifecycle</b> — terminal-state counters for
+///     <b>Saga / coordinator / lifecycle</b> - terminal-state counters for
 ///     <c>SetManyAtomicAsync</c> sagas, long-running coordinator completions
 ///     (snapshot / resize / reshard / merge / compaction), and tree-lifecycle
 ///     transitions (deleted / recovered / purged).
 ///   </item>
 ///   <item>
-///     <b>Events &amp; configuration</b> — event-publisher health (dispatches
+///     <b>Events &amp; configuration</b> - event-publisher health (dispatches
 ///     succeeded vs. dropped) and per-tree configuration-change counters.
 ///   </item>
 /// </list>
@@ -143,7 +143,7 @@ public static class LatticeMetrics
             description: "Tombstone entries permanently removed by compaction.");
 
     /// <summary>
-    /// Counter of tombstones created — incremented on every <c>DeleteAsync</c>
+    /// Counter of tombstones created - incremented on every <c>DeleteAsync</c>
     /// success and once per deleted key in <c>DeleteRangeAsync</c>.
     /// </summary>
     public static readonly Counter<long> LeafTombstonesCreated =
@@ -180,7 +180,7 @@ public static class LatticeMetrics
     // --- Cache instruments (LeafCacheGrain) --------------------------------------
 
     /// <summary>
-    /// Counter of cache hits observed by <c>LeafCacheGrain</c> — a key was present
+    /// Counter of cache hits observed by <c>LeafCacheGrain</c> - a key was present
     /// and live in the local cache after (possibly) refreshing the delta.
     /// </summary>
     public static readonly Counter<long> CacheHits =
@@ -188,7 +188,7 @@ public static class LatticeMetrics
             description: "LeafCacheGrain reads served by a live, cached entry.");
 
     /// <summary>
-    /// Counter of cache misses observed by <c>LeafCacheGrain</c> — the key was
+    /// Counter of cache misses observed by <c>LeafCacheGrain</c> - the key was
     /// absent or tombstoned in the local cache after the delta refresh.
     /// </summary>
     public static readonly Counter<long> CacheMisses =
@@ -236,7 +236,7 @@ public static class LatticeMetrics
     /// (or the per-entry list length on apply-mode sagas). Tagged with
     /// <see cref="TagOutcome"/> = <c>committed</c>, <c>compensated</c>, or
     /// <c>failed</c>. Lets operators interpret <see cref="AtomicWriteDuration"/>
-    /// in context — a 10-entry batch and a 1000-entry batch both appear as one
+    /// in context - a 10-entry batch and a 1000-entry batch both appear as one
     /// data point on the duration histogram, and only the batch-size histogram
     /// disambiguates them.
     /// </summary>

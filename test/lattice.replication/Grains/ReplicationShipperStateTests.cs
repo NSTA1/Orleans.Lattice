@@ -75,7 +75,7 @@ public class ReplicationShipperStateTests
 
     /// <summary>
     /// Wire-compat anchor: a state value that round-trips through the
-    /// Orleans serializer must come back byte-for-byte equivalent —
+    /// Orleans serializer must come back byte-for-byte equivalent -
     /// proves <c>[Id(2)] PartitionCursors</c> participates in
     /// serialization without disturbing the existing slots.
     /// </summary>
@@ -118,7 +118,7 @@ public class ReplicationShipperStateTests
     /// deserializing a legacy persisted blob that pre-dates the
     /// <c>[Id(2)]</c> slot: the parameterless constructor runs first
     /// (initializer populates an empty dictionary), then only the
-    /// tagged slots present in the wire bytes are overwritten — a
+    /// tagged slots present in the wire bytes are overwritten - a
     /// missing <c>[Id(2)]</c> tag therefore leaves PartitionCursors at
     /// the empty-dictionary default rather than null.
     /// </summary>
@@ -134,7 +134,7 @@ public class ReplicationShipperStateTests
         {
             Cursor = new HybridLogicalClock { WallClockTicks = 999, Counter = 1 },
             ConsecutiveFailures = 5,
-            // PartitionCursors deliberately untouched — exercises the
+            // PartitionCursors deliberately untouched - exercises the
             // same wire shape a legacy blob produces.
         };
         var bytes = serializer.SerializeToArray(original);

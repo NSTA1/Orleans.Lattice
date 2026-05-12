@@ -11,7 +11,7 @@ using ProtoV1 = MultiSiteManufacturing.Contracts.V1;
 namespace MultiSiteManufacturing.Tests.Grpc;
 
 /// <summary>
-/// Contract-level tests for <c>ComplianceService</c> — exercises the
+/// Contract-level tests for <c>ComplianceService</c> - exercises the
 /// real gRPC pipeline via <see cref="GrpcContractFixture"/>'s in-process
 /// channel. Covers both the point-in-time <c>GetPartCompliance</c>
 /// response shape and the live <c>WatchDivergence</c> server stream.
@@ -61,7 +61,7 @@ public sealed class ComplianceContractTests
         var compliance = new ComplianceService.ComplianceServiceClient(channel);
 
         // Reach into the host DI to grab the raw LatticeFactBackend so we
-        // can sneak a fact past the router — this creates divergence
+        // can sneak a fact past the router - this creates divergence
         // without relying on chaos presets (tier 2 flakiness is rate-based
         // and therefore non-deterministic in short-running contract tests).
         var lattice = _fixture.Services.GetRequiredService<LatticeFactBackend>();
@@ -79,7 +79,7 @@ public sealed class ComplianceContractTests
         var firstMove = reader.MoveNext(cts.Token);
         await Task.Delay(200, cts.Token);
 
-        // Step 1 — lattice sees a Critical NC, baseline doesn't.
+        // Step 1 - lattice sees a Critical NC, baseline doesn't.
         await lattice.EmitAsync(new DomainFacts.NonConformanceRaised
         {
             Serial = partSerial,
@@ -93,7 +93,7 @@ public sealed class ComplianceContractTests
             Severity = DomainFacts.NcSeverity.Critical,
         }, cts.Token);
 
-        // Step 2 — route any fact through the router so FactRouted fires
+        // Step 2 - route any fact through the router so FactRouted fires
         // and the broadcaster re-reads both backends, detecting divergence.
         await router.EmitAsync(new DomainFacts.ProcessStepCompleted
         {

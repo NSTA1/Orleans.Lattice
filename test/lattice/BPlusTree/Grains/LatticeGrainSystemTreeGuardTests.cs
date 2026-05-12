@@ -157,7 +157,7 @@ public class LatticeGrainSystemTreeGuardTests
     [TestCaseSource(nameof(ReservedIds))]
     public void GetRoutingAsync_does_not_throw_for_reserved_id(string treeId)
     {
-        // GetRoutingAsync is intentionally NOT guarded — it is called by
+        // GetRoutingAsync is intentionally NOT guarded - it is called by
         // internal coordinator grains for system trees before dispatching
         // further internal calls. It does not read or mutate user data;
         // shard grains enforce the real boundary on reads/writes.

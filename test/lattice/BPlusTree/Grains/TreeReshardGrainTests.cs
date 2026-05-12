@@ -245,7 +245,7 @@ public class TreeReshardGrainTests
     [Test]
     public async Task MigrateAsync_skips_shards_with_fewer_than_two_slots()
     {
-        // Shard 0 owns 15 slots, shard 1 owns 1 slot — only shard 0 is eligible.
+        // Shard 0 owns 15 slots, shard 1 owns 1 slot - only shard 0 is eligible.
         var slots = new int[16];
         for (int i = 0; i < 15; i++) slots[i] = 0;
         slots[15] = 1;
@@ -299,7 +299,7 @@ public class TreeReshardGrainTests
         grainFactory.GetGrain<ITreeShardSplitGrain>($"{TreeId}/0").Returns(split0);
         grainFactory.GetGrain<ITreeShardSplitGrain>($"{TreeId}/1").Returns(split1);
 
-        // Must not throw — dispatch errors are logged and retried next tick.
+        // Must not throw - dispatch errors are logged and retried next tick.
         Assert.DoesNotThrowAsync(() => grain.MigrateAsync());
     }
 
@@ -416,7 +416,7 @@ public class TreeReshardGrainTests
     public void ReshardAsync_validates_arguments_before_consulting_resize_interlock()
     {
         // Bad argument must throw ArgumentOutOfRangeException even when a
-        // resize is in flight — caller feedback on bad input must not be
+        // resize is in flight - caller feedback on bad input must not be
         // masked by the interlock check.
         var (grain, _, grainFactory, _) = CreateGrain(virtualShardCount: 16, physicalShardCount: 2);
         var resize = Substitute.For<ITreeResizeGrain>();

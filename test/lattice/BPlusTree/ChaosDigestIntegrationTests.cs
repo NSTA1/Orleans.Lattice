@@ -11,11 +11,11 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// digest's value as a cross-silo divergence detector:
 ///
 /// <list type="bullet">
-/// <item><description>Repeated-call stability — within a write-quiescent window
+/// <item><description>Repeated-call stability - within a write-quiescent window
 /// (after the chaos workload completes), every shard returns byte-identical
 /// digests across successive calls. Non-determinism here would invalidate the
 /// digest as a divergence-detection primitive.</description></item>
-/// <item><description>Total-entry consistency — the sum of <see cref="LeafProjectionDigest.EntryCount"/>
+/// <item><description>Total-entry consistency - the sum of <see cref="LeafProjectionDigest.EntryCount"/>
 /// across all shards equals <see cref="ILattice.CountAsync"/>, so the digest's
 /// per-shard counts are accountable against the tree's own population view.</description></item>
 /// </list>

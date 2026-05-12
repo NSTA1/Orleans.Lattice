@@ -4,7 +4,7 @@ namespace MultiSiteManufacturing.Host.Federation;
 
 /// <summary>
 /// Stateless registry grain implementation. Holds no persistent state of
-/// its own — it's purely a fan-out coordinator over the seven
+/// its own - it's purely a fan-out coordinator over the seven
 /// <see cref="IProcessSiteGrain"/> instances.
 /// </summary>
 internal sealed class SiteRegistryGrain(IGrainFactory grains) : Grain, ISiteRegistryGrain
@@ -85,7 +85,7 @@ internal sealed class SiteRegistryGrain(IGrainFactory grains) : Grain, ISiteRegi
                 break;
             case ChaosPreset.ClusterSplit:
             case ChaosPreset.ReplicationDisconnect:
-                // No site / backend knobs — the router handles the
+                // No site / backend knobs - the router handles the
                 // cluster-split flag via IPartitionChaosGrain and the
                 // replication-disconnect flag via
                 // IReplicationDisconnectGrain.

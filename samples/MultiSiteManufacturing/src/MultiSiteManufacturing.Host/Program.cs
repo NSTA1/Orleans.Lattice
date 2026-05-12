@@ -30,7 +30,7 @@ AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport
 var builder = WebApplication.CreateBuilder(args);
 
 // Cluster-aware bootstrap. The sample launches as one of two
-// independent Orleans clusters — "us" and "eu" — selected via
+// independent Orleans clusters - "us" and "eu" - selected via
 // the --cluster command-line argument. Each cluster has its own ClusterId,
 // its own Azurite instance, and its own HTTP port range. A per-cluster
 // overlay file (appsettings.cluster.{name}.json) supplies connection
@@ -63,7 +63,7 @@ var queueStorageConnectionString =
     builder.Configuration.GetConnectionString("AzureQueueStorage")
     ?? tableStorageConnectionString;
 
-// Cluster section — per-cluster ports, cluster id, etc.
+// Cluster section - per-cluster ports, cluster id, etc.
 var clusterSection = builder.Configuration.GetSection("Cluster");
 var orleansClusterId = clusterSection["OrleansClusterId"] ?? $"msmfg-{clusterName}";
 
@@ -81,7 +81,7 @@ var httpPort = isPrimarySilo
     : clusterSection.GetValue("HttpPortB", 5002);
 
 // When running under Docker Compose, ASPNETCORE_URLS is set by the
-// container env (typically "http://+:8080") and must be honoured as-is —
+// container env (typically "http://+:8080") and must be honoured as-is -
 // binding to "localhost" inside a container only binds the loopback
 // interface and the host-side port publish (5001..5004) never reaches
 // the app. For the host-process path (plain `dotnet run`),
@@ -96,7 +96,7 @@ if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ASPNETCORE_URL
 // the shared-bin/obj race of two concurrent `dotnet run` invocations), the
 // default environment is Production and ASP.NET Core does not auto-wire the
 // Static Web Assets manifest. Without this call, MapStaticAssets serves
-// _framework/blazor.web.js as a 200 with 0 bytes — the Blazor bootstrap
+// _framework/blazor.web.js as a 200 with 0 bytes - the Blazor bootstrap
 // script loads but does nothing, so the interactive SignalR circuit never
 // forms and all @onclick handlers (Chaos flyout, Race, Fix) are dead.
 builder.WebHost.UseStaticWebAssets();
@@ -127,7 +127,7 @@ builder.Services.AddSingleton(new SiloIdentity(siloId, isPrimarySilo, clusterNam
 // Cross-cluster replication is delegated end-to-end to
 // Orleans.Lattice.Replication: WAL, shipper, applier, dead-letter
 // handling, plus the gRPC push transport. Every replicated tree in
-// the sample ships through that package — `mfg-facts` and
+// the sample ships through that package - `mfg-facts` and
 // `mfg-site-activity-index` as LwwRegister, `mfg-part-labels` as
 // OrSet (typed CRDT delta shipping). The `mfg-part-operator` tree
 // stays cluster-local because LWW across clusters with disjoint HLCs
@@ -157,7 +157,7 @@ builder.Host.UseOrleans(silo =>
         silo.AddMemoryGrainStorage("msmfgGrainState");
         silo.AddLattice((services, name) => services.AddMemoryGrainStorage(name));
 
-        // Dashboard broadcast stream — in-memory variant. This path is
+        // Dashboard broadcast stream - in-memory variant. This path is
         // only used by the single-silo quick-start so cluster-wide
         // fan-out is a no-op; the memory provider keeps the broadcaster
         // wiring identical to the production code path.
@@ -205,8 +205,8 @@ builder.Host.UseOrleans(silo =>
         // Cluster-wide dashboard broadcast stream backed by Azure
         // Storage Queues. Every silo's DashboardBroadcaster publishes
         // each inbound fact onto this stream and subscribes to it, so
-        // every Blazor Server circuit — regardless of which silo hosts
-        // it — receives every fact. Durable transport survives silo
+        // every Blazor Server circuit - regardless of which silo hosts
+        // it - receives every fact. Durable transport survives silo
         // restarts and transient outages: queued messages are picked
         // up when subscribers reconnect. PubSubStore (Azure Table)
         // backs subscription metadata so subscriptions survive restart
@@ -255,7 +255,7 @@ builder.Host.UseOrleans(silo =>
                     [LatticeFactBackend.FactTreeId] = LatticeMergeMode.LwwRegister,
                     // Secondary index keyed by {site}/{HLC}/{serial}
                     // for the "Inventory By Activity" tab. Same
-                    // shipping mode as the fact tree — entries are
+                    // shipping mode as the fact tree - entries are
                     // append-only LWW writes.
                     [SiteActivityIndex.TreeId] = LatticeMergeMode.LwwRegister,
                     // Per-serial OR-Set of process labels. Typed
@@ -376,7 +376,7 @@ builder.Services.AddHostedService<PartitionHealHostedService>();
 // Keeps a lightweight B+ tree index of {site}/{stage}/{serial}
 // entries so the "Parts by site" page can render a live per-site
 // inventory via a range scan on ILattice. The index subscribes to
-// FederationRouter.FactRouted and writes one entry per Fact — every
+// FederationRouter.FactRouted and writes one entry per Fact - every
 // fact type carries a Site, so inspection-only sites (Stuttgart CMM
 // Lab) appear alongside process-step sites.
 builder.Services.AddSingleton<SiteActivityIndex>();
@@ -401,11 +401,11 @@ builder.Services.AddHostedService(sp =>
 //
 // Gating precedence:
 //   1. Configuration key "Seeder:Enabled" (env var `Seeder__Enabled`)
-//      wins outright when present — `true` forces seeding on this
+//      wins outright when present - `true` forces seeding on this
 //      silo, `false` forces it off. Useful in docker-compose / CI
 //      where the topology is declarative.
 //   2. Otherwise, the default heuristic runs the seeder only on the
-//      primary silo of the "us" cluster — the convention the
+//      primary silo of the "us" cluster - the convention the
 //      sample's docker-compose and run.ps1 topologies rely on.
 var isSeeder = false;
 if (!builder.Environment.IsEnvironment("Testing"))

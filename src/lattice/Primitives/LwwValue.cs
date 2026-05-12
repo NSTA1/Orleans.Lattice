@@ -48,7 +48,7 @@ internal readonly record struct LwwValue<T>
     /// merge, snapshot / restore, bulk-load, compaction, saga
     /// prepare / compensate, and shard-split shadow-forward path so the
     /// frontier travels with the value. The library itself does not
-    /// merge or interpret the frontier — replication-aware consumers
+    /// merge or interpret the frontier - replication-aware consumers
     /// pin or compare it as needed. Wire-compatible: legacy persisted
     /// state without this field decodes to <c>null</c>.
     /// </summary>

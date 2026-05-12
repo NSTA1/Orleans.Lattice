@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Replication;
 /// hybrid-logical-clock cursor.
 /// <para>
 /// <b>Cursor-shape decision.</b> The public
-/// <see cref="IChangeFeed"/> contract is HLC-cursor-shaped — that
+/// <see cref="IChangeFeed"/> contract is HLC-cursor-shaped - that
 /// preserves transitive replication HLC fidelity, aligns with the
 /// per-origin high-water-mark dedup table, and matches the
 /// shape a future cross-tree materialiser needs (no notion of per-shard

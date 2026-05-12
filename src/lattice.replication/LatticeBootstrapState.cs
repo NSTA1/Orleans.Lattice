@@ -52,7 +52,7 @@ public enum LatticeBootstrapState
 
     /// <summary>
     /// A previous bootstrap attempt threw an exception. The state
-    /// machine is reentrant — calling
+    /// machine is reentrant - calling
     /// <see cref="ILatticeBootstrapCoordinator.BootstrapAsync"/> again
     /// restarts the cycle from <see cref="RequestingSnapshot"/>.
     /// </summary>

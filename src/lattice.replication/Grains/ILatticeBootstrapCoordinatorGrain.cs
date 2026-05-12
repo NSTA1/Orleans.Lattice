@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Replication.Grains;
 /// activation per tree id is provided by Orleans' grain placement,
 /// so concurrent bootstraps for the same tree across silos all route
 /// to one activation and the in-progress gate inside the grain
-/// becomes the cluster-wide mutual exclusion primitive — no
+/// becomes the cluster-wide mutual exclusion primitive - no
 /// distributed lock or external coordination is required.
 /// <para>
 /// Grain key format: <c>{treeName}</c>. The public

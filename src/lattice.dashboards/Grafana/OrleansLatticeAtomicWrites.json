@@ -130,7 +130,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Orleans.Lattice — Atomic Writes",
+  "title": "Orleans.Lattice - Atomic Writes",
   "uid": "orleans-lattice-atomic-writes",
   "version": 1,
   "panels": [
@@ -328,7 +328,7 @@
     {
       "id": 8,
       "title": "Non-committed saga count (range)",
-      "description": "Total number of sagas that did NOT reach the committed terminal outcome over the dashboard time range. A standalone counter — distinct from the rate panel — for at-a-glance visibility into the absolute scale of failure / compensation activity.",
+      "description": "Total number of sagas that did NOT reach the committed terminal outcome over the dashboard time range. A standalone counter - distinct from the rate panel - for at-a-glance visibility into the absolute scale of failure / compensation activity.",
       "type": "stat",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },

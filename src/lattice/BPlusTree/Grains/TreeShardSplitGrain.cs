@@ -13,22 +13,22 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Phase machine:
 /// </para>
 /// <list type="number">
-/// <item><description><see cref="ShardSplitPhase.BeginShadowWrite"/> — persist
+/// <item><description><see cref="ShardSplitPhase.BeginShadowWrite"/> - persist
 /// intent and call <see cref="IShardRootGrain.BeginSplitAsync"/> on the source
 /// so that subsequent live writes to moved virtual slots are mirrored to the
 /// target.</description></item>
-/// <item><description><see cref="ShardSplitPhase.Drain"/> — walk the source
+/// <item><description><see cref="ShardSplitPhase.Drain"/> - walk the source
 /// shard's leaf chain and merge all entries (including tombstones) for moved
 /// virtual slots into the target via <see cref="IShardRootGrain.MergeManyAsync"/>,
 /// preserving original HLC timestamps.</description></item>
-/// <item><description><see cref="ShardSplitPhase.Swap"/> — atomically update
+/// <item><description><see cref="ShardSplitPhase.Swap"/> - atomically update
 /// the persisted <see cref="ShardMap"/> so that moved virtual slots route to
 /// the new target shard.</description></item>
-/// <item><description><see cref="ShardSplitPhase.Reject"/> — flip the source
+/// <item><description><see cref="ShardSplitPhase.Reject"/> - flip the source
 /// into reject mode so any stale <c>LatticeGrain</c> activations still
 /// targeting the source for moved-slot keys receive
 /// <see cref="StaleShardRoutingException"/> and refresh.</description></item>
-/// <item><description><see cref="ShardSplitPhase.Complete"/> — final drain
+/// <item><description><see cref="ShardSplitPhase.Complete"/> - final drain
 /// pass to capture any post-shadow tombstones, clear the source's
 /// <c>SplitInProgress</c> state, and deactivate.</description></item>
 /// </list>
@@ -58,7 +58,7 @@ internal sealed class TreeShardSplitGrain(
     /// Parses the grain key as <c>{treeId}/{sourceShardIndex}</c>. The trailing
     /// integer suffix is the source shard; everything before the final '/' is
     /// the tree ID. A key without a '/' is treated as a tree-level coordinator
-    /// (legacy behaviour) — <see cref="SourceShardIndexFromKey"/> returns
+    /// (legacy behaviour) - <see cref="SourceShardIndexFromKey"/> returns
     /// <c>-1</c> in that case.
     /// </summary>
     private string TreeId
@@ -148,7 +148,7 @@ internal sealed class TreeShardSplitGrain(
                 $"Shard {sourceShardIndex} cannot be split because it owns fewer than 2 virtual slots.");
 
         // Atomically allocate a fresh target physical shard index via the
-        // registry — the registry's non-reentrant scheduling guarantees that
+        // registry - the registry's non-reentrant scheduling guarantees that
         // concurrent split coordinators each receive a distinct index even
         // when the persisted shard map is the same.
         var maxExisting = -1;
@@ -400,7 +400,7 @@ internal sealed class TreeShardSplitGrain(
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
             // Slot filtering is pushed into the leaf so only moved-slot
-            // entries are serialised on the response — saves bandwidth and
+            // entries are serialised on the response - saves bandwidth and
             // coordinator-side allocations on hot shards where moved slots
             // are a minority of the keyspace.
             var delta = await leaf.GetDeltaSinceForSlotsAsync(emptyVector, movedSlotsArray, virtualShardCount);

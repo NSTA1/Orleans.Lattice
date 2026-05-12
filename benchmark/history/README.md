@@ -9,7 +9,7 @@ stack has been torn down. Independent of, and orthogonal to, the per-run flow.
 | Container         | Image                                        | Port | Purpose                                                  |
 |-------------------|----------------------------------------------|------|----------------------------------------------------------|
 | `vfs-history-vm`  | `victoriametrics/victoria-metrics:v1.103.0`  | 8428 | PromQL-compatible long-term store; accepts pushes via `/api/v1/import/prometheus`. |
-| `vfs-history-grafana` | `grafana/grafana:11.3.0`                  | 3001 | Dedicated Grafana hosting the **Orleans.Lattice — Benchmark History** persona dashboards (one per lattice-usage profile, see [Dashboards](#dashboards)). |
+| `vfs-history-grafana` | `grafana/grafana:11.3.0`                  | 3001 | Dedicated Grafana hosting the **Orleans.Lattice - Benchmark History** persona dashboards (one per lattice-usage profile, see [Dashboards](#dashboards)). |
 
 `docker-compose.history.yml` declares two named volumes (`victoriametrics-data`,
 `grafana-history-data`) so data survives `down`. Use `down -v` to reset.
@@ -20,7 +20,7 @@ stack has been torn down. Independent of, and orthogonal to, the per-run flow.
 # Stand it up (once; stays up across many scenario runs).
 ./benchmark.ps1 -OpenHistory
 
-# Run scenarios as normal — they push their results.json scalars into VM
+# Run scenarios as normal - they push their results.json scalars into VM
 # automatically if the history stack is reachable.
 ./benchmark.ps1 current-state-no-replication
 ./benchmark.ps1 current-state-single-peer
@@ -59,10 +59,10 @@ The push helper in `benchmark.ps1` translates every key in `results.json`'s
 `metrics` block into a Prometheus gauge named `bench_<key>`. Two ingest paths
 feed it:
 
-1. **Explicit `$ScalarPanel` entries** in `benchmark.ps1` — one row per headline
+1. **Explicit `$ScalarPanel` entries** in `benchmark.ps1` - one row per headline
    metric with its source PromQL.
 2. **Auto-discovered prefixes** (`vehicle_fleet_simulator_*`, `orleans_lattice_*`,
-   `dotnet_*`) — every counter / histogram emitted under those OpenTelemetry
+   `dotnet_*`) - every counter / histogram emitted under those OpenTelemetry
    meters is synthesised into `bench_<sanitised>_per_second` /
    `_p50` / `_p95` / `_p99` keys without harness edits. Adding a new
    instrumentation site (e.g. the read-driver in `Bench.Sink`) just needs the
@@ -74,7 +74,7 @@ feed it:
 The history Grafana hosts an **Overview dashboard** plus **seven persona
 dashboards**. The Overview is a single-page roll-up showing every persona's
 headline KPIs in one view (one row per persona, scoped to that persona's
-scenarios) — use it as the landing page to spot the workload class that has
+scenarios) - use it as the landing page to spot the workload class that has
 regressed, then click into the matching persona dashboard for trend strips
 and per-run barcharts.
 
@@ -82,7 +82,7 @@ and per-run barcharts.
 |--------------------------------------|------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
 | `lat-hist-overview`                  | every persona below, one row each                                                                                      | Single-page roll-up: is anything red right now?                                |
 | `lat-hist-replication`               | `current-state-single-peer`, `bidirectional-replication`, `observer-no-peer`, `replication-key-filter`, `replication-backpressure`, `receiver-crash` | Replication ship/apply latency and commit-path overhead under replication.    |
-| `lat-hist-write-heavy-random`        | `current-state-no-replication`, `skewed-key-shard-splits`                                                              | Per-vehicle current-state overwrites — steady-state and hot-key variants.     |
+| `lat-hist-write-heavy-random`        | `current-state-no-replication`, `skewed-key-shard-splits`                                                              | Per-vehicle current-state overwrites - steady-state and hot-key variants.     |
 | `lat-hist-write-heavy-ordered`       | `event-log-with-ttl`                                                                                                    | Event-log keyspace with TTL: each tick a new key, TTL drives compaction.      |
 | `lat-hist-read-heavy`                | `read-heavy-random`, `read-heavy-ordered`                                                                               | GetAsync-dominant load (95:5 read:write) across random and sequential keys.   |
 | `lat-hist-read-write-mix`            | `read-write-mix-random`, `read-write-mix-ordered`                                                                       | Balanced 50:50 read/write (YCSB-A shape) across random and sequential keys.   |
@@ -105,7 +105,7 @@ The dashboards are regenerated from `benchmark/history/Generate-Dashboards.ps1`.
 The script wipes `BenchmarkHistory*.json` first so deleted personas don't leak,
 then emits one JSON per persona under `grafana/dashboards/`. Adding or moving a
 scenario between personas is a one-line edit to the `$Personas` table at the
-top of the script — re-run, wait ~30 s for Grafana's file-provider rescan,
+top of the script - re-run, wait ~30 s for Grafana's file-provider rescan,
 done.
 
 ## Querying directly

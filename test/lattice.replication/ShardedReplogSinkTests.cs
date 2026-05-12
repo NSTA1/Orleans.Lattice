@@ -208,7 +208,7 @@ public class ShardedReplogSinkTests
             async () => await sink.WriteAsync(MakeEntry("tree", "k"), CancellationToken.None),
             Throws.InvalidOperationException);
 
-        // The counter must reflect committed entries only — a thrown
+        // The counter must reflect committed entries only - a thrown
         // append does not contribute, so growth-rate vs ship-rate
         // operators are not misled by failed appends.
         Assert.That(collector.Measurements, Is.Empty);

@@ -14,7 +14,7 @@ namespace VehicleFleetSimulator.Api.Services;
 ///    existing <see cref="VehicleEvent"/> hierarchy would mean adding new proto messages, mapping
 ///    code on both ends, and breaking the assumption that <c>VehicleEventMessage.VehicleId</c> is
 ///    always meaningful.
-/// 2. SSE is trivial to consume from JS (browser) and from <c>HttpClient</c> in .NET — no client
+/// 2. SSE is trivial to consume from JS (browser) and from <c>HttpClient</c> in .NET - no client
 ///    libraries required.
 ///
 /// Each connected client owns a small bounded channel; full channels drop the oldest payload, which

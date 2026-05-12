@@ -195,7 +195,7 @@ public partial class LatticeRegistryGrainTests
     {
         var (grain, tree) = CreateGrain();
 
-        // Target tree has a PhysicalTreeId — it's already aliased.
+        // Target tree has a PhysicalTreeId - it's already aliased.
         var targetEntry = new TreeRegistryEntry { PhysicalTreeId = "another-tree" };
         var targetBytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(targetEntry);
         tree.GetAsync("physical-tree").Returns(Task.FromResult<byte[]?>(targetBytes));

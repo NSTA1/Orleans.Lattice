@@ -7,7 +7,8 @@ namespace Orleans.Lattice;
 /// Registry of WAL-consumer cursor positions used by the WAL garbage
 /// collector to compute a safe trim point. Every active consumer of
 /// the per-shard write-ahead log (an outbound replication ship loop,
-/// a future local materialiser, an in-process bridge, ...) reports the
+/// the leaf-as-materialiser cursor reporter, an in-process bridge,
+/// ...) reports the
 /// highest <see cref="HybridLogicalClock"/> it has fully consumed for
 /// a given <c>treeName</c>; the <see cref="ILatticeWalGc"/>
 /// then trims entries with <see cref="LatticeMutation.Timestamp"/> at or
@@ -77,7 +78,7 @@ public interface IWalCursorRegistry
     /// replaces the previous value, including transitioning back to
     /// <see langword="null"/> when the buffer drains. A
     /// <see langword="null"/> report contributes nothing to the
-    /// blocked-floor meet — only consumers that report a non-null
+    /// blocked-floor meet - only consumers that report a non-null
     /// pin participate.
     /// </para>
     /// </summary>
@@ -98,8 +99,8 @@ public interface IWalCursorRegistry
     /// In addition to the highest HLC the consumer has fully consumed,
     /// the consumer reports the per-origin <see cref="VersionVector"/>
     /// frontier it has fully applied. The garbage collector uses the
-    /// pointwise minimum of every reported vector — the
-    /// <em>causal-stable frontier</em> — as the dominating-clock half
+    /// pointwise minimum of every reported vector - the
+    /// <em>causal-stable frontier</em> - as the dominating-clock half
     /// of its trim predicate, AND-ed with the existing HLC cursor
     /// predicate for safety.
     /// <para>
@@ -115,7 +116,7 @@ public interface IWalCursorRegistry
     /// <para>
     /// Consumers that only report through the HLC-only overload
     /// continue to pin the HLC half of the predicate but are excluded
-    /// from the causal-stable frontier computation — when no consumer
+    /// from the causal-stable frontier computation - when no consumer
     /// has reported a vector, <see cref="GetCausalStableAsync"/>
     /// returns <see langword="null"/> and the GC degrades to the
     /// HLC-only predicate.
@@ -137,7 +138,7 @@ public interface IWalCursorRegistry
     /// Causal+ × blocked-floor overload that combines the per-origin
     /// <paramref name="vector"/> (pointwise-max coalescing) with the
     /// blocked-floor pin (<paramref name="blockedAtHlc"/>, replace
-    /// semantics). Cursor contract matches the VC-shaped overload —
+    /// semantics). Cursor contract matches the VC-shaped overload -
     /// must be strictly greater than <see cref="HybridLogicalClock.Zero"/>
     /// for VC-reporting consumers (the blocked-floor-only relaxation
     /// is reserved for the HLC-shape overload because a VC-reporting
@@ -223,7 +224,7 @@ public interface IWalCursorRegistry
     /// <c>BlockedAtHlc</c> through the blocked-floor overloads of
     /// <see cref="ReportCursorAsync(string, string, HybridLogicalClock, HybridLogicalClock?, CancellationToken)"/>.
     /// Consumers that have never reported a non-null pin (the
-    /// majority — leaf materialisers, peer ship loops) are excluded,
+    /// majority - leaf materialisers, peer ship loops) are excluded,
     /// and a consumer that previously reported a non-null pin and
     /// later cleared it via a null report no longer contributes.
     /// <para>

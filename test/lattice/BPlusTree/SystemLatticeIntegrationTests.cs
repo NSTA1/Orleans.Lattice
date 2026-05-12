@@ -16,6 +16,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// after the switchover.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class SystemLatticeIntegrationTests
 {
     private ClusterFixture _fixture = null!;

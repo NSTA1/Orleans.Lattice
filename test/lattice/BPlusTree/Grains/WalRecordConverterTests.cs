@@ -4,7 +4,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// the dormant seam — translation invariants between <see cref="LatticeMutation"/>
+/// the dormant seam - translation invariants between <see cref="LatticeMutation"/>
 /// and <see cref="WalRecord"/>. Mirrors the field-by-field semantics
 /// established by the existing <c>ReplicationMutationObserver</c>.
 /// </summary>
@@ -192,7 +192,7 @@ public class WalRecordConverterTests
         // batch. The converter is on the WAL read-back path
         // (WalShardGrain.GetPageAsync) and the commit-log write path
         // (WalCommitLogWriter), so it must preserve all three slots
-        // verbatim in both directions — otherwise the receiver-side
+        // verbatim in both directions - otherwise the receiver-side
         // atomic-batch buffer gate (entry.AtomicBatchSize > 0) is unreachable
         // for any cross-cluster atomic batch.
         var txId = Guid.NewGuid();

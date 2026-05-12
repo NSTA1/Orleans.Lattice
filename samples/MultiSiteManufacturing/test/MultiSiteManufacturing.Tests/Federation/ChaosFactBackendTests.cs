@@ -80,7 +80,7 @@ public class ChaosFactBackendTests
 
         var facts = await baseline.GetFactsAsync(serial);
         // Baseline appends on every EmitAsync regardless of fact id,
-        // so write amplification surfaces as a duplicate fact — exactly
+        // so write amplification surfaces as a duplicate fact - exactly
         // the scenario downstream dedup logic must tolerate.
         Assert.That(facts, Has.Count.EqualTo(2));
     }
@@ -94,7 +94,7 @@ public class ChaosFactBackendTests
         var serial = new PartSerialNumber("HPT-BLD-S1-2028-96004");
         await baseline.EmitAsync(Step(serial, 1, ProcessStage.Forge, ProcessSite.OhioForge));
 
-        // Turn on every knob — reads must still pass through unchanged.
+        // Turn on every knob - reads must still pass through unchanged.
         await _fixture.GrainFactory.GetGrain<IBackendChaosGrain>(baseline.Name)
             .ConfigureAsync(new BackendChaosConfig
             {
@@ -134,7 +134,7 @@ public class ChaosFactBackendTests
         var baseline = _fixture.NewBaselineBackend();
         // Seed-2 produces a deterministic shuffle that is not the identity
         // permutation for N=5 under Fisher–Yates, so arrival order at the
-        // inner backend differs from emission order — that's the whole
+        // inner backend differs from emission order - that's the whole
         // point of the reorder buffer.
         var decorator = new ChaosFactBackend(baseline, _fixture.GrainFactory, () => new Random(2));
 
@@ -172,7 +172,7 @@ public class ChaosFactBackendTests
             .All(x => x);
         Assert.That(
             isInHlcOrder, Is.False,
-            "Seeded RNG should produce a non-identity shuffle — if this ever flakes, pick a different deterministic seed.");
+            "Seeded RNG should produce a non-identity shuffle - if this ever flakes, pick a different deterministic seed.");
     }
 
     [Test]

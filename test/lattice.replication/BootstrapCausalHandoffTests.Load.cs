@@ -41,7 +41,7 @@ public partial class BootstrapCausalHandoffTests
         var yResult = await h.Applier.ApplyAsync(y);
         Assert.That(yResult.Applied, Is.False);
 
-        // Z arrives — applies directly, then triggers a fixed-point
+        // Z arrives - applies directly, then triggers a fixed-point
         // drain that releases Y (origin-D now at 700) and then X
         // (origin-B now at 500).
         var zResult = await h.Applier.ApplyAsync(z);
@@ -128,7 +128,7 @@ public partial class BootstrapCausalHandoffTests
         // Three ~25 KB-payload entries from origin-B with unsatisfied
         // forward deps on origin-A. EstimateSize per entry ~= 25_746
         // (value + key*2 + 128 overhead); two fit under 65_536, three
-        // do not — so adding the third evicts exactly the oldest.
+        // do not - so adding the third evicts exactly the oldest.
         var payload = new byte[25 * 1024];
         var e1 = SetEntry("k-bytes-1", Hlc(10), OriginB, Vector((OriginA, Hlc(999, 1)), (OriginB, Hlc(10))), payload);
         var e2 = SetEntry("k-bytes-2", Hlc(20), OriginB, Vector((OriginA, Hlc(999, 2)), (OriginB, Hlc(20))), payload);
@@ -154,7 +154,7 @@ public partial class BootstrapCausalHandoffTests
     /// HWM-deduped entries, (b) above-frontier-with-satisfied-deps
     /// directly-applied entries, (c) above-frontier-with-unsatisfied-
     /// deps parked entries, and (d) the satisfier that drains the
-    /// parked tail — all on a single applier instance — must produce
+    /// parked tail - all on a single applier instance - must produce
     /// the per-category outcomes for every entry without cross-talk.
     /// </summary>
     [Test]
@@ -176,7 +176,7 @@ public partial class BootstrapCausalHandoffTests
         var park = SetEntry("k-park", Hlc(160), OriginA, Vector((OriginA, Hlc(160)), (OriginB, Hlc(500))));
         var parkResult = await h.Applier.ApplyAsync(park);
 
-        // Satisfier (origin-B @ 500, no deps) — drains "k-park".
+        // Satisfier (origin-B @ 500, no deps) - drains "k-park".
         var satisfier = SetEntry("k-sat", Hlc(500), OriginB, Vector((OriginB, Hlc(500))));
         var satResult = await h.Applier.ApplyAsync(satisfier);
 

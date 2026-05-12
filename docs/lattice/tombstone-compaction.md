@@ -1,6 +1,6 @@
 # Tombstone Compaction
 
-Deleted keys are represented as **tombstones** — `LwwValue` entries with `IsTombstone = true`. Tombstones participate in LWW merge and delta replication like any other entry, so all replicas and caches eventually learn about the delete. However, tombstones are never removed by normal operations, leading to unbounded storage and scan overhead.
+Deleted keys are represented as **tombstones** - `LwwValue` entries with `IsTombstone = true`. Tombstones participate in LWW merge and delta replication like any other entry, so all replicas and caches eventually learn about the delete. However, tombstones are never removed by normal operations, leading to unbounded storage and scan overhead.
 
 ## How It Works
 
@@ -33,7 +33,7 @@ sequenceDiagram
     C->>R: Register keepalive reminder (1 min)
     C->>C: Start grain timer (2s ticks)
 
-    Note over C: Timer tick 1 — shard 0
+    Note over C: Timer tick 1 - shard 0
     C->>S0: GetLeftmostLeafIdAsync()
     S0-->>C: leafId₀
     C->>L0: CompactTombstonesAsync(gracePeriod)
@@ -44,20 +44,20 @@ sequenceDiagram
     L1-->>C: null (end of chain)
     C->>C: Persist NextShardIndex = 1
 
-    Note over C: Timer tick 2 — shard 1
+    Note over C: Timer tick 2 - shard 1
     C->>S1: GetLeftmostLeafIdAsync()
     S1-->>C: leafId₂
     C->>L2: CompactTombstonesAsync(gracePeriod)
     C->>L2: GetNextSiblingAsync()
     L2-->>C: null
 
-    Note over C: Timer tick 3 — all shards done
+    Note over C: Timer tick 3 - all shards done
     C->>C: Persist InProgress = false
     C->>R: Unregister keepalive reminder
     C->>C: Dispose timer
 ```
 
-The reminder is registered lazily — `LatticeGrain` calls `EnsureReminderAsync` on the first `SetAsync` or `DeleteAsync` for a given tree. A per-activation `bool` field ensures this cross-grain call happens at most once per `LatticeGrain` activation.
+The reminder is registered lazily - `LatticeGrain` calls `EnsureReminderAsync` on the first `SetAsync` or `DeleteAsync` for a given tree. A per-activation `bool` field ensures this cross-grain call happens at most once per `LatticeGrain` activation.
 
 For manual or on-demand compaction (e.g. maintenance scripts, integration tests), `LatticeGrain` invokes `ITombstoneCompactionGrain.RunCompactionPassAsync` internally on each reminder tick. The compaction grain is not part of the public API.
 
@@ -66,7 +66,7 @@ For manual or on-demand compaction (e.g. maintenance scripts, integration tests)
 `TombstoneGracePeriod` follows the same named-options pattern as all other `LatticeOptions` properties:
 
 ```csharp verify
-// Global default — applies to all trees.
+// Global default - applies to all trees.
 siloBuilder.ConfigureLattice(o => o.TombstoneGracePeriod = TimeSpan.FromHours(12));
 
 // Per-tree override.

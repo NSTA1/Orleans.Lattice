@@ -18,7 +18,7 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     Task<(GrainId ChildId, bool ChildrenAreLeaves)> RouteWithMetadataAsync(string key);
 
     /// <summary>
-    /// Returns a point-in-time snapshot of the full routing table —
+    /// Returns a point-in-time snapshot of the full routing table -
     /// separator keys, child identities, and the
     /// <c>ChildrenAreLeaves</c> flag. The shard root caches this snapshot
     /// per activation and uses it to perform key-to-child routing locally,

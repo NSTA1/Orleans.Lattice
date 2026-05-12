@@ -5,7 +5,7 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Internal ambient WAL-offset hint used to stamp the per-prepare
 /// offset onto the per-leaf pending-transaction map for projection
-/// checkpoint gating. Public callers do not interact with this type —
+/// checkpoint gating. Public callers do not interact with this type -
 /// the replay coordinator wraps each <c>ILeafProjection.Apply</c> call
 /// in <see cref="BeginScope(long)"/> so the leaf can record the WAL
 /// offset of every prepare and clamp checkpoint advances back to
@@ -20,7 +20,7 @@ namespace Orleans.Lattice;
 /// <see cref="RequestContext"/> entry keyed
 /// <see cref="LatticeEventConstants.ApplyOffsetRequestContextKey"/>. The
 /// foreground commit path leaves the hint unset (<see cref="Current"/>
-/// returns <c>null</c>) — there is no WAL offset to stamp because the
+/// returns <c>null</c>) - there is no WAL offset to stamp because the
 /// foreground path is the WAL author, not its replayer, so the leaf's
 /// pending-tx offset map simply skips the record.
 /// </para>

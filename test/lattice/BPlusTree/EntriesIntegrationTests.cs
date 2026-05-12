@@ -8,6 +8,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// Integration tests for <see cref="ILattice.EntriesAsync"/> using the default cluster.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class EntriesDefaultClusterTests
 {
     private ClusterFixture _fixture = null!;
@@ -111,6 +112,7 @@ public class EntriesDefaultClusterTests
 /// to exercise multi-leaf pagination across splits.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class EntriesSmallLeafClusterTests
 {
     private SmallLeafClusterFixture _fixture = null!;
@@ -193,6 +195,7 @@ public class EntriesSmallLeafClusterTests
 /// parameter enabled, using a 4-shard cluster with small leaves to force pagination.
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class EntriesPrefetchTests
 {
     private FourShardClusterFixture _fixture = null!;
@@ -298,7 +301,7 @@ public class EntriesPrefetchTests
     [Test]
     public async Task Entries_prefetch_false_disables_even_when_option_enabled()
     {
-        // prefetch: false should work the same as default — verifies the parameter
+        // prefetch: false should work the same as default - verifies the parameter
         // override path doesn't break anything.
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("epf-disabled");
 

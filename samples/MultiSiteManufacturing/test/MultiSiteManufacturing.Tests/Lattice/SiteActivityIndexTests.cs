@@ -96,7 +96,7 @@ public class SiteActivityIndexTests
     [Test]
     public async Task ListAtSite_indexes_non_process_step_facts()
     {
-        // CMM lab never emits a ProcessStepCompleted — only InspectionRecorded,
+        // CMM lab never emits a ProcessStepCompleted - only InspectionRecorded,
         // NonConformanceRaised, MrbDisposition etc. Before generalization the
         // site panel was always empty; now it shows the latest activity.
         var site = ProcessSite.CincinnatiMrb;

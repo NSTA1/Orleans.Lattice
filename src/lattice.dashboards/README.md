@@ -1,6 +1,6 @@
 # Orleans.Lattice.Dashboards
 
-Pre-built Grafana dashboards and provisioning templates for `Orleans.Lattice` and `Orleans.Lattice.Replication` telemetry. Sibling package — install when you want operator dashboards bundled with the library version.
+Pre-built Grafana dashboards and provisioning templates for `Orleans.Lattice` and `Orleans.Lattice.Replication` telemetry. Sibling package - install when you want operator dashboards bundled with the library version.
 
 ## What's in the box
 
@@ -14,8 +14,8 @@ Three Grafana dashboards (Grafana schema v39, Prometheus data source) shipped as
 
 Plus Grafana provisioning templates under `Provisioning/`:
 
-- `datasources.yaml` — Prometheus data source.
-- `dashboards.yaml` — file-system dashboard provider.
+- `datasources.yaml` - Prometheus data source.
+- `dashboards.yaml` - file-system dashboard provider.
 
 ## Drift guard
 

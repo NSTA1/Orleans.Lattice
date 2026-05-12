@@ -202,7 +202,7 @@ public class DeadLetterIntegrationTests
         // Replay routes through the canonical ReplicationApplier (not
         // the decorator). The HWM is already at this entry's timestamp
         // from the parking step, so the canonical applier reports
-        // Applied=false (filtered re-delivery) — terminal for cleanup.
+        // Applied=false (filtered re-delivery) - terminal for cleanup.
         var result = await _inspector.ReplayAsync(TreeId, parked.EntryId, CancellationToken.None);
 
         Assert.That(result, Is.Not.Null);

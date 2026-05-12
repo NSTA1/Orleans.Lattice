@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 /// emits typed CRDT state on the WAL and the receiver routes
 /// through <see cref="ReplicationApplier"/>'s
 /// <c>ApplyStateMergeAsync&lt;OrSet&gt;</c> path under
-/// <see cref="LatticeOriginContext"/> — the full mode-declaration →
+/// <see cref="LatticeOriginContext"/> - the full mode-declaration →
 /// producer-dispatch → receiver-merge pipeline this matrix exists to
 /// pin.
 /// </para>
@@ -121,7 +121,7 @@ public class OrSetConvergenceChaosTests
     /// the elements it authored (so each remove sees its own dots and
     /// is therefore guaranteed to take effect). After drain, every site
     /// must observe exactly the union of authored adds minus the union
-    /// of authored removes — the canonical OR-Set invariant under
+    /// of authored removes - the canonical OR-Set invariant under
     /// concurrent mutation.
     /// </summary>
     [Test]

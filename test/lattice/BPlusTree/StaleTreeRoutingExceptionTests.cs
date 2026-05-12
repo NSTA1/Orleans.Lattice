@@ -3,7 +3,7 @@ using Orleans.Lattice;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// Unit tests for <see cref="StaleTreeRoutingException"/> — mirrors the
+/// Unit tests for <see cref="StaleTreeRoutingException"/> - mirrors the
 /// StaleShardRoutingException test contract.
 /// </summary>
 public class StaleTreeRoutingExceptionTests

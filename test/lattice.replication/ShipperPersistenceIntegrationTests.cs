@@ -223,7 +223,7 @@ public class ShipperPersistenceIntegrationTests
         var grainA = BuildGrain(persistent, transport, encoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
 
-        // Pump 7 times — first flush at tick 4, then 3 pending writes
+        // Pump 7 times - first flush at tick 4, then 3 pending writes
         // (5/6/7) sit in the deferred-persist window.
         for (var i = 0; i < 7; i++)
         {
@@ -272,7 +272,7 @@ public class ShipperPersistenceIntegrationTests
             for (var i = 1L; i <= totalEntries; i++)
             {
                 Assert.That(deliveredHlcs, Contains.Item(i),
-                    $"Entry HLC={i} was lost across the crash — no data must be silently dropped.");
+                    $"Entry HLC={i} was lost across the crash - no data must be silently dropped.");
             }
             // Recovery actually re-shipped at least one duplicate
             // (entries 5,6,7 were pre-crash-pending so they reship
@@ -283,7 +283,7 @@ public class ShipperPersistenceIntegrationTests
             // Post-crash activation must eventually persist everything.
             Assert.That(persistent2.State.PartitionCursors[0], Is.EqualTo((long)totalEntries),
                 "After full recovery, partition cursor must point one past the last WAL sequence.");
-            // Cursors must monotonically advance — never roll back.
+            // Cursors must monotonically advance - never roll back.
             Assert.That(persistent2.State.Cursor.CompareTo(preCrashCursor), Is.GreaterThanOrEqualTo(0),
                 "Recovery cursor must not roll back behind the durable pre-crash cursor.");
             Assert.That(persistent2.State.PartitionCursors[0], Is.GreaterThanOrEqualTo(preCrashPartitionCursor),
@@ -360,12 +360,12 @@ public class ShipperPersistenceIntegrationTests
         }
 
         Assert.That(transport.SentHlcSequence.Count, Is.EqualTo(preDeactivateSendCount),
-            "Graceful-flush activation must NOT re-ship anything — the durable cursor already covered every WAL entry.");
+            "Graceful-flush activation must NOT re-ship anything - the durable cursor already covered every WAL entry.");
     }
 
     /// <summary>
     /// Even when graceful deactivation's flush fails (e.g. storage
-    /// outage during shutdown), no entry is lost — recovery just
+    /// outage during shutdown), no entry is lost - recovery just
     /// re-ships the deferred-persist window's worth at the receiver,
     /// which dedupes.
     /// </summary>
@@ -398,7 +398,7 @@ public class ShipperPersistenceIntegrationTests
             await grainA.OnDoorbellAsync(CancellationToken.None);
         }
 
-        // Arm OnDeactivate's WriteStateAsync to fail — simulate a
+        // Arm OnDeactivate's WriteStateAsync to fail - simulate a
         // storage outage during shutdown.
         persistent.ThrowOnWrite = new InvalidOperationException("storage-down");
         Assert.That(
@@ -408,7 +408,7 @@ public class ShipperPersistenceIntegrationTests
             Throws.Nothing,
             "OnDeactivate must swallow storage failures so deactivation completes.");
         Assert.That(persistent.WriteCount, Is.EqualTo(0),
-            "Storage was failing — no durable write actually landed.");
+            "Storage was failing - no durable write actually landed.");
 
         // Reactivate against the un-flushed durable state. Crashed
         // shutdown == empty PartitionCursors == cold-start re-ship.
@@ -434,7 +434,7 @@ public class ShipperPersistenceIntegrationTests
         for (var i = 1L; i <= totalEntries; i++)
         {
             Assert.That(deliveredHlcs, Contains.Item(i),
-                $"Entry HLC={i} was lost across a crashed deactivation flush — no data must be silently dropped.");
+                $"Entry HLC={i} was lost across a crashed deactivation flush - no data must be silently dropped.");
         }
     }
 
@@ -471,7 +471,7 @@ public class ShipperPersistenceIntegrationTests
         var grainA = BuildGrain(persistent, transport, encoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
 
-        // Pre-crash pumps — drain a few batches.
+        // Pre-crash pumps - drain a few batches.
         for (var i = 0; i < 2; i++)
         {
             await grainA.OnDoorbellAsync(CancellationToken.None);

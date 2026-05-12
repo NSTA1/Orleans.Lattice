@@ -15,7 +15,7 @@ snapshot. Two seams collaborate to detect and react to this condition:
 Fall-off is detected when, for a given `(treeName, sourceClusterId)`, the
 receiver's per-origin high-water-mark is **strictly less than** the sender's
 oldest still-available WAL entry HLC. Equality is intentionally not a
-fall-off — the receiver has applied exactly up to the sender's oldest entry
+fall-off - the receiver has applied exactly up to the sender's oldest entry
 and can resume incrementally from the next one.
 
 ## Triggering a check
@@ -23,9 +23,9 @@ and can resume incrementally from the next one.
 Today the sender's oldest-available HLC is plumbed through the call shape as
 an explicit parameter:
 
-```csharp
-var detector = host.Services.GetRequiredService<ILatticeFallOffLogDetector>();
-var introspection = host.Services.GetRequiredService<ILatticeWalIntrospection>();
+```csharp verify
+var detector = client.ServiceProvider.GetRequiredService<ILatticeFallOffLogDetector>();
+var introspection = client.ServiceProvider.GetRequiredService<ILatticeWalIntrospection>();
 
 var senderOldest = await introspection.GetOldestAvailableHlcAsync("tree-a");
 if (senderOldest is { } hlc)

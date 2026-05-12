@@ -50,7 +50,7 @@ internal sealed class LeafSnapshotProvider(
         await foreach (var entry in stream.Entries.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
             // Half-open [start, end) range filter, ordinal comparison
-            // — matches the lex order the rest of the library uses for
+            // - matches the lex order the rest of the library uses for
             // key ranges.
             if (string.CompareOrdinal(entry.Key, leafKeyRangeStart) < 0)
             {

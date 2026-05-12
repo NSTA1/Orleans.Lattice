@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Replication;
 /// on <see cref="LatticeReplicationMetrics"/>: <c>entries_behind</c>,
 /// <c>bytes_behind</c>, <c>consecutive_errors</c>, and
 /// <c>last_contact_seconds</c>. Instances are designed to be registered as a
-/// singleton by <c>AddLatticeReplication</c> — the constructor wires the
+/// singleton by <c>AddLatticeReplication</c> - the constructor wires the
 /// observable gauges, so a single instance is sufficient per silo.
 /// </summary>
 /// <remarks>
@@ -25,7 +25,7 @@ public class ReplicationPeerStats
     // single _current slot below, which is updated by every constructor.
     // This avoids leaking gauge registrations (and the closures bound to a
     // specific instance) into the static meter every time another instance
-    // is created — important for hosts that re-register the singleton during
+    // is created - important for hosts that re-register the singleton during
     // integration-test setup, and for unit tests that intentionally create
     // throw-away instances.
     private static readonly object RegistrationLock = new();

@@ -83,7 +83,7 @@ public partial class TreeResizeGrainTests
         state.State.NewMaxLeafKeys = 256;
         state.State.NewMaxInternalChildren = 64;
 
-        // Same params — should not throw.
+        // Same params - should not throw.
         await grain.ResizeAsync(256, 64);
 
         // Idempotent call must leave the in-progress marker unchanged.

@@ -16,8 +16,8 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// single-shot retry on prepare (catching only
 /// <see cref="StaleShardRoutingException"/>) and a single-shot retry
 /// on the terminal broadcast (catching both, but still single-shot).
-/// A reshard storm — a 4-to-8 grow that produces multiple sequential
-/// ShardMap swaps under a single in-flight saga — generates more
+/// A reshard storm - a 4-to-8 grow that produces multiple sequential
+/// ShardMap swaps under a single in-flight saga - generates more
 /// stale-routing throws than a single retry can absorb, so the
 /// exception escapes the saga and surfaces as
 /// "round=N: unknown-round (..., other&gt;0)" in the chaos test
@@ -86,7 +86,7 @@ public partial class AtomicWriteGrainTests
     [Test]
     public void PrepareAsync_surfaces_StaleShardRoutingException_after_budget_exhausted()
     {
-        // Confirm the retry budget is finite — a pathological storm of
+        // Confirm the retry budget is finite - a pathological storm of
         // stale-routing throws beyond the configured budget surfaces
         // the last exception to the caller rather than retrying
         // forever.
@@ -136,7 +136,7 @@ public partial class AtomicWriteGrainTests
     {
         // Saga's per-shard terminal broadcast under repeated
         // stale-routing throws (sequential split commits during a
-        // reshard window). Pre-fix: one-shot retry — second throw
+        // reshard window). Pre-fix: one-shot retry - second throw
         // escapes the saga's CompleteSagaAsync path and the registry
         // ForgetAsync never runs, leaking the saga's persisted state.
         var (grain, _, _, _, shard) = CreateGrain();

@@ -42,7 +42,7 @@ public partial class BPlusLeafGrainTests
         var d2 = await grain2.GetProjectionDigestAsync();
 
         // Hashes will differ because HLCs differ per grain (different replica ids
-        // for clock advancement) — verify only structural properties here.
+        // for clock advancement) - verify only structural properties here.
         Assert.That(d1.EntryCount, Is.EqualTo(2));
         Assert.That(d2.EntryCount, Is.EqualTo(2));
     }
@@ -51,7 +51,7 @@ public partial class BPlusLeafGrainTests
     public async Task Digest_is_invariant_to_insertion_order()
     {
         // Two grains using the same replica id with identical write sequence
-        // converge on identical hashes — sort-order invariance plus determinism.
+        // converge on identical hashes - sort-order invariance plus determinism.
         var grain1 = CreateGrain(replicaId: "leaf-x");
         var grain2 = CreateGrain(replicaId: "leaf-x");
         // The leaf's HLC advances per write; force the same HLC by using
@@ -130,7 +130,7 @@ public partial class BPlusLeafGrainTests
 
         var projection = (ILeafProjection)grain;
         await projection.SetCheckpointOffsetAsync(42, CancellationToken.None);
-        // SetCheckpointOffsetAsync coalesces — force-flush so the persisted
+        // SetCheckpointOffsetAsync coalesces - force-flush so the persisted
         // ProjectionCheckpointOffset (which the digest reads) advances.
         await projection.FlushCheckpointAsync(CancellationToken.None);
 
@@ -219,8 +219,8 @@ public partial class BPlusLeafGrainTests
         // Pin the public hash shape: an empty leaf with checkpoint=0 must
         // produce XxHash128 over (16 zero bytes XOR-fold ||
         // int64LE(0) entry-count || int64LE(0) checkpoint-offset). Any
-        // future change to the digest's outer framing — for example,
-        // appending an additional metadata field after the checkpoint —
+        // future change to the digest's outer framing - for example,
+        // appending an additional metadata field after the checkpoint -
         // will break this regression and force the change to be a
         // deliberate, documented wire-format bump.
         var grain = CreateGrain();

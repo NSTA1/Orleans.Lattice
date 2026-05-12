@@ -34,7 +34,7 @@ public sealed class GrpcContractFixture : IDisposable
         return channel;
     }
 
-    /// <summary>Root service provider of the host — useful for resolving FederationRouter directly.</summary>
+    /// <summary>Root service provider of the host - useful for resolving FederationRouter directly.</summary>
     public IServiceProvider Services => _factory.Services;
 
     public void Dispose()

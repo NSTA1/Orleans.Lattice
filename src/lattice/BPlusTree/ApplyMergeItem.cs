@@ -18,7 +18,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// <see cref="Value"/> and are persisted as a tombstone
 /// <see cref="LwwValue{T}"/>; non-tombstone items carry the committed
 /// payload bytes. The <see cref="ExpiresAtTicks"/> slot is preserved
-/// for non-tombstone items only and must be <c>0</c> on tombstones —
+/// for non-tombstone items only and must be <c>0</c> on tombstones -
 /// the apply path mirrors the per-entry behaviour where deletes never
 /// carry an expiry.
 /// </para>

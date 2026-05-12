@@ -55,7 +55,7 @@ internal interface ICommitLogReader
 
     /// <summary>
     /// Returns the offset of the oldest still-readable entry on the
-    /// per-shard WAL — the entry with the smallest offset that
+    /// per-shard WAL - the entry with the smallest offset that
     /// <see cref="ReadAsync"/> would yield if invoked with
     /// <c>fromOffsetExclusive = -1</c>. When the WAL has been trimmed,
     /// this is strictly greater than zero. When the WAL is empty

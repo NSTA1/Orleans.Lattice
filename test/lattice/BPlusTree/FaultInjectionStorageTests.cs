@@ -5,6 +5,7 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 [TestFixture]
+[Category("Integration")]
 public class FaultInjectionStorageTests
 {
     private FaultInjectionClusterFixture _fixture = null!;
@@ -52,7 +53,7 @@ public class FaultInjectionStorageTests
             await GetLeafForKeyAsync("lsr-0000"));
         var leafId = probeLeaf.GetGrainId();
 
-        // Inject a write fault on that leaf — the next WriteStateAsync will throw.
+        // Inject a write fault on that leaf - the next WriteStateAsync will throw.
         await StorageFaultGrain.AddFaultOnWrite(
             leafId, new InvalidOperationException("Injected storage fault"));
 
@@ -65,10 +66,10 @@ public class FaultInjectionStorageTests
         }
         catch
         {
-            // Expected — the storage fault causes the call to fail.
+            // Expected - the storage fault causes the call to fail.
         }
 
-        // No more faults — the next attempt should succeed via recovery.
+        // No more faults - the next attempt should succeed via recovery.
         // Give the grain a moment to deactivate if needed, then retry.
         await tree.SetAsync($"lsr-{limit:D4}", Encoding.UTF8.GetBytes($"v-{limit}"));
 
@@ -99,14 +100,14 @@ public class FaultInjectionStorageTests
             await tree.SetAsync($"ms-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
         }
 
-        // Inject a blanket of faults — we'll inject on the first leaf we can find.
+        // Inject a blanket of faults - we'll inject on the first leaf we can find.
         var probeLeaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(
             await GetLeafForKeyAsync("ms-0000", $"{FaultInjectionClusterFixture.TreeName}-multi"));
         await StorageFaultGrain.AddFaultOnWrite(
             probeLeaf.GetGrainId(),
             new InvalidOperationException("Injected fault for multi-split"));
 
-        // Try to insert more keys — some may fail.
+        // Try to insert more keys - some may fail.
         var failures = 0;
         for (int i = totalKeys / 2; i < totalKeys; i++)
         {
@@ -120,7 +121,7 @@ public class FaultInjectionStorageTests
             }
         }
 
-        // Now retry any that failed — the fault was consumed on the first throw.
+        // Now retry any that failed - the fault was consumed on the first throw.
         for (int i = totalKeys / 2; i < totalKeys; i++)
         {
             var existing = await tree.GetAsync($"ms-{i:D4}");
@@ -150,13 +151,13 @@ public class FaultInjectionStorageTests
             $"{FaultInjectionClusterFixture.TreeName}-idem");
         var limit = FaultInjectionClusterFixture.SmallMaxLeafKeys;
 
-        // Fill past the split point twice — each batch triggers a split.
+        // Fill past the split point twice - each batch triggers a split.
         for (int i = 0; i < limit * 3; i++)
         {
             await tree.SetAsync($"id-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
         }
 
-        // All keys must be readable — no duplicates, no lost data.
+        // All keys must be readable - no duplicates, no lost data.
         for (int i = 0; i < limit * 3; i++)
         {
             var result = await tree.GetAsync($"id-{i:D4}");
@@ -182,7 +183,7 @@ public class FaultInjectionStorageTests
             await tree.SetAsync($"sb-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
         }
 
-        // Trigger the split — this time let it succeed.
+        // Trigger the split - this time let it succeed.
         await tree.SetAsync($"sb-{limit:D4}", Encoding.UTF8.GetBytes($"v-{limit}"));
 
         // Overwrite a key that likely moved to the sibling (upper half).
@@ -285,7 +286,7 @@ public class FaultInjectionStorageTests
         // Update a key that was moved to the new sibling.
         await tree.SetAsync($"ca-{limit:D4}", Encoding.UTF8.GetBytes("updated"));
 
-        // Read all keys — cache should return correct (not stale) data.
+        // Read all keys - cache should return correct (not stale) data.
         for (int i = 0; i <= limit; i++)
         {
             var result = await tree.GetAsync($"ca-{i:D4}");
@@ -298,7 +299,7 @@ public class FaultInjectionStorageTests
     }
 
     // -----------------------------------------------------------------------
-    // Deterministic root leaf — same shard always produces same GrainId
+    // Deterministic root leaf - same shard always produces same GrainId
     // -----------------------------------------------------------------------
 
     [Test]
@@ -312,7 +313,7 @@ public class FaultInjectionStorageTests
 
         await tree.SetAsync("det-key", Encoding.UTF8.GetBytes("det-value"));
 
-        // Read it back — internally this goes through a potentially different
+        // Read it back - internally this goes through a potentially different
         // cache activation, but the shard root must route to the same leaf.
         var result = await tree.GetAsync("det-key");
         Assert.That(result, Is.Not.Null);
@@ -320,7 +321,7 @@ public class FaultInjectionStorageTests
     }
 
     // -----------------------------------------------------------------------
-    // ShardRootGrain retry — write succeeds despite a transient fault
+    // ShardRootGrain retry - write succeeds despite a transient fault
     // -----------------------------------------------------------------------
 
     [Test]
@@ -329,7 +330,7 @@ public class FaultInjectionStorageTests
         var treeName = $"{FaultInjectionClusterFixture.TreeName}-retry";
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
 
-        // Prime the shard — ensure the root leaf exists.
+        // Prime the shard - ensure the root leaf exists.
         await tree.SetAsync("retry-prime", Encoding.UTF8.GetBytes("prime"));
 
         // Inject a write fault on the root leaf.

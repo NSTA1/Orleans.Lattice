@@ -65,7 +65,7 @@ public partial class TreeSnapshotGrainTests
         state.State.DestinationTreeId = DestTreeId;
         state.State.OperationId = "op-1";
         state.State.Mode = SnapshotMode.Online;
-        state.State.NextShardIndex = 99; // garbage — should reset
+        state.State.NextShardIndex = 99; // garbage - should reset
 
         await grain.BeginShadowForwardAllShardsAsync();
 

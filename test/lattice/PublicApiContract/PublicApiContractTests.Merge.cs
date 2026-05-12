@@ -50,7 +50,7 @@ public partial class PublicApiContractTests
         var src = await _fixture.CreateSmallTreeAsync(sourceId, shardCount: 1);
         var dst = await _fixture.CreateSmallTreeAsync(targetId, shardCount: 1);
 
-        // Write to dst first; then write to src — src's HLC will be later.
+        // Write to dst first; then write to src - src's HLC will be later.
         await dst.SetAsync("k", Bytes("dst-old"));
         await Task.Delay(20);
         await src.SetAsync("k", Bytes("src-newer"));
@@ -70,7 +70,7 @@ public partial class PublicApiContractTests
         var src = await _fixture.CreateSmallTreeAsync(sourceId, shardCount: 1);
         var dst = await _fixture.CreateSmallTreeAsync(targetId, shardCount: 1);
 
-        // Both have "k". Then source deletes "k" — the tombstone is later.
+        // Both have "k". Then source deletes "k" - the tombstone is later.
         await dst.SetAsync("k", Bytes("dst-live"));
         await src.SetAsync("k", Bytes("src-live"));
         await Task.Delay(20);

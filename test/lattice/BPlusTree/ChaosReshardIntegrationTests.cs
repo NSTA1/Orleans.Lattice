@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <item><description>The <c>TreeReshardGrain</c> coordinator's migration
 /// loop under sustained traffic (eligibility filtering, dispatch-budget
 /// clamping, re-evaluation across ticks).</description></item>
-/// <item><description>The <c>HotShardMonitorGrain</c> interlock — the
+/// <item><description>The <c>HotShardMonitorGrain</c> interlock - the
 /// monitor must suppress its own passes while the reshard is in flight.</description></item>
 /// <item><description><c>ShardMap</c> convergence when reshard-dispatched
 /// splits race with workload writes.</description></item>

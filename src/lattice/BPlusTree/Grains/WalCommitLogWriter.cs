@@ -12,7 +12,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="IWalShardGrain.AppendAsync"/> entry point so the
 /// caller observes the per-shard sequence number.
 /// <para>
-/// Bypasses <c>IReplogSink</c> by design — the replication-package sink
+/// Bypasses <c>IReplogSink</c> by design - the replication-package sink
 /// seam returns <see cref="System.Threading.Tasks.Task"/> rather than
 /// <see cref="System.Threading.Tasks.Task{Long}"/>, and the leaf
 /// commit path needs the assigned offset to drive replay coordination
@@ -50,7 +50,7 @@ internal sealed class WalCommitLogWriter(
 
         // The mutation's own OriginClusterId wins when present (a
         // remote-replay path stamps it before reaching the WAL). When
-        // it is null — the foreground single-cluster commit path — the
+        // it is null - the foreground single-cluster commit path - the
         // resolver supplies the local cluster id so multi-site hosts
         // record "this WAL entry was authored locally by <cluster-id>"
         // without threading the cluster id through every call site.
@@ -62,7 +62,7 @@ internal sealed class WalCommitLogWriter(
             originClusterId: clusterIdResolver.Resolve(mutation.TreeId));
 
         // Saga terminal marks (TxCommit / TxAbort) have no natural
-        // user key — the spec mandates one terminal append per WAL
+        // user key - the spec mandates one terminal append per WAL
         // partition the saga touched, never per-key. The shard-root
         // coordinator stamps its own shard index into mutation.Key as
         // a base-10 invariant-culture string; the writer maps that

@@ -147,7 +147,7 @@ public class LatticeCursorGrainResilienceTests
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.NextKeysAsync(10));
     }
 
-    // --- Resume-from-checkpoint (G5 — unit-level failover simulation) ---
+    // --- Resume-from-checkpoint (G5 - unit-level failover simulation) ---
 
     [Test]
     public async Task Fresh_activation_resumes_from_persisted_LastYieldedKey()
@@ -166,7 +166,7 @@ public class LatticeCursorGrainResilienceTests
             "First activation must checkpoint the last yielded key.");
 
         // Step 2: discard grain1 and build a fresh grain over the same
-        // persisted state — simulates Orleans reactivating the grain on a
+        // persisted state - simulates Orleans reactivating the grain on a
         // different silo after a failover.
         var (grain2, _, lattice2, _) = CreateGrain(existingState: sharedState);
         lattice2.KeysAsync("b\0", null, false, null)

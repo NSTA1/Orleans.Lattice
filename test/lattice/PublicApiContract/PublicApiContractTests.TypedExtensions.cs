@@ -223,7 +223,7 @@ public partial class PublicApiContractTests
         var opId = "op-" + Guid.NewGuid().ToString("N");
 
         await tree.SetManyAtomicAsync(entries, opId);
-        // Re-submit with the same opId — should be an idempotent no-op.
+        // Re-submit with the same opId - should be an idempotent no-op.
         Assert.That(
             async () => await tree.SetManyAtomicAsync(entries, opId),
             Throws.Nothing);

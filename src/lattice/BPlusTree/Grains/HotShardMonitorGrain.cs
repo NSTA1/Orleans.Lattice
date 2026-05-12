@@ -20,14 +20,14 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Suppression rules:
 /// </para>
 /// <list type="bullet">
-/// <item><description><see cref="LatticeOptions.AutoSplitEnabled"/> is <c>false</c> — entire pass returns.</description></item>
-/// <item><description>The tree is younger than <see cref="LatticeOptions.AutoSplitMinTreeAge"/> (since this monitor activated) — entire pass returns.</description></item>
-/// <item><description>A resize, merge, or snapshot is in progress (<see cref="ILattice.IsResizeCompleteAsync"/> etc.) — entire pass returns.</description></item>
-/// <item><description>Any physical shard has a pending bulk graft (<see cref="IShardRootGrain.HasPendingBulkOperationAsync"/>) — entire pass returns.</description></item>
-/// <item><description>A shard is already splitting — that shard is skipped and counts toward the in-flight cap.</description></item>
-/// <item><description>The shard is in the per-shard cooldown window after a recent split — that shard is skipped.</description></item>
-/// <item><description>The shard owns fewer than two virtual slots — that shard is skipped (nothing to subdivide).</description></item>
-/// <item><description><see cref="LatticeOptions.MaxConcurrentAutoSplits"/> in-flight splits already running — no further splits this tick.</description></item>
+/// <item><description><see cref="LatticeOptions.AutoSplitEnabled"/> is <c>false</c> - entire pass returns.</description></item>
+/// <item><description>The tree is younger than <see cref="LatticeOptions.AutoSplitMinTreeAge"/> (since this monitor activated) - entire pass returns.</description></item>
+/// <item><description>A resize, merge, or snapshot is in progress (<see cref="ILattice.IsResizeCompleteAsync"/> etc.) - entire pass returns.</description></item>
+/// <item><description>Any physical shard has a pending bulk graft (<see cref="IShardRootGrain.HasPendingBulkOperationAsync"/>) - entire pass returns.</description></item>
+/// <item><description>A shard is already splitting - that shard is skipped and counts toward the in-flight cap.</description></item>
+/// <item><description>The shard is in the per-shard cooldown window after a recent split - that shard is skipped.</description></item>
+/// <item><description>The shard owns fewer than two virtual slots - that shard is skipped (nothing to subdivide).</description></item>
+/// <item><description><see cref="LatticeOptions.MaxConcurrentAutoSplits"/> in-flight splits already running - no further splits this tick.</description></item>
 /// </list>
 /// Key format: <c>{treeId}</c>.
 /// </summary>
@@ -295,7 +295,7 @@ internal sealed class HotShardMonitorGrain(
         }
         catch (InvalidOperationException ex)
         {
-            // Coordinator already busy on a different parameter set — ignore until next tick.
+            // Coordinator already busy on a different parameter set - ignore until next tick.
             logger.LogDebug(ex, "Could not trigger split for shard {ShardIndex} of tree {TreeId}", shardIndex, TreeId);
         }
     }

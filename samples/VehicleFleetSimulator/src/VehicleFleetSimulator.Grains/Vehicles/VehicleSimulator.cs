@@ -5,7 +5,7 @@ using VehicleFleetSimulator.Grains.Cities;
 namespace VehicleFleetSimulator.Grains.Vehicles;
 
 /// <summary>
-/// Pure tick function that advances <see cref="VehicleState"/>. No I/O, no Orleans dependencies —
+/// Pure tick function that advances <see cref="VehicleState"/>. No I/O, no Orleans dependencies -
 /// this is the unit-testable heart of the simulation.
 /// </summary>
 public static class VehicleSimulator

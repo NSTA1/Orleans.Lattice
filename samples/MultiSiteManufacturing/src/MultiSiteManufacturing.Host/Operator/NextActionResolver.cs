@@ -68,7 +68,7 @@ public static class NextActionResolver
             .ThenBy(f => f.Hlc.Counter)
             .ToArray();
 
-        // 1. Terminal — FAI accepted or MRB Scrap / ReturnToVendor.
+        // 1. Terminal - FAI accepted or MRB Scrap / ReturnToVendor.
         var hasFai = ordered.OfType<FinalAcceptance>().Any();
         var hasTerminalMrb = ordered.OfType<MrbDisposition>()
             .Any(m => m.Disposition is MrbDispositionKind.Scrap or MrbDispositionKind.ReturnToVendor);
@@ -77,7 +77,7 @@ public static class NextActionResolver
             return new NextActionSuggestion(NextAction.Terminal, null);
         }
 
-        // 2. Open NCR — raised, not yet dispositioned via MRB.
+        // 2. Open NCR - raised, not yet dispositioned via MRB.
         var dispositionedNcs = ordered.OfType<MrbDisposition>()
             .Select(m => m.NcNumber)
             .ToHashSet(StringComparer.Ordinal);
@@ -97,7 +97,7 @@ public static class NextActionResolver
             return new NextActionSuggestion(NextAction.CompleteRework, null);
         }
 
-        // 4. Rework completed — retest outcome determines next step.
+        // 4. Rework completed - retest outcome determines next step.
         if (latestReworkDoneIdx >= 0)
         {
             var reworkDone = (ReworkCompleted)ordered[latestReworkDoneIdx];
@@ -124,7 +124,7 @@ public static class NextActionResolver
             return new NextActionSuggestion(NextAction.CompleteMachining, null);
         }
 
-        // 6. Machining done — require CMM pass, then NDT pass, then FAI.
+        // 6. Machining done - require CMM pass, then NDT pass, then FAI.
         var hasCmmPass = ordered.OfType<InspectionRecorded>()
             .Any(i => i.Inspection == Inspection.CMM && i.Outcome == InspectionOutcome.Pass);
         if (!hasCmmPass)

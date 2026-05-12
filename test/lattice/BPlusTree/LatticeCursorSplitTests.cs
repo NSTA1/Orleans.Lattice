@@ -19,6 +19,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </para>
 /// </summary>
 [TestFixture]
+[Category("Integration")]
 public class LatticeCursorSplitTests
 {
     private FourShardClusterFixture _fixture = null!;

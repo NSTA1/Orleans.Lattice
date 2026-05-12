@@ -72,7 +72,7 @@ internal sealed partial class BPlusLeafGrain(
     /// <see cref="GetDeltaSinceAsync"/> consume <c>delta.Version</c>
     /// exclusively through the pure static
     /// <see cref="VersionVector.Merge(VersionVector, VersionVector)"/>
-    /// (see <see cref="LeafCacheGrain.RefreshAsync"/>) — no caller mutates
+    /// (see <see cref="LeafCacheGrain.RefreshAsync"/>) - no caller mutates
     /// the returned vector. The singleton's empty version is also
     /// correctness-equivalent on this branch: the dominate-or-equals
     /// precondition guarantees the caller already saw everything the leaf
@@ -125,7 +125,7 @@ internal sealed partial class BPlusLeafGrain(
     /// ticks remain strictly greater than the override (preserving local
     /// monotonicity), but the <em>override</em> is returned verbatim so
     /// the persisted <see cref="LwwValue{T}.Timestamp"/> matches the
-    /// authoring cluster's HLC bit-identically — preserving the
+    /// authoring cluster's HLC bit-identically - preserving the
     /// receiver-side LWW resolution invariant.
     /// </summary>
     private HybridLogicalClock AdvanceClockOrOverride()
@@ -147,7 +147,7 @@ internal sealed partial class BPlusLeafGrain(
     public Task<byte[]?> GetAsync(string key)
     {
         // Strict atomic-visibility: a key with a pending-tx entry
-        // dials back through the per-tree TxRegistry — the
+        // dials back through the per-tree TxRegistry - the
         // registry-recorded saga outcome is the single tree-wide
         // linearization point, so readers never observe a partial
         // commit / abort across leaves. The fast path (no pending
@@ -177,7 +177,7 @@ internal sealed partial class BPlusLeafGrain(
                     return null;
                 return pendingValue.Value;
             default:
-                // InFlight or Aborted — surface the pre-saga value
+                // InFlight or Aborted - surface the pre-saga value
                 // from Entries. Strict atomic visibility: until the
                 // registry records a Committed decision, the saga's
                 // prepared writes are invisible and readers must see
@@ -218,7 +218,7 @@ internal sealed partial class BPlusLeafGrain(
                     return new VersionedValue();
                 return new VersionedValue { Value = pendingValue.Value, Version = pendingValue.Timestamp };
             default:
-                // InFlight or Aborted — surface the pre-saga value.
+                // InFlight or Aborted - surface the pre-saga value.
                 // See GetWithPendingAsync for the rationale.
                 if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
                     return new VersionedValue { Value = lww.Value, Version = lww.Timestamp };
@@ -247,7 +247,7 @@ internal sealed partial class BPlusLeafGrain(
             case TxStatus.Committed:
                 return !pendingValue.IsTombstone && !pendingValue.IsExpired(nowTicks);
             default:
-                // InFlight or Aborted — fall through to Entries.
+                // InFlight or Aborted - fall through to Entries.
                 // See GetWithPendingAsync for the rationale.
                 return state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks);
         }
@@ -268,7 +268,7 @@ internal sealed partial class BPlusLeafGrain(
             return Task.FromResult(new GetOrSetResult { ExistingValue = existing.Value });
         }
 
-        // Key is absent, tombstoned, expired, or pending — delegate to the write path and wrap the result.
+        // Key is absent, tombstoned, expired, or pending - delegate to the write path and wrap the result.
         return GetOrSetWriteAsync(key, value);
     }
 
@@ -282,7 +282,7 @@ internal sealed partial class BPlusLeafGrain(
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         // Pending-tx isolation: a key with an in-flight saga prepare is
-        // invisible to CAS — treat it as absent so expectedVersion must
+        // invisible to CAS - treat it as absent so expectedVersion must
         // be Zero. The CAS write itself races with the saga's terminal
         // mark; LWW resolves the conflict deterministically via HLC.
         var pending = IsKeyPending(key);
@@ -306,7 +306,7 @@ internal sealed partial class BPlusLeafGrain(
         }
         else
         {
-            // Key is absent, tombstoned, or pending — expectedVersion must be Zero.
+            // Key is absent, tombstoned, or pending - expectedVersion must be Zero.
             if (expectedVersion != HybridLogicalClock.Zero)
             {
                 return Task.FromResult(new CasResult
@@ -317,7 +317,7 @@ internal sealed partial class BPlusLeafGrain(
             }
         }
 
-        // Version matches — delegate to the async write path.
+        // Version matches - delegate to the async write path.
         return SetIfVersionWriteAsync(key, value);
     }
 
@@ -350,7 +350,7 @@ internal sealed partial class BPlusLeafGrain(
                         result[key] = pending.value.Value!;
                     continue;
                 }
-                // InFlight or Aborted — fall through to Entries
+                // InFlight or Aborted - fall through to Entries
                 // (pre-saga visibility). See GetWithPendingAsync.
             }
 
@@ -387,7 +387,7 @@ internal sealed partial class BPlusLeafGrain(
             // Apply the caller's write to the correct leaf so it isn't silently dropped.
             if (string.Compare(key, state.State.SplitKey!, StringComparison.Ordinal) >= 0)
             {
-                // The key belongs to the new sibling — forward it there.
+                // The key belongs to the new sibling - forward it there.
                 // The sibling publishes its own mutation notification after persist,
                 // so we do not publish one here to avoid a duplicate for the same key.
                 var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.SplitSiblingId!.Value);
@@ -395,7 +395,7 @@ internal sealed partial class BPlusLeafGrain(
             }
             else
             {
-                // The key belongs to this leaf — write it via the
+                // The key belongs to this leaf - write it via the
                 // dual-durability commit path so the WAL append, the
                 // in-memory projection update, and the shadow persist
                 // remain consistent with the main path below.
@@ -412,14 +412,14 @@ internal sealed partial class BPlusLeafGrain(
     /// Commit path for <see cref="MutationKind.Set"/>.
     /// Steps in order:
     /// <list type="number">
-    ///   <item><b>build</b> — tick HLC + version vector and construct
+    ///   <item><b>build</b> - tick HLC + version vector and construct
     ///   the LWW value plus its observer-bound mutation envelope;</item>
-    ///   <item><b>wal</b> — append the mutation to the per-shard WAL via
+    ///   <item><b>wal</b> - append the mutation to the per-shard WAL via
     ///   the resolved <see cref="ICommitLogWriter"/> (no-op when the
     ///   adapter is absent);</item>
-    ///   <item><b>apply</b> — merge the LWW value into the in-memory
+    ///   <item><b>apply</b> - merge the LWW value into the in-memory
     ///   projection and check the leaf-split predicate;</item>
-    ///   <item><b>observer</b> — publish the post-commit mutation to
+    ///   <item><b>observer</b> - publish the post-commit mutation to
     ///   any registered <see cref="IMutationObserver"/> inside a
     ///   <see cref="LatticeCommitLogContext"/> scope so a downstream
     ///   replication-aware observer can detect the commit-log source
@@ -560,7 +560,7 @@ internal sealed partial class BPlusLeafGrain(
         // For non-prepared deletes, the absent / tombstoned short-circuit
         // saves an HLC tick and a WAL append. For prepared deletes the
         // saga still expects a pending-tx entry, so we always emit a
-        // tombstone into the pending bucket — committing the saga must
+        // tombstone into the pending bucket - committing the saga must
         // make the absence durable (the caller's pre-saga value is
         // captured separately by the saga coordinator).
         if (!isPrepared && (!state.State.Entries.TryGetValue(key, out var existing) || existing.IsTombstone))
@@ -644,7 +644,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive)
     {
         // Collect matching keys. Entries is a SortedDictionary so we can
-        // break early once we pass endExclusive — but we must still report
+        // break early once we pass endExclusive - but we must still report
         // whether we observed a key >= endExclusive so the shard
         // coordinator can terminate the chain walk deterministically.
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
@@ -707,7 +707,7 @@ internal sealed partial class BPlusLeafGrain(
             // for the rationale. DeleteRange replay on the receiving
             // leaf iterates that leaf's own Entries only, so the
             // filter is not strictly required for correctness on
-            // DeleteRange — but stamping consistently keeps every
+            // DeleteRange - but stamping consistently keeps every
             // mutation kind on the same wire shape so receivers and
             // operator tooling can rely on the slot being populated.
             ShardIndex = state.State.ShardIndex ?? 0,
@@ -757,7 +757,7 @@ internal sealed partial class BPlusLeafGrain(
                     if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)) count++;
                     continue;
                 }
-                // InFlight or Aborted — fall through to Entries
+                // InFlight or Aborted - fall through to Entries
                 // (pre-saga visibility). See GetWithPendingAsync.
             }
             if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
@@ -795,7 +795,7 @@ internal sealed partial class BPlusLeafGrain(
                     else live++;
                     continue;
                 }
-                // InFlight or Aborted — fall through to Entries
+                // InFlight or Aborted - fall through to Entries
                 // (pre-saga visibility). See GetWithPendingAsync.
             }
             if (lww.IsTombstone || lww.IsExpired(nowTicks)) tombstones++;
@@ -864,7 +864,7 @@ internal sealed partial class BPlusLeafGrain(
         // (CompleteSplitAsync stamping a freshly-created sibling)
         // passes a non-null splitKey as the low bound, so a non-null
         // persisted LowKeyInclusive is the unambiguous "already
-        // seeded" sentinel. Donors never call this — they update
+        // seeded" sentinel. Donors never call this - they update
         // their own HighKeyExclusive directly inside CompleteSplitAsync
         // when narrowing their own range to the split key.
         if (state.State.LowKeyInclusive is not null) return;
@@ -908,7 +908,7 @@ internal sealed partial class BPlusLeafGrain(
                 }
                 else
                 {
-                    // Tombstone is still within the grace window — a future pass
+                    // Tombstone is still within the grace window - a future pass
                     // must re-scan it once the grace has elapsed.
                     anyInGraceRemaining = true;
                 }
@@ -1113,7 +1113,7 @@ internal sealed partial class BPlusLeafGrain(
                         keys.Add(key);
                     continue;
                 }
-                // InFlight or Aborted — fall through to Entries
+                // InFlight or Aborted - fall through to Entries
                 // (pre-saga visibility). See GetWithPendingAsync.
             }
 
@@ -1182,7 +1182,7 @@ internal sealed partial class BPlusLeafGrain(
                         entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
                     continue;
                 }
-                // InFlight or Aborted — fall through to Entries
+                // InFlight or Aborted - fall through to Entries
                 // (pre-saga visibility). See GetWithPendingAsync.
             }
 
@@ -1231,7 +1231,7 @@ internal sealed partial class BPlusLeafGrain(
                         result[key] = pending.value.Value!;
                     continue;
                 }
-                // InFlight or Aborted — fall through to Entries
+                // InFlight or Aborted - fall through to Entries
                 // (pre-saga visibility). See GetWithPendingAsync.
             }
             if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
@@ -1265,7 +1265,7 @@ internal sealed partial class BPlusLeafGrain(
                         result.Add(new LwwEntry(key, pending.value));
                     continue;
                 }
-                // InFlight or Aborted — fall through to Entries
+                // InFlight or Aborted - fall through to Entries
                 // (pre-saga visibility). See GetWithPendingAsync.
             }
             if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
@@ -1285,7 +1285,7 @@ internal sealed partial class BPlusLeafGrain(
     /// <summary>
     /// Returns all key-value entries in this leaf including tombstones,
     /// preserving the original <see cref="LwwValue{T}"/> timestamps.
-    /// Internal method for unit testing — not exposed on the grain interface
+    /// Internal method for unit testing - not exposed on the grain interface
     /// to avoid Orleans generic type serialization issues.
     /// </summary>
     internal Task<Dictionary<string, LwwValue<byte[]>>> GetAllRawEntriesAsync()

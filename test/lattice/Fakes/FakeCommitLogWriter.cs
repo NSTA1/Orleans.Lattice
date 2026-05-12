@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Tests.Fakes;
 /// invariant by counting <see cref="AppendCount"/>.
 /// <para>
 /// Returns a strictly-monotonic, dense per-instance offset starting at
-/// <c>0</c> — the same shape a real adapter would assign for a single
+/// <c>0</c> - the same shape a real adapter would assign for a single
 /// <c>(treeId, shardIndex)</c> WAL partition. Multi-shard tests that
 /// need separate offset counters construct one instance per shard.
 /// </para>
