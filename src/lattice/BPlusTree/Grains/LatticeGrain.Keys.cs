@@ -119,7 +119,15 @@ internal sealed partial class LatticeGrain
         }
 
         // System trees never split - skip reconciliation entirely.
-        HashSet<string>? yielded = isSystemTree ? null : new HashSet<string>(StringComparer.Ordinal);
+        // For non-system trees the cross-cursor dedup set grows to roughly
+        // the scan window size (~hundreds-to-thousands of keys). Pre-sizing
+        // to `pageSize` saves the small-end resize chain
+        // (0 -> 3 -> 7 -> 17 -> 37 -> ...) which dominates the HashSet
+        // allocation cost for medium scans without committing to a large
+        // upfront allocation for tiny scans. The natural bound is one full
+        // page-fetch worth of keys, which is also tunable via
+        // `LatticeOptions.KeysPageSize`.
+        HashSet<string>? yielded = isSystemTree ? null : new HashSet<string>(capacity: pageSize, comparer: StringComparer.Ordinal);
         var maxRetries = isSystemTree ? 0 : Math.Max(1, Options.MaxScanRetries);
         var retriesUsed = 0;
 

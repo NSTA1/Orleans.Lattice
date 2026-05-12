@@ -77,14 +77,20 @@ public sealed class BenchmarkProfilerSmokeTests
             Assert.That(root.GetProperty("mode").GetString(), Is.EqualTo("alloc"));
             Assert.That(root.GetProperty("run_id").GetString(), Is.EqualTo("smoke"));
             Assert.That(root.GetProperty("git_sha").GetString(), Is.EqualTo("smoke-sha"));
-            // The sampled-allocation event delivery on dry/quick fidelity is
-            // best-effort: on busy CI hosts the EventPipe session can be
-            // truncated before any GCSampledObjectAllocation event flushes.
-            // We assert the schema rather than a non-zero count so the
-            // smoke test stays stable across platforms.
             Assert.That(root.TryGetProperty("top_allocators", out _), Is.True);
             Assert.That(root.TryGetProperty("top_cpu", out _), Is.True);
-            Assert.That(root.TryGetProperty("total_allocations_b", out _), Is.True);
+            Assert.That(root.TryGetProperty("total_allocations_b", out var totalAllocProp), Is.True);
+            // 16 MiB of managed allocation comfortably exceeds the
+            // GCAllocationTick emit threshold (~100 KB), so a healthy
+            // EventPipe pipeline must report a positive byte total. A zero
+            // here means the post-processing handler block silently dropped
+            // every allocation event (the failure mode that previously
+            // shipped under the GCSampledObjectAllocation-only handler).
+            Assert.That(totalAllocProp.GetInt64(), Is.GreaterThan(0L),
+                "profile.json reported zero allocations after a 16 MiB burst; the EventPipe allocation handler is not firing");
+            var topAllocators = root.GetProperty("top_allocators");
+            Assert.That(topAllocators.GetArrayLength(), Is.GreaterThan(0),
+                "top_allocators is empty after a 16 MiB burst; the allocation handler captured nothing");
         }
         finally
         {

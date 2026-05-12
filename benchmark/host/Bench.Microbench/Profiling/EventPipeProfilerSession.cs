@@ -227,6 +227,37 @@ internal sealed class EventPipeProfilerSession : IDisposable
                         // single bad event must not tank the pass
                     }
                 };
+
+                // GCAllocationTick fires every ~100 KB of managed allocation
+                // across all threads and is the reliable allocation signal
+                // over EventPipe (GCSampledObjectAllocationHigh is documented
+                // by the runtime but ships near-empty on .NET 10 EventPipe
+                // sessions, presumably because the sampled-allocator path is
+                // ETW-only). The 0x1 GC keyword is already enabled by
+                // BuildProviders. Attributing the full tick amount to the
+                // deepest managed frame is the same shape as the sampled
+                // handler above; on a healthy session this dominates.
+                clrParser.GCAllocationTick += data =>
+                {
+                    try
+                    {
+                        long bytes = data.AllocationAmount64;
+                        if (bytes <= 0)
+                        {
+                            bytes = data.AllocationAmount;
+                        }
+                        if (bytes <= 0)
+                        {
+                            return;
+                        }
+                        var (method, module) = ResolveDeepestManagedFrame(data);
+                        _aggregator.RecordAllocation(method, module, bytes);
+                    }
+                    catch
+                    {
+                        // single bad event must not tank the pass
+                    }
+                };
             }
 
             if (_options.CapturesCpu)
