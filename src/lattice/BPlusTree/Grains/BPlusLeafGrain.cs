@@ -1106,7 +1106,18 @@ internal sealed partial class BPlusLeafGrain(
         var splitKey = state.State.SplitKey;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
 
-        var keys = new List<string>();
+        // Pre-size the result list to bound the small-end resize chain
+        // (0 -> 4 -> 8 -> 16 -> ... -> 256 = 7 resizes for the common
+        // ~250-entry-per-leaf shape). Capped at 256: for small leaves the
+        // cap collapses to Entries.Count (no waste); for large leaves the
+        // cap prevents the cycle-27 trap where pre-sizing to Entries.Count
+        // over-allocates by ~10x when the range filter or split-key bound
+        // truncates iteration well below the leaf's total entry count.
+        // 256 is just above the typical page-size shape (KeysPageSize
+        // default 512 / typical fanout 2-4 cursors = ~128-256 keys
+        // per leaf per page) so it sized the initial array to the
+        // expected emission, not the worst-case.
+        var keys = new List<string>(capacity: Math.Min(state.State.Entries.Count, 256));
         foreach (var (key, lww) in state.State.Entries)
         {
             if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
