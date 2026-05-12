@@ -344,61 +344,49 @@ internal sealed class AtomicWriteGrain(
         touchedSorted.Sort();
         state.State.TouchedShards = touchedSorted;
 
-        foreach (var entry in entries)
+        // Pre-saga value capture: group keys by their routed shard, then
+        // issue ONE batched GetRawEntriesAsync RPC per shard in parallel.
+        // The earlier shape was a 16-iteration sequential per-entry
+        // foreach that paid one cross-grain Task allocation per entry
+        // (16 in the microbench atomic batch); the batched shape pays
+        // one Task allocation per distinct touched shard (1 in the
+        // single-shard microbench, up to 4 in the 4-shards variant).
+        // Stale-routing retry is per-shard with the same wall-clock
+        // budget as the original loop, since a topology change must be
+        // re-resolved against a fresh snapshot regardless of fan-out
+        // shape. The per-shard call returns a list aligned by index
+        // with its input keys list, so the scatter back into PreValues
+        // tracks (key -> original entry index) explicitly.
+        var preValuesArray = new AtomicPreValue[entries.Count];
+        var shardBuckets = new Dictionary<int, List<(string Key, int Index)>>(touched.Count);
+        for (int i = 0; i < entries.Count; i++)
         {
-            LwwEntry? raw = null;
-            // Deadline-bounded retry for sequential topology changes (split
-            // commit followed by another split commit, or an alias swap
-            // that lands between attempts during an online reshard /
-            // resize). Refreshes routing once per stale-routing throw via
-            // the public ILattice.GetRoutingAsync hook before re-issuing
-            // the direct IShardRootGrain call. A bounded attempt-count
-            // budget was insufficient under reshard storms - see
-            // ReshardTopologyTests.Continuous_reader_observes_zero_or_all
-            // _keys_through_mid_saga_reshard and the matching resize test
-            // which exercise this path under a 4-to-8 reshard / online
-            // resize alias swap. The catch blocks unconditionally fire so
-            // the original stale-routing throw surfaces to the caller once
-            // the wall-clock budget elapses; a when-filter on the catch
-            // could race against the loop condition and exit silently.
-            var deadline = DateTime.UtcNow + StaleRoutingRetryBudget;
-            while (true)
+            var key = entries[i].Key;
+            var shardIndex = routing.Map.Resolve(key);
+            if (!shardBuckets.TryGetValue(shardIndex, out var bucket))
             {
-                try
-                {
-                    raw = await GetShardForKey(routing, entry.Key).GetRawEntryAsync(entry.Key);
-                    break;
-                }
-                catch (StaleShardRoutingException)
-                {
-                    // Adaptive shard split has remapped virtual slots; refresh
-                    // routing and retry until the deadline elapses.
-                    if (DateTime.UtcNow >= deadline) throw;
-                    routing = await lattice.GetRoutingAsync();
-                }
-                catch (StaleTreeRoutingException)
-                {
-                    // Tree alias was swapped mid-saga (online resize / reshard);
-                    // refresh routing and retry against the new physical tree.
-                    if (DateTime.UtcNow >= deadline) throw;
-                    routing = await lattice.GetRoutingAsync();
-                }
+                bucket = new List<(string, int)>();
+                shardBuckets[shardIndex] = bucket;
             }
+            bucket.Add((key, i));
+        }
 
-            // LwwEntry fields are flat (Value/Timestamp/IsTombstone/ExpiresAtTicks).
-            // ToLwwValue() rehydrates the underlying LwwValue for IsExpired.
-            var existed = raw is not null
-                && !raw.Value.IsTombstone
-                && !raw.Value.ToLwwValue().IsExpired(nowTicks);
-            state.State.PreValues.Add(new AtomicPreValue
-            {
-                Key = entry.Key,
-                Value = existed ? raw!.Value.Value : null,
-                Existed = existed,
-                ExpiresAtTicks = existed ? raw!.Value.ExpiresAtTicks : 0,
-                OriginClusterId = existed ? raw!.Value.OriginClusterId : null,
-                VectorClock = existed ? raw!.Value.VectorClock : null,
-            });
+        var capturePending = new List<Task>(shardBuckets.Count);
+        foreach (var (shardIndex, bucket) in shardBuckets)
+        {
+            capturePending.Add(CaptureShardAsync(lattice, routing, shardIndex, bucket, preValuesArray, nowTicks));
+        }
+        // Mutate the routing snapshot reference inside the per-shard
+        // helper is unnecessary: GetRoutingAsync inside the helper
+        // hands back a fresh snapshot only on a stale-routing throw,
+        // and the outer loop here does not consult routing again.
+        await Task.WhenAll(capturePending);
+
+        // Materialise the array into the persisted list in input order.
+        state.State.PreValues = new List<AtomicPreValue>(preValuesArray.Length);
+        for (int i = 0; i < preValuesArray.Length; i++)
+        {
+            state.State.PreValues.Add(preValuesArray[i]);
         }
 
         state.State.Phase = AtomicWritePhase.Execute;
@@ -406,16 +394,82 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
-    /// Resolves the <see cref="IShardRootGrain"/> that owns <paramref name="key"/>
-    /// for the supplied <paramref name="routing"/> snapshot. Mirrors
-    /// <c>LatticeGrain.GetShardGrainAsync</c> but inlined because the saga
-    /// holds the <see cref="RoutingInfo"/> externally rather than caching it
-    /// on a per-activation basis.
+    /// Per-shard pre-saga capture helper used by <see cref="PrepareAsync"/>.
+    /// Issues a single <see cref="IShardRootGrain.GetRawEntriesAsync"/>
+    /// call for every key in <paramref name="bucket"/>, scatters the
+    /// response into <paramref name="preValues"/> at each entry's
+    /// original input index, and retries on a stale-routing throw with
+    /// the same deadline-bounded budget the prior per-entry loop used.
+    /// <paramref name="initialRouting"/> is the snapshot the caller
+    /// already fetched once at the head of <see cref="PrepareAsync"/>;
+    /// the helper reuses it on the first attempt and only re-fetches
+    /// after a stale-routing throw, preserving the routing-refresh
+    /// accounting the prior per-entry loop established (one fetch at
+    /// PrepareAsync start + one per stale-throw + one in
+    /// BroadcastTerminalsAsync's drift-correction pass).
     /// </summary>
-    private IShardRootGrain GetShardForKey(RoutingInfo routing, string key)
+    private async Task CaptureShardAsync(
+        ILattice lattice,
+        RoutingInfo initialRouting,
+        int shardIndex,
+        List<(string Key, int Index)> bucket,
+        AtomicPreValue[] preValues,
+        long nowTicks)
     {
-        var shardIndex = routing.Map.Resolve(key);
-        return grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}");
+        // The catch blocks unconditionally fire so the original
+        // stale-routing throw surfaces to the caller once the wall-clock
+        // budget elapses; a when-filter on the catch could race against
+        // the loop condition and exit silently.
+        var deadline = DateTime.UtcNow + StaleRoutingRetryBudget;
+        var keys = new List<string>(bucket.Count);
+        foreach (var (key, _) in bucket) keys.Add(key);
+
+        List<LwwEntry?>? raws = null;
+        var routing = initialRouting;
+        while (true)
+        {
+            try
+            {
+                var shard = grainFactory.GetGrain<IShardRootGrain>(
+                    $"{routing.PhysicalTreeId}/{shardIndex}");
+                raws = await shard.GetRawEntriesAsync(keys);
+                break;
+            }
+            catch (StaleShardRoutingException)
+            {
+                // Adaptive shard split / reshard remapped this slot;
+                // refresh routing and retry against the new owner.
+                if (DateTime.UtcNow >= deadline) throw;
+                routing = await lattice.GetRoutingAsync();
+            }
+            catch (StaleTreeRoutingException)
+            {
+                // Tree alias was swapped mid-saga (online resize /
+                // reshard); refresh routing and retry against the new
+                // physical tree.
+                if (DateTime.UtcNow >= deadline) throw;
+                routing = await lattice.GetRoutingAsync();
+            }
+        }
+
+        for (int i = 0; i < bucket.Count; i++)
+        {
+            var raw = raws![i];
+            // LwwEntry fields are flat (Value/Timestamp/IsTombstone/ExpiresAtTicks).
+            // ToLwwValue() rehydrates the underlying LwwValue for IsExpired.
+            var existed = raw is not null
+                && !raw.Value.IsTombstone
+                && !raw.Value.ToLwwValue().IsExpired(nowTicks);
+            preValues[bucket[i].Index] = new AtomicPreValue
+            {
+                Key = bucket[i].Key,
+                Value = existed ? raw!.Value.Value : null,
+                Existed = existed,
+                ExpiresAtTicks = existed ? raw!.Value.ExpiresAtTicks : 0,
+                OriginClusterId = existed ? raw!.Value.OriginClusterId : null,
+                VectorClock = existed ? raw!.Value.VectorClock : null,
+            };
+        }
     }
 
     /// <summary>

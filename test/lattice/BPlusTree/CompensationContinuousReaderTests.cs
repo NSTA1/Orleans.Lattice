@@ -61,6 +61,25 @@ public class CompensationContinuousReaderTests
         grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shard);
         shard.GetRawEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<LwwEntry?>(null));
 
+        // The production saga now issues a single batched
+        // GetRawEntriesAsync per shard rather than one GetRawEntryAsync
+        // per key. Stub the batched call to delegate to the existing
+        // per-key GetRawEntryAsync mock so this fixture keeps relying
+        // on the single-key default (null = pre-saga absent) without
+        // having to enumerate per-key responses.
+        shard.GetRawEntriesAsync(Arg.Any<List<string>>())
+            .Returns(async callInfo =>
+            {
+                var keys = (List<string>)callInfo[0];
+                var results = new List<LwwEntry?>(keys.Count);
+                foreach (var key in keys)
+                {
+                    var entry = await shard.GetRawEntryAsync(key);
+                    results.Add(entry);
+                }
+                return results;
+            });
+
         var routing = new RoutingInfo(
             TreeId,
             ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, LatticeConstants.DefaultShardCount));
