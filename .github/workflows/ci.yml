@@ -94,9 +94,22 @@ jobs:
             # markdown file (roadmap, design note, etc.) is not pulled into
             # the test matrix - its expensive suites (e.g. chaos) would add
             # minutes of CI runtime for a docs edit.
+            #
+            # NOTE: the downstream grep must NOT use `-q`. Under
+            # `set -o pipefail`, an early-exiting `grep -q` causes the
+            # upstream `grep -E` to receive SIGPIPE on its next write,
+            # which GNU grep reports as `write error: Broken pipe` and
+            # exit status 141. `pipefail` then propagates 141 as the
+            # pipeline's status, making the `if` skip the body - so the
+            # package with the largest matching diff (the one whose
+            # upstream grep is still flushing when the downstream exits)
+            # gets silently dropped from the test matrix. Letting the
+            # downstream grep read to EOF (no `-q`, redirect output to
+            # /dev/null) keeps the conditional driven solely by grep's
+            # match/no-match exit status (0 / 1) and avoids the race.
             if echo "$changed" \
                  | grep -E "^(src|test|docs)/${name}/" \
-                 | grep -qvE '\.md$'; then
+                 | grep -vE '\.md$' > /dev/null; then
               matched+=("$name")
             fi
           done
@@ -188,9 +201,12 @@ jobs:
             # etc.) is not pulled into the build matrix - its expensive
             # build/test sequence would add minutes of CI runtime for a docs
             # edit.
+            #
+            # See the package-discovery comment above for why the
+            # downstream grep must not use `-q` under `set -o pipefail`.
             if echo "$changed" \
                  | grep -E "^samples/${sampleName}/" \
-                 | grep -qvE '\.md$'; then
+                 | grep -vE '\.md$' > /dev/null; then
               samples+=("$sampleDir")
             fi
           done
