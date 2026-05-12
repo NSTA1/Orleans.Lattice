@@ -3,6 +3,7 @@ using BenchmarkDotNet.Attributes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Orleans.Lattice.Benchmark.Microbench.Profiling;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
@@ -204,6 +205,21 @@ public class LatticeMicroBenchmarks
     private int _atomicReadCursor;
     private Guid _atomicPendingTxId;
 
+    // ===== EventPipe-driven per-method profiler =====
+    // Lifecycle:
+    //   * GlobalSetupCore() instantiates the profiler at the END of seeding so
+    //     setup allocations (10k pre-seed writes etc.) don't dominate the
+    //     attribution. The factory returns null when
+    //     BENCH_MICROBENCH_PROFILE=off (default) or when EventPipe cannot
+    //     be opened on the host, so the harness path is a complete no-op
+    //     under normal cohort runs.
+    //   * GlobalCleanup() stops the session, post-processes the captured
+    //     .nettrace, and writes profile.json next to the harness results.json.
+    // The profiler perturbs measurement (per-event stack-walking inside the
+    // runtime), so PROFILE=alloc|cpu|both runs are diagnostic snapshots, not
+    // comparable cohort baselines. The harness documentation calls this out.
+    private BenchmarkProfiler? _profiler;
+
     /// <summary>
     /// Wires up the mock Orleans seams, instantiates a single-shard
     /// <see cref="ILattice"/> tree backed by real grain instances for the
@@ -387,6 +403,54 @@ public class LatticeMicroBenchmarks
         BuildAtomicFanoutTree();
         BuildAtomicConcurrentBatches();
         BuildAtomicReadFixture();
+
+        // Last step in setup: open the optional EventPipe profile session.
+        // We do this AFTER seeding so the multi-thousand pre-seed writes
+        // (which dominate alloc volume by 2+ orders of magnitude) don't
+        // drown out the in-loop benchmark allocations in the top-N table.
+        _profiler = TryStartProfiler();
+    }
+
+    /// <summary>
+    /// Stops the optional EventPipe profile session (no-op when profiling is
+    /// disabled). Writes the per-method attribution sidecar
+    /// <c>profile.json</c> next to the harness <c>results.json</c>.
+    /// </summary>
+    [GlobalCleanup]
+    public void GlobalCleanup()
+    {
+        try
+        {
+            _profiler?.Stop();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[microbench] GlobalCleanup failed: {ex}");
+        }
+    }
+
+    /// <summary>
+    /// Resolves the <c>profile.json</c> output path next to the harness
+    /// <c>results.json</c> (env <c>BENCH_RESULTS_PATH</c>) and starts the
+    /// EventPipe-driven profiler. Returns <see langword="null"/> when
+    /// profiling is disabled or the session cannot be opened.
+    /// </summary>
+    private static BenchmarkProfiler? TryStartProfiler()
+    {
+        var resultsPath = Environment.GetEnvironmentVariable("BENCH_RESULTS_PATH");
+        string profilePath;
+        if (string.IsNullOrWhiteSpace(resultsPath))
+        {
+            profilePath = Path.Combine(Directory.GetCurrentDirectory(), "profile.json");
+        }
+        else
+        {
+            var dir = Path.GetDirectoryName(resultsPath) ?? Directory.GetCurrentDirectory();
+            profilePath = Path.Combine(dir, "profile.json");
+        }
+        var runId = Environment.GetEnvironmentVariable("BENCH_RUN_ID") ?? string.Empty;
+        var gitSha = Environment.GetEnvironmentVariable("BENCH_GIT_SHA") ?? string.Empty;
+        return BenchmarkProfiler.TryStart(profilePath, runId, gitSha);
     }
 
     /// <summary>
