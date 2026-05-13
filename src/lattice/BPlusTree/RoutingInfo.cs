@@ -21,7 +21,6 @@ namespace Orleans.Lattice;
 /// </param>
 [GenerateSerializer]
 [Alias(TypeAliases.RoutingInfo)]
-[Immutable]
 [EditorBrowsable(EditorBrowsableState.Never)]
 public sealed record RoutingInfo(
     [property: Id(0)] string PhysicalTreeId,

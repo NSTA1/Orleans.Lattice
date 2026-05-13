@@ -9,7 +9,6 @@ namespace Orleans.Lattice.Primitives;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.StateDelta)]
-[Immutable]
 internal sealed record StateDelta
 {
     /// <summary>The changed entries: key → LWW-wrapped value (including tombstones).</summary>

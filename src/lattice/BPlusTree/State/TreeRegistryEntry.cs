@@ -10,7 +10,6 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.TreeRegistryEntry)]
-[Immutable]
 internal sealed record TreeRegistryEntry
 {
     /// <summary>Maximum number of keys per leaf node, or <c>null</c> to use configured defaults.</summary>

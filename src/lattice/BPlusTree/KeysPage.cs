@@ -8,7 +8,6 @@ namespace Orleans.Lattice.BPlusTree;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.KeysPage)]
-[Immutable]
 internal sealed record KeysPage
 {
     /// <summary>The keys in this page, in sorted order.</summary>
