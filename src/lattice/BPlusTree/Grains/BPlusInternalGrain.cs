@@ -39,6 +39,17 @@ internal sealed class BPlusInternalGrain(
 
     public async Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild, bool childrenAreLeaves)
     {
+        // Snapshot mutated fields BEFORE any in-memory change so a failing
+        // WriteStateAsync below can revert the activation to the state every
+        // peer (and any future reactivation) observes from storage. Without
+        // this revert, a transient storage failure leaves this activation
+        // routing against an initialised topology while every peer reads an
+        // uninitialised one - the Class B "persisted / in-memory divergence
+        // on write failure" anti-pattern.
+        var childrenSnapshot = state.State.Children;
+        var childrenAreLeavesSnapshot = state.State.ChildrenAreLeaves;
+        var clockSnapshot = state.State.Clock;
+
         state.State.Children =
         [
             new ChildEntry { SeparatorKey = null, ChildId = leftChild },
@@ -46,7 +57,18 @@ internal sealed class BPlusInternalGrain(
         ];
         state.State.ChildrenAreLeaves = childrenAreLeaves;
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
-        await state.WriteStateAsync();
+
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Children = childrenSnapshot;
+            state.State.ChildrenAreLeaves = childrenAreLeavesSnapshot;
+            state.State.Clock = clockSnapshot;
+            throw;
+        }
     }
 
     public async Task InitializeWithChildrenAsync(List<string?> separatorKeys, List<GrainId> childIds, bool childrenAreLeaves)
@@ -55,10 +77,26 @@ internal sealed class BPlusInternalGrain(
         for (int i = 0; i < separatorKeys.Count; i++)
             children.Add(new ChildEntry { SeparatorKey = separatorKeys[i], ChildId = childIds[i] });
 
+        // See InitializeAsync for the snapshot/restore rationale.
+        var childrenSnapshot = state.State.Children;
+        var childrenAreLeavesSnapshot = state.State.ChildrenAreLeaves;
+        var clockSnapshot = state.State.Clock;
+
         state.State.Children = children;
         state.State.ChildrenAreLeaves = childrenAreLeaves;
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
-        await state.WriteStateAsync();
+
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Children = childrenSnapshot;
+            state.State.ChildrenAreLeaves = childrenAreLeavesSnapshot;
+            state.State.Clock = clockSnapshot;
+            throw;
+        }
     }
 
     public Task<(GrainId ChildId, bool ChildrenAreLeaves)> RouteWithMetadataAsync(string key) =>
@@ -129,6 +167,16 @@ internal sealed class BPlusInternalGrain(
             }
         }
 
+        // Snapshot mutated fields BEFORE any in-memory change so that a
+        // failing WriteStateAsync below can revert the activation to the
+        // state every peer (and any future reactivation) observes from
+        // storage. Without this revert, a transient storage failure leaves
+        // this activation routing as though the split landed while every
+        // peer routes against the unmodified topology - the Class B
+        // "persisted / in-memory divergence on write failure" anti-pattern.
+        var clockSnapshot = state.State.Clock;
+        var childrenSnapshot = new List<ChildEntry>(state.State.Children);
+
         state.State.Clock = HybridLogicalClock.Tick(state.State.Clock);
 
         // Insert the new child at the correct sorted position.
@@ -142,20 +190,63 @@ internal sealed class BPlusInternalGrain(
         state.State.Children.Insert(insertIndex, entry);
 
         SplitResult? splitResult = null;
+        var splitRan = false;
         if (state.State.Children.Count > (await GetOptionsAsync()).MaxInternalChildren)
         {
             splitResult = await SplitAsync();
+            splitRan = true;
         }
 
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            // Only revert the AcceptSplitAsync-local Clock/Children mutations
+            // when SplitAsync did NOT run. When SplitAsync did run, its own
+            // WriteStateAsync (BPlusInternalGrain.SplitAsync line ~179) has
+            // already persisted Clock and Children at the post-mutation
+            // values; rewinding them here would introduce a fresh divergence
+            // (in-memory < persisted) and break the SplitInProgress recovery
+            // branch which expects the post-SplitAsync state to match. The
+            // Split-branch recovery is already covered by that path - on the
+            // next activation, persisted SplitState=SplitInProgress drives
+            // CompleteSplitAsync (idempotent) and the in-memory mutations
+            // CompleteSplitAsync made (SplitState=SplitComplete,
+            // SplitRightChildren=null) are reproduced.
+            if (!splitRan)
+            {
+                state.State.Clock = clockSnapshot;
+                state.State.Children = childrenSnapshot;
+            }
+            throw;
+        }
+
         return pendingRecovery ?? splitResult;
     }
 
     public async Task SetTreeIdAsync(string treeId)
     {
         if (state.State.TreeId is not null) return;
+
+        // Snapshot the pre-mutation TreeId. The idempotency guard above
+        // means a failing WriteStateAsync that leaks the mutated TreeId in
+        // memory would short-circuit every retry from the same activation,
+        // permanently diverging in-memory from storage - the Class B
+        // "persisted / in-memory divergence on write failure" anti-pattern.
+        var treeIdSnapshot = state.State.TreeId;
         state.State.TreeId = treeId;
-        await state.WriteStateAsync();
+
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.TreeId = treeIdSnapshot;
+            throw;
+        }
     }
 
     private async Task<SplitResult> SplitAsync()
