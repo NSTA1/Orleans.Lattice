@@ -131,6 +131,30 @@ internal sealed class TreeSnapshotGrain(
         };
         await registry.RegisterAsync(destinationTreeId, entry);
 
+        // Snapshot every field the mutation set touches so a failing
+        // WriteStateAsync leaves the activation observably equal to what
+        // disk (and any future reactivation) see. Without this, the
+        // in-memory InProgress / DestinationTreeId / Mode / OperationId
+        // would survive the throw and the SnapshotAsync idempotency guard
+        // at L73-84 would short-circuit subsequent retries on dirty values -
+        // a transient storage failure becoming a permanent "snapshot never
+        // started" state until the activation recycles. The cross-grain
+        // registry.RegisterAsync above is intentionally not reverted: it
+        // is idempotent on the destination key and a retry will succeed
+        // (or surface a separate failure) on its own merits.
+        var prevInProgress = state.State.InProgress;
+        var prevPhase = state.State.Phase;
+        var prevNextShardIndex = state.State.NextShardIndex;
+        var prevShardRetries = state.State.ShardRetries;
+        var prevDestinationTreeId = state.State.DestinationTreeId;
+        var prevMode = state.State.Mode;
+        var prevOperationId = state.State.OperationId;
+        var prevShardCount = state.State.ShardCount;
+        var prevMaxLeafKeys = state.State.MaxLeafKeys;
+        var prevMaxInternalChildren = state.State.MaxInternalChildren;
+        var prevComplete = state.State.Complete;
+        var prevLogicalTreeId = state.State.LogicalTreeId;
+
         // Persist intent BEFORE any shard-marking side effects.
         state.State.InProgress = true;
         state.State.Phase = mode switch
@@ -149,7 +173,26 @@ internal sealed class TreeSnapshotGrain(
         state.State.MaxInternalChildren = maxInternalChildren;
         state.State.Complete = false;
         state.State.LogicalTreeId = logicalTreeId ?? "";
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Phase = prevPhase;
+            state.State.NextShardIndex = prevNextShardIndex;
+            state.State.ShardRetries = prevShardRetries;
+            state.State.DestinationTreeId = prevDestinationTreeId;
+            state.State.Mode = prevMode;
+            state.State.OperationId = prevOperationId;
+            state.State.ShardCount = prevShardCount;
+            state.State.MaxLeafKeys = prevMaxLeafKeys;
+            state.State.MaxInternalChildren = prevMaxInternalChildren;
+            state.State.Complete = prevComplete;
+            state.State.LogicalTreeId = prevLogicalTreeId;
+            throw;
+        }
     }
 
     /// <summary>
@@ -168,9 +211,26 @@ internal sealed class TreeSnapshotGrain(
         }
         await Task.WhenAll(tasks);
 
+        // Snapshot the two fields the Lock->Copy flip mutates so a failing
+        // persist doesn't leak Phase=Copy / ShardRetries=0 ahead of disk.
+        // Bundled with the high-priority guarded sites per the same-grain
+        // Class B rule: this site self-heals via Phase replay on a
+        // subsequent reactivation, but a concurrent reader on the dirty
+        // in-memory Phase could observe Copy while disk still says Lock.
+        var prevPhase = state.State.Phase;
+        var prevShardRetries = state.State.ShardRetries;
         state.State.Phase = SnapshotPhase.Copy;
         state.State.ShardRetries = 0;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            state.State.ShardRetries = prevShardRetries;
+            throw;
+        }
     }
 
     public async Task RunSnapshotPassAsync()
@@ -243,6 +303,20 @@ internal sealed class TreeSnapshotGrain(
                 case SnapshotPhase.Copy:
                     await CopyShardAsync(shardIndex);
 
+                    // Snapshot the three fields the Copy-success flip mutates
+                    // so a failing persist doesn't leak Phase=Unmark/Copy /
+                    // NextShardIndex+1 / ShardRetries=0 ahead of disk. The
+                    // outer try/catch below would otherwise see the dirty
+                    // in-memory state, increment ShardRetries from the
+                    // already-zeroed value, and on a subsequent re-entry
+                    // skip a shard (NextShardIndex was advanced) while disk
+                    // still pointed at this one. Bundled with the
+                    // high-priority guarded sites per the same-grain Class B
+                    // rule.
+                    var prevPhaseCopy = state.State.Phase;
+                    var prevNextShardIndexCopy = state.State.NextShardIndex;
+                    var prevShardRetriesCopy = state.State.ShardRetries;
+
                     if (state.State.Mode == SnapshotMode.Offline)
                     {
                         state.State.Phase = SnapshotPhase.Unmark;
@@ -257,15 +331,44 @@ internal sealed class TreeSnapshotGrain(
                         state.State.Phase = SnapshotPhase.Copy;
                     }
                     state.State.ShardRetries = 0;
-                    await state.WriteStateAsync();
+                    try
+                    {
+                        await state.WriteStateAsync();
+                    }
+                    catch
+                    {
+                        state.State.Phase = prevPhaseCopy;
+                        state.State.NextShardIndex = prevNextShardIndexCopy;
+                        state.State.ShardRetries = prevShardRetriesCopy;
+                        throw;
+                    }
                     break;
 
                 case SnapshotPhase.Unmark:
                     await UnmarkSourceShardAsync(shardIndex);
+
+                    // Same shape as the Copy-success branch: snapshot the
+                    // three fields the Unmark-success flip mutates so a
+                    // failing persist doesn't leak Phase=Copy /
+                    // NextShardIndex+1 / ShardRetries=0 ahead of disk.
+                    var prevPhaseUnmark = state.State.Phase;
+                    var prevNextShardIndexUnmark = state.State.NextShardIndex;
+                    var prevShardRetriesUnmark = state.State.ShardRetries;
+
                     state.State.NextShardIndex++;
                     state.State.Phase = SnapshotPhase.Copy;
                     state.State.ShardRetries = 0;
-                    await state.WriteStateAsync();
+                    try
+                    {
+                        await state.WriteStateAsync();
+                    }
+                    catch
+                    {
+                        state.State.Phase = prevPhaseUnmark;
+                        state.State.NextShardIndex = prevNextShardIndexUnmark;
+                        state.State.ShardRetries = prevShardRetriesUnmark;
+                        throw;
+                    }
                     break;
             }
         }
@@ -276,8 +379,22 @@ internal sealed class TreeSnapshotGrain(
 
             if (state.State.ShardRetries < MaxRetriesPerPhase)
             {
+                // Snapshot the retry counter so a failing persist of the
+                // retry-bump doesn't leak ShardRetries++ ahead of disk - on
+                // reactivation the budget check would observe the dirty
+                // counter while disk holds the pre-bump value, double-burning
+                // retries in lock-step with reactivation.
+                var prevShardRetries = state.State.ShardRetries;
                 state.State.ShardRetries++;
-                await state.WriteStateAsync();
+                try
+                {
+                    await state.WriteStateAsync();
+                }
+                catch
+                {
+                    state.State.ShardRetries = prevShardRetries;
+                    throw;
+                }
             }
             else
             {
@@ -386,10 +503,30 @@ internal sealed class TreeSnapshotGrain(
         }
         await Task.WhenAll(tasks);
 
+        // Snapshot the three fields the ShadowBegin->Copy flip mutates so
+        // a failing persist doesn't leak Phase=Copy / NextShardIndex=0 /
+        // ShardRetries=0 ahead of disk. Bundled with the high-priority
+        // guarded sites per the same-grain Class B rule: cross-grain
+        // BeginShadowForwardAsync side effects on the source shards are
+        // deliberately not reverted (they are idempotent on the
+        // operationId + destinationTreeId tuple).
+        var prevPhase = state.State.Phase;
+        var prevNextShardIndex = state.State.NextShardIndex;
+        var prevShardRetries = state.State.ShardRetries;
         state.State.Phase = SnapshotPhase.Copy;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            state.State.NextShardIndex = prevNextShardIndex;
+            state.State.ShardRetries = prevShardRetries;
+            throw;
+        }
     }
 
     /// <summary>
@@ -415,9 +552,25 @@ internal sealed class TreeSnapshotGrain(
         }
         await Task.WhenAll(tasks);
 
+        // Snapshot the two fields the bulk-cursor advance mutates so a
+        // failing persist doesn't leak NextShardIndex=shardCount /
+        // ShardRetries=0 ahead of disk. The DrainOneShardOnlineAsync
+        // side effects above are deliberately not reverted (each shard's
+        // MarkDrainedAsync transition is idempotent on the operationId).
+        var prevNextShardIndex = state.State.NextShardIndex;
+        var prevShardRetries = state.State.ShardRetries;
         state.State.NextShardIndex = shardCount;
         state.State.ShardRetries = 0;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.NextShardIndex = prevNextShardIndex;
+            state.State.ShardRetries = prevShardRetries;
+            throw;
+        }
     }
 
     private async Task DrainOneShardOnlineAsync(int shardIndex, SemaphoreSlim sem)
@@ -449,12 +602,38 @@ internal sealed class TreeSnapshotGrain(
 
     internal async Task CompleteSnapshotAsync()
     {
+        // Snapshot every field the completion flip mutates. Without this,
+        // a failing WriteStateAsync would leave InProgress=false /
+        // Complete=true / Phase=Lock in memory while disk still says the
+        // snapshot is running. IsIdleAsync (defined as `!InProgress`) would
+        // then lie to callers; the keepalive reminder would still tick and
+        // re-enter RunSnapshotPassAsync which now short-circuits at its
+        // !InProgress guard - the snapshot halts on this activation while
+        // disk-loaded reactivations would resume.
+        var prevInProgress = state.State.InProgress;
+        var prevComplete = state.State.Complete;
+        var prevNextShardIndex = state.State.NextShardIndex;
+        var prevShardRetries = state.State.ShardRetries;
+        var prevPhase = state.State.Phase;
+
         state.State.InProgress = false;
         state.State.Complete = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
         state.State.Phase = SnapshotPhase.Lock;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Complete = prevComplete;
+            state.State.NextShardIndex = prevNextShardIndex;
+            state.State.ShardRetries = prevShardRetries;
+            state.State.Phase = prevPhase;
+            throw;
+        }
 
         // Ensure tombstone compaction is active on the destination tree.
         var destCompaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(state.State.DestinationTreeId!);
@@ -497,6 +676,26 @@ internal sealed class TreeSnapshotGrain(
         // to clear (via ClearShadowForwardAsync); the snapshot grain does not
         // touch it here because the coordinator may want to preserve it across
         // retries.
+        // Snapshot every field the abort-clear mutates so a failing
+        // WriteStateAsync doesn't leak InProgress=false / OperationId=null
+        // ahead of disk. Without this, the L488 idempotency guard
+        // `if (!state.State.InProgress) return` would short-circuit every
+        // subsequent abort retry, and the L492
+        // `if (!state.State.OperationId.Equals(operationId)) return` guard
+        // on a dirty in-memory OperationId=null would silently no-op every
+        // abort from any caller - a transient storage failure permanently
+        // blocking abort recovery until activation recycles.
+        var prevInProgress = state.State.InProgress;
+        var prevComplete = state.State.Complete;
+        var prevNextShardIndex = state.State.NextShardIndex;
+        var prevShardRetries = state.State.ShardRetries;
+        var prevPhase = state.State.Phase;
+        var prevDestinationTreeId = state.State.DestinationTreeId;
+        var prevOperationId = state.State.OperationId;
+        var prevMaxLeafKeys = state.State.MaxLeafKeys;
+        var prevMaxInternalChildren = state.State.MaxInternalChildren;
+        var prevLogicalTreeId = state.State.LogicalTreeId;
+
         state.State.InProgress = false;
         state.State.Complete = false;
         state.State.NextShardIndex = 0;
@@ -507,7 +706,24 @@ internal sealed class TreeSnapshotGrain(
         state.State.MaxLeafKeys = null;
         state.State.MaxInternalChildren = null;
         state.State.LogicalTreeId = "";
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Complete = prevComplete;
+            state.State.NextShardIndex = prevNextShardIndex;
+            state.State.ShardRetries = prevShardRetries;
+            state.State.Phase = prevPhase;
+            state.State.DestinationTreeId = prevDestinationTreeId;
+            state.State.OperationId = prevOperationId;
+            state.State.MaxLeafKeys = prevMaxLeafKeys;
+            state.State.MaxInternalChildren = prevMaxInternalChildren;
+            state.State.LogicalTreeId = prevLogicalTreeId;
+            throw;
+        }
 
         await CompleteCoordinatorAsync();
     }
