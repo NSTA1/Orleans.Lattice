@@ -134,12 +134,35 @@ internal sealed class TombstoneCompactionGrain(
         // to mid-pass shard-map mutations (audit bug #1).
         var (physicalTreeId, physicalShards) = await ResolveShardTopologyAsync();
 
+        // Snapshot before mutating so a transient WriteStateAsync failure
+        // does not leave the in-memory InProgress / shard cursor ahead of
+        // disk. The keepalive ReceiveReminder branch reads
+        // state.State.InProgress directly and would short-circuit against
+        // a dirty value otherwise.
+        var prevInProgress = state.State.InProgress;
+        var prevNextShardIndex = state.State.NextShardIndex;
+        var prevShardRetries = state.State.ShardRetries;
+        var prevPhysicalTreeId = state.State.PhysicalTreeId;
+        var prevPhysicalShardIndices = state.State.PhysicalShardIndices;
+
         state.State.InProgress = true;
         state.State.NextShardIndex = startFromShard;
         state.State.ShardRetries = 0;
         state.State.PhysicalTreeId = physicalTreeId;
         state.State.PhysicalShardIndices = [.. physicalShards];
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.NextShardIndex = prevNextShardIndex;
+            state.State.ShardRetries = prevShardRetries;
+            state.State.PhysicalTreeId = prevPhysicalTreeId;
+            state.State.PhysicalShardIndices = prevPhysicalShardIndices;
+            throw;
+        }
 
         // Register a 1-minute keepalive so the grain is reactivated after a
         // silo restart. The minimum Orleans reminder period is 1 minute.
@@ -181,27 +204,74 @@ internal sealed class TombstoneCompactionGrain(
         var physicalTreeId = state.State.PhysicalTreeId ?? TreeId;
         var shardIndex = physicalShards[state.State.NextShardIndex];
 
+        // Distinguish "compaction failed -> apply retry/skip policy" from
+        // "compaction succeeded but persist failed -> revert and rethrow".
+        // Lifting the success-path persist out of the outer try ensures a
+        // rethrown InvalidOperationException from the snapshot/restore
+        // doesn't accidentally trip the compaction-failure handler and
+        // bump ShardRetries.
+        bool compactionSucceeded = false;
         try
         {
             await CompactShardAsync(physicalTreeId, shardIndex, Options.TombstoneGracePeriod);
-            state.State.NextShardIndex++;
-            state.State.ShardRetries = 0;
-            await state.WriteStateAsync();
+            compactionSucceeded = true;
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Tombstone compaction failed for shard {ShardIndex} of tree {TreeId}", shardIndex, TreeId);
             if (state.State.ShardRetries < MaxRetriesPerShard)
             {
+                var prevShardRetries = state.State.ShardRetries;
                 state.State.ShardRetries++;
-                await state.WriteStateAsync();
+                try
+                {
+                    await state.WriteStateAsync();
+                }
+                catch
+                {
+                    state.State.ShardRetries = prevShardRetries;
+                    throw;
+                }
             }
             else
             {
                 // Exhausted retries for this shard - skip to next.
+                var prevNextShardIndex = state.State.NextShardIndex;
+                var prevShardRetries = state.State.ShardRetries;
                 state.State.NextShardIndex++;
                 state.State.ShardRetries = 0;
+                try
+                {
+                    await state.WriteStateAsync();
+                }
+                catch
+                {
+                    state.State.NextShardIndex = prevNextShardIndex;
+                    state.State.ShardRetries = prevShardRetries;
+                    throw;
+                }
+            }
+        }
+
+        if (compactionSucceeded)
+        {
+            // Snapshot the cursor before advancing so a transient
+            // WriteStateAsync failure does not leave NextShardIndex /
+            // ShardRetries ahead of disk, which would cause the next tick to
+            // skip a shard or believe a retry budget has been spent.
+            var prevNextShardIndex = state.State.NextShardIndex;
+            var prevShardRetries = state.State.ShardRetries;
+            state.State.NextShardIndex++;
+            state.State.ShardRetries = 0;
+            try
+            {
                 await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.NextShardIndex = prevNextShardIndex;
+                state.State.ShardRetries = prevShardRetries;
+                throw;
             }
         }
     }
@@ -211,12 +281,37 @@ internal sealed class TombstoneCompactionGrain(
         _compactionTimer?.Dispose();
         _compactionTimer = null;
 
+        // Snapshot before mutating so a transient WriteStateAsync failure
+        // does not leave InProgress / cursor / topology cleared in-memory
+        // ahead of disk. The keepalive ReceiveReminder branch reads
+        // state.State.InProgress directly: with a dirty (false) in-memory
+        // value it would unregister the keepalive against a still-in-progress
+        // disk record, forcing the next regular reminder tick to restart the
+        // pass from shard 0 instead of resuming where it left off.
+        var prevInProgress = state.State.InProgress;
+        var prevNextShardIndex = state.State.NextShardIndex;
+        var prevShardRetries = state.State.ShardRetries;
+        var prevPhysicalTreeId = state.State.PhysicalTreeId;
+        var prevPhysicalShardIndices = state.State.PhysicalShardIndices;
+
         state.State.InProgress = false;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
         state.State.PhysicalTreeId = null;
         state.State.PhysicalShardIndices = [];
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.NextShardIndex = prevNextShardIndex;
+            state.State.ShardRetries = prevShardRetries;
+            state.State.PhysicalTreeId = prevPhysicalTreeId;
+            state.State.PhysicalShardIndices = prevPhysicalShardIndices;
+            throw;
+        }
 
         await UnregisterKeepaliveAsync();
 
