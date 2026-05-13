@@ -108,13 +108,42 @@ internal sealed class TreeReshardGrain(
             throw new InvalidOperationException(
                 $"A resize is already in progress for tree '{TreeId}'; reshard refused until resize completes.");
 
+        // Snapshot every field the mutation set touches so a failing
+        // WriteStateAsync leaves the activation observably equal to what
+        // disk (and any future reactivation) see. Without this, the
+        // in-memory InProgress / Phase / TargetShardCount would survive
+        // the throw and the ReshardAsync idempotency guard at the top of
+        // this method (`if (state.State.InProgress) ...`) would
+        // short-circuit retries on dirty values - a transient storage
+        // failure becoming a permanent "reshard never started" state until
+        // the activation recycles. Snapshot Complete *before* the L111
+        // `if (state.State.Complete) state.State.Complete = false;` reset
+        // so a previously-completed reshard isn't observably lost on throw.
+        var prevComplete = state.State.Complete;
+        var prevInProgress = state.State.InProgress;
+        var prevOperationId = state.State.OperationId;
+        var prevPhase = state.State.Phase;
+        var prevTargetShardCount = state.State.TargetShardCount;
+
         if (state.State.Complete) state.State.Complete = false;
 
         state.State.InProgress = true;
         state.State.OperationId = Guid.NewGuid().ToString("N");
         state.State.Phase = ReshardPhase.Migrating;
         state.State.TargetShardCount = newShardCount;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Complete = prevComplete;
+            state.State.InProgress = prevInProgress;
+            state.State.OperationId = prevOperationId;
+            state.State.Phase = prevPhase;
+            state.State.TargetShardCount = prevTargetShardCount;
+            throw;
+        }
 
         await StartCoordinatorAsync();
     }
@@ -126,8 +155,24 @@ internal sealed class TreeReshardGrain(
 
         if (state.State.Phase == ReshardPhase.Planning)
         {
+            // Snapshot Phase so a failing persist of the Planning->Migrating
+            // flip doesn't leak an in-memory Phase=Migrating ahead of disk.
+            // Bundled with the high-priority guarded sites above per the
+            // same-grain Class B rule: this site self-heals via Phase
+            // replay on a subsequent reactivation, but a concurrent reader
+            // on the dirty in-memory Phase could observe Migrating while
+            // disk still says Planning.
+            var prevPhase = state.State.Phase;
             state.State.Phase = ReshardPhase.Migrating;
-            await state.WriteStateAsync();
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.Phase = prevPhase;
+                throw;
+            }
         }
 
         if (state.State.Phase == ReshardPhase.Migrating)
@@ -151,8 +196,22 @@ internal sealed class TreeReshardGrain(
         switch (state.State.Phase)
         {
             case ReshardPhase.Planning:
+                // Snapshot Phase so a failing persist of the Planning->Migrating
+                // flip doesn't leak an in-memory Phase=Migrating ahead of
+                // disk. Bundled with the high-priority guarded sites in
+                // ReshardAsync / FinaliseAsync above per the same-grain
+                // Class B rule.
+                var prevPhase = state.State.Phase;
                 state.State.Phase = ReshardPhase.Migrating;
-                await state.WriteStateAsync();
+                try
+                {
+                    await state.WriteStateAsync();
+                }
+                catch
+                {
+                    state.State.Phase = prevPhase;
+                    throw;
+                }
                 break;
             case ReshardPhase.Migrating:
                 await MigrateAsync();
@@ -180,8 +239,25 @@ internal sealed class TreeReshardGrain(
         var physicalShards = currentMap.GetPhysicalShardIndices();
         if (physicalShards.Count >= state.State.TargetShardCount)
         {
+            // Snapshot Phase so a failing persist of the Migrating->Complete
+            // flip doesn't leak an in-memory Phase=Complete ahead of disk.
+            // Bundled with the high-priority guarded sites in ReshardAsync /
+            // FinaliseAsync per the same-grain Class B rule: a dirty
+            // in-memory Phase=Complete here would trigger RunReshardPassAsync's
+            // `if (Phase == Complete) await FinaliseAsync()` clause on the
+            // next tick (without a fresh reload), advancing the workflow
+            // past Migrating while disk still says we're mid-migration.
+            var prevPhase = state.State.Phase;
             state.State.Phase = ReshardPhase.Complete;
-            await state.WriteStateAsync();
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.Phase = prevPhase;
+                throw;
+            }
             return;
         }
 
@@ -277,10 +353,32 @@ internal sealed class TreeReshardGrain(
         // reconciles the scalar pin with the map's physical shard count.
         await UpdateShardCountPinAsync(state.State.TargetShardCount);
 
+        // Snapshot every field the completion flip mutates. Without this,
+        // a failing WriteStateAsync would leave InProgress=false and
+        // Complete=true in memory while disk still says the reshard is
+        // running. IsIdleAsync (defined as `!InProgress`) would then lie
+        // to callers; the keepalive reminder would still tick and re-enter
+        // RunReshardPassAsync which now short-circuits at its !InProgress
+        // guard - the reshard halts on this activation while disk-loaded
+        // reactivations would resume.
+        var prevInProgress = state.State.InProgress;
+        var prevComplete = state.State.Complete;
+        var prevPhase = state.State.Phase;
+
         state.State.InProgress = false;
         state.State.Complete = true;
         state.State.Phase = ReshardPhase.None;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Complete = prevComplete;
+            state.State.Phase = prevPhase;
+            throw;
+        }
 
         LatticeMetrics.CoordinatorCompleted.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
@@ -327,9 +425,33 @@ internal sealed class TreeReshardGrain(
         var newMap = ShardMap.CreateDefault(virtualShardCount, newShardCount);
         await registry.SetShardMapAsync(TreeId, newMap);
 
+        // Snapshot the three fields the empty-tree fast-path mutates so a
+        // failing persist doesn't leak Complete=true / Phase=None /
+        // TargetShardCount=N into in-memory state while disk holds the
+        // pre-call values. No coordinator is active on this path, so a
+        // post-throw dirty Complete=true would make IsCompleteAsync lie
+        // to callers, and a subsequent ReshardAsync retry from the same
+        // activation would observe TargetShardCount=newShardCount on the
+        // empty-tree fast-path's `if (newShardCount != currentCount)`
+        // re-evaluation. Bundled with the high-priority guarded sites
+        // above per the same-grain Class B rule.
+        var prevComplete = state.State.Complete;
+        var prevPhase = state.State.Phase;
+        var prevTargetShardCount = state.State.TargetShardCount;
+
         state.State.Complete = true;
         state.State.Phase = ReshardPhase.None;
         state.State.TargetShardCount = newShardCount;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Complete = prevComplete;
+            state.State.Phase = prevPhase;
+            state.State.TargetShardCount = prevTargetShardCount;
+            throw;
+        }
     }
 }
