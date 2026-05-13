@@ -24,7 +24,48 @@ internal sealed partial class ShardRootGrain(
     private string ComputeTreeId()
     {
         var key = context.GrainId.Key.ToString()!;
-        return key[..key.LastIndexOf('/')];
+        var (slash, _) = ParseShardGrainKey(key);
+        return key[..slash];
+    }
+
+    /// <summary>
+    /// Validates the activation key and returns the separator position and
+    /// parsed shard index. Throws <see cref="InvalidOperationException"/> for
+    /// any malformed shape (empty key, missing separator, leading slash,
+    /// trailing slash, non-integer suffix, negative shard index) so callers
+    /// see a typed validation failure rather than a low-level
+    /// <see cref="ArgumentOutOfRangeException"/> /
+    /// <see cref="FormatException"/> or a silently misparsed value that
+    /// mis-tags metrics and corrupts routing. Mirrors the contract already
+    /// enforced by <c>WalShardGrain</c> and
+    /// <c>LeafReplayCoordinatorGrain</c>.
+    /// </summary>
+    /// <remarks>
+    /// Returns the slash position rather than allocating the
+    /// <c>{treeId}</c> substring so callers that only need the shard index
+    /// (<c>ShardIndex</c>, <c>MyShardIndex</c>) pay zero string allocations.
+    /// <c>ComputeTreeId</c> slices once and caches the result.
+    /// </remarks>
+    private static (int slash, int shardIndex) ParseShardGrainKey(string key)
+    {
+        if (string.IsNullOrEmpty(key))
+            throw new InvalidOperationException(
+                $"{nameof(ShardRootGrain)} activation key is empty; expected '{{treeId}}/{{shardIndex}}'.");
+        var slash = key.LastIndexOf('/');
+        if (slash <= 0 || slash >= key.Length - 1)
+            throw new InvalidOperationException(
+                $"{nameof(ShardRootGrain)} activation key '{key}' is not in the expected '{{treeId}}/{{shardIndex}}' format.");
+        if (!int.TryParse(
+                key.AsSpan(slash + 1),
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var shardIndex)
+            || shardIndex < 0)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(ShardRootGrain)} activation key '{key}' has a non-integer or negative shard index suffix.");
+        }
+        return (slash, shardIndex);
     }
 
     private ResolvedLatticeOptions? _cachedOptions;

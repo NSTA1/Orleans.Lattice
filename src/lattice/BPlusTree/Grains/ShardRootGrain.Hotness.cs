@@ -22,10 +22,8 @@ internal sealed partial class ShardRootGrain
         {
             if (_cachedShardIndex is { } cached) return cached;
             var key = context.GrainId.Key.ToString()!;
-            var sep = key.LastIndexOf('/');
-            var parsed = sep >= 0 && int.TryParse(key.AsSpan(sep + 1), out var idx) ? idx : 0;
-            _cachedShardIndex = parsed;
-            return parsed;
+            _cachedShardIndex = ParseShardGrainKey(key).shardIndex;
+            return _cachedShardIndex.Value;
         }
     }
 
