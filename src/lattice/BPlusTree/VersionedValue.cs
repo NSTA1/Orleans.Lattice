@@ -9,7 +9,6 @@ namespace Orleans.Lattice;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.VersionedValue)]
-[Immutable]
 [EditorBrowsable(EditorBrowsableState.Never)]
 public sealed record VersionedValue
 {

@@ -8,7 +8,6 @@ namespace Orleans.Lattice.Primitives;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LwwValue)]
-[Immutable]
 internal readonly record struct LwwValue<T>
 {
     [Id(0)] public T? Value { get; init; }

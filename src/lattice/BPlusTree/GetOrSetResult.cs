@@ -9,7 +9,6 @@ namespace Orleans.Lattice.BPlusTree;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.GetOrSetResult)]
-[Immutable]
 internal sealed record GetOrSetResult
 {
     /// <summary>

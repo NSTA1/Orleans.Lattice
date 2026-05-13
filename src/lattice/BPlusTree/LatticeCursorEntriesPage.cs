@@ -8,7 +8,6 @@ namespace Orleans.Lattice;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeCursorEntriesPage)]
-[Immutable]
 public sealed record LatticeCursorEntriesPage
 {
     /// <summary>
