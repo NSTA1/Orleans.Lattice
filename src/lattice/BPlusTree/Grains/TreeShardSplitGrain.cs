@@ -161,6 +161,20 @@ internal sealed class TreeShardSplitGrain(
             movedSlots[i] = ownedSlots[splitPoint + i];
         Array.Sort(movedSlots);
 
+        // Snapshot prior in-memory state before mutating so a failing
+        // WriteStateAsync can be unwound. Without this, the in-memory
+        // dictionary records the split intent while disk does not, and
+        // SplitAsync's `if (state.State.InProgress)` guard short-circuits
+        // every retry from the same activation.
+        var prevInProgress = state.State.InProgress;
+        var prevComplete = state.State.Complete;
+        var prevOperationId = state.State.OperationId;
+        var prevPhase = state.State.Phase;
+        var prevSourceShardIndex = state.State.SourceShardIndex;
+        var prevTargetShardIndex = state.State.TargetShardIndex;
+        var prevMovedSlots = state.State.MovedSlots;
+        var prevOriginalShardMap = state.State.OriginalShardMap;
+
         state.State.InProgress = true;
         state.State.Complete = false;
         state.State.OperationId = Guid.NewGuid().ToString("N");
@@ -169,15 +183,39 @@ internal sealed class TreeShardSplitGrain(
         state.State.TargetShardIndex = targetShardIndex;
         state.State.MovedSlots = new List<int>(movedSlots);
         state.State.OriginalShardMap = currentMap;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Complete = prevComplete;
+            state.State.OperationId = prevOperationId;
+            state.State.Phase = prevPhase;
+            state.State.SourceShardIndex = prevSourceShardIndex;
+            state.State.TargetShardIndex = prevTargetShardIndex;
+            state.State.MovedSlots = prevMovedSlots;
+            state.State.OriginalShardMap = prevOriginalShardMap;
+            throw;
+        }
 
         // Kick off shadow-writing on the source shard.
         var physicalTreeId = await GetPhysicalTreeIdAsync();
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{sourceShardIndex}");
         await source.BeginSplitAsync(targetShardIndex, movedSlots, currentMap.Slots.Length);
 
+        var prevPhaseAtDrainAdvance = state.State.Phase;
         state.State.Phase = ShardSplitPhase.Drain;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Phase = prevPhaseAtDrainAdvance;
+            throw;
+        }
     }
 
     /// <inheritdoc />
@@ -197,8 +235,17 @@ internal sealed class TreeShardSplitGrain(
                 state.State.MovedSlots.ToArray(),
                 state.State.OriginalShardMap!.Slots.Length);
 
+            var prevPhase = state.State.Phase;
             state.State.Phase = ShardSplitPhase.Drain;
-            await state.WriteStateAsync();
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.Phase = prevPhase;
+                throw;
+            }
         }
 
         if (state.State.Phase == ShardSplitPhase.Drain)
@@ -262,8 +309,17 @@ internal sealed class TreeShardSplitGrain(
     internal async Task DrainAsync()
     {
         await ForwardMovedSlotEntriesAsync();
+        var prevPhase = state.State.Phase;
         state.State.Phase = ShardSplitPhase.Swap;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            throw;
+        }
     }
 
     /// <summary>
@@ -285,8 +341,20 @@ internal sealed class TreeShardSplitGrain(
             newSlots[slot] = state.State.TargetShardIndex;
         await registry.SetShardMapAsync(TreeId, new ShardMap { Slots = newSlots });
 
+        // The registry SetShardMapAsync side effect is cross-grain and
+        // idempotent on re-apply; only the in-memory Phase mutation needs
+        // to be reverted on a failing WriteStateAsync.
+        var prevPhase = state.State.Phase;
         state.State.Phase = ShardSplitPhase.Reject;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            throw;
+        }
     }
 
     /// <summary>
@@ -300,8 +368,20 @@ internal sealed class TreeShardSplitGrain(
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
         await source.EnterRejectPhaseAsync();
 
+        // The source.EnterRejectPhaseAsync side effect is cross-grain and
+        // idempotent on re-apply; only the in-memory Phase mutation needs
+        // to be reverted on a failing WriteStateAsync.
+        var prevPhase = state.State.Phase;
         state.State.Phase = ShardSplitPhase.Complete;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            throw;
+        }
     }
 
     /// <summary>
@@ -318,10 +398,30 @@ internal sealed class TreeShardSplitGrain(
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
         await source.CompleteSplitAsync();
 
+        // Snapshot the terminal triple before mutating. Without the revert,
+        // an in-memory InProgress=false causes RunSplitPassAsync's
+        // `if (!state.State.InProgress) return;` guard to short-circuit any
+        // retry from the same activation, while disk still has InProgress=true
+        // and Phase=Complete - the activation thinks the split finished, the
+        // persisted state says otherwise.
+        var prevInProgress = state.State.InProgress;
+        var prevComplete = state.State.Complete;
+        var prevPhase = state.State.Phase;
+
         state.State.InProgress = false;
         state.State.Complete = true;
         state.State.Phase = ShardSplitPhase.None;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Complete = prevComplete;
+            state.State.Phase = prevPhase;
+            throw;
+        }
 
         // Fire-and-forget notification to the diagnostics ring buffer; failures
         // are swallowed so the commit path never waits on diagnostics plumbing.
