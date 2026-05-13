@@ -91,10 +91,26 @@ internal sealed class LatticeCursorGrain(
 
         if (state.State.Phase == LatticeCursorPhase.NotStarted)
         {
+            var prevTreeId = state.State.TreeId;
+            var prevSpec = state.State.Spec;
+            var prevPhase = state.State.Phase;
             state.State.TreeId = treeId;
             state.State.Spec = spec;
             state.State.Phase = LatticeCursorPhase.Open;
-            await state.WriteStateAsync();
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                // Restore in-memory state so the Phase == NotStarted guard
+                // above remains entered on retry and the spec-mismatch check
+                // below does not reject a valid second OpenAsync.
+                state.State.TreeId = prevTreeId;
+                state.State.Spec = prevSpec;
+                state.State.Phase = prevPhase;
+                throw;
+            }
             await SlideTtlAsync();
             return;
         }
@@ -130,6 +146,8 @@ internal sealed class LatticeCursorGrain(
         }
 
         var hasMore = collected.Count >= pageSize;
+        var prevLastYieldedKey = state.State.LastYieldedKey;
+        var prevPhase = state.State.Phase;
         if (collected.Count > 0)
         {
             state.State.LastYieldedKey = collected[^1];
@@ -138,7 +156,20 @@ internal sealed class LatticeCursorGrain(
         {
             state.State.Phase = LatticeCursorPhase.Exhausted;
         }
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            // Restore so the Phase == Exhausted short-circuit at the top of
+            // NextKeysAsync does not return empty pages forever after a
+            // single failed persist, and so the next retry resumes from the
+            // same continuation key.
+            state.State.LastYieldedKey = prevLastYieldedKey;
+            state.State.Phase = prevPhase;
+            throw;
+        }
         await SlideTtlAsync();
 
         return new LatticeCursorKeysPage { Keys = collected, HasMore = hasMore };
@@ -170,6 +201,8 @@ internal sealed class LatticeCursorGrain(
         }
 
         var hasMore = collected.Count >= pageSize;
+        var prevEntriesLastYieldedKey = state.State.LastYieldedKey;
+        var prevEntriesPhase = state.State.Phase;
         if (collected.Count > 0)
         {
             state.State.LastYieldedKey = collected[^1].Key;
@@ -178,7 +211,19 @@ internal sealed class LatticeCursorGrain(
         {
             state.State.Phase = LatticeCursorPhase.Exhausted;
         }
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            // Restore so the Phase == Exhausted short-circuit at the top of
+            // NextEntriesAsync does not return empty entry pages forever
+            // after a single failed persist.
+            state.State.LastYieldedKey = prevEntriesLastYieldedKey;
+            state.State.Phase = prevEntriesPhase;
+            throw;
+        }
         await SlideTtlAsync();
 
         return new LatticeCursorEntriesPage { Entries = collected, HasMore = hasMore };
@@ -217,8 +262,20 @@ internal sealed class LatticeCursorGrain(
 
         if (probe.Count == 0)
         {
+            var prevEmptyPhase = state.State.Phase;
             state.State.Phase = LatticeCursorPhase.Exhausted;
-            await state.WriteStateAsync();
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                // Restore so the Phase == Exhausted short-circuit at the top
+                // of DeleteRangeStepAsync does not report IsComplete=true for
+                // every retry without ever persisting the completion.
+                state.State.Phase = prevEmptyPhase;
+                throw;
+            }
             await SlideTtlAsync();
             return new LatticeCursorDeleteProgress
             {
@@ -230,6 +287,9 @@ internal sealed class LatticeCursorGrain(
 
         int deletedThisStep;
         bool isComplete;
+        var prevDeleteLastYieldedKey = state.State.LastYieldedKey;
+        var prevDeletePhase = state.State.Phase;
+        var prevDeletedTotal = state.State.DeletedTotal;
         if (probe.Count <= maxToDelete)
         {
             // Final step: delete everything remaining in one call.
@@ -250,7 +310,25 @@ internal sealed class LatticeCursorGrain(
         }
 
         state.State.DeletedTotal += deletedThisStep;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            // Restore the cursor's in-memory checkpoint so a retry resumes
+            // from the same continuation key and the Exhausted short-circuit
+            // does not lock the activation into reporting IsComplete=true
+            // with a stale DeletedTotal. The keys deleted by the cross-grain
+            // DeleteRangeAsync above remain deleted on the target tree;
+            // their count is forfeited from DeletedTotal because reverting
+            // here is preferable to double-counting on retry (the probe on
+            // retry will skip the already-deleted prefix anyway).
+            state.State.LastYieldedKey = prevDeleteLastYieldedKey;
+            state.State.Phase = prevDeletePhase;
+            state.State.DeletedTotal = prevDeletedTotal;
+            throw;
+        }
         await SlideTtlAsync();
 
         return new LatticeCursorDeleteProgress
