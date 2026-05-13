@@ -98,7 +98,7 @@ public class ReplicationApplyIntegrationTests
         await lattice.SetAsync("m", new byte[] { 2 });
         await lattice.SetAsync("y", new byte[] { 3 });
 
-        await apply.ApplyDeleteRangeAsync("a", "z", TwoSiteClusterFixture.SiteAClusterId, sourceVectorClock: null);
+        await apply.ApplyDeleteRangeAsync("a", "z", HybridLogicalClock.Zero, TwoSiteClusterFixture.SiteAClusterId, sourceVectorClock: null);
 
         Assert.Multiple(() =>
         {

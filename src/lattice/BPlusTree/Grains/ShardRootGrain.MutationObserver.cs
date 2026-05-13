@@ -29,6 +29,17 @@ internal sealed partial class ShardRootGrain
         if (!mutationObservers.HasObservers) return Task.CompletedTask;
         var delta = LatticeDeltaContext.Current;
         var batch = LatticeAtomicBatchContext.Current;
+        // The producer's DeleteRangeAsyncCore pins a single issue HLC
+        // for the entire fan-out via LatticeHlcOverrideContext; every
+        // per-leaf tombstone is stamped at that HLC. Surface the same
+        // value on the observer payload (and hence on the persisted
+        // WalRecord) so receivers can pin their per-leaf tombstones to
+        // the producer's authoring frontier and preserve the
+        // cross-origin LWW invariant. When the override is absent
+        // (legacy callers that never set it - today only the in-tree
+        // foreground path sets it, but third-party hosts of the grain
+        // API may not), fall back to Zero so the wire shape matches
+        // the historical "range deletes carry HLC.Zero" contract.
         var mutation = new LatticeMutation
         {
             TreeId = TreeId,
@@ -36,11 +47,11 @@ internal sealed partial class ShardRootGrain
             Key = startInclusive,
             EndExclusiveKey = endExclusive,
             IsTombstone = true,
-            // Range deletes span many per-key HLCs; we deliberately surface
-            // HybridLogicalClock.Zero rather than leaking a per-leaf HLC pick.
-            // Observers that need per-key resolution must synthesize deletes
-            // from the tree's current key set.
-            Timestamp = HybridLogicalClock.Zero,
+            // Producer's range-delete issue HLC, pinned by
+            // LatticeGrain.DeleteRangeAsyncCore. Receivers honour this
+            // verbatim via LatticeHlcOverrideContext on the apply seam
+            // (see IReplicationApplyGrain.ApplyDeleteRangeAsync).
+            Timestamp = LatticeHlcOverrideContext.Current ?? HybridLogicalClock.Zero,
             // Range deletes read the ambient origin at publish time - there
             // is no per-key LwwValue to pull from - so replication consumers
             // can skip re-forwarding ranges that originated on another cluster.

@@ -113,7 +113,7 @@ public partial class ReplicationApplierTests
         var result = await applier.ApplyAsync(RangeDeleteEntry("a", "z"));
 
         Assert.That(result.Applied, Is.True);
-        await apply.Received(1).ApplyDeleteRangeAsync("a", "z", RemoteCluster, null);
+        await apply.Received(1).ApplyDeleteRangeAsync("a", "z", HybridLogicalClock.Zero, RemoteCluster, null);
 
         // Range deletes carry HLC.Zero; the HWM is not advanced for them
         // because dedupe does not apply (range applies are naturally

@@ -60,6 +60,7 @@ internal sealed partial class LatticeGrain
     public async Task ApplyDeleteRangeAsync(
         string startInclusive,
         string endExclusive,
+        HybridLogicalClock sourceHlc,
         string originClusterId,
         VersionVector? sourceVectorClock)
     {
@@ -80,8 +81,31 @@ internal sealed partial class LatticeGrain
         // per-shard mutation that carries both pieces of metadata, and the
         // outbound ship loop filters the resulting WAL entries back out -
         // preventing the range from looping back to the authoring cluster.
+        //
+        // Additionally pin every per-leaf tombstone to the producer's
+        // issue HLC via LatticeHlcOverrideContext so the cross-origin LWW
+        // invariant is preserved: a DeleteRange authored at frontier T
+        // must not overwrite a foreign-origin write whose HLC is strictly
+        // greater than T. The override is suppressed when sourceHlc is
+        // HybridLogicalClock.Zero - that wire-default is produced by
+        // legacy peers that pre-date the parameter and the receiver falls
+        // back to the historical fresh-local-HLC stamping path so
+        // single-cluster and same-version multi-cluster topologies are
+        // unaffected by the wire-shape change.
         using var originScope = LatticeOriginContext.With(originClusterId);
         using var vcScope = LatticeVectorClockContext.With(sourceVectorClock);
+        // Pin every per-leaf tombstone to the producer's issue HLC via
+        // LatticeHlcOverrideContext so the cross-origin LWW invariant is
+        // preserved: a DeleteRange authored at frontier T must not
+        // overwrite a foreign-origin write whose HLC is strictly greater
+        // than T. Passing Zero (the wire-default produced by legacy
+        // peers that pre-date the sourceHlc parameter) yields a
+        // null-override scope - the leaf falls back to the historical
+        // fresh-local-HLC stamping path so single-cluster and
+        // same-version multi-cluster topologies are unaffected by the
+        // wire-shape change.
+        using var hlcScope = LatticeHlcOverrideContext.With(
+            sourceHlc == HybridLogicalClock.Zero ? null : sourceHlc);
 
         try
         {
