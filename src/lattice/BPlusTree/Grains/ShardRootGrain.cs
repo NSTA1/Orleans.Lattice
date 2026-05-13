@@ -657,6 +657,7 @@ internal sealed partial class ShardRootGrain(
         // Register the tree in the registry before creating the root node.
         // This ensures the tree is discoverable before any data is written.
         // System trees (e.g. the registry itself) skip self-registration.
+        var prevIsRegistered = state.State.IsRegistered;
         if (!state.State.IsRegistered &&
             !TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
@@ -672,9 +673,38 @@ internal sealed partial class ShardRootGrain(
         var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
         await leafGrain.SetTreeIdAsync(TreeId);
         await leafGrain.SetShardIndexAsync(MyShardIndex);
+        var prevRootNodeId = state.State.RootNodeId;
+        var prevRootIsLeaf = state.State.RootIsLeaf;
         state.State.RootNodeId = leafGrain.GetGrainId();
         state.State.RootIsLeaf = true;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            // Class B revert: a thrown WriteStateAsync leaves the
+            // in-memory IsRegistered / RootNodeId / RootIsLeaf set
+            // while storage stays at the pre-mutation values. The
+            // `if (state.State.RootNodeId is not null) return;` guard
+            // at the top of this method would then short-circuit every
+            // retry on this activation, permanently routing against a
+            // root id storage never accepted (or skipping the registry
+            // registration even though the registry-side write succeeded
+            // - which is itself idempotent, so re-running it on the
+            // next retry is safe).
+            //
+            // The cross-grain calls above (registry.RegisterAsync,
+            // leafGrain.SetTreeIdAsync, leafGrain.SetShardIndexAsync)
+            // are NOT reverted - each is idempotent on retry by its own
+            // idempotency guard (cycle 1 for the leaf-init pair, by
+            // contract for RegisterAsync), so leaving their side effects
+            // in place across a failed WriteStateAsync is correct.
+            state.State.IsRegistered = prevIsRegistered;
+            state.State.RootNodeId = prevRootNodeId;
+            state.State.RootIsLeaf = prevRootIsLeaf;
+            throw;
+        }
     }
 
     /// <summary>
