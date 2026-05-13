@@ -131,6 +131,20 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // Persist intent BEFORE any external side effects. The phase
         // timer's first tick (scheduled by StartCoordinatorAsync) will
         // observe RequestingSnapshot and call ExportAsync.
+        //
+        // Snapshot every field we're about to mutate so a failed
+        // WriteStateAsync rolls in-memory state back to the pre-call
+        // values. Without the revert, the `if (state.State.InProgress)`
+        // guard above short-circuits every same-source kickoff retry
+        // from the same activation, silently dropping the bootstrap.
+        var prevInProgress = state.State.InProgress;
+        var prevPhase = state.State.Phase;
+        var prevSourceClusterId = state.State.SourceClusterId;
+        var prevOperationId = state.State.OperationId;
+        var prevLastAppliedHlc = state.State.LastAppliedHlc;
+        var prevSnapshotAsOfHlc = state.State.SnapshotAsOfHlc;
+        var prevCausalStableFrontier = state.State.CausalStableFrontier;
+
         state.State.InProgress = true;
         state.State.Phase = LatticeBootstrapState.RequestingSnapshot;
         state.State.SourceClusterId = sourceClusterId;
@@ -138,7 +152,21 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         state.State.LastAppliedHlc = HybridLogicalClock.Zero;
         state.State.SnapshotAsOfHlc = HybridLogicalClock.Zero;
         state.State.CausalStableFrontier = new VersionVector();
-        await state.WriteStateAsync().ConfigureAwait(true);
+        try
+        {
+            await state.WriteStateAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Phase = prevPhase;
+            state.State.SourceClusterId = prevSourceClusterId;
+            state.State.OperationId = prevOperationId;
+            state.State.LastAppliedHlc = prevLastAppliedHlc;
+            state.State.SnapshotAsOfHlc = prevSnapshotAsOfHlc;
+            state.State.CausalStableFrontier = prevCausalStableFrontier;
+            throw;
+        }
         return true;
     }
 
@@ -181,6 +209,21 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             Logger.LogWarning(ex,
                 "Bootstrap phase {Phase} failed for {Context}",
                 state.State.Phase, LogContext);
+
+            // Snapshot the fields we're about to mutate. If the
+            // catch-handler persist below also throws, the L207
+            // "leave keepalive armed for retry" branch deliberately
+            // keeps the coordinator running so the next tick can
+            // retry the Failed pivot. Without the revert, the next
+            // tick would observe dirty in-memory InProgress=false
+            // (set just below) and short-circuit at the
+            // `if (!state.State.InProgress) return;` guard in
+            // ProcessNextPhaseAsync - silently breaking the documented
+            // retry intent and stranding the activation until it
+            // recycles.
+            var prevPhase = state.State.Phase;
+            var prevInProgress = state.State.InProgress;
+
             state.State.Phase = LatticeBootstrapState.Failed;
             state.State.InProgress = false;
             bool persisted;
@@ -194,6 +237,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 Logger.LogError(writeEx,
                     "Failed to persist Failed phase for {Context}; leaving keepalive reminder armed so the next tick can retry",
                     LogContext);
+                state.State.Phase = prevPhase;
+                state.State.InProgress = prevInProgress;
                 persisted = false;
             }
 
