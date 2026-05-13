@@ -106,7 +106,12 @@ public partial class LatticeGrainReplicationApplyTests
         await lattice.SetAsync("b", new byte[] { 2 });
         await lattice.SetAsync("c", new byte[] { 3 });
 
-        await apply.ApplyDeleteRangeAsync("a", "c", "site-x", sourceVectorClock: null);
+        await apply.ApplyDeleteRangeAsync(
+            "a",
+            "c",
+            Hlc(long.MaxValue / 2, 0),
+            "site-x",
+            sourceVectorClock: null);
 
         Assert.Multiple(() =>
         {
@@ -124,9 +129,100 @@ public partial class LatticeGrainReplicationApplyTests
         var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
         await lattice.SetAsync("k", new byte[] { 1 });
 
-        await apply.ApplyDeleteRangeAsync("z", "a", "site-x", sourceVectorClock: null);
+        await apply.ApplyDeleteRangeAsync(
+            "z",
+            "a",
+            Hlc(1),
+            "site-x",
+            sourceVectorClock: null);
 
         Assert.That(await lattice.GetAsync("k"), Is.EqualTo(new byte[] { 1 }));
+    }
+
+    /// <summary>
+    /// Regression for the cross-origin LWW invariant on the DeleteRange
+    /// apply seam. A foreign-origin Set whose HLC is strictly greater
+    /// than every leaf stamp the producer of the range delete observed
+    /// at authoring time must survive a re-application of that range
+    /// delete on the receiver. The single-key analog of this invariant
+    /// is already enforced by
+    /// <see cref="ApplyDeleteAsync_older_hlc_does_not_overwrite_newer_local_value"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Pre-fix the receiver-side apply seam at
+    /// <c>LatticeGrain.ReplicationApply.ApplyDeleteRangeAsync</c> wraps
+    /// the per-shard <c>IShardRootGrain.DeleteRangeAsync</c> walk in
+    /// <c>LatticeOriginContext</c> + <c>LatticeVectorClockContext</c>
+    /// but does <em>not</em> set <c>LatticeHlcOverrideContext</c>, so
+    /// the leaf falls into the standard <c>AdvanceClockOrOverride</c>
+    /// branch that returns a fresh local HLC. Because the leaf's local
+    /// clock has already absorbed the foreign Set's HLC (via the
+    /// earlier <c>ApplySetAsync</c> path's <c>HybridLogicalClock.Merge</c>),
+    /// every tombstone stamped on the range walk carries an HLC strictly
+    /// greater than the foreign Set's HLC and wins LWW resolution -
+    /// silently overwriting a value the authoring DeleteRange cannot
+    /// have observed.
+    /// </para>
+    /// <para>
+    /// Post-fix the apply seam stamps each tombstone with the producer's
+    /// ceiling HLC (the maximum leaf stamp the producer observed during
+    /// its authoring walk), preserving the invariant that a DeleteRange
+    /// authored at frontier <c>T</c> cannot overwrite a write authored
+    /// at any HLC strictly greater than <c>T</c>.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task ApplyDeleteRangeAsync_does_not_overwrite_foreign_origin_value_with_higher_hlc()
+    {
+        const string tree = "rapply-range-cross-origin-lww";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+
+        // Foreign cluster "C" authored a Set at an HLC far in the future
+        // (well past any local wall-clock tick the receiver can produce
+        // organically). The apply seam preserves this HLC verbatim on
+        // the persisted LwwValue and merges it into the leaf's local
+        // clock so the leaf's next foreground tick is strictly greater
+        // than foreignSetHlc.
+        var foreignSetHlc = Hlc(DateTimeOffset.UtcNow.AddYears(50).UtcTicks, 0);
+        await apply.ApplySetAsync(
+            "m",
+            new byte[] { 42 },
+            foreignSetHlc,
+            "cluster-C",
+            sourceVectorClock: null,
+            expiresAtTicks: 0);
+
+        // Sanity check: the foreign-origin Set is visible before the
+        // DeleteRange apply.
+        var before = await lattice.GetAsync("m");
+        Assert.That(before, Is.EqualTo(new byte[] { 42 }),
+            "pre-condition: foreign-origin Set must be visible before DeleteRange apply");
+
+        // Foreign cluster "A" authored a DeleteRange covering "m" at an
+        // earlier frontier than foreignSetHlc (the producer's authoring
+        // walk could only have stamped leaves at HLCs below
+        // foreignSetHlc, since C's Set has not yet propagated to A).
+        // Per LWW, C's Set must dominate any tombstone stamped at an
+        // HLC below foreignSetHlc.
+        var rangeDeleteHlc = Hlc(DateTimeOffset.UtcNow.UtcTicks, 0);
+        await apply.ApplyDeleteRangeAsync(
+            "a",
+            "z",
+            rangeDeleteHlc,
+            "cluster-A",
+            sourceVectorClock: null);
+
+        // The cross-origin LWW invariant: a DeleteRange cannot win over
+        // a foreign-origin write whose HLC is strictly greater than the
+        // producer's authoring frontier. Today the receiver synthesises
+        // a tombstone at a fresh local HLC strictly greater than
+        // foreignSetHlc, the tombstone wins LWW, and the foreign value
+        // is silently lost.
+        var after = await lattice.GetAsync("m");
+        Assert.That(after, Is.EqualTo(new byte[] { 42 }),
+            "DeleteRange apply must preserve foreign-origin values with HLC above the producer's authoring frontier");
     }
 
     [Test]
@@ -181,13 +277,13 @@ public partial class LatticeGrainReplicationApplyTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                async () => await apply.ApplyDeleteRangeAsync(null!, "z", "site-x", sourceVectorClock: null),
+                async () => await apply.ApplyDeleteRangeAsync(null!, "z", Hlc(1), "site-x", sourceVectorClock: null),
                 Throws.InstanceOf<ArgumentNullException>());
             Assert.That(
-                async () => await apply.ApplyDeleteRangeAsync("a", null!, "site-x", sourceVectorClock: null),
+                async () => await apply.ApplyDeleteRangeAsync("a", null!, Hlc(1), "site-x", sourceVectorClock: null),
                 Throws.InstanceOf<ArgumentNullException>());
             Assert.That(
-                async () => await apply.ApplyDeleteRangeAsync("a", "z", "", sourceVectorClock: null),
+                async () => await apply.ApplyDeleteRangeAsync("a", "z", Hlc(1), "", sourceVectorClock: null),
                 Throws.InstanceOf<ArgumentException>());
         });
     }

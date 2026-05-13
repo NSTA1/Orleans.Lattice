@@ -385,7 +385,7 @@ public sealed partial class MutationObserverIntegrationTests
         // Drain prior captures so we observe only the range publish.
         MutationObserverClusterFixture.Drain();
 
-        await apply.ApplyDeleteRangeAsync("a", "z", "site-x", sourceVectorClock: vc);
+        await apply.ApplyDeleteRangeAsync("a", "z", HybridLogicalClock.Zero, "site-x", sourceVectorClock: vc);
 
         var m = await WaitForAsync(m =>
             m.Kind == MutationKind.DeleteRange && m.TreeId == treeId);
@@ -409,7 +409,7 @@ public sealed partial class MutationObserverIntegrationTests
 
         MutationObserverClusterFixture.Drain();
 
-        await apply.ApplyDeleteRangeAsync("a", "z", "site-x", sourceVectorClock: null);
+        await apply.ApplyDeleteRangeAsync("a", "z", HybridLogicalClock.Zero, "site-x", sourceVectorClock: null);
 
         var m = await WaitForAsync(m =>
             m.Kind == MutationKind.DeleteRange && m.TreeId == treeId);

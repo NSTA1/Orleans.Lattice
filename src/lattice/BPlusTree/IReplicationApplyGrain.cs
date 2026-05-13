@@ -92,19 +92,31 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// <summary>
     /// Installs a range delete authored on the remote cluster identified
     /// by <paramref name="originClusterId"/>. The receiver walks the leaf
-    /// chain locally and stamps each tombstone with a freshly-ticked local
-    /// HLC - range deletes do not carry a single source HLC because the
-    /// remote walk produced many per-leaf timestamps. The
+    /// chain locally and stamps every per-leaf tombstone with
+    /// <paramref name="sourceHlc"/> via the
+    /// <see cref="LatticeHlcOverrideContext"/> scope, preserving the
+    /// cross-origin LWW invariant: a DeleteRange authored at frontier
+    /// <c>T</c> cannot overwrite a foreign-origin write whose HLC is
+    /// strictly greater than <c>T</c>. The
     /// <see cref="LatticeOriginContext"/> and
-    /// <see cref="LatticeVectorClockContext"/> scopes ensure every
-    /// per-leaf tombstone produced by the local walk is stamped with the
-    /// remote origin and the remote frontier, so the receiver-side
+    /// <see cref="LatticeVectorClockContext"/> scopes additionally ensure
+    /// every per-leaf tombstone is stamped with the remote origin and
+    /// the remote frontier, so the receiver-side
     /// <see cref="MutationKind.DeleteRange"/> observer publishes a
-    /// notification stamped with both pieces of metadata and the outbound
-    /// ship loop does not loop the range back to the authoring cluster.
+    /// notification stamped with both pieces of metadata and the
+    /// outbound ship loop does not loop the range back to the authoring
+    /// cluster.
     /// </summary>
     /// <param name="startInclusive">Inclusive start key of the range.</param>
     /// <param name="endExclusive">Exclusive end key of the range.</param>
+    /// <param name="sourceHlc">
+    /// The producer-side issue HLC stamped on every per-leaf tombstone.
+    /// When this value is <see cref="HybridLogicalClock.Zero"/> (the
+    /// wire-default produced by a legacy peer that pre-dates this
+    /// parameter), the receiver falls back to a freshly-ticked local
+    /// HLC for back-compat - the cross-origin LWW invariant is not
+    /// preserved in that mode and operators should upgrade producers.
+    /// </param>
     /// <param name="originClusterId">The id of the remote cluster that authored the range delete.</param>
     /// <param name="sourceVectorClock">
     /// The vector-clock frontier captured by the remote cluster at commit
@@ -115,6 +127,7 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     Task ApplyDeleteRangeAsync(
         string startInclusive,
         string endExclusive,
+        HybridLogicalClock sourceHlc,
         string originClusterId,
         VersionVector? sourceVectorClock);
 

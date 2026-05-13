@@ -49,9 +49,19 @@ public readonly record struct WalRecord
     /// <summary>
     /// The <see cref="HybridLogicalClock"/> stamped on the committed entry
     /// for <see cref="MutationKind.Set"/> and <see cref="MutationKind.Delete"/>.
-    /// For <see cref="MutationKind.DeleteRange"/> this carries
-    /// <see cref="HybridLogicalClock.Zero"/> because a single range may
-    /// produce many per-leaf HLCs that cannot be faithfully collapsed.
+    /// For <see cref="MutationKind.DeleteRange"/> this carries the
+    /// producer's authoring issue HLC - the single HLC pinned across the
+    /// entire range-delete fan-out via <see cref="LatticeHlcOverrideContext"/>
+    /// and stamped verbatim on every per-leaf tombstone. Receivers honour
+    /// this value on their own apply seam so cross-origin LWW resolution
+    /// agrees with the producer: a DeleteRange authored at frontier <c>T</c>
+    /// cannot overwrite a foreign-origin write whose HLC is strictly
+    /// greater than <c>T</c>. Legacy WAL entries persisted before this
+    /// invariant was enforced carry <see cref="HybridLogicalClock.Zero"/>;
+    /// receivers detect the sentinel and fall back to a freshly-ticked
+    /// local HLC for back-compat (the historical buggy behaviour - cross
+    /// -origin LWW is not preserved in that mode and operators should
+    /// upgrade producers).
     /// </summary>
     [Id(5)] public HybridLogicalClock Timestamp { get; init; }
 

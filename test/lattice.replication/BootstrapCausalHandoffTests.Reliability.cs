@@ -172,7 +172,7 @@ public partial class BootstrapCausalHandoffTests
                 "Range delete does not consult the HWM table; result.HighWaterMark is Zero.");
             Assert.That(h.Parked, Is.Empty);
         });
-        await h.Apply.Received(1).ApplyDeleteRangeAsync("k-from", "k-to", OriginA, null);
+        await h.Apply.Received(1).ApplyDeleteRangeAsync("k-from", "k-to", HybridLogicalClock.Zero, OriginA, null);
     }
 
     /// <summary>

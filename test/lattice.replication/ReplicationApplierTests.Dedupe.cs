@@ -115,7 +115,7 @@ public partial class ReplicationApplierTests
             Assert.That(firstResult.Applied, Is.True);
             Assert.That(secondResult.Applied, Is.True);
         });
-        await apply.Received(2).ApplyDeleteRangeAsync("a", "z", RemoteCluster, null);
+        await apply.Received(2).ApplyDeleteRangeAsync("a", "z", HybridLogicalClock.Zero, RemoteCluster, null);
     }
 
     [Test]

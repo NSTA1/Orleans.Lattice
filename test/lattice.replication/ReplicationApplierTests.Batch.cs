@@ -242,7 +242,7 @@ public partial class ReplicationApplierTests
         });
 
         // Range-delete always applied unconditionally.
-        await apply.Received(1).ApplyDeleteRangeAsync("a", "m", RemoteCluster, null);
+        await apply.Received(1).ApplyDeleteRangeAsync("a", "m", HybridLogicalClock.Zero, RemoteCluster, null);
         // The single apply-eligible LWW entry "z" is flushed via the
         // batched path with a 1-item list.
         await apply.Received(1).ApplyMergeManyAsync(

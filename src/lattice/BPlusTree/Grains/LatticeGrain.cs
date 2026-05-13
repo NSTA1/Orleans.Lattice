@@ -658,6 +658,25 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap.GetPhysicalShardIndices();
 
+        // Generate a single producer-side issue HLC for the entire range
+        // delete and pin every per-leaf tombstone (across every shard in
+        // the fan-out) to that HLC via LatticeHlcOverrideContext. This
+        // preserves the cross-origin LWW invariant on the receiver side:
+        // a DeleteRange authored at frontier T must not overwrite a
+        // foreign-origin write whose HLC is strictly greater than T. The
+        // single-HLC stamping also makes the producer-side and
+        // receiver-side stamps bit-identical, so leaf-level LWW
+        // resolution at the receiver agrees with the producer for every
+        // key in the range.
+        //
+        // Nested DeleteRange (a user-level DeleteRange invoked from
+        // inside a saga or split coordinator that already pinned an
+        // override) keeps the outer override - the producer's authoring
+        // frontier dominates and the inner walk inherits it.
+        var existingOverride = LatticeHlcOverrideContext.Current;
+        var issueHlc = existingOverride ?? HybridLogicalClock.Tick(default);
+        using var hlcScope = LatticeHlcOverrideContext.With(issueHlc);
+
         // Fan out to all physical shards in parallel - any may contain keys in the range.
         var tasks = new Task<int>[physicalShards.Count];
         for (int i = 0; i < physicalShards.Count; i++)

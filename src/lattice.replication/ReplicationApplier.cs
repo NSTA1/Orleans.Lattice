@@ -689,7 +689,20 @@ internal sealed partial class ReplicationApplier(
         }
 
         var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
-        return apply.ApplyDeleteRangeAsync(entry.Key, entry.EndExclusiveKey, entry.OriginClusterId!, sourceVectorClock: null);
+        // Pass entry.Timestamp through verbatim: producers stamp the
+        // range-delete issue HLC into this slot via
+        // ShardRootGrain.PublishDeleteRangeAsync; receivers pin every
+        // per-leaf tombstone to this HLC on the apply seam so the
+        // cross-origin LWW invariant is preserved. Legacy entries
+        // persisted before this invariant was enforced carry
+        // HybridLogicalClock.Zero; the apply seam detects the sentinel
+        // and falls back to fresh-local-HLC stamping for back-compat.
+        return apply.ApplyDeleteRangeAsync(
+            entry.Key,
+            entry.EndExclusiveKey,
+            entry.Timestamp,
+            entry.OriginClusterId!,
+            sourceVectorClock: null);
     }
 
     private IReplicationHighWaterMarkGrain GetHwmGrain(string treeId) =>
