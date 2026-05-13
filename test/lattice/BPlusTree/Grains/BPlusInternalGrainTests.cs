@@ -7,7 +7,7 @@ using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
-public class BPlusInternalGrainTests
+public partial class BPlusInternalGrainTests
 {
     private static readonly GrainId Child0 = GrainId.Create("leaf", "child-0");
     private static readonly GrainId Child1 = GrainId.Create("leaf", "child-1");
