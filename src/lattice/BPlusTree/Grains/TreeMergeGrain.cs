@@ -97,6 +97,23 @@ internal sealed class TreeMergeGrain(
             ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, sourceResolvedOpts.ShardCount);
         var sourcePhysicalShards = sourceMap.GetPhysicalShardIndices();
 
+        // Snapshot every field the mutation set touches so a failing
+        // WriteStateAsync can leave the activation observably equal to
+        // what disk (and peers) see. Without this, the in-memory
+        // InProgress / SourceTreeId / etc. would survive the throw and
+        // the MergeAsync idempotency guard would short-circuit retries
+        // on dirty values - a transient storage failure becoming a
+        // permanent "merge never started" state until activation recycles.
+        var prevInProgress = state.State.InProgress;
+        var prevNextShardIndex = state.State.NextShardIndex;
+        var prevShardRetries = state.State.ShardRetries;
+        var prevSourceTreeId = state.State.SourceTreeId;
+        var prevSourceShardCount = state.State.SourceShardCount;
+        var prevSourcePhysicalTreeId = state.State.SourcePhysicalTreeId;
+        var prevTargetPhysicalTreeId = state.State.TargetPhysicalTreeId;
+        var prevSourcePhysicalShards = state.State.SourcePhysicalShards;
+        var prevComplete = state.State.Complete;
+
         state.State.InProgress = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
@@ -106,7 +123,23 @@ internal sealed class TreeMergeGrain(
         state.State.TargetPhysicalTreeId = targetPhysicalTreeId;
         state.State.SourcePhysicalShards = [.. sourcePhysicalShards];
         state.State.Complete = false;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.NextShardIndex = prevNextShardIndex;
+            state.State.ShardRetries = prevShardRetries;
+            state.State.SourceTreeId = prevSourceTreeId;
+            state.State.SourceShardCount = prevSourceShardCount;
+            state.State.SourcePhysicalTreeId = prevSourcePhysicalTreeId;
+            state.State.TargetPhysicalTreeId = prevTargetPhysicalTreeId;
+            state.State.SourcePhysicalShards = prevSourcePhysicalShards;
+            state.State.Complete = prevComplete;
+            throw;
+        }
     }
 
     public async Task RunMergePassAsync()
@@ -222,9 +255,24 @@ internal sealed class TreeMergeGrain(
             logger.LogWarning(
                 "Poisoning source shard {ShardIndex} of tree {SourceTreeId} into {TargetTreeId} after {Retries} attempts; skipping.",
                 shardIndex, state.State.SourceTreeId, TargetTreeId, state.State.ShardRetries);
+            // Snapshot the two fields the poison-skip mutates so a failing
+            // persist doesn't leak an in-memory advance ahead of disk.
+            // The next reminder tick would otherwise re-poison the next
+            // shard while disk still pointed at this one.
+            var prevNextShardIndex = state.State.NextShardIndex;
+            var prevShardRetries = state.State.ShardRetries;
             state.State.NextShardIndex++;
             state.State.ShardRetries = 0;
-            await state.WriteStateAsync();
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.NextShardIndex = prevNextShardIndex;
+                state.State.ShardRetries = prevShardRetries;
+                throw;
+            }
             return;
         }
 
@@ -232,16 +280,47 @@ internal sealed class TreeMergeGrain(
         // non-throwing crash (silo restart, host kill) still burns budget
         // on reactivation. Without this, ShardRetries stays at 0 across
         // restarts and a deterministic-crash shard would loop forever.
+        //
+        // Snapshot ShardRetries so a failing persist of the pre-merge
+        // increment doesn't leak the bumped counter into in-memory state
+        // while disk holds the old value - the documented safety invariant
+        // requires in-memory and disk to agree on the burn-budget for the
+        // poison cap to function deterministically across reactivation.
+        var prevShardRetriesPreMerge = state.State.ShardRetries;
         state.State.ShardRetries++;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.ShardRetries = prevShardRetriesPreMerge;
+            throw;
+        }
 
         try
         {
             await MergeShardAsync(shardIndex);
 
+            // Snapshot the two fields the success-advance mutates. A
+            // failing persist here would otherwise advance the in-memory
+            // shard cursor past a shard whose drain disk doesn't yet
+            // know was complete - a reactivation would then re-drain
+            // it (safe, LWW-idempotent on payloads, but burns budget).
+            var prevNextShardIndexSuccess = state.State.NextShardIndex;
+            var prevShardRetriesSuccess = state.State.ShardRetries;
             state.State.NextShardIndex++;
             state.State.ShardRetries = 0;
-            await state.WriteStateAsync();
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.NextShardIndex = prevNextShardIndexSuccess;
+                state.State.ShardRetries = prevShardRetriesSuccess;
+                throw;
+            }
         }
         catch (Exception ex)
         {
@@ -355,11 +434,35 @@ internal sealed class TreeMergeGrain(
         _mergeTimer?.Dispose();
         _mergeTimer = null;
 
+        // Snapshot every field the completion-flip mutates. Without this,
+        // a failing WriteStateAsync would leave InProgress=false and
+        // Complete=true in memory while disk still says the merge is
+        // running. IsCompleteAsync would then lie to callers (returning
+        // true on the dirty in-memory value); the keepalive reminder
+        // would still tick and re-enter RunMergePassAsync which now
+        // short-circuits at its !InProgress guard - the merge halts on
+        // this activation while disk-loaded reactivations would resume.
+        var prevInProgress = state.State.InProgress;
+        var prevComplete = state.State.Complete;
+        var prevNextShardIndex = state.State.NextShardIndex;
+        var prevShardRetries = state.State.ShardRetries;
+
         state.State.InProgress = false;
         state.State.Complete = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Complete = prevComplete;
+            state.State.NextShardIndex = prevNextShardIndex;
+            state.State.ShardRetries = prevShardRetries;
+            throw;
+        }
 
         LatticeMetrics.CoordinatorCompleted.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TargetTreeId),
