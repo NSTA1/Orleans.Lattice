@@ -117,10 +117,26 @@ internal sealed class TreeResizeGrain(
         };
         await registry.UpdateAsync(TreeId, updated);
 
+        // Snapshot before mutating so a transient WriteStateAsync failure
+        // does not leave the in-memory Complete / NewMax* flags ahead of disk.
+        var prevComplete = state.State.Complete;
+        var prevNewMaxLeafKeys = state.State.NewMaxLeafKeys;
+        var prevNewMaxInternalChildren = state.State.NewMaxInternalChildren;
+
         state.State.Complete = true;
         state.State.NewMaxLeafKeys = newMaxLeafKeys;
         state.State.NewMaxInternalChildren = newMaxInternalChildren;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Complete = prevComplete;
+            state.State.NewMaxLeafKeys = prevNewMaxLeafKeys;
+            state.State.NewMaxInternalChildren = prevNewMaxInternalChildren;
+            throw;
+        }
     }
 
     /// <summary>
@@ -141,6 +157,20 @@ internal sealed class TreeResizeGrain(
         // Capture the old registry entry so UndoResizeAsync can restore it.
         var oldEntry = await registry.GetEntryAsync(TreeId);
 
+        // Snapshot every field this method writes so a transient
+        // WriteStateAsync failure cannot leak in-memory mutations past the
+        // ResizeAsync InProgress idempotency guard.
+        var prevInProgress = state.State.InProgress;
+        var prevPhase = state.State.Phase;
+        var prevNewMaxLeafKeys = state.State.NewMaxLeafKeys;
+        var prevNewMaxInternalChildren = state.State.NewMaxInternalChildren;
+        var prevOperationId = state.State.OperationId;
+        var prevShardCount = state.State.ShardCount;
+        var prevComplete = state.State.Complete;
+        var prevSnapshotTreeId = state.State.SnapshotTreeId;
+        var prevOldPhysicalTreeId = state.State.OldPhysicalTreeId;
+        var prevOldRegistryEntry = state.State.OldRegistryEntry;
+
         // Persist intent BEFORE any external side effects.
         state.State.InProgress = true;
         state.State.Phase = ResizePhase.Snapshot;
@@ -152,7 +182,24 @@ internal sealed class TreeResizeGrain(
         state.State.SnapshotTreeId = snapshotTreeId;
         state.State.OldPhysicalTreeId = currentPhysical;
         state.State.OldRegistryEntry = oldEntry;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Phase = prevPhase;
+            state.State.NewMaxLeafKeys = prevNewMaxLeafKeys;
+            state.State.NewMaxInternalChildren = prevNewMaxInternalChildren;
+            state.State.OperationId = prevOperationId;
+            state.State.ShardCount = prevShardCount;
+            state.State.Complete = prevComplete;
+            state.State.SnapshotTreeId = prevSnapshotTreeId;
+            state.State.OldPhysicalTreeId = prevOldPhysicalTreeId;
+            state.State.OldRegistryEntry = prevOldRegistryEntry;
+            throw;
+        }
 
         // Initiate the online snapshot from current physical tree to new tree.
         // Online mode keeps the source tree available for reads and writes
@@ -256,8 +303,30 @@ internal sealed class TreeResizeGrain(
             var destDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(snapshotTreeId);
             await destDeletion.DeleteTreeAsync();
 
+            // Snapshot every field ResetResizeState clears so a transient
+            // WriteStateAsync failure does not leave in-memory state below
+            // the UndoResizeAsync top guard (!InProgress && !Complete),
+            // which would refuse every subsequent undo retry.
+            var prevInProgress1 = state.State.InProgress;
+            var prevComplete1 = state.State.Complete;
+            var prevSnapshotTreeId1 = state.State.SnapshotTreeId;
+            var prevOldPhysicalTreeId1 = state.State.OldPhysicalTreeId;
+            var prevOldRegistryEntry1 = state.State.OldRegistryEntry;
+
             ResetResizeState();
-            await state.WriteStateAsync();
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.InProgress = prevInProgress1;
+                state.State.Complete = prevComplete1;
+                state.State.SnapshotTreeId = prevSnapshotTreeId1;
+                state.State.OldPhysicalTreeId = prevOldPhysicalTreeId1;
+                state.State.OldRegistryEntry = prevOldRegistryEntry1;
+                throw;
+            }
 
             await CompleteCoordinatorAsync();
             return;
@@ -296,8 +365,30 @@ internal sealed class TreeResizeGrain(
         await registry.UpdateAsync(TreeId, state.State.OldRegistryEntry ?? new TreeRegistryEntry());
 
         // 6. Clear resize state.
+        // Snapshot every field ResetResizeState clears so a transient
+        // WriteStateAsync failure does not leave in-memory state below
+        // the UndoResizeAsync top guard (!InProgress && !Complete),
+        // which would refuse every subsequent undo retry.
+        var prevInProgress2 = state.State.InProgress;
+        var prevComplete2 = state.State.Complete;
+        var prevSnapshotTreeId2 = state.State.SnapshotTreeId;
+        var prevOldPhysicalTreeId2 = state.State.OldPhysicalTreeId;
+        var prevOldRegistryEntry2 = state.State.OldRegistryEntry;
+
         ResetResizeState();
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress2;
+            state.State.Complete = prevComplete2;
+            state.State.SnapshotTreeId = prevSnapshotTreeId2;
+            state.State.OldPhysicalTreeId = prevOldPhysicalTreeId2;
+            state.State.OldRegistryEntry = prevOldRegistryEntry2;
+            throw;
+        }
     }
 
     private void ResetResizeState()
@@ -355,8 +446,17 @@ internal sealed class TreeResizeGrain(
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(state.State.OldPhysicalTreeId!);
         await snapshot.RunSnapshotPassAsync();
 
+        var prevPhase = state.State.Phase;
         state.State.Phase = ResizePhase.Swap;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            throw;
+        }
     }
 
     /// <summary>
@@ -382,8 +482,17 @@ internal sealed class TreeResizeGrain(
         // Set alias to redirect to the new physical tree.
         await registry.SetAliasAsync(TreeId, state.State.SnapshotTreeId!);
 
+        var prevPhase = state.State.Phase;
         state.State.Phase = ResizePhase.Reject;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            throw;
+        }
     }
 
     /// <summary>
@@ -408,8 +517,17 @@ internal sealed class TreeResizeGrain(
         }
         await Task.WhenAll(tasks);
 
+        var prevPhase = state.State.Phase;
         state.State.Phase = ResizePhase.Cleanup;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            throw;
+        }
     }
 
     /// <summary>
@@ -429,9 +547,20 @@ internal sealed class TreeResizeGrain(
 
     internal async Task CompleteResizeAsync()
     {
+        var prevInProgress = state.State.InProgress;
+        var prevComplete = state.State.Complete;
         state.State.InProgress = false;
         state.State.Complete = true;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Complete = prevComplete;
+            throw;
+        }
 
         LatticeMetrics.CoordinatorCompleted.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
