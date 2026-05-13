@@ -105,6 +105,7 @@ internal sealed class ReplicationMaintenanceGrain(
         // failing GC cannot stall the activation indefinitely.
         if (ShouldRunCadence(nowTicks, state.State.LastGcTicks, options.MaintenanceGcInterval))
         {
+            var prevGcTicks = state.State.LastGcTicks;
             try
             {
                 await _gc.RunOnceAsync(TreeName, CancellationToken.None).ConfigureAwait(true);
@@ -113,6 +114,14 @@ internal sealed class ReplicationMaintenanceGrain(
             }
             catch (Exception ex)
             {
+                // Restore the in-memory cadence stamp so the next phase
+                // tick's ShouldRunCadence guard sees the pre-attempt
+                // value and correctly fires the retry the comment above
+                // promises. Without this, a transient WriteStateAsync
+                // failure latches the dirty in-memory stamp at nowTicks
+                // and the GC pass is skipped for the full
+                // MaintenanceGcInterval (default many minutes).
+                state.State.LastGcTicks = prevGcTicks;
                 Logger.LogWarning(ex,
                     "WAL garbage-collection pass failed for {Context}; will retry on next phase tick",
                     LogContext);
@@ -137,8 +146,22 @@ internal sealed class ReplicationMaintenanceGrain(
             // mutation isolation model; the cadence is preserved as
             // a future hook so the public maintenance state shape
             // does not have to change again.
+            var prevOrphanTicks = state.State.LastOrphanSweepTicks;
             state.State.LastOrphanSweepTicks = nowTicks;
-            await state.WriteStateAsync().ConfigureAwait(true);
+            try
+            {
+                await state.WriteStateAsync().ConfigureAwait(true);
+            }
+            catch
+            {
+                // Snapshot/restore: a transient persist failure must
+                // not latch the in-memory cadence stamp - the next
+                // tick must retry. The throw propagates as before;
+                // existing callers / tests rely on the orphan-sweep
+                // block surfacing storage failures.
+                state.State.LastOrphanSweepTicks = prevOrphanTicks;
+                throw;
+            }
         }
 
         // Fall-off-the-log probe - independent cadence. Same retry
@@ -146,6 +169,7 @@ internal sealed class ReplicationMaintenanceGrain(
         // probe pass.
         if (ShouldRunCadence(nowTicks, state.State.LastFallOffCheckTicks, options.MaintenanceFallOffCheckInterval))
         {
+            var prevFallOffTicks = state.State.LastFallOffCheckTicks;
             try
             {
                 await ProbeFallOffAsync(options).ConfigureAwait(true);
@@ -154,6 +178,9 @@ internal sealed class ReplicationMaintenanceGrain(
             }
             catch (Exception ex)
             {
+                // Restore so the next phase tick retries (mirrors the
+                // GC block; see comment there for the full rationale).
+                state.State.LastFallOffCheckTicks = prevFallOffTicks;
                 Logger.LogWarning(ex,
                     "Fall-off-log probe pass failed for {Context}; will retry on next phase tick",
                     LogContext);

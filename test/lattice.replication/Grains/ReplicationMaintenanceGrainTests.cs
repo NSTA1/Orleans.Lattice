@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 /// state is pre-seeded through <see cref="FakePersistentState{T}"/>.
 /// </summary>
 [TestFixture]
-public class ReplicationMaintenanceGrainTests
+public partial class ReplicationMaintenanceGrainTests
 {
     private const string Tree = "maintenance-tree";
 
