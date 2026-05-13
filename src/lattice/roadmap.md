@@ -348,6 +348,45 @@ Route the remaining foreground leaf-write sites in `BPlusLeafGrain.MergeEntriesA
 - The chaos suite (`ReshardTopologyTests`, `ChaosReshardIntegrationTests`, `ChaosResizeIntegrationTests`) continues to pass at the same rate as the F-058 baseline, with the WAL-routed merge / compaction paths observably exercising the same crash-recovery contract as every other foreground commit path under chaos.
 
 
+### 10 · F-061
+**API / reliability / medium impact (opt-in idempotency-key surface + caller-controlled retry policy for transient storage faults on the public `ILattice` mutating methods)** *(depends on Core F-036 ✓, F-049 ✓)*
+
+Today every public mutating method on `ILattice` (`SetAsync`, `RemoveAsync`, `SetManyAsync`, `SetManyAtomicAsync`, `IncrementAsync`, `DeleteRangeAsync`, `MergeAsync`, ...) follows the contract "on transient storage failure, throw to the caller and revert in-memory state to match disk". That contract is correct - cycles 1-30 of the bug-hunter sweep landed Class B revert-on-throw fixes across `BPlusLeafGrain`, `BPlusInternalGrain`, `ShardRootGrain`, `AtomicWriteGrain`, `WalShardGrain`, `BootstrapCoordinatorGrain`, and `ReplicationMaintenanceGrain`, so the in-memory / on-disk invariant holds at the activation boundary. What it does **not** do is give the caller a *safe* retry path: a naive caller-side `try / catch / retry` re-enters `SetAsync` and mints a fresh `HybridLogicalClock.Now()` for the retry, producing a second WAL entry, a second replication shipment, a second `IMutationObserver.OnMutation` callback, and (for `IncrementAsync` on a PnCounter) a real semantic double-count. F-061 closes that gap by exposing an explicit idempotency-key surface so a retried call replays under the same logical timestamp and the existing LWW / HWM / WAL-append dedup collapses it to a single observable mutation.
+
+The shape is deliberately caller-controlled, not ambient. Silent retry inside the library compounds tail latency (a single retry can triple p99), amplifies storage load at precisely the moment the storage is degraded ("retry storm"), and destroys the "did the first storage attempt succeed?" signal that operators alert on. F-061 puts the retry decision at the caller boundary - the library defaults to today's throw-and-revert behaviour and the policy is opt-in per tree.
+
+**Design.** Two strictly-additive layers, independent of each other:
+
+1. **Per-call idempotency key**, defaulted such that existing callers see no behaviour change. New `LatticeIdempotencyKey` (readonly record struct, alias `ol.idk`, `[Id(0)] HybridLogicalClock Timestamp`, `[Id(1)] string? OriginClusterId`) carried via an optional ambient `LatticeIdempotencyContext` scope (mirrors the existing `LatticeOriginContext` / `LatticeVectorClockContext` / `LatticeHlcOverrideContext` pattern, so no public `ILattice` signature changes). When the scope is set, every mutating grain method reads the supplied `Timestamp` instead of issuing a fresh `HybridLogicalClock.Tick()`, and stamps `OriginClusterId` from the key rather than from the ambient `LatticeOriginContext`. When the scope is null, today's fresh-Tick behaviour is preserved bit-for-bit. Replay collapses naturally: the WAL append path is keyed `(treeId, hlc, originClusterId)` for HWM dedup (replication R-023 + R-080); a retry that hits the same `(hlc, origin)` is a no-op append. The LWW merge path is already idempotent on identical `(Timestamp, OriginClusterId)`. PnCounter is the one CRDT whose foreground-write surface needs an explicit dedup - F-061 adds an `(originClusterId, hlc)`-keyed guard inside `PnCounterAccessor.IncrementAsync` so a retried increment with the same key drops before the per-replica counter advances.
+
+2. **Optional `ILatticeRetryPolicy`** resolved via DI and wired in through a new `LatticeOptions.RetryPolicy` slot. The shipped default `BoundedExponentialRetryPolicy` (hand-rolled, no third-party dep) takes `(maxAttempts, initialDelay, maxDelay, retryableExceptionClassifier)` and re-runs the caller's lambda under the *same* `LatticeIdempotencyKey` for the budget's duration; on exhaustion it surfaces the *original* failure verbatim. The policy is **not registered by default** - hosts must opt in via `siloBuilder.ConfigureLattice(opts => opts.RetryPolicy = new BoundedExponentialRetryPolicy(...))` - so the ambient-library default remains "throw and let the caller decide". Hosts that want to mint their own keys and drive retry from their own infrastructure (Polly, ASP.NET Core's `ResiliencePipeline`, a custom orchestrator) consume layer 1 alone; hosts that want a turnkey experience consume layer 2, which sits on top of layer 1.
+
+**Surface.** Public-additive only:
+* `Orleans.Lattice.LatticeIdempotencyKey` - readonly record struct.
+* `Orleans.Lattice.LatticeIdempotencyContext` - static AsyncLocal scope helper, `Current` / `Push(LatticeIdempotencyKey)` pattern (mirrors `LatticeOriginContext`).
+* `Orleans.Lattice.ILatticeRetryPolicy` interface.
+* `Orleans.Lattice.BoundedExponentialRetryPolicy` default impl.
+* `LatticeOptions.RetryPolicy { get; set; } = null;` - opt-in, default null.
+* `ISiloBuilder.AddLatticeRetryPolicy(Action<BoundedExponentialRetryPolicyOptions>)` convenience DI extension.
+
+**Replication interaction.** None at the wire level - the replication apply path already dedups by `(originClusterId, hlc)` (R-023 / R-080), so a retried foreground write that re-uses the same key produces a WAL entry the receiver dedups verbatim. The replication library already covers the equivalent retry / flow-control concerns on its own pipeline through **R-060** (poison-entry DLQ + `MaxApplyRetries`), **R-062** (receiver-side flow control via `SuggestedBatchSize` / `PauseForMs`), **R-064** (per-peer observability), and **R-068** (apply-duration histogram), so no companion replication roadmap entry is needed - operators who want a retry surface on the replication apply path use the existing `ILatticeReplicationDeadLetters.ReplayAsync` flow.
+
+**Out of scope.**
+* **Internal silent retry inside grain methods.** Explicitly *not* added - the throw-and-revert contract is the load-bearing invariant Class B has been hardening for 30 cycles; an ambient internal retry would amplify latency on transient storage degradation and destroy the failure signal operators alert on. The boundary for retry is the public-API entry point, not the grain method.
+* **Saga retry under in-flight `BeginAsync` / `CommitAsync`.** The `AtomicWriteGrain` saga is already idempotent on the same `transactionId` (the TxRegistry is the deduplication point); F-061 does not add a second retry layer on top. A caller that wants saga retry mints a fresh `transactionId` for each saga and uses the idempotency-key surface on individual `SetAsync` / `RemoveAsync` calls inside the saga's prepared phase.
+* **Per-method retry policy override.** Out of scope for v1; the tree-wide `LatticeOptions.RetryPolicy` covers the canonical case. A future entry can add per-call policy overrides if a real consumer needs it.
+* **Retry across activations.** A retry budget that outlives a deactivation is not supported - the key + budget live in the caller's `LatticeIdempotencyContext` scope; if the activation deactivates between attempts, the next attempt reactivates and replays under the same key (correct), but cross-activation budget tracking is the caller's responsibility.
+
+**Acceptance.**
+- A fault-injection fixture configures `FakePersistentState.ThrowOnWrite` to throw on the first N attempts and succeed on the (N+1)-th; a caller-side `SetAsync` under `RetryPolicy` with budget > N collapses to exactly one observable mutation (one `IMutationObserver.OnMutation`, one WAL append, one persisted state-row write, one replication shipment).
+- A negative-control fixture exercises the same scenario *without* an idempotency key (or with a fresh key per retry) and confirms the test observes N+1 distinct WAL appends and N+1 observer callbacks - proving the idempotency key is the load-bearing component, not retry alone.
+- A `PnCounterAccessor.IncrementAsync` fixture issues two retries with the same idempotency key and confirms the per-replica counter advanced by exactly one increment; a counterpart fixture issues two retries with distinct keys and confirms the counter advanced by two.
+- A latency-amplification regression fixture confirms `ILattice` calls with `RetryPolicy = null` (the default) have the same p50 / p95 latency as v3.4.0 - the opt-in nature of the policy is observable as zero ambient cost.
+- A bug-hunter Class B regression sweep confirms every existing revert-on-throw test continues to pass - F-061's retry surface sits **above** the grain's revert contract, not in place of it; the grain still throws on a failed `WriteStateAsync`, and the policy is the only thing that catches and retries.
+- A docs snippet under `docs/lattice/retry-policy.md` (new, with `csharp verify` fences) walks the opt-in flow, the idempotency-key lifetime contract, and the operational guidance "retry belongs at the boundary; never enable it ambiently in the library".
+
+
+
 ---
 
 ## 🛠 Audit Follow-up Fixes
