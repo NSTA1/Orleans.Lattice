@@ -857,8 +857,23 @@ internal sealed partial class BPlusLeafGrain(
     public async Task SetTreeIdAsync(string treeId)
     {
         if (state.State.TreeId is not null) return;
+        var prevTreeId = state.State.TreeId;
         state.State.TreeId = treeId;
-        await PersistAsync();
+        try
+        {
+            await PersistAsync();
+        }
+        catch
+        {
+            // Class B revert: a thrown WriteStateAsync leaves the
+            // in-memory TreeId set while storage stays null. The
+            // idempotency guard above would then short-circuit every
+            // retry from this activation, permanently divorcing the
+            // leaf's in-memory tree id from storage. Roll back the
+            // in-memory assignment so the next call retries the persist.
+            state.State.TreeId = prevTreeId;
+            throw;
+        }
     }
 
     public Task<string?> GetTreeIdAsync() =>
@@ -875,8 +890,23 @@ internal sealed partial class BPlusLeafGrain(
         // otherwise pay an extra WriteStateAsync round-trip on every
         // shard-root activation that walks its leaves.
         if (state.State.ShardIndex is not null) return;
+        var prevShardIndex = state.State.ShardIndex;
         state.State.ShardIndex = shardIndex;
-        await PersistAsync();
+        try
+        {
+            await PersistAsync();
+        }
+        catch
+        {
+            // Class B revert: see SetTreeIdAsync above. Without this,
+            // the activation stamps ShardIndex on every foreground
+            // commit while every peer (or a future reactivation) still
+            // sees a null slot, and the replay-time ownership filter on
+            // the cross-shard fanout regression gate silently drops the
+            // legitimate records.
+            state.State.ShardIndex = prevShardIndex;
+            throw;
+        }
     }
 
     public async Task SetKeyRangeAsync(string? lowKeyInclusive, string? highKeyExclusive)
@@ -889,9 +919,25 @@ internal sealed partial class BPlusLeafGrain(
         // their own HighKeyExclusive directly inside CompleteSplitAsync
         // when narrowing their own range to the split key.
         if (state.State.LowKeyInclusive is not null) return;
+        var prevLowKey = state.State.LowKeyInclusive;
+        var prevHighKey = state.State.HighKeyExclusive;
         state.State.LowKeyInclusive = lowKeyInclusive;
         state.State.HighKeyExclusive = highKeyExclusive;
-        await PersistAsync();
+        try
+        {
+            await PersistAsync();
+        }
+        catch
+        {
+            // Class B revert: see SetTreeIdAsync above. Both fields
+            // are restored together because the guard short-circuits
+            // on LowKeyInclusive alone - leaving the in-memory range
+            // even partially seeded would re-route range scans against
+            // a topology storage never accepted.
+            state.State.LowKeyInclusive = prevLowKey;
+            state.State.HighKeyExclusive = prevHighKey;
+            throw;
+        }
     }
 
     public Task SetCheckpointOffsetHintAsync(long offset)
