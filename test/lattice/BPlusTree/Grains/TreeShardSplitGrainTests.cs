@@ -12,7 +12,7 @@ using Orleans.Timers;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 [TestFixture]
-public class TreeShardSplitGrainTests
+public partial class TreeShardSplitGrainTests
 {
     private const string TreeId = "split-test-tree";
 
