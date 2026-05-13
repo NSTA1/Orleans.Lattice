@@ -24,6 +24,25 @@ public class LwwValueTests
     }
 
     [Test]
+    public void Merge_is_commutative_when_timestamps_tie_across_distinct_origins()
+    {
+        // Two replicas authoring concurrent writes at the same HLC. This is the
+        // common case at startup when both replicas Tick() from
+        // HybridLogicalClock.Zero in the same UTC tick. A CRDT-correct LWW must
+        // resolve the tie deterministically so both replicas converge regardless
+        // of which order the writes arrive in.
+        var tie = new HybridLogicalClock { WallClockTicks = 12345, Counter = 7 };
+        var fromA = LwwValue<string>.Create("from-A", tie) with { OriginClusterId = "cluster-a" };
+        var fromB = LwwValue<string>.Create("from-B", tie) with { OriginClusterId = "cluster-b" };
+
+        var leftFirst = LwwValue<string>.Merge(fromA, fromB);
+        var rightFirst = LwwValue<string>.Merge(fromB, fromA);
+
+        Assert.That(leftFirst, Is.EqualTo(rightFirst),
+            "Merge must be commutative on HLC ties; otherwise replicas diverge silently.");
+    }
+
+    [Test]
     public void Merge_is_idempotent()
     {
         var v = LwwValue<string>.Create("x", new HybridLogicalClock { WallClockTicks = 5, Counter = 0 });

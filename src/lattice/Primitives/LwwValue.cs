@@ -78,11 +78,37 @@ internal readonly record struct LwwValue<T>
         !IsTombstone && ExpiresAtTicks != 0 && ExpiresAtTicks <= nowUtcTicks;
 
     /// <summary>
-    /// Lattice merge: keep the value with the higher timestamp.
-    /// Commutative, associative, idempotent.
+    /// Lattice merge: keep the value with the higher timestamp. On an HLC tie
+    /// (two replicas authored at the same <see cref="HybridLogicalClock"/>),
+    /// the result is resolved deterministically by a stable total order on
+    /// (<see cref="Timestamp"/>, <see cref="OriginClusterId"/>, 
+    /// <see cref="IsTombstone"/>) so replicas converge regardless of the
+    /// order in which they observe the writes. Commutative, associative,
+    /// idempotent.
     /// </summary>
-    public static LwwValue<T> Merge(LwwValue<T> left, LwwValue<T> right) =>
-        left.Timestamp >= right.Timestamp ? left : right;
+    public static LwwValue<T> Merge(LwwValue<T> left, LwwValue<T> right)
+    {
+        // Primary: higher HLC wins.
+        var clockCmp = left.Timestamp.CompareTo(right.Timestamp);
+        if (clockCmp != 0) return clockCmp > 0 ? left : right;
+
+        // Secondary: break HLC ties on writer identity. Ordinal string
+        // compare is a total order; null is deterministically ordered
+        // before any non-null id (legacy state without OriginClusterId).
+        var originCmp = string.CompareOrdinal(left.OriginClusterId, right.OriginClusterId);
+        if (originCmp != 0) return originCmp > 0 ? left : right;
+
+        // Tertiary: same writer, same HLC, but the live/tombstone bit
+        // differs. Tombstone wins on tie to preserve delete intent and
+        // keep the result stable across replicas that observed only one
+        // of the two writes.
+        if (left.IsTombstone != right.IsTombstone)
+            return left.IsTombstone ? left : right;
+
+        // Indistinguishable on every stable identity field - the values are
+        // for all CRDT purposes equivalent, so picking left is deterministic.
+        return left;
+    }
 
     public int CompareTo(LwwValue<T> other) => Timestamp.CompareTo(other.Timestamp);
 
