@@ -11,7 +11,7 @@ using Orleans.Timers;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 [TestFixture]
-public class TreeReshardGrainTests
+public partial class TreeReshardGrainTests
 {
     private const string TreeId = "reshard-test-tree";
 
