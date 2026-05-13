@@ -50,8 +50,23 @@ internal sealed class TxRegistryGrain(
             }
         }
 
+        // Snapshot prior in-memory state so a failing WriteStateAsync
+        // can be unwound. Without this, the in-memory dictionary records
+        // Committed while disk does not, and the next retry from the
+        // same activation hits the `existing == TxStatus.Committed`
+        // short-circuit and silently returns without re-persisting.
+        var hadEntry = state.State.Decisions.TryGetValue(txid, out var prevStatus);
         state.State.Decisions[txid] = TxStatus.Committed;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            if (hadEntry) state.State.Decisions[txid] = prevStatus;
+            else state.State.Decisions.Remove(txid);
+            throw;
+        }
     }
 
     /// <inheritdoc />
@@ -67,8 +82,20 @@ internal sealed class TxRegistryGrain(
             }
         }
 
+        // Snapshot prior in-memory state so a failing WriteStateAsync
+        // can be unwound (see MarkCommittedAsync for the same rationale).
+        var hadEntry = state.State.Decisions.TryGetValue(txid, out var prevStatus);
         state.State.Decisions[txid] = TxStatus.Aborted;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            if (hadEntry) state.State.Decisions[txid] = prevStatus;
+            else state.State.Decisions.Remove(txid);
+            throw;
+        }
     }
 
     /// <inheritdoc />
@@ -109,21 +136,43 @@ internal sealed class TxRegistryGrain(
     /// <inheritdoc />
     public async Task ForgetAsync(Guid txid)
     {
+        // Capture prior entries before mutation so a failing
+        // WriteStateAsync can be unwound. Without this, the in-memory
+        // dictionaries lose the saga while disk still has it; a
+        // subsequent retry of ForgetAsync from the same activation
+        // finds nothing to drop and short-circuits without re-persisting.
+        state.State.Decisions.TryGetValue(txid, out var prevStatus);
+        state.State.Participants.TryGetValue(txid, out var prevParticipants);
+
         var droppedDecision = state.State.Decisions.Remove(txid);
         var droppedParticipants = state.State.Participants.Remove(txid);
         if (droppedDecision || droppedParticipants)
         {
-            await state.WriteStateAsync();
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                if (droppedDecision) state.State.Decisions[txid] = prevStatus;
+                if (droppedParticipants && prevParticipants is not null)
+                {
+                    state.State.Participants[txid] = prevParticipants;
+                }
+                throw;
+            }
         }
     }
 
     /// <inheritdoc />
     public async Task RegisterParticipantAsync(Guid txid, int shardIndex)
     {
+        var createdSet = false;
         if (!state.State.Participants.TryGetValue(txid, out var set))
         {
             set = [];
             state.State.Participants[txid] = set;
+            createdSet = true;
         }
 
         if (!set.Add(shardIndex))
@@ -136,7 +185,19 @@ internal sealed class TxRegistryGrain(
             return;
         }
 
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            // Unwind the in-memory mutation so a retry from the same
+            // activation does not hit the `!set.Add(shardIndex)`
+            // short-circuit and silently no-op with disk still stale.
+            set.Remove(shardIndex);
+            if (createdSet) state.State.Participants.Remove(txid);
+            throw;
+        }
     }
 
     /// <inheritdoc />
