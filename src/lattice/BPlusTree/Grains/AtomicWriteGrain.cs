@@ -251,6 +251,28 @@ internal sealed class AtomicWriteGrain(
     /// </summary>
     private async Task PrepareAsync(string treeId, List<KeyValuePair<string, byte[]>> entries)
     {
+        // Class B snapshot/restore: PrepareAsync mutates ~15 fields in place
+        // before the terminal persist. A failure on that persist must revert
+        // EVERY mutated field so the ExecuteAsync L168 NotStarted-only Prepare
+        // branch re-runs PrepareAsync on retry from the same activation. The
+        // standard pattern (capture previous values, try persist, catch
+        // restore) is applied around the L393 WriteStateAsync.
+        var prevPhase = state.State.Phase;
+        var prevTreeId = state.State.TreeId;
+        var prevEntries = state.State.Entries;
+        var prevPreValues = state.State.PreValues;
+        var prevNextIndex = state.State.NextIndex;
+        var prevRetriesOnCurrentStep = state.State.RetriesOnCurrentStep;
+        var prevFailureMessage = state.State.FailureMessage;
+        var prevKeyFingerprint = state.State.KeyFingerprint;
+        var prevTransactionId = state.State.TransactionId;
+        var prevDeltaKind = state.State.DeltaKind;
+        var prevDeltaPayload = state.State.DeltaPayload;
+        var prevVectorClock = state.State.VectorClock;
+        var prevAtomicBatchSize = state.State.AtomicBatchSize;
+        var prevSagaStartedAtTicks = state.State.SagaStartedAtTicks;
+        var prevTouchedShards = state.State.TouchedShards;
+
         state.State.Phase = AtomicWritePhase.Prepare;
         state.State.TreeId = treeId;
         state.State.Entries = entries;
@@ -390,7 +412,29 @@ internal sealed class AtomicWriteGrain(
         }
 
         state.State.Phase = AtomicWritePhase.Execute;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            state.State.TreeId = prevTreeId;
+            state.State.Entries = prevEntries;
+            state.State.PreValues = prevPreValues;
+            state.State.NextIndex = prevNextIndex;
+            state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
+            state.State.FailureMessage = prevFailureMessage;
+            state.State.KeyFingerprint = prevKeyFingerprint;
+            state.State.TransactionId = prevTransactionId;
+            state.State.DeltaKind = prevDeltaKind;
+            state.State.DeltaPayload = prevDeltaPayload;
+            state.State.VectorClock = prevVectorClock;
+            state.State.AtomicBatchSize = prevAtomicBatchSize;
+            state.State.SagaStartedAtTicks = prevSagaStartedAtTicks;
+            state.State.TouchedShards = prevTouchedShards;
+            throw;
+        }
     }
 
     /// <summary>
@@ -545,8 +589,21 @@ internal sealed class AtomicWriteGrain(
             }
             var sorted = new List<int>(touched);
             sorted.Sort();
+            // Class B snapshot/restore: a failure on this persist must revert
+            // TouchedShards so the next reconstruction pass re-derives the set
+            // rather than iterating the dirty in-memory list during the
+            // remainder of this activation's broadcast.
+            var prevTouchedShards = state.State.TouchedShards;
             state.State.TouchedShards = sorted;
-            await state.WriteStateAsync();
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.TouchedShards = prevTouchedShards;
+                throw;
+            }
         }
         else if (state.State.Entries.Count > 0)
         {
@@ -586,8 +643,21 @@ internal sealed class AtomicWriteGrain(
             {
                 var sorted = new List<int>(union);
                 sorted.Sort();
+                // Class B snapshot/restore: a failure here leaves the union'd
+                // TouchedShards dirty in memory. The remaining broadcast pass
+                // would iterate the dirty set and double-fan-out terminal
+                // appends to the union'd shards.
+                var prevTouchedShards = state.State.TouchedShards;
                 state.State.TouchedShards = sorted;
-                await state.WriteStateAsync();
+                try
+                {
+                    await state.WriteStateAsync();
+                }
+                catch
+                {
+                    state.State.TouchedShards = prevTouchedShards;
+                    throw;
+                }
             }
         }
 
@@ -623,8 +693,20 @@ internal sealed class AtomicWriteGrain(
                 {
                     var sorted = new List<int>(regUnion);
                     sorted.Sort();
+                    // Class B snapshot/restore: same shape as the drift-correction
+                    // branch above. Reverts TouchedShards on persist failure so the
+                    // remaining broadcast pass does not iterate a dirty union.
+                    var prevTouchedShards = state.State.TouchedShards;
                     state.State.TouchedShards = sorted;
-                    await state.WriteStateAsync();
+                    try
+                    {
+                        await state.WriteStateAsync();
+                    }
+                    catch
+                    {
+                        state.State.TouchedShards = prevTouchedShards;
+                        throw;
+                    }
                 }
             }
         }
@@ -910,16 +992,48 @@ internal sealed class AtomicWriteGrain(
                     var entry = state.State.Entries[state.State.NextIndex];
                     await lattice.SetAsync(entry.Key, entry.Value);
 
+                    // Class B snapshot/restore at Site 5 (success persist).
+                    // Without this, a transient storage failure leaves the
+                    // advanced NextIndex / reset RetriesOnCurrentStep in
+                    // memory; the catch block below then persists the dirty
+                    // values via its own WriteStateAsync, masking the
+                    // "advance only on successful persist" contract.
+                    var prevNextIndex = state.State.NextIndex;
+                    var prevRetriesOnCurrentStep = state.State.RetriesOnCurrentStep;
                     state.State.NextIndex++;
                     state.State.RetriesOnCurrentStep = 0;
-                    await state.WriteStateAsync();
+                    try
+                    {
+                        await state.WriteStateAsync();
+                    }
+                    catch
+                    {
+                        state.State.NextIndex = prevNextIndex;
+                        state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
+                        throw;
+                    }
                 }
                 catch (Exception ex)
                 {
                     if (state.State.RetriesOnCurrentStep < MaxRetriesPerStep)
                     {
+                        // Class B snapshot/restore at Site 6 (retry persist).
+                        // A failure here without the restore would advance the
+                        // retry counter in memory while disk still says the
+                        // pre-retry value. Subsequent retries on the same
+                        // activation would observe an over-counted budget and
+                        // pivot to compensation prematurely.
+                        var prevRetriesOnCurrentStep = state.State.RetriesOnCurrentStep;
                         state.State.RetriesOnCurrentStep++;
-                        await state.WriteStateAsync();
+                        try
+                        {
+                            await state.WriteStateAsync();
+                        }
+                        catch
+                        {
+                            state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
+                            throw;
+                        }
                         Logger.LogWarning(ex,
                             "Atomic-write saga {OperationKey}: retrying step {Index} (attempt {Attempt}).",
                             OperationKey, state.State.NextIndex, state.State.RetriesOnCurrentStep);
@@ -927,12 +1041,32 @@ internal sealed class AtomicWriteGrain(
                     }
 
                     // Exhausted retries - pivot to compensation.
+                    // Class B snapshot/restore at Site 7 (compensate pivot).
+                    // A failure on this persist would leave Phase=Compensate
+                    // in memory while disk still says Execute; the rest of
+                    // RunSagaAsync's dispatch (line 788) would enter the
+                    // compensation branch on the dirty in-memory flag, but a
+                    // reactivation would find disk at Execute and re-run the
+                    // failing SetAsync from scratch.
+                    var prevPhase = state.State.Phase;
+                    var prevFailureMessage = state.State.FailureMessage;
+                    var prevRetriesOnCurrentStepPivot = state.State.RetriesOnCurrentStep;
                     state.State.Phase = AtomicWritePhase.Compensate;
                     state.State.FailureMessage = ex.Message;
                     // NextIndex currently points at the failed-to-commit entry; it
                     // was NOT written, so compensation rolls back entries [0..NextIndex-1].
                     state.State.RetriesOnCurrentStep = 0;
-                    await state.WriteStateAsync();
+                    try
+                    {
+                        await state.WriteStateAsync();
+                    }
+                    catch
+                    {
+                        state.State.Phase = prevPhase;
+                        state.State.FailureMessage = prevFailureMessage;
+                        state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStepPivot;
+                        throw;
+                    }
                     return;
                 }
             }
@@ -952,9 +1086,26 @@ internal sealed class AtomicWriteGrain(
     /// </summary>
     private async Task CompleteSagaAsync(bool success)
     {
+        // Class B snapshot/restore at Site 8 (CompleteSagaAsync terminal
+        // persist). A failure here would leave Phase=Completed in memory
+        // while disk still says Execute. The ExecuteAsync L159
+        // Phase==Completed short-circuit then reports false success on
+        // every retry from the same activation, but a reactivation finds
+        // disk at Execute and re-runs the entire saga.
+        var prevPhase = state.State.Phase;
+        var prevRetriesOnCurrentStep = state.State.RetriesOnCurrentStep;
         state.State.Phase = AtomicWritePhase.Completed;
         state.State.RetriesOnCurrentStep = 0;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
+            throw;
+        }
         await UnregisterKeepaliveAsync();
         await SlideTtlAsync();
 
