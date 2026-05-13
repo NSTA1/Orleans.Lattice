@@ -189,10 +189,22 @@ internal sealed class DeadLetterTrackingReplicationApplier(
 
         // Advance HWM only for point-applied entries; range deletes do
         // not consult the HWM (see ReplicationApplier) so advancing it
-        // would be misleading. Local-origin entries cannot reach this
-        // path because the canonical applier returns Applied=false
-        // synchronously without throwing.
-        if (entry.Op != MutationKind.DeleteRange)
+        // would be misleading. Saga terminal-mark records (TxCommit /
+        // TxAbort) are likewise routed by the canonical applier
+        // through ApplyTxTerminalCoreAsync, which deliberately
+        // bypasses the per-origin HWM check: saga terminal HLCs are
+        // saga linearization points, not per-origin frontiers, and
+        // the receiver dedupes terminals through the per-tree
+        // TxRegistry instead. Advancing HWM past a parked terminal
+        // would silently dedupe any in-flight retry of a legitimate
+        // point mutation from the same origin carrying an HLC at or
+        // below the terminal's HLC (silent data loss on the next
+        // dedup-eligible same-origin entry). Local-origin entries
+        // cannot reach this path because the canonical applier
+        // returns Applied=false synchronously without throwing.
+        if (entry.Op != MutationKind.DeleteRange
+            && entry.Op != MutationKind.TxCommit
+            && entry.Op != MutationKind.TxAbort)
         {
             var hwm = grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(entry.TreeId);
             await hwm.TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken).ConfigureAwait(false);

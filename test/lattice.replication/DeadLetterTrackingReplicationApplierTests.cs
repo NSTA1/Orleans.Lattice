@@ -107,6 +107,48 @@ public partial class DeadLetterTrackingReplicationApplierTests
     }
 
     [Test]
+    public async Task ApplyAsync_skips_hwm_advance_for_tx_commit_terminal()
+    {
+        // The canonical ReplicationApplier routes TxCommit / TxAbort
+        // through ApplyTxTerminalCoreAsync, which deliberately bypasses
+        // the per-origin HWM (saga terminal HLCs are saga linearization
+        // points, not per-origin frontiers; the receiver dedupes
+        // terminals through the per-tree TxRegistry instead). The
+        // DLQ-park path must preserve this invariant: advancing HWM
+        // past a parked terminal would silently dedupe any in-flight
+        // retry of a legitimate point mutation from the same origin
+        // carrying an HLC at or below the terminal's HLC.
+        var (decorator, inner, dlq, hwm, _) = Build(maxRetries: 1);
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
+            .Returns<Task<ApplyResult>>(_ => throw new InvalidOperationException("shard unavailable"));
+
+        var entry = MakeEntry(op: MutationKind.TxCommit);
+        var result = await decorator.ApplyAsync(entry, CancellationToken.None);
+
+        Assert.That(result.Applied, Is.False);
+        await dlq.Received(1).EnqueueAsync(entry, Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await hwm.DidNotReceive().TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_skips_hwm_advance_for_tx_abort_terminal()
+    {
+        // Mirror of the TxCommit carveout: TxAbort routes through the
+        // same ApplyTxTerminalCoreAsync seam and must not consume a
+        // per-origin HWM slot on DLQ park.
+        var (decorator, inner, dlq, hwm, _) = Build(maxRetries: 1);
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
+            .Returns<Task<ApplyResult>>(_ => throw new InvalidOperationException("shard unavailable"));
+
+        var entry = MakeEntry(op: MutationKind.TxAbort);
+        var result = await decorator.ApplyAsync(entry, CancellationToken.None);
+
+        Assert.That(result.Applied, Is.False);
+        await dlq.Received(1).EnqueueAsync(entry, Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await hwm.DidNotReceive().TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task ApplyAsync_clears_failure_counter_on_subsequent_success()
     {
         var (decorator, inner, dlq, _, _) = Build(maxRetries: 3);
