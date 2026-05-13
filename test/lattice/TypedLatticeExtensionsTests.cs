@@ -180,6 +180,29 @@ public class TypedLatticeExtensionsTests
     }
 
     [Test]
+    public void SetManyAsync_throws_for_null_entries_with_serializer()
+    {
+        // Mirrors the SetManyAtomicAsync_throws_for_null_entries_with_serializer
+        // sibling. Without the guard the extension dereferences entries.Count
+        // and surfaces NullReferenceException instead of the typed
+        // ArgumentNullException("entries"), which is the public-API contract
+        // documented across the rest of the Typed/Atomic surface.
+        var lattice = CreateMock();
+        var ex = Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAsync<TestItem>(null!, Serializer));
+        Assert.That(ex!.ParamName, Is.EqualTo("entries"));
+    }
+
+    [Test]
+    public void SetManyAsync_throws_for_null_entries_default_serializer()
+    {
+        var lattice = CreateMock();
+        var ex = Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAsync<TestItem>((List<KeyValuePair<string, TestItem>>)null!));
+        Assert.That(ex!.ParamName, Is.EqualTo("entries"));
+    }
+
+    [Test]
     public async Task SetManyAsync_empty_list_delegates_empty()
     {
         var lattice = CreateMock();
@@ -280,6 +303,28 @@ public class TypedLatticeExtensionsTests
         var lattice = CreateMock();
         Assert.ThrowsAsync<ArgumentNullException>(
             () => lattice.BulkLoadAsync(new List<KeyValuePair<string, TestItem>>(), null!));
+    }
+
+    [Test]
+    public void BulkLoadAsync_throws_for_null_entries_with_serializer()
+    {
+        // BulkLoadAsync<T> shares the SetManyAsync<T> shape: the entries.Count
+        // dereference happens before the underlying ILattice.BulkLoadAsync call
+        // forwards the list to the grain (which would otherwise have surfaced
+        // its own ArgumentNullException). Guard at the extension boundary.
+        var lattice = CreateMock();
+        var ex = Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.BulkLoadAsync<TestItem>(null!, Serializer));
+        Assert.That(ex!.ParamName, Is.EqualTo("entries"));
+    }
+
+    [Test]
+    public void BulkLoadAsync_throws_for_null_entries_default_serializer()
+    {
+        var lattice = CreateMock();
+        var ex = Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.BulkLoadAsync<TestItem>((IReadOnlyList<KeyValuePair<string, TestItem>>)null!));
+        Assert.That(ex!.ParamName, Is.EqualTo("entries"));
     }
 
     [Test]

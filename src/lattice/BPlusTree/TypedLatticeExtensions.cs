@@ -141,6 +141,7 @@ public static class TypedLatticeExtensions
         ILatticeSerializer<T> serializer,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(serializer);
         var raw = new List<KeyValuePair<string, byte[]>>(entries.Count);
         foreach (var (k, v) in entries)
@@ -152,8 +153,11 @@ public static class TypedLatticeExtensions
     public static Task SetManyAsync<T>(
         this ILattice lattice,
         List<KeyValuePair<string, T>> entries,
-        CancellationToken cancellationToken = default) =>
-        lattice.SetManyAsync(entries, JsonLatticeSerializer<T>.Default, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        return lattice.SetManyAsync(entries, JsonLatticeSerializer<T>.Default, cancellationToken);
+    }
 
     /// <summary>
     /// Serializes and atomically writes multiple key-value pairs via the
@@ -229,6 +233,7 @@ public static class TypedLatticeExtensions
         ILatticeSerializer<T> serializer,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(serializer);
         var raw = new List<KeyValuePair<string, byte[]>>(entries.Count);
         foreach (var (k, v) in entries)
@@ -240,8 +245,11 @@ public static class TypedLatticeExtensions
     public static Task BulkLoadAsync<T>(
         this ILattice lattice,
         IReadOnlyList<KeyValuePair<string, T>> entries,
-        CancellationToken cancellationToken = default) =>
-        lattice.BulkLoadAsync(entries, JsonLatticeSerializer<T>.Default, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        return lattice.BulkLoadAsync(entries, JsonLatticeSerializer<T>.Default, cancellationToken);
+    }
 
     /// <summary>
     /// Low-level typed streaming primitive. Streams deserialized entries
