@@ -67,8 +67,19 @@ internal sealed class HotShardMonitorGrain(
     private async Task<DateTime> GetOrSetActivationUtcAsync(DateTime nowUtc)
     {
         if (state.State.ActivationUtc is DateTime v) return v;
+        var prev = state.State.ActivationUtc;
         state.State.ActivationUtc = nowUtc;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            // Restore in-memory state so the idempotency guard above does
+            // not short-circuit subsequent retries from this activation.
+            state.State.ActivationUtc = prev;
+            throw;
+        }
         return nowUtc;
     }
 

@@ -11,7 +11,7 @@ using Orleans.Timers;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 [TestFixture]
-public class LatticeCursorGrainTests
+public partial class LatticeCursorGrainTests
 {
     private const string TreeId = "cursor-tree";
     private const string CursorId = "cur-abc";
