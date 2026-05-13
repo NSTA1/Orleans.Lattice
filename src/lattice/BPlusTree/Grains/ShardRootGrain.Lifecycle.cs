@@ -8,8 +8,23 @@ internal sealed partial class ShardRootGrain
     public async Task MarkDeletedAsync()
     {
         if (state.State.IsDeleted) return;
+
+        // Snapshot the pre-mutation IsDeleted. Without this revert, the
+        // idempotency guard above short-circuits every retry from this
+        // activation - turning a transient storage failure into a permanent
+        // split-brain (Class B "persisted / in-memory divergence on write
+        // failure, idempotency-guarded" anti-pattern).
+        var isDeletedSnapshot = state.State.IsDeleted;
         state.State.IsDeleted = true;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.IsDeleted = isDeletedSnapshot;
+            throw;
+        }
     }
 
     public Task<bool> IsDeletedAsync() => Task.FromResult(state.State.IsDeleted);
@@ -17,8 +32,19 @@ internal sealed partial class ShardRootGrain
     public async Task UnmarkDeletedAsync()
     {
         if (!state.State.IsDeleted) return;
+
+        // See MarkDeletedAsync for the snapshot/restore rationale.
+        var isDeletedSnapshot = state.State.IsDeleted;
         state.State.IsDeleted = false;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.IsDeleted = isDeletedSnapshot;
+            throw;
+        }
     }
 
     public async Task PurgeAsync()

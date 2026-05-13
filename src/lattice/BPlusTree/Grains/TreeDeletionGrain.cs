@@ -51,10 +51,31 @@ internal sealed class TreeDeletionGrain(
         }
         await Task.WhenAll(tasks);
 
+        // Snapshot mutated fields BEFORE any in-memory change so a failing
+        // WriteStateAsync below can revert the activation to the state every
+        // peer (and any future reactivation) observes from storage. Without
+        // this revert, the idempotency guard `if (state.State.IsDeleted) return;`
+        // above short-circuits every retry from this activation - turning a
+        // transient storage failure into a permanent split-brain (the Class B
+        // "persisted / in-memory divergence on write failure, idempotency-
+        // guarded" anti-pattern). The cross-grain MarkDeleted calls already
+        // executed are idempotent on retry.
+        var isDeletedSnapshot = state.State.IsDeleted;
+        var deletedAtUtcSnapshot = state.State.DeletedAtUtc;
+
         // Persist the deletion state.
         state.State.IsDeleted = true;
         state.State.DeletedAtUtc = DateTimeOffset.UtcNow;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.IsDeleted = isDeletedSnapshot;
+            state.State.DeletedAtUtc = deletedAtUtcSnapshot;
+            throw;
+        }
 
         // Unregister the tombstone compaction reminder - no longer needed.
         var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
@@ -94,10 +115,26 @@ internal sealed class TreeDeletionGrain(
         }
         await Task.WhenAll(tasks);
 
+        // See DeleteTreeAsync for the snapshot/restore rationale. Without
+        // this revert, the guarded precondition `if (!state.State.IsDeleted) throw`
+        // above would falsely fire on every retry from this activation
+        // (in-memory IsDeleted=false while persisted IsDeleted=true).
+        var isDeletedSnapshot = state.State.IsDeleted;
+        var deletedAtUtcSnapshot = state.State.DeletedAtUtc;
+
         // Clear deletion state.
         state.State.IsDeleted = false;
         state.State.DeletedAtUtc = null;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.IsDeleted = isDeletedSnapshot;
+            state.State.DeletedAtUtc = deletedAtUtcSnapshot;
+            throw;
+        }
 
         // Unregister the purge reminder.
         await UnregisterAllRemindersAsync();
@@ -124,12 +161,32 @@ internal sealed class TreeDeletionGrain(
             await PurgeShardAsync(i);
         }
 
+        // See DeleteTreeAsync for the snapshot/restore rationale. Without
+        // this revert, the guarded precondition `if (state.State.PurgeComplete) throw`
+        // above would falsely fire on every retry from this activation
+        // (in-memory PurgeComplete=true while persisted PurgeComplete=false).
+        var purgeInProgressSnapshot = state.State.PurgeInProgress;
+        var purgeCompleteSnapshot = state.State.PurgeComplete;
+        var nextShardIndexSnapshot = state.State.NextShardIndex;
+        var shardRetriesSnapshot = state.State.ShardRetries;
+
         // Mark complete and clean up.
         state.State.PurgeInProgress = false;
         state.State.PurgeComplete = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.PurgeInProgress = purgeInProgressSnapshot;
+            state.State.PurgeComplete = purgeCompleteSnapshot;
+            state.State.NextShardIndex = nextShardIndexSnapshot;
+            state.State.ShardRetries = shardRetriesSnapshot;
+            throw;
+        }
 
         // Remove the tree from the registry so TreeExistsAsync immediately
         // returns false. The reminder-driven CompletePurgeAsync path does
