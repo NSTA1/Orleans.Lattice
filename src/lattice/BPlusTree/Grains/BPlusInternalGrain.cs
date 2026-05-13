@@ -142,8 +142,32 @@ internal sealed class BPlusInternalGrain(
         // Recovery: if a previous split was interrupted, complete it first.
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
         {
+            // Snapshot the recovery-mutated fields BEFORE CompleteSplitAsync
+            // runs so that a failing WriteStateAsync below can revert the
+            // activation to the pre-recovery state. Without this revert, the
+            // recovery branch guard above (state.State.SplitState ==
+            // SplitInProgress) would short-circuit every retry from this
+            // activation - in-memory SplitState would be SplitComplete and
+            // SplitRightChildren would be null, so the caller never
+            // receives the prior split's pending SplitResult and the
+            // structural promotion chain is silently dropped until the
+            // activation is recycled. This is the Class B
+            // "persisted / in-memory divergence on write failure"
+            // anti-pattern, made high-priority by the guard short-circuit.
+            var splitStateSnapshot = state.State.SplitState;
+            var splitRightChildrenSnapshot = state.State.SplitRightChildren;
+
             pendingRecovery = await CompleteSplitAsync();
-            await state.WriteStateAsync();
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.SplitState = splitStateSnapshot;
+                state.State.SplitRightChildren = splitRightChildrenSnapshot;
+                throw;
+            }
 
             // Route the caller's promotion to the correct node after recovery.
             if (string.Compare(promotedKey, state.State.SplitKey!, StringComparison.Ordinal) >= 0)
