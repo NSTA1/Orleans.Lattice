@@ -29,8 +29,14 @@ public class WalShardGrainTests
         var grainContext = Substitute.For<IGrainContext>();
         var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        // Per-tree options are now resolved through the monitor on every
+        // grain call (matches the BPlusTree/Grains convention); wire the
+        // substitute up-front so tests passing custom WalMaxBatch* values
+        // see them honoured the same way an operator's runtime config
+        // override would be.
+        monitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions());
         var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver(), CreatePermissiveClusterIdResolver());
-        await grain.InitializeForTestingAsync(TreeId, ShardIndex, provider, options, CancellationToken.None);
+        await grain.InitializeForTestingAsync(TreeId, ShardIndex, provider, CancellationToken.None);
         return grain;
     }
 
@@ -529,7 +535,7 @@ public class WalShardGrainTests
         var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver(), CreatePermissiveClusterIdResolver());
 
         Assert.That(
-            async () => await grain.InitializeForTestingAsync(null!, 0, new InMemoryWalStorageProvider(), null, CancellationToken.None),
+            async () => await grain.InitializeForTestingAsync(null!, 0, new InMemoryWalStorageProvider(), CancellationToken.None),
             Throws.ArgumentNullException);
     }
 
@@ -542,8 +548,55 @@ public class WalShardGrainTests
         var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver(), CreatePermissiveClusterIdResolver());
 
         Assert.That(
-            async () => await grain.InitializeForTestingAsync(TreeId, 0, null!, null, CancellationToken.None),
+            async () => await grain.InitializeForTestingAsync(TreeId, 0, null!, CancellationToken.None),
             Throws.ArgumentNullException);
+    }
+
+    /// <summary>
+    /// Regression for the Class D.3 hazard "<c>IOptionsMonitor</c> change
+    /// not picked up": <see cref="WalShardGrain"/> previously captured
+    /// the resolved <see cref="LatticeOptions"/> into a private field on
+    /// activation and reused it for every subsequent <c>AppendAsync</c>,
+    /// so an operator updating
+    /// <see cref="LatticeOptions.WalMaxBatchEntries"/> or
+    /// <see cref="LatticeOptions.WalMaxBatchBytes"/> at runtime saw no
+    /// effect until the grain deactivated and reactivated. The fix
+    /// resolves through <see cref="IOptionsMonitor{TOptions}.Get(string)"/>
+    /// on every call site, matching the per-call idiom every other
+    /// <c>BPlusTree/Grains/*Grain.cs</c> already uses.
+    /// </summary>
+    [Test]
+    public async Task AppendAsync_resolves_options_per_call_through_IOptionsMonitor()
+    {
+        // Arrange: a monitor configured to return a valid LatticeOptions
+        // up-front so AppendAsync's batch-limit reads succeed in both
+        // pre- and post-fix code. We clear received calls AFTER activation
+        // so the assertion measures only the AppendAsync code path.
+        var provider = new InMemoryWalStorageProvider();
+        var grainContext = Substitute.For<IGrainContext>();
+        var services = Substitute.For<IServiceProvider>();
+        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+
+        var grain = new WalShardGrain(
+            grainContext,
+            services,
+            monitor,
+            CreatePermissiveResolver(),
+            CreatePermissiveClusterIdResolver());
+        await grain.InitializeForTestingAsync(TreeId, ShardIndex, provider, CancellationToken.None);
+
+        monitor.ClearReceivedCalls();
+
+        // Act: two foreground appends. The post-fix grain must consult
+        // the monitor on each call so a live options update is observed.
+        await grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
+        await grain.AppendAsync(MakeEntry("b"), CancellationToken.None);
+
+        // Assert: at least one Get(TreeId) on the monitor per AppendAsync.
+        // Pre-fix: zero calls (AppendAsync reads the captured _options
+        // field and bypasses the monitor entirely).
+        monitor.Received().Get(TreeId);
     }
 
     /// <summary>

@@ -45,7 +45,6 @@ internal sealed class WalShardGrain(
     private string _treeId = "";
     private int _shardIndex;
     private IWalStorageProvider _provider = null!;
-    private LatticeOptions _options = null!;
     private long _nextOffset;
     private bool _initialized;
 
@@ -56,6 +55,17 @@ internal sealed class WalShardGrain(
 
     /// <inheritdoc />
     IGrainContext IGrainBase.GrainContext => context;
+
+    /// <summary>
+    /// Per-call <see cref="LatticeOptions"/> resolved from the injected
+    /// <see cref="IOptionsMonitor{TOptions}"/>. Resolving on every read
+    /// (rather than capturing on activation) is the
+    /// <c>BPlusTree/Grains/*Grain.cs</c> convention - it lets operators
+    /// retune <see cref="LatticeOptions.WalMaxBatchEntries"/> and
+    /// <see cref="LatticeOptions.WalMaxBatchBytes"/> at runtime without
+    /// recycling the activation.
+    /// </summary>
+    private LatticeOptions Options => optionsMonitor.Get(_treeId);
 
     /// <summary>
     /// Recovers <c>_nextOffset</c> from the configured
@@ -86,8 +96,8 @@ internal sealed class WalShardGrain(
                 $"{nameof(WalShardGrain)} activation key '{key}' has a non-integer or negative shard index suffix.");
         }
 
-        _options = optionsMonitor.Get(_treeId);
-        _provider = _options.WalStorageProvider?.Invoke(_treeId)
+        var options = optionsMonitor.Get(_treeId);
+        _provider = options.WalStorageProvider?.Invoke(_treeId)
             ?? services.GetRequiredService<IWalStorageProvider>();
         var highest = await _provider.GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = highest + 1;
@@ -124,8 +134,9 @@ internal sealed class WalShardGrain(
         EnsureInitialized();
 
         var size = EstimateSize(entry);
-        var maxEntries = _options.WalMaxBatchEntries;
-        var maxBytes = _options.WalMaxBatchBytes;
+        var options = Options;
+        var maxEntries = options.WalMaxBatchEntries;
+        var maxBytes = options.WalMaxBatchBytes;
 
         // Flush the current pending batch when adding `entry` would
         // overflow either limit. The loop tolerates concurrent appends
@@ -358,12 +369,19 @@ internal sealed class WalShardGrain(
     /// for direct instantiation in unit tests without standing up a
     /// silo. Tests pre-load any persisted state into the supplied
     /// <paramref name="provider"/> before calling this method.
+    /// <para>
+    /// Per-tree <see cref="LatticeOptions"/> overrides are supplied
+    /// through the injected <see cref="IOptionsMonitor{TOptions}"/> in
+    /// the constructor (configure the substitute monitor to return the
+    /// desired <see cref="LatticeOptions"/> for the tree id before
+    /// calling this seam) so the grain reads exactly the same surface
+    /// it does in production.
+    /// </para>
     /// </summary>
     internal async Task InitializeForTestingAsync(
         string treeId,
         int shardIndex,
         IWalStorageProvider provider,
-        LatticeOptions? options,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(treeId);
@@ -372,7 +390,6 @@ internal sealed class WalShardGrain(
         _treeId = treeId;
         _shardIndex = shardIndex;
         _provider = provider;
-        _options = options ?? new LatticeOptions();
         var highest = await provider.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = highest + 1;
         _initialized = true;
