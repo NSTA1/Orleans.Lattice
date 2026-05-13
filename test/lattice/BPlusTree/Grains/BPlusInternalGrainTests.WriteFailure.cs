@@ -150,4 +150,72 @@ public partial class BPlusInternalGrainTests
             + "the idempotency guard now short-circuits every retry, "
             + "leaving the grain permanently divergent from storage.");
     }
+
+    [Test]
+    public void AcceptSplit_recovery_branch_reverts_in_memory_state_when_WriteStateAsync_throws()
+    {
+        // The recovery branch of AcceptSplitAsync enters when the persisted
+        // state shows SplitState=SplitInProgress (an earlier SplitAsync
+        // persisted its intent but the activation died before the caller
+        // observed the SplitResult). Recovery calls CompleteSplitAsync(),
+        // which mutates two fields in memory BEFORE the WriteStateAsync at
+        // BPlusInternalGrain.AcceptSplitAsync:146:
+        //   * state.State.SplitState  : SplitInProgress -> SplitComplete
+        //   * state.State.SplitRightChildren : populated -> null
+        // If WriteStateAsync throws, the in-memory mutations leak. The
+        // recovery branch is then guarded by `SplitState == SplitInProgress`
+        // (line 143), so every retry from the same activation observes
+        // SplitState=SplitComplete in memory and SKIPS the recovery branch
+        // entirely. The caller never receives the prior split's pending
+        // SplitResult (PromotedKey, NewSiblingId) - that structural
+        // promotion is silently dropped, breaking the parent's chain of
+        // split promotions until the activation is recycled.
+        var state = new FakePersistentState<InternalNodeState>
+        {
+            State =
+            {
+                TreeId = "tree-1",
+                ChildrenAreLeaves = true,
+                Children =
+                [
+                    new ChildEntry { SeparatorKey = null, ChildId = Child0 },
+                    new ChildEntry { SeparatorKey = "fox", ChildId = Child1 },
+                ],
+                SplitState = global::Orleans.Lattice.Primitives.SplitState.SplitInProgress,
+                SplitKey = "monkey",
+                SplitSiblingId = GrainId.Create("internal", "sibling-mid-split"),
+                SplitRightChildren =
+                [
+                    new ChildEntry { SeparatorKey = null, ChildId = Child2 },
+                    new ChildEntry { SeparatorKey = "rabbit", ChildId = Child3 },
+                ],
+            },
+        };
+        var grain = CreateGrain(state);
+
+        var splitStateBefore = state.State.SplitState;
+        var splitRightChildrenBefore = state.State.SplitRightChildren;
+
+        state.ThrowOnWrite = new InvalidOperationException(
+            "simulated storage failure on WriteStateAsync");
+
+        // Caller's promoted key < SplitKey ("monkey"), so the recovery
+        // branch would fall through to insert in THIS node after the
+        // recovery's WriteStateAsync. The throw happens at the recovery
+        // write itself - we never reach the fall-through insert.
+        Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await grain.AcceptSplitAsync("apple", Child3));
+
+        Assert.That(state.State.SplitState, Is.EqualTo(splitStateBefore),
+            "SplitState advanced from SplitInProgress to SplitComplete in "
+            + "memory survived a failing WriteStateAsync; the recovery "
+            + "branch guard (state.State.SplitState == SplitInProgress) "
+            + "now short-circuits on every retry from this activation, "
+            + "silently dropping the prior split's PromotedKey/NewSiblingId "
+            + "from the caller's promotion chain.");
+        Assert.That(state.State.SplitRightChildren, Is.EqualTo(splitRightChildrenBefore),
+            "SplitRightChildren cleared in memory survived a failing "
+            + "WriteStateAsync; subsequent CompleteSplitAsync resumptions "
+            + "from this activation would dereference a null list.");
+    }
 }
