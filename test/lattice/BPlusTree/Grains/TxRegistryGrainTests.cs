@@ -8,7 +8,7 @@ using Orleans.Runtime;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 [TestFixture]
-public class TxRegistryGrainTests
+public partial class TxRegistryGrainTests
 {
     private static (TxRegistryGrain grain, FakePersistentState<TxRegistryState> state) CreateGrain(
         FakePersistentState<TxRegistryState>? state = null,
