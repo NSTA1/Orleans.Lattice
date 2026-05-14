@@ -68,9 +68,18 @@ public class LatticeMicroBenchmarks
     private byte[] _value = null!;
     private List<KeyValuePair<string, byte[]>> _bulkBatch = null!;
 
+    // GetMany batch keys for the PointGetMany benchmark. A small fixed-size
+    // batch (4 keys) drawn from the pre-seeded _keys[] keyspace. Sized to
+    // mirror a typical user-facing multi-get rather than the bulk-load
+    // surface BulkLoad already exercises; isolates the
+    // LatticeGrain.GetManyAsyncCore state-machine allocation rather than
+    // the per-shard fan-out cost.
+    private List<string> _getManyBatch = null!;
+
     private int _writeCursor;
     private int _readCursor;
     private int _mixedCursor;
+    private int _getManyCursor;
 
     // ===== Cycle 11 fanout instrument: 4-physical-shard sibling tree =====
     // A second ILattice activation rooted at FanoutTreeName routes through
@@ -396,6 +405,19 @@ public class LatticeMicroBenchmarks
             _bulkBatch.Add(new(k, _value));
         }
 
+        // Fixed 4-key GetMany batch drawn from the pre-seeded keyspace.
+        // The batch is reused across iterations; rotating offsets via
+        // _getManyCursor would only add a per-iteration allocation
+        // (a fresh List<string>) that would mask the state-machine
+        // delta we are measuring. Identity batch keeps the alloc
+        // baseline stable.
+        var getManyBatchSize = Math.Min(4, _keys.Length);
+        _getManyBatch = new List<string>(getManyBatchSize);
+        for (var i = 0; i < getManyBatchSize; i++)
+        {
+            _getManyBatch.Add(_keys[i]);
+        }
+
         BuildFanoutTree(keyCount, bulkBatch);
         BuildDeepTree();
         BuildDeeperTree();
@@ -647,7 +669,31 @@ public class LatticeMicroBenchmarks
         return _lattice.ExistsAsync(key);
     }
 
-    /// <summary>One <see cref="ILattice.SetManyAsync"/> invocation flushing the pre-built batch.</summary>
+    /// <summary>
+    /// Single <see cref="ILattice.GetManyAsync(List{string}, CancellationToken)"/>
+    /// against a pre-built fixed 4-key batch drawn from the seeded keyspace.
+    /// Drives the multi-key fan-out path
+    /// (<c>LatticeGrain.GetManyAsyncCore</c> -> per-shard
+    /// <c>IShardRootGrain.GetManyAsync</c> -> <c>LeafCacheGrain.GetManyAsync</c>)
+    /// so allocation optimisations targeting <c>GetManyAsyncCore</c>
+    /// (e.g. pooling the state-machine box) have an empirical validation
+    /// lane. The batch list is shared across iterations so per-iteration
+    /// allocation is dominated by the state machine + the result dictionary
+    /// rather than batch construction.
+    /// </summary>
+    [Benchmark(Description = "Point get many")]
+    public Task<Dictionary<string, byte[]>> PointGetMany()
+    {
+        // Increment cursor to keep the structural pattern symmetric with
+        // PointRead / PointExists; the result is not used to index because
+        // the batch is intentionally identity-stable for allocation
+        // baseline reasons (see _getManyBatch comment).
+        _ = unchecked(_getManyCursor++) & int.MaxValue;
+        return _lattice.GetManyAsync(_getManyBatch);
+    }
+
+    /// <summary>
+    /// One <see cref="ILattice.SetManyAsync"/> invocation flushing the pre-built batch.</summary>
     [Benchmark(Description = "Bulk load")]
     public Task BulkLoad()
     {
