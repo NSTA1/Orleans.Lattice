@@ -292,6 +292,49 @@ if (packageReplicationConfigured)
     builder.Services.AddLatticeReplicationGrpcPushTransport(opts =>
     {
         opts.PeerEndpoints[packagePeerClusterId!] = peerUri;
+        // The sample's docker-compose + run.ps1 topologies expose the
+        // replication endpoint as plaintext h2c (HTTP/2 prior knowledge)
+        // on an internal Docker network or localhost. The package
+        // hardens the sender by default to refuse non-https endpoints;
+        // explicitly opt in here because the sample is a dev / demo
+        // deployment, not a production cluster. Production deployments
+        // should instead supply an https://... endpoint and leave this
+        // flag at its secure default.
+        opts.AllowPlaintextEndpoints = true;
+        // Stamp the origin-cluster header on every outbound batch so
+        // the peer's auth interceptor can resolve a per-peer secret
+        // when the operator chooses to partition secrets by origin.
+        opts.LocalClusterId = clusterName;
+    });
+
+    // Sample security defaults. Cross-cluster replication is now
+    // authenticated by default (the package's
+    // LatticeReplicationGrpcAuthInterceptor rejects unmatched batches
+    // with PermissionDenied). The sample uses two paths:
+    //
+    //   1. If the operator sets LATTICE_REPLICATION_SECRET on every
+    //      silo (the docker-compose path does), the default
+    //      EnvironmentVariableSecretSource picks it up and the
+    //      receiver-side authenticator accepts batches whose
+    //      x-lattice-replication-secret header matches.
+    //
+    //   2. If no secret is configured (the legacy `run-legacy.ps1` /
+    //      single-host quick-start path), authentication is disabled
+    //      so the sample still works out-of-the-box. This is safe for
+    //      a dev sample bound to loopback; production deployments
+    //      must supply a secret and leave RequireAuthentication at
+    //      its secure default.
+    var configuredSecret = Environment.GetEnvironmentVariable(
+        LatticeReplicationEnvironmentVariables.Secret);
+    var requireAuthentication = !string.IsNullOrWhiteSpace(configuredSecret);
+    builder.Services.Configure<LatticeReplicationSecurityOptions>(o =>
+    {
+        o.RequireAuthentication = requireAuthentication;
+        // The sample ships every appsettings.cluster.{us,eu}.json
+        // without any secret material; the hostile-config scan would
+        // be a no-op anyway but leaving it on covers operators who
+        // copy the sample into their own deployment and later add a
+        // LatticeReplication:Secret key by mistake.
     });
 
     // Operator-driven Tier 4b chaos: pause cross-cluster replication

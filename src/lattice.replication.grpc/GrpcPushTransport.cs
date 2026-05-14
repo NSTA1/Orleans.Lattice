@@ -53,6 +53,8 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
     private readonly LatticeReplicationGrpcMethod _method;
     private readonly IReplicationBatchEncoder _encoder;
     private readonly IOptionsMonitor<GrpcPushTransportOptions> _options;
+    private readonly IReplicationSecretProvider _secrets;
+    private readonly IOptionsMonitor<LatticeReplicationOptions> _replicationOptions;
     private readonly ConcurrentDictionary<string, PeerChannel> _channels = new(StringComparer.Ordinal);
     private int _disposed;
 
@@ -62,15 +64,21 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
     public GrpcPushTransport(
         LatticeReplicationGrpcMethod method,
         IReplicationBatchEncoder encoder,
-        IOptionsMonitor<GrpcPushTransportOptions> options)
+        IOptionsMonitor<GrpcPushTransportOptions> options,
+        IReplicationSecretProvider secrets,
+        IOptionsMonitor<LatticeReplicationOptions> replicationOptions)
     {
         ArgumentNullException.ThrowIfNull(method);
         ArgumentNullException.ThrowIfNull(encoder);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(secrets);
+        ArgumentNullException.ThrowIfNull(replicationOptions);
 
         _method = method;
         _encoder = encoder;
         _options = options;
+        _secrets = secrets;
+        _replicationOptions = replicationOptions;
     }
 
     /// <inheritdoc />
@@ -187,7 +195,41 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
                 + "before the first SendAsync call to this peer.");
         }
 
+        // Security gate: refuse to ship to a non-https peer unless the
+        // host has explicitly signed off on plaintext via
+        // GrpcPushTransportOptions.AllowPlaintextEndpoints.
+        GrpcChannelHardening.EnforceSchemeGate(endpoint, options.AllowPlaintextEndpoints, targetClusterId);
+
+        // Local cluster id stamped on the x-lattice-replication-origin
+        // header. The options surface is the explicit override; the
+        // implicit fallback is LatticeReplicationOptions.ClusterId
+        // (already validated non-empty by the options validator).
+        var localClusterId = !string.IsNullOrWhiteSpace(options.LocalClusterId)
+            ? options.LocalClusterId!
+            : _replicationOptions.CurrentValue.ClusterId;
+
         var channelOptions = new GrpcChannelOptions();
+
+        // Attach the shared-secret CallCredentials. When the channel
+        // is https the composite credentials carry TLS plus
+        // call-credentials together; when the channel is plaintext
+        // (only possible with the opt-in), the secret still travels
+        // via UnsafeUseInsecureChannelCallCredentials so the
+        // receiver-side interceptor can still authenticate the call.
+        var callCreds = GrpcChannelHardening.BuildCallCredentials(_secrets, targetClusterId, localClusterId);
+        if (options.AllowPlaintextEndpoints && !string.Equals(endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            channelOptions.UnsafeUseInsecureChannelCallCredentials = true;
+            channelOptions.Credentials = ChannelCredentials.Create(ChannelCredentials.Insecure, callCreds);
+        }
+        else
+        {
+            channelOptions.Credentials = ChannelCredentials.Create(ChannelCredentials.SecureSsl, callCreds);
+        }
+
+        // Host-supplied ConfigureChannel runs *after* the hardened
+        // defaults so the host can replace any of them (e.g. supply
+        // an explicit ChannelCredentials with a custom mTLS chain).
         options.ConfigureChannel?.Invoke(targetClusterId, channelOptions);
         var createdChannel = GrpcChannel.ForAddress(endpoint, channelOptions);
         // Cache the CallInvoker alongside the channel so SendAsync

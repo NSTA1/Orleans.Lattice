@@ -153,6 +153,21 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<LatticeReplicationOptions>, LatticeReplicationOptionsValidator>());
 
+        // Security: secret-source surface and the startup hostile-config
+        // scan. The default secret source reads from the
+        // LATTICE_REPLICATION_* environment-variable surface; hosts
+        // replace it via AddLatticeReplicationSecrets<TSource>() or via
+        // AddLatticeReplicationSecretsFromConfiguration. The scan
+        // refuses to start the silo when secrets are sourced from a
+        // file under the application directory (typically a checked-in
+        // appsettings.json).
+        builder.Services.TryAddSingleton<ILatticeReplicationSecretSource, EnvironmentVariableSecretSource>();
+        builder.Services.TryAddSingleton<TimeProvider>(_ => TimeProvider.System);
+        builder.Services.TryAddSingleton<IReplicationSecretProvider, CachingReplicationSecretProvider>();
+        builder.Services.AddOptions<LatticeReplicationSecurityOptions>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<Microsoft.Extensions.Hosting.IHostedService, LatticeReplicationConfigurationSafetyValidator>());
+
         // Replication-only commit-log seam: streaming snapshot drain for
         // the SnapshotThenWal recovery path. The core ICommitLogReader /
         // ICommitLogWriter / IWalStorageProvider are already wired by

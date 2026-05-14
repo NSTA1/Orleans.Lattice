@@ -6,23 +6,23 @@ The sub-package is opt-in: hosts that need the transport reference `Orleans.Latt
 
 ## Topology
 
-```text
-Site A silo                          Site B host (ASP.NET Core)
-───────────                          ──────────────────────────
-ChangeFeed                           Kestrel (HTTP/2)
-   │                                   │
-   ▼                                   ▼
-GrpcPushTransport                    LatticeReplicationGrpcService
-   │                                   │
-   │  unary Push(ReplicationBatchEnvelope)
-   │  → ReplicationAck
-   │ ───────────────────────────────▶  │
-   │                                   ▼
-   │                                 IReplicationApplier
-   │                                   │
-   │ ◀─────── ReplicationAck ──────────┤
-   ▼
-peer cursor advances strictly to ack.HighestAppliedHlc
+```mermaid
+flowchart LR
+    subgraph SiteA["Site A silo"]
+        CF[ChangeFeed]
+        GPT[GrpcPushTransport]
+        CF --> GPT
+    end
+    subgraph SiteB["Site B host (ASP.NET Core)"]
+        K[Kestrel HTTP/2]
+        SVC[LatticeReplicationGrpcService]
+        APP[IReplicationApplier]
+        K --> SVC --> APP
+    end
+    GPT -- "unary Push(ReplicationBatchEnvelope)" --> K
+    APP -- "ReplicationAck" --> SVC
+    SVC -- "ReplicationAck" --> GPT
+    GPT -- "peer cursor advances to ack.HighestAppliedHlc" --> CF
 ```
 
 One unary `Push` RPC per batch, a single long-lived `GrpcChannel` per peer cluster id, HTTP/2 multiplexing concurrent batches across the channel.
@@ -53,9 +53,11 @@ siloBuilder.ConfigureServices(services =>
 | Member | Semantics |
 |---|---|
 | `PeerEndpoints` | `IDictionary<string, Uri>` keyed by `TargetClusterId`. Every peer the silo intends to ship to must be present before the first `SendAsync` call. A batch whose `TargetClusterId` is not in the map causes `SendAsync` to throw `InvalidOperationException`. The map is read once per peer (on the first dispatch) and cached - runtime edits are not observed. |
-| `ConfigureChannel` | Optional `Action<string, GrpcChannelOptions>?` invoked when the transport constructs the per-peer `GrpcChannel`. Hosts attach mTLS credentials, custom `HttpHandler`s, retry policies, and keep-alive settings here. The default (`null`) leaves channel options at `Grpc.Net.Client` defaults, which is sufficient for plaintext-loopback tests but not for production. |
+| `ConfigureChannel` | Optional `Action<string, GrpcChannelOptions>?` invoked when the transport constructs the per-peer `GrpcChannel`. Hosts attach mTLS credentials, custom `HttpHandler`s, retry policies, and keep-alive settings here. The callback runs **after** the package applies its hardened defaults (call credentials + secure-channel option), so a host that needs to replace the credential chain (e.g. mTLS only) can do so unconditionally. The default (`null`) leaves channel options at `Grpc.Net.Client` defaults plus the package's shared-secret call credentials. |
+| `AllowPlaintextEndpoints` | `bool`, default `false`. When `false`, any `PeerEndpoints` entry whose scheme is not `https://` causes `SendAsync` to throw at channel-resolution time. Set to `true` only for loopback / test scenarios. |
+| `LocalClusterId` | `string?`. When set, stamped as the `x-lattice-replication-origin` header on every outbound call. When unset, the transport falls back to `LatticeReplicationOptions.ClusterId`. |
 
-A future item standardises mTLS / token-rotation across both transports; until then the host is responsible for wiring transport security via `ConfigureChannel`.
+Transport security is shipped by the package: shared-secret authentication, HTTPS-by-default scheme enforcement, and a pluggable secret-source seam are documented in [Transport Security](transport-security.md). mTLS remains available end-to-end via `ConfigureChannel`.
 
 ## Receiver-side registration
 
@@ -100,5 +102,5 @@ Per-peer gauges (`entries_behind`, `bytes_behind`, `consecutive_errors`, `last_c
 ## Caveats
 
 - **`PeerEndpoints` is read once per peer.** Adding or removing peers at runtime is **not** observed by the transport. A future item (observable topology) addresses this; until then, host restarts are required to change the peer set.
-- **No transport-level authentication is configured by default.** The default `GrpcChannelOptions` accept any server certificate over HTTPS and any client over HTTP. Production hosts must configure mTLS or bearer-token authentication via `ConfigureChannel` and the receiver's ASP.NET Core authentication middleware.
+- **Transport-level authentication is enabled by default.** `LatticeReplicationGrpcAuthInterceptor` rejects every Lattice replication call that does not carry a valid `x-lattice-replication-secret` header (`StatusCode.Unauthenticated` when absent, `PermissionDenied` when the value is not in the accepted-secret set). The sender attaches the secret as gRPC `CallCredentials` whenever a non-empty outbound secret is resolved. See [Transport Security](transport-security.md) for the full surface, including how to plug in a custom secret source via `AddLatticeReplicationSecrets<TSource>()`.
 - **The transport does not interpret the payload.** A transport-level decision based on payload contents (e.g. shed-load on oversize batches) is out of scope. `GrpcChannelOptions.MaxSendMessageSize` and `MaxReceiveMessageSize` cap the wire size at the transport boundary; the receiver-side flow-control work will surface batch-size hints on the ack envelope.
