@@ -204,7 +204,8 @@ internal sealed partial class LatticeGrain(
         }
     }
 
-    private async Task<Dictionary<string, byte[]>> GetManyAsyncCore(List<string> keys)
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    private async ValueTask<Dictionary<string, byte[]>> GetManyAsyncCore(List<string> keys)
     {
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
 
