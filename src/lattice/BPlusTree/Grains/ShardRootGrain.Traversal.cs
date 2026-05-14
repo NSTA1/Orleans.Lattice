@@ -164,7 +164,8 @@ internal sealed partial class ShardRootGrain
         _routingTableCache?.Remove(internalId);
     }
 
-    private async Task<byte[]?> TraverseForReadAsync(string key)
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    private async ValueTask<byte[]?> TraverseForReadAsync(string key)
     {
         GrainId leafId;
         if (state.State.RootIsLeaf)
