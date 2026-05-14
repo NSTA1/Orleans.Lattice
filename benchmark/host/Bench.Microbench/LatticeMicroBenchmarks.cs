@@ -613,6 +613,40 @@ public class LatticeMicroBenchmarks
         return _lattice.GetAsync(key);
     }
 
+    /// <summary>
+    /// Single <see cref="ILattice.GetWithVersionAsync(string, CancellationToken)"/>
+    /// against a rotating key. Mirrors <see cref="PointRead"/> but drives the
+    /// version-returning traversal path
+    /// (<c>ShardRootGrain.TraverseForReadWithVersionAsync</c>) so allocation
+    /// optimisations targeting that sibling helper have an empirical
+    /// validation lane. Reuses <c>_readCursor</c> since the rotating-key
+    /// pattern is identical to <see cref="PointRead"/>.
+    /// </summary>
+    [Benchmark(Description = "Point read with version")]
+    public Task<VersionedValue> PointReadWithVersion()
+    {
+        var i = unchecked(_readCursor++) & int.MaxValue;
+        var key = _keys[i % _keys.Length];
+        return _lattice.GetWithVersionAsync(key);
+    }
+
+    /// <summary>
+    /// Single <see cref="ILattice.ExistsAsync(string, CancellationToken)"/>
+    /// against a rotating key. Mirrors <see cref="PointRead"/> but drives the
+    /// existence-check traversal path
+    /// (<c>ShardRootGrain.TraverseForExistsAsync</c>) so allocation
+    /// optimisations targeting that sibling helper have an empirical
+    /// validation lane. Reuses <c>_readCursor</c> since the rotating-key
+    /// pattern is identical to <see cref="PointRead"/>.
+    /// </summary>
+    [Benchmark(Description = "Point exists")]
+    public Task<bool> PointExists()
+    {
+        var i = unchecked(_readCursor++) & int.MaxValue;
+        var key = _keys[i % _keys.Length];
+        return _lattice.ExistsAsync(key);
+    }
+
     /// <summary>One <see cref="ILattice.SetManyAsync"/> invocation flushing the pre-built batch.</summary>
     [Benchmark(Description = "Bulk load")]
     public Task BulkLoad()
