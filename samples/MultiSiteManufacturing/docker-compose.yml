@@ -195,6 +195,13 @@ services:
       # peer side.
       PackageReplication__PeerClusterId: "eu"
       PackageReplication__PeerGrpcEndpoint: "http://traefik-eu:80"
+      # Shared replication secret. Every silo in both clusters must
+      # carry the same value so the package's auth interceptor
+      # accepts inbound batches. This value is sample-only and is
+      # checked into the compose file deliberately - production
+      # deployments must source the secret from a secret store
+      # (env-from a Kubernetes Secret, Docker secrets, etc.).
+      LATTICE_REPLICATION_SECRET: "msmfg-sample-shared-secret-do-not-use-in-production"
     command: ["--cluster", "us", "--silo-id", "a"]
     networks:
       - us-net
@@ -220,6 +227,7 @@ services:
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-us:10000/devstoreaccount1;QueueEndpoint=http://azurite-us:10001/devstoreaccount1;TableEndpoint=http://azurite-us:10002/devstoreaccount1;"
       PackageReplication__PeerClusterId: "eu"
       PackageReplication__PeerGrpcEndpoint: "http://traefik-eu:80"
+      LATTICE_REPLICATION_SECRET: "msmfg-sample-shared-secret-do-not-use-in-production"
     command: ["--cluster", "us", "--silo-id", "b"]
     networks:
       - us-net
@@ -289,6 +297,7 @@ services:
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-eu:10000/devstoreaccount1;QueueEndpoint=http://azurite-eu:10001/devstoreaccount1;TableEndpoint=http://azurite-eu:10002/devstoreaccount1;"
       PackageReplication__PeerClusterId: "us"
       PackageReplication__PeerGrpcEndpoint: "http://traefik-us:80"
+      LATTICE_REPLICATION_SECRET: "msmfg-sample-shared-secret-do-not-use-in-production"
     command: ["--cluster", "eu", "--silo-id", "a"]
     networks:
       - eu-net
@@ -314,6 +323,7 @@ services:
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-eu:10000/devstoreaccount1;QueueEndpoint=http://azurite-eu:10001/devstoreaccount1;TableEndpoint=http://azurite-eu:10002/devstoreaccount1;"
       PackageReplication__PeerClusterId: "us"
       PackageReplication__PeerGrpcEndpoint: "http://traefik-us:80"
+      LATTICE_REPLICATION_SECRET: "msmfg-sample-shared-secret-do-not-use-in-production"
     command: ["--cluster", "eu", "--silo-id", "b"]
     networks:
       - eu-net

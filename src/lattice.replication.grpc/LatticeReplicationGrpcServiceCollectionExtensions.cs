@@ -36,6 +36,20 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
 
         services.Configure(configure);
         RegisterMethodFactory(services);
+
+        // The transport now depends on IReplicationSecretProvider and
+        // IOptionsMonitor<LatticeReplicationOptions>. AddLatticeReplication
+        // is the canonical registration site for both, but a host that
+        // wires the gRPC transport without the core seam (e.g. a test
+        // that injects a stub applier directly) still needs a working
+        // DI graph. TryAdd preserves any registration the host did
+        // first and supplies safe defaults otherwise.
+        services.TryAddSingleton<ILatticeReplicationSecretSource, EnvironmentVariableSecretSource>();
+        services.TryAddSingleton<TimeProvider>(_ => TimeProvider.System);
+        services.TryAddSingleton<IReplicationSecretProvider, CachingReplicationSecretProvider>();
+        services.AddOptions<LatticeReplicationSecurityOptions>();
+        services.AddOptions<LatticeReplicationOptions>();
+
         services.Replace(ServiceDescriptor.Singleton<IReplicationTransport, GrpcPushTransport>());
         return services;
     }
@@ -50,7 +64,33 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddGrpc();
+        services.AddGrpc(options =>
+        {
+            // Register the auth interceptor globally so every gRPC
+            // service hosted on this pipeline runs through the
+            // shared-secret authenticator. The interceptor itself
+            // scopes enforcement to LatticeReplication methods by
+            // matching on the service-name prefix, so unrelated
+            // gRPC services on the same host are unaffected.
+            options.Interceptors.Add<LatticeReplicationGrpcAuthInterceptor>();
+        });
+        services.TryAddSingleton<LatticeReplicationGrpcAuthInterceptor>();
+
+        // Security defaults: TryAdd so a host that called
+        // AddLatticeReplication first wins (its registrations land
+        // before these), and a stand-alone gRPC server host that
+        // doesn't have AddLatticeReplication still gets a complete DI
+        // graph for the interceptor. The accepted-set returned by the
+        // default EnvironmentVariableSecretSource is empty when no
+        // env vars are set, so the interceptor will reject every call
+        // with PermissionDenied; tests that don't configure a secret
+        // must set LatticeReplicationSecurityOptions.RequireAuthentication
+        // to false explicitly.
+        services.TryAddSingleton<ILatticeReplicationSecretSource, EnvironmentVariableSecretSource>();
+        services.TryAddSingleton<TimeProvider>(_ => TimeProvider.System);
+        services.TryAddSingleton<IReplicationSecretProvider, CachingReplicationSecretProvider>();
+        services.AddOptions<LatticeReplicationSecurityOptions>();
+
         RegisterMethodFactory(services);
         // Defensive default: hosts that don't call AddLatticeReplication
         // (e.g. test hosts that wire only the gRPC service against a

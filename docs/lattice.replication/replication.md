@@ -99,6 +99,7 @@ For day-to-day use and operations:
 - [Dead-Letter Queue](dead-letter-queue.md) - quarantine model, operator surface, replay.
 - [Snapshot Bootstrap](snapshot-bootstrap.md) - point-in-time bootstrap, snapshot HLC, incremental cutover.
 - [Auto-Bootstrap](auto-bootstrap.md) - fall-off-the-log detection and automatic re-seed.
+- [Transport Security](transport-security.md) - shared-secret authentication, HTTPS-by-default, custom secret sources, env-var convention.
 
 For internals (the "how"):
 
@@ -113,4 +114,4 @@ For internals (the "how"):
 
 ## Roadmap
 
-The feature plan - including the items still ahead of GA (mTLS / token-rotation defaults, observable topology, MV-Register dispatch, performance follow-ons) and the satisfied dependencies - lives in [`src/lattice.replication/roadmap.md`](../../src/lattice.replication/roadmap.md).
+The feature plan - including the items still ahead of GA (observable topology, MV-Register dispatch, performance follow-ons) and the satisfied dependencies - lives in [`src/lattice.replication/roadmap.md`](../../src/lattice.replication/roadmap.md).

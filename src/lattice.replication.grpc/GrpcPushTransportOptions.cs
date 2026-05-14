@@ -42,4 +42,29 @@ public sealed class GrpcPushTransportOptions
     /// sufficient for plaintext-loopback test scenarios.
     /// </summary>
     public Action<string, global::Grpc.Net.Client.GrpcChannelOptions>? ConfigureChannel { get; set; }
+
+    /// <summary>
+    /// When <see langword="false"/> (the default), the transport
+    /// refuses to construct a channel for any peer whose endpoint URI
+    /// is not <c>https://</c>. Replication batches carry secret-shaped
+    /// CRDT mutations and must travel over TLS; the gate fails closed
+    /// during startup-style misconfiguration. Set to <see langword="true"/>
+    /// only for loopback / diagnostic scenarios where the receiver
+    /// runs inside the same trust domain and the host has explicitly
+    /// signed off on plaintext.
+    /// </summary>
+    public bool AllowPlaintextEndpoints { get; set; }
+
+    /// <summary>
+    /// The local cluster id stamped on every outbound batch as the
+    /// <c>x-lattice-replication-origin</c> metadata header. The
+    /// receiver-side interceptor uses this to choose the correct
+    /// per-peer secret when the host's
+    /// <see cref="ILatticeReplicationSecretSource"/> partitions
+    /// secrets per origin. When unset, the transport reads
+    /// <see cref="LatticeReplicationOptions.ClusterId"/> from
+    /// <c>IOptionsMonitor&lt;LatticeReplicationOptions&gt;</c> at
+    /// channel-construction time.
+    /// </summary>
+    public string? LocalClusterId { get; set; }
 }

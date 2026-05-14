@@ -19,6 +19,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Replication.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Replication.Grpc" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Replication.Grpc.Tests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 

@@ -44,6 +44,11 @@ public class GrpcPushTransportIntegrationTests
                         new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
                     services.AddLatticeReplicationGrpcServer();
+                    // This fixture validates the wire shape rather than the
+                    // shared-secret authenticator; disable the receiver-side
+                    // auth gate so the metadata round-trip assertions are not
+                    // blocked by the gate.
+                    services.Configure<LatticeReplicationSecurityOptions>(o => o.RequireAuthentication = false);
                 });
                 web.Configure(app =>
                 {
