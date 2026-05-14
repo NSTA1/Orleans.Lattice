@@ -493,14 +493,23 @@ internal sealed partial class LatticeGrain(
     {
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
 
-        // Group entries by shard.
-        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>> ();
+        // Group entries by shard. Pre-size each bucket to the expected
+        // shard-fair fraction of the batch, capped at 256 to bound
+        // over-allocation for tiny shards / huge batches (see PR #210 for
+        // the canonical bounded pre-size shape). Eliminates the 0→N
+        // AddWithResize cascade that previously dominated bulk-write
+        // allocations.
+
+        var physicalShardCount = Math.Max(1, shardMap.GetPhysicalShardIndices().Count);
+        var expectedPerShard = Math.Max(4, entries.Count / physicalShardCount);
+        var bucketCapacity = Math.Min(expectedPerShard, 256);
+        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(physicalShardCount);
         foreach (var entry in entries)
         {
             var idx = shardMap.Resolve(entry.Key);
             if (!shardBuckets.TryGetValue(idx, out var bucket))
             {
-                bucket = [];
+                bucket = new List<KeyValuePair<string, byte[]>>(bucketCapacity);
                 shardBuckets[idx] = bucket;
             }
             bucket.Add(entry);
