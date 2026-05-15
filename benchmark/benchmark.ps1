@@ -437,7 +437,15 @@ function Invoke-Compose {
     )
     $fileArgs = @()
     foreach ($f in $ComposeFiles) { $fileArgs += @('-f', $f) }
-    Push-Location ($Cwd ?? $benchmarkRoot)
+    # PowerShell's ?? operator only treats $null as null, not the empty string.
+    # `[string] $Cwd` with no caller-supplied value binds to '', so `?? $benchmarkRoot`
+    # would return '' and Push-Location '' is a no-op leaving the location at the
+    # caller's cwd. When the harness is invoked from the repo root (./benchmark/benchmark.ps1)
+    # rather than from inside benchmark/, this silently breaks every compose call because
+    # docker compose then looks for docker-compose.yml at the repo root. Use an explicit
+    # IsNullOrEmpty test so empty strings fall back to $benchmarkRoot too.
+    $resolvedCwd = if ([string]::IsNullOrEmpty($Cwd)) { $benchmarkRoot } else { $Cwd }
+    Push-Location $resolvedCwd
     try {
         & docker compose @fileArgs @Args
         if ($LASTEXITCODE -ne 0) { throw "docker compose $($Args -join ' ') failed (exit $LASTEXITCODE)." }
