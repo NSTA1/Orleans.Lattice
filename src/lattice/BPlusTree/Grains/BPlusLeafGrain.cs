@@ -631,9 +631,9 @@ internal sealed partial class BPlusLeafGrain(
             else
             {
                 // The key belongs to this leaf - write it via the
-                // dual-durability commit path so the WAL append, the
-                // in-memory projection update, and the shadow persist
-                // remain consistent with the main path below.
+                // WAL-first commit path so the WAL append and the
+                // in-memory projection update remain consistent with the
+                // main path below.
                 await CommitSetAsync(key, value, expiresAtTicks);
             }
 

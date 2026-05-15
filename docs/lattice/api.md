@@ -1,6 +1,6 @@
 # Lattice Public API Reference
 
-Lattice is a distributed, CRDI-based B+ tree built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/). It exposes a single entry-point grain interface, `ILattice`, that routes operations to sharded internal storage. See [Architecture](architecture.md) for the full grain layer design.
+Lattice is a distributed, CRDT-based B+ tree built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/). It exposes a single entry-point grain interface, `ILattice`, that routes operations to sharded internal storage. See [Architecture](architecture.md) for the full grain layer design.
 
 ## Setup
 
@@ -617,6 +617,7 @@ See [Configuration](configuration.md) for detailed guidance on each option, immu
 | `WalPartitions` | `int` | 1 | Number of independent WAL partitions per tree. Pinned per-tree on first WAL write. |
 | `WalMaxBatchEntries` | `int` | 100 | Maximum WAL entries the partition grain coalesces into a single flush. |
 | `WalMaxBatchBytes` | `long` | 4 MiB | Maximum byte budget the partition grain coalesces into a single flush. |
+| `WalRetention` | `TimeSpan?` | `null` | Optional wall-clock hard ceiling for WAL retention. When set, the WAL GC trims entries older than `now - WalRetention` regardless of consumer cursors; lagging consumers then "fall off the log". When `null` the GC predicate is purely `min(consumer cursors)`. |
 
 ## Serializable Types
 

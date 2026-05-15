@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public class WalRecordConverterTests
 {
     [Test]
-    public void ToReplogEntry_translates_Set_mutation_with_all_fields()
+    public void ToWalRecord_translates_Set_mutation_with_all_fields()
     {
         var txId = Guid.NewGuid();
         var mutation = new LatticeMutation
@@ -58,7 +58,7 @@ public class WalRecordConverterTests
     }
 
     [Test]
-    public void ToReplogEntry_preserves_existing_origin_over_supplied_default()
+    public void ToWalRecord_preserves_existing_origin_over_supplied_default()
     {
         var mutation = new LatticeMutation
         {
@@ -76,7 +76,7 @@ public class WalRecordConverterTests
     }
 
     [Test]
-    public void ToReplogEntry_translates_DeleteRange()
+    public void ToWalRecord_translates_DeleteRange()
     {
         var mutation = new LatticeMutation
         {
@@ -100,7 +100,7 @@ public class WalRecordConverterTests
     }
 
     [Test]
-    public void ToReplogEntry_clones_VectorClock_defensively()
+    public void ToWalRecord_clones_VectorClock_defensively()
     {
         var vc = new VersionVector();
         vc.Tick("origin-A");
@@ -123,7 +123,7 @@ public class WalRecordConverterTests
     }
 
     [Test]
-    public void FromReplogEntry_reverses_a_Set_translation()
+    public void FromWalRecord_reverses_a_Set_translation()
     {
         var original = new LatticeMutation
         {
@@ -161,7 +161,7 @@ public class WalRecordConverterTests
     }
 
     [Test]
-    public void FromReplogEntry_reverses_a_Delete_translation()
+    public void FromWalRecord_reverses_a_Delete_translation()
     {
         var original = new LatticeMutation
         {
@@ -184,7 +184,7 @@ public class WalRecordConverterTests
     }
 
     [Test]
-    public void ToReplogEntry_preserves_atomic_batch_metadata_round_trip()
+    public void ToWalRecord_preserves_atomic_batch_metadata_round_trip()
     {
         // Producer-side atomic-batch stamping (LatticeAtomicBatchContext +
         // BPlusLeafGrain.MutationObserver) writes AtomicBatchSize/Index and
@@ -223,7 +223,7 @@ public class WalRecordConverterTests
     }
 
     [Test]
-    public void ToReplogEntry_leaves_atomic_batch_metadata_at_defaults_for_non_atomic_writes()
+    public void ToWalRecord_leaves_atomic_batch_metadata_at_defaults_for_non_atomic_writes()
     {
         // Non-atomic writes (the default SetAsync path) flow through the
         // same converter; their AtomicBatchSize/Index/TransactionId slots

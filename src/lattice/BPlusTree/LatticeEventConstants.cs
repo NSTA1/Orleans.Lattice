@@ -85,11 +85,11 @@ public static class LatticeEventConstants
     /// <summary>
     /// Orleans <c>RequestContext</c> key used to flag the current logical
     /// call as being driven by the commit-log adapter rather than by a
-    /// foreground caller. Set by the core library's dual-durability
-    /// commit path on <see cref="BPlusTree.Grains.BPlusLeafGrain"/>
-    /// around the post-commit observer publish so a downstream
-    /// replication-aware observer can detect and short-circuit the
-    /// would-be loop where its own input is fed back into the WAL.
+    /// foreground caller. Set by the core library's WAL-first commit path
+    /// on <see cref="BPlusTree.Grains.BPlusLeafGrain"/> around the
+    /// post-commit observer publish so a downstream replication-aware
+    /// observer can detect and short-circuit the would-be loop where its
+    /// own input is fed back into the WAL.
     /// Internal - set through <see cref="LatticeCommitLogContext"/>.
     /// </summary>
     internal const string CommitLogSourceRequestContextKey = "ol.cls";

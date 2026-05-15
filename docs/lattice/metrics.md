@@ -136,7 +136,7 @@ dashboards keyed by `LatticeDashboardKind`:
 | Kind | Title | Focus |
 |---|---|---|
 | `Overview` | Orleans.Lattice - Overview | Per-tree throughput, leaf-write percentiles, cache hit-rate, tombstone churn, splits, atomic-write outcomes (rate), coordinator completions, tree-lifecycle, event publish/drop, runtime config changes. The dashboard now also includes a horizontal row of three atomic-write panels: saga duration p50/p95/p99, batch-size p50/p95/p99, and a dedicated saga-failure-rate panel. |
-| `CommitPath` | Orleans.Lattice - Commit Path | Dual-durability commit-path promotion, leaf shadow-write percentiles, activation-time replay duration / entries by recovery outcome. |
+| `CommitPath` | Orleans.Lattice - Commit Path | Per-step commit-pipeline latency (`wal` / `apply` / `observer`), storage-provider write duration, compaction duration, activation-time replay duration / entries by recovery outcome, and tombstone churn (reaped / expired / created). |
 | `Replication` | Orleans.Lattice.Replication - Operator | Cross-cluster ship/apply/lag, WAL append vs trim, dead-letter churn, FIFO violations, fall-off-log events, per-peer cursor lag. Sources the `orleans.lattice.replication` meter. |
 | `AtomicWrites` | Orleans.Lattice - Atomic Writes | Dedicated `SetManyAtomicAsync` saga deep-dive: outcome rate (stacked area), saga duration p50/p95/p99 and p95 by outcome, batch size p50/p95/p99 and p95 by outcome, per-tree committed throughput, range-window non-committed saga count, and a separate saga-failure-rate panel with 1% / 5% threshold lines. |
 
