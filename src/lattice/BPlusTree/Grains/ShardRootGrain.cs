@@ -776,7 +776,7 @@ internal sealed partial class ShardRootGrain(
             throw new InvalidOperationException("This tree has been deleted and is no longer accessible.");
     }
 
-    private async Task PrepareForOperationAsync()
+    private Task PrepareForOperationAsync()
     {
         // Order matters: a shard that participated as the *source* of an
         // online resize transitions Reject -> Cleanup, which sets BOTH
@@ -791,6 +791,30 @@ internal sealed partial class ShardRootGrain(
         // is a no-op and ThrowIfDeleted still fires correctly.
         ThrowIfTreeRejecting();
         ThrowIfDeleted();
+
+        // Steady-state sync fast path: on the read hot path each `await`
+        // below resolves synchronously - `EnsureRootAsync` short-circuits
+        // when `RootNodeId is not null`, and the two `ResumePending*` helpers
+        // short-circuit when their state pointers are null. The original
+        // `async Task` wrapper still ran three nested `MoveNext` traversals
+        // for every read; this peek lets the whole prepare chain compile to
+        // a `Task.CompletedTask` return when nothing is owed, deferring the
+        // async machinery to `PrepareForOperationSlowAsync` only when at
+        // least one helper actually has work. The cycle 36 lesson
+        // (synchronous-completion async methods are zero-alloc) still
+        // applies - this is a CPU optimisation, not an allocation one.
+        if (state.State.RootNodeId is not null
+            && state.State.PendingPromotion is null
+            && state.State.PendingBulkGraft is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        return PrepareForOperationSlowAsync();
+    }
+
+    private async Task PrepareForOperationSlowAsync()
+    {
         await EnsureRootAsync();
         await ResumePendingPromotionAsync();
         await ResumePendingBulkGraftAsync();
