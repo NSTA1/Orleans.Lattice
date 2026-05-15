@@ -81,6 +81,47 @@ internal sealed class ChangeFeed(
                         continue;
                     }
 
+                    // Tombstone-reap envelopes are local structural
+                    // cleanup records (see `ReplicationShipperGrain.ShouldShip`
+                    // for the full rationale). They are produced by
+                    // `BPlusLeafGrain.CompactTombstonesAsync`, carry
+                    // `MutationKind.Tombstone`, and have no defined
+                    // receiver-side apply rule because every peer
+                    // cluster reaps independently against its own
+                    // copy of the data. Skip them at the change-feed
+                    // boundary so bootstrap consumers do not observe
+                    // them either.
+                    if (entry.Op == MutationKind.Tombstone)
+                    {
+                        continue;
+                    }
+
+                    // Receiver-apply foreign-origin filter. Under the
+                    // WAL-as-sole-durability-boundary contract, every
+                    // leaf commit - including entries installed by
+                    // `IReplicationApplier` on this cluster - is
+                    // captured by the per-shard WAL. The change-feed
+                    // contract documented on `IChangeFeed` is narrower:
+                    // "locally-authored writes only". An apply-installed
+                    // entry stamps `OriginClusterId` with the *source*
+                    // cluster id (set by
+                    // `LatticeOriginContext.With(originClusterId)`
+                    // inside `LatticeGrain.ApplySetAsync` /
+                    // `ApplyDeleteAsync` / `ApplyDeleteRangeAsync`), so
+                    // an entry whose origin is set and does not match
+                    // the local cluster id is by construction an
+                    // apply-installed record - drop it before any
+                    // downstream filter sees it. Empty-origin entries
+                    // are durability-only authoring records produced
+                    // by the local `ICommitLogWriter` path and remain
+                    // eligible; local-origin entries are governed by
+                    // the optional `includeLocalOrigin` filter below.
+                    if (entry.OriginClusterId is { Length: > 0 } applyOrigin
+                        && !string.Equals(applyOrigin, localClusterId, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
                     if (!includeLocalOrigin
                         && entry.OriginClusterId is { } origin
                         && string.Equals(origin, localClusterId, StringComparison.Ordinal))

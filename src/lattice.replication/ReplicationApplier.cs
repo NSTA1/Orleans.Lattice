@@ -110,6 +110,23 @@ internal sealed partial class ReplicationApplier(
                     nameof(entry));
             }
 
+            // Defence-in-depth: tombstone-reap envelopes
+            // (`MutationKind.Tombstone`) are local structural cleanup
+            // records and are filtered out at the producer boundary by
+            // `ReplicationShipperGrain.ShouldShip` / `ChangeFeed.Subscribe`.
+            // A receiver should therefore never see one in the steady
+            // state; an older shipper or a hand-built apply call site
+            // could still deliver one. Surface it as an explicit
+            // dedup-shaped no-op (Applied=false, HWM unchanged) so the
+            // entry is acknowledged without faulting the apply loop.
+            // The category signal is not preserved through `WalRecord`
+            // (no Category slot), so the guard keys on `Op` directly.
+            if (entry.Op == MutationKind.Tombstone)
+            {
+                outcome = LatticeReplicationMetrics.OutcomeDedup;
+                return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+            }
+
             var resolved = options.Get(entry.TreeId);
             if (string.Equals(entry.OriginClusterId, resolved.ClusterId, StringComparison.Ordinal))
             {

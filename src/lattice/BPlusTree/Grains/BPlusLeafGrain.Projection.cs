@@ -61,6 +61,10 @@ internal sealed partial class BPlusLeafGrain
                 ApplyTxAbort(mutation.TransactionId);
                 AdvanceProjectionClock(mutation.Timestamp);
                 break;
+            case MutationKind.Tombstone:
+                ApplyTombstoneReap(mutation);
+                AdvanceProjectionClock(mutation.Timestamp);
+                break;
             default:
                 throw new ArgumentOutOfRangeException(
                     nameof(mutation),
@@ -327,6 +331,35 @@ internal sealed partial class BPlusLeafGrain
         // stale migration marker, keeping replay's post-state bit-
         // identical to foreground's.
         StoreEntry(key, incoming);
+    }
+
+    /// <summary>
+    /// Replay path for a <see cref="MutationKind.Tombstone"/> reap
+    /// envelope authored by <c>CompactTombstonesAsync</c>. Physically
+    /// removes the stamped key from the visible projection if the
+    /// existing entry is a tombstone (or an already-expired live
+    /// entry) whose timestamp does not dominate the reap envelope's
+    /// timestamp. The HLC guard preserves LWW convergence under
+    /// replay reordering - a reap envelope from an earlier compaction
+    /// pass cannot resurrect-and-then-remove a freshly-written live
+    /// entry that the same WAL slice already replayed.
+    /// </summary>
+    private void ApplyTombstoneReap(in LatticeMutation mutation)
+    {
+        if (!state.State.Entries.TryGetValue(mutation.Key, out var existing))
+            return;
+        if (existing.Timestamp > mutation.Timestamp)
+            return;
+        // Reap is well-formed only against tombstones or expired live
+        // entries - any other shape indicates a stale envelope whose
+        // counterpart Set replay landed later, and the live entry must
+        // stay. The compactor only emits Tombstone envelopes for entries
+        // that already met the tombstone-or-expired predicate at
+        // compaction time, so this guard is a defence-in-depth check.
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        if (!existing.IsTombstone && !existing.IsExpired(nowTicks))
+            return;
+        RemoveEntry(mutation.Key);
     }
 
     private void AdvanceProjectionClock(HybridLogicalClock incoming)

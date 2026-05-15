@@ -338,7 +338,7 @@ Retroactive shadow-forward of in-flight prepared mutations when a shard split be
 The end-to-end `ReshardTopologyTests` chaos surface is covered by the existing in-tree fixture; the retroactive sweep itself is a structural shape change behind the existing split state machine.
 
 
-### 9 · F-060
+### 9 · F-060 ✓ shipped
 **Reliability / medium impact (closes the residual foreground-commit sites that bypass the WAL; follow-on to F-058)** *(depends on Core F-058 ✓)*
 
 Route the remaining foreground leaf-write sites in `BPlusLeafGrain.MergeEntriesAsync`, `BPlusLeafGrain.MergeManyAsync`, and `BPlusLeafGrain.CompactTombstonesAsync` through `ICommitLogWriter` instead of through standalone `state.WriteStateAsync()` (via `PersistAsync()`). F-058 retired the cross-migration LWW backstop's legacy state-row commit but left an analogous architectural-debt gap on three sibling code paths: every merge of received entries (replication apply, sibling redistribute, split-recovery rebroadcast) and every tombstone-compaction pass mutates `Entries` directly and commits via the Orleans persisted state row, with no WAL append. A leaf reactivation that replays the WAL alone (the activation-time WAL materialiser established under F-049c) silently drops the merged or compacted state, because the projection checkpoint that captured the mutation has not yet flushed and the WAL holds no record of it.

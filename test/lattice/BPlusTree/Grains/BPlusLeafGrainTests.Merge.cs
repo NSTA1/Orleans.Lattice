@@ -122,4 +122,64 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(state.State.Entries.Count, Is.EqualTo(countBefore));
     }
+
+    // --- WAL routing: merge envelopes ---
+
+    [Test]
+    public async Task MergeEntries_appends_one_WAL_envelope_per_entry_with_IsMerge_flag()
+    {
+        var commitLog = new FakeCommitLogWriter();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, commitLog: commitLog);
+
+        var clock1 = HybridLogicalClock.Tick(default);
+        var clock2 = HybridLogicalClock.Tick(clock1);
+        var entries = new Dictionary<string, LwwValue<byte[]>>
+        {
+            ["live"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("v"), clock1),
+            ["dead"] = LwwValue<byte[]>.Tombstone(clock2),
+        };
+
+        await grain.MergeEntriesAsync(entries);
+
+        Assert.That(commitLog.AppendCount, Is.EqualTo(2));
+        Assert.That(commitLog.Appended.All(m => m.IsMerge), Is.True,
+            "every merge envelope must carry IsMerge=true so receivers can tag the kind dimension");
+        Assert.That(commitLog.Appended.Any(m =>
+            m.Key == "live" && m.Kind == MutationKind.Set && !m.IsTombstone), Is.True);
+        Assert.That(commitLog.Appended.Any(m =>
+            m.Key == "dead" && m.Kind == MutationKind.Delete && m.IsTombstone), Is.True);
+    }
+
+    [Test]
+    public async Task MergeEntries_empty_dictionary_does_not_append_to_WAL()
+    {
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(commitLog: commitLog);
+
+        await grain.MergeEntriesAsync(new Dictionary<string, LwwValue<byte[]>>());
+
+        Assert.That(commitLog.AppendCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task MergeEntries_does_not_call_state_write_state_async()
+    {
+        var commitLog = new FakeCommitLogWriter();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, commitLog: commitLog);
+        var writeCountBefore = state.WriteCount;
+
+        var clock = HybridLogicalClock.Tick(default);
+        var entries = new Dictionary<string, LwwValue<byte[]>>
+        {
+            ["k"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("v"), clock),
+        };
+
+        await grain.MergeEntriesAsync(entries);
+
+        Assert.That(state.WriteCount, Is.EqualTo(writeCountBefore),
+            "MergeEntriesAsync must route durability through the WAL; the legacy "
+            + "state.WriteStateAsync() call site is gone now that merge is WAL-routed.");
+    }
 }

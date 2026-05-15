@@ -93,6 +93,21 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
     /// <inheritdoc />
     public async Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)
     {
+        // Tombstone-reap envelopes (`MutationKind.Tombstone`) are local
+        // structural cleanup records emitted by
+        // `BPlusLeafGrain.CompactTombstonesAsync`. They are filtered
+        // out at the producer-side `ReplicationShipperGrain.ShouldShip`
+        // and `ChangeFeed.Subscribe` boundaries, and have no defined
+        // observer dispatch path (the leaf write path does not invoke
+        // `IMutationObserver` for compaction). The defence-in-depth
+        // short-circuit here keeps a future emit path that routes a
+        // tombstone-reap through the observer from faulting the switch
+        // below, which only enumerates `Set` / `Delete` / `DeleteRange`.
+        if (mutation.Kind == MutationKind.Tombstone)
+        {
+            return;
+        }
+
         var op = mutation.Kind switch
         {
             MutationKind.Set => MutationKind.Set,

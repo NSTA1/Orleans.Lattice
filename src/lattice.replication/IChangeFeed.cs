@@ -19,26 +19,32 @@ namespace Orleans.Lattice.Replication;
 /// that value as the new cursor.
 /// </para>
 /// <para>
-/// <b>Scope: locally-authored writes only.</b> The feed surfaces the
-/// WAL, and the WAL is appended <i>only</i> by mutations that
-/// originate as fresh user-authored writes on this cluster - i.e.
-/// calls reaching <see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/>, 
+/// <b>Scope: locally-authored writes only.</b> Consumers see only
+/// the writes this cluster authored - i.e. calls reaching
+/// <see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/>, 
 /// <see cref="ILattice.SetAsync(string, byte[], TimeSpan, CancellationToken)"/>, 
 /// <see cref="ILattice.DeleteAsync(string, CancellationToken)"/>, and
 /// <see cref="ILattice.DeleteRangeAsync(string, string, CancellationToken)"/>.
 /// Entries installed by the receiver-side apply pipeline
-/// (<see cref="IReplicationApplier"/> / <c>IReplicationApplyGrain</c>),
-/// by shard-split shadow-forward, by tree-merge / online-resize
-/// forwards, or by snapshot / bootstrap bulk-load are deliberately
-/// <b>not</b> WAL-appended on the destination - re-emitting them
-/// would cause the producer-side ship loop to re-ship them as
-/// local-origin writes, looping the cluster (the
+/// (<see cref="IReplicationApplier"/> / <c>IReplicationApplyGrain</c>)
+/// are captured by the per-shard WAL on the destination cluster -
+/// the WAL is the sole durability boundary - but they are filtered
+/// out at the feed boundary by the foreign-origin guard so the
+/// outbound ship loop and bootstrap consumers never observe them.
+/// An apply-installed entry stamps <see cref="WalRecord.OriginClusterId"/>
+/// with the *source* cluster id (set by <c>LatticeOriginContext.With</c>
+/// inside the apply seam), so an entry whose origin is set and does
+/// not match the local <see cref="LatticeReplicationOptions.ClusterId"/>
+/// is by construction apply-installed and is dropped before any
+/// downstream consumer sees it. Re-emitting them would cause the
+/// producer-side ship loop to re-ship a peer's writes back across
+/// the wire and loop the cluster. The
 /// <c>includeLocalOrigin=false</c> filter on <see cref="Subscribe"/>
-/// is a wire-shape cycle-break for the remote shipper, not the
-/// authority on what enters the feed in the first place). The
-/// <see cref="IMutationObserver"/> hook in the core library has the
-/// same scope by design - its "Coverage gaps" remarks describe the
-/// same boundary.
+/// is an *additional* cycle-break that suppresses local-origin
+/// observer entries for the remote shipper; it is orthogonal to the
+/// foreign-origin guard. The <see cref="IMutationObserver"/> hook in
+/// the core library has the same scope by design - its "Coverage
+/// gaps" remarks describe the same boundary.
 /// </para>
 /// <para>
 /// <b>Reading the feed for "every observable state change" is wrong.</b>

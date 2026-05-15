@@ -35,6 +35,7 @@ public partial class ReplicationShipperGrainTests
         public bool ThrowOnEncode { get; set; }
         public Exception EncodeException { get; set; } = new ArgumentException("malformed");
         public int Encodes { get; private set; }
+        public ReplicationBatchEnvelope? LastEnvelope { get; private set; }
 
         public void Encode(ReplicationBatchEnvelope envelope, IBufferWriter<byte> writer)
         {
@@ -44,6 +45,7 @@ public partial class ReplicationShipperGrainTests
                 throw EncodeException;
             }
             Encodes++;
+            LastEnvelope = envelope;
             writer.Write(new byte[] { 1, 2, 3 });
         }
 
@@ -394,6 +396,27 @@ public partial class ReplicationShipperGrainTests
 
         // Peer-origin entries are filtered before the encode/send;
         // the batch is empty so nothing is sent.
+        await transport.DidNotReceive().SendAsync(
+            Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
+        Assert.That(state.State.Cursor, Is.EqualTo(HybridLogicalClock.Zero));
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_skips_entries_originating_from_third_cluster_other_than_local()
+    {
+        // Receiver-apply regression: under
+        // WAL-as-sole-durability-boundary the local WAL contains
+        // entries authored by *any* peer (e.g. cluster C's entries
+        // apply-installed on cluster B). The shipper must restrict
+        // outbound traffic to writes authored by the *local* cluster
+        // - the broader local-origin rule subsumes the older "skip
+        // entries from this peer" cycle-break and prevents B from
+        // re-shipping C-authored entries to A.
+        var (grain, state, feed, transport, _, _, _) = Create();
+        feed.Append(MakeEntry("k1", origin: "site-c", ticks: 10));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
         Assert.That(state.State.Cursor, Is.EqualTo(HybridLogicalClock.Zero));

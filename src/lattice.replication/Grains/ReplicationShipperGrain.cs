@@ -448,8 +448,47 @@ internal sealed class ReplicationShipperGrain(
             return false;
         }
 
-        // Cycle-break: don't ship a peer its own writes back.
-        if (string.Equals(entry.OriginClusterId, _peerClusterId, StringComparison.Ordinal))
+        // Tombstone-reap envelopes are emitted by the per-leaf
+        // `CompactTombstonesAsync` path to durably record a local
+        // structural cleanup (physically remove a tombstone or expired
+        // entry whose grace period has elapsed). They carry
+        // `MutationKind.Tombstone`, are tagged
+        // `MutationCategory.Maintenance` via the producer-side
+        // `LatticeMaintenanceContext` scope, and have no defined
+        // receiver-side semantics: every peer cluster runs its own
+        // compaction pass against its own copy of the data and reaps
+        // independently when its local grace period elapses. Shipping
+        // them would (a) generate apply-side failures because
+        // `ReplicationApplier` has no `MutationKind.Tombstone` apply
+        // rule registered, (b) pollute the per-origin HWM with marks
+        // that never advance user-visible state, and (c) inflate every
+        // peer's apply traffic with envelopes that produce no semantic
+        // change. Skip them at the shipper boundary. The category
+        // signal is not preserved through `WalRecord` (no Category
+        // slot), so the filter keys on `Op` directly.
+        if (entry.Op == MutationKind.Tombstone)
+        {
+            return false;
+        }
+
+        // Cycle-break: only ship entries authored by the *local*
+        // cluster. Under the WAL-as-sole-durability-boundary contract,
+        // the per-shard WAL also captures entries installed by
+        // `IReplicationApplier` on this cluster - those entries stamp
+        // `OriginClusterId` with the *source* cluster id (set by
+        // `LatticeOriginContext.With(originClusterId)` inside
+        // `LatticeGrain.ApplySetAsync` / `ApplyDeleteAsync` /
+        // `ApplyDeleteRangeAsync`). Without this filter, a three-way
+        // topology (A authors -> ships to B; B applies, WAL-appends,
+        // and re-ships the apply-installed entry to C) would re-route
+        // A-origin writes back through B's outbound pipeline, breaking
+        // the producer-side "ship this cluster's authored writes only"
+        // contract and inflating apply traffic everywhere. Restricting
+        // the shipper to local-origin entries subsumes the older
+        // "don't ship a peer its own writes back" rule because
+        // `_peerClusterId != options.ClusterId` is a wire-shape
+        // invariant on every replication peer.
+        if (!string.Equals(entry.OriginClusterId, options.ClusterId, StringComparison.Ordinal))
         {
             return false;
         }

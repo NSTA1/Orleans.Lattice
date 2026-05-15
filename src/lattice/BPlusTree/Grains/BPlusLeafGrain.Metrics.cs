@@ -17,19 +17,19 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// commit-pipeline latency histogram.
 /// <para>
 /// Post-WAL-first scope: the per-shard WAL is the durability boundary
-/// for every saga / set / tombstone / backstop commit, so the surviving
-/// role of <see cref="PersistAsync"/> is narrowed to two slices:
+/// for every foreground commit - saga / set / tombstone / backstop /
+/// merge / compaction - so the surviving role of
+/// <see cref="PersistAsync"/> is narrowed to two slices:
 /// (i) persisting non-WAL-replayable topology and lifecycle metadata
 /// (sibling pointers, split lifecycle fields, tree id, shard index,
 /// key range, last-compaction version), and (ii) flushing the
 /// projection-checkpoint snapshot consulted by the activation-time WAL
-/// replay path. A small residual set of foreground commit sites in
-/// <c>MergeEntriesAsync</c>, <c>MergeManyAsync</c>, and
-/// <c>CompactTombstonesAsync</c> still drive their entry mutations
-/// through <see cref="PersistAsync"/> directly without a preceding WAL
-/// append; rerouting these to <see cref="ICommitLogWriter"/> is tracked
-/// as a follow-on roadmap entry so the surviving
-/// <see cref="PersistAsync"/> path becomes strictly topology + checkpoint.
+/// replay path. Every entry mutation in <c>MergeEntriesAsync</c>,
+/// <c>MergeManyAsync</c>, and <c>CompactTombstonesAsync</c> now appends
+/// a synthetic <see cref="LatticeMutation"/> through
+/// <see cref="ICommitLogWriter"/> before mutating in-memory state, on
+/// the same WAL-first contract as <c>SetCoreAsync</c> and the
+/// cross-migration LWW backstop.
 /// </para>
 /// </summary>
 internal sealed partial class BPlusLeafGrain
@@ -72,15 +72,16 @@ internal sealed partial class BPlusLeafGrain
     /// Used by (a) the topology / lifecycle paths (sibling pointer
     /// updates, split lifecycle transitions, tree-id / shard-index /
     /// key-range assignment, last-compaction-version stamping) that
-    /// persist metadata not carried by the per-shard WAL, (b) the
+    /// persist metadata not carried by the per-shard WAL, and (b) the
     /// projection-checkpoint flush that snapshots <c>Entries</c> plus
     /// <c>ProjectionCheckpointOffset</c> for the activation-time WAL
-    /// replayer, and (c) the residual foreground commit sites in
-    /// <c>MergeEntriesAsync</c>, <c>MergeManyAsync</c>, and
-    /// <c>CompactTombstonesAsync</c> still pending rerouting through
-    /// <see cref="ICommitLogWriter"/>. The tree-id tag is sourced from
-    /// persisted state and may be empty when the tree has not yet been
-    /// registered with this leaf (pre-<c>SetTreeIdAsync</c>).
+    /// replayer. Every foreground entry mutation - set, delete, saga
+    /// prepare / terminal, cross-migration LWW backstop, merge, and
+    /// tombstone-reap compaction - now routes durability through
+    /// <see cref="ICommitLogWriter"/> rather than through this helper.
+    /// The tree-id tag is sourced from persisted state and may be empty
+    /// when the tree has not yet been registered with this leaf
+    /// (pre-<c>SetTreeIdAsync</c>).
     /// </summary>
     private async Task PersistAsync()
     {
