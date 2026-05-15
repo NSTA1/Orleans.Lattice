@@ -127,8 +127,14 @@ original ordering preserved.
 
 Every guarantee in the tables above holds **during an active shard
 split**. The shadow-write primitive mirrors every mutation accepted by
-the source shard to the new owner during the drain phase. At swap, the
-source shard enters a reject phase that throws
+the source shard to the new owner during the drain phase, and a
+**retroactive prepared-mutation sweep** at `BeginShadowWrite` replays
+every in-flight `_pendingTx` entry from the source's leaves into the
+destination's pending buckets under the original
+`(txid, hlc, origin, vc)` provenance - so a `SetManyAtomicAsync` saga
+whose Prepare landed on the source shard before the split commits and
+completes against the new owner with no observable interruption. At
+swap, the source shard enters a reject phase that throws
 `StaleShardRoutingException` for keys whose slots have moved; the
 `LatticeGrain` orchestrator catches this, refreshes the cached
 `ShardMap`, and retries against the new owner within the same grain
@@ -246,6 +252,18 @@ peer, the same all-or-nothing window holds on every remote tree:
 prepared entries are invisible until the terminal mark arrives, and
 the terminal flip is atomic per-leaf and registry-coordinated
 tree-wide.
+
+The registry retains each completed decision as a tombstone for
+`LatticeOptions.TxDecisionRetention` (default 60 s) after the saga
+calls `ForgetAsync`. The retention window is invisible to direct
+readers (the verdict has the same outcome as before the call) but is
+essential when a concurrent adaptive shard split's retroactive
+shadow-forward sweep installs a *new* pending bucket on the saga's
+txid on a destination shard after the terminal has already broadcast:
+the sweep's post-sweep cleanup pass resolves the verdict against the
+retained tombstone and drains the orphan bucket directly. See
+[Atomic Writes - Phase 4 Complete](atomic-writes.md#phase-4---complete)
+and [Configuration - `TxDecisionRetention`](configuration.md#txdecisionretention).
 
 ---
 

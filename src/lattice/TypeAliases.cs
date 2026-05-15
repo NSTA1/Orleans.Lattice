@@ -72,6 +72,12 @@ internal static class TypeAliases
     // Raw-entry bulk load ( snapshot TTL preservation)
     internal const string LwwEntry = "ol.lwe";
 
+    // Retroactive shadow-forward of in-flight prepared mutations.
+    // Per-(txid, key) snapshot of a leaf's pending-tx map filtered by
+    // migrating virtual slot, replayed into the destination shard at the
+    // start of a shard split's BeginShadowWrite phase.
+    internal const string PendingMutationSnapshot = "ol.pms";
+
     // Atomic multi-key writes
     internal const string AtomicWriteState = "ol.aws";
     internal const string AtomicWritePhase = "ol.awp";

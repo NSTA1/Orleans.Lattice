@@ -86,6 +86,8 @@ internal sealed partial class BPlusLeafGrain(
         Entries = EmptyEntries,
         Version = new VersionVector(),
         SplitKey = null,
+        MovedAwaySlots = null,
+        MovedAwayVsc = null,
     };
 
     private static readonly Task<StateDelta> EmptyDeltaTask = Task.FromResult(EmptyDelta);
@@ -146,6 +148,18 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<byte[]?> GetAsync(string key)
     {
+        // Moved-away seal: a slot recorded on this leaf as having
+        // migrated to a sibling shard is invisible to every read
+        // path, including the LeafCacheGrain pending-key delegation
+        // that bypasses the shard front door. See IsKeyMovedAway for the rationale.
+        if (IsKeyMovedAway(key))
+        {
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG read1-moved-away] gid={context.GrainId} key={key}");
+#endif
+            return Task.FromResult<byte[]?>(null);
+        }
+
         // Strict atomic-visibility: a key with a pending-tx entry
         // dials back through the per-tree TxRegistry - the
         // registry-recorded saga outcome is the single tree-wide
@@ -160,10 +174,59 @@ internal sealed partial class BPlusLeafGrain(
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
         {
+            // Migration-window shadow guard. A migrated entry on this
+            // destination leaf carries the source's pre-saga snapshot
+            // (IsMigrated=true). If the split coordinator installed a
+            // shadow marker naming a saga that committed at the
+            // registry but whose backstop terminal has not yet reached
+            // this leaf, serving the migrated value here would split
+            // observation against any sibling leaf whose backstop has
+            // already landed. The slow path consults the registry and
+            // raises StaleShardRoutingException for the Committed-no-
+            // backstop case so the LatticeGrain deadline-bounded retry
+            // loop re-fans under a fresh snapshot.
+            if (lww.IsMigrated && TryGetShadowedSagas(key, out var sagas))
+            {
+                return GetWithShadowedMigratedAsync(key, lww.Value, sagas);
+            }
+#if LATTICE_DIAG
+            // DIAG: single-key read-return path.
+            DiagSink.Write($"[DIAG read1] gid={context.GrainId} key={key} valRound={DiagDecodeRound(lww.Value)} " +
+                $"hlc={lww.Timestamp} isMig={lww.IsMigrated} origin={lww.OriginClusterId ?? "(local)"}");
+#endif
             return Task.FromResult<byte[]?>(lww.Value);
         }
 
+#if LATTICE_DIAG
+        // DIAG: single-key returning null.
+        DiagSink.Write($"[DIAG read1-null] gid={context.GrainId} key={key}");
+#endif
         return Task.FromResult<byte[]?>(null);
+    }
+
+    /// <summary>
+    /// Slow-path completion of <see cref="GetAsync"/> when the key
+    /// would surface a migrated entry but carries a destination-side
+    /// shadow marker. Resolves every shadowing saga through the
+    /// registry and either passes the migrated value through
+    /// (InFlight / Aborted / Committed-with-backstop) or raises
+    /// <see cref="StaleShardRoutingException"/> with a sentinel
+    /// <c>(-1, -1, -1)</c> tuple so the caller's deadline-bounded
+    /// retry loop re-fans under a fresh snapshot.
+    /// </summary>
+    private async Task<byte[]?> GetWithShadowedMigratedAsync(string key, byte[]? migratedValue, HashSet<Guid> sagas)
+    {
+        if (await IsShadowedReadSafeAsync(sagas))
+        {
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG read1-shadow-pass] gid={context.GrainId} key={key} valRound={DiagDecodeRound(migratedValue)}");
+#endif
+            return migratedValue;
+        }
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG read1-shadow-stale] gid={context.GrainId} key={key} sagas=[{string.Join(',', sagas)}]");
+#endif
+        throw new StaleShardRoutingException(-1, -1, -1);
     }
 
     private async Task<byte[]?> GetWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
@@ -173,6 +236,43 @@ internal sealed partial class BPlusLeafGrain(
         switch (status)
         {
             case TxStatus.Committed:
+                // Orphan-pending guard. A pending bucket that survives
+                // AFTER this leaf has already processed the saga's
+                // terminal is an orphan from a late-arriving shadow-
+                // forward: under an online reshard, the saga's terminal
+                // broadcast can reach this destination leaf via the
+                // cross-migration LWW backstop (no bucket existed, so
+                // ApplyTxTerminalAsync wrote the saga's value directly
+                // into Entries and set _recentlyTerminal) BEFORE the
+                // source shard's shadow-forward of the prepare lands
+                // here. The shadow-forward then bucketed the prepare,
+                // and TryFindPendingForKey's HLC tie-break can pick
+                // that orphan over a sibling bucket from a later saga
+                // whose prepare HLC was stamped against the
+                // destination's own clock (typically lower than the
+                // orphan's source-stamped HLC). Returning the orphan's
+                // value would then shadow Entries[key], which may hold
+                // a later saga's already-drained value, producing the
+                // "split (pre=1, post=15)" / "unknown-round (other=1)"
+                // chaos shapes the reshard-topology suite caught.
+                //
+                // _recentlyTerminal is the per-leaf "this saga's
+                // terminal has already been applied here" flag set by
+                // every ApplyTxTerminalAsync exit path (drain commit,
+                // drain abort, fast-path-no-bucket commit, backstop-
+                // only commit). When it is set for the bucket's txid,
+                // the bucket cannot be the saga's primary delivery, so
+                // we surface the durably-projected value from Entries
+                // (which the saga's own backstop or drain wrote, or
+                // which a strictly-later saga has since overwritten).
+                if (_recentlyTerminal is not null && _recentlyTerminal.Contains(txid))
+                {
+                    if (state.State.Entries.TryGetValue(key, out var entriesLww)
+                        && !entriesLww.IsTombstone
+                        && !entriesLww.IsExpired(nowTicks))
+                        return entriesLww.Value;
+                    return null;
+                }
                 if (pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks))
                     return null;
                 return pendingValue.Value;
@@ -193,6 +293,12 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<VersionedValue> GetWithVersionAsync(string key)
     {
+        // Moved-away seal. See GetAsync for the rationale.
+        if (IsKeyMovedAway(key))
+        {
+            return Task.FromResult(new VersionedValue());
+        }
+
         if (TryFindPendingForKey(key, out var txid, out var pendingValue))
         {
             return GetWithVersionWithPendingAsync(key, txid, pendingValue);
@@ -214,6 +320,19 @@ internal sealed partial class BPlusLeafGrain(
         switch (status)
         {
             case TxStatus.Committed:
+                // Orphan-pending guard. See GetWithPendingAsync for the
+                // full rationale: a Committed bucket whose txid is in
+                // _recentlyTerminal is a late-arriving shadow-forward
+                // orphan and must not shadow Entries[key]'s authoritative
+                // value.
+                if (_recentlyTerminal is not null && _recentlyTerminal.Contains(txid))
+                {
+                    if (state.State.Entries.TryGetValue(key, out var entriesLww)
+                        && !entriesLww.IsTombstone
+                        && !entriesLww.IsExpired(nowTicks))
+                        return new VersionedValue { Value = entriesLww.Value, Version = entriesLww.Timestamp };
+                    return new VersionedValue();
+                }
                 if (pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks))
                     return new VersionedValue();
                 return new VersionedValue { Value = pendingValue.Value, Version = pendingValue.Timestamp };
@@ -228,6 +347,12 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<bool> ExistsAsync(string key)
     {
+        // Moved-away seal. See GetAsync for the rationale.
+        if (IsKeyMovedAway(key))
+        {
+            return Task.FromResult(false);
+        }
+
         if (TryFindPendingForKey(key, out var txid, out var pendingValue))
         {
             return ExistsWithPendingAsync(key, txid, pendingValue);
@@ -245,6 +370,14 @@ internal sealed partial class BPlusLeafGrain(
         switch (status)
         {
             case TxStatus.Committed:
+                // Orphan-pending guard. See GetWithPendingAsync for the
+                // full rationale.
+                if (_recentlyTerminal is not null && _recentlyTerminal.Contains(txid))
+                {
+                    return state.State.Entries.TryGetValue(key, out var entriesLww)
+                        && !entriesLww.IsTombstone
+                        && !entriesLww.IsExpired(nowTicks);
+                }
                 return !pendingValue.IsTombstone && !pendingValue.IsExpired(nowTicks);
             default:
                 // InFlight or Aborted - fall through to Entries.
@@ -341,22 +474,80 @@ internal sealed partial class BPlusLeafGrain(
         var result = new Dictionary<string, byte[]>(keys.Count);
         foreach (var key in keys)
         {
+            // Moved-away seal. See GetAsync for the rationale.
+            // Hot path: leaves with no moved slots short-circuit on a
+            // single nullable read inside IsKeyMovedAway.
+            if (IsKeyMovedAway(key))
+            {
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG read-moved-away] gid={context.GrainId} key={key}");
+#endif
+                continue;
+            }
+
             if (pendingKeys.TryGetValue(key, out var pending))
             {
                 var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
-                if (status == TxStatus.Committed)
+                if (status == TxStatus.Committed
+                    && !(_recentlyTerminal is not null && _recentlyTerminal.Contains(pending.txid)))
                 {
                     if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
+                    {
                         result[key] = pending.value.Value!;
+#if LATTICE_DIAG
+                        // DIAG: pending-bucket-committed read path.
+                        DiagSink.Write($"[DIAG read-pending-committed] gid={context.GrainId} key={key} tx={pending.txid} valRound={DiagDecodeRound(pending.value.Value)} hlc={pending.value.Timestamp}");
+#endif
+                    }
+                    else
+                    {
+#if LATTICE_DIAG
+                        DiagSink.Write($"[DIAG read-pending-committed-tomb] gid={context.GrainId} key={key} tx={pending.txid}");
+#endif
+                    }
                     continue;
                 }
-                // InFlight or Aborted - fall through to Entries
-                // (pre-saga visibility). See GetWithPendingAsync.
+#if LATTICE_DIAG
+                // DIAG: pending-bucket-fallthrough (InFlight, Aborted, or already-terminal'd).
+                DiagSink.Write($"[DIAG read-pending-fallthrough] gid={context.GrainId} key={key} tx={pending.txid} status={status} alreadyTerminal={(_recentlyTerminal is not null && _recentlyTerminal.Contains(pending.txid))}");
+#endif
+                // InFlight, Aborted, or orphan-pending (committed bucket whose
+                // saga terminal has already landed on this leaf) - fall through
+                // to Entries. See GetWithPendingAsync for the orphan-pending
+                // rationale: a late-arriving shadow-forward of a prepare can
+                // bucket a saga whose terminal has already drained into Entries,
+                // and surfacing the orphan would shadow the authoritative
+                // Entries value (or a strictly-later saga's value).
             }
 
             if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
             {
+                // Migration-window shadow guard. See GetAsync for the
+                // full rationale: when the surfacing entry is a
+                // destination-side migration (IsMigrated=true) and
+                // the split coordinator installed a shadow marker
+                // naming a committed-no-backstop saga as the owner
+                // of this key, raise StaleShardRoutingException so
+                // the LatticeGrain retry loop re-fans under a fresh
+                // snapshot. Cheap on the steady-state path: a single
+                // null check plus a dictionary miss when no marker
+                // is installed.
+                if (lww.IsMigrated && TryGetShadowedSagas(key, out var shadowSagas))
+                {
+                    if (!await IsShadowedReadSafeAsync(shadowSagas))
+                    {
+#if LATTICE_DIAG
+                        DiagSink.Write($"[DIAG read-shadow-stale] gid={context.GrainId} key={key} sagas=[{string.Join(',', shadowSagas)}]");
+#endif
+                        throw new StaleShardRoutingException(-1, -1, -1);
+                    }
+                }
                 result[key] = lww.Value!;
+#if LATTICE_DIAG
+                // DIAG: read-return path - capture what each leaf returns per key.
+                DiagSink.Write($"[DIAG read] gid={context.GrainId} key={key} valRound={DiagDecodeRound(lww.Value)} " +
+                    $"hlc={lww.Timestamp} isMig={lww.IsMigrated} origin={lww.OriginClusterId ?? "(local)"}");
+#endif
             }
         }
         return result;
@@ -451,18 +642,30 @@ internal sealed partial class BPlusLeafGrain(
     {
         // step 0 (build) - HLC tick (or override), build LwwValue. Version
         // vector is foreground-only; ILeafProjection.Apply does not advance it.
-        // Prepared writes (saga prepare phase) skip the Version tick because
-        // they route into the pending-tx map, not visible Entries; ticking
-        // Version on prepare would advance the cache's saved callerClock
+        // Prepared writes (saga prepare phase) skip the Version publication
+        // because they route into the pending-tx map, not visible Entries;
+        // publishing on prepare would advance the cache's saved callerClock
         // past prepare time and the cache's per-entry HLC delta filter would
         // then exclude the drained value when the saga's terminal mark
-        // re-stamps and surfaces it. The terminal handler ticks Version
+        // re-stamps and surfaces it. The terminal handler publishes Version
         // itself so the cache observes a single linearization-point
         // advance covering the whole saga's drained set.
+        //
+        // PublishVersionAdvance: lift Version[ReplicaId] to the entry's
+        // own stamp. The stamp equals Entries[key].Timestamp by
+        // construction, so the cache filter `lww.Timestamp > callerClock`
+        // delivers this entry on any refresh where the caller's saved
+        // callerClock is strictly less than the stamp (i.e. every fresh
+        // LeafCacheGrain activation, and every refresh that has not yet
+        // observed this write). VersionVector.Tick(ReplicaId) would call
+        // HLC.Tick against DateTimeOffset.UtcNow.Ticks and could land
+        // strictly above stamp, causing the filter to silently drop this
+        // entry on its next refresh. Passing stamp directly avoids that.
+        // See PublishVersionAdvance's XML doc for the full invariant.
         var stamp = AdvanceClockOrOverride();
         var isPrepared = LatticePreparedContext.Current;
         if (!isPrepared)
-            state.State.Version.Tick(ReplicaId);
+            PublishVersionAdvance(stamp);
         BumpLocalRevision();
         var newEntry = LwwValue<byte[]>.CreateWithExpiry(value, stamp, expiresAtTicks)
             with
@@ -523,6 +726,11 @@ internal sealed partial class BPlusLeafGrain(
         else
         {
             StoreEntry(key, newEntry);
+            // Foreground commit constructs a fresh LwwValue with the
+            // default IsMigrated=false, so StoreEntry's merge clears
+            // any stale migration provenance from a prior migrated
+            // entry on the same key automatically - the flag rides
+            // with the value, not in a side-channel map.
             if (state.State.Entries.Count > options.MaxLeafKeys)
             {
                 splitResult = await SplitAsync();
@@ -590,12 +798,16 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         // step 0 (build) - HLC tick (or override), build tombstone, build mutation envelope.
+        // PublishVersionAdvance lifts Version[ReplicaId] to the tombstone's
+        // own Timestamp; the cache filter `lww.Timestamp > callerClock`
+        // then delivers the tombstone on its next refresh. See
+        // CommitSetAsync for the full invariant.
         var stamp = AdvanceClockOrOverride();
         // Prepared deletes route to the pending-tx map and skip the
-        // Version tick for the same reason as CommitSetAsync (see the
-        // build-step comment there for the cache-callerClock argument).
+        // Version publication for the same reason as CommitSetAsync (see
+        // the build-step comment there for the cache-callerClock argument).
         if (!isPrepared)
-            state.State.Version.Tick(ReplicaId);
+            PublishVersionAdvance(stamp);
         BumpLocalRevision();
         var tombstone = LwwValue<byte[]>.Tombstone(stamp)
             with
@@ -643,6 +855,10 @@ internal sealed partial class BPlusLeafGrain(
         else
         {
             StoreEntry(key, tombstone);
+            // Tombstone has IsMigrated=false (default), so the merge
+            // result inside StoreEntry clears any stale migration
+            // marker for the same key naturally - no explicit cleanup
+            // call required.
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -699,9 +915,12 @@ internal sealed partial class BPlusLeafGrain(
         // publish the per-range mutation - that's a shard-level concern -
         // but it still appends the range tombstone to the WAL so a future
         // replay applies the same set-of-keys closure rather than each
-        // individual key.
+        // individual key. PublishVersionAdvance lifts Version[ReplicaId]
+        // to the range tombstone's own stamp so the cache delta filter
+        // delivers every fresh tombstone (see CommitSetAsync for the
+        // full invariant).
         var stamp = AdvanceClockOrOverride();
-        state.State.Version.Tick(ReplicaId);
+        PublishVersionAdvance(stamp);
         BumpLocalRevision();
         var tombstone = LwwValue<byte[]>.Tombstone(stamp)
             with
@@ -748,6 +967,10 @@ internal sealed partial class BPlusLeafGrain(
         foreach (var key in keysToDelete)
         {
             StoreEntry(key, tombstone);
+            // Range tombstone has IsMigrated=false (default); merge
+            // inside StoreEntry naturally clears any stale migration
+            // marker - the flag rides with the value, not in a
+            // side-channel map.
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -1036,25 +1259,30 @@ internal sealed partial class BPlusLeafGrain(
         // If the caller's version dominates ours, they already have everything.
         if (sinceVersion.DominatesOrEquals(state.State.Version))
         {
-            // Steady-state fast path: no pending split, return the
-            // process-wide empty-delta singleton so the receiver's
-            // VersionVector.Merge folds in nothing (the caller already
-            // dominates) and we elide three heap allocations per read.
-            // See EmptyDelta XML doc above for the safety argument.
-            if (state.State.SplitKey is null)
+            // Steady-state fast path: no pending split, no moved-away
+            // slots to advertise. Return the process-wide empty-delta
+            // singleton so the receiver's VersionVector.Merge folds in
+            // nothing (the caller already dominates) and we elide three
+            // heap allocations per read. See EmptyDelta XML doc above
+            // for the safety argument.
+            if (state.State.SplitKey is null
+                && (state.State.MovedAwaySlots is null || state.State.MovedAwaySlots.Length == 0))
             {
                 return EmptyDeltaTask;
             }
 
-            // SplitKey is set: the caller needs the prune signal even
-            // though Entries is empty. Allocate a per-call envelope so
-            // SplitKey is observed; this branch is rare (only fires
-            // between a split commit and the next compaction sweep).
+            // SplitKey or MovedAwaySlots is set: the caller needs the
+            // prune signal even though Entries is empty. Allocate a
+            // per-call envelope so the signal is observed; this branch
+            // is rare (only fires between a split / moved-away commit
+            // and the next compaction sweep).
             return Task.FromResult(new StateDelta
             {
                 Entries = EmptyEntries,
                 Version = state.State.Version.Clone(),
-                SplitKey = state.State.SplitKey
+                SplitKey = state.State.SplitKey,
+                MovedAwaySlots = state.State.MovedAwaySlots is { Length: > 0 } ms ? ms : null,
+                MovedAwayVsc = state.State.MovedAwayVirtualShardCount,
             });
         }
 
@@ -1075,7 +1303,9 @@ internal sealed partial class BPlusLeafGrain(
         {
             Entries = changed,
             Version = state.State.Version.Clone(),
-            SplitKey = state.State.SplitKey
+            SplitKey = state.State.SplitKey,
+            MovedAwaySlots = state.State.MovedAwaySlots is { Length: > 0 } ms2 ? ms2 : null,
+            MovedAwayVsc = state.State.MovedAwayVirtualShardCount,
         });
     }
 
@@ -1104,30 +1334,72 @@ internal sealed partial class BPlusLeafGrain(
         {
             Entries = changed,
             Version = state.State.Version.Clone(),
-            SplitKey = state.State.SplitKey
+            SplitKey = state.State.SplitKey,
+            MovedAwaySlots = state.State.MovedAwaySlots is { Length: > 0 } ms3 ? ms3 : null,
+            MovedAwayVsc = state.State.MovedAwayVirtualShardCount,
         });
     }
 
     public async Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries)
     {
+#if LATTICE_DIAG
+        // DIAG leaf-cross-leaf-merge: fires when a sibling leaf or
+        // a split-source leaf hands a batch of LWW values into this
+        // leaf. This path stamps IsMigrated=true on every incoming
+        // entry (see StoreEntry call below) but does NOT update
+        // MovedAwaySlots on the SOURCE leaf - that mask is driven only
+        // by ShardRootGrain.MarkLeavesMovedAwayAsync during a shard-
+        // wide split. The V_{N-2} regression in Section 14 hinges on
+        // whether a slot migration arrives via this path (no source-
+        // side mask) or via the shard-split path (source-side mask
+        // present). The DIAG event records the merge size and a key
+        // sample so the trace can attribute each post-merge
+        // commit-key event to the correct upstream channel.
+        var diagKeySample = entries.Count == 0
+            ? string.Empty
+            : string.Join(",", entries.Keys.Take(8));
+        DiagSink.Write($"[DIAG leaf-cross-leaf-merge] gid={context.GrainId} entriesCount={entries.Count} keySample=[{diagKeySample}] currentMovedSlots=[{(state.State.MovedAwaySlots is null ? "" : string.Join(',', state.State.MovedAwaySlots))}] currentClock={state.State.Clock}");
+#endif
         // NOTE: Expired entries are merged as-is and not filtered here.
         // Replication must preserve them so CRDT LWW convergence is resolved
         // by timestamp, not by the wall clock of whichever replica happens to
         // see a write first. Readers filter expired entries; compaction reaps
         // them after the grace period.
+        //
+        // Track the high-water timestamp of the incoming batch so we can
+        // (a) advance state.State.Clock past it (audit bug #3), and (b)
+        // publish it as Version[ReplicaId] so LeafCacheGrain delta checks
+        // detect the new entries. Using VersionVector.Tick(ReplicaId) here
+        // would key the advance off DateTimeOffset.UtcNow.Ticks and could
+        // land strictly above the merged entries' Timestamps - causing the
+        // cache's `lww.Timestamp > callerClock` delta filter to silently
+        // drop the freshly-merged values on its next refresh. Publishing
+        // maxIncoming keeps Version[ReplicaId] equal to the latest stamp
+        // any merged entry actually carries.
         var maxIncoming = HybridLogicalClock.Zero;
         foreach (var (key, incoming) in entries)
         {
             if (incoming.Timestamp > maxIncoming)
                 maxIncoming = incoming.Timestamp;
 
-            StoreEntry(key, incoming);
+            // Cross-leaf migration provenance: stamp IsMigrated=true on
+            // the incoming value before merging. If the imported HLC
+            // wins the LWW merge, the resulting Entries[K] carries the
+            // flag (StoreEntry returns the merged winner). If a
+            // pre-existing dominator wins, its own IsMigrated is
+            // preserved by Merge - either way the value's provenance
+            // travels with the value, and no out-of-band map is
+            // required. The foreground orphan-drain guard in
+            // BPlusLeafGrain.ApplyTxCommit reads existing.IsMigrated
+            // to distinguish a migrated dominator (drain proceeds)
+            // from a sibling-saga drain (drain skips).
+            StoreEntry(key, incoming with { IsMigrated = true });
         }
 
-        // Tick the version so that LeafCacheGrain delta checks detect the new
-        // entries. Without this, a freshly-split sibling has an empty version
-        // vector and the cache short-circuits (empty dominates empty), never
-        // populating its local cache.
+        // Publish a Version advance so LeafCacheGrain delta checks detect
+        // the new entries. Without this, a freshly-split sibling has an
+        // empty version vector and the cache short-circuits (empty dominates
+        // empty), never populating its local cache.
         if (entries.Count > 0)
         {
             // Advance the local HLC past the highest incoming timestamp so a
@@ -1137,7 +1409,7 @@ internal sealed partial class BPlusLeafGrain(
             // catches up.
             if (maxIncoming > state.State.Clock)
                 state.State.Clock = maxIncoming;
-            state.State.Version.Tick(ReplicaId);
+            PublishVersionAdvance(maxIncoming);
             BumpLocalRevision();
         }
 
@@ -1191,8 +1463,13 @@ internal sealed partial class BPlusLeafGrain(
                         keys.Add(key);
                     continue;
                 }
-                // InFlight or Aborted - fall through to Entries
-                // (pre-saga visibility). See GetWithPendingAsync.
+                // InFlight, Aborted, or orphan-pending (committed bucket whose
+                // saga terminal has already landed on this leaf) - fall through
+                // to Entries. See GetWithPendingAsync for the orphan-pending
+                // rationale: a late-arriving shadow-forward of a prepare can
+                // bucket a saga whose terminal has already drained into Entries,
+                // and surfacing the orphan would shadow the authoritative
+                // Entries value (or a strictly-later saga's value).
             }
 
             if (lww.IsTombstone || lww.IsExpired(nowTicks))
@@ -1372,7 +1649,7 @@ internal sealed partial class BPlusLeafGrain(
             new Dictionary<string, LwwValue<byte[]>>(state.State.Entries));
     }
 
-    public async Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries)
+    public async Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
     {
         // Recovery: if a previous split was interrupted, complete it first.
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
@@ -1394,13 +1671,15 @@ internal sealed partial class BPlusLeafGrain(
             if (siblingEntries.Count > 0)
             {
                 var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.SplitSiblingId!.Value);
-                await sibling.MergeManyAsync(siblingEntries);
+                // Forward the caller's migration intent verbatim - a cross-shard migration
+                // import that arrives during split recovery is still a migration on the sibling.
+                await sibling.MergeManyAsync(siblingEntries, isCrossShardMigration);
             }
 
             // Merge remaining local entries.
             if (localEntries.Count > 0)
             {
-                MergeIntoState(localEntries);
+                MergeIntoState(localEntries, isCrossShardMigration);
                 await PersistAsync();
             }
 
@@ -1412,7 +1691,7 @@ internal sealed partial class BPlusLeafGrain(
             return null;
         }
 
-        MergeIntoState(entries);
+        MergeIntoState(entries, isCrossShardMigration);
 
         SplitResult? splitResult = null;
         if (state.State.Entries.Count > (await GetOptionsAsync()).MaxLeafKeys)
@@ -1424,15 +1703,63 @@ internal sealed partial class BPlusLeafGrain(
         return splitResult;
     }
 
-    private void MergeIntoState(Dictionary<string, LwwValue<byte[]>> entries)
+    private void MergeIntoState(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
     {
+        // Track the high-water timestamp of the incoming batch so we can
+        // (a) advance state.State.Clock past it (audit bug #3), and (b)
+        // publish it as Version[ReplicaId] so LeafCacheGrain delta checks
+        // detect the new entries. See MergeEntriesAsync for the full
+        // invariant.
         var maxIncoming = HybridLogicalClock.Zero;
         foreach (var (key, incoming) in entries)
         {
             if (incoming.Timestamp > maxIncoming)
                 maxIncoming = incoming.Timestamp;
 
-            StoreEntry(key, incoming);
+            // Asymmetric migration-vs-foreground rule. Only fires on the
+            // cross-shard migration callsites (TreeShardSplitGrain
+            // -> ForwardMovedSlotEntriesAsync, and ShardRootGrain.Split.cs
+            // shadow-forward). When the destination already has a
+            // non-migration entry for the key, that entry is an
+            // authoritative post-split foreground commit (a direct Set,
+            // a saga's prepared-bucket drain, or a saga's cross-migration
+            // LWW backstop) and MUST NOT be overwritten by a migration
+            // import regardless of LWW HLC comparison: the migrated
+            // record's HLC reflects the SOURCE leaf's accumulated clock
+            // at migration time, which can dominate the freshly-created
+            // destination's Clock at the time the foreground write landed
+            // - even though the foreground write is logically newer
+            // (post-split-routing-update) and the destination is the new
+            // owner of the key.
+            //
+            // Non-migration callers (cross-cluster replication, tree-merge,
+            // snapshot restore, intra-shard sibling-merge) use the
+            // symmetric LWW-by-HLC contract: the incoming entry wins iff
+            // its HLC dominates, regardless of the existing entry's
+            // IsMigrated flag. For those callers the asymmetric guard
+            // would silently drop legitimate higher-HLC imports and
+            // tombstones (see the cross-cluster LWW contract tests).
+            //
+            // The Fix-M backstop pre-advance (BPlusLeafGrain.PendingTx.cs)
+            // already handles the migration-FIRST, terminal-SECOND
+            // ordering by Ticking the stamp past existing migrated
+            // Entries' HLCs. This guard handles the reverse ordering
+            // (terminal-FIRST on a fresh leaf, migration-SECOND with
+            // an inverted HLC).
+            if (isCrossShardMigration
+                && state.State.Entries.TryGetValue(key, out var existing)
+                && !existing.IsMigrated)
+            {
+                continue;
+            }
+
+            // Stamp IsMigrated=true ONLY on the cross-shard migration
+            // callsite. Non-migration callers preserve the incoming entry's
+            // own IsMigrated flag verbatim - that flag is normally `false`
+            // for foreground writes on the source and `true` only when the
+            // source-side entry was itself a migration import being
+            // re-replicated / re-merged forward.
+            StoreEntry(key, isCrossShardMigration ? (incoming with { IsMigrated = true }) : incoming);
         }
 
         if (entries.Count > 0)
@@ -1441,7 +1768,7 @@ internal sealed partial class BPlusLeafGrain(
             // subsequent local writes dominate the merged values (audit bug #3).
             if (maxIncoming > state.State.Clock)
                 state.State.Clock = maxIncoming;
-            state.State.Version.Tick(ReplicaId);
+            PublishVersionAdvance(maxIncoming);
             BumpLocalRevision();
         }
     }

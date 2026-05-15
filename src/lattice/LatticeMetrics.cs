@@ -329,5 +329,30 @@ public static class LatticeMetrics
     public static readonly Counter<long> WalEntriesTrimmed =
         Meter.CreateCounter<long>("orleans.lattice.wal.entries_trimmed", unit: "{entry}",
             description: "WAL entries removed by the per-tree garbage collector, tagged by tree.");
+
+    // --- Retroactive shard-split sweep instruments ----------------
+
+    /// <summary>
+    /// Counter of in-flight prepared mutations retroactively
+    /// shadow-forwarded from a source shard's leaf chain to the
+    /// destination shard at the start of an adaptive split's
+    /// <c>BeginShadowWrite</c> phase. Tagged with <see cref="TagTree"/>
+    /// and <see cref="TagShard"/> (the source shard index). One
+    /// increment per <see cref="PendingMutationSnapshot"/> replayed.
+    /// </summary>
+    public static readonly Counter<long> SplitRetroactiveForwardEntries =
+        Meter.CreateCounter<long>("orleans.lattice.split.retroactive_forward.entries", unit: "{entry}",
+            description: "Pending prepared mutations retroactively shadow-forwarded at the start of a shard split.");
+
+    /// <summary>
+    /// Histogram of the wall-clock duration the split coordinator
+    /// spends inside the retroactive shadow-forward sweep before
+    /// transitioning to the <c>Drain</c> phase. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/> (the source
+    /// shard index).
+    /// </summary>
+    public static readonly Histogram<double> SplitRetroactiveForwardDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.split.retroactive_forward.duration", unit: "ms",
+            description: "Wall-clock duration of the retroactive prepared-mutation sweep at shard-split BeginShadowWrite entry.");
 }
 

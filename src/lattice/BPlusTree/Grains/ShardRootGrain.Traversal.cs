@@ -177,6 +177,15 @@ internal sealed partial class ShardRootGrain
             leafId = await TraverseToLeafAsync(key);
         }
 
+#if LATTICE_DIAG
+        // DIAG read-routing: capture the resolved leaf id alongside
+        // the moved-away mask state at the moment of routing so that a
+        // stale-read trace can be correlated against the post-migration
+        // shard-side mask. A read that routes to a leaf NOT marked in
+        // MovedAwaySlots while that key has in fact migrated is the
+        // exact signature of the V_{N-2} regression hunted by Section 14.
+        DiagSink.Write($"[DIAG read-routing] gid={context.GrainId} key={key} leafId={leafId} rootIsLeaf={state.State.RootIsLeaf} movedSlots=[{string.Join(',', state.State.MovedAwaySlots.Keys)}] phase={state.State.SplitInProgress?.Phase.ToString() ?? "(none)"}");
+#endif
         var cache = (_cachedLeafCache is { } existing && _cachedLeafCacheKey.Equals(leafId))
             ? existing
             : ResolveLeafCacheGrainSlow(leafId);
@@ -236,6 +245,14 @@ internal sealed partial class ShardRootGrain
                 leafId = await TraverseToLeafAsync(key);
             }
 
+#if LATTICE_DIAG
+            // DIAG read-routing (batch path). Same intent as the
+            // single-key TraverseForReadAsync emission - records the
+            // resolved leaf id + moved-away state per key so the chaos
+            // trace can distinguish "shard routed to the new owner" from
+            // "shard routed to the stale source" on every observed read.
+            DiagSink.Write($"[DIAG read-routing] gid={context.GrainId} key={key} leafId={leafId} rootIsLeaf={state.State.RootIsLeaf} movedSlots=[{string.Join(',', state.State.MovedAwaySlots.Keys)}] phase={state.State.SplitInProgress?.Phase.ToString() ?? "(none)"} batch=true");
+#endif
             if (!leafBuckets.TryGetValue(leafId, out var bucket))
             {
                 bucket = [];

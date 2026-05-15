@@ -123,5 +123,57 @@ internal sealed partial class BPlusLeafGrain
             LeafRevisionRegistry.GetOrAdd(context.GrainId, static _ => new StrongBox<long>(0L));
         Volatile.Write(ref box.Value, box.Value + 1);
     }
+
+    /// <summary>
+    /// Publishes <paramref name="newClock"/> as <c>state.State.Version[ReplicaId]</c>
+    /// when it strictly dominates the currently published value. Call sites pass
+    /// the actual high-water timestamp produced by the just-completed mutation:
+    /// the entry's own <c>stamp</c> on Set/Delete/RangeDelete, <c>maxIncoming</c>
+    /// on a merge, and <c>state.State.Clock</c> on operations that advance the
+    /// local HLC without stamping individual Entries (e.g. moved-away marking).
+    /// <para>
+    /// The invariant the <see cref="LeafCacheGrain"/> delta filter relies on is
+    /// <c>Version[ReplicaId] == max(Entries[K].Timestamp for K written by this
+    /// replica)</c>. With that, a caller whose saved <c>callerClock</c> is
+    /// strictly less than <c>Version[ReplicaId]</c> after a refresh receives
+    /// every entry it has not yet seen (filter: <c>lww.Timestamp &gt; callerClock</c>),
+    /// and a caller whose <c>callerClock</c> equals <c>Version[ReplicaId]</c> has
+    /// already seen everything (fast path: <c>DominatesOrEquals</c> returns
+    /// true and the empty-delta singleton is returned).
+    /// </para>
+    /// <para>
+    /// Replaces an earlier shape that called
+    /// <see cref="Primitives.VersionVector.Tick(string)"/>, which internally
+    /// invokes <see cref="Primitives.HybridLogicalClock.Tick(Primitives.HybridLogicalClock)"/>
+    /// against <c>DateTimeOffset.UtcNow.Ticks</c>. That call would produce a
+    /// value that could exceed the just-written <c>Entries[K].Timestamp</c>
+    /// (whenever <c>state.State.Clock</c> had been advanced past wall-clock-now
+    /// by a saga override or a merge of future-dated incoming entries), causing
+    /// the cache filter to silently drop that entry on its next refresh.
+    /// </para>
+    /// <para>
+    /// An intermediate shape passed the pre-advance Clock snapshot instead,
+    /// which avoided the wall-clock overshoot but introduced a different bug:
+    /// on the first write to a freshly-activated leaf, both <c>preWriteClock</c>
+    /// and the current <c>Version[ReplicaId]</c> were <see cref="Primitives.HybridLogicalClock.Zero"/>,
+    /// the strict-greater guard rejected the publication, and
+    /// <c>Version.Entries</c> stayed empty. <see cref="Primitives.VersionVector.DominatesOrEquals(Primitives.VersionVector)"/>
+    /// then trivially returned <c>true</c> for any caller (the iteration body
+    /// never executes on an empty dictionary), and the fast path in
+    /// <see cref="IBPlusLeafGrain.GetDeltaSinceAsync(Primitives.VersionVector)"/>
+    /// returned the empty singleton - hiding the just-written entry from the
+    /// cache. Publishing the post-advance stamp (which is strictly greater
+    /// than <c>Zero</c> by <see cref="Primitives.HybridLogicalClock.Tick(Primitives.HybridLogicalClock)"/>'s
+    /// monotonicity) closes both holes.
+    /// </para>
+    /// </summary>
+    private void PublishVersionAdvance(Primitives.HybridLogicalClock newClock)
+    {
+        var current = state.State.Version.GetClock(ReplicaId);
+        if (newClock.CompareTo(current) > 0)
+        {
+            state.State.Version.Entries[ReplicaId] = newClock;
+        }
+    }
 }
 

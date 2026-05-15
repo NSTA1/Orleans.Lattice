@@ -461,7 +461,8 @@ public partial class BPlusLeafGrainTests
     /// <summary>
     /// Regression: decoupled flip-dedup vs backstop-dedup. A first
     /// terminal delivery that carries a null or empty <c>committedValues</c>
-    /// (e.g. <c>ForwardSplitTerminalAsync</c> mirrors with no per-shard
+    /// (e.g. the saga's flat fan-out reaching a transitively-discovered
+    /// destination via <c>TerminalFanOutResolver</c> with no per-shard
     /// subset routed via this hop) marks <c>_recentlyTerminal[txid]</c>
     /// so the pending-flip path will not re-run. A subsequent delivery
     /// from a different channel - typically <c>AtomicWriteGrain</c>'s
@@ -510,13 +511,13 @@ public partial class BPlusLeafGrainTests
     /// Regression: per-(txid, key) - not per-(txid) - backstop dedup.
     /// Two terminal deliveries to the same leaf can legitimately carry
     /// disjoint <c>committedValues</c> subsets - the AtomicWriteGrain
-    /// direct fan-out and the source shard's
-    /// <c>ForwardSplitTerminalAsync</c> mirror route by independent
-    /// criteria (current-routing vs <c>MovedAwaySlots</c> earlier
-    /// migration record). Each subset's backstop must land on the
-    /// leaf without poisoning the other subset via a per-saga dedup
-    /// marker. A third delivery repeating an already-backstopped key
-    /// must short-circuit on the per-(txid, key) dedup so the WAL
+    /// direct fan-out and the saga's transitive split-forward fan-out
+    /// (<c>TerminalFanOutResolver.ResolveTransitiveAsync</c>) route by
+    /// independent criteria (current-routing vs <c>MovedAwaySlots</c>
+    /// earlier migration record). Each subset's backstop must land on
+    /// the leaf without poisoning the other subset via a per-saga
+    /// dedup marker. A third delivery repeating an already-backstopped
+    /// key must short-circuit on the per-(txid, key) dedup so the WAL
     /// append is not paid twice for the same effect (the WAL append,
     /// NOT a foreground state-row write, is the durability point).
     /// </summary>
@@ -573,5 +574,122 @@ public partial class BPlusLeafGrainTests
             "replay of already-backstopped key must not append to the WAL again");
         Assert.That(state.State.Entries["a"].Timestamp, Is.EqualTo(aStampAfterSecond),
             "replay of already-backstopped key must not re-stamp the entry");
+    }
+
+    [Test]
+    public async Task ApplyTxTerminalAsync_backstop_publishes_Version_for_replicaId_so_cache_observes_nonempty_delta()
+    {
+        // Regression for the V_{N-2} stale-cache leak surfaced by the
+        // mid-saga reshard chaos test
+        // (Continuous_reader_observes_zero_or_all_keys_through_mid_saga_reshard).
+        //
+        // Failure mode prior to the fix: a backstop terminal landing on
+        // a destination leaf whose only prior write was a cross-leaf
+        // migration import would stamp Entries[K] and advance
+        // state.State.Clock, but would NOT publish stamp into
+        // state.State.Version[ReplicaId]. The co-located
+        // LeafCacheGrain.RefreshAsync therefore observed
+        // sinceVersion.DominatesOrEquals(state.State.Version) on the
+        // very next refresh and short-circuited to the empty-delta
+        // singleton, pinning the cache on the freshly-imported pre-saga
+        // value indefinitely. This test asserts the version-publication
+        // contract that fixes the leak: after a pure backstop write
+        // (hadPending=false, committedValues nonempty), the leaf's
+        // Version strictly dominates its pre-backstop value. That
+        // guarantees the cache filter `lww.Timestamp > callerClock`
+        // delivers every just-stamped backstop value on the next
+        // RefreshAsync.
+        //
+        // The complement of this assertion - that the SAME publication
+        // does NOT fire on WAL replay - is structurally enforced by the
+        // replay path's choice of dispatch seam: replay routes
+        // committed Set entries through ILeafProjection.Apply ->
+        // ApplySet, which never invokes ApplyTxTerminalAsync at all, so
+        // the foreground-only Version publication added by this fix is
+        // unreachable from the replay path. See the Foreground-only
+        // comment block in BPlusLeafGrain.PendingTx.cs and
+        // BPlusLeafGrainTests.Materialiser.* for the replay coverage.
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.Clock = new HybridLogicalClock { WallClockTicks = 100, Counter = 5 };
+        var versionBefore = state.State.Version.Clone();
+        var grain = CreateGrain(state);
+        var txid = Guid.NewGuid();
+        var committed = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["k1"] = [1],
+            ["k2"] = [2],
+        };
+
+        await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
+
+        var stamp1 = state.State.Entries["k1"].Timestamp;
+        var stamp2 = state.State.Entries["k2"].Timestamp;
+        var versionAfter = state.State.Version;
+
+        // Primary invariant: the leaf's Version strictly dominates its
+        // pre-backstop value. The cache's RefreshAsync fast path is
+        // `sinceVersion.DominatesOrEquals(leafVersion)` - so the
+        // post-backstop Version must NOT be dominated-or-equal to the
+        // pre-backstop Version, otherwise the cache short-circuits and
+        // the just-stamped backstop entries are never delivered. This
+        // is the exact regression the chaos test exposed.
+        Assert.That(versionAfter.DominatesOrEquals(versionBefore), Is.True,
+            "post-backstop Version must dominate pre-backstop Version (monotonicity)");
+        Assert.That(versionBefore.DominatesOrEquals(versionAfter), Is.False,
+            "post-backstop Version must be strictly greater so the cache observes a nonempty delta");
+
+        // Secondary invariant: the published Version covers every
+        // entry the backstop just stamped under the leaf's own
+        // ReplicaId. The cache filter `lww.Timestamp > callerClock`
+        // relies on the leaf's published Version[ReplicaId] being at
+        // least as great as every Entries[K].Timestamp the leaf has
+        // ever surfaced - otherwise the cache's saved callerClock
+        // (set to Version[ReplicaId] after every refresh) would lag
+        // the entry stamps and a subsequent refresh would mistakenly
+        // exclude a still-fresh entry.
+        var maxStamp = stamp1 > stamp2 ? stamp1 : stamp2;
+        Assert.That(
+            versionAfter.Entries.Values.Any(clock => clock >= maxStamp),
+            Is.True,
+            "Version must cover the highest backstop stamp under some replica id");
+    }
+
+    [Test]
+    public async Task ApplyTxTerminalAsync_backstop_with_no_missing_keys_does_not_advance_Version()
+    {
+        // Companion guardrail to the publication test above. When the
+        // backstop branch finds NO missing keys (the per-(txid, key)
+        // dedup set already covers every committedValues entry from a
+        // prior delivery), nothing is stamped, nothing is appended to
+        // the WAL, and Version must remain untouched. A spurious tick
+        // here would push the cache's saved callerClock forward
+        // without an accompanying entry change, which would then
+        // exclude a legitimate later write whose stamp is now
+        // <= the inflated callerClock.
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.Clock = new HybridLogicalClock { WallClockTicks = 100, Counter = 5 };
+        var grain = CreateGrain(state);
+        var txid = Guid.NewGuid();
+        var committed = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["k1"] = [1],
+        };
+
+        // First delivery stamps k1 and publishes Version.
+        await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
+        var versionAfterFirst = state.State.Version.Clone();
+        var stampAfterFirst = state.State.Entries["k1"].Timestamp;
+
+        // Second delivery for the same (txid, key) pair: dedup
+        // short-circuits, no missing keys, no stamp change, no Version
+        // change.
+        await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
+
+        Assert.That(state.State.Entries["k1"].Timestamp, Is.EqualTo(stampAfterFirst),
+            "dedup-shortcircuited delivery must not re-stamp the entry");
+        Assert.That(state.State.Version.DominatesOrEquals(versionAfterFirst), Is.True,
+            "Version must remain monotone across the no-op delivery");
+        Assert.That(versionAfterFirst.DominatesOrEquals(state.State.Version), Is.True,
+            "dedup-shortcircuited delivery must not advance Version");
     }
 }

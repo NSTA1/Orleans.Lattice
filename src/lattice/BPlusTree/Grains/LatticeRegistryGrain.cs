@@ -30,8 +30,22 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         ThrowIfReservedPrefix(treeId, nameof(treeId));
 
+        // The existence check is also used by the DIAG block below; keep
+        // the call outside the directive so foreground behaviour is
+        // identical whether or not LATTICE_DIAG is defined.
+        var existsAtCall = await Registry.ExistsAsync(treeId);
+#if LATTICE_DIAG
+        // DIAG-PATH1: log every entry into RegisterAsync.
+        try
+        {
+            DiagSink.Write(
+                $"RegisterAsync entry treeId={treeId} exists={existsAtCall} incoming={(entry is null ? "null" : $"{{mlk={entry.MaxLeafKeys},mic={entry.MaxInternalChildren},sc={entry.ShardCount}}}")}");
+        }
+        catch { }
+#endif
+
         // Idempotent - if already registered, preserve existing config.
-        if (await Registry.ExistsAsync(treeId))
+        if (existsAtCall)
             return;
 
         // Seed the structural sizing pin from LatticeConstants so every tree
@@ -44,6 +58,14 @@ internal sealed class LatticeRegistryGrain(
         // internals, and shard maps share the same invariants as user
         // trees.
         var seeded = SeedStructuralDefaults(entry);
+#if LATTICE_DIAG
+        try
+        {
+            DiagSink.Write(
+                $"RegisterAsync seeding treeId={treeId} seeded={{mlk={seeded.MaxLeafKeys},mic={seeded.MaxInternalChildren},sc={seeded.ShardCount}}}");
+        }
+        catch { }
+#endif
 
         var bytes = SerializeEntry(seeded);
         await Registry.SetAsync(treeId, bytes);

@@ -109,8 +109,10 @@ internal sealed partial class BPlusLeafGrain
     ///     slot has already migrated).
     ///   </description></item>
     ///   <item><description>
-    ///     A source shard's <c>ForwardSplitTerminalAsync</c> mirror to
-    ///     the same destination with a DIFFERENT subset - the keys whose
+    ///     A source shard's transitive split-forward fan-out (via the
+    ///     saga's <c>TerminalFanOutResolver.ResolveTransitiveAsync</c>
+    ///     expansion of <c>TouchedShards</c>) reaching the same
+    ///     destination with a DIFFERENT subset - the keys whose
     ///     prepare landed on the source pre-split but whose slot has
     ///     since migrated to this destination.
     ///   </description></item>
@@ -172,6 +174,14 @@ internal sealed partial class BPlusLeafGrain
         {
             bucket[key] = incoming;
         }
+
+#if LATTICE_DIAG
+        // DIAG: prepare landed on this leaf.
+        DiagSink.Write($"[DIAG prepare] gid={context.GrainId} tx={transactionId} key={key} " +
+            $"valRound={DiagDecodeRound(incoming.Value)} " +
+            $"hlc={incoming.Timestamp} origin={incoming.OriginClusterId ?? "(local)"} " +
+            $"clock={state.State.Clock}");
+#endif
 
         // Strict atomic-visibility: bump the same-silo revision cookie
         // so a co-located LeafCacheGrain notices the new pending key
@@ -286,8 +296,27 @@ internal sealed partial class BPlusLeafGrain
         {
             _pendingTxOffsets?.Remove(transactionId);
             (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
+#if LATTICE_DIAG
+            // DIAG: commit arrived on leaf with no bucket (fast-path).
+            DiagSink.Write($"[DIAG commit-empty] gid={context.GrainId} tx={transactionId} clock={state.State.Clock}");
+#endif
             return;
         }
+
+#if LATTICE_DIAG
+        // DIAG: commit will drain this bucket.
+        {
+            var keys = string.Join(",", bucket.Keys);
+            DiagSink.Write($"[DIAG commit] gid={context.GrainId} tx={transactionId} bucket=[{keys}] clock={state.State.Clock}");
+            foreach (var kvp in bucket)
+            {
+                var hasExisting = state.State.Entries.TryGetValue(kvp.Key, out var existing);
+                DiagSink.Write($"[DIAG commit-key] gid={context.GrainId} tx={transactionId} key={kvp.Key} " +
+                    $"prepared.Hlc={kvp.Value.Timestamp} " +
+                    $"existing={(hasExisting ? $"hlc={existing.Timestamp},isMig={existing.IsMigrated}" : "(none)")}");
+            }
+        }
+#endif
 
         // Branch on the persisted OriginClusterId signal. See the
         // method's XML doc for the full rationale and the replay
@@ -307,7 +336,10 @@ internal sealed partial class BPlusLeafGrain
             // Cross-cluster atomic apply: preserve per-entry source HLCs
             // verbatim. Advance state.State.Clock to the max of the
             // bucket's Timestamps so subsequent local reads observe a
-            // monotonic clock.
+            // monotonic clock. The bucket value carries IsMigrated=false
+            // (prepared mutations are never migration imports), so the
+            // merge in StoreEntry clears any stale migration marker
+            // when this value wins.
             foreach (var kvp in bucket)
             {
                 StoreEntry(kvp.Key, kvp.Value);
@@ -318,9 +350,174 @@ internal sealed partial class BPlusLeafGrain
         {
             // Foreground single-cluster: re-stamp with terminal-time Clock
             // for cache-delta-filter correctness.
-            var terminalStamp = state.State.Clock;
+            //
+            // Cross-shard-migration LWW dominance (Fix M). Under an online
+            // reshard, the destination leaf is freshly created and its
+            // state.State.Clock starts near Zero, while the SOURCE leaf's
+            // Entries[K] for a saga-touched key carries the HLC stamped at
+            // a PRIOR saga's terminal-flip time on the source - a high
+            // HLC reflecting the source leaf's cumulative tick history.
+            // TreeShardSplitGrain.ForwardMovedSlotEntriesAsync ships those
+            // entries verbatim via target.MergeManyAsync, so the
+            // destination's Entries[K] inherits the source's high HLC
+            // BEFORE the current saga's terminal drains the destination's
+            // pending bucket. If we re-stamp with state.State.Clock
+            // verbatim (the destination's low clock) and let StoreEntry
+            // LWW-merge against the migrated value, the migrated value
+            // WINS because its HLC dominates ours - silently overwriting
+            // the saga's drained value with the pre-saga value the
+            // migration carried. The chaos-suite "other=1" stuck-key
+            // failure shape on Continuous_reader_observes_zero_or_all_keys_through_mid_saga_reshard
+            // reproduces this exactly: one key per reshard window stays
+            // at an OLDER round's value across multiple subsequent
+            // sagas because every drain on the destination loses LWW to
+            // the migrated entry until the destination's clock organically
+            // catches up.
+            //
+            // Fix: pre-scan the bucket for any existing Entries[K] whose
+            // HLC dominates state.State.Clock, then Tick once past the
+            // observed max. The single Tick is sufficient because the
+            // migrated HLC is observed atomically here and the resulting
+            // terminalStamp strictly dominates it via HLC.Tick's
+            // strict-greater semantic.
+            var baseTerminalStamp = state.State.Clock;
             foreach (var kvp in bucket)
             {
+                if (state.State.Entries.TryGetValue(kvp.Key, out var preExisting))
+                {
+                    // Mirror the orphan-drain skip condition below: a key
+                    // whose existing HLC dominates the prepared HLC will
+                    // NOT be written, so its existing.Timestamp must not
+                    // pull terminalStamp past where we need it for the
+                    // keys we WILL write.
+                    //
+                    // Migration-provenance carve-out: a dominating
+                    // preExisting whose value carries IsMigrated=true
+                    // (stamped at MergeIntoState / MergeEntriesAsync
+                    // import time) IS going to be written below, so
+                    // its HLC MUST contribute to baseTerminalStamp -
+                    // otherwise the drained stamp would lose LWW to
+                    // the migrated entry's high HLC.
+                    if (preExisting.Timestamp.CompareTo(kvp.Value.Timestamp) > 0
+                        && !preExisting.IsMigrated)
+                    {
+#if LATTICE_DIAG
+                        // DIAG: pre-scan skip - capture stuck-key signature.
+                        DiagSink.Write($"[DIAG pre-scan-skip] gid={context.GrainId} tx={transactionId} key={kvp.Key} " +
+                            $"existing.Hlc={preExisting.Timestamp} existing.IsMigrated={preExisting.IsMigrated} " +
+                            $"existing.Origin={preExisting.OriginClusterId ?? "(local)"} " +
+                            $"prepared.Hlc={kvp.Value.Timestamp} prepared.Origin={kvp.Value.OriginClusterId ?? "(local)"} " +
+                            $"clock={state.State.Clock}");
+#endif
+                        continue;
+                    }
+                    if (preExisting.Timestamp.CompareTo(baseTerminalStamp) > 0)
+                        baseTerminalStamp = preExisting.Timestamp;
+                }
+            }
+            // Counter-only bump past the higher of state.State.Clock and
+            // baseTerminalStamp. The bump is load-bearing for cache-delta
+            // visibility: ApplyTxTerminalAsync publishes the pre-bump
+            // state.State.Clock as the new Version[ReplicaId] (see the
+            // comment block around the call site), and the cache's
+            // GetDeltaSinceAsync filter excludes any entry whose Timestamp
+            // is <= the caller's last-observed Version[ReplicaId]. A
+            // strictly-greater terminalStamp is therefore required for the
+            // drained entries to be delivered on the next refresh.
+            //
+            // Replay determinism: HybridLogicalClock.Tick is non-deterministic
+            // (it reads DateTimeOffset.UtcNow.Ticks, so foreground and
+            // terminal-replay produce different WallClockTicks values). A
+            // counter-only bump - construct a new HLC with the same
+            // WallClockTicks and Counter+1 - is bit-identical across
+            // foreground and replay because the WAL's AdvanceProjectionClock
+            // calls have already deterministically reconstructed
+            // state.State.Clock on the replay path. Every drained entry on
+            // both paths thus carries the same Timestamp, which is the
+            // invariant the cross-saga LWW dominance checks rely on.
+            var maxBase = baseTerminalStamp.CompareTo(state.State.Clock) > 0
+                ? baseTerminalStamp
+                : state.State.Clock;
+            var terminalStamp = new Primitives.HybridLogicalClock
+            {
+                WallClockTicks = maxBase.WallClockTicks,
+                Counter = maxBase.Counter + 1,
+            };
+            foreach (var kvp in bucket)
+            {
+                // Orphan-drain guard. Under an online reshard, a saga's
+                // shadow-forwarded prepare can land on a destination
+                // leaf AFTER the saga's terminal broadcast already
+                // reached the same leaf via the cross-migration LWW
+                // backstop path (which writes Entries directly with no
+                // bucket to flip). A second terminal for the same saga
+                // - typically a duplicate via the late-refetch loop in
+                // AtomicWriteGrain.BroadcastTerminalsAsync - observes
+                // the orphan bucket with alreadyFlipped=false and
+                // would drain it here. Re-stamping the drained value
+                // with the current state.State.Clock unconditionally
+                // dominates ANY prior Entries timestamp via LWW.Merge,
+                // so a strictly-later saga that has ALREADY drained
+                // the same key (Entries[K] = V_{newer}) gets silently
+                // overwritten by this saga's (now-stale) V_{older}.
+                // The orphan's prepared HLC (kvp.Value.Timestamp) is
+                // the saga's source-time stamp captured at PREPARE
+                // time on the source shard - strictly less than the
+                // destination's terminal-time stamp for a strictly-
+                // later saga that touched the same key. So if Entries
+                // already holds a timestamp dominating the prepared
+                // HLC, this drain is logically obsolete and must be
+                // skipped to preserve the cross-saga LWW ordering.
+                // Replay determinism is preserved: the same HLC
+                // comparison runs against the same Entries snapshot
+                // during WAL replay, producing the same skip decision.
+                // This is the write-side complement to the read-side
+                // orphan-pending guard in GetWithPendingAsync; both
+                // are needed because the orphan can manifest either
+                // as a surviving pending bucket (read-side path) or
+                // as an already-drained-but-stale Entries write
+                // (write-side path).
+                //
+                // Migration-provenance carve-out: the inverse race
+                // also exists. Under a cross-shard reshard, a saga's
+                // shadow-forwarded prepare can land on a freshly-
+                // created destination leaf BEFORE
+                // TreeShardSplitGrain.ForwardMovedSlotEntriesAsync
+                // ships the source's high-HLC entries to the
+                // destination via target.MergeManyAsync. The pending
+                // bucket on the destination then carries a LOW
+                // prepared HLC (the destination's low clock at
+                // prepare-arrival time), and migration subsequently
+                // imports the source's HIGH migrated HLC into
+                // Entries. When the saga's terminal arrives, this
+                // guard would see `existing.Timestamp > prepared.Timestamp`
+                // and skip the drain - silently discarding the
+                // current saga's authoritative value in favour of
+                // the pre-saga migrated value. The IsMigrated flag
+                // on the existing value distinguishes the two shapes:
+                // when the dominating existing entry came from a
+                // migration, the drain proceeds; when it came from a
+                // strictly-later sibling-saga drain (IsMigrated=false),
+                // the drain is correctly skipped. See LwwValue.IsMigrated
+                // for the discriminator's full semantics.
+                if (state.State.Entries.TryGetValue(kvp.Key, out var existing)
+                    && existing.Timestamp.CompareTo(kvp.Value.Timestamp) > 0
+                    && !existing.IsMigrated)
+                {
+#if LATTICE_DIAG
+                    // DIAG: drain-loop skip - capture stuck-key signature.
+                    DiagSink.Write($"[DIAG drain-skip] gid={context.GrainId} tx={transactionId} key={kvp.Key} " +
+                        $"existing.Hlc={existing.Timestamp} existing.IsMigrated={existing.IsMigrated} " +
+                        $"existing.Origin={existing.OriginClusterId ?? "(local)"} " +
+                        $"prepared.Hlc={kvp.Value.Timestamp} prepared.Origin={kvp.Value.OriginClusterId ?? "(local)"} " +
+                        $"clock={state.State.Clock} terminalStamp={terminalStamp}");
+#endif
+                    continue;
+                }
+                // The prepared value carries IsMigrated=false (default
+                // - prepared mutations are never migration imports);
+                // the re-stamp preserves that, so StoreEntry's merge
+                // naturally clears any stale migration marker.
                 var restamped = kvp.Value with { Timestamp = terminalStamp };
                 StoreEntry(kvp.Key, restamped);
             }
@@ -351,6 +548,11 @@ internal sealed partial class BPlusLeafGrain
         var hadPending = _pendingTx is not null && _pendingTx.Remove(transactionId);
         _pendingTxOffsets?.Remove(transactionId);
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
+
+#if LATTICE_DIAG
+        // DIAG: abort entry.
+        DiagSink.Write($"[DIAG abort] gid={context.GrainId} tx={transactionId} hadPending={hadPending} clock={state.State.Clock}");
+#endif
 
         // Bump the same-silo revision cookie so a co-located
         // LeafCacheGrain refreshes its pending-key set and stops
@@ -407,11 +609,20 @@ internal sealed partial class BPlusLeafGrain
     /// before serving the read - this method does not look at the
     /// per-tree TxRegistry.
     /// <para>
-    /// O(pending-txs); bounded by in-flight saga cardinality. If two
-    /// independent sagas have prepared the same key (the saga
-    /// coordinator should reject this upstream) the first one
-    /// encountered wins this lookup and the second one stays hidden
-    /// until the first terminates.
+    /// O(pending-txs); bounded by in-flight saga cardinality. When two
+    /// independent sagas have prepared the same key (which can happen
+    /// after a shard split's retroactive sweep installs a prepare for
+    /// a saga whose terminal then arrives only at the source shard,
+    /// leaving an orphan on the destination, while a later saga
+    /// prepares the same key against the destination), the bucket
+    /// with the strictly-greater <see cref="HybridLogicalClock"/>
+    /// timestamp wins this lookup. The newest prepare always
+    /// represents the saga whose terminal is most likely to be
+    /// pending or recently delivered, so preferring it minimises
+    /// stale-read exposure when an orphaned older prepare lingers in
+    /// the pending map. Idempotent re-replays of the same
+    /// <c>(txid, key)</c> use the same timestamp and produce a fixed
+    /// point under this tie-break.
     /// </para>
     /// </summary>
     private bool TryFindPendingForKey(string key, out Guid txid, out LwwValue<byte[]> pendingValue)
@@ -421,16 +632,20 @@ internal sealed partial class BPlusLeafGrain
         if (_pendingTx is null || _pendingTx.Count == 0)
             return false;
 
+        var found = false;
         foreach (var (id, bucket) in _pendingTx)
         {
-            if (bucket.TryGetValue(key, out var value))
+            if (!bucket.TryGetValue(key, out var value))
+                continue;
+
+            if (!found || value.Timestamp.CompareTo(pendingValue.Timestamp) > 0)
             {
                 txid = id;
                 pendingValue = value;
-                return true;
+                found = true;
             }
         }
-        return false;
+        return found;
     }
 
     /// <summary>
@@ -611,6 +826,58 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc />
+    public Task<List<PendingMutationSnapshot>> GetPendingMutationsForSlotsAsync(int[] sortedMovedSlots, int virtualShardCount)
+    {
+        ArgumentNullException.ThrowIfNull(sortedMovedSlots);
+        if (virtualShardCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
+
+        // Steady-state fast path: no pending bucket (the vast majority
+        // of leaves never participate in a saga) or an empty
+        // moved-slots array means no work to do. Return an empty list
+        // without allocating any further state.
+        if (_pendingTx is null || _pendingTx.Count == 0 || sortedMovedSlots.Length == 0)
+            return Task.FromResult(new List<PendingMutationSnapshot>());
+
+        var result = new List<PendingMutationSnapshot>();
+        foreach (var (txid, bucket) in _pendingTx)
+        {
+            // Per-saga WAL offset (if any) for the snapshot's
+            // WalOffset field. Foreground commits leave this map
+            // untouched; the value is surfaced for diagnostics only
+            // and is 0 when unstamped.
+            long walOffset = 0;
+            if (_pendingTxOffsets is not null
+                && _pendingTxOffsets.TryGetValue(txid, out var offset))
+            {
+                walOffset = offset;
+            }
+
+            foreach (var (key, value) in bucket)
+            {
+                var slot = ShardMap.GetVirtualSlot(key, virtualShardCount);
+                if (Array.BinarySearch(sortedMovedSlots, slot) < 0)
+                    continue;
+
+                result.Add(new PendingMutationSnapshot
+                {
+                    TransactionId = txid,
+                    Key = key,
+                    Value = value.IsTombstone ? null : value.Value,
+                    Timestamp = value.Timestamp,
+                    IsTombstone = value.IsTombstone,
+                    ExpiresAtTicks = value.ExpiresAtTicks,
+                    OriginClusterId = value.OriginClusterId,
+                    VectorClock = value.VectorClock,
+                    WalOffset = walOffset,
+                });
+            }
+        }
+
+        return Task.FromResult(result);
+    }
+
+    /// <inheritdoc />
     public async Task ApplyTxTerminalAsync(
         Guid transactionId,
         bool committed,
@@ -618,6 +885,18 @@ internal sealed partial class BPlusLeafGrain
     {
         if (transactionId == Guid.Empty)
             return;
+
+#if LATTICE_DIAG
+        // DIAG terminal-leaf-apply: fires at the very entry of the
+        // per-leaf terminal handler, BEFORE the _recentlyTerminal dedup
+        // and the pending/backstop path selection. Pairs with the
+        // shard-side terminal-recv emission so the saga's full fan-out
+        // ordering (per-leaf wall-clock timing, dedup state, backstop
+        // payload presence) can be reconstructed from the trace.
+        var diagHadPending = _pendingTx is not null && _pendingTx.ContainsKey(transactionId);
+        var diagAlreadyFlipped = _recentlyTerminal is not null && _recentlyTerminal.Contains(transactionId);
+        DiagSink.Write($"[DIAG terminal-leaf-apply] gid={context.GrainId} tx={transactionId} committed={committed} hadPending={diagHadPending} alreadyFlipped={diagAlreadyFlipped} committedValuesCount={committedValues?.Count ?? 0} committedKeys=[{(committedValues is null ? "<null>" : string.Join(",", committedValues.Keys))}]");
+#endif
 
         // Capture the bucket reference up-front. ApplyTxCommit/ApplyTxAbort
         // remove the bucket from _pendingTx, so we need the snapshot here to
@@ -640,12 +919,13 @@ internal sealed partial class BPlusLeafGrain
         // Per-key dedup is load-bearing: two terminal deliveries to the
         // same leaf can legitimately carry DIFFERENT committedValues
         // subsets - the AtomicWriteGrain direct fan-out routes by
-        // current-routing per shard, while a source shard's
-        // ForwardSplitTerminalAsync mirror routes by MovedAwaySlots's
-        // earlier migration record. A per-saga dedup observes one
-        // subset first, marks the saga backstopped, and short-circuits
-        // the OTHER subset's missing keys - leaving them stuck at the
-        // drained pre-saga value. The chaos pattern
+        // current-routing per shard, while the saga's transitive
+        // split-forward fan-out (TerminalFanOutResolver) reaches the
+        // same destination via the source shard's earlier
+        // MovedAwaySlots migration record. A per-saga dedup observes
+        // one subset first, marks the saga backstopped, and short-
+        // circuits the OTHER subset's missing keys - leaving them
+        // stuck at the drained pre-saga value. The chaos pattern
         // `split (pre=5, post=11)` on the reshard fixture reproduces
         // this exactly: 5 keys (one source shard's worth) orphaned
         // because their backstop arrived after another shard's subset
@@ -678,33 +958,86 @@ internal sealed partial class BPlusLeafGrain
 
         // Pending-flip path: drain the bucket into Entries (commit) or
         // drop it without surfacing (abort). Zero leaf I/O - the WAL is
-        // the recovery source for the flipped entries. Gated on
-        // !alreadyFlipped so a duplicate delivery (e.g. arriving via
-        // both the direct fan-out and a split-shadow forward) does not
-        // attempt to re-flip a bucket that the first delivery already
-        // consumed.
-        if (hadPending && !alreadyFlipped)
+        // the recovery source for the flipped entries.
+        //
+        // Three sub-paths based on `alreadyFlipped`:
+        //
+        // (1) `!alreadyFlipped, committed`: normal commit. Drain the
+        //     bucket into Entries via ApplyTxCommit. Tick Version so
+        //     a co-located LeafCacheGrain notices the new saga state.
+        //
+        // (2) `!alreadyFlipped, !committed`: normal abort. Discard the
+        //     bucket via ApplyTxAbort without surfacing prepared values.
+        //
+        // (3) `alreadyFlipped` (either commit or abort): the saga's
+        //     terminal has ALREADY landed on this leaf, having written
+        //     the correct values via flip-drain or per-key backstop.
+        //     A bucket present now means a TreeShardSplitGrain
+        //     retroactive sweep replayed a source-leaf prepare snapshot
+        //     to this destination AFTER the saga's commit broadcast had
+        //     already reached it (via BFS-with-fullBackstop through the
+        //     source's MovedAwaySlots). The orphan bucket carries the
+        //     PREPARE-TIME value, which can be many saga rounds older
+        //     than the current Entries[K] state. Draining it would
+        //     stamp a stale value with a fresh HLC tick, causing
+        //     readers to observe an old saga's value in place of the
+        //     current one (the chaos signature `unknown-round
+        //     (other=N)` reproduces this exactly). The correct action
+        //     is to DISCARD the orphan bucket without surfacing - the
+        //     original terminal's backstop already wrote the correct
+        //     value, so the bucket is pure dead weight that would
+        //     otherwise pin the pending-key read-path until the txid
+        //     was evicted from the registry retention window.
+        if (hadPending)
         {
-            if (committed)
+            if (alreadyFlipped)
             {
-                // Tick state.State.Version[ReplicaId] at the saga's
-                // terminal-foreground entry point so the cache's next
-                // delta(callerClock) call no longer hits the
-                // sinceVersion.DominatesOrEquals(state.State.Version)
-                // short-circuit, AND so callerClock at the next refresh
-                // (which equals the cache's new saved Version[ReplicaId])
-                // is strictly less than the drained values' re-stamped
-                // Timestamps (= state.State.Clock at terminal-time, which
-                // already trails Version by zero-or-positive ticks because
-                // the prepare path no longer ticks Version). Foreground-
-                // only - the replay path inherits the
+                ApplyTxAbort(transactionId);
+            }
+            else if (committed)
+            {
+                // Publish Version[ReplicaId] as the *pre-drain* Clock
+                // value, then let ApplyTxCommit's counter-only bump push
+                // Clock (and every drained Entries[K].Timestamp) one
+                // counter unit ahead. The LeafCacheGrain stores
+                // Version[ReplicaId] as its saved callerClock on each
+                // refresh and excludes entries whose Timestamp is <=
+                // callerClock from the next delta - so Version[ReplicaId]
+                // must be strictly less than every drained Timestamp for
+                // the just-flipped saga's values to be delivered.
+                //
+                // The previous shape - state.State.Version.Tick(ReplicaId)
+                // BEFORE ApplyTxCommit - read DateTimeOffset.UtcNow.Ticks
+                // and pumped Version[ReplicaId] forward to wall-clock-now,
+                // while state.State.Clock only advanced via
+                // AdvanceProjectionClock at prepare time. After enough
+                // saga commits the two clocks drifted by tens of
+                // milliseconds (Version ahead of Clock), and the cache's
+                // `lww.Timestamp > callerClock` filter silently dropped
+                // the drained values on every refresh - manifesting as
+                // the chaos-test "unknown-round (other=N)" stale-cache
+                // signature on Continuous_reader_observes_zero_or_all_keys_through_mid_saga_reshard.
+                //
+                // Foreground-only: the replay path inherits the
                 // ILeafProjection.Apply convention of not advancing
-                // Version, so terminal replay rebuilds Entries
-                // deterministically without contributing to a
-                // foreground-cache version-vector view that does not
-                // exist during replay.
-                state.State.Version.Tick(ReplicaId);
+                // Version, so this branch is skipped on replay and the
+                // foreground/replay symmetry holds because every drained
+                // Entries[K].Timestamp is reconstructed bit-identically
+                // from the same counter-only bump (see the matching
+                // comment block in ApplyTxCommit).
                 ApplyTxCommit(transactionId);
+                // Publish state.State.Clock AFTER the commit: ApplyTxCommit
+                // does the counter-only bump that lifts state.State.Clock
+                // (and every drained Entries[K].Timestamp) one counter unit
+                // ahead of the pre-publish snapshot. Publishing the
+                // post-commit Clock keeps Version[ReplicaId] equal to the
+                // highest stamp any drained entry actually carries - which
+                // is exactly the cache filter's reference value.
+                var postCommitVersion = state.State.Clock;
+                if (postCommitVersion.CompareTo(state.State.Version.GetClock(ReplicaId)) > 0)
+                {
+                    state.State.Version.Entries[ReplicaId] = postCommitVersion;
+                }
             }
             else
             {
@@ -718,12 +1051,33 @@ internal sealed partial class BPlusLeafGrain
         // Stamp every backstop entry with the SAME Tick(state.State.Clock)
         // value: HLC.Tick guarantees strict-greater ordering against any
         // pre-saga drained value already in Entries, so LWW.Merge
-        // resolves in favour of the backstop. We do NOT tick Version on
-        // the pure backstop path (hadPending=false) - the cache is not
-        // tracking this leaf as a pending source for this saga, and
-        // ticking would race with concurrent reads. When the
-        // pending-flip path above already ticked Version
-        // (hadPending=true), the backstop piggybacks on that single tick.
+        // resolves in favour of the backstop.
+        //
+        // After the loop we MUST publish the backstop stamp into
+        // Version[ReplicaId] via PublishVersionAdvance(stamp) (see
+        // below). An earlier shape skipped the publication on the
+        // hadPending=false branch on the theory that "the cache is not
+        // tracking this leaf as a pending source for this saga." That
+        // reasoning was incorrect: the same-tree LeafCacheGrain is the
+        // primary read path for every key in state.State.Entries, and
+        // its RefreshAsync fast path (GetDeltaSinceAsync ->
+        // DominatesOrEquals) short-circuits when the cache's saved
+        // _version equals Version[ReplicaId]. If the backstop write
+        // does not lift Version[ReplicaId], the cache continues
+        // serving the previous value (commonly a freshly-imported
+        // IsMigrated=true pre-saga snapshot) indefinitely. A backstop terminal landing on a destination
+        // leaf whose only prior write was a cross-leaf migration
+        // import never advanced Version, so the cache pinned the
+        // migrated pre-saga value through every subsequent saga
+        // round.
+        //
+        // Publication is safe under concurrent reads because
+        // PublishVersionAdvance is a strict-greater-only conditional
+        // assignment of a single dictionary entry (no allocation, no
+        // structural mutation of the dictionary's shape); concurrent
+        // dictionary reads on the keyed slot see either the old or
+        // the new value, both of which are correctness-preserving
+        // (the cache's filter is monotone in either direction).
         //
         // Each missing-key write is durably committed by appending a
         // LatticeMutation { Kind = Set, IsBackstop = true, ... } to the
@@ -740,7 +1094,27 @@ internal sealed partial class BPlusLeafGrain
         // WAL-as-sole-commit-point invariant.
         if (missingKeys is { Count: > 0 })
         {
-            var stamp = Primitives.HybridLogicalClock.Tick(state.State.Clock);
+            // Cross-shard-migration LWW dominance (Fix M, backstop variant).
+            // See the foreground-drain branch above for the full rationale.
+            // The same race that affects the pending-flip restamp affects
+            // the pure-backstop path: a destination leaf whose freshly-
+            // minted state.State.Clock is below the migrated value's HLC
+            // would stamp the backstop write with Tick(state.State.Clock),
+            // which the LWW.Merge inside StoreEntry resolves AGAINST when
+            // the existing Entries[K] carries a higher HLC from migration.
+            // Pre-advance baseClock past any existing entry for the
+            // missing keys before Ticking so the backstop strictly
+            // dominates the migrated pre-saga value.
+            var baseClock = state.State.Clock;
+            foreach (var kvp in missingKeys)
+            {
+                if (state.State.Entries.TryGetValue(kvp.Key, out var preExisting)
+                    && preExisting.Timestamp.CompareTo(baseClock) > 0)
+                {
+                    baseClock = preExisting.Timestamp;
+                }
+            }
+            var stamp = Primitives.HybridLogicalClock.Tick(baseClock);
             var origin = LatticeOriginContext.Current;
             var vc = LatticeVectorClockContext.Current;
             var writer = ResolveCommitLogWriter();
@@ -802,9 +1176,36 @@ internal sealed partial class BPlusLeafGrain
                     VectorClock = vc,
                 };
                 StoreEntry(kvp.Key, value);
+                // Backstop is a non-migration write: any prior
+                // migration-provenance marker for this key is now
+                // stale and must be cleared so a subsequent saga's
+                // orphan-drain guard does not mistake the backstop
+                // write for a migration import.
             }
 
             AdvanceProjectionClock(stamp);
+            // Lift Version[ReplicaId] to the backstop stamp so the
+            // co-located LeafCacheGrain's next RefreshAsync observes
+            // a non-empty delta containing the just-stamped backstop
+            // entries. Without this the cache's DominatesOrEquals
+            // fast path returns the empty singleton and the cache
+            // serves whatever value was in _cache before the backstop
+            // (commonly an IsMigrated=true pre-saga snapshot from an
+            // earlier cross-leaf migration import) indefinitely. See
+            // the multi-paragraph rationale block at the head of the
+            // backstop branch above.
+            //
+            // The hadPending=true commit branch already published
+            // state.State.Clock post-commit; re-publishing here is
+            // additive (the guard is strict-greater) and load-bearing
+            // when the same terminal carries BOTH a flippable bucket
+            // AND missing-key backstops (the bucket flip publishes
+            // the post-flip Clock, but the backstop is stamped AFTER
+            // and produces a strictly-greater stamp).
+            if (stamp.CompareTo(state.State.Version.GetClock(ReplicaId)) > 0)
+            {
+                state.State.Version.Entries[ReplicaId] = stamp;
+            }
             BumpLocalRevision();
 
             // Record the keys we just backstopped so a SUBSEQUENT
@@ -828,5 +1229,183 @@ internal sealed partial class BPlusLeafGrain
         // keyed per-key so future deliveries with different subsets
         // continue to do real work for keys they haven't covered yet.
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
+
+        // Clear any destination-side shadow marker installed by the
+        // split coordinator for this saga. Once the terminal has been
+        // applied here, Entries[K] reflects the authoritative
+        // post-saga state (drained pending, backstopped commit, or
+        // unchanged on abort), so the migrated-entry guard in the
+        // read path has nothing left to gate. The clear is unconditional
+        // on the (committed, aborted) axis - both terminate the saga's
+        // visibility window for this leaf, and any shadow marker
+        // installed for a different saga's txid is untouched.
+        ClearSagaShadow(transactionId);
     }
+
+    /// <summary>
+    /// Destination-side shadow markers installed by the split
+    /// coordinator naming, for each key whose virtual slot is
+    /// migrating into this leaf, the in-flight source-side sagas
+    /// whose prepared mutations touched that key. The read path
+    /// consults this map whenever it is about to surface an
+    /// <see cref="LwwValue{T}.IsMigrated"/>=<c>true</c> value, and
+    /// raises <see cref="StaleShardRoutingException"/> for any
+    /// shadowing saga that the registry has flipped to
+    /// <see cref="TxStatus.Committed"/> but whose backstop terminal
+    /// has not yet reached this leaf - so the
+    /// <c>LatticeGrain</c> deadline-bounded retry loop re-fans once
+    /// the backstop arrives. In-flight and aborted sagas are
+    /// strict-isolation-correct on the migrated pre-saga value and
+    /// pass through.
+    /// <para>
+    /// Lazily allocated - the steady-state path (no active split
+    /// touching this leaf) leaves it null and incurs zero overhead
+    /// in the read hot path beyond a single null check. Cleared
+    /// per-saga by <see cref="ApplyTxTerminalAsync"/> when the
+    /// saga's terminal lands on this leaf, so the per-saga footprint
+    /// is bounded by saga lifetime.
+    /// </para>
+    /// </summary>
+    private Dictionary<string, HashSet<Guid>>? _shadowedSagas;
+
+    /// <inheritdoc />
+    public Task MarkSagaShadowAsync(Guid transactionId, IReadOnlyList<string> keys)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        if (transactionId == Guid.Empty)
+            throw new ArgumentException("Transaction id must be non-empty.", nameof(transactionId));
+
+        if (keys.Count == 0)
+            return Task.CompletedTask;
+
+        _shadowedSagas ??= new Dictionary<string, HashSet<Guid>>(StringComparer.Ordinal);
+        foreach (var key in keys)
+        {
+            if (string.IsNullOrEmpty(key))
+                continue;
+            if (!_shadowedSagas.TryGetValue(key, out var sagas))
+            {
+                sagas = new HashSet<Guid>();
+                _shadowedSagas[key] = sagas;
+            }
+            sagas.Add(transactionId);
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Removes <paramref name="transactionId"/> from every key's
+    /// shadow set, prunes any empty sets, and releases the map when
+    /// it falls empty. Invoked by <see cref="ApplyTxTerminalAsync"/>
+    /// on every terminal application regardless of decision, so the
+    /// guard has a bounded lifetime tied to saga progress.
+    /// </summary>
+    private void ClearSagaShadow(Guid transactionId)
+    {
+        if (_shadowedSagas is null || _shadowedSagas.Count == 0) return;
+
+        List<string>? emptyKeys = null;
+        foreach (var (key, sagas) in _shadowedSagas)
+        {
+            if (sagas.Remove(transactionId) && sagas.Count == 0)
+            {
+                emptyKeys ??= new List<string>();
+                emptyKeys.Add(key);
+            }
+        }
+        if (emptyKeys is not null)
+        {
+            foreach (var key in emptyKeys)
+                _shadowedSagas.Remove(key);
+        }
+        if (_shadowedSagas.Count == 0)
+            _shadowedSagas = null;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when a destination-side shadow marker is
+    /// installed for <paramref name="key"/>, returning the captured
+    /// txid set. The read path uses this signal to decide whether to
+    /// consult the registry for a shadow-routing decision on an
+    /// <see cref="LwwValue{T}.IsMigrated"/>=<c>true</c> value.
+    /// </summary>
+    private bool TryGetShadowedSagas(string key, out HashSet<Guid> sagas)
+    {
+        if (_shadowedSagas is not null && _shadowedSagas.TryGetValue(key, out var s) && s.Count > 0)
+        {
+            sagas = s;
+            return true;
+        }
+        sagas = null!;
+        return false;
+    }
+
+    /// <summary>
+    /// Decides whether the read path is safe to surface an
+    /// <see cref="LwwValue{T}.IsMigrated"/>=<c>true</c> value for a
+    /// key that carries a destination-side shadow marker. Resolves
+    /// every shadowing saga's <see cref="TxStatus"/> through the
+    /// per-tree registry (or the ambient
+    /// <see cref="LatticeRegistrySnapshotContext"/> snapshot when one
+    /// is in scope) and applies the per-saga rule:
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     <see cref="TxStatus.InFlight"/> / <see cref="TxStatus.Aborted"/>:
+    ///     the migrated pre-saga value is the strict-isolation-correct
+    ///     answer, the saga is safe to pass through.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="TxStatus.Committed"/> with backstop already
+    ///     applied (txid in <see cref="_recentlyTerminal"/>): the
+    ///     value in <c>Entries[K]</c> is now post-saga and safe to
+    ///     serve.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="TxStatus.Committed"/> without backstop: serving
+    ///     the migrated pre-saga value would violate atomic visibility
+    ///     against any sibling leaf whose backstop has already landed.
+    ///     Returns <c>false</c> so the caller raises
+    ///     <see cref="StaleShardRoutingException"/>.
+    ///   </description></item>
+    /// </list>
+    /// </summary>
+    private async ValueTask<bool> IsShadowedReadSafeAsync(HashSet<Guid> sagas)
+    {
+        foreach (var txid in sagas)
+        {
+            var status = await ResolvePendingStatusAsync(txid);
+            if (status != TxStatus.Committed) continue;
+            // Committed: safe only if the backstop terminal has already
+            // been applied here. _recentlyTerminal is set unconditionally
+            // by every ApplyTxTerminalAsync exit path, so it is the
+            // single source of truth for "this saga's terminal has
+            // landed on this leaf".
+            if (_recentlyTerminal is not null && _recentlyTerminal.Contains(txid))
+                continue;
+            return false;
+        }
+        return true;
+    }
+
+    #if LATTICE_DIAG
+    /// <summary>
+    /// DIAG: decode the round prefix from a chaos-test value of
+    /// shape <c>v-NNN-II</c>, where <c>NNN</c> is the round and
+    /// <c>II</c> is the key index. Returns <c>-1</c> for any value
+    /// that doesn't match the test's format.
+    /// </summary>
+    private static int DiagDecodeRound(byte[]? value)
+    {
+        if (value is null || value.Length < 6) return -1;
+        if (value[0] != (byte)'v' || value[1] != (byte)'-') return -1;
+        int round = 0;
+        for (int i = 2; i < value.Length && i < 5; i++)
+        {
+            var c = value[i];
+            if (c < (byte)'0' || c > (byte)'9') return -1;
+            round = round * 10 + (c - (byte)'0');
+        }
+        return round;
+    }
+#endif
 }

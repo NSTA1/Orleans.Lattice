@@ -269,6 +269,31 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultAtomicWriteRetention = TimeSpan.FromHours(48);
 
     /// <summary>
+    /// How long a completed saga's commit/abort decision persists in the
+    /// per-tree <see cref="Grains.TxRegistryGrain"/> as a tombstone after
+    /// the saga calls <c>ForgetAsync</c>. Covers the race window where a
+    /// concurrent <c>TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync</c>
+    /// installs a pending bucket on a destination shard <i>after</i> the
+    /// saga's terminal fan-out (and after the late-pickup fetch-loop in
+    /// <c>AtomicWriteGrain.BroadcastTerminalsAsync</c>) but <i>before</i>
+    /// the saga's <c>ForgetAsync</c> call: with a non-zero retention, the
+    /// sweep's post-sweep cleanup pass can still resolve the saga's
+    /// outcome via <c>GetStatusAsync</c> and apply the terminal directly,
+    /// draining the orphan pending bucket. Default is 60 seconds - long
+    /// enough to absorb typical sweep durations while bounding the
+    /// registry's persisted footprint. Set to <see cref="TimeSpan.Zero"/>
+    /// to disable tombstoning entirely (legacy behaviour: <c>ForgetAsync</c>
+    /// removes the decision immediately, restoring the original semantic
+    /// from before the tombstone feature shipped). Increase for
+    /// environments where sweep completion can exceed 60 seconds (very
+    /// large shards or cascading split storms under sustained write load).
+    /// </summary>
+    public TimeSpan TxDecisionRetention { get; set; } = DefaultTxDecisionRetention;
+
+    /// <summary>Default value for <see cref="TxDecisionRetention"/> (60 seconds).</summary>
+    public static readonly TimeSpan DefaultTxDecisionRetention = TimeSpan.FromSeconds(60);
+
+    /// <summary>
     /// Optional retention window for <see cref="Primitives.VersionVector"/>
     /// entries. When a merge pipeline calls
     /// <see cref="Primitives.VersionVector.PruneOlderThan(long)"/> with
@@ -315,9 +340,12 @@ public class LatticeOptions
 
     /// <summary>
     /// When <c>true</c>, Lattice publishes <see cref="LatticeTreeEvent"/> notifications
-    /// on an Orleans stream (namespace <see cref="LatticeEventConstants.StreamNamespace"/>,
+    /// on an Orleans stream (namespace <see cref="LatticeEventConstants.StreamNamespace"/>)
+    /// covering per-key writes, atomic-write completions, splits, compactions,
     /// snapshots, resizes, reshards, and tree-lifecycle transitions. Consumers
-    /// events.
+    /// subscribe via <c>LatticeExtensions.SubscribeToEventsAsync</c>; publication
+    /// is fire-and-forget and log-and-swallow, so a missing or misconfigured
+    /// provider never breaks the write path. Opt in per tree.
     /// </summary>
     public bool PublishEvents { get; set; } = DefaultPublishEvents;
     /// <summary>Default value for <see cref="PublishEvents"/> (<c>false</c>).</summary>

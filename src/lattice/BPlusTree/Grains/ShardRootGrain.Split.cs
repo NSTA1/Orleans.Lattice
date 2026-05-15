@@ -143,12 +143,21 @@ internal sealed partial class ShardRootGrain
         => Task.FromResult(state.State.PendingBulkGraft is not null);
 
     /// <summary>
-    /// Hot-path read/write gate. Throws <see cref="StaleShardRoutingException"/>
+    /// Hot-path write gate. Throws <see cref="StaleShardRoutingException"/>
     /// when (a) the shard is in <see cref="ShardSplitPhase.Reject"/> and
     /// <paramref name="key"/> hashes to a moved virtual slot of the active
     /// split, or (b) <paramref name="key"/> hashes to a slot in
     /// <see cref="ShardRootState.MovedAwaySlots"/> from a previously-completed
     /// split. No-op otherwise.
+    /// <para>
+    /// Writes at <see cref="ShardSplitPhase.Swap"/> are intentionally
+    /// admitted: the source's local write is mirrored to the new owner via
+    /// the shadow-forward pipeline, keeping both sides consistent through
+    /// the swap → reject transition. Only the
+    /// <see cref="ShardSplitPhase.Reject"/> phase actively rejects writes
+    /// on moved slots (because at that point the source has stopped
+    /// accepting new mirrored work).
+    /// </para>
     /// </summary>
     private void ThrowIfRejectedForKey(string key)
     {
@@ -170,11 +179,12 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Hot-path read/write gate for batched operations. Throws on the first key
+    /// Hot-path write gate for batched operations. Throws on the first key
     /// in <paramref name="keys"/> that maps to a moved virtual slot during the
     /// reject phase or to a slot already in
     /// <see cref="ShardRootState.MovedAwaySlots"/>. No-op when neither
-    /// condition holds.
+    /// condition holds. See <see cref="ThrowIfRejectedForKey"/> for the
+    /// rationale on excluding <see cref="ShardSplitPhase.Swap"/>.
     /// </summary>
     private void ThrowIfRejectedForAnyKey(IEnumerable<string> keys)
     {
@@ -198,6 +208,64 @@ internal sealed partial class ShardRootGrain
                 var slot = ShardMap.GetVirtualSlot(key, movedVsc);
                 if (moved.TryGetValue(slot, out var target))
                     throw new StaleShardRoutingException(MyShardIndex, target, slot);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Read-path gate. Throws <see cref="StaleShardRoutingException"/> as
+    /// soon as a split has advanced to <see cref="ShardSplitPhase.Swap"/>
+    /// (the registry's <see cref="ShardMap"/> has been swapped to the new
+    /// owner) or later, and <paramref name="key"/> hashes to a moved slot.
+    /// Also fires for slots in <see cref="ShardRootState.MovedAwaySlots"/>
+    /// from a previously-completed split.
+    /// <para>
+    /// The gate is wider than the write-side
+    /// <see cref="ThrowIfRejectedForKey"/> because reads carry a real
+    /// orphan-visibility hazard the write path does not: a stale-routed
+    /// read against the source returns the source's <c>Entries[K]</c>
+    /// snapshot from the moment of last mirrored write, and the
+    /// <c>LeafCacheGrain</c> happily warms with and serves that snapshot
+    /// indefinitely. By rejecting at Swap, the read forces
+    /// <c>LatticeGrain.GetAsyncCore</c> to invalidate its cached shard
+    /// map and retry against the new owner T, which holds the
+    /// authoritative copy.
+    /// </para>
+    /// <para>
+    /// Matches the scan-side gate <see cref="IsSlotMovedAway"/> /
+    /// <see cref="TryGetMovedAwaySlot"/>, which already filters
+    /// moved-away slots from <see cref="ShardSplitPhase.Swap"/> onward.
+    /// </para>
+    /// </summary>
+    private void ThrowIfMovedAwayForReadKey(string key)
+    {
+        var sip = state.State.SplitInProgress;
+        if (sip is not null
+            && (sip.Phase == ShardSplitPhase.Swap
+                || sip.Phase == ShardSplitPhase.Reject))
+        {
+            var slot = ShardMap.GetVirtualSlot(key, sip.VirtualShardCount);
+            if (sip.IsMovedSlot(slot))
+            {
+#if LATTICE_DIAG
+                // [DIAG] trace read-gate throw via SplitInProgress.
+                DiagSink.Write($"[DIAG shard-read-gate-throw-sip] shardIdx={MyShardIndex} key={key} slot={slot} target={sip.ShadowTargetShardIndex} phase={sip.Phase}");
+#endif
+                throw new StaleShardRoutingException(MyShardIndex, sip.ShadowTargetShardIndex, slot);
+            }
+        }
+
+        var moved = state.State.MovedAwaySlots;
+        if (moved.Count > 0 && state.State.MovedAwayVirtualShardCount is { } vsc)
+        {
+            var slot = ShardMap.GetVirtualSlot(key, vsc);
+            if (moved.TryGetValue(slot, out var target))
+            {
+#if LATTICE_DIAG
+                // [DIAG] trace read-gate throw via MovedAwaySlots (post-Complete).
+                DiagSink.Write($"[DIAG shard-read-gate-throw-moved] shardIdx={MyShardIndex} key={key} slot={slot} target={target} vsc={vsc}");
+#endif
+                throw new StaleShardRoutingException(MyShardIndex, target, slot);
             }
         }
     }
@@ -229,7 +297,7 @@ internal sealed partial class ShardRootGrain
         if (!sip.IsMovedSlot(slot)) return;
 
         var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{sip.ShadowTargetShardIndex}");
-        await target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = value });
+        await target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = value }, isCrossShardMigration: true);
     }
 
     /// <summary>
@@ -262,20 +330,80 @@ internal sealed partial class ShardRootGrain
     /// is benign - both writes' forwards will eventually arrive and CRDT LWW
     /// (highest HLC wins) will converge to the correct value on the target.
     /// </para>
+    /// <para>
+    /// <b>Phase coverage - Reject admission.</b> The active-split branch admits
+    /// <see cref="ShardSplitPhase.BeginShadowWrite"/>, <see cref="ShardSplitPhase.Drain"/>,
+    /// <see cref="ShardSplitPhase.Swap"/>, AND <see cref="ShardSplitPhase.Reject"/>. Reject is included because
+    /// <c>ThrowIfRejectedForKey</c> only gates writes whose <c>SetAsync</c>
+    /// has not yet entered the leaf traversal - an in-flight write that
+    /// already passed the gate (when the phase was Swap) can land its
+    /// prepared value into the destination's <c>_pendingTx[txid][key]</c>
+    /// - which the saga's terminal mark would then flip into the destination's
+    /// <c>Entries</c>, leaving a reader routed to the destination after the
+    /// shard-map swap surfacing the pre-saga value indefinitely (a saga
+    /// atomic-visibility violation across the migrating slot).
+    /// </para>
+    /// <para>
+    /// <b>Post-complete fallback.</b> A symmetric race exists at
+    /// the Reject → Complete boundary: the coordinator clears
+    /// <see cref="ShardRootState.SplitInProgress"/> and populates
+    /// <see cref="ShardRootState.MovedAwaySlots"/> +
+    /// <see cref="ShardRootState.MovedAwayVirtualShardCount"/> in the
+    /// same write. If a write's <c>SetAsync</c> entered before the clear
+    /// but reaches this helper after, <c>sip</c> reads as <c>null</c>.
+    /// The fallback consults <c>MovedAwaySlots</c> under the recorded
+    /// virtual shard count and forwards to the post-split owner. This
+    /// mirrors <see cref="IShardRootGrain.GetSplitForwardTargetsAsync"/>
+    /// which already enumerates the post-Complete destinations for the
+    /// saga's terminal fan-out, closing the prepare-side gap symmetrically.
+    /// </para>
     /// </summary>
     private async Task ForwardLocalWriteToShadowIfNeededAsync(string key, byte[] value, long expiresAtTicks = 0L)
     {
+        // Resolve the shadow-forward target. Two windows are covered:
+        //
+        //   (A) Active split - sip is non-null and the slot is moved.
+        //       Phases admitted: BeginShadowWrite, Drain, Swap, AND
+        //       Reject (closes the Swap → Reject race where an
+        //       in-flight write that passed ThrowIfRejectedForKey at
+        //       phase ≤ Swap reaches this helper after the coordinator
+        //       advanced to Reject).
+        //
+        //   (B) Post-complete - sip is null but MovedAwaySlots records
+        //       the slot's post-split owner (closes the
+        //       Reject → Complete race where sip is cleared and
+        //       MovedAwaySlots populated between the local write and
+        //       this helper).
+        int? targetShardIndex = null;
+
         var sip = state.State.SplitInProgress;
-        if (sip is null) return;
-        if (sip.Phase != ShardSplitPhase.BeginShadowWrite
-            && sip.Phase != ShardSplitPhase.Drain
-            && sip.Phase != ShardSplitPhase.Swap) return;
-        if (sip.ShadowTargetShardIndex == MyShardIndex) return;
+        if (sip is not null
+            && sip.ShadowTargetShardIndex != MyShardIndex
+            && (sip.Phase == ShardSplitPhase.BeginShadowWrite
+                || sip.Phase == ShardSplitPhase.Drain
+                || sip.Phase == ShardSplitPhase.Swap
+                || sip.Phase == ShardSplitPhase.Reject))
+        {
+            var slot = ShardMap.GetVirtualSlot(key, sip.VirtualShardCount);
+            if (sip.IsMovedSlot(slot))
+                targetShardIndex = sip.ShadowTargetShardIndex;
+        }
 
-        var slot = ShardMap.GetVirtualSlot(key, sip.VirtualShardCount);
-        if (!sip.IsMovedSlot(slot)) return;
+        if (targetShardIndex is null
+            && state.State.MovedAwaySlots.Count > 0
+            && state.State.MovedAwayVirtualShardCount is { } movedVsc)
+        {
+            var movedSlot = ShardMap.GetVirtualSlot(key, movedVsc);
+            if (state.State.MovedAwaySlots.TryGetValue(movedSlot, out var newOwner)
+                && newOwner != MyShardIndex)
+            {
+                targetShardIndex = newOwner;
+            }
+        }
 
-        var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{sip.ShadowTargetShardIndex}");
+        if (targetShardIndex is null) return;
+
+        var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{targetShardIndex.Value}");
 
         // Saga prepare-phase shadow-forward branch. When the local write is
         // a saga prepare (LatticePreparedContext active and a non-empty
@@ -325,7 +453,7 @@ internal sealed partial class ShardRootGrain
         var raw = await leaf.GetRawEntryAsync(key);
         if (raw is null || raw.Value.IsTombstone) return; // deleted/missing - handled by cleanup phase.
 
-        await target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = raw.Value.ToLwwValue() });
+        await target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = raw.Value.ToLwwValue() }, isCrossShardMigration: true);
     }
 
     private static bool SlotsEqual(int[] sortedExisting, int[] candidate)
@@ -338,9 +466,91 @@ internal sealed partial class ShardRootGrain
         return true;
     }
 
+    /// <inheritdoc />
+    public async Task<int> MarkLeavesMovedAwayAsync(int[] sortedMovedSlots, int virtualShardCount)
+    {
+        ArgumentNullException.ThrowIfNull(sortedMovedSlots);
+        if (virtualShardCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
+
+        if (sortedMovedSlots.Length == 0 || state.State.RootNodeId is null)
+            return 0;
+
+        await PrepareForOperationAsync();
+
+        // Walk the leaf chain from leftmost and mark every leaf with
+        // the moved-slot set. Idempotent on identical inputs - leaves
+        // that have already recorded the same set are no-ops.
+        var leafId = state.State.RootIsLeaf
+            ? state.State.RootNodeId!.Value
+            : (await GetLeftmostLeafIdAsync())!.Value;
+
+        var leavesMarked = 0;
+        while (true)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            await leaf.MarkSlotsMovedAwayAsync(sortedMovedSlots, virtualShardCount);
+            leavesMarked++;
+
+            var next = await leaf.GetNextSiblingAsync();
+            if (next is null) break;
+            leafId = next.Value;
+        }
+
+        return leavesMarked;
+    }
+
+    /// <inheritdoc />
+    public async Task MarkSagaShadowAsync(Guid transactionId, IReadOnlyList<string> keys)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        if (transactionId == Guid.Empty)
+            throw new ArgumentException("Transaction id must be non-empty.", nameof(transactionId));
+
+        if (keys.Count == 0 || state.State.RootNodeId is null)
+            return;
+
+        await PrepareForOperationAsync();
+
+        // Group keys by owning leaf so each leaf receives a single
+        // batched MarkSagaShadowAsync call rather than N per-key RPCs.
+        // The leaf-side marker is keyed per-key, so the per-leaf
+        // batch matches the contract on the other end.
+        //
+        // Root-is-leaf shards collapse to a single-leaf bucket; the
+        // traversal path would otherwise try to read a routing table
+        // from a leaf grain and throw InvalidCastException.
+        if (state.State.RootIsLeaf)
+        {
+            var rootLeafId = state.State.RootNodeId!.Value;
+            var rootLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(rootLeafId);
+            await rootLeaf.MarkSagaShadowAsync(transactionId, keys);
+            return;
+        }
+
+        var byLeaf = new Dictionary<GrainId, List<string>>();
+        foreach (var key in keys)
+        {
+            if (string.IsNullOrEmpty(key)) continue;
+            var leafId = await TraverseToLeafAsync(key);
+            if (!byLeaf.TryGetValue(leafId, out var list))
+            {
+                list = new List<string>();
+                byLeaf[leafId] = list;
+            }
+            list.Add(key);
+        }
+
+        foreach (var (leafId, leafKeys) in byLeaf)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            await leaf.MarkSagaShadowAsync(transactionId, leafKeys);
+        }
+    }
+
     /// <summary>
     /// Returns <c>true</c> when <paramref name="key"/> hashes to a virtual slot
-    /// that this shard no longer authoritatively owns - either because it has
+    /// that this shard no longer authoritively owns - either because it has
     /// been permanently split away (<see cref="ShardRootState.MovedAwaySlots"/>),
     /// or because an active split has reached <see cref="ShardSplitPhase.Swap"/>
     /// or later (the registry's shard map already routes the slot to <c>T</c>
@@ -407,5 +617,52 @@ internal sealed partial class ShardRootGrain
 
         slot = -1;
         return false;
+    }
+
+    /// <summary>
+    /// Read-path gate for batched operations. Throws on the first key in
+    /// <paramref name="keys"/> that maps to a moved virtual slot from the
+    /// swap phase onward or to a slot already in
+    /// <see cref="ShardRootState.MovedAwaySlots"/>. See
+    /// <see cref="ThrowIfMovedAwayForReadKey"/> for the rationale on
+    /// including <see cref="ShardSplitPhase.Swap"/>.
+    /// </summary>
+    private void ThrowIfMovedAwayForReadAnyKey(IEnumerable<string> keys)
+    {
+        var sip = state.State.SplitInProgress;
+        var readGateActive = sip is not null
+            && (sip.Phase == ShardSplitPhase.Swap || sip.Phase == ShardSplitPhase.Reject);
+        var moved = state.State.MovedAwaySlots;
+        var movedActive = moved.Count > 0 && state.State.MovedAwayVirtualShardCount is not null;
+        if (!readGateActive && !movedActive) return;
+
+        var movedVsc = state.State.MovedAwayVirtualShardCount ?? 0;
+        foreach (var key in keys)
+        {
+            if (readGateActive)
+            {
+                var slot = ShardMap.GetVirtualSlot(key, sip!.VirtualShardCount);
+                if (sip.IsMovedSlot(slot))
+                {
+#if LATTICE_DIAG
+                    // [DIAG] trace batch read-gate throw via SIP.
+                    DiagSink.Write($"[DIAG shard-read-gate-throw-sip-any] shardIdx={MyShardIndex} key={key} slot={slot} target={sip.ShadowTargetShardIndex} phase={sip.Phase}");
+#endif
+                    throw new StaleShardRoutingException(MyShardIndex, sip.ShadowTargetShardIndex, slot);
+                }
+            }
+            if (movedActive)
+            {
+                var slot = ShardMap.GetVirtualSlot(key, movedVsc);
+                if (moved.TryGetValue(slot, out var target))
+                {
+#if LATTICE_DIAG
+                    // [DIAG] trace batch read-gate throw via MovedAwaySlots.
+                    DiagSink.Write($"[DIAG shard-read-gate-throw-moved-any] shardIdx={MyShardIndex} key={key} slot={slot} target={target} vsc={movedVsc}");
+#endif
+                    throw new StaleShardRoutingException(MyShardIndex, target, slot);
+                }
+            }
+        }
     }
 }

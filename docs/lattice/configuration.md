@@ -71,10 +71,19 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | `MaxScanRetries` | `int` | 3 | Yes |
 | `CursorIdleTtl` | `TimeSpan` | 48 hours | Yes |
 | `AtomicWriteRetention` | `TimeSpan` | 48 hours | Yes |
+| `TxDecisionRetention` | `TimeSpan` | 60 seconds | Yes |
 | `VersionVectorRetention` | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
 | `DiagnosticsCacheTtl` | `TimeSpan` | 5 seconds | Yes |
 | `MaterialiserCheckpointInterval` | `TimeSpan` | 1 second | Yes |
 | `MaterialiserCheckpointEntries` | `int` | 1000 | Yes |
+| `MaxLeafReplayEntries` | `int` | 10 000 | Yes |
+| `LeafProjectionRetention` | `TimeSpan` | 7 days | Yes |
+| `ProjectionRebuildPolicy` | enum | `SnapshotThenWal` | Yes |
+| `PublishEvents` | `bool` | `false` | Yes |
+| `EventStreamProviderName` | `string` | `"Default"` | Yes (on next publish) |
+| `WalPartitions` | `int` | 1 | No (per-tree, pinned on first WAL write) |
+| `WalMaxBatchEntries` | `int` | 100 | Yes |
+| `WalMaxBatchBytes` | `long` | 4 MiB | Yes |
 
 ### Structural sizing (registry-pinned)
 
@@ -269,6 +278,16 @@ Retention window for completed `SetManyAtomicAsync` saga state (default: 48 hour
 
 This option can be changed freely at any time.
 
+### `TxDecisionRetention`
+
+Retention window for a completed saga's commit/abort decision in the per-tree `ITxRegistryGrain` after the saga calls `ForgetAsync` (default: 60 seconds). The registry stamps a `ForgottenAt` tombstone instead of evicting the decision; for the duration of the window `GetStatusAsync` / `GetStatusManyAsync` / `SnapshotAsync` continue to surface the decision so that a process which installs a *new* pending bucket on that txid *after* the saga's terminal fan-out can still resolve the verdict and apply the terminal directly.
+
+The primary race the window guards is the retroactive shadow-forward sweep at the start of an adaptive shard split: the split coordinator replays every in-flight prepared mutation from the source leaves into the destination shard's `_pendingTx` buckets, and its post-sweep cleanup pass resolves any orphan bucket whose terminal has already broadcast by reading the retained verdict. Without retention, a saga that completed microseconds before the sweep installed its pending bucket would leave a destination-shard orphan with no recoverable outcome.
+
+Tombstones are physically purged on the next `ForgetAsync` / `MarkCommittedAsync` / `MarkAbortedAsync` call against the registry (inline `PruneExpired` pass). Set `TimeSpan.Zero` to restore the pre-tombstone immediate-evict semantic (legacy behaviour; reintroduces the orphan risk - reserved for tests or trees with `AutoSplitEnabled = false`). Increase beyond 60 s only if your operational profile produces sweep durations longer than that (very large shards under sustained write load, cascading split storms).
+
+This option can be changed freely at any time.
+
 ### `VersionVectorRetention`
 
 How long to retain version vectors for deleted keys (default: `InfiniteTimeSpan`, disabled). When a key is deleted, its version vector is retained in the `LeafCacheGrain` for this duration to support historical scans. After the retention window, the vector is expunged from the cache.
@@ -336,6 +355,36 @@ Selects the recovery strategy a leaf grain takes when one of the fall-off-log tr
 | `Fail` | Surfaces `LeafProjectionStaleException` at activation and waits for an operator-driven rebuild. |
 
 This option can be changed freely at any time.
+
+### `PublishEvents`
+
+When `true`, Lattice publishes `LatticeTreeEvent` notifications on the Orleans stream namespace `orleans.lattice.events` covering per-key writes, atomic-write completions, splits, compactions, snapshots, resizes, reshards, and tree-lifecycle transitions (default: `false`, opt-in per tree). Consumers subscribe via `LatticeExtensions.SubscribeToEventsAsync`. Publication is fire-and-forget and log-and-swallow, so a missing or misconfigured stream provider never breaks the write path. Per-tree overrides applied via `ILattice.SetPublishEventsEnabledAsync` are persisted on the tree's registry entry and override the silo-wide default. See [Events](events.md).
+
+This option can be changed freely at any time. Per-tree overrides take effect on the publishing activation immediately; other activations refresh within a few seconds.
+
+### `EventStreamProviderName`
+
+Name of the Orleans stream provider Lattice publishes `LatticeTreeEvent` notifications onto (default: `"Default"`). The same name must be configured on every silo (publishers) and on the client (subscribers); register the provider via the standard `siloBuilder.AddMemoryStreams("Default")` / equivalent durable-stream extension. Only consulted when `PublishEvents` is `true`.
+
+This option can be changed freely at any time. The new value takes effect on the next publish.
+
+### `WalPartitions`
+
+Number of independent WAL partitions per tree (default: 1). The foreground commit-log writer hashes the mutation key modulo this value to pick the partition, so increasing the value fans WAL throughput out across multiple `IWalShardGrain` activations when a single partition becomes the bottleneck. The dominant single-cluster shape uses 1.
+
+**Per-tree, pinned on first WAL write.** Changing this value after a tree has accepted writes silently re-routes new mutations to different partitions; existing entries remain in the partition they were originally written to. Set the value before the tree first commits if a non-default fan-out is required.
+
+### `WalMaxBatchEntries`
+
+Maximum number of WAL entries the partition grain coalesces into a single storage flush (default: 100). Lower values reduce per-entry flush latency at the cost of throughput. Whichever of `WalMaxBatchEntries` or `WalMaxBatchBytes` is reached first triggers the flush.
+
+This option can be changed freely at any time. The new value takes effect on the next batch boundary.
+
+### `WalMaxBatchBytes`
+
+Maximum byte budget the partition grain coalesces into a single storage flush (default: 4 MiB). Whichever of `WalMaxBatchEntries` or `WalMaxBatchBytes` is reached first triggers the flush.
+
+This option can be changed freely at any time. The new value takes effect on the next batch boundary.
 
 ## Storage Provider Name
 

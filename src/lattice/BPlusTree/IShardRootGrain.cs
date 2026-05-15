@@ -212,12 +212,62 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task PurgeAsync();
 
     /// <summary>
-    /// Merges entries into this shard using LWW semantics, preserving original
+    /// Merges entries into this shard using LWW (Last-Writer-Wins) semantics,
+    /// preserving original
     /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> timestamps. Routes
     /// each entry to the correct leaf via tree traversal and handles splits.
     /// Used by the tree merge operation.
+    /// <para>
+    /// When <paramref name="isCrossShardMigration"/> is <c>true</c>, the
+    /// merge runs the asymmetric migration-vs-foreground rule on the leaf:
+    /// see <see cref="IBPlusLeafGrain.MergeManyAsync"/> for the full
+    /// contract. The flag is intended for the cross-shard migration
+    /// callsites only (the source-shard drain in
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.TreeShardSplitGrain"/>
+    /// and the per-write shadow-forward in <c>ShardRootGrain.Split.cs</c>).
+    /// All other callers (cross-cluster replication, tree-merge, snapshot
+    /// restore, online tree-resize shadow-forward) MUST pass <c>false</c>
+    /// so the merge runs the symmetric LWW-by-HLC contract.
+    /// </para>
     /// </summary>
-    Task MergeManyAsync(Dictionary<string, Orleans.Lattice.Primitives.LwwValue<byte[]>> entries);
+    Task MergeManyAsync(Dictionary<string, Orleans.Lattice.Primitives.LwwValue<byte[]>> entries, bool isCrossShardMigration = false);
+
+    /// <summary>
+    /// Records that ownership of the given <paramref name="sortedMovedSlots"/>
+    /// has migrated away from this shard. Walks the leaf chain
+    /// (starting from <see cref="GetLeftmostLeafIdAsync"/>) and calls
+    /// <see cref="IBPlusLeafGrain.MarkSlotsMovedAwayAsync"/> on every
+    /// leaf so the leaf-side read gate and the cache-coherence prune
+    /// pass both observe the moved-slot set. Called by
+    /// <c>TreeShardSplitGrain.SwapAsync</c> on the source shard
+    /// immediately before <c>EnterRejectPhaseAsync</c>, so no read
+    /// crosses the Swap boundary observing an unmarked leaf under a
+    /// Reject-phase shard. Returns the total count of leaves that
+    /// recorded at least one new moved slot (best-effort - tests use
+    /// this for assertions; production paths ignore the value).
+    /// </summary>
+    /// <param name="sortedMovedSlots">Sorted, distinct virtual-slot indices that have moved away.</param>
+    /// <param name="virtualShardCount">The virtual shard count in force at the moment of the move.</param>
+    Task<int> MarkLeavesMovedAwayAsync(int[] sortedMovedSlots, int virtualShardCount);
+
+    /// <summary>
+    /// Routes <paramref name="keys"/> to their owning leaves and
+    /// invokes <see cref="IBPlusLeafGrain.MarkSagaShadowAsync"/> on
+    /// each leaf with the subset of keys it owns. Used by the split
+    /// coordinator to install destination-side shadow markers naming
+    /// the in-flight source-side saga
+    /// <paramref name="transactionId"/> whose prepared mutations
+    /// touched migrating keys. See <c>MarkSagaShadowAsync</c> on
+    /// <see cref="IBPlusLeafGrain"/> for the full atomic-visibility
+    /// rationale.
+    /// <para>
+    /// Idempotent on identical input. Empty key lists are a no-op;
+    /// <paramref name="transactionId"/> must be non-empty.
+    /// </para>
+    /// </summary>
+    /// <param name="transactionId">Source-side saga id whose prepared mutations affected the listed keys.</param>
+    /// <param name="keys">Keys to shadow. Routed per-leaf internally.</param>
+    Task MarkSagaShadowAsync(Guid transactionId, IReadOnlyList<string> keys);
 
     /// <summary>
     /// Returns volatile in-memory hotness counters for this shard. Counters
@@ -484,4 +534,21 @@ internal interface IShardRootGrain : IGrainWithStringKey
         bool committed,
         IReadOnlyDictionary<string, byte[]>? committedValues = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns this shard's transitive split-forward destination set -
+    /// the union of (a) the in-flight split's
+    /// <see cref="ShardSplitInProgress.ShadowTargetShardIndex"/> when one
+    /// is recorded and (b) every distinct value in
+    /// <see cref="State.ShardRootState.MovedAwaySlots"/>, with this shard's
+    /// own index excluded. Used by the saga's commit-broadcast loop and
+    /// by the cross-cluster replication-apply path to pre-resolve the
+    /// transitive closure of split destinations before fanning out
+    /// terminal marks in parallel, so a deep cascading-split chain does
+    /// not collapse into an unbounded recursive RPC depth on the
+    /// receiving shard root. Returns an empty list when this shard has
+    /// never shadow-forwarded any prepared writes (no in-flight split
+    /// recorded and an empty moved-away-slots map).
+    /// </summary>
+    Task<List<int>> GetSplitForwardTargetsAsync();
 }

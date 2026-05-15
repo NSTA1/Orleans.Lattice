@@ -406,6 +406,24 @@ public interface ILattice : IGrainWithStringKey
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     ValueTask<RoutingInfo> GetRoutingAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Force-refresh overload of <see cref="GetRoutingAsync(CancellationToken)"/>.
+    /// When <paramref name="forceRefresh"/> is <see langword="true"/>, the
+    /// <see cref="LatticeGrain"/> activation's cached <see cref="ShardMap"/>
+    /// and <see cref="RoutingInfo"/> are invalidated before the routing
+    /// snapshot is re-resolved. Used by external coordinators (e.g. the
+    /// atomic-write saga's <c>CaptureShardAsync</c> /
+    /// <c>MarkOneShardAsync</c> retry loops) whose stale-routing recovery
+    /// would otherwise spin against the activation's cached snapshot
+    /// indefinitely - the <see cref="LatticeGrain"/> is a
+    /// <see cref="Orleans.Placement.StatelessWorkerPlacement"/> with
+    /// per-activation routing caching, and its private invalidation hooks
+    /// only fire on the grain's own internal stale-routing throws, so an
+    /// external caller cannot otherwise force the cache to refresh.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    ValueTask<RoutingInfo> GetRoutingAsync(bool forceRefresh, CancellationToken cancellationToken = default);
+
     // ── Diagnostics ─────────────────────────────────────
 
     /// <summary>

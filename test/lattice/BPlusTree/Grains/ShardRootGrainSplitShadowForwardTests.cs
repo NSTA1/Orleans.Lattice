@@ -90,7 +90,7 @@ public class ShardRootGrainSplitShadowForwardTests
 
         var shadowTarget = Substitute.For<IShardRootGrain>();
         shadowTarget.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.CompletedTask);
-        shadowTarget.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>()).Returns(Task.CompletedTask);
+        shadowTarget.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>()).Returns(Task.CompletedTask);
         shadowTarget.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shadowTarget);
@@ -159,7 +159,7 @@ public class ShardRootGrainSplitShadowForwardTests
 
         // The forward must use SetAsync on the destination, NOT MergeManyAsync.
         await h.ShadowTarget.Received().SetAsync("k", Arg.Any<byte[]>());
-        await h.ShadowTarget.DidNotReceive().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>());
+        await h.ShadowTarget.DidNotReceive().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>());
     }
 
     [Test]
@@ -172,7 +172,7 @@ public class ShardRootGrainSplitShadowForwardTests
 
         await h.Grain.SetAsync("k", [1, 2]);
 
-        await h.ShadowTarget.Received().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>());
+        await h.ShadowTarget.Received().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>());
         // SetAsync on the shadow target is acceptable as part of the
         // shadow-forward observed-task tracker (which calls SetAsync on
         // the resize-shadow destination) - but no resize-shadow is
@@ -200,102 +200,98 @@ public class ShardRootGrainSplitShadowForwardTests
             await h.Grain.SetAsync("k", [1, 2]);
         }
 
-        await h.ShadowTarget.Received().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>());
+        await h.ShadowTarget.Received().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>());
     }
 
     // ============================================================================
-    // Fix 3 - terminal-mark forwards to split shadow target
+    // GetSplitForwardTargetsAsync - saga-side flat fan-out target enumeration
     // ============================================================================
+    //
+    // Replaces the previous recursive ForwardSplitTerminalAsync hop on
+    // the receiving shard root. The saga's BroadcastTerminalsAsync
+    // (and the cross-cluster ApplyTxTerminalAsync) now invoke
+    // TerminalFanOutResolver.ResolveTransitiveAsync, which walks each
+    // shard's GetSplitForwardTargetsAsync to BFS-expand TouchedShards
+    // until every transitive split destination is enumerated. The
+    // contract under test here: the shard root must report the union
+    // of (a) the in-flight split's ShadowTargetShardIndex and (b)
+    // every distinct value in MovedAwaySlots, excluding this shard's
+    // own index. AppendTxTerminalAsync no longer performs any
+    // same-physical-tree forward to split destinations - that
+    // responsibility is owned by the saga's flat fan-out.
 
     [Test]
-    public async Task AppendTxTerminalAsync_forwards_to_split_shadow_target_during_shadow_write()
+    public async Task GetSplitForwardTargetsAsync_returns_empty_when_no_split_in_progress_and_no_moved_away_slots()
     {
-        // The saga's terminal mark must reach the split-shadow target
-        // so its pending-tx bucket is drained before the saga's
-        // AtomicWriteGrain calls ITxRegistryGrain.ForgetAsync. Pre-fix
-        // the terminal only forwarded via ForwardShadowAsync (resize-
-        // shadow) which is null during a shard split.
+        var h = CreateHarness(splitInProgress: null);
+
+        var targets = await h.Grain.GetSplitForwardTargetsAsync();
+
+        Assert.That(targets, Is.Empty,
+            "no split in progress and no migrated slots → no split-forward destinations");
+    }
+
+    [Test]
+    public async Task GetSplitForwardTargetsAsync_returns_split_in_progress_target_during_shadow_write_phase()
+    {
         var h = CreateHarness(NewSplit(ShardSplitPhase.BeginShadowWrite));
 
-        var txid = Guid.NewGuid();
-        await h.Grain.AppendTxTerminalAsync(txid, committed: true);
+        var targets = await h.Grain.GetSplitForwardTargetsAsync();
 
-        await h.ShadowTarget.Received().AppendTxTerminalAsync(
-            txid,
-            true,
-            Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
-            Arg.Any<CancellationToken>());
+        Assert.That(targets, Is.EqualTo(new[] { TargetShardIndex }),
+            "an in-flight split exposes its ShadowTargetShardIndex from the BeginShadowWrite phase onward");
     }
 
     [Test]
-    public async Task AppendTxTerminalAsync_forwards_to_split_shadow_target_during_drain()
+    public async Task GetSplitForwardTargetsAsync_returns_split_in_progress_target_during_drain_phase()
     {
         var h = CreateHarness(NewSplit(ShardSplitPhase.Drain));
 
-        var txid = Guid.NewGuid();
-        await h.Grain.AppendTxTerminalAsync(txid, committed: true);
+        var targets = await h.Grain.GetSplitForwardTargetsAsync();
 
-        await h.ShadowTarget.Received().AppendTxTerminalAsync(
-            txid, true, Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
+        Assert.That(targets, Is.EqualTo(new[] { TargetShardIndex }));
     }
 
     [Test]
-    public async Task AppendTxTerminalAsync_forwards_to_split_shadow_target_during_swap()
+    public async Task GetSplitForwardTargetsAsync_returns_split_in_progress_target_during_swap_phase()
     {
         var h = CreateHarness(NewSplit(ShardSplitPhase.Swap));
 
-        var txid = Guid.NewGuid();
-        await h.Grain.AppendTxTerminalAsync(txid, committed: false);
+        var targets = await h.Grain.GetSplitForwardTargetsAsync();
 
-        await h.ShadowTarget.Received().AppendTxTerminalAsync(
-            txid, false, Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
+        Assert.That(targets, Is.EqualTo(new[] { TargetShardIndex }));
     }
 
     [Test]
-    public async Task AppendTxTerminalAsync_forwards_to_split_shadow_target_during_reject()
+    public async Task GetSplitForwardTargetsAsync_returns_split_in_progress_target_during_reject_phase()
     {
-        // Reject phase MUST also forward: a saga whose prepare ran
-        // during BeginShadowWrite/Drain/Swap shadow-forwarded its
-        // prepared writes into the destination's _pendingTx[txid],
-        // and the source's phase can advance to Reject between the
-        // saga's prepare and its terminal broadcast. Without
-        // forwarding here the destination's pending bucket is
-        // orphaned, the saga's TouchedShards list points at the
-        // OLD source shard index (so AtomicWriteGrain's stale-routing
-        // retry loop never re-routes to the destination - the source's
-        // AppendTxTerminalAsync does not throw stale-routing in
-        // Reject), and a reader routed to the destination after the
-        // swap surfaces the destination's pre-saga value
-        // indefinitely. This is the root cause of the chaos test
-        // ShardSplitTopologyTests.Continuous_reader_observes_zero_or
-        // _all_keys_through_mid_saga_shard_split's "round=N: split
-        // (pre=1, post=15, missing=0)" and "round=N: unknown-round
-        // (..., other=1)" failures.
+        // Reject is the most load-bearing phase: a saga whose prepare
+        // ran during BeginShadowWrite/Drain/Swap shadow-forwarded its
+        // prepared writes into the destination's _pendingTx[txid] -
+        // the saga's terminal must still reach the destination after
+        // the source's split has advanced to Reject. Pre-fix the
+        // shard root's recursive forward handled this; post-fix the
+        // saga's flat fan-out walks GetSplitForwardTargetsAsync here
+        // and reaches the destination directly.
         var h = CreateHarness(NewSplit(ShardSplitPhase.Reject));
 
-        var txid = Guid.NewGuid();
-        await h.Grain.AppendTxTerminalAsync(txid, committed: true);
+        var targets = await h.Grain.GetSplitForwardTargetsAsync();
 
-        await h.ShadowTarget.Received().AppendTxTerminalAsync(
-            txid, true, Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
+        Assert.That(targets, Is.EqualTo(new[] { TargetShardIndex }));
     }
 
     [Test]
-    public async Task AppendTxTerminalAsync_forwards_to_destination_recorded_in_MovedAwaySlots_after_split_completes()
+    public async Task GetSplitForwardTargetsAsync_returns_moved_away_destinations_after_split_completes()
     {
         // After a split fully completes the coordinator clears
-        // SplitInProgress, but MovedAwaySlots persists on the source
-        // so the hot-path reject gate continues to throw stale-routing
-        // for moved virtual slots. A saga whose prepare straddled
-        // the split window may now have its terminal arrive AFTER
-        // the source's SplitInProgress was cleared - without
+        // SplitInProgress, but MovedAwaySlots persists on the source.
+        // A saga whose prepare straddled the split window may have its
+        // terminal arrive AFTER SplitInProgress was cleared - without
         // consulting MovedAwaySlots there is no record of the
-        // destination shard index and the destination's pending-tx
-        // bucket is orphaned forever. ForwardSplitTerminalAsync
-        // must therefore also forward to every distinct destination
-        // recorded in MovedAwaySlots so the destination's pending
-        // bucket is flushed regardless of how late the terminal
-        // arrives.
+        // destination shard index and the destination's pending bucket
+        // would be orphaned. GetSplitForwardTargetsAsync therefore
+        // surfaces every distinct destination ever recorded so the
+        // saga's resolver BFS still reaches it.
         var h = CreateHarness(splitInProgress: null);
         h.State.State.MovedAwaySlots = new Dictionary<int, int>
         {
@@ -305,19 +301,19 @@ public class ShardRootGrainSplitShadowForwardTests
         };
         h.State.State.MovedAwayVirtualShardCount = VirtualShardCount;
 
-        var txid = Guid.NewGuid();
-        await h.Grain.AppendTxTerminalAsync(txid, committed: true);
+        var targets = await h.Grain.GetSplitForwardTargetsAsync();
 
-        await h.ShadowTarget.Received().AppendTxTerminalAsync(
-            txid, true, Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
+        Assert.That(targets, Is.EqualTo(new[] { TargetShardIndex }),
+            "duplicate destination entries collapse to a single distinct target");
     }
 
     [Test]
-    public async Task AppendTxTerminalAsync_forwards_to_every_distinct_destination_in_MovedAwaySlots()
+    public async Task GetSplitForwardTargetsAsync_returns_every_distinct_destination_in_moved_away_slots()
     {
-        // Two completed splits, two distinct destinations: the
-        // terminal must reach BOTH so any orphaned pending-tx bucket
-        // on either destination is flushed.
+        // Two completed splits, two distinct destinations: both must
+        // appear in the reported set so the saga's resolver BFS reaches
+        // both. Returned list is sorted ascending for deterministic
+        // caller iteration.
         var h = CreateHarness(splitInProgress: null);
         const int TargetA = 1;
         const int TargetB = 5;
@@ -330,48 +326,246 @@ public class ShardRootGrainSplitShadowForwardTests
         };
         h.State.State.MovedAwayVirtualShardCount = VirtualShardCount;
 
-        // Wire distinct shadow targets so we can assert both received
-        // the forward.
-        var targetA = Substitute.For<IShardRootGrain>();
-        var targetB = Substitute.For<IShardRootGrain>();
-        targetA.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-        targetB.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-        h.Factory.GetGrain<IShardRootGrain>($"{TreeId}/{TargetA}").Returns(targetA);
-        h.Factory.GetGrain<IShardRootGrain>($"{TreeId}/{TargetB}").Returns(targetB);
+        var targets = await h.Grain.GetSplitForwardTargetsAsync();
 
-        var txid = Guid.NewGuid();
-        await h.Grain.AppendTxTerminalAsync(txid, committed: true);
-
-        await targetA.Received().AppendTxTerminalAsync(txid, true, Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
-        await targetB.Received().AppendTxTerminalAsync(txid, true, Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
+        Assert.That(targets, Is.EqualTo(new[] { TargetA, TargetB }));
     }
 
     [Test]
-    public async Task AppendTxTerminalAsync_does_not_forward_to_split_shadow_when_no_split_active()
+    public async Task GetSplitForwardTargetsAsync_excludes_my_shard_index_from_moved_away_targets()
     {
-        // No split in progress → no split-shadow target → no forward.
+        // Defensive: even if state somehow records the source's own
+        // index as a moved-away destination (corruption / partial
+        // recovery), the reported set must exclude it - a saga's
+        // resolver BFS that re-included the source would create a
+        // cycle and stall on the visited-set check, never
+        // discovering any further destinations.
         var h = CreateHarness(splitInProgress: null);
+        h.State.State.MovedAwaySlots = new Dictionary<int, int>
+        {
+            [0] = SourceShardIndex,
+            [1] = TargetShardIndex,
+        };
+        h.State.State.MovedAwayVirtualShardCount = VirtualShardCount;
 
-        var txid = Guid.NewGuid();
-        await h.Grain.AppendTxTerminalAsync(txid, committed: true);
+        var targets = await h.Grain.GetSplitForwardTargetsAsync();
 
-        await h.ShadowTarget.DidNotReceive().AppendTxTerminalAsync(
-            Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
+        Assert.That(targets, Is.EqualTo(new[] { TargetShardIndex }),
+            "this shard's own index is filtered out of moved-away destinations");
     }
 
     [Test]
-    public async Task AppendTxTerminalAsync_does_not_forward_to_split_shadow_with_empty_transaction_id()
+    public async Task GetSplitForwardTargetsAsync_unions_split_in_progress_target_and_moved_away_destinations()
     {
-        // A defensive empty-txid call short-circuits before any
-        // forwarding - verified by both the source's no-op behaviour
-        // and no shadow-target call.
+        // A shard that completed one earlier split (recorded in
+        // MovedAwaySlots) and now started another (recorded in
+        // SplitInProgress) must report BOTH destinations so the saga's
+        // resolver fan-out reaches both.
+        const int PriorTarget = 3;
+        var h = CreateHarness(NewSplit(ShardSplitPhase.Drain));
+        h.State.State.MovedAwaySlots = new Dictionary<int, int>
+        {
+            [0] = PriorTarget,
+        };
+        h.State.State.MovedAwayVirtualShardCount = VirtualShardCount;
+
+        var targets = await h.Grain.GetSplitForwardTargetsAsync();
+
+        Assert.That(targets, Is.EqualTo(new[] { TargetShardIndex, PriorTarget }.OrderBy(i => i).ToArray()));
+    }
+
+    [Test]
+    public async Task AppendTxTerminalAsync_does_not_forward_to_split_destinations()
+    {
+        // Post-fix: AppendTxTerminalAsync no longer recurses into split
+        // destinations. The saga's BroadcastTerminalsAsync
+        // pre-resolves the transitive closure via
+        // TerminalFanOutResolver and fans the terminal out flat in
+        // parallel from the saga layer, so the receiving shard root
+        // performs only its own per-leaf fan-out (and the
+        // resize-shadow ForwardShadowAsync for cross-tree resize) -
+        // never a same-physical-tree split-destination call. This
+        // test pins the bound: a shard with a recorded split must
+        // NOT call AppendTxTerminalAsync on its split destination
+        // when the saga drives a terminal append.
         var h = CreateHarness(NewSplit(ShardSplitPhase.BeginShadowWrite));
 
-        await h.Grain.AppendTxTerminalAsync(Guid.Empty, committed: true);
+        var txid = Guid.NewGuid();
+        await h.Grain.AppendTxTerminalAsync(txid, committed: true);
 
         await h.ShadowTarget.DidNotReceive().AppendTxTerminalAsync(
             Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>());
+    }
+
+    // ============================================================================
+    // Shadow-forward closes Reject phase and post-Complete races
+    // ============================================================================
+    //
+    // Pre-fix, ForwardLocalWriteToShadowIfNeededAsync admitted only
+    // BeginShadowWrite / Drain / Swap. Two races could strand a
+    // mid-saga prepared write on the source shard while the ShardMap
+    // (already swapped at Swap entry) routed readers to the
+    // destination:
+    //
+    //   (A) Swap → Reject mid-write: SetAsync passes
+    //       ThrowIfRejectedForKey while phase is Swap, writes to the
+    //       leaf, then the coordinator advances phase to Reject
+    //       before the shadow-forward call observes it. Pre-fix the
+    //       forward early-returned on the phase gate.
+    //
+    //   (B) Reject → Complete mid-write: same shape, but the
+    //       coordinator clears SplitInProgress and populates
+    //       MovedAwaySlots in the same write. Pre-fix the forward
+    //       early-returned on `sip is null`.
+    //
+    // The tests below race-simulate both transitions by mutating the
+    // persisted state from inside the leaf's SetAsync NSubstitute
+    // callback - which fires between ThrowIfRejectedForKey (already
+    // passed) and ForwardLocalWriteToShadowIfNeededAsync (the helper
+    // under test).
+
+    [Test]
+    public async Task ForwardLocalWriteToShadowIfNeededAsync_forwards_when_phase_advances_to_Reject_mid_write()
+    {
+        // Race (A): SetAsync enters at phase=Swap → passes
+        // ThrowIfRejectedForKey → leaf traversal begins. The leaf
+        // callback mutates SplitInProgress.Phase to Reject,
+        // mimicking the split coordinator advancing the state
+        // machine concurrently. ForwardLocalWriteToShadowIfNeededAsync
+        // must STILL forward the write so the destination shard
+        // observes it before the saga's terminal arrives. Without
+        // the Reject-phase admission in the forward helper, the
+        // destination never sees the write and a reader routed there
+        // post-swap surfaces the pre-saga value.
+        var h = CreateHarness(NewSplit(ShardSplitPhase.Swap));
+        h.Leaf.When(l => l.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()))
+            .Do(_ => h.State.State.SplitInProgress =
+                h.State.State.SplitInProgress! with { Phase = ShardSplitPhase.Reject });
+
+        await h.Grain.SetAsync("k", [1, 2]);
+
+        await h.ShadowTarget.Received().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>());
+    }
+
+    [Test]
+    public async Task ForwardLocalWriteToShadowIfNeededAsync_forwards_via_SetAsync_when_phase_advances_to_Reject_mid_prepared_write()
+    {
+        // Race (A) + prepared context: a saga prepare write that
+        // races the Swap → Reject transition must still forward via
+        // target.SetAsync (NOT MergeManyAsync) so the destination
+        // leaf buckets the value into its own _pendingTx[txid] and
+        // the saga's terminal mark can flip it into Entries
+        // atomically. Pre-fix the prepare write was stranded on the
+        // source and the destination's pending bucket never received
+        // the value, producing a mid-saga visibility split when the
+        // reader routed to the destination via the swapped ShardMap.
+        var h = CreateHarness(NewSplit(ShardSplitPhase.Swap));
+        h.Leaf.When(l => l.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()))
+            .Do(_ => h.State.State.SplitInProgress =
+                h.State.State.SplitInProgress! with { Phase = ShardSplitPhase.Reject });
+
+        var txid = Guid.NewGuid();
+        LatticeTransactionContext.Set(txid);
+        try
+        {
+            using (LatticePreparedContext.BeginScope())
+            {
+                await h.Grain.SetAsync("k", [1, 2]);
+            }
+        }
+        finally
+        {
+            LatticeTransactionContext.Set(Guid.Empty);
+        }
+
+        await h.ShadowTarget.Received().SetAsync("k", Arg.Any<byte[]>());
+        await h.ShadowTarget.DidNotReceive().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>());
+    }
+
+    [Test]
+    public async Task ForwardLocalWriteToShadowIfNeededAsync_forwards_via_MovedAwaySlots_when_split_completes_mid_write()
+    {
+        // Race (B): SetAsync enters at phase=Swap → passes
+        // ThrowIfRejectedForKey while MovedAwaySlots is still empty
+        // → leaf traversal begins. The leaf callback simulates the
+        // coordinator completing the split: clears SplitInProgress
+        // and populates MovedAwaySlots + MovedAwayVirtualShardCount
+        // in the same beat. ForwardLocalWriteToShadowIfNeededAsync
+        // sees `sip is null` but must consult the MovedAwaySlots
+        // fallback and forward to the recorded post-split owner.
+        // Without the fallback the write is stranded on the source
+        // while the ShardMap routes the reader to the new owner.
+        var h = CreateHarness(NewSplit(ShardSplitPhase.Swap));
+        h.Leaf.When(l => l.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()))
+            .Do(_ =>
+            {
+                h.State.State.SplitInProgress = null;
+                h.State.State.MovedAwaySlots = Enumerable.Range(0, VirtualShardCount)
+                    .ToDictionary(i => i, _ => TargetShardIndex);
+                h.State.State.MovedAwayVirtualShardCount = VirtualShardCount;
+            });
+
+        await h.Grain.SetAsync("k", [1, 2]);
+
+        await h.ShadowTarget.Received().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>());
+    }
+
+    [Test]
+    public async Task ForwardLocalWriteToShadowIfNeededAsync_forwards_via_SetAsync_post_complete_when_prepared()
+    {
+        // Race (B) + prepared context: same post-Complete race but
+        // for a saga prepare write. The MovedAwaySlots fallback must
+        // also route through target.SetAsync (not MergeManyAsync) so
+        // prepared semantics are preserved on the destination.
+        var h = CreateHarness(NewSplit(ShardSplitPhase.Swap));
+        h.Leaf.When(l => l.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()))
+            .Do(_ =>
+            {
+                h.State.State.SplitInProgress = null;
+                h.State.State.MovedAwaySlots = Enumerable.Range(0, VirtualShardCount)
+                    .ToDictionary(i => i, _ => TargetShardIndex);
+                h.State.State.MovedAwayVirtualShardCount = VirtualShardCount;
+            });
+
+        var txid = Guid.NewGuid();
+        LatticeTransactionContext.Set(txid);
+        try
+        {
+            using (LatticePreparedContext.BeginScope())
+            {
+                await h.Grain.SetAsync("k", [1, 2]);
+            }
+        }
+        finally
+        {
+            LatticeTransactionContext.Set(Guid.Empty);
+        }
+
+        await h.ShadowTarget.Received().SetAsync("k", Arg.Any<byte[]>());
+        await h.ShadowTarget.DidNotReceive().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>());
+    }
+
+    [Test]
+    public async Task ForwardLocalWriteToShadowIfNeededAsync_does_not_forward_via_MovedAwaySlots_when_slot_maps_to_self()
+    {
+        // Defensive: a corrupt/inconsistent state where MovedAwaySlots
+        // records the source's own index as the post-split owner must
+        // not produce a self-forward (which would recurse onto the
+        // same activation and deadlock). The fallback gate requires
+        // `newOwner != MyShardIndex` before forwarding.
+        var h = CreateHarness(NewSplit(ShardSplitPhase.Swap));
+        h.Leaf.When(l => l.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()))
+            .Do(_ =>
+            {
+                h.State.State.SplitInProgress = null;
+                h.State.State.MovedAwaySlots = Enumerable.Range(0, VirtualShardCount)
+                    .ToDictionary(i => i, _ => SourceShardIndex);  // self!
+                h.State.State.MovedAwayVirtualShardCount = VirtualShardCount;
+            });
+
+        await h.Grain.SetAsync("k", [1, 2]);
+
+        await h.ShadowTarget.DidNotReceive().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>());
+        await h.ShadowTarget.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
     }
 }

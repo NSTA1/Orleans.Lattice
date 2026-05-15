@@ -53,6 +53,37 @@ internal readonly record struct LwwValue<T>
     /// </summary>
     [Id(5)] public VersionVector? VectorClock { get; init; }
 
+    /// <summary>
+    /// <c>true</c> when this entry was authored by a cross-leaf
+    /// migration import (i.e. <c>BPlusLeafGrain.MergeEntriesAsync</c>
+    /// or <c>BPlusLeafGrain.MergeIntoState</c>) and the imported HLC
+    /// won the LWW merge against any prior entry. <c>false</c> for
+    /// every value authored by a local commit, replay, prepared-saga
+    /// drain, or cross-shard backstop write.
+    /// <para>
+    /// This flag is the discriminator the foreground orphan-drain
+    /// guard in <c>BPlusLeafGrain.ApplyTxCommit</c> uses to tell a
+    /// migrated dominator (drain must proceed - the migrated value is
+    /// pre-saga state from a sibling shard) apart from a strictly-
+    /// later sibling-saga drain (drain must skip - a newer saga has
+    /// already drained the same key on this leaf). Both shapes have
+    /// the same HLC ordering (<c>existing &gt; prepared</c>), so the
+    /// discrimination cannot come from HLC comparison alone.
+    /// </para>
+    /// <para>
+    /// The flag rides with the value through every persistence,
+    /// merge, snapshot/restore, bulk-load, and replication path
+    /// because it is a property of the value, not of the leaf. When
+    /// a non-migration write replaces a migrated entry, the
+    /// replacement value's default <c>IsMigrated = false</c> naturally
+    /// clears the marker. When <see cref="Merge(LwwValue{T}, LwwValue{T})"/>
+    /// picks a winner, the winner's flag is preserved verbatim.
+    /// Wire-compatible: legacy persisted state without this field
+    /// decodes to <c>false</c>.
+    /// </para>
+    /// </summary>
+    [Id(6)] public bool IsMigrated { get; init; }
+
     public static LwwValue<T> Create(T value, HybridLogicalClock timestamp) =>
         new() { Value = value, Timestamp = timestamp };
 
@@ -82,8 +113,10 @@ internal readonly record struct LwwValue<T>
     /// the result is resolved deterministically by a stable total order on
     /// (<see cref="Timestamp"/>, <see cref="OriginClusterId"/>, 
     /// <see cref="IsTombstone"/>) so replicas converge regardless of the
-    /// order in which they observe the writes. Commutative, associative,
-    /// idempotent.
+    /// order in which they observe the writes. The winner's
+    /// <see cref="IsMigrated"/> flag rides through verbatim (it is provenance
+    /// metadata that is not part of the identity total order). Commutative,
+    /// associative, idempotent.
     /// </summary>
     public static LwwValue<T> Merge(LwwValue<T> left, LwwValue<T> right)
     {
@@ -104,7 +137,7 @@ internal readonly record struct LwwValue<T>
         if (left.IsTombstone != right.IsTombstone)
             return left.IsTombstone ? left : right;
 
-        // Indistinguishable on every stable identity field - the values are
+        // Quaternary: indistinguishable on every stable identity field - the values are
         // for all CRDT purposes equivalent, so picking left is deterministic.
         return left;
     }

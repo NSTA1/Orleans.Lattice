@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// Unit tests for the adaptive-split surface on <see cref="ShardRootGrain"/>:
 /// lifecycle methods, reject-phase routing, and shadow-write forwarding.
 /// </summary>
-public class ShardRootGrainSplitTests
+public partial class ShardRootGrainSplitTests
 {
     private const string TreeId = "test-tree";
     private const int VirtualShardCount = 16;
@@ -365,5 +365,161 @@ public class ShardRootGrainSplitTests
     {
         var h = CreateHarness();
         Assert.That(h.Grain.IsSlotMovedAway("anything"), Is.False);
+    }
+
+    // ============================================================================
+    // Read-side gate at Phase=Swap (closes the read-vs-scan asymmetry that
+    // produced the persistent source-side orphan identified by chaos tests)
+    //
+    // The scan-side IsSlotMovedAway/TryGetMovedAwaySlot already gate at
+    // Phase ∈ {Swap, Reject, Complete}. Pre-fix the point-read entrypoints
+    // only gated at Phase=Reject, so a stale-routed read landing at the
+    // source during Phase=Swap returned the source's pre-migration
+    // Entries[K]. LeafCacheGrain warmed and served that orphan indefinitely.
+    // The read-side gate at Swap forces LatticeGrain.GetAsyncCore to take
+    // the StaleShardRoutingException, invalidate its shard map, and retry
+    // against the new owner.
+    //
+    // Writes intentionally remain admitted at Swap: their values are
+    // mirrored to the new owner via the shadow-forward pipeline.
+    // ============================================================================
+
+    [Test]
+    public async Task GetAsync_throws_StaleShardRouting_for_moved_slot_during_Swap_phase()
+    {
+        var h = CreateHarness();
+        var movedSlot = ShardMap.GetVirtualSlot("x", VirtualShardCount);
+        await h.Grain.BeginSplitAsync(targetShardIndex: 5, movedSlots: [movedSlot], VirtualShardCount);
+        h.State.State.SplitInProgress = h.State.State.SplitInProgress! with { Phase = ShardSplitPhase.Swap };
+
+        var ex = Assert.ThrowsAsync<StaleShardRoutingException>(async () => await h.Grain.GetAsync("x"));
+        Assert.That(ex!.TargetShardIndex, Is.EqualTo(5));
+        Assert.That(ex.VirtualSlot, Is.EqualTo(movedSlot));
+    }
+
+    [Test]
+    public async Task GetAsync_succeeds_during_Swap_phase_when_slot_not_moved()
+    {
+        var h = CreateHarness();
+        // Pick a slot to move, then craft a key whose slot is NOT in the moved set.
+        var movedSlot = ShardMap.GetVirtualSlot("x", VirtualShardCount);
+        string? otherKey = null;
+        for (int i = 0; i < 1000; i++)
+        {
+            var candidate = $"other-{i}";
+            if (ShardMap.GetVirtualSlot(candidate, VirtualShardCount) != movedSlot)
+            {
+                otherKey = candidate;
+                break;
+            }
+        }
+        Assert.That(otherKey, Is.Not.Null);
+
+        await h.Grain.BeginSplitAsync(targetShardIndex: 5, movedSlots: [movedSlot], VirtualShardCount);
+        h.State.State.SplitInProgress = h.State.State.SplitInProgress! with { Phase = ShardSplitPhase.Swap };
+
+        Assert.DoesNotThrowAsync(async () => await h.Grain.GetAsync(otherKey!));
+    }
+
+    [Test]
+    public async Task GetAsync_admits_during_Drain_phase_for_moved_slot()
+    {
+        // Drain is intentionally NOT gated: the source still authoritatively
+        // serves reads with shadow-writes mirrored to the target. Source-side
+        // reads are correct during Drain.
+        var h = CreateHarness();
+        var movedSlot = ShardMap.GetVirtualSlot("x", VirtualShardCount);
+        await h.Grain.BeginSplitAsync(targetShardIndex: 5, movedSlots: [movedSlot], VirtualShardCount);
+        h.State.State.SplitInProgress = h.State.State.SplitInProgress! with { Phase = ShardSplitPhase.Drain };
+
+        Assert.DoesNotThrowAsync(async () => await h.Grain.GetAsync("x"));
+    }
+
+    [Test]
+    public async Task GetAsync_admits_during_BeginShadowWrite_phase_for_moved_slot()
+    {
+        // BeginShadowWrite is the earliest phase - the source is still the
+        // sole authoritative owner. Reads must be admitted.
+        var h = CreateHarness();
+        var movedSlot = ShardMap.GetVirtualSlot("x", VirtualShardCount);
+        await h.Grain.BeginSplitAsync(targetShardIndex: 5, movedSlots: [movedSlot], VirtualShardCount);
+        Assert.That(h.State.State.SplitInProgress!.Phase, Is.EqualTo(ShardSplitPhase.BeginShadowWrite));
+
+        Assert.DoesNotThrowAsync(async () => await h.Grain.GetAsync("x"));
+    }
+
+    [Test]
+    public async Task GetManyAsync_throws_StaleShardRouting_for_first_moved_slot_during_Swap_phase()
+    {
+        var h = CreateHarness();
+        var movedSlot = ShardMap.GetVirtualSlot("x", VirtualShardCount);
+        await h.Grain.BeginSplitAsync(targetShardIndex: 5, movedSlots: [movedSlot], VirtualShardCount);
+        h.State.State.SplitInProgress = h.State.State.SplitInProgress! with { Phase = ShardSplitPhase.Swap };
+
+        var ex = Assert.ThrowsAsync<StaleShardRoutingException>(async () => await h.Grain.GetManyAsync(new List<string> { "x", "y", "z" }));
+        Assert.That(ex!.TargetShardIndex, Is.EqualTo(5));
+    }
+
+    [Test]
+    public async Task ExistsAsync_throws_StaleShardRouting_for_moved_slot_during_Swap_phase()
+    {
+        var h = CreateHarness();
+        var movedSlot = ShardMap.GetVirtualSlot("x", VirtualShardCount);
+        await h.Grain.BeginSplitAsync(targetShardIndex: 5, movedSlots: [movedSlot], VirtualShardCount);
+        h.State.State.SplitInProgress = h.State.State.SplitInProgress! with { Phase = ShardSplitPhase.Swap };
+
+        var ex = Assert.ThrowsAsync<StaleShardRoutingException>(async () => await h.Grain.ExistsAsync("x"));
+        Assert.That(ex!.TargetShardIndex, Is.EqualTo(5));
+    }
+
+    [Test]
+    public async Task GetWithVersionAsync_throws_StaleShardRouting_for_moved_slot_during_Swap_phase()
+    {
+        var h = CreateHarness();
+        var movedSlot = ShardMap.GetVirtualSlot("x", VirtualShardCount);
+        await h.Grain.BeginSplitAsync(targetShardIndex: 5, movedSlots: [movedSlot], VirtualShardCount);
+        h.State.State.SplitInProgress = h.State.State.SplitInProgress! with { Phase = ShardSplitPhase.Swap };
+
+        var ex = Assert.ThrowsAsync<StaleShardRoutingException>(async () => await h.Grain.GetWithVersionAsync("x"));
+        Assert.That(ex!.TargetShardIndex, Is.EqualTo(5));
+    }
+
+    [Test]
+    public async Task GetRawEntryAsync_throws_StaleShardRouting_for_moved_slot_during_Swap_phase()
+    {
+        var h = CreateHarness();
+        var movedSlot = ShardMap.GetVirtualSlot("x", VirtualShardCount);
+        await h.Grain.BeginSplitAsync(targetShardIndex: 5, movedSlots: [movedSlot], VirtualShardCount);
+        h.State.State.SplitInProgress = h.State.State.SplitInProgress! with { Phase = ShardSplitPhase.Swap };
+
+        var ex = Assert.ThrowsAsync<StaleShardRoutingException>(async () => await h.Grain.GetRawEntryAsync("x"));
+        Assert.That(ex!.TargetShardIndex, Is.EqualTo(5));
+    }
+
+    [Test]
+    public async Task SetAsync_succeeds_during_Swap_phase_for_moved_slot()
+    {
+        // Companion contract: writes at Swap are intentionally admitted
+        // so the source's local write can be shadow-forwarded to the new
+        // owner. Only reads are gated at Swap.
+        var h = CreateHarness();
+        var movedSlot = ShardMap.GetVirtualSlot("x", VirtualShardCount);
+        await h.Grain.BeginSplitAsync(targetShardIndex: 5, movedSlots: [movedSlot], VirtualShardCount);
+        h.State.State.SplitInProgress = h.State.State.SplitInProgress! with { Phase = ShardSplitPhase.Swap };
+
+        Assert.DoesNotThrowAsync(async () => await h.Grain.SetAsync("x", [1, 2, 3]));
+    }
+
+    [Test]
+    public async Task DeleteAsync_succeeds_during_Swap_phase_for_moved_slot()
+    {
+        // Companion contract: deletes (tombstones) at Swap are intentionally
+        // admitted so the tombstone can be shadow-forwarded to the new owner.
+        var h = CreateHarness();
+        var movedSlot = ShardMap.GetVirtualSlot("x", VirtualShardCount);
+        await h.Grain.BeginSplitAsync(targetShardIndex: 5, movedSlots: [movedSlot], VirtualShardCount);
+        h.State.State.SplitInProgress = h.State.State.SplitInProgress! with { Phase = ShardSplitPhase.Swap };
+
+        Assert.DoesNotThrowAsync(async () => await h.Grain.DeleteAsync("x"));
     }
 }

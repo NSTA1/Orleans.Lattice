@@ -220,4 +220,79 @@ public class LwwValueTests
         Assert.That(winner.Value, Is.EqualTo("new"));
         Assert.That(winner.VectorClock, Is.SameAs(newerVc));
     }
+
+    [Test]
+    public void IsMigrated_defaults_to_false()
+    {
+        var v = LwwValue<string>.Create("x", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
+        Assert.That(v.IsMigrated, Is.False);
+    }
+
+    [Test]
+    public void With_expression_sets_IsMigrated()
+    {
+        var v = LwwValue<string>.Create("x", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 })
+            with { IsMigrated = true };
+        Assert.That(v.IsMigrated, Is.True);
+    }
+
+    [Test]
+    public void Merge_preserves_IsMigrated_flag_of_winning_value_when_winner_is_migrated()
+    {
+        // Migrated entry has the higher HLC (the realistic shape - a cross-leaf
+        // migration imports the source's high cumulative HLC and wins the merge
+        // against a local low-HLC entry).
+        var local = LwwValue<string>.Create("local", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
+        var migrated = LwwValue<string>.Create("migrated", new HybridLogicalClock { WallClockTicks = 2, Counter = 0 })
+            with { IsMigrated = true };
+
+        var winner = LwwValue<string>.Merge(local, migrated);
+        Assert.That(winner.Value, Is.EqualTo("migrated"));
+        Assert.That(winner.IsMigrated, Is.True, "Winner is the migrated value; its IsMigrated flag must ride through.");
+    }
+
+    [Test]
+    public void Merge_preserves_IsMigrated_flag_of_winning_value_when_winner_is_local()
+    {
+        // Foreground commit at a higher HLC than the existing migrated entry -
+        // the foreground value wins and its IsMigrated=false naturally clears
+        // the marker (this is the mechanism by which non-migration writes
+        // "clear" stale migration provenance under Option A).
+        var migrated = LwwValue<string>.Create("migrated", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 })
+            with { IsMigrated = true };
+        var local = LwwValue<string>.Create("local", new HybridLogicalClock { WallClockTicks = 2, Counter = 0 });
+
+        var winner = LwwValue<string>.Merge(migrated, local);
+        Assert.That(winner.Value, Is.EqualTo("local"));
+        Assert.That(winner.IsMigrated, Is.False, "Winner is the foreground value; its default IsMigrated=false replaces the prior marker.");
+    }
+
+    [Test]
+    public void Merge_is_commutative_with_respect_to_IsMigrated()
+    {
+        // Order-independence: feeding (a,b) and (b,a) must produce the same
+        // winner including the IsMigrated bit, otherwise replicas could diverge
+        // on the provenance signal.
+        var migrated = LwwValue<string>.Create("migrated", new HybridLogicalClock { WallClockTicks = 2, Counter = 0 })
+            with { IsMigrated = true };
+        var local = LwwValue<string>.Create("local", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
+
+        var leftFirst = LwwValue<string>.Merge(migrated, local);
+        var rightFirst = LwwValue<string>.Merge(local, migrated);
+
+        Assert.That(leftFirst, Is.EqualTo(rightFirst));
+        Assert.That(leftFirst.IsMigrated, Is.True);
+        Assert.That(rightFirst.IsMigrated, Is.True);
+    }
+
+    [Test]
+    public void Merge_is_idempotent_with_respect_to_IsMigrated()
+    {
+        var migrated = LwwValue<string>.Create("migrated", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 })
+            with { IsMigrated = true };
+
+        var self = LwwValue<string>.Merge(migrated, migrated);
+        Assert.That(self, Is.EqualTo(migrated));
+        Assert.That(self.IsMigrated, Is.True);
+    }
 }

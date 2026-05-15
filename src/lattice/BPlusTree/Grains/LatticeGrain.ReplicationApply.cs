@@ -451,29 +451,70 @@ internal sealed partial class LatticeGrain
         // LatticeHlcOverrideContext.Current and returns the override
         // unchanged - preserving the cross-cluster ordering invariant
         // on receiver replays.
+        //
+        // Pre-resolve the transitive split-forward closure of
+        // shardIndex via TerminalFanOutResolver: under cascading
+        // mid-saga splits on the receiver cluster, the inbound
+        // record's authoring-cluster shardIndex may have further
+        // split locally. The resolver BFS-expands the seed against
+        // each shard's GetSplitForwardTargetsAsync so the terminal
+        // mark reaches every destination of every chain, in a single
+        // parallel hop - replacing the previous recursive forward
+        // that compounded RPC depth into Orleans' response timeout.
         using (LatticeOriginContext.With(originClusterId))
         using (LatticeHlcOverrideContext.With(terminalHlc))
         {
             var (physicalTreeId, _) = await GetRoutingAsync();
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
-            try
+            var targets = await TerminalFanOutResolver.ResolveTransitiveAsync(
+                grainFactory,
+                physicalTreeId,
+                new[] { shardIndex },
+                cancellationToken);
+
+            var tasks = new List<Task>(targets.Count);
+            foreach (var target in targets)
             {
-                await shard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
+                tasks.Add(ApplyTerminalToShardAsync(
+                    physicalTreeId, target, transactionId, committed, cancellationToken));
             }
-            catch (StaleShardRoutingException) when (InvalidateShardMap())
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var (retryPhysicalTreeId, _) = await GetRoutingAsync();
-                var retryShard = grainFactory.GetGrain<IShardRootGrain>($"{retryPhysicalTreeId}/{shardIndex}");
-                await retryShard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
-            }
-            catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var (retryPhysicalTreeId, _) = await GetRoutingAsync();
-                var retryShard = grainFactory.GetGrain<IShardRootGrain>($"{retryPhysicalTreeId}/{shardIndex}");
-                await retryShard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
-            }
+            await Task.WhenAll(tasks);
+        }
+    }
+
+    /// <summary>
+    /// Per-shard terminal apply with a single stale-routing /
+    /// stale-tree-alias retry, preserving the bounded retry semantics
+    /// the cross-cluster replication apply path has always used for
+    /// terminal marks. The resolver in
+    /// <see cref="ApplyTxTerminalAsync"/> pre-fans the closure across
+    /// every transitively-discovered destination, so each call here
+    /// targets exactly one shard.
+    /// </summary>
+    private async Task ApplyTerminalToShardAsync(
+        string physicalTreeId,
+        int shardIndex,
+        Guid transactionId,
+        bool committed,
+        CancellationToken cancellationToken)
+    {
+        var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+        try
+        {
+            await shard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
+        }
+        catch (StaleShardRoutingException) when (InvalidateShardMap())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (retryPhysicalTreeId, _) = await GetRoutingAsync();
+            var retryShard = grainFactory.GetGrain<IShardRootGrain>($"{retryPhysicalTreeId}/{shardIndex}");
+            await retryShard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
+        }
+        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (retryPhysicalTreeId, _) = await GetRoutingAsync();
+            var retryShard = grainFactory.GetGrain<IShardRootGrain>($"{retryPhysicalTreeId}/{shardIndex}");
+            await retryShard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
         }
     }
 }

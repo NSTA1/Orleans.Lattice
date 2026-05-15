@@ -317,6 +317,15 @@ internal sealed partial class BPlusLeafGrain
 
     private void MergeIntoProjection(string key, LwwValue<byte[]> incoming)
     {
+        // Replay-path projection writes are non-migration: they
+        // mirror the foreground commit / drain / backstop semantics
+        // (cross-shard migrations are persisted via PersistAsync, not
+        // through the WAL, so they never re-emerge here at replay
+        // time). The incoming value carries IsMigrated=false by default
+        // (every WAL-authored LwwValue is non-migration), so when it
+        // wins the merge inside StoreEntry it naturally clears any
+        // stale migration marker, keeping replay's post-state bit-
+        // identical to foreground's.
         StoreEntry(key, incoming);
     }
 

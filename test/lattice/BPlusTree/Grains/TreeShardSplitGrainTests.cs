@@ -259,7 +259,14 @@ public partial class TreeShardSplitGrainTests
         await grain.RunSplitPassAsync();
 
         await registry.Received(1).SetShardMapAsync(TreeId, Arg.Any<ShardMap>());
-        await source.Received(1).EnterRejectPhaseAsync();
+        // EnterRejectPhaseAsync is called twice in a full pass:
+        //   1. Inside SwapAsync, BEFORE the registry's shard-map flip, to
+        //      close the stale-routing window (see SwapAsync's ordering
+        //      invariant). EnterRejectPhaseAsync is documented as idempotent
+        //      on the source-side so the second call is a no-op.
+        //   2. Inside EnterRejectAsync, the coordinator phase that follows
+        //      Swap; preserved verbatim for crash-recovery composition.
+        await source.Received(2).EnterRejectPhaseAsync();
         await source.Received(1).CompleteSplitAsync();
         Assert.That(state.State.InProgress, Is.False);
         Assert.That(state.State.Complete, Is.True);
