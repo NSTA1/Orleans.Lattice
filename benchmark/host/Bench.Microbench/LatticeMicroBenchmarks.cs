@@ -486,7 +486,7 @@ public class LatticeMicroBenchmarks
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("leaf", id.ToString("N")));
         var state = new FakePersistentState<LeafNodeState>();
-        var leaf = new BPlusLeafGrain(ctx, state, _grainFactory, _optionsResolver, _observers);
+        var leaf = new BPlusLeafGrain(ctx, state, _grainFactory, _optionsResolver, _observers, new DefaultLatticeOriginClusterIdResolver());
         _leaves[id] = leaf;
         return leaf;
     }
@@ -523,7 +523,7 @@ public class LatticeMicroBenchmarks
         // to recover the primary leaf id, so the key must be the leaf-id
         // round-trippable string.
         ctx.GrainId.Returns(GrainId.Create("leafcache", leafIdString));
-        var cache = new LeafCacheGrain(ctx, _grainFactory, _optionsMonitor);
+        var cache = new LeafCacheGrain(ctx, _grainFactory, _optionsMonitor, new DefaultLatticeOriginClusterIdResolver());
         _leafCaches[leafIdString] = cache;
         return cache;
     }

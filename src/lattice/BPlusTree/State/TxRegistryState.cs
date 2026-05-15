@@ -80,4 +80,59 @@ internal sealed class TxRegistryState
     /// </para>
     /// </summary>
     [Id(2)] public Dictionary<Guid, DateTimeOffset> ForgottenAt { get; set; } = [];
+
+    /// <summary>
+    /// Per-saga tally of distinct source-cluster shard indices whose
+    /// cross-cluster terminal records have arrived on this receiver.
+    /// Used by <c>LatticeGrain.ApplyTxTerminalAsync</c> to gate the
+    /// per-tree linearization mark
+    /// (<see cref="Decisions"/> [txid] = commit/abort) until every
+    /// per-source-shard terminal of the saga has been observed, so a
+    /// reader concurrent with cross-cluster replication of a multi-shard
+    /// <c>SetManyAtomicAsync</c> never observes a strict subset of the
+    /// saga's keys at the new value. The tally is keyed by
+    /// <c>(receiver-side TreeId, txid, sourceShardIndex)</c>; the
+    /// receiver-side shard layout is independent of the source's
+    /// (adaptive splits and operator resize on either side can diverge
+    /// the counts) and the gate only consults the producer-stamped
+    /// source-side count.
+    /// <para>
+    /// Cleared by <c>ForgetAsync</c> alongside the decision entry once
+    /// the saga's terminal fan-out is complete, so the persisted
+    /// footprint stays bounded.
+    /// </para>
+    /// <para>
+    /// Wire-compatibility: legacy persisted state with no Id-3 slot
+    /// decodes to an empty dictionary, which is the correct semantic
+    /// default (no terminals tallied yet).
+    /// </para>
+    /// </summary>
+    [Id(3)] public Dictionary<Guid, HashSet<int>> TerminalArrivals { get; set; } = [];
+
+    /// <summary>
+    /// Per-saga snapshot of the producer-stamped
+    /// <c>AtomicShardCount</c> (largest value observed across every
+    /// terminal record of the saga that has arrived on this receiver
+    /// so far). Used together with <see cref="TerminalArrivals"/> to
+    /// decide whether a per-tree linearization mark is yet safe to
+    /// flip: a saga whose tallied terminal count meets or exceeds
+    /// <c>ExpectedTerminals[txid]</c> has had every per-source-shard
+    /// terminal observed, so the gate flips and the per-tree
+    /// <see cref="Decisions"/> entry is recorded.
+    /// <para>
+    /// Adopts <c>max(seen, incoming)</c> on each arrival so that a
+    /// producer-side mid-saga shadow-forward split (which grows the
+    /// source-side touched-shard set between successive per-shard
+    /// terminals) is absorbed without ever under-counting. A receiver
+    /// that observes a fully-tallied saga and later receives a
+    /// duplicate-delivery retry of one of its terminals is a safe
+    /// no-op (the registry's decision-repeat path is idempotent).
+    /// </para>
+    /// <para>
+    /// Wire-compatibility: legacy persisted state with no Id-4 slot
+    /// decodes to an empty dictionary, which is the correct semantic
+    /// default (no expected-terminal count recorded yet).
+    /// </para>
+    /// </summary>
+    [Id(4)] public Dictionary<Guid, int> ExpectedTerminals { get; set; } = [];
 }

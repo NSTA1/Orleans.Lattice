@@ -125,6 +125,131 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// callers can use it as a deterministic broadcast target list.
     /// </summary>
     Task<IReadOnlyList<int>> GetParticipantsAsync(Guid txid);
+
+    /// <summary>
+    /// Records the arrival of a single cross-cluster terminal record
+    /// for the saga identified by <paramref name="txid"/>. Used by the
+    /// receiver-side replication apply path
+    /// (<see cref="IReplicationApplyGrain.ApplyTxTerminalAsync"/>) to
+    /// gate the per-tree linearization mark until every per-source-shard
+    /// terminal of the saga has been observed, so a reader concurrent
+    /// with cross-cluster replication of a multi-shard
+    /// <c>SetManyAtomicAsync</c> never observes a strict subset of the
+    /// saga's keys at the new value.
+    /// <para>
+    /// Idempotent on duplicate-delivery retries: a repeat call with the
+    /// same <paramref name="sourceShardIndex"/> is a no-op and does not
+    /// double-count the arrival. Adopts
+    /// <c>max(seen, expectedShardCount)</c> for the saga's expected
+    /// total so a producer-side mid-saga shadow-forward split that
+    /// grows the touched-shard set between successive per-shard
+    /// terminals never under-counts. The same gate applies to commit
+    /// and abort terminals - a saga's outcome is either committed by
+    /// every per-source-shard terminal or aborted by every
+    /// per-source-shard terminal; a mixed-outcome arrival sequence
+    /// throws <see cref="InvalidOperationException"/> via the same
+    /// invariant that protects <see cref="MarkCommittedAsync"/> /
+    /// <see cref="MarkAbortedAsync"/>.
+    /// </para>
+    /// <para>
+    /// When <paramref name="expectedShardCount"/> is <c>0</c> (a legacy
+    /// producer that pre-dates this gate), the call short-circuits to
+    /// the legacy "mark on first terminal" semantic by reporting the
+    /// arrival as <see cref="TerminalTallyResult.IsFinal"/> immediately
+    /// - preserving today's best-effort cross-cluster atomic-visibility
+    /// contract during rolling upgrades.
+    /// </para>
+    /// </summary>
+    /// <param name="txid">Source saga's transaction id.</param>
+    /// <param name="sourceShardIndex">
+    /// The authoring-cluster's shard index from which this terminal was
+    /// shipped. Used as the dedup key for the tally - the receiver's
+    /// own shard layout is irrelevant.
+    /// </param>
+    /// <param name="committed">
+    /// <c>true</c> for commit terminals, <c>false</c> for abort
+    /// terminals.
+    /// </param>
+    /// <param name="expectedShardCount">
+    /// The producer-stamped <c>AtomicShardCount</c> on the incoming
+    /// terminal record. <c>0</c> means the producer did not stamp a
+    /// gate (legacy peer); a positive value names the total number of
+    /// distinct source-shard terminals the saga shipped.
+    /// </param>
+    Task<TerminalTallyResult> RecordTerminalArrivalAsync(
+        Guid txid,
+        int sourceShardIndex,
+        bool committed,
+        int expectedShardCount);
+}
+
+/// <summary>
+/// Outcome of a single
+/// <see cref="ITxRegistryGrain.RecordTerminalArrivalAsync(Guid, int, bool, int)"/>
+/// call: did this arrival complete the saga's per-source-shard tally,
+/// and (when it did) what outcome should the receiver flip the per-tree
+/// linearization mark to. Pure value type - the registry has already
+/// persisted the tally state by the time this returns, so a crash
+/// between the registry update and the caller's subsequent fan-out is
+/// safe (the tally remains gated; a re-delivery of any terminal will
+/// re-evaluate and re-issue the flip).
+/// </summary>
+[GenerateSerializer]
+[Alias(TypeAliases.TerminalTallyResult)]
+[Immutable]
+public readonly record struct TerminalTallyResult
+{
+    /// <summary>
+    /// <c>true</c> when this arrival was the final per-source-shard
+    /// terminal of the saga (i.e. the tallied distinct source-shard
+    /// count met or exceeded the producer-stamped
+    /// <c>AtomicShardCount</c>), <i>or</i> when the producer did not
+    /// stamp a gate (<c>expectedShardCount == 0</c>, legacy producer)
+    /// so the gate falls back to "mark on first terminal" semantics.
+    /// The receiver's <c>ApplyTxTerminalAsync</c> consults this flag
+    /// to decide whether to flip the per-tree linearization mark to
+    /// <see cref="FinalOutcome"/>; when <c>false</c>, the receiver
+    /// records the arrival but does not flip the mark, leaving the
+    /// saga's pending bucket invisible to readers until the remaining
+    /// per-shard terminals arrive.
+    /// </summary>
+    [Id(0)] public bool IsFinal { get; init; }
+
+    /// <summary>
+    /// The saga outcome stamped on the most recent arrival, or
+    /// <see cref="TxStatus.InFlight"/> when no arrival has been
+    /// recorded. Meaningful only when <see cref="IsFinal"/> is
+    /// <c>true</c> - the caller flips
+    /// <see cref="ITxRegistryGrain.MarkCommittedAsync(Guid)"/> /
+    /// <see cref="ITxRegistryGrain.MarkAbortedAsync(Guid)"/> from this
+    /// value.
+    /// </summary>
+    [Id(1)] public TxStatus FinalOutcome { get; init; }
+
+    /// <summary>
+    /// The full set of source-shard indices observed for this saga so
+    /// far, including the current arrival. Sorted ascending so the
+    /// caller can use the result deterministically. Populated only when
+    /// <see cref="IsFinal"/> is <c>true</c>; an in-progress tally
+    /// returns an empty list to avoid shipping interim state that the
+    /// caller will not act on. When the legacy fast path fires
+    /// (<c>expectedShardCount == 0</c>), the list contains only the
+    /// current arrival's <c>sourceShardIndex</c> - matching the
+    /// pre-gate one-terminal-per-arrival fan-out semantic.
+    /// <para>
+    /// Receivers use this list to drive the per-shard terminal fan-out:
+    /// the per-leaf pending-bucket flip MUST be deferred until every
+    /// per-source-shard terminal has arrived, because once a leaf
+    /// drains its pending bucket the bucket is no longer there for
+    /// <c>ResolvePendingStatusAsync</c> to dial back through the
+    /// registry. Gating the fan-out on <see cref="IsFinal"/> means a
+    /// reader concurrent with the saga's replication observes either
+    /// the pre-saga value (registry says InFlight, leaf still has a
+    /// pending bucket) or every key at the post-saga value (registry
+    /// flipped, leaves drained) - never a split view.
+    /// </para>
+    /// </summary>
+    [Id(2)] public IReadOnlyList<int> ObservedSourceShards { get; init; }
 }
 
 /// <summary>

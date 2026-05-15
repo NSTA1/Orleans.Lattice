@@ -18,6 +18,7 @@ internal static class TypeAliases
     internal const string OrSet = "ol.ors";
     internal const string OrSetDot = "ol.osd";
     internal const string PnCounter = "ol.pnc";
+    internal const string LeafDeliveryCursor = "ol.ldc";
 
     // BPlusTree State
     internal const string ChildEntry = "ol.ce";
@@ -84,6 +85,7 @@ internal static class TypeAliases
     internal const string AtomicPreValue = "ol.apv";
     internal const string TxRegistryState = "ol.txr";
     internal const string TxStatus = "ol.txo";
+    internal const string TerminalTallyResult = "ol.ttr";
 
     // Stateful cursor / iterator
     internal const string LatticeCursorKind = "ol.lck";

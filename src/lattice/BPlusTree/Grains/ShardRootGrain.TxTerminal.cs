@@ -203,6 +203,17 @@ internal sealed partial class ShardRootGrain
                 // filter on the receiving leaf, operator tooling, and
                 // cross-cluster receivers) reads the typed slot.
                 ShardIndex = ShardIndex,
+                // Saga touched-shard count for receiver-side
+                // cross-cluster all-or-nothing visibility gating.
+                // Stamped from the ambient set by the saga
+                // coordinator's MarkOneShardAsync. Defaults to 0 when
+                // the ambient is unset - e.g. a unit-test driving
+                // AppendTxTerminalAsync directly without going through
+                // the saga, or a legacy in-flight path that pre-dates
+                // this gate. A 0 falls back to the legacy "mark on
+                // first terminal" semantics on the receiver, matching
+                // pre-gate behaviour.
+                AtomicShardCount = LatticeAtomicShardCountContext.Current ?? 0,
             };
 
             await writer.AppendAsync(terminal, cancellationToken);

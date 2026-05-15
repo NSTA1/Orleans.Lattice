@@ -65,7 +65,7 @@ public partial class BPlusLeafGrainTests
             maxLeafKeys: 128,
             shardCount: 1,
             factory: grainFactory);
-        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers());
+        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
         return (grain, state, coordinator, reporter);
     }
 

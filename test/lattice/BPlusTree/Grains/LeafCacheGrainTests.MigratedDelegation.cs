@@ -55,7 +55,7 @@ public partial class LeafCacheGrainTests
         // NEXT read for this key, the cache must NOT serve the migrated
         // value from _cache - it must delegate to the primary leaf so
         // the leaf's shadow-marker / TxRegistry guard runs.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MigratedDeltaWith("k1", Encoding.UTF8.GetBytes("pre-saga")));
         leaf.GetAsync("k1").Returns(Encoding.UTF8.GetBytes("post-saga"));
 
@@ -69,7 +69,7 @@ public partial class LeafCacheGrainTests
         // No new delta on the second call. If the cache short-circuits
         // on _cache, it returns "pre-saga". The correct behavior is to
         // delegate to leaf.GetAsync, which returns "post-saga".
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         var result = await grain.GetAsync("k1");
 
@@ -88,7 +88,7 @@ public partial class LeafCacheGrainTests
         var (grain, leaf) = CreateGrain();
 
         // Prime the cache with a migrated entry.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MigratedDeltaWith("k1", Encoding.UTF8.GetBytes("pre-saga")));
         await grain.GetAsync("k1");
 
@@ -98,7 +98,7 @@ public partial class LeafCacheGrainTests
         // cache MUST propagate that exception (it must not swallow it
         // and serve the cached pre-saga value), so the LatticeGrain
         // retry loop can re-fan against a fresh routing snapshot.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
         leaf.GetAsync("k1").Returns<byte[]?>(_ => throw new StaleShardRoutingException(-1, -1, -1));
 
         Assert.That(async () => await grain.GetAsync("k1"),
@@ -129,7 +129,7 @@ public partial class LeafCacheGrainTests
             },
             Version = version
         };
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(mixed);
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(mixed);
         leaf.GetManyAsync(Arg.Any<List<string>>())
             .Returns(_ => new Dictionary<string, byte[]>
             {
@@ -142,7 +142,7 @@ public partial class LeafCacheGrainTests
         // Second call: no further delta. The non-migrated key must
         // serve from _cache. The migrated key must NOT - it must
         // delegate to the primary leaf so the shadow guard runs.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         var result = await grain.GetManyAsync(new List<string> { "migrated-k", "live-k" });
 
@@ -163,7 +163,7 @@ public partial class LeafCacheGrainTests
     {
         var (grain, leaf) = CreateGrain();
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MigratedDeltaWith("migrated-k", Encoding.UTF8.GetBytes("pre-saga")));
         // The leaf returns an empty dictionary for the migrated key -
         // a legitimate outcome when the destination has applied a
@@ -176,7 +176,7 @@ public partial class LeafCacheGrainTests
         // Prime the cache.
         await grain.GetManyAsync(new List<string> { "migrated-k" });
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         var result = await grain.GetManyAsync(new List<string> { "migrated-k" });
 
@@ -189,7 +189,7 @@ public partial class LeafCacheGrainTests
     {
         var (grain, leaf) = CreateGrain();
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MigratedDeltaWith("k1", Encoding.UTF8.GetBytes("pre-saga")));
         // The leaf's shadow guard reports the key as absent after
         // saga commit (the destination tombstoned the migrated row,
@@ -198,7 +198,7 @@ public partial class LeafCacheGrainTests
 
         await grain.ExistsAsync("k1");
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         var exists = await grain.ExistsAsync("k1");
 
@@ -220,7 +220,7 @@ public partial class LeafCacheGrainTests
         var followUpHlc = HybridLogicalClock.Tick(migratedHlc);
         var v1 = new VersionVector();
         v1.Tick("primary");
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(new StateDelta
             {
                 Entries = new Dictionary<string, LwwValue<byte[]>>
@@ -238,7 +238,7 @@ public partial class LeafCacheGrainTests
         var v2 = new VersionVector();
         v2.Tick("primary");
         v2.Tick("primary");
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(new StateDelta
             {
                 Entries = new Dictionary<string, LwwValue<byte[]>>
@@ -277,7 +277,7 @@ public partial class LeafCacheGrainTests
         var (grain, leaf) = CreateGrain();
 
         leaf.GetPendingKeysAsync().Returns(new List<string> { "k1" });
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MigratedDeltaWith("k1", Encoding.UTF8.GetBytes("pre-saga")));
         leaf.GetAsync("k1").Returns(Encoding.UTF8.GetBytes("post-saga"));
 
@@ -299,7 +299,7 @@ public partial class LeafCacheGrainTests
         var (grain, leaf) = CreateGrain();
 
         leaf.GetPendingKeysAsync().Returns(new List<string> { "k1" });
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MigratedDeltaWith("k1", Encoding.UTF8.GetBytes("pre-saga")));
         leaf.GetManyAsync(Arg.Any<List<string>>())
             .Returns(_ => new Dictionary<string, byte[]>
@@ -327,7 +327,7 @@ public partial class LeafCacheGrainTests
         // delegate the same key twice and double the leaf round-trip.
         var (grain, leaf) = CreateGrain();
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MigratedDeltaWith("k1", Encoding.UTF8.GetBytes("pre")));
         leaf.GetManyAsync(Arg.Any<List<string>>())
             .Returns(_ => new Dictionary<string, byte[]>
@@ -338,7 +338,7 @@ public partial class LeafCacheGrainTests
         // Prime the cache so k1 is recorded as IsMigrated=true.
         await grain.GetManyAsync(new List<string> { "k1" });
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
         leaf.ClearReceivedCalls();
 
         var result = await grain.GetManyAsync(new List<string> { "k1", "k1", "k1" });
@@ -364,7 +364,7 @@ public partial class LeafCacheGrainTests
         var tombstoneHlc = HybridLogicalClock.Tick(new HybridLogicalClock());
         var version = new VersionVector();
         version.Tick("primary");
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(new StateDelta
             {
                 Entries = new Dictionary<string, LwwValue<byte[]>>
@@ -380,7 +380,7 @@ public partial class LeafCacheGrainTests
         // Prime the cache.
         await grain.GetAsync("k1");
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
         leaf.ClearReceivedCalls();
 
         var result = await grain.GetAsync("k1");

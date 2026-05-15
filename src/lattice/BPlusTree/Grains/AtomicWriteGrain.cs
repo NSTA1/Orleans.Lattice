@@ -1064,6 +1064,18 @@ internal sealed class AtomicWriteGrain(
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG broadcast-mark-shard] op={OperationKey} tx={transactionId} shardIndex={shardIndex} committed={committed} subsetKeys=[{(committedValues is null ? "<null>" : string.Join(",", committedValues.Keys))}]");
 #endif
+        // Stamp the saga's authoritative touched-shard count on the
+        // ambient request context so ShardRootGrain.AppendTxTerminalAsync
+        // reads it while assembling the terminal LatticeMutation and
+        // stamps LatticeMutation.AtomicShardCount. This is the
+        // receiver-side cross-cluster atomic-visibility gate: the
+        // remote cluster's ApplyTxTerminalAsync holds back the
+        // per-tree TxRegistry mark until it has tallied this many
+        // distinct source-shard terminal arrivals. The value is read
+        // fresh from state.State.TouchedShards.Count each call so
+        // late-pass shards observe the post-union count.
+        using var shardCountScope = LatticeAtomicShardCountContext.With(state.State.TouchedShards.Count);
+
         // The catch blocks unconditionally fire so the original
         // stale-routing throw surfaces to the caller once the wall-clock
         // budget elapses; a when-filter on the catch could race against

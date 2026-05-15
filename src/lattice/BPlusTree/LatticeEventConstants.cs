@@ -133,6 +133,21 @@ public static class LatticeEventConstants
     internal const string AtomicBatchRequestContextKey = "ol.batch";
 
     /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry the saga's
+    /// authoritative touched-shard count from the
+    /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> coordinator
+    /// down into the per-shard terminal-mutation publish helpers, so
+    /// each emitted <see cref="LatticeMutation"/> carries
+    /// <see cref="LatticeMutation.AtomicShardCount"/> for the
+    /// receiver-side cross-cluster all-or-nothing visibility gate.
+    /// Stamped only at terminal-broadcast time; prepare-phase per-key
+    /// writes and non-saga single-key writes leave the entry absent
+    /// so the publish helpers stamp <c>0</c> verbatim. Internal - set
+    /// through <see cref="LatticeAtomicShardCountContext"/>.
+    /// </summary>
+    internal const string AtomicShardCountRequestContextKey = "ol.shct";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to flag the current logical
     /// call as a saga prepare-phase write. When set to <c>true</c>, the
     /// leaf grain's commit pipeline routes the mutation into the per-leaf

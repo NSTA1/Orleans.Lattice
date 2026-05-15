@@ -239,6 +239,25 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// <param name="shardIndex">The source-shard index the terminal applies to. Maps to the receiver's same-numbered shard root.</param>
     /// <param name="terminalHlc">The HLC the source cluster stamped on the terminal record. Re-stamped verbatim on the receiver via the ambient HLC override.</param>
     /// <param name="originClusterId">The id of the source cluster that authored the terminal.</param>
+    /// <param name="atomicShardCount">
+    /// Producer-stamped count of distinct source-shard terminals the
+    /// enclosing saga ships - i.e. the size of the saga's authoritative
+    /// participant union at terminal-broadcast time. The receiver uses
+    /// this value to gate the per-tree
+    /// <see cref="ITxRegistryGrain"/> linearization mark until every
+    /// per-source-shard terminal of the saga has been observed, so a
+    /// reader concurrent with cross-cluster replication of a
+    /// multi-shard <c>SetManyAtomicAsync</c> never observes a strict
+    /// subset of the saga's keys at the new value. Defaults to
+    /// <c>0</c>, which selects the legacy "mark on first terminal"
+    /// semantic - the same behaviour as a legacy producer that does
+    /// not stamp the gate. Production receivers
+    /// (<c>ReplicationApplier.ApplyTxTerminalCoreAsync</c>) always pass
+    /// the producer-stamped <see cref="WalRecord.AtomicShardCount"/>
+    /// verbatim; the default exists for back-compat with unit tests
+    /// that exercise the apply seam directly without going through the
+    /// replication wire.
+    /// </param>
     /// <param name="cancellationToken">Token to cancel the call.</param>
     Task ApplyTxTerminalAsync(
         Guid transactionId,
@@ -246,5 +265,6 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
         int shardIndex,
         HybridLogicalClock terminalHlc,
         string originClusterId,
+        int atomicShardCount = 0,
         CancellationToken cancellationToken = default);
 }

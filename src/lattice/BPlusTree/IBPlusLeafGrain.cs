@@ -238,6 +238,39 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion);
 
     /// <summary>
+    /// Returns a <see cref="StateDelta"/> containing every entry the
+    /// caller has not yet observed, addressed by an activation-scoped
+    /// <see cref="LeafDeliveryCursor"/> rather than the LWW
+    /// <see cref="VersionVector"/>. The cursor decouples delivery from
+    /// LWW HLC ordering so cross-cluster applies whose source HLC is
+    /// below the destination leaf's published clock are still
+    /// delivered correctly.
+    /// <para>
+    /// Behavior:
+    /// <list type="bullet">
+    ///   <item>
+    ///     If <paramref name="sinceCursor"/>'s
+    ///     <see cref="LeafDeliveryCursor.Epoch"/> does not match the
+    ///     leaf activation's epoch (i.e. <see cref="LeafDeliveryCursor.Empty"/>
+    ///     from a fresh cache, or a stale cursor from a previous
+    ///     leaf activation), the leaf returns a full snapshot of every
+    ///     live entry and stamps <see cref="StateDelta.DeliveryCursor"/>
+    ///     with the leaf's current cursor for the caller to adopt.
+    ///   </item>
+    ///   <item>
+    ///     Otherwise the leaf scans its per-key sequence map and
+    ///     returns only entries whose sequence is strictly greater
+    ///     than <paramref name="sinceCursor"/>'s
+    ///     <see cref="LeafDeliveryCursor.Sequence"/>, with
+    ///     <see cref="StateDelta.DeliveryCursor"/> set to the leaf's
+    ///     current cursor.
+    ///   </item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    Task<StateDelta> GetDeltaSinceCursorAsync(LeafDeliveryCursor sinceCursor);
+
+    /// <summary>
     /// Returns the set of keys that currently have a pending-tx mutation
     /// on this leaf (the saga has prepared a write but the registry has
     /// not yet recorded a terminal decision, OR the terminal has been

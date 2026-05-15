@@ -338,4 +338,160 @@ public partial class ReplicationApplierTests
             Is.True,
             "every recorded sample should carry the tree tag");
     }
+
+    [Test]
+    public async Task ApplyBatchAsync_routes_prepared_set_through_prepared_apply_seam_not_batched_merge()
+    {
+        // Cross-cluster atomic-saga visibility regression. Prepared
+        // entries (IsPrepared=true) carry a TransactionId and must
+        // park in the receiver leaf's per-tx pending bucket via
+        // ApplyPreparedSetAsync. The batched LWW path collapses
+        // ordinary Set/Delete entries to ApplyMergeManyAsync, which
+        // routes through the shard-root's generic LWW merge primitive
+        // WITHOUT honouring IsPrepared / TransactionId. Routing a
+        // prepared record through that primitive applies it directly
+        // into the visible projection, bypassing the per-tx pending
+        // bucket - the cross-cluster atomic-visibility contract for
+        // SetManyAtomicAsync collapses to ad-hoc per-key arrival
+        // order and a continuous reader on the receiving site
+        // observes a strict subset of the saga's keys mid-flight.
+        // The classifier in ApplyOriginRunAsync must therefore
+        // exclude IsPrepared=true entries from the batched path so
+        // they fall through to ApplyPointAsync's IsPrepared branch.
+        var (applier, _, apply, _) = CreateApplier();
+        var txid = Guid.NewGuid();
+        var entries = new[]
+        {
+            new WalRecord
+            {
+                TreeId = Tree,
+                Op = MutationKind.Set,
+                Key = "k0",
+                Value = new byte[] { 1 },
+                Timestamp = Hlc(10),
+                OriginClusterId = RemoteCluster,
+                IsPrepared = true,
+                TransactionId = txid,
+                AtomicBatchSize = 2,
+                AtomicBatchIndex = 0,
+            },
+            new WalRecord
+            {
+                TreeId = Tree,
+                Op = MutationKind.Set,
+                Key = "k1",
+                Value = new byte[] { 2 },
+                Timestamp = Hlc(20),
+                OriginClusterId = RemoteCluster,
+                IsPrepared = true,
+                TransactionId = txid,
+                AtomicBatchSize = 2,
+                AtomicBatchIndex = 1,
+            },
+        };
+
+        var result = await applier.ApplyBatchAsync(entries);
+
+        Assert.That(result.Applied, Is.True);
+
+        // Prepared entries MUST flow through the prepared-apply seam,
+        // one call per entry.
+        await apply.Received(1).ApplyPreparedSetAsync(
+            "k0", Arg.Any<byte[]>(), Hlc(10), RemoteCluster, null, 0, txid, 2, 0);
+        await apply.Received(1).ApplyPreparedSetAsync(
+            "k1", Arg.Any<byte[]>(), Hlc(20), RemoteCluster, null, 0, txid, 2, 1);
+
+        // The batched LWW merge seam MUST NOT be invoked: that would
+        // route the prepared record into the visible projection,
+        // breaking cross-cluster atomic visibility.
+        await apply.DidNotReceiveWithAnyArgs().ApplyMergeManyAsync(default!);
+        // And the non-prepared per-entry seam must also stay silent.
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(
+            default!, default!, default, default!, default, default);
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_routes_prepared_delete_through_prepared_apply_seam_not_batched_merge()
+    {
+        // Mirror of the prepared-Set regression for prepared-Delete
+        // tombstones. Same routing contract: the prepared-apply seam,
+        // not the batched LWW merge primitive.
+        var (applier, _, apply, _) = CreateApplier();
+        var txid = Guid.NewGuid();
+        var entries = new[]
+        {
+            new WalRecord
+            {
+                TreeId = Tree,
+                Op = MutationKind.Delete,
+                Key = "k0",
+                Timestamp = Hlc(10),
+                IsTombstone = true,
+                OriginClusterId = RemoteCluster,
+                IsPrepared = true,
+                TransactionId = txid,
+                AtomicBatchSize = 1,
+                AtomicBatchIndex = 0,
+            },
+        };
+
+        var result = await applier.ApplyBatchAsync(entries);
+
+        Assert.That(result.Applied, Is.True);
+        await apply.Received(1).ApplyPreparedDeleteAsync(
+            "k0", Hlc(10), RemoteCluster, null, txid, 1, 0);
+        await apply.DidNotReceiveWithAnyArgs().ApplyMergeManyAsync(default!);
+        await apply.DidNotReceiveWithAnyArgs().ApplyDeleteAsync(
+            default!, default, default!, default);
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_mixed_prepared_and_unprepared_entries_route_to_correct_seams()
+    {
+        // A run that interleaves an unprepared Set and a prepared Set
+        // from the same origin must still split correctly: the
+        // unprepared entry batches through ApplyMergeManyAsync, the
+        // prepared entry falls out to ApplyPreparedSetAsync. The
+        // classifier must respect the per-entry IsPrepared bit, not
+        // the run-level mode.
+        var (applier, _, apply, _) = CreateApplier();
+        var txid = Guid.NewGuid();
+        var entries = new[]
+        {
+            SetEntry("plain-a", Hlc(10)),
+            new WalRecord
+            {
+                TreeId = Tree,
+                Op = MutationKind.Set,
+                Key = "prep-b",
+                Value = new byte[] { 1 },
+                Timestamp = Hlc(20),
+                OriginClusterId = RemoteCluster,
+                IsPrepared = true,
+                TransactionId = txid,
+                AtomicBatchSize = 1,
+                AtomicBatchIndex = 0,
+            },
+            SetEntry("plain-c", Hlc(30)),
+        };
+
+        var result = await applier.ApplyBatchAsync(entries);
+
+        Assert.That(result.Applied, Is.True);
+
+        // The two unprepared entries land on the batched merge seam.
+        await apply.Received().ApplyMergeManyAsync(
+            Arg.Is<IReadOnlyList<ApplyMergeItem>>(items =>
+                items.All(i => i.Key == "plain-a" || i.Key == "plain-c")));
+
+        // The prepared entry lands on the prepared-apply seam.
+        await apply.Received(1).ApplyPreparedSetAsync(
+            "prep-b", Arg.Any<byte[]>(), Hlc(20), RemoteCluster, null, 0, txid, 1, 0);
+
+        // The prepared entry must NOT have been swept into the
+        // batched merge - the items collection must not contain it.
+        await apply.DidNotReceive().ApplyMergeManyAsync(
+            Arg.Is<IReadOnlyList<ApplyMergeItem>>(items =>
+                items.Any(i => i.Key == "prep-b")));
+    }
 }

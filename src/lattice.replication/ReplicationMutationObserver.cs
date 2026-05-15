@@ -232,6 +232,17 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             // producer-side ambient LatticeTransactionContext supplied
             // (Guid.Empty by default).
             TransactionId = mutation.TransactionId,
+            // Saga touched-shard count passthrough. Stamped only on
+            // terminal mutations by the saga coordinator (read via
+            // LatticeAtomicShardCountContext inside
+            // ShardRootGrain.AppendTxTerminalAsync). Non-terminal
+            // mutations leave the slot at the wire default (0).
+            // Terminal mutations on this branch are theoretical - the
+            // producer terminal path goes through
+            // WalCommitLogWriter / WalRecordConverter, not the
+            // observer - but the passthrough is defensive in case a
+            // future emit path routes terminals through the observer.
+            AtomicShardCount = mutation.AtomicShardCount,
         };
 
         await _sink.WriteAsync(entry, cancellationToken).ConfigureAwait(false);

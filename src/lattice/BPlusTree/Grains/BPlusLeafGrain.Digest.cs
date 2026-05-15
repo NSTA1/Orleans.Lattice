@@ -66,12 +66,14 @@ internal sealed partial class BPlusLeafGrain
             var merged = LwwValue<byte[]>.Merge(existing, incoming);
             state.State.Entries[key] = merged;
             UpdateProjectionHash(key, existing, merged);
+            BumpDeliverySequenceFor(key);
             return merged;
         }
         else
         {
             state.State.Entries[key] = incoming;
             UpdateProjectionHash(key, oldValue: null, incoming);
+            BumpDeliverySequenceFor(key);
             return incoming;
         }
     }
@@ -91,6 +93,7 @@ internal sealed partial class BPlusLeafGrain
         EnsureProjectionHashInitialized();
         state.State.Entries.Remove(key);
         UpdateProjectionHash(key, existing, newValue: null);
+        BumpDeliverySequenceFor(key);
         return true;
     }
 

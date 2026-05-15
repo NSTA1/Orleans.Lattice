@@ -415,6 +415,7 @@ internal sealed partial class LatticeGrain
         int shardIndex,
         HybridLogicalClock terminalHlc,
         string originClusterId,
+        int atomicShardCount = 0,
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
@@ -427,13 +428,50 @@ internal sealed partial class LatticeGrain
         }
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Step 1 (linearization point) - mark the per-tree TxRegistry
-        // with the saga's outcome. Receiver-side readers that find a
-        // pending entry on a leaf dial back through the registry to
-        // resolve their read against the already-recorded outcome,
-        // delivering strict atomic-visibility regardless of how the
-        // per-leaf terminal fan-out is interleaved.
+        // Step 1 (cross-cluster all-or-nothing visibility gate) -
+        // Record this per-source-shard terminal arrival against the
+        // per-tree TxRegistry's tally. While the tally is pending we
+        // do NOT mark the registry and do NOT fan the terminal out to
+        // the receiver's leaves: a receiver reader finding a pending
+        // entry on a leaf dials back through the registry, gets
+        // InFlight, and falls through to the pre-saga value. The
+        // per-leaf pending buckets stay in place so the dial-back has
+        // something to resolve against.
+        //
+        // Only when the tally is final (every per-source-shard
+        // terminal observed, or the producer did not stamp a gate /
+        // atomicShardCount == 0) do we (a) flip the per-tree
+        // linearization mark to the saga's outcome and (b) fan the
+        // terminal out to every observed source-shard's transitive
+        // closure on the receiver. This delivers strict cross-cluster
+        // atomic visibility: a reader concurrent with a multi-shard
+        // SetManyAtomicAsync's replication observes either the
+        // pre-saga value on every key or the post-saga value on every
+        // key, never a partial subset.
+        //
+        // The gate handles producer/receiver shard-count divergence
+        // naturally: the tally key is the source-side shard index
+        // stamped on the incoming terminal, not the receiver's own
+        // shard layout. A receiver whose adaptive splits or operator
+        // resize have produced a different shard count than the
+        // source still sees exactly atomicShardCount distinct source
+        // terminals (one per source shard the saga touched). The
+        // receiver's transitive split-forward closure runs per
+        // observed source-shard so per-saga keys that have been
+        // resharded locally still reach every destination.
         var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
+        var tally = await registry.RecordTerminalArrivalAsync(
+            transactionId, shardIndex, committed, atomicShardCount);
+
+        if (!tally.IsFinal)
+        {
+            // Saga's per-source-shard tally is incomplete - leave the
+            // registry mark unset and the receiver leaves' pending
+            // buckets undrained so reads remain all-or-nothing. The
+            // next arrival will re-evaluate.
+            return;
+        }
+
         if (committed)
         {
             await registry.MarkCommittedAsync(transactionId);
@@ -452,23 +490,29 @@ internal sealed partial class LatticeGrain
         // unchanged - preserving the cross-cluster ordering invariant
         // on receiver replays.
         //
-        // Pre-resolve the transitive split-forward closure of
-        // shardIndex via TerminalFanOutResolver: under cascading
-        // mid-saga splits on the receiver cluster, the inbound
-        // record's authoring-cluster shardIndex may have further
-        // split locally. The resolver BFS-expands the seed against
-        // each shard's GetSplitForwardTargetsAsync so the terminal
-        // mark reaches every destination of every chain, in a single
-        // parallel hop - replacing the previous recursive forward
-        // that compounded RPC depth into Orleans' response timeout.
+        // Pre-resolve the transitive split-forward closure of every
+        // observed source-shard index via TerminalFanOutResolver: under
+        // cascading mid-saga splits on the receiver cluster, the
+        // inbound records' authoring-cluster shardIndices may have
+        // further split locally. The resolver BFS-expands the seeds
+        // against each shard's GetSplitForwardTargetsAsync so the
+        // terminal mark reaches every destination of every chain, in a
+        // single parallel hop - replacing the previous recursive
+        // forward that compounded RPC depth into Orleans' response
+        // timeout. Seeding with the full ObservedSourceShards set
+        // (not just the current arrival's shardIndex) means a saga
+        // touching N source shards fans the terminal out across the
+        // union of all N transitive closures in a single pass on the
+        // final arrival.
         using (LatticeOriginContext.With(originClusterId))
         using (LatticeHlcOverrideContext.With(terminalHlc))
         {
             var (physicalTreeId, _) = await GetRoutingAsync();
+            var seeds = tally.ObservedSourceShards;
             var targets = await TerminalFanOutResolver.ResolveTransitiveAsync(
                 grainFactory,
                 physicalTreeId,
-                new[] { shardIndex },
+                seeds,
                 cancellationToken);
 
             var tasks = new List<Task>(targets.Count);

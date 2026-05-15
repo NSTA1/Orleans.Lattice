@@ -55,7 +55,7 @@ public partial class BPlusLeafGrainTests
 
         var grainFactory = Substitute.For<IGrainFactory>();
         var optionsResolver = TestOptionsResolver.Create(maxLeafKeys: 128, shardCount: 1, factory: grainFactory);
-        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers());
+        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
         return (grain, reporter, state);
     }
 
@@ -160,7 +160,7 @@ public partial class BPlusLeafGrainTests
         state.State.TreeId = CursorTreeId;
         var grainFactory = Substitute.For<IGrainFactory>();
         var optionsResolver = TestOptionsResolver.Create(maxLeafKeys: 128, shardCount: 1, factory: grainFactory);
-        var nullSvcGrain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers());
+        var nullSvcGrain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
         var projection = AsProjection(nullSvcGrain);
 
         projection.Apply(BuildSet("k1", Encoding.UTF8.GetBytes("v1"), hlcPhysical: 100));

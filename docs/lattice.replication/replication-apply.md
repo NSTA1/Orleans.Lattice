@@ -148,7 +148,33 @@ through three additional internal hops on `IReplicationApplyGrain`:
 |---|---|---|
 | `ApplyPreparedSetAsync` | `Op == Set` && `IsPrepared == true` | Stages the write under the saga's `TransactionId` in the destination leaf's per-tx pending bucket. The visible projection is unchanged - public readers (`GetAsync`, `KeysAsync`, etc.) do not observe the prepared entry. |
 | `ApplyPreparedDeleteAsync` | `Op == Delete` && `IsPrepared == true` | Stages a tombstone under the saga's `TransactionId` in the same pending bucket. The pre-saga value remains visible to public readers until the terminal arrives. |
-| `ApplyTxTerminalAsync` | `Op == TxCommit` or `Op == TxAbort` | Marks the per-tree `ITxRegistry` entry (LWW-resolved on `(committed, terminalHlc)` so a duplicate or abort-after-commit terminal is a no-op), then fans out the terminal to every leaf on the named shard. On commit, every pending entry under the `TransactionId` flips into the visible projection in a single linearization point on that shard; on abort, the pending entries are dropped. |
+| `ApplyTxTerminalAsync` | `Op == TxCommit` or `Op == TxAbort` | Calls `ITxRegistryGrain.RecordTerminalArrivalAsync(txid, sourceShardIndex, committed, atomicShardCount)` to tally this per-source-shard arrival. While the tally is not final the registry mark stays unset and the receiver leaves' pending buckets stay in place so reads remain all-or-nothing. Only on the final arrival does the receiver mark the per-tree `ITxRegistry` entry and pre-fan the terminal across the transitive split-forward closure of every observed source-shard in a single parallel hop. On commit every pending entry under the `TransactionId` flips into the visible projection; on abort the pending entries are dropped. |
+
+The `ReplicationApplier.ApplyBatchAsync` classifier excludes any
+entry with `IsPrepared == true` from the batched LWW fast-path so
+prepared `Set` / `Delete` records are always routed through the
+per-entry `ApplyPreparedSetAsync` / `ApplyPreparedDeleteAsync` seam.
+Without this exclusion the prepared writes would commit directly
+into the receiver leaf's visible `Entries` and the saga's terminal
+mark would find no matching pending entries to flip - so the
+cross-cluster reader would observe the prepared write as visible
+before the registry gate flipped, purely as a function of whether
+the inbound run happened to be batched or single-entry. Unprepared
+writes continue to consume the batched merge path.
+
+The per-source-shard arrival tally is the receiver-side
+multi-shard atomic-visibility gate. A saga that touched **N** source
+shards emits **N** independent terminal records, one per source
+shard, that ship through the change feed under independent
+backpressure / batching cadences. Each terminal carries the saga's
+authoritative touched-shard count in the additive
+`WalRecord.AtomicShardCount` slot, which the receiver feeds into
+`RecordTerminalArrivalAsync` to compute `IsFinal`. A receiver
+running a pre-gate producer sees `atomicShardCount == 0` on every
+terminal, which the gate treats as "no expected-total information"
+and falls back to first-terminal-wins semantics - equivalent to the
+pre-gate behaviour and wire-compatible across mixed-version
+deployments.
 
 The transport-level filter (`ShouldShip`) explicitly bypasses
 per-tree `KeyFilter` and `KeyPrefixes` for `TxCommit` and `TxAbort`
@@ -169,12 +195,13 @@ output identically to single-key cross-cluster writes.
 
 What ships today:
 
-- `WalRecord.AtomicBatchSize`, `AtomicBatchIndex`, `TransactionId`,
-  and `IsPrepared` are preserved on the wire end-to-end. The
-  receiver consumes `TransactionId` and `IsPrepared` to drive the
-  prepared/terminal staging path; `AtomicBatchSize` and
-  `AtomicBatchIndex` remain reserved for future receiver-side batch
-  optimisations.
+- `WalRecord.AtomicBatchSize`, `AtomicBatchIndex`, `AtomicShardCount`,
+  `TransactionId`, and `IsPrepared` are preserved on the wire end-to-end.
+  The receiver consumes `TransactionId` and `IsPrepared` to drive the
+  prepared / terminal staging path, and `AtomicShardCount` to drive
+  the per-source-shard arrival tally on terminal records.
+  `AtomicBatchSize` and `AtomicBatchIndex` remain reserved for future
+  receiver-side batch optimisations.
 - The receiver-side multi-key atomic apply seam (and its associated
   `Atomic` + `Apply` value types) was deleted by the universal-
   visibility ship. Cross-cluster atomic visibility is provided

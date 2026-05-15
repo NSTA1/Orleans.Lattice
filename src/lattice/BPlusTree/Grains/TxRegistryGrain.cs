@@ -252,6 +252,18 @@ internal sealed class TxRegistryGrain(
         // that depends on the tombstone uses Decisions only.
         var droppedParticipants = state.State.Participants.Remove(txid);
 
+        // Receiver-side cross-cluster terminal-tally state is also
+        // bounded by the saga lifetime, so drop it alongside the
+        // participants. The tally is only consulted while the gate is
+        // pending; once the decision flips it has done its job. The
+        // legacy single-cluster path never populates these slots so
+        // the Remove calls are cheap no-ops in that mode.
+        state.State.TerminalArrivals.TryGetValue(txid, out var prevArrivals);
+        var droppedArrivals = state.State.TerminalArrivals.Remove(txid);
+        state.State.ExpectedTerminals.TryGetValue(txid, out var prevExpectedTotal);
+        var hadExpectedTotal = state.State.ExpectedTerminals.ContainsKey(txid);
+        var droppedExpected = state.State.ExpectedTerminals.Remove(txid);
+
         // Inline prune of expired tombstones from earlier ForgetAsync
         // calls. Folding the GC pass into the natural caller (saga
         // post-cleanup) means tombstones are pruned at roughly the
@@ -261,6 +273,7 @@ internal sealed class TxRegistryGrain(
         var pruned = PruneExpired(now, retention);
 
         var changed = droppedDecision || addedForgottenAt || droppedParticipants
+            || droppedArrivals || droppedExpected
             || (pruned is { Count: > 0 });
 
         if (changed)
@@ -276,6 +289,14 @@ internal sealed class TxRegistryGrain(
                 if (droppedParticipants && prevParticipants is not null)
                 {
                     state.State.Participants[txid] = prevParticipants;
+                }
+                if (droppedArrivals && prevArrivals is not null)
+                {
+                    state.State.TerminalArrivals[txid] = prevArrivals;
+                }
+                if (droppedExpected && hadExpectedTotal)
+                {
+                    state.State.ExpectedTerminals[txid] = prevExpectedTotal;
                 }
                 if (pruned is not null)
                 {
@@ -346,6 +367,132 @@ internal sealed class TxRegistryGrain(
         set.CopyTo(sorted);
         Array.Sort(sorted);
         return Task.FromResult<IReadOnlyList<int>>(sorted);
+    }
+
+    /// <inheritdoc />
+    public async Task<TerminalTallyResult> RecordTerminalArrivalAsync(
+        Guid txid,
+        int sourceShardIndex,
+        bool committed,
+        int expectedShardCount)
+    {
+        // Legacy-producer fast path: a 0 expected count means the
+        // producer did not stamp the gate, so fall back to "mark on
+        // first terminal" semantics. The caller treats IsFinal=true
+        // as the signal to flip the per-tree linearization mark
+        // immediately, matching pre-gate behaviour. We also do NOT
+        // accumulate tally state in this branch - there is no
+        // expected total to compare against, so the dedup set would
+        // grow unbounded if cross-cluster delivery retries piled up.
+        if (expectedShardCount <= 0)
+        {
+            return new TerminalTallyResult
+            {
+                IsFinal = true,
+                FinalOutcome = committed ? TxStatus.Committed : TxStatus.Aborted,
+                // Legacy fan-out semantic is "fan out the source shard
+                // index just observed". Return a single-element list so
+                // the caller's loop body is uniform between the legacy
+                // fast path and the gated final-arrival path.
+                ObservedSourceShards = new[] { sourceShardIndex },
+            };
+        }
+
+        // Mixed-outcome guard: every per-source-shard terminal of a
+        // saga must agree on commit/abort. A mixed sequence is a
+        // protocol violation (the saga coordinator never broadcasts a
+        // mixed terminal set); throwing here lets a malformed inbound
+        // stream surface as a hard error rather than silently
+        // corrupting the gate.
+        if (state.State.Decisions.TryGetValue(txid, out var existing))
+        {
+            if (committed && existing == TxStatus.Aborted)
+            {
+                throw new InvalidOperationException(
+                    $"Saga {txid:N} received a commit terminal after an abort was already recorded.");
+            }
+            if (!committed && existing == TxStatus.Committed)
+            {
+                throw new InvalidOperationException(
+                    $"Saga {txid:N} received an abort terminal after a commit was already recorded.");
+            }
+        }
+
+        // Snapshot prior state so a failing WriteStateAsync can unwind
+        // every in-memory mutation - mirrors the
+        // RegisterParticipantAsync / MarkCommittedAsync pattern.
+        var arrivalsHadEntry = state.State.TerminalArrivals.TryGetValue(txid, out var arrivals);
+        var arrivalsCreated = false;
+        if (arrivals is null)
+        {
+            arrivals = [];
+            state.State.TerminalArrivals[txid] = arrivals;
+            arrivalsCreated = true;
+        }
+
+        // Idempotent add: a duplicate-delivery retry of the same
+        // source-shard terminal is a safe no-op for the tally side.
+        // The caller-facing decision still needs to re-evaluate so we
+        // do not early-return; it just contributes no new state mutation.
+        var arrivalAdded = arrivals.Add(sourceShardIndex);
+
+        var expectedHadEntry = state.State.ExpectedTerminals.TryGetValue(txid, out var prevExpected);
+        var newExpected = expectedHadEntry
+            ? Math.Max(prevExpected, expectedShardCount)
+            : expectedShardCount;
+        var expectedChanged = !expectedHadEntry || newExpected != prevExpected;
+        if (expectedChanged)
+        {
+            state.State.ExpectedTerminals[txid] = newExpected;
+        }
+
+        if (arrivalAdded || expectedChanged)
+        {
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                if (arrivalAdded) arrivals.Remove(sourceShardIndex);
+                if (arrivalsCreated || (!arrivalsHadEntry && arrivals.Count == 0))
+                {
+                    state.State.TerminalArrivals.Remove(txid);
+                }
+                if (expectedChanged)
+                {
+                    if (expectedHadEntry) state.State.ExpectedTerminals[txid] = prevExpected;
+                    else state.State.ExpectedTerminals.Remove(txid);
+                }
+                throw;
+            }
+        }
+
+        var isFinal = arrivals.Count >= newExpected;
+        // Materialise the observed source-shard set only on the final
+        // arrival - in-progress arrivals do not need to know the
+        // interim list and shipping a fresh copy on every arrival
+        // would inflate the wire size of the call linearly with saga
+        // shard cardinality. Empty list (Array.Empty<int>()) on the
+        // non-final path is a singleton, so the allocation is free.
+        IReadOnlyList<int> observed;
+        if (isFinal)
+        {
+            var sorted = new int[arrivals.Count];
+            arrivals.CopyTo(sorted);
+            Array.Sort(sorted);
+            observed = sorted;
+        }
+        else
+        {
+            observed = Array.Empty<int>();
+        }
+        return new TerminalTallyResult
+        {
+            IsFinal = isFinal,
+            FinalOutcome = committed ? TxStatus.Committed : TxStatus.Aborted,
+            ObservedSourceShards = observed,
+        };
     }
 
     /// <summary>

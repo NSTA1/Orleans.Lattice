@@ -62,7 +62,7 @@ and snapshot drain rejects. Callers never see these exceptions.
 |-----------|-----------|-------|
 | `GetManyAsync` | **Per-key linearizable** under default `CacheTtl = TimeSpan.Zero`; **per-key eventually consistent** when `CacheTtl > 0` | Each key is fetched independently via the read-cache path and inherits `GetAsync`'s dual classification. The batch is **not** snapshot-atomic across keys: under any setting, two keys in a single call may reflect different real-time points (each is linearized at its own primary delta-check). When `CacheTtl > 0`, different keys in a single call may additionally reflect different cache refresh instants. |
 | `SetManyAsync` | **Per-key linearizable, batch non-atomic** | Each key's write is linearizable; the batch as a whole is **not** atomic. A partial failure leaves the batch half-applied with no compensating rollback. |
-| `SetManyAtomicAsync` | **Per-key linearizable, batch atomic, strictly isolated tree-wide** | All-or-nothing: on success every key holds its new value; on any failure every already-committed key is rolled back via LWW compensation with a fresh HLC tick. **Readers concurrent with an in-flight saga observe the saga atomically** - the per-tree `ITxRegistryGrain` is the single tree-wide linearization point, and every read path (direct leaf, read-cache, multi-shard scan) dials back through it for any key sitting in a leaf's pending-tx bucket. The post-decision / pre-terminal-fan-out window is invisible to readers. See [Atomic Writes](atomic-writes.md). |
+| `SetManyAtomicAsync` | **Per-key linearizable, batch atomic, strictly isolated tree-wide, atomic across clusters** | All-or-nothing: on success every key holds its new value; on any failure every already-committed key is rolled back via LWW compensation with a fresh HLC tick. **Readers concurrent with an in-flight saga observe the saga atomically** - the per-tree `ITxRegistryGrain` is the single tree-wide linearization point, and every read path (direct leaf, read-cache, multi-shard scan) dials back through it for any key sitting in a leaf's pending-tx bucket. The post-decision / pre-terminal-fan-out window is invisible to readers. **The atomic guarantee extends across clusters**: a destination-cluster reader observes either none or all of a replicated saga's keys, because the receiver stages prepared writes through the same `ITxRegistryGrain` and only flips visibility once every source-shard terminal has arrived (gated by the producer-stamped `AtomicShardCount`). See [Atomic Writes](atomic-writes.md). |
 | `DeleteRangeAsync` | **Strongly consistent** | Walks the leaf chain in every shard under the authoritative `ShardMap`, tombstoning matching entries. Robust against sparse multi-shard distributions (`RangeDeleteResult.PastRange` ensures the scan does not short-circuit on an empty leaf). For resumable, crash-safe range deletes prefer `OpenDeleteRangeCursorAsync`. |
 | `CountAsync` | **Strongly consistent** | Partitions virtual slots by current owner via the authoritative `ShardMap`, asks each physical shard to count only its owned slots via `IShardRootGrain.CountForSlotsAsync`, re-reads the map version, and retries on version change up to `LatticeOptions.MaxScanRetries`. Every virtual slot is counted exactly once. Throws `InvalidOperationException` on retry exhaustion. |
 | `CountPerShardAsync` | **Strongly consistent** | Same per-slot routing as `CountAsync`; per-shard counts are topology-consistent with the observed `ShardMap` snapshot. |
@@ -233,16 +233,48 @@ writes flow through the standard per-key WAL → replication transport
 carrying an additive `IsPrepared` slot and the saga's `TransactionId`;
 each terminal mark (`TxCommit` / `TxAbort`) ships as a single per-shard
 record exempt from the producer-side `KeyFilter` / `KeyPrefixes`
-filters. On the receiver, `IReplicationApplyGrain.ApplyPreparedSetAsync`
-/ `ApplyPreparedDeleteAsync` route each prepared entry into the local
-leaf's per-tx pending bucket under the source HLC verbatim, and
-`ApplyTxTerminalAsync` (a) marks the per-tree `ITxRegistryGrain` as
-the linearization point for the saga's outcome, then (b) drives the
-per-shard terminal-mark primitive that flips every receiver leaf's
-pending bucket into the visible projection. Receiver-side reads
-consult the same `ITxRegistryGrain` they consult locally, so a remote
-reader concurrent with replication of a `SetManyAtomicAsync` observes
-either zero or all of the saga's keys - never a partial view.
+filters and stamped with the saga's authoritative touched-shard count
+in the additive `AtomicShardCount` slot. On the receiver, prepared
+records route to `IReplicationApplyGrain.ApplyPreparedSetAsync` /
+`ApplyPreparedDeleteAsync`, which install each entry into the
+destination leaf's per-tx pending bucket under the source HLC
+verbatim. The receiver's `ReplicationApplier.ApplyBatchAsync`
+classifier excludes any entry with `IsPrepared == true` from the
+batched LWW fast-path so prepared writes are always routed through
+the per-entry prepared-apply seam - committing them directly into
+visible `Entries` would let the cross-cluster reader observe the
+prepared write before the registry gate ever flipped.
+
+`ApplyTxTerminalAsync` then drives a **per-source-shard arrival
+tally** before the visibility flip: each terminal arrival calls
+`ITxRegistryGrain.RecordTerminalArrivalAsync(txid, sourceShardIndex,
+committed, atomicShardCount)`, which deduplicates per `(txid,
+sourceShardIndex)`, latches the outcome on the first arrival (a
+mismatched-outcome arrival preserves the earlier abort), and adopts
+`max(seen, incoming)` into the expected total so a producer-side
+mid-saga shadow-forward split that grows the touched-shard count is
+absorbed without under-counting. The tally returns `IsFinal = false`
+until every per-source-shard terminal has arrived; while the tally is
+pending the receiver leaves' pending buckets stay in place and
+readers dialling back through `ITxRegistryGrain.GetStatusAsync`
+observe `InFlight` for the whole saga and fall through to the
+pre-saga value. Only on the final arrival does the receiver mark the
+registry's decision (the single per-tree visibility flip) and resolve
+the transitive split-forward closure of every observed source-shard
+in a single parallel hop to dispatch the terminal mark to every
+destination on the receiver. The gate handles producer / receiver
+shard-count divergence naturally because the tally key is the
+producer-stamped source-side shard index, not the receiver's shard
+layout - a receiver whose adaptive splits or operator resize have
+produced a different shard count than the source still observes
+exactly `atomicShardCount` distinct source terminals (one per source
+shard the saga touched). The slot is wire-compatible: a legacy
+producer that never stamps `AtomicShardCount` ships `0`, which the
+gate treats as "no expected-total information" and falls back to
+first-terminal-wins semantics. Receiver-side reads consult the same
+`ITxRegistryGrain` they consult locally, so a remote reader
+concurrent with replication of a `SetManyAtomicAsync` observes either
+zero or all of the saga's keys - never a partial view.
 
 Once `SetManyAtomicAsync` returns without throwing, every key in the
 batch holds its target value across the local tree with no

@@ -66,6 +66,7 @@ internal static class WalRecordConverter
             TransactionId = mutation.TransactionId,
             IsPrepared = mutation.IsPrepared,
             ShardIndex = mutation.ShardIndex,
+            AtomicShardCount = mutation.AtomicShardCount,
         };
     }
 
@@ -108,6 +109,7 @@ internal static class WalRecordConverter
             DeltaPayload = entry.DeltaPayload,
             IsPrepared = entry.IsPrepared,
             ShardIndex = entry.ShardIndex,
+            AtomicShardCount = entry.AtomicShardCount,
         };
     }
 }

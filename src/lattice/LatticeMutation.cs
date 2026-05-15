@@ -252,4 +252,29 @@ public readonly record struct LatticeMutation
     /// existed.
     /// </summary>
     [Id(18)] public bool IsBackstop { get; init; }
+
+    /// <summary>
+    /// Total number of source-cluster shards the enclosing atomic-write
+    /// saga touched. Stamped only on terminal mutations
+    /// (<see cref="MutationKind.TxCommit"/> /
+    /// <see cref="MutationKind.TxAbort"/>) by the saga coordinator at
+    /// terminal-broadcast time, reading the authoritative participant
+    /// set from <c>TxRegistryState.Participants</c>. Every prepare-phase
+    /// per-key emit stamps <c>0</c>; non-saga single-key writes stamp
+    /// <c>0</c>; a saga whose participant union is empty (degenerate
+    /// zero-entries case) stamps <c>0</c>. Mirrored verbatim onto
+    /// <see cref="WalRecord.AtomicShardCount"/> by the replication
+    /// observer so the cross-cluster apply path can gate the
+    /// per-tree <c>ITxRegistryGrain</c> linearization mark until every
+    /// per-shard terminal has arrived.
+    /// <para>
+    /// Defaults to <c>0</c> for wire compatibility with observers
+    /// persisted before this field existed; the receiver-side gating
+    /// path treats <c>0</c> as "no gating information" and falls back
+    /// to the legacy "mark on first terminal" semantics, so rolling
+    /// upgrades involving mixed-version shippers degrade gracefully
+    /// to the best-effort cross-cluster atomic-visibility contract.
+    /// </para>
+    /// </summary>
+    [Id(19)] public int AtomicShardCount { get; init; }
 }

@@ -28,7 +28,7 @@ public partial class BPlusLeafGrainTests
             maxLeafKeys: maxLeafKeys,
             shardCount: 1,
             factory: grainFactory);
-        return new BPlusLeafGrain(context, state, grainFactory, resolver, TestMutationObservers.NoObservers());
+        return new BPlusLeafGrain(context, state, grainFactory, resolver, TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
     }
 
     // --- Split recovery ---
@@ -497,7 +497,7 @@ public partial class BPlusLeafGrainTests
             shardCount: 1,
             factory: grainFactory);
 
-        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers());
+        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
         return (grain, state, siblingMock, coordinator);
     }
 
@@ -572,7 +572,7 @@ public partial class BPlusLeafGrainTests
             shardCount: 1,
             factory: grainFactory);
 
-        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers());
+        var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
 
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("1"));
         await grain.SetAsync("c", Encoding.UTF8.GetBytes("2"));

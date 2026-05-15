@@ -45,6 +45,17 @@ internal sealed record StateDelta
     /// </summary>
     [Id(4)] public int? MovedAwayVsc { get; init; }
 
+    /// <summary>
+    /// The leaf's activation-scoped delivery cursor at the moment this
+    /// delta was extracted. Consumed by <c>LeafCacheGrain</c> as the
+    /// cursor to present on its next refresh. <see cref="LeafDeliveryCursor.Empty"/>
+    /// when the producing path is not the cursor-based delivery seam
+    /// (for example <c>TreeMergeGrain</c> and <c>TreeShardSplitGrain</c>
+    /// pass an empty <see cref="VersionVector"/> to <c>GetDeltaSinceAsync</c>
+    /// for a full-snapshot drain; those paths ignore the cursor).
+    /// </summary>
+    [Id(5)] public LeafDeliveryCursor DeliveryCursor { get; init; }
+
     /// <summary><c>true</c> if there were no changes to send.</summary>
     public bool IsEmpty => Entries.Count == 0;
 }
