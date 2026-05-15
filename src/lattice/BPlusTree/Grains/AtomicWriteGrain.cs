@@ -251,12 +251,34 @@ internal sealed class AtomicWriteGrain(
         Span<byte> lenBuf = stackalloc byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(lenBuf, sortedKeys.Length);
         sha.AppendData(lenBuf);
+
+        // Per-key UTF-8 encoding scratch buffer. Stackalloc when the
+        // worst-case UTF-8 length fits in a small fixed bound; rent from
+        // the array pool for pathologically long keys. The previous shape
+        // (`Encoding.UTF8.GetBytes(key)`) allocated a fresh transient
+        // byte[] per key, which dominated the saga prepare allocation
+        // profile at 1.8% of total bytes (213 KB / op at batch=16,
+        // concurrency=64) before this change.
+        const int StackScratchBytes = 256;
         foreach (var key in sortedKeys)
         {
-            var bytes = Encoding.UTF8.GetBytes(key);
-            BinaryPrimitives.WriteInt32LittleEndian(lenBuf, bytes.Length);
-            sha.AppendData(lenBuf);
-            sha.AppendData(bytes);
+            var maxBytes = Encoding.UTF8.GetMaxByteCount(key.Length);
+            byte[]? rented = null;
+            Span<byte> scratch = maxBytes <= StackScratchBytes
+                ? stackalloc byte[StackScratchBytes].Slice(0, maxBytes)
+                : (rented = System.Buffers.ArrayPool<byte>.Shared.Rent(maxBytes)).AsSpan(0, maxBytes);
+            try
+            {
+                var written = Encoding.UTF8.GetBytes(key, scratch);
+                BinaryPrimitives.WriteInt32LittleEndian(lenBuf, written);
+                sha.AppendData(lenBuf);
+                sha.AppendData(scratch[..written]);
+            }
+            finally
+            {
+                if (rented is not null)
+                    System.Buffers.ArrayPool<byte>.Shared.Return(rented);
+            }
         }
         return sha.GetHashAndReset();
     }
