@@ -534,6 +534,60 @@ public partial class AtomicWriteGrainTests
     }
 
     [Test]
+    public void ComputeKeyFingerprint_digest_is_byte_compatible_with_reference_implementation()
+    {
+        // Pins the on-disk digest produced by ComputeKeyFingerprint against an
+        // independent reference implementation that mirrors the pre-optimisation
+        // shape (sort keys ordinal, write LE int32 count, then for each key write
+        // LE int32 utf8-byte-length followed by utf8 bytes, then SHA-256).
+        //
+        // The candidate ComputeKeyFingerprintCore reuses a stackalloc scratch
+        // buffer when Encoding.UTF8.GetMaxByteCount(key.Length) <= 256, and
+        // rents from ArrayPool<byte>.Shared otherwise. This test covers both
+        // paths plus multi-byte UTF-8 to guarantee the digest is invariant
+        // across the encoding strategy change. KeyFingerprint is persisted in
+        // saga state, so a single drifted byte would silently break idempotency
+        // checks on in-flight sagas after a rolling upgrade.
+        static byte[] Reference(IEnumerable<string> keys)
+        {
+            var sorted = keys.ToArray();
+            Array.Sort(sorted, StringComparer.Ordinal);
+            using var sha = System.Security.Cryptography.IncrementalHash.CreateHash(
+                System.Security.Cryptography.HashAlgorithmName.SHA256);
+            Span<byte> lenBuf = stackalloc byte[4];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(lenBuf, sorted.Length);
+            sha.AppendData(lenBuf);
+            foreach (var key in sorted)
+            {
+                var bytes = System.Text.Encoding.UTF8.GetBytes(key);
+                System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(lenBuf, bytes.Length);
+                sha.AppendData(lenBuf);
+                sha.AppendData(bytes);
+            }
+            return sha.GetHashAndReset();
+        }
+
+        // Short ASCII key  -> stackalloc fast path (maxBytes = 6).
+        // Multi-byte UTF-8 -> stackalloc fast path with width > 1 byte/char.
+        // Long ASCII key   -> ArrayPool fallback (200 chars * 3 = 600 > 256).
+        var shortKey   = "k1";
+        var multiByte  = "key-\u4e2d\u6587-\ud83d\ude80";        // CJK + emoji surrogate pair.
+        var longKey    = new string('x', 200);
+        var entries = MakeEntries(
+            (shortKey,  [1]),
+            (multiByte, [2]),
+            (longKey,   [3]));
+
+        var actual    = AtomicWriteGrain.ComputeKeyFingerprint(entries);
+        var reference = Reference(new[] { shortKey, multiByte, longKey });
+
+        Assert.That(actual, Is.EqualTo(reference),
+            "ComputeKeyFingerprint must produce a byte-identical digest to the reference " +
+            "implementation across the stackalloc fast path, the ArrayPool fallback, and " +
+            "multi-byte UTF-8 keys. A drift here would break saga idempotency cross-version.");
+    }
+
+    [Test]
     public async Task ExecuteAsync_seeds_KeyFingerprint_on_first_Prepare()
     {
         var (grain, state, _, _, _) = CreateGrain();
