@@ -246,7 +246,7 @@ below.
 
 ---
 
-- [ ] **R-153 - `LatticeBootstrapCoordinatorGrain` routes snapshot drain through `IReplicationApplier`** *(deps: R-152)*
+- [x] **R-153 - `LatticeBootstrapCoordinatorGrain` routes snapshot drain through `IReplicationApplier`** *(no deps; landed ahead of R-152 as part of v4 readiness)*
 
   Internal-seam change: `DrainSnapshotAsync` switches from
   `IReplicationApplyGrain.ApplySetAsync(...)` to
@@ -274,7 +274,7 @@ below.
 
 ---
 
-- [ ] **R-154 - gRPC binding for `IRemoteSnapshotTransport`** *(deps: R-150, R-151, R-153)*
+- [ ] **R-154 - gRPC binding for `IRemoteSnapshotTransport`** *(deps: R-150, R-151, R-153 ✓)*
 
   Concrete `IRemoteSnapshotTransport` implementation in
   `Orleans.Lattice.Replication.Grpc`, mirroring the existing
@@ -340,7 +340,7 @@ below.
 
 ---
 
-- [ ] **R-156 - Bootstrap progress observability** *(deps: R-152, R-153)*
+- [ ] **R-156 - Bootstrap progress observability** *(deps: R-152, R-153 ✓)*
 
   Three new instruments on the existing `orleans.lattice.replication` meter
   plus a structured log at each phase transition. Mirrors the per-peer

@@ -5,7 +5,8 @@ namespace Orleans.Lattice.Replication.Grains;
 /// collector and the fall-off-the-log detector for the named tree on
 /// independent cadences (LatticeReplicationOptions.MaintenanceGcInterval
 /// / MaintenanceFallOffCheckInterval), driving the dormant
-/// LatticeReplicationMetrics.WalEntriesTrimmed and
+/// LatticeMetrics.WalEntriesTrimmed (published on the core
+/// <c>orleans.lattice</c> meter) and
 /// LatticeReplicationMetrics.PeerFellOffLog instruments.
 /// <para>
 /// Grain key format: tree name verbatim. One activation per tree;

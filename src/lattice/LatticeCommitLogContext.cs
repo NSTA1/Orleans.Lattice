@@ -6,7 +6,7 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Ambient signal flagging that the current logical call is being driven
 /// by the commit-log adapter rather than by a foreground caller. Library
-/// internal: the dual-durability commit path on
+/// internal: the WAL-first commit path on
 /// <see cref="BPlusTree.Grains.BPlusLeafGrain"/> opens a scope around the
 /// post-commit observer publish so a downstream replication-aware
 /// observer can short-circuit and avoid re-appending its own input back
