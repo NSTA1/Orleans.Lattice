@@ -49,6 +49,24 @@ internal sealed partial class LatticeGrain(
     private readonly PublishEventsGate _eventsGate = new();
 
     /// <summary>
+    /// Wall-clock budget for the stale-routing retry loop in
+    /// <see cref="SetAsyncCore"/>. A single
+    /// <see cref="StaleShardRoutingException"/> /
+    /// <see cref="StaleTreeRoutingException"/> retry is insufficient
+    /// under cascading mid-saga topology changes (e.g. a 4-to-8
+    /// reshard with adaptive shard splits in flight), where multiple
+    /// sequential ShardMap swaps can land between the initial fetch
+    /// and the retry. The wall-clock budget here mirrors the saga's
+    /// own per-shard retry pattern in
+    /// <c>AtomicWriteGrain.MarkOneShardAsync</c> and
+    /// <c>AtomicWriteGrain.CaptureShardAsync</c>: bounded by wall
+    /// clock rather than attempt count so any reasonable storm can
+    /// drain, but still terminates with the original stale-routing
+    /// throw when the topology never quiesces within the budget.
+    /// </summary>
+    private static readonly TimeSpan StaleRoutingWriteRetryBudget = TimeSpan.FromSeconds(60);
+
+    /// <summary>
     /// Rejects any public <see cref="ILattice"/> call targeting a reserved
     /// system-tree name (any id starting with
     /// <see cref="LatticeConstants.SystemTreePrefix"/>, which includes the
@@ -183,24 +201,43 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(keys);
         cancellationToken.ThrowIfCancellationRequested();
-        try
-        {
-            return await GetManyAsyncCore(keys);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
+
+        // Deadline-bounded stale-routing retry loop, symmetric with
+        // SetAsyncCore. Under a cascading mid-saga reshard the previous
+        // single-shot catch-and-retry shape exhausted on the second
+        // stale-routing throw and the exception propagated out of a
+        // continuous read - which a strict-atomic-visibility caller
+        // counts as a violation. The wall-clock budget mirrors
+        // SetAsyncCore's so reads and writes absorb the same topology
+        // storm in lockstep. Asymmetric InvalidOperationException
+        // handling preserves tree-deletion semantics (single retry
+        // only, so a deleted tree surfaces in <2s rather than after
+        // 60s).
+        var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+        var invalidOpRetried = false;
+        while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return await GetManyAsyncCore(keys);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return await GetManyAsyncCore(keys);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return await GetManyAsyncCore(keys);
+            try
+            {
+                return await GetManyAsyncCore(keys);
+            }
+            catch (StaleShardRoutingException)
+            {
+                if (DateTime.UtcNow >= deadline) throw;
+                InvalidateShardMap();
+            }
+            catch (StaleTreeRoutingException)
+            {
+                if (DateTime.UtcNow >= deadline) throw;
+                if (!TryInvalidateStaleAlias()) throw;
+            }
+            catch (InvalidOperationException)
+            {
+                if (invalidOpRetried) throw;
+                if (!TryInvalidateStaleAlias()) throw;
+                invalidOpRetried = true;
+            }
         }
     }
 
@@ -221,6 +258,10 @@ internal sealed partial class LatticeGrain(
             }
             bucket.Add(key);
         }
+
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG reader-batch-enter] tree={physicalTreeId} keyCount={keys.Count} bucketCount={shardBuckets.Count} buckets=[{string.Join(';', shardBuckets.Select(kv => $"s{kv.Key}:[{string.Join(',', kv.Value)}]"))}]");
+#endif
 
         // Double-checked snapshot retry: pre-fetch a TxRegistry snapshot
         // (snap1), fan out under that ambient view, then re-fetch
@@ -249,16 +290,24 @@ internal sealed partial class LatticeGrain(
                 foreach (var (shardIdx, bucket) in shardBuckets)
                 {
                     var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
-                    tasks.Add(FetchFromShardAsync(shard, bucket, concurrent));
+                    tasks.Add(FetchFromShardAsync(shard, shardIdx, bucket, concurrent, attempt));
                 }
                 await Task.WhenAll(tasks);
             }
 
             var snap2 = await FetchRegistrySnapshotAsync();
             if (IsSnapshotStable(snap1, snap2))
+            {
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG reader-batch-exit] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} returnedCount={concurrent.Count} rounds=[{string.Join(',', concurrent.Select(kv => $"{kv.Key}=r{DiagSink.DecodeRound(kv.Value)}"))}]");
+#endif
                 return new Dictionary<string, byte[]>(concurrent);
+            }
             // else: a saga's InFlight->Committed transition raced our
             // fan-out; retry with the fresh snapshot in scope.
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG reader-snapshot-retry] tree={physicalTreeId} attempt={attempt} returnedSoFar={concurrent.Count}");
+#endif
         }
 
         throw new InvalidOperationException(
@@ -268,10 +317,18 @@ internal sealed partial class LatticeGrain(
 
         static async Task FetchFromShardAsync(
             IShardRootGrain shard,
+            int shardIdx,
             List<string> keys,
-            ConcurrentDictionary<string, byte[]> result)
+            ConcurrentDictionary<string, byte[]> result,
+            int attempt)
         {
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG reader-shard-fanout-enter] shard={shardIdx} attempt={attempt} keys=[{string.Join(',', keys)}]");
+#endif
             var values = await shard.GetManyAsync(keys);
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG reader-shard-fanout-exit] shard={shardIdx} attempt={attempt} returnedCount={values.Count} rounds=[{string.Join(',', values.Select(kv => $"{kv.Key}=r{DiagSink.DecodeRound(kv.Value)}"))}]");
+#endif
             foreach (var (key, value) in values)
             {
                 result[key] = value;
@@ -297,29 +354,59 @@ internal sealed partial class LatticeGrain(
         await EnsureCompactionReminderAsync();
         await EnsureMonitorAsync();
         cancellationToken.ThrowIfCancellationRequested();
-        var shard = await GetShardGrainAsync(key);
-        try
-        {
-            await shard.SetAsync(key, value);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
+
+        // Deadline-bounded stale-routing retry loop. Under a cascading
+        // mid-saga reshard or online resize, a single ShardMap swap is
+        // not the worst case - chains of adaptive shard splits during
+        // a 4-to-8 reshard can produce multiple sequential stale-routing
+        // throws on the same per-key write. The previous one-shot
+        // catch-and-retry shape exhausted on the second throw and the
+        // exception propagated into the saga, which then pivoted into
+        // compensation on a write that would have succeeded with one
+        // more refresh. The wall-clock budget here mirrors the saga's
+        // own per-shard retry pattern (AtomicWriteGrain.MarkOneShardAsync
+        // and CaptureShardAsync) and absorbs any reasonable topology
+        // storm; if the topology genuinely never quiesces within the
+        // budget, the original stale-routing throw still surfaces to
+        // the caller.
+        //
+        // Important asymmetry: only the two topology-change exceptions
+        // (StaleShardRoutingException, StaleTreeRoutingException)
+        // benefit from the deadline-budget retry. InvalidOperationException
+        // is typically permanent (e.g. tree deleted, alias removed) and
+        // looping on it would mask deletion semantics and trip Orleans'
+        // default response timeout on the caller side. Preserve the
+        // pre-existing single-retry shape for that catch so a deleted
+        // tree surfaces on the second throw, not after 60 seconds.
+        var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+        var invalidOpRetried = false;
+        while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            await shard.SetAsync(key, value);
+            var shard = await GetShardGrainAsync(key);
+            try
+            {
+                await shard.SetAsync(key, value);
+                break;
+            }
+            catch (StaleShardRoutingException)
+            {
+                if (DateTime.UtcNow >= deadline) throw;
+                InvalidateShardMap();
+            }
+            catch (StaleTreeRoutingException)
+            {
+                if (DateTime.UtcNow >= deadline) throw;
+                if (!TryInvalidateStaleAlias()) throw;
+            }
+            catch (InvalidOperationException)
+            {
+                if (invalidOpRetried) throw;
+                if (!TryInvalidateStaleAlias()) throw;
+                invalidOpRetried = true;
+            }
         }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            await shard.SetAsync(key, value);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            await shard.SetAsync(key, value);
-        }
+
         await PublishEventAsync(LatticeTreeEventKind.Set, key);
     }
 
@@ -1250,6 +1337,25 @@ internal sealed partial class LatticeGrain(
         var cached = _cachedRouting;
         if (cached is not null) return new ValueTask<RoutingInfo>(cached);
         return GetRoutingSlowAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Force-refresh overload. When <paramref name="forceRefresh"/> is
+    /// <see langword="true"/>, invalidates the cached
+    /// <see cref="ShardMap"/> and <see cref="RoutingInfo"/> on this
+    /// activation before re-resolving. The resolved physical tree id is
+    /// preserved - alias swaps are handled by
+    /// <see cref="TryInvalidateStaleAlias"/> on the appropriate catch
+    /// clauses. External saga coordinators use this overload to break
+    /// out of stale-routing retry loops that the
+    /// <see cref="StatelessWorker"/> activation's per-instance cache
+    /// would otherwise sustain indefinitely.
+    /// </summary>
+    public ValueTask<RoutingInfo> GetRoutingAsync(bool forceRefresh, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (forceRefresh) InvalidateShardMap();
+        return GetRoutingAsync(cancellationToken);
     }
 
     private async ValueTask<RoutingInfo> GetRoutingSlowAsync(CancellationToken cancellationToken)

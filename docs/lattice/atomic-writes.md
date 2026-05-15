@@ -179,13 +179,35 @@ Whether the saga succeeds or rolls back, it ends by writing `Phase =
 Completed`, unregistering the keepalive reminder, arming the retention
 reminder (`atomic-write-retention`, default 48 h via
 `LatticeOptions.AtomicWriteRetention`) for delayed state cleanup,
-calling `registry.ForgetAsync(txid)` to drop the saga decision now
-that every touched leaf has applied its terminal, and calling
+calling `registry.ForgetAsync(txid)` so the registry transitions the
+decision into its tombstone retention window, and calling
 `DeactivateOnIdle`. Failed sagas preserve `FailureMessage` so a client
 that re-invokes the same grain key receives the original failure via
-`InvalidOperationException`. The `ForgetAsync` cleanup is best-effort
-- a transient failure leaves a tombstone in the registry that
-amortises against the next saga on the same tree.
+`InvalidOperationException`.
+
+`ForgetAsync` does **not** evict the decision record immediately - it
+stamps a tombstone in the per-tree `ITxRegistryGrain` with a `ForgottenAt`
+timestamp and retains the committed/aborted verdict for
+`LatticeOptions.TxDecisionRetention` (default 60 s). During this window
+`GetStatusAsync` / `GetStatusManyAsync` / `SnapshotAsync` continue to
+surface the saga's outcome, so any process that races the saga's
+terminal fan-out and installs a *new* pending bucket on the saga's txid
+can still resolve the verdict and apply the terminal directly. The
+primary race this guards is the retroactive shadow-forward sweep at
+the start of an adaptive shard split: the split coordinator walks the
+source shard's leaves at `BeginShadowWrite` entry, replays every
+in-flight prepared mutation into the destination shard's
+`_pendingTx` buckets, and then runs a post-sweep cleanup pass that
+resolves any saga whose terminal already completed via the retained
+verdict. Without the retention window, a saga that completed
+microseconds before the sweep installed its pending bucket on the
+destination would leave an orphan bucket whose verdict the registry
+had already forgotten. Tombstones expire and are physically purged on
+the next `ForgetAsync` / `MarkCommittedAsync` / `MarkAbortedAsync`
+call. Setting `TxDecisionRetention = TimeSpan.Zero` restores the
+pre-tombstone immediate-evict behaviour and reintroduces the orphan
+risk - reserved for unit tests or environments that disable adaptive
+splitting.
 
 ## Crash-Recovery Timeline
 

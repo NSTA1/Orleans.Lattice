@@ -97,7 +97,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<byte[]?> GetAsync(string key)
     {
         await PrepareForOperationAsync();
-        ThrowIfRejectedForKey(key);
+        ThrowIfMovedAwayForReadKey(key);
         RecordRead();
         return await TraverseForReadAsync(key);
     }
@@ -105,7 +105,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<VersionedValue> GetWithVersionAsync(string key)
     {
         await PrepareForOperationAsync();
-        ThrowIfRejectedForKey(key);
+        ThrowIfMovedAwayForReadKey(key);
         RecordRead();
         return await TraverseForReadWithVersionAsync(key);
     }
@@ -114,7 +114,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<LwwEntry?> GetRawEntryAsync(string key)
     {
         await PrepareForOperationAsync();
-        ThrowIfRejectedForKey(key);
+        ThrowIfMovedAwayForReadKey(key);
         RecordRead();
 
         if (state.State.RootNodeId is null) return null;
@@ -133,7 +133,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys)
     {
         await PrepareForOperationAsync();
-        ThrowIfRejectedForAnyKey(keys);
+        ThrowIfMovedAwayForReadAnyKey(keys);
         RecordRead();
 
         var result = new List<LwwEntry?>(keys.Count);
@@ -206,7 +206,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<bool> ExistsAsync(string key)
     {
         await PrepareForOperationAsync();
-        ThrowIfRejectedForKey(key);
+        ThrowIfMovedAwayForReadKey(key);
         RecordRead();
         return await TraverseForExistsAsync(key);
     }
@@ -214,7 +214,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
         await PrepareForOperationAsync();
-        ThrowIfRejectedForAnyKey(keys);
+        ThrowIfMovedAwayForReadAnyKey(keys);
         RecordRead();
         return await TraverseForBatchReadAsync(keys);
     }
@@ -820,7 +820,7 @@ internal sealed partial class ShardRootGrain(
         await ResumePendingBulkGraftAsync();
     }
 
-    public async Task MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries)
+    public async Task MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
     {
         await PrepareForOperationAsync();
         RecordWrite();
@@ -834,13 +834,19 @@ internal sealed partial class ShardRootGrain(
         // destination tree in parallel. LWW preserves the original HLCs end-to-end,
         // so the destination converges whether this forward wins, loses, or races
         // with the background drain reader.
+        //
+        // The shadow-forward target is a different physical tree (the online-resize
+        // destination), not a different shard within the same tree. From the
+        // destination tree's perspective the forwarded write is a normal merge,
+        // NOT a cross-shard migration, so isCrossShardMigration is deliberately
+        // not threaded through TrackShadowForward.
         var forwardTask = TrackShadowForward(entries, static (t, s) => t.MergeManyAsync(s));
 
         // Root-is-leaf fast path: route the entire batch to the single leaf
         // in one grain call and one WriteStateAsync.
         if (state.State.RootIsLeaf)
         {
-            await MergeGroupAsync(entries);
+            await MergeGroupAsync(entries, isCrossShardMigration);
             await forwardTask;
             return;
         }
@@ -877,7 +883,7 @@ internal sealed partial class ShardRootGrain(
 
         foreach (var group in groups.Values)
         {
-            await MergeGroupAsync(group);
+            await MergeGroupAsync(group, isCrossShardMigration);
         }
 
         // Await forwardTask at the end of the grouped path - matches the
@@ -911,7 +917,7 @@ internal sealed partial class ShardRootGrain(
     /// the root. Retries on transient Orleans / storage exceptions; the leaf's
     /// <c>MergeManyAsync</c> is LWW-idempotent, so replay is safe.
     /// </summary>
-    private async Task MergeGroupAsync(Dictionary<string, LwwValue<byte[]>> group)
+    private async Task MergeGroupAsync(Dictionary<string, LwwValue<byte[]>> group, bool isCrossShardMigration)
     {
         // Any key in the group routes to the same leaf under the current
         // topology; pick one via foreach-break to avoid the LINQ enumerator
@@ -924,7 +930,7 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
-                var splitResult = await TraverseForMergeAsync(pivotKey!, group);
+                var splitResult = await TraverseForMergeAsync(pivotKey!, group, isCrossShardMigration);
 
                 while (splitResult is not null)
                 {
@@ -939,12 +945,12 @@ internal sealed partial class ShardRootGrain(
         }
     }
 
-    private async Task<SplitResult?> TraverseForMergeAsync(string key, Dictionary<string, LwwValue<byte[]>> entries)
+    private async Task<SplitResult?> TraverseForMergeAsync(string key, Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
     {
         if (state.State.RootIsLeaf)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
-            return await leaf.MergeManyAsync(entries);
+            return await leaf.MergeManyAsync(entries, isCrossShardMigration);
         }
 
         var path = StackPool.Get();
@@ -970,7 +976,7 @@ internal sealed partial class ShardRootGrain(
 
             var leafId = path.Pop();
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var splitResult = await leafGrain.MergeManyAsync(entries);
+            var splitResult = await leafGrain.MergeManyAsync(entries, isCrossShardMigration);
 
             while (splitResult is not null && path.Count > 0)
             {

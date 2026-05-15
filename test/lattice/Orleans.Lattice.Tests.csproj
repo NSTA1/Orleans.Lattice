@@ -7,6 +7,19 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <!--
+    Opt-in diagnostic instrumentation, mirrored from the core library.
+    When LatticeDiag=true is supplied (e.g. `dotnet build /p:LatticeDiag=true`),
+    every `#if LATTICE_DIAG` block in this project compiles in. Off by
+    default. The mirror is required because test-side trace emissions
+    (e.g. from chaos repros that decorate failures with extra context)
+    live in this assembly and need the same compile guard as the library
+    emissions to stay symmetrically gated.
+  -->
+  <PropertyGroup Condition="'$(LatticeDiag)' == 'true'">
+    <DefineConstants>$(DefineConstants);LATTICE_DIAG</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>

@@ -95,8 +95,22 @@ internal sealed class TreeReshardGrain(
         }
 
         if (newShardCount <= currentCount)
+        {
+#if LATTICE_DIAG
+            // DIAG-PATH1: diagnose why currentCount mis-tracks the pinned ShardCount.
+            var diagRegistry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var diagEntry = await diagRegistry.GetEntryAsync(TreeId);
+            var diagMap = await diagRegistry.GetShardMapAsync(TreeId);
+            var diagPhysical = diagMap?.GetPhysicalShardIndices()?.Count;
+            var diagVsc = diagMap?.Slots.Length;
+            throw new ArgumentOutOfRangeException(nameof(newShardCount),
+                $"Target shard count ({newShardCount}) must be greater than current count ({currentCount}). Shrink is not supported. " +
+                $"[DIAG-PATH1 resolved.ShardCount={resolved.ShardCount} entry.ShardCount={diagEntry?.ShardCount} entry.MaxLeafKeys={diagEntry?.MaxLeafKeys} entry.MaxInternalChildren={diagEntry?.MaxInternalChildren} map.VirtualShardCount={diagVsc} map.PhysicalCount={diagPhysical} map.Version={diagMap?.Version}]");
+#else
             throw new ArgumentOutOfRangeException(nameof(newShardCount),
                 $"Target shard count ({newShardCount}) must be greater than current count ({currentCount}). Shrink is not supported.");
+#endif
+        }
 
         // Interlock: refuse to start a reshard while a resize is in flight.
         // Resize crosses physical trees; concurrent ShardMap mutation on the

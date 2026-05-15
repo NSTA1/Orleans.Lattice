@@ -201,6 +201,36 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task SetCheckpointOffsetHintAsync(long offset);
 
     /// <summary>
+    /// Records that ownership of the given <paramref name="sortedMovedSlots"/>
+    /// has migrated away from this leaf's owning shard. Subsequent read
+    /// entrypoints on this leaf (<see cref="GetAsync"/>,
+    /// <see cref="GetWithVersionAsync"/>, <see cref="ExistsAsync"/>,
+    /// <see cref="GetManyAsync"/>) return null/false for any key whose
+    /// <c>ShardMap.GetVirtualSlot(key, virtualShardCount)</c> falls in
+    /// the moved-slot set, sealing the persistent-orphan read path that
+    /// the cache-coherence prune pass cannot reach via the
+    /// <see cref="ILeafCacheGrain"/> pending-key delegation hole.
+    /// <para>
+    /// The implementation does NOT touch <see cref="State.LeafNodeState.Entries"/>
+    /// - storage stays inconsistent on the source for moved slots so
+    /// the k-way merge ordering invariant in <c>LatticeGrain.KeysAsync</c>
+    /// remains intact. Physically removing the entries would re-shape
+    /// the leaf chain mid-scan and break the ordering guarantee that
+    /// the merge relies on; sealing the read path at the leaf preserves
+    /// the invariant and is provably unobservable through any reader
+    /// because the cache prunes on the next
+    /// <see cref="GetDeltaSinceAsync"/>.
+    /// </para>
+    /// <para>
+    /// Idempotent on identical input. Persists the moved-slot set,
+    /// bumps the version vector + revision cookie, and persists once.
+    /// </para>
+    /// </summary>
+    /// <param name="sortedMovedSlots">Sorted, distinct virtual-slot indices that have moved away.</param>
+    /// <param name="virtualShardCount">The virtual shard count in force at the moment of the move.</param>
+    Task MarkSlotsMovedAwayAsync(int[] sortedMovedSlots, int virtualShardCount);
+
+    /// <summary>
     /// Returns a <see cref="StateDelta"/> containing all entries whose timestamp is
     /// newer than what <paramref name="sinceVersion"/> has seen.
     /// Returns an empty delta if the caller is already up to date.
@@ -224,6 +254,41 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </para>
     /// </summary>
     Task<List<string>> GetPendingKeysAsync();
+
+    /// <summary>
+    /// Returns a snapshot of every prepared mutation currently buffered
+    /// in this leaf's pending-tx map whose key hashes into one of the
+    /// virtual slots in <paramref name="sortedMovedSlots"/>. Used by the
+    /// retroactive shadow-forward sweep at the entry of a shard
+    /// split's <c>BeginShadowWrite</c> phase so prepares that landed on
+    /// the source shard <em>before</em> the split's shadow-forward
+    /// window opened are replayed into the destination shard's pending
+    /// bucket.
+    /// <para>
+    /// <paramref name="sortedMovedSlots"/> must be ascending; lookup
+    /// uses <see cref="Array.BinarySearch(int[], int)"/>. The
+    /// <paramref name="virtualShardCount"/> is the
+    /// <see cref="State.ShadowForwardState.VirtualShardCount"/>-equivalent
+    /// constant from the active <see cref="ShardMap"/> - the same value
+    /// every saga-coordinator + shard-split slot calculation already
+    /// uses. Returns an empty list when no pending bucket exists, no
+    /// pending key falls into a migrating slot, or the moved-slot
+    /// array is empty (steady-state hot path).
+    /// </para>
+    /// <para>
+    /// The returned <see cref="PendingMutationSnapshot"/> carries the
+    /// authoring <c>(Timestamp, OriginClusterId, VectorClock)</c> tuple
+    /// verbatim so the retroactive shadow-forward sweep can re-stamp each replay through
+    /// <see cref="LatticeHlcOverrideContext"/> +
+    /// <see cref="LatticeOriginContext"/> +
+    /// <see cref="LatticeVectorClockContext"/> scopes; the destination
+    /// leaf's pending-tx bucket then carries the same identity as the
+    /// source leaf's, and the saga's terminal mark drains both via the
+    /// same LWW path. Lightweight: returns the in-memory snapshot
+    /// without touching persistent state.
+    /// </para>
+    /// </summary>
+    Task<List<PendingMutationSnapshot>> GetPendingMutationsForSlotsAsync(int[] sortedMovedSlots, int virtualShardCount);
 
     /// <summary>
     /// Returns a <see cref="StateDelta"/> containing only the entries whose
@@ -296,8 +361,23 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// timestamps. Unlike <see cref="MergeEntriesAsync"/>, this method checks
     /// for leaf overflow and triggers a split if needed.
     /// Returns a <see cref="SplitResult"/> if the leaf split, otherwise <c>null</c>.
+    /// <para>
+    /// When <paramref name="isCrossShardMigration"/> is <c>true</c>, the
+    /// merge runs the asymmetric migration-vs-foreground rule: an incoming
+    /// entry is dropped if the destination already holds a non-migration
+    /// entry for the same key, and otherwise the stored entry is stamped
+    /// with <c>IsMigrated = true</c>. The flag is intended for the
+    /// cross-shard migration callsites only (the source-shard drain in
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.TreeShardSplitGrain"/>
+    /// and the per-write shadow-forward in
+    /// <c>ShardRootGrain.Split.cs</c>). All other callers (cross-cluster
+    /// replication, tree-merge, snapshot restore, intra-shard
+    /// sibling-merge) MUST pass <c>false</c> so the merge runs the
+    /// symmetric LWW-by-HLC contract and the incoming entry's own
+    /// <c>IsMigrated</c> flag is preserved verbatim.
+    /// </para>
     /// </summary>
-    Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries);
+    Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false);
 
     /// <summary>
     /// Clears all persistent state for this grain and deactivates it.
@@ -381,4 +461,47 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </para>
     /// </summary>
     Task<HybridLogicalClock> GetClockAsync();
+
+    /// <summary>
+    /// Installs a per-saga shadow marker on this destination leaf
+    /// claiming that the source-side saga <paramref name="transactionId"/>
+    /// affected each key in <paramref name="keys"/>. The marker is
+    /// consulted by the read path whenever an
+    /// <see cref="LwwValue{T}.IsMigrated"/>=<c>true</c> entry is about
+    /// to be surfaced for one of those keys: an in-flight or aborted
+    /// saga lets the migrated pre-saga value pass through (strict
+    /// isolation), while a saga that has committed at the registry
+    /// but whose backstop terminal has not yet reached this leaf
+    /// triggers a <see cref="StaleShardRoutingException"/> so the
+    /// <c>LatticeGrain</c> deadline-bounded retry loop re-fans once
+    /// the backstop arrives.
+    /// <para>
+    /// Installed by the split coordinator
+    /// (<see cref="ITreeShardSplitGrain"/>) during the drain and
+    /// retroactive-sweep phases of an online shard split, naming
+    /// every in-flight saga whose prepared mutations touched keys
+    /// migrating into the destination shard. The marker is cleared
+    /// automatically by <see cref="ApplyTxTerminalAsync"/> when the
+    /// saga's terminal reaches this leaf - so the marker has at most
+    /// saga-lifetime memory footprint and degenerates to a no-op
+    /// outside of an active split.
+    /// </para>
+    /// <para>
+    /// Idempotent on identical input; an empty <paramref name="keys"/>
+    /// list is a no-op (the saga touched only non-moved slots on
+    /// source). <paramref name="transactionId"/> must be non-empty -
+    /// the matching terminal mark needs a non-default key to clear
+    /// the marker.
+    /// </para>
+    /// </summary>
+    /// <param name="transactionId">
+    /// The source-side saga identifier whose prepared mutations
+    /// affected the listed keys. Must not be <see cref="Guid.Empty"/>.
+    /// </param>
+    /// <param name="keys">
+    /// The keys this saga affected on source whose virtual slots are
+    /// migrating to the destination shard owning this leaf. Must not
+    /// be <c>null</c>.
+    /// </param>
+    Task MarkSagaShadowAsync(Guid transactionId, IReadOnlyList<string> keys);
 }

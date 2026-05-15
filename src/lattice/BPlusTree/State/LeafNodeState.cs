@@ -147,6 +147,39 @@ internal sealed class LeafNodeState
     /// </summary>
     [Id(15)] public string? HighKeyExclusive { get; set; }
 
+    /// <summary>
+    /// Sorted, distinct set of virtual slot indices whose ownership has
+    /// migrated away from this leaf's owning shard. Populated by
+    /// <see cref="BPlusTree.Grains.BPlusLeafGrain.MarkSlotsMovedAwayAsync"/>
+    /// at the Swap phase of an adaptive shard split. Once a slot is
+    /// recorded here, the leaf's read entrypoints (<c>GetAsync</c>,
+    /// <c>GetWithVersionAsync</c>, <c>ExistsAsync</c>, <c>GetManyAsync</c>)
+    /// return null/false for any key hashing into that slot, sealing the
+    /// persistent-orphan read path that the cache-coherence prune pass
+    /// cannot reach via the <see cref="BPlusTree.Grains.ILeafCacheGrain"/>
+    /// pending-key delegation hole. The list is sticky once written
+    /// (slots never un-move).
+    /// <para>
+    /// <see langword="null"/> in the steady state (no slot has ever moved
+    /// away from this leaf), so non-resharded leaves pay zero per-leaf
+    /// allocation cost. Lazily allocated the first time
+    /// <see cref="BPlusTree.Grains.BPlusLeafGrain.MarkSlotsMovedAwayAsync"/>
+    /// fires and the underlying split shape actually changes ownership
+    /// of one of this leaf's slots.
+    /// </para>
+    /// </summary>
+    [Id(16)] public int[]? MovedAwaySlots { get; set; }
+
+    /// <summary>
+    /// The <see cref="ShardMap.VirtualShardCount"/> in force at the moment
+    /// <see cref="MovedAwaySlots"/> was populated. Required to recompute
+    /// the slot for an incoming key via
+    /// <see cref="ShardMap.GetVirtualSlot(string, int)"/>. <c>null</c>
+    /// when <see cref="MovedAwaySlots"/> is empty (the leaf has never
+    /// recorded a moved-away slot).
+    /// </summary>
+    [Id(17)] public int? MovedAwayVirtualShardCount { get; set; }
+
     /// <summary>Returns the number of live (non-tombstoned) entries.</summary>
     public int LiveCount
     {

@@ -38,6 +38,15 @@ internal sealed class LatticeOptionsResolver(
         {
             var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
             var entry = await registry.GetEntryAsync(treeId);
+#if LATTICE_DIAG
+            // DIAG-PATH1: record every resolve so we can see when entry transitions to defaults.
+            try
+            {
+                Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
+                    $"resolve-pre treeId={treeId} entry={(entry is null ? "null" : $"{{mlk={entry.MaxLeafKeys},mic={entry.MaxInternalChildren},sc={entry.ShardCount}}}")}");
+            }
+            catch { }
+#endif
             if (entry is null ||
                 entry.MaxLeafKeys is null ||
                 entry.MaxInternalChildren is null ||
@@ -49,6 +58,14 @@ internal sealed class LatticeOptionsResolver(
                 // idempotent and fills nulls with LatticeConstants defaults.
                 await registry.RegisterAsync(treeId, entry);
                 entry = await registry.GetEntryAsync(treeId) ?? entry;
+#if LATTICE_DIAG
+                try
+                {
+                    Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
+                        $"resolve-post-register treeId={treeId} entry={(entry is null ? "null" : $"{{mlk={entry.MaxLeafKeys},mic={entry.MaxInternalChildren},sc={entry.ShardCount}}}")}");
+                }
+                catch { }
+#endif
             }
             mlk = entry?.MaxLeafKeys ?? LatticeConstants.DefaultMaxLeafKeys;
             mic = entry?.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren;

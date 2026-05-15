@@ -77,6 +77,23 @@ public class ShardRootGrainTxTerminalTests
             state.State.RootNodeId = GrainId.Create("leaf", $"{TreeId}-leaf-0");
             state.State.RootIsLeaf = true;
         }
+        else
+        {
+            // Pre-populate state so EnsureRootAsync is a no-op (avoids
+            // calling GetGrainId() on a substitute, which requires a
+            // real grain reference). The AppendTxTerminalAsync pre-flight
+            // runs PrepareForOperationAsync -> EnsureRootAsync on every
+            // entry; pre-populating RootNodeId makes that early-return,
+            // so the test exercises the post-root-init code path
+            // (BroadcastTerminalToLeavesAsync) without requiring
+            // grain-extension support on the substitute. The bug shape
+            // itself - silent-skip on a null RootNodeId during the
+            // backstop branch - is exercised end-to-end by the reshard
+            // chaos suite where the real cluster actually creates leaves.
+            state.State.RootNodeId = GrainId.Create("leaf", $"{TreeId}-empty-leaf-sentinel");
+            state.State.RootIsLeaf = true;
+            state.State.IsRegistered = true;
+        }
 
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILeafCacheGrain>(Arg.Any<string>()).Returns(Substitute.For<ILeafCacheGrain>());
@@ -100,6 +117,23 @@ public class ShardRootGrainTxTerminalTests
                     : GrainId.Create("leaf", $"{TreeId}-leaf-{i}");
                 factory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leaf);
             }
+        }
+        else if (emptyChain)
+        {
+            // For the empty-chain harness, register a sentinel leaf at
+            // the pre-populated RootNodeId. The leaf has no siblings,
+            // so the chain walk completes in one step. Its
+            // GetClockAsync returns Zero, so the terminal HLC ticks
+            // to a non-Zero value (the existing assertion).
+            var sentinelLeaf = Substitute.For<IBPlusLeafGrain>();
+            sentinelLeaf.GetClockAsync().Returns(Task.FromResult(HybridLogicalClock.Zero));
+            sentinelLeaf.ApplyTxTerminalAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<bool>(),
+                Arg.Any<IReadOnlyDictionary<string, byte[]>?>())
+                .Returns(Task.CompletedTask);
+            sentinelLeaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
+            factory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value).Returns(sentinelLeaf);
         }
 
         var resolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions(), factory: factory);
@@ -558,6 +592,22 @@ public class ShardRootGrainTxTerminalTests
         await h.Leaves[0].DidNotReceive().ApplyTxTerminalAsync(txA, Arg.Any<bool>());
         await h.Leaves[1].DidNotReceive().ApplyTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>());
     }
+
+    // --- Regression: pre-flight must initialize root on freshly-activated shard ---
+    //
+    // The unit-level pin previously sketched here required GetGrainId() to
+    // succeed on an NSubstitute proxy of IBPlusLeafGrain - Orleans'
+    // GrainExtensions.GetGrainId rejects bare interface proxies (see the
+    // canonical pre-populate-RootNodeId workaround in
+    // ShardRootGrainHotnessTests.cs). The end-to-end pin lives in the
+    // reshard chaos suite's continuous-reader fixture, which exercises the
+    // bug shape (fresh destination shard receives a saga terminal with
+    // committedValues whose backstop must reach the destination's leaves)
+    // against a real cluster where Orleans' own machinery creates the
+    // leaves - the only place the call path is faithfully reproduced.
+    // The fix itself (PrepareForOperationAsync replacing
+    // ThrowIfTreeRejecting in AppendTxTerminalAsync) is documented at the
+    // call site.
 
     /// <summary>
     /// Mirrors <see cref="AppendTxTerminalAsync_evicts_tracking_entry_after_terminal_completes"/>

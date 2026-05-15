@@ -94,16 +94,30 @@ internal sealed partial class ShardRootGrain
         IReadOnlyDictionary<string, byte[]>? committedValues = null,
         CancellationToken cancellationToken = default)
     {
-        // Pre-flight gate: refuse if this shard is rejecting (mid
-        // Rejecting phase of a tree-rewrite). The caller will catch
-        // StaleTreeRoutingException and retry against the destination
-        // tree's shard, which is the correct linearization point now.
-        ThrowIfTreeRejecting();
+        // Pre-flight: refuse if this shard is rejecting (mid Rejecting phase of
+        // a tree-rewrite) so the caller can catch StaleTreeRoutingException and
+        // retry against the destination tree's shard. PrepareForOperationAsync
+        // additionally runs EnsureRootAsync, which is load-bearing for the
+        // cross-migration backstop path: when the retroactive prepared-mutation
+        // sweep migrates a saga's prepared mutations to a freshly-activated
+        // destination shard whose RootNodeId is still null, a terminal arriving
+        // with committedValues must initialize the destination's tree before
+        // BroadcastTerminalToLeavesAsync runs, or the per-leaf RootNodeId-is-null
+        // guard there silently drops every backstop write and the sweep's
+        // prepared entries become orphans in _pendingTx - which surface as
+        // pre-saga reads once the saga's decision is forgotten by
+        // ITxRegistryGrain.
+        await PrepareForOperationAsync();
 
         if (transactionId == Guid.Empty)
             return;
 
         cancellationToken.ThrowIfCancellationRequested();
+
+#if LATTICE_DIAG
+        var diagTrackedCount = (_affectedLeavesByTx is not null && _affectedLeavesByTx.TryGetValue(transactionId, out var diagAff)) ? diagAff.Count : -1;
+        DiagSink.Write($"[DIAG terminal-recv] gid={context.GrainId} shardIdx={ShardIndex} tx={transactionId} committed={committed} trackedAffectedCount={diagTrackedCount} committedValuesCount={committedValues?.Count ?? 0} committedKeys=[{(committedValues is null ? "<null>" : string.Join(",", committedValues.Keys))}]");
+#endif
 
         // Step 1 (target resolution) - prefer the per-saga
         // affected-leaves set recorded during prepare-routed writes
@@ -202,32 +216,27 @@ internal sealed partial class ShardRootGrain
         // shape onto the destination shard, which independently
         // appends its own WAL terminal + fans out on its own chain.
         //
-        // Two shadow-forward channels run in parallel:
-        //   (a) ForwardShadowAsync targets state.State.ShadowForward,
-        //       i.e. the resize / online-merge destination tree (a
-        //       different physical tree id, same shard index). Active
-        //       only when this shard is participating in a tree-wide
-        //       rewrite.
-        //   (b) ForwardSplitTerminalAsync targets state.State.SplitInProgress,
-        //       i.e. the destination shard of an in-flight shard split
-        //       (same physical tree, different shard index). Active
-        //       only when the saga's prepare-phase writes also
-        //       shadow-forwarded into the destination via
-        //       ForwardLocalWriteToShadowIfNeededAsync (which routes
-        //       prepared writes through SetAsync so the destination
-        //       leaf buckets the value into its own _pendingTx[txid]).
-        //       Without (b), a saga whose prepare straddles a shard
-        //       split would leave the destination's pending-tx bucket
-        //       orphaned forever once AtomicWriteGrain calls
-        //       ITxRegistryGrain.ForgetAsync - readers routing to the
-        //       destination after the swap would consult the registry,
-        //       see TxStatus.InFlight (the registry's default for
-        //       forgotten ids), hide the pending entry, and surface
-        //       the destination's pre-saga Entries indefinitely. The
-        //       chaos test
-        //       ShardSplitTopologyTests.Continuous_reader_observes_zero
-        //       _or_all_keys_through_mid_saga_shard_split exercises
-        //       this path.
+        // ForwardShadowAsync targets state.State.ShadowForward, i.e.
+        // the resize / online-merge destination tree (a different
+        // physical tree id, same shard index). Active only when this
+        // shard is participating in a tree-wide rewrite. The
+        // SAME-physical-tree split-forward channel is NOT driven from
+        // here - the saga (AtomicWriteGrain.BroadcastTerminalsAsync)
+        // and the cross-cluster replication apply path
+        // (LatticeGrain.ApplyTxTerminalAsync) pre-resolve the
+        // transitive closure of split destinations via
+        // TerminalFanOutResolver.ResolveTransitiveAsync and fan the
+        // terminal out flat (in parallel) across every shard in the
+        // closure. That replaces the previous recursive
+        // ForwardSplitTerminalAsync hop on the receiving shard, which
+        // unbounded the RPC chain depth under cascading mid-saga
+        // splits and tripped Orleans' default response timeout on
+        // deep multi-hop reshard chains. The saga walks each shard's
+        // GetSplitForwardTargetsAsync, BFS-expanding the seed set
+        // until no new destinations are discovered, then fans every
+        // shard in the closure in parallel - so cascading splits
+        // collapse to a single-hop parallel fan-out at the saga
+        // layer.
         var leafFanOut = BroadcastTerminalToLeavesAsync(
             trackedAffected,
             transactionId,
@@ -240,9 +249,7 @@ internal sealed partial class ShardRootGrain
             static (target, state) => target.AppendTxTerminalAsync(
                 state.transactionId, state.committed, state.committedValues, state.cancellationToken));
 
-        var splitShadowForward = ForwardSplitTerminalAsync(transactionId, committed, committedValues, cancellationToken);
-
-        await Task.WhenAll(leafFanOut, shadowForward, splitShadowForward);
+        await Task.WhenAll(leafFanOut, shadowForward);
     }
 
     /// <summary>
@@ -406,23 +413,16 @@ internal sealed partial class ShardRootGrain
         await Task.WhenAll(pending);
     }
 
-    /// <summary>
-    /// Mirrors <see cref="AppendTxTerminalAsync(Guid, bool, IReadOnlyDictionary{string, byte[]}, CancellationToken)"/>
-    /// onto the destination shard(s) of any shard split this shard has
-    /// participated in as the source - both an in-flight split (read
-    /// from <see cref="ShardRootState.SplitInProgress"/>) and every
-    /// completed split whose moved-away slots still record the
-    /// destination shard index in
-    /// <see cref="ShardRootState.MovedAwaySlots"/>. The destination shard
-    /// independently consumes its own per-saga affected-leaves map
-    /// (populated by <see cref="ForwardLocalWriteToShadowIfNeededAsync"/>'s
-    /// prepared-write branch via <see cref="SetAsync"/>), appends its
-    /// own per-shard WAL terminal entry, and fans the terminal RPC out
-    /// to its own affected-leaves subset. Idempotent: a terminal that
-    /// arrives via this path and a subsequent stale-routing retry from
-    /// <see cref="AtomicWriteGrain"/> deduplicates inside each leaf's
-    /// <c>_recentlyTerminal</c> set. No-op when this shard has never
-    /// shadow-forwarded any prepared writes (no split state recorded).
+    /// <inheritdoc />
+    /// <remarks>
+    /// Synchronous read of the persisted split state - no WAL append,
+    /// no fan-out, no clock-tick. The shard root computes the union of
+    /// (a) <see cref="ShardRootState.SplitInProgress"/>.ShadowTargetShardIndex
+    /// (when a split is in progress) and (b) every distinct value in
+    /// <see cref="ShardRootState.MovedAwaySlots"/>, excluding this
+    /// shard's own index. Used by
+    /// <see cref="TerminalFanOutResolver.ResolveTransitiveAsync"/> as
+    /// the per-shard BFS expansion step.
     /// <para>
     /// <b>Why both windows are required.</b> A saga whose prepare runs
     /// during <see cref="ShardSplitPhase.BeginShadowWrite"/> /
@@ -433,26 +433,19 @@ internal sealed partial class ShardRootGrain
     /// lands on this source shard *after* the split has progressed to
     /// <see cref="ShardSplitPhase.Reject"/> - or after the split has
     /// fully completed and <see cref="ShardRootState.SplitInProgress"/>
-    /// has been cleared - the destination's pending bucket is orphaned
-    /// forever (or until aged out by the replay coordinator), and a
-    /// reader routed to the destination after the swap surfaces the
-    /// destination's pre-saga value indefinitely. Forwarding the terminal
-    /// to every destination this shard has ever migrated slots to
-    /// closes that window: each destination either flushes a real
-    /// pending bucket into its visible projection (committed=true) or
-    /// drops it (committed=false), and destinations that hold no
-    /// pending bucket for this saga simply no-op via their per-leaf
-    /// <c>_recentlyTerminal</c> dedup.
+    /// has been cleared - the destination's pending bucket would be
+    /// orphaned without an explicit terminal mark. Reporting every
+    /// destination this shard has ever migrated slots to via
+    /// <see cref="ShardRootState.MovedAwaySlots"/> lets the saga's
+    /// flat fan-out reach all of them: each destination either
+    /// flushes a real pending bucket into its visible projection
+    /// (committed=true) or drops it (committed=false), and destinations
+    /// that hold no pending bucket for this saga simply no-op via
+    /// their per-leaf <c>_recentlyTerminal</c> dedup.
     /// </para>
-    /// </summary>
-    private Task ForwardSplitTerminalAsync(Guid transactionId, bool committed, IReadOnlyDictionary<string, byte[]>? committedValues, CancellationToken cancellationToken)
+    /// </remarks>
+    public Task<List<int>> GetSplitForwardTargetsAsync()
     {
-        // Collect distinct destination shard indices: the in-flight
-        // split's target (if any) plus every distinct target recorded
-        // in MovedAwaySlots (which persists past SplitInProgress = null
-        // for the lifetime of this shard's activation, so completed
-        // splits whose terminal arrives after Reject / Complete are
-        // still covered).
         HashSet<int>? targets = null;
 
         var sip = state.State.SplitInProgress;
@@ -473,24 +466,10 @@ internal sealed partial class ShardRootGrain
         }
 
         if (targets is null || targets.Count == 0)
-            return Task.CompletedTask;
+            return Task.FromResult(new List<int>());
 
-        if (targets.Count == 1)
-        {
-            // Fast path: single destination (the common case - one
-            // split per shard at a time, or one completed split that
-            // moved every migrated slot to the same target).
-            var only = targets.First();
-            var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{only}");
-            return target.AppendTxTerminalAsync(transactionId, committed, committedValues, cancellationToken);
-        }
-
-        var tasks = new List<Task>(targets.Count);
-        foreach (var idx in targets)
-        {
-            var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{idx}");
-            tasks.Add(target.AppendTxTerminalAsync(transactionId, committed, committedValues, cancellationToken));
-        }
-        return Task.WhenAll(tasks);
+        var list = new List<int>(targets);
+        list.Sort();
+        return Task.FromResult(list);
     }
 }

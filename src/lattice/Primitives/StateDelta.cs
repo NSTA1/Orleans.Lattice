@@ -27,6 +27,24 @@ internal sealed record StateDelta
     /// </summary>
     [Id(2)] public string? SplitKey { get; init; }
 
+    /// <summary>
+    /// Sorted virtual-slot indices that have migrated away from the source
+    /// leaf since the requester's <see cref="Version"/>. Cache consumers
+    /// should prune any locally held entries whose key hashes (via
+    /// <c>ShardMap.GetVirtualSlot</c> with <see cref="MovedAwayVsc"/>) into
+    /// one of these slots, because those keys are now owned by a different
+    /// shard and the leaf's read entrypoints have started returning null
+    /// for them.
+    /// </summary>
+    [Id(3)] public int[]? MovedAwaySlots { get; init; }
+
+    /// <summary>
+    /// The virtual shard count in force when <see cref="MovedAwaySlots"/>
+    /// was populated. Required by cache consumers to map keys into slots
+    /// for the prune pass.
+    /// </summary>
+    [Id(4)] public int? MovedAwayVsc { get; init; }
+
     /// <summary><c>true</c> if there were no changes to send.</summary>
     public bool IsEmpty => Entries.Count == 0;
 }

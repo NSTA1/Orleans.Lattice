@@ -163,7 +163,16 @@ internal sealed partial class ShardRootGrain
 
         _registeredParticipantTxids ??= [];
         if (!_registeredParticipantTxids.Add(txid))
+        {
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG register-participant-dup] gid={context.GrainId} shardIdx={MyShardIndex} tx={txid} leaf={leafId}");
+#endif
             return;
+        }
+
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG register-participant] gid={context.GrainId} shardIdx={MyShardIndex} tx={txid} leaf={leafId}");
+#endif
 
         try
         {

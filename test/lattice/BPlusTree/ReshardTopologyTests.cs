@@ -1,6 +1,9 @@
 using System.Collections.Concurrent;
 using System.Text;
 using Orleans.Lattice.BPlusTree;
+#if LATTICE_DIAG
+using Orleans.Lattice.BPlusTree.Grains;
+#endif
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -56,9 +59,12 @@ public class ReshardTopologyTests
     }
 
     [Test]
-    [Ignore("Temporarily disabled to unblock CI; mid-saga reshard visibility check flakes intermittently and is being stabilised separately.")]
     public async Task Continuous_reader_observes_zero_or_all_keys_through_mid_saga_reshard()
     {
+#if LATTICE_DIAG
+        DiagSink.Reset();
+        DiagSink.Write($"[DIAG test-start] Continuous_reader_observes_zero_or_all_keys_through_mid_saga_reshard");
+#endif
         var treeId = $"reshard-{Guid.NewGuid():N}";
         var tree = await _fixture.CreateTreeAsync(treeId);
 
@@ -115,6 +121,9 @@ public class ReshardTopologyTests
 
         for (int round = 1; round <= IterationCount; round++)
         {
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG test-round-start] round={round}");
+#endif
             var newBatch = new List<KeyValuePair<string, byte[]>>(BatchSize);
             for (int i = 0; i < BatchSize; i++)
                 newBatch.Add(new(KeyOf(i), Value(round, i)));
@@ -141,6 +150,7 @@ public class ReshardTopologyTests
                     Interlocked.Increment(ref totalPolls);
 
                     int preCount = 0, postCount = 0, missingCount = 0, otherCount = 0;
+                    List<(string Key, int Round)>? otherDetail = null;
                     foreach (var key in allKeys)
                     {
                         if (!snapshot.TryGetValue(key, out var bytes) || bytes is null)
@@ -151,11 +161,20 @@ public class ReshardTopologyTests
                         var observedRound = RoundOf(bytes);
                         if (observedRound == preRound) preCount++;
                         else if (observedRound == postRound) postCount++;
-                        else otherCount++;
+                        else
+                        {
+                            otherCount++;
+                            (otherDetail ??= []).Add((key, observedRound));
+                        }
                     }
 
                     if (otherCount > 0)
-                        failures.Add($"round={capturedRound}: unknown-round (pre={preCount}, post={postCount}, missing={missingCount}, other={otherCount})");
+                    {
+                        var detail = otherDetail is null
+                            ? string.Empty
+                            : " detail=[" + string.Join(", ", otherDetail.Select(d => $"{d.Key}=r{d.Round}")) + "]";
+                        failures.Add($"round={capturedRound}: unknown-round (pre={preCount}, post={postCount}, missing={missingCount}, other={otherCount}){detail}");
+                    }
                     else if (preCount == BatchSize)
                         Interlocked.Increment(ref fullPrePolls);
                     else if (postCount == BatchSize)
@@ -163,7 +182,17 @@ public class ReshardTopologyTests
                     else if (missingCount == BatchSize)
                         Interlocked.Increment(ref fullHiddenPolls);
                     else
+                    {
+#if LATTICE_DIAG
+                        var perKey = string.Join(',', allKeys.Select(k =>
+                        {
+                            if (!snapshot.TryGetValue(k, out var b) || b is null) return $"{k}=missing";
+                            return $"{k}=r{RoundOf(b)}";
+                        }));
+                        DiagSink.Write($"[DIAG reader-result-mix] round={capturedRound} pre={preCount} post={postCount} missing={missingCount} perKey=[{perKey}]");
+#endif
                         failures.Add($"round={capturedRound}: split (pre={preCount}, post={postCount}, missing={missingCount})");
+                    }
 
                     try { await Task.Delay(PollCadence, ct); }
                     catch (OperationCanceledException) { return; }
@@ -171,6 +200,9 @@ public class ReshardTopologyTests
             }, ct);
 
             await tree.SetManyAtomicAsync(newBatch);
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG test-round-committed] round={round}");
+#endif
             await Task.Delay(PollCadence + PollCadence, CancellationToken.None);
             cts.Cancel();
             try { await reader; } catch (OperationCanceledException) { }

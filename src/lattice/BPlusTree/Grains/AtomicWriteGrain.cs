@@ -344,7 +344,21 @@ internal sealed class AtomicWriteGrain(
         }
 
         var lattice = grainFactory.GetGrain<ILattice>(treeId);
-        var routing = await lattice.GetRoutingAsync();
+        // forceRefresh:true at saga entry: the saga's TouchedShards
+        // capture, per-key SetAsync routing, and BroadcastTerminalsAsync
+        // drift correction all derive from this initial snapshot. A
+        // stale activation-cached map here would seed the saga with the
+        // pre-reshard physical shard set, and even though the broadcast
+        // pass re-resolves with forceRefresh:true, the per-key SetAsync
+        // loop in ExecutePhaseAsync routes through the public
+        // ILattice surface against the LatticeGrain's own cache - if
+        // that cache is also stale, some keys land on shards that have
+        // since lost ownership of their slot, leaving the pending-tx
+        // bucket on the wrong physical shard. Starting the saga with a
+        // freshly-forced cache invalidation propagates the new map to
+        // every subsequent ILattice call from this activation and so
+        // anchors the saga to the post-migration topology.
+        var routing = await lattice.GetRoutingAsync(forceRefresh: true);
         var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
 
         // Touched-shard set capture. Populated from the routing
@@ -465,54 +479,95 @@ internal sealed class AtomicWriteGrain(
         // budget elapses; a when-filter on the catch could race against
         // the loop condition and exit silently.
         var deadline = DateTime.UtcNow + StaleRoutingRetryBudget;
-        var keys = new List<string>(bucket.Count);
-        foreach (var (key, _) in bucket) keys.Add(key);
-
-        List<LwwEntry?>? raws = null;
         var routing = initialRouting;
         while (true)
         {
+            var keys = new List<string>(bucket.Count);
+            foreach (var (key, _) in bucket) keys.Add(key);
+
+            List<LwwEntry?>? raws = null;
             try
             {
                 var shard = grainFactory.GetGrain<IShardRootGrain>(
                     $"{routing.PhysicalTreeId}/{shardIndex}");
                 raws = await shard.GetRawEntriesAsync(keys);
-                break;
             }
             catch (StaleShardRoutingException)
             {
-                // Adaptive shard split / reshard remapped this slot;
-                // refresh routing and retry against the new owner.
+                // Adaptive shard split / reshard remapped at least one
+                // slot in this bucket. Refresh routing and re-bucket
+                // remaining keys against the new map: a refresh alone
+                // is not enough because the per-bucket call addresses
+                // the OLD shardIndex, which still owns only a subset
+                // (or none) of the bucket's keys after migration. The
+                // forceRefresh:true overload is required - the
+                // LatticeGrain is a StatelessWorker with per-activation
+                // cached routing whose private invalidation hooks only
+                // fire on the grain's own internal stale-routing
+                // catches; an external caller cannot otherwise force a
+                // cache refresh, so a plain GetRoutingAsync() retry
+                // would spin against the same stale map indefinitely.
                 if (DateTime.UtcNow >= deadline) throw;
-                routing = await lattice.GetRoutingAsync();
+                routing = await lattice.GetRoutingAsync(forceRefresh: true);
+                var rebucketed = new Dictionary<int, List<(string Key, int Index)>>();
+                foreach (var entry in bucket)
+                {
+                    var newOwner = routing.Map.Resolve(entry.Key);
+                    if (!rebucketed.TryGetValue(newOwner, out var list))
+                        rebucketed[newOwner] = list = new List<(string, int)>();
+                    list.Add(entry);
+                }
+                // Fast path: every key still routes to the same shard
+                // we just queried (so the throw came from an alias
+                // swap or a transient inconsistency, not a real
+                // migration of this bucket's keys). Retry against the
+                // refreshed physical tree id without recursing.
+                if (rebucketed.Count == 1 && rebucketed.ContainsKey(shardIndex))
+                    continue;
+                // Migration: fan out the bucket across its new owners.
+                // Each sub-bucket recursively goes through the same
+                // stale-routing recovery loop, so cascading splits
+                // converge in O(splits) per affected key.
+                var pending = new List<Task>(rebucketed.Count);
+                foreach (var (newShardIdx, subBucket) in rebucketed)
+                    pending.Add(CaptureShardAsync(lattice, routing, newShardIdx, subBucket, preValues, nowTicks));
+                await Task.WhenAll(pending);
+                return;
             }
             catch (StaleTreeRoutingException)
             {
                 // Tree alias was swapped mid-saga (online resize /
                 // reshard); refresh routing and retry against the new
-                // physical tree.
+                // physical tree. shardIndex is preserved because alias
+                // swap does not remap virtual slots, only the physical
+                // tree's storage suffix. Same force-refresh rationale
+                // as the StaleShardRoutingException catch above.
                 if (DateTime.UtcNow >= deadline) throw;
-                routing = await lattice.GetRoutingAsync();
+                routing = await lattice.GetRoutingAsync(forceRefresh: true);
+                continue;
             }
-        }
 
-        for (int i = 0; i < bucket.Count; i++)
-        {
-            var raw = raws![i];
-            // LwwEntry fields are flat (Value/Timestamp/IsTombstone/ExpiresAtTicks).
-            // ToLwwValue() rehydrates the underlying LwwValue for IsExpired.
-            var existed = raw is not null
-                && !raw.Value.IsTombstone
-                && !raw.Value.ToLwwValue().IsExpired(nowTicks);
-            preValues[bucket[i].Index] = new AtomicPreValue
+            // Success: scatter raws into preValues at each entry's
+            // original input index. raws is aligned by index with
+            // the keys list we built above, which itself preserves
+            // bucket order.
+            for (int i = 0; i < bucket.Count; i++)
             {
-                Key = bucket[i].Key,
-                Value = existed ? raw!.Value.Value : null,
-                Existed = existed,
-                ExpiresAtTicks = existed ? raw!.Value.ExpiresAtTicks : 0,
-                OriginClusterId = existed ? raw!.Value.OriginClusterId : null,
-                VectorClock = existed ? raw!.Value.VectorClock : null,
-            };
+                var raw = raws![i];
+                var existed = raw is not null
+                    && !raw.Value.IsTombstone
+                    && !raw.Value.ToLwwValue().IsExpired(nowTicks);
+                preValues[bucket[i].Index] = new AtomicPreValue
+                {
+                    Key = bucket[i].Key,
+                    Value = existed ? raw!.Value.Value : null,
+                    Existed = existed,
+                    ExpiresAtTicks = existed ? raw!.Value.ExpiresAtTicks : 0,
+                    OriginClusterId = existed ? raw!.Value.OriginClusterId : null,
+                    VectorClock = existed ? raw!.Value.VectorClock : null,
+                };
+            }
+            return;
         }
     }
 
@@ -566,6 +621,10 @@ internal sealed class AtomicWriteGrain(
             return;
         }
 
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG broadcast-entry] op={OperationKey} tx={transactionId} committed={committed} initialTouched=[{string.Join(",", state.State.TouchedShards)}] entriesCount={state.State.Entries.Count}");
+#endif
+
         // Reconstruct the touched-shard set on legacy state where the
         // slot was never populated. Persist the reconstruction so a
         // subsequent crash-resume can skip the rebuild.
@@ -580,7 +639,7 @@ internal sealed class AtomicWriteGrain(
         RoutingInfo? routing = null;
         if (state.State.TouchedShards.Count == 0 && state.State.Entries.Count > 0)
         {
-            routing = await lattice.GetRoutingAsync();
+            routing = await lattice.GetRoutingAsync(forceRefresh: true);
             physicalTreeId = routing.PhysicalTreeId;
             var touched = new HashSet<int>();
             foreach (var entry in state.State.Entries)
@@ -604,6 +663,9 @@ internal sealed class AtomicWriteGrain(
                 state.State.TouchedShards = prevTouchedShards;
                 throw;
             }
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG broadcast-reconstructed] op={OperationKey} tx={transactionId} touched=[{string.Join(",", state.State.TouchedShards)}]");
+#endif
         }
         else if (state.State.Entries.Count > 0)
         {
@@ -627,10 +689,11 @@ internal sealed class AtomicWriteGrain(
             // TouchedShards. This is purely additive - old captures
             // are preserved (for sagas whose prepare landed on the
             // OLD owner before a migration moved the slot, the OLD
-            // owner is in TouchedShards and ForwardSplitTerminalAsync
-            // mirrors the terminal forward to the migration's
-            // destination via state.MovedAwaySlots / SplitInProgress).
-            routing = await lattice.GetRoutingAsync();
+            // owner is in TouchedShards and the
+            // TerminalFanOutResolver pass below BFS-expands the
+            // OLD owner's MovedAwaySlots / SplitInProgress into the
+            // broadcast's destination set).
+            routing = await lattice.GetRoutingAsync(forceRefresh: true);
             physicalTreeId = routing.PhysicalTreeId;
             HashSet<int>? union = null;
             foreach (var entry in state.State.Entries)
@@ -658,6 +721,9 @@ internal sealed class AtomicWriteGrain(
                     state.State.TouchedShards = prevTouchedShards;
                     throw;
                 }
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG broadcast-drift-corrected] op={OperationKey} tx={transactionId} touched=[{string.Join(",", state.State.TouchedShards)}]");
+#endif
             }
         }
 
@@ -677,10 +743,20 @@ internal sealed class AtomicWriteGrain(
         // amortised cost is negligible compared to the per-shard
         // terminal fan-out below. The registry returns a sorted set
         // so the union iteration is order-deterministic.
+        //
+        // The registry handle is hoisted to function scope so the
+        // post-fan-out late-participant fetch-loop below can reuse it
+        // without re-resolving the grain reference. It is non-null
+        // here only when transactionId != Guid.Empty (the early-return
+        // at the top of this method guarantees that precondition).
+        ITxRegistryGrain? registry = null;
         if (transactionId != Guid.Empty)
         {
-            var registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
+            registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
             var participants = await registry.GetParticipantsAsync(transactionId);
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG broadcast-registry-fetch] op={OperationKey} tx={transactionId} participants=[{string.Join(",", participants)}]");
+#endif
             if (participants.Count > 0)
             {
                 HashSet<int>? regUnion = null;
@@ -707,6 +783,9 @@ internal sealed class AtomicWriteGrain(
                         state.State.TouchedShards = prevTouchedShards;
                         throw;
                     }
+#if LATTICE_DIAG
+                    DiagSink.Write($"[DIAG broadcast-registry-unioned] op={OperationKey} tx={transactionId} touched=[{string.Join(",", state.State.TouchedShards)}]");
+#endif
                 }
             }
         }
@@ -730,6 +809,41 @@ internal sealed class AtomicWriteGrain(
         // fresh routing snapshot in hand and reuse it.
         physicalTreeId ??= state.State.TreeId;
 
+        // Pre-resolve the transitive split-forward closure of
+        // TouchedShards. Each shard root's GetSplitForwardTargetsAsync
+        // reports its in-flight split destination (when one is
+        // recorded) plus every distinct value in its MovedAwaySlots
+        // map, and the resolver BFS-expands those wavefronts until
+        // no new destinations are discovered. The expanded set
+        // replaces the recursive ForwardSplitTerminalAsync hop that
+        // ShardRootGrain.AppendTxTerminalAsync used to perform on
+        // every receive: under cascading mid-saga splits that
+        // recursion compounded into an unbounded RPC chain depth on
+        // a single shard's turn, which tripped Orleans' default
+        // response timeout (~30s) on deep multi-hop reshard chains
+        // (e.g. 4 -> 8 reshard with cascading adaptive splits ending
+        // at 11 physical shards). Pre-resolving here moves the fan-
+        // out into the saga's own broadcast loop, where every
+        // destination is reached in a single parallel hop. Persist
+        // the expanded set so a crash-resume picks up the same
+        // closure without re-running the BFS.
+        if (state.State.TouchedShards.Count > 0)
+        {
+            var expanded = await TerminalFanOutResolver.ResolveTransitiveAsync(
+                grainFactory,
+                physicalTreeId,
+                state.State.TouchedShards,
+                CancellationToken.None);
+            if (expanded.Count != state.State.TouchedShards.Count)
+            {
+                state.State.TouchedShards = expanded;
+                await state.WriteStateAsync();
+            }
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG broadcast-expanded] op={OperationKey} tx={transactionId} touched=[{string.Join(",", state.State.TouchedShards)}]");
+#endif
+        }
+
         // Compute per-shard subsets of the saga's committed values for
         // the cross-migration LWW backstop. The backstop fires on the
         // commit path only; on abort, the leaf-side handler drops the
@@ -750,14 +864,7 @@ internal sealed class AtomicWriteGrain(
         Dictionary<int, Dictionary<string, byte[]>>? perShardCommitted = null;
         if (committed && state.State.Entries.Count > 0)
         {
-            // Reuse the routing snapshot the drift-correction branch
-            // above already fetched. Both branches that can reach this
-            // point with Entries.Count > 0 also fetched routing
-            // (TouchedShards-reconstruction and drift-correction), so
-            // routing is non-null here. The defensive null-coalesce
-            // covers the theoretical case where future edits add a
-            // path that bypasses both branches.
-            var routingForBackstop = routing ?? await lattice.GetRoutingAsync();
+            var routingForBackstop = routing ?? await lattice.GetRoutingAsync(forceRefresh: true);
             perShardCommitted = new Dictionary<int, Dictionary<string, byte[]>>();
             foreach (var entry in state.State.Entries)
             {
@@ -769,7 +876,55 @@ internal sealed class AtomicWriteGrain(
                 }
                 bucket[entry.Key] = entry.Value;
             }
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG broadcast-perShardCommitted] op={OperationKey} tx={transactionId} shards=[{string.Join(",", perShardCommitted.Keys.Select(k => $"{k}({perShardCommitted[k].Count})"))}]");
+#endif
         }
+
+        // Defensive backstop for transitive-expansion shards. The
+        // routing-based perShardCommitted loop above only populates
+        // entries for shards whose ownership is reflected in the
+        // current routing map. Transitively-discovered shards from
+        // TerminalFanOutResolver (cascading mid-saga split
+        // destinations whose alias swap hasn't landed yet) would
+        // otherwise receive a NULL backstop dict, leaving any saga
+        // key whose pending bucket on the destination was dropped
+        // (sweep failure, drain race) orphaned at the destination's
+        // pre-saga value. The pre-flat-fan-out recursive forwarding
+        // path covered this defensively by passing committedValues
+        // unchanged through every hop; the destination's
+        // BroadcastTerminalToLeavesAsync then localized each key via
+        // per-key TraverseToLeafAsync. Restore the same defensive
+        // surface by handing every TouchedShard without a routing-
+        // resolved subset the FULL backstop dict - the shard root's
+        // per-key traversal routes only the keys it actually owns to
+        // its own leaves. CRDT-LWW-safe under accidental delivery:
+        // leaf ApplyTxTerminalAsync performs no range-ownership
+        // check (see ShardRootGrain.TxTerminal.cs:339-340).
+        //
+        // The full-backstop dict is hoisted to function scope so the
+        // post-fan-out late-participant fetch-loop below can reuse it
+        // for any late arrival whose ownership is not reflected in the
+        // routing snapshot used to compute perShardCommitted above.
+        Dictionary<string, byte[]>? fullBackstop = null;
+        if (committed && state.State.Entries.Count > 0 && perShardCommitted is not null)
+        {
+            foreach (var shardIndex in state.State.TouchedShards)
+            {
+                if (perShardCommitted.ContainsKey(shardIndex)) continue;
+                if (fullBackstop is null)
+                {
+                    fullBackstop = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+                    foreach (var entry in state.State.Entries)
+                        fullBackstop[entry.Key] = entry.Value;
+                }
+                perShardCommitted[shardIndex] = fullBackstop;
+            }
+        }
+
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG broadcast-initial-fanout] op={OperationKey} tx={transactionId} shards=[{string.Join(",", state.State.TouchedShards)}]");
+#endif
 
         var pending = new List<Task>(state.State.TouchedShards.Count);
         foreach (var shardIndex in state.State.TouchedShards)
@@ -781,6 +936,106 @@ internal sealed class AtomicWriteGrain(
         }
 
         await Task.WhenAll(pending);
+
+        // Orphan-window closure: re-fetch participants and drain any
+        // late arrivals. The initial GetParticipantsAsync fetch above
+        // is a single snapshot, but a concurrent
+        // TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync
+        // can register a destination shard as a participant via
+        // RecordAffectedLeafIfPreparedAsync AFTER the snapshot and
+        // BEFORE the saga calls ForgetAsync on the registry. Without
+        // this loop, that late-arrived destination keeps an orphaned
+        // _pendingTx bucket whose Decisions[txid] = Committed is still
+        // recorded, so a reader routed to that destination resolves
+        // the pending status to Committed and surfaces the saga's
+        // pre-overlay value indefinitely (until the next saga's
+        // shadow-overwrite, which the chaos suite caught as the
+        // surviving visibility-race after the flat saga-terminal
+        // fan-out eliminated the recursive-forward timeout failure
+        // mode but left this orphan window open).
+        //
+        // Each iteration: (1) re-fetch the registry participants;
+        // (2) diff against the already-terminalled set; (3)
+        // transitively expand new arrivals via
+        // TerminalFanOutResolver so any cascading-split children of
+        // the new arrival are also reached; (4) fan terminals out
+        // to the late shards using the same per-shard subset / full-
+        // backstop logic as the initial pass; (5) persist the
+        // updated TouchedShards so crash-resume picks up the same
+        // closure. Bounded by MaxLateRefetchRounds to guarantee
+        // liveness under continuous cascading splits - the leaf-side
+        // _recentlyTerminal dedup makes re-targeting an already-
+        // terminalled shard a safe no-op, so the cap is a wall-
+        // clock guard, not a correctness guard.
+        if (registry is not null)
+        {
+            const int MaxLateRefetchRounds = 5;
+            var terminalled = new HashSet<int>(state.State.TouchedShards);
+            for (var latePass = 0; latePass < MaxLateRefetchRounds; latePass++)
+            {
+                var freshParticipants = await registry.GetParticipantsAsync(transactionId);
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG broadcast-late-pass-fetch] op={OperationKey} tx={transactionId} pass={latePass} participants=[{string.Join(",", freshParticipants)}] alreadyTerminalled=[{string.Join(",", terminalled)}]");
+#endif
+                if (freshParticipants.Count == 0) break;
+                var newlyArrived = new List<int>();
+                foreach (var s in freshParticipants)
+                {
+                    if (!terminalled.Contains(s)) newlyArrived.Add(s);
+                }
+                if (newlyArrived.Count == 0) break;
+
+                var expanded = await TerminalFanOutResolver.ResolveTransitiveAsync(
+                    grainFactory,
+                    physicalTreeId,
+                    newlyArrived,
+                    CancellationToken.None);
+                var lateToSend = new List<int>();
+                foreach (var s in expanded)
+                {
+                    if (terminalled.Add(s)) lateToSend.Add(s);
+                }
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG broadcast-late-pass-send] op={OperationKey} tx={transactionId} pass={latePass} newlyArrived=[{string.Join(",", newlyArrived)}] expanded=[{string.Join(",", expanded)}] lateToSend=[{string.Join(",", lateToSend)}]");
+#endif
+                if (lateToSend.Count == 0) break;
+
+                var latePending = new List<Task>(lateToSend.Count);
+                foreach (var shardIndex in lateToSend)
+                {
+                    IReadOnlyDictionary<string, byte[]>? subset = null;
+                    if (perShardCommitted is not null)
+                    {
+                        if (perShardCommitted.TryGetValue(shardIndex, out var existing))
+                        {
+                            subset = existing;
+                        }
+                        else if (committed && state.State.Entries.Count > 0)
+                        {
+                            if (fullBackstop is null)
+                            {
+                                fullBackstop = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+                                foreach (var entry in state.State.Entries)
+                                    fullBackstop[entry.Key] = entry.Value;
+                            }
+                            perShardCommitted[shardIndex] = fullBackstop;
+                            subset = fullBackstop;
+                        }
+                    }
+                    latePending.Add(MarkOneShardAsync(physicalTreeId, shardIndex, transactionId, committed, subset));
+                }
+                await Task.WhenAll(latePending);
+
+                var sortedSent = new List<int>(terminalled);
+                sortedSent.Sort();
+                state.State.TouchedShards = sortedSent;
+                await state.WriteStateAsync();
+            }
+        }
+
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG broadcast-done] op={OperationKey} tx={transactionId} finalTouched=[{string.Join(",", state.State.TouchedShards)}]");
+#endif
     }
 
     /// <summary>
@@ -806,6 +1061,9 @@ internal sealed class AtomicWriteGrain(
         bool committed,
         IReadOnlyDictionary<string, byte[]>? committedValues)
     {
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG broadcast-mark-shard] op={OperationKey} tx={transactionId} shardIndex={shardIndex} committed={committed} subsetKeys=[{(committedValues is null ? "<null>" : string.Join(",", committedValues.Keys))}]");
+#endif
         // The catch blocks unconditionally fire so the original
         // stale-routing throw surfaces to the caller once the wall-clock
         // budget elapses; a when-filter on the catch could race against
@@ -837,7 +1095,11 @@ internal sealed class AtomicWriteGrain(
             }
 
             var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
-            var refreshed = await lattice.GetRoutingAsync();
+            // forceRefresh:true breaks out of any cached-routing spin -
+            // see the CaptureShardAsync stale-routing catch for the
+            // full rationale (StatelessWorker per-activation cache,
+            // private invalidation hooks).
+            var refreshed = await lattice.GetRoutingAsync(forceRefresh: true);
             physicalTreeId = refreshed.PhysicalTreeId;
         }
     }

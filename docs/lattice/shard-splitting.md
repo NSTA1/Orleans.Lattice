@@ -32,11 +32,26 @@ stateDiagram-v2
 ```
 
 1. **BeginShadowWrite** - Coordinator persists intent and calls
-   `S.BeginSplitAsync(targetShardIndex, movedSlots, virtualShardCount)`. From
-   this point on, every successful write *S* applies to a key in a moved
-   virtual slot is mirrored to *T* via `T.MergeManyAsync`, preserving the
-   original HLC. CRDT LWW guarantees correct convergence regardless of how
-   the foreground write and the background drain interleave.
+   `S.BeginSplitAsync(targetShardIndex, movedSlots, virtualShardCount)`. Before
+   any foreground writes are mirrored, the coordinator also runs a
+   **retroactive prepared-mutation sweep**: it walks *S*'s leaf chain,
+   pulls every in-flight `_pendingTx` entry whose key hashes into a moved
+   virtual slot via
+   `IBPlusLeafGrain.GetPendingMutationsForSlotsAsync(sortedMovedSlots, virtualShardCount)`,
+   and replays each one into *T*'s `_pendingTx` buckets under the
+   original `(txid, hlc, origin, vc, expiresAtTicks)` so any prepared
+   write that landed on *S* before the split survives the topology
+   change. The sweep is idempotent by `(txid, key)` and persists its
+   phase, so a coordinator crash mid-sweep resumes from the same point
+   on reactivation. Instrumentation:
+   `orleans.lattice.split.retroactive_forward.entries` (counter, per
+   replayed mutation) and
+   `orleans.lattice.split.retroactive_forward.duration` (histogram,
+   total sweep wall-clock). From this point on, every successful write
+   *S* applies to a key in a moved virtual slot is also mirrored to *T*
+   via `T.MergeManyAsync`, preserving the original HLC. CRDT LWW
+   guarantees correct convergence regardless of how the foreground
+   write and the background drain interleave.
 2. **Drain** - Coordinator walks *S*'s leaf chain and forwards moved-slot
    entries (including tombstones) to *T* with their original HLC timestamps.
    The drain is **chunked** and **leaf-side filtered**: each leaf returns
@@ -216,6 +231,15 @@ individually** when:
 
 * **No data loss** - every write committed to *S* is either drained,
   shadow-mirrored, or both, and `MergeManyAsync` is idempotent under LWW.
+* **No prepared-mutation loss** - the retroactive sweep at
+  `BeginShadowWrite` re-stamps every in-flight prepared mutation from
+  *S*'s leaves onto *T*'s `_pendingTx` buckets, so a `SetManyAtomicAsync`
+  saga whose Prepare landed on *S* before the split commits and
+  completes against *T* with no perceived interruption. Combined with
+  `LatticeOptions.TxDecisionRetention` (default 60 s), a sweep that
+  installs a pending bucket after the saga's terminal fan-out has
+  already broadcast can still resolve the verdict via the registry
+  tombstone window. See [Atomic Writes - Phase 4 Complete](atomic-writes.md#phase-4---complete).
 * **No duplicate authority** - after the swap, only *T* is reachable for
   moved slots via the public API; orphan entries on *S* are unreachable
   and reclaimed on tree purge.

@@ -13,6 +13,19 @@
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 
+  <!--
+    Opt-in diagnostic instrumentation. When LatticeDiag=true is supplied
+    (e.g. `dotnet build /p:LatticeDiag=true`), the LATTICE_DIAG compile
+    symbol is defined and every `#if LATTICE_DIAG` block in this project
+    is compiled in. Off by default: production / CI builds compile every
+    DIAG site out, with no runtime cost. The instrumentation is kept in
+    source so future investigations can re-enable it without re-deriving
+    the trace shape.
+  -->
+  <PropertyGroup Condition="'$(LatticeDiag)' == 'true'">
+    <DefineConstants>$(DefineConstants);LATTICE_DIAG</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
   </ItemGroup>

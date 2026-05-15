@@ -136,9 +136,18 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
 public enum TxStatus
 {
     /// <summary>
-    /// No commit/abort decision has been recorded for this saga (it is
-    /// still preparing, or its decision has been forgotten after every
-    /// touched leaf applied its terminal).
+    /// No commit/abort decision is currently visible for this saga. The
+    /// saga is either still preparing (no <c>MarkCommittedAsync</c> /
+    /// <c>MarkAbortedAsync</c> has been issued yet), or its decision
+    /// was previously recorded and has been forgotten by
+    /// <see cref="ITxRegistryGrain.ForgetAsync(Guid)"/> long enough ago
+    /// that the registry's tombstone TTL
+    /// (<see cref="LatticeOptions.TxDecisionRetention"/>) has elapsed
+    /// and the entry has been pruned. A decision that was forgotten
+    /// <i>within</i> the retention window remains queryable as
+    /// <see cref="Committed"/> / <see cref="Aborted"/> so concurrent
+    /// shard-split sweeps can resolve orphan pending buckets they
+    /// install on destination shards after the saga's terminal fan-out.
     /// </summary>
     InFlight = 0,
 
