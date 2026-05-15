@@ -137,6 +137,31 @@ public class ShardMapTests
     }
 
     [Test]
+    public void GetPhysicalShardIndices_returns_empty_when_slots_empty()
+    {
+        var map = new ShardMap();
+        Assert.That(map.GetPhysicalShardIndices(), Is.Empty);
+    }
+
+    [Test]
+    public void GetPhysicalShardIndices_handles_single_slot()
+    {
+        var map = new ShardMap { Slots = [5] };
+        Assert.That(map.GetPhysicalShardIndices(), Is.EqualTo(new[] { 5 }));
+    }
+
+    [Test]
+    public void GetPhysicalShardIndices_handles_sparse_indices_beyond_stack_threshold()
+    {
+        // Forces the heap-rented bitmap branch: max index (1000) exceeds the
+        // stackalloc threshold (256) but stays under the heap threshold.
+        var map = new ShardMap { Slots = [0, 1000, 500, 1000, 0, 250] };
+        Assert.That(
+            map.GetPhysicalShardIndices(),
+            Is.EqualTo(new[] { 0, 250, 500, 1000 }));
+    }
+
+    [Test]
     public void VirtualShardCount_reflects_slot_array_length()
     {
         var map = new ShardMap { Slots = new int[16] };
