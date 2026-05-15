@@ -224,4 +224,86 @@ public partial class BPlusLeafGrainTests
         var versionAfter = state.State.Version.GetClock("leaf/test-leaf");
         Assert.That(versionAfter, Is.EqualTo(versionBefore));
     }
+
+    // --- WAL routing: merge-many envelopes ---
+
+    [Test]
+    public async Task MergeMany_appends_one_WAL_envelope_per_accepted_entry()
+    {
+        var commitLog = new FakeCommitLogWriter();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, commitLog: commitLog);
+
+        var clock = HybridLogicalClock.Tick(default);
+        var entries = new Dictionary<string, LwwValue<byte[]>>
+        {
+            ["a"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("v-a"), clock),
+            ["b"] = LwwValue<byte[]>.Tombstone(HybridLogicalClock.Tick(clock)),
+        };
+
+        await grain.MergeManyAsync(entries);
+
+        Assert.That(commitLog.AppendCount, Is.EqualTo(2));
+        Assert.That(commitLog.Appended.All(m => m.IsMerge), Is.True);
+    }
+
+    [Test]
+    public async Task MergeMany_skips_WAL_append_for_cross_shard_migration_rejected_by_asymmetric_guard()
+    {
+        var commitLog = new FakeCommitLogWriter();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, commitLog: commitLog);
+
+        // Seed a foreground (non-migration) entry that the asymmetric
+        // guard must protect from a later cross-shard migration import.
+        await grain.SetAsync("k", Encoding.UTF8.GetBytes("foreground"));
+        var foregroundAppends = commitLog.AppendCount;
+
+        // Import a higher-HLC migration entry; the asymmetric guard
+        // drops it and the WAL must not see an envelope for the
+        // rejected key.
+        var newer = HybridLogicalClock.Tick(state.State.Clock);
+        var imports = new Dictionary<string, LwwValue<byte[]>>
+        {
+            ["k"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("migrated"), newer),
+        };
+        await grain.MergeManyAsync(imports, isCrossShardMigration: true);
+
+        Assert.That(commitLog.AppendCount, Is.EqualTo(foregroundAppends),
+            "the asymmetric migration guard must short-circuit before the WAL append fires");
+        Assert.That(Encoding.UTF8.GetString(state.State.Entries["k"].Value!), Is.EqualTo("foreground"));
+    }
+
+    [Test]
+    public async Task MergeMany_empty_does_not_append_to_WAL()
+    {
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(commitLog: commitLog);
+
+        await grain.MergeManyAsync([]);
+
+        Assert.That(commitLog.AppendCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task MergeMany_does_not_call_state_write_state_async_in_steady_path()
+    {
+        var commitLog = new FakeCommitLogWriter();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, commitLog: commitLog);
+        var writeCountBefore = state.WriteCount;
+
+        var clock = HybridLogicalClock.Tick(default);
+        var entries = new Dictionary<string, LwwValue<byte[]>>
+        {
+            ["k"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("v"), clock),
+        };
+
+        await grain.MergeManyAsync(entries);
+
+        Assert.That(state.WriteCount, Is.EqualTo(writeCountBefore),
+            "MergeManyAsync steady-state path must route durability through the WAL; the "
+            + "legacy state.WriteStateAsync() call site is gone now that merge-many is WAL-routed. "
+            + "The split-recovery branch's topology-only persist still fires when an interrupted split is recovered.");
+    }
 }

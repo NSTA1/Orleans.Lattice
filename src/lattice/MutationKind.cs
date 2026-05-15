@@ -40,4 +40,27 @@ public enum MutationKind
     /// undone in a single linearization step.
     /// </summary>
     TxAbort = 4,
+
+    /// <summary>
+    /// A tombstone-of-tombstone reap mark - one envelope per key
+    /// physically removed from a leaf's projection by
+    /// <c>BPlusLeafGrain.CompactTombstonesAsync</c>. When this mutation
+    /// surfaces to a leaf via the WAL replay path, the entry for the
+    /// stamped <see cref="LatticeMutation.Key"/> is physically removed
+    /// from the visible projection if-and-only-if the existing entry is
+    /// already a tombstone or an expired live entry with a timestamp
+    /// at-or-below the envelope's <see cref="LatticeMutation.Timestamp"/>.
+    /// Carrying the reap intent on the WAL means a reactivation whose
+    /// projection checkpoint sits behind the compaction pass observes
+    /// the compacted state after the activation-time replay returns,
+    /// rather than resurrecting the tombstone from a pre-compact
+    /// checkpoint and a stale state-row persist. Always pairs with
+    /// <see cref="LatticeMutation.IsMerge"/> = <c>true</c>; receivers
+    /// that do not recognize this kind (older binaries) drop the
+    /// envelope under the forward-compat default in
+    /// <c>BPlusLeafGrain.ShouldApplyDuringReplay</c>, which is correct
+    /// because failing to reap a tombstone never violates safety - the
+    /// tombstone simply lives longer than the grace cutoff intended.
+    /// </summary>
+    Tombstone = 5,
 }

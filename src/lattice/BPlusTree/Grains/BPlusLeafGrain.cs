@@ -1202,10 +1202,22 @@ internal sealed partial class BPlusLeafGrain(
         if (state.State.LastCompactionVersion.DominatesOrEquals(state.State.Version))
             return 0;
 
+        // Tombstone-reap is a structural rewrite of state already authored
+        // by user writes - not a semantic causal event. Wrap the entire
+        // body in a maintenance scope so every emitted WAL envelope is
+        // stamped `Category = MutationCategory.Maintenance` independently
+        // of whether the caller (e.g. `TombstoneCompactionGrain` vs. a
+        // direct test invocation) supplied an outer scope. The
+        // `LatticeMaintenanceContext` is `RequestContext`-backed, so a
+        // pre-existing maintenance bit set by the coordinator is preserved
+        // by the disposal sequence (the inner scope restores the prior
+        // value, not the absence of one).
+        using var maintenanceScope = LatticeMaintenanceContext.BeginScope();
+
         var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var cutoff = nowTicks - gracePeriod.Ticks;
-        var toRemove = new List<string>();
+        var toRemove = new List<(string Key, HybridLogicalClock ReapAt)>();
         var anyInGraceRemaining = false;
         var tombstonesRemoved = 0;
         var expiredRemoved = 0;
@@ -1216,7 +1228,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 if (lww.Timestamp.WallClockTicks <= cutoff)
                 {
-                    toRemove.Add(key);
+                    toRemove.Add((key, lww.Timestamp));
                     tombstonesRemoved++;
                 }
                 else
@@ -1236,7 +1248,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 if (lww.ExpiresAtTicks <= cutoff)
                 {
-                    toRemove.Add(key);
+                    toRemove.Add((key, lww.Timestamp));
                     expiredRemoved++;
                 }
                 else
@@ -1246,10 +1258,69 @@ internal sealed partial class BPlusLeafGrain(
             }
         }
 
+        // WAL-as-sole-commit-point: every reaped key is durably committed
+        // by appending one `LatticeMutation { Kind = Tombstone, IsMerge = true }`
+        // envelope per removed entry to the per-shard WAL before the
+        // in-memory removal. Activation-time replay routes the envelope
+        // through `ApplyTombstoneReap(...)` which physically removes
+        // the entry iff the existing local entry is still a tombstone
+        // or expired live entry. The replay handler does its own HLC
+        // dominance check so a Tombstone envelope cannot resurrect a
+        // freshly-rewritten live entry that landed after the reap
+        // envelope was written.
+        //
+        // The reap envelope's HLC is the existing tombstone / expired
+        // entry's own timestamp - reusing it (instead of Tick()ing) is
+        // intentional: the envelope's intent is "remove the entry whose
+        // current HLC is X", and stamping X verbatim makes the replay
+        // dominance check `existing.Timestamp <= mutation.Timestamp`
+        // trivially satisfied for the entry the compactor saw, while
+        // any later live rewrite (with HLC > X) is automatically
+        // protected from accidental reap by the same comparison.
         if (toRemove.Count > 0)
         {
-            foreach (var key in toRemove)
+            var writer = ResolveCommitLogWriter();
+            var treeId = state.State.TreeId ?? string.Empty;
+            var shardIndex = state.State.ShardIndex ?? 0;
+            var origin = LatticeOriginContext.Current;
+            var vc = LatticeVectorClockContext.Current;
+            var transactionId = LatticeTransactionContext.Current;
+            var maintenance = LatticeMaintenanceContext.Current;
+
+            foreach (var (key, reapAt) in toRemove)
             {
+                if (writer is not null)
+                {
+                    var mutation = new LatticeMutation
+                    {
+                        TreeId = treeId,
+                        Kind = MutationKind.Tombstone,
+                        Key = key,
+                        Timestamp = reapAt,
+                        IsTombstone = true,
+                        OriginClusterId = origin,
+                        VectorClock = vc,
+                        TransactionId = transactionId,
+                        Category = maintenance,
+                        IsPrepared = false,
+                        IsMerge = true,
+                        ShardIndex = shardIndex,
+                    };
+
+                    var walStartTicks = Stopwatch.GetTimestamp();
+                    try
+                    {
+                        await writer.AppendAsync(mutation);
+                    }
+                    finally
+                    {
+                        var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
+                        LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "compact"));
+                    }
+                }
+
                 RemoveEntry(key);
             }
         }
@@ -1257,14 +1328,16 @@ internal sealed partial class BPlusLeafGrain(
         // Only mark this version as "fully compacted" when no tombstones were
         // left in the grace window. Stamping while tombstones remain would
         // dead-end every subsequent pass until a new write ticks the version
-        // vector (audit bug #2).
+        // vector (audit bug #2). The advance lives in-memory only; the next
+        // projection-checkpoint flush snapshots it alongside Entries, and a
+        // missed flush before deactivation simply causes the next activation
+        // to re-scan once (no data loss).
         if (!anyInGraceRemaining)
             state.State.LastCompactionVersion = state.State.Version.Clone();
 
-        await PersistAsync();
-        var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
+        var elapsedTotalMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         var treeTag = LeafTreeTag();
-        LatticeMetrics.LeafCompactionDuration.Record(elapsedMs, treeTag);
+        LatticeMetrics.LeafCompactionDuration.Record(elapsedTotalMs, treeTag);
         if (tombstonesRemoved > 0)
             LatticeMetrics.LeafTombstonesReaped.Add(tombstonesRemoved, treeTag);
         if (expiredRemoved > 0)
@@ -1399,11 +1472,64 @@ internal sealed partial class BPlusLeafGrain(
         // drop the freshly-merged values on its next refresh. Publishing
         // maxIncoming keeps Version[ReplicaId] equal to the latest stamp
         // any merged entry actually carries.
+        //
+        // WAL-as-sole-commit-point: every incoming entry is durably
+        // committed by appending a LatticeMutation { Kind = Set | Delete,
+        // IsMerge = true, ... } to the per-shard WAL via ICommitLogWriter
+        // before the in-memory projection mutation (StoreEntry). The WAL
+        // append is the durability point; crash recovery rebuilds Entries
+        // from the WAL via the activation-time replay path. The legacy
+        // standalone state-row persist that used to follow this loop is
+        // gone - every leaf foreground commit now obeys the
+        // WAL-as-sole-commit-point invariant.
+        var writer = ResolveCommitLogWriter();
+        var treeId = state.State.TreeId ?? string.Empty;
+        var shardIndex = state.State.ShardIndex ?? 0;
+        var maintenance = LatticeMaintenanceContext.Current;
+        var transactionId = LatticeTransactionContext.Current;
         var maxIncoming = HybridLogicalClock.Zero;
         foreach (var (key, incoming) in entries)
         {
             if (incoming.Timestamp > maxIncoming)
                 maxIncoming = incoming.Timestamp;
+
+            if (writer is not null)
+            {
+                var mutation = new LatticeMutation
+                {
+                    TreeId = treeId,
+                    Kind = incoming.IsTombstone ? MutationKind.Delete : MutationKind.Set,
+                    Key = key,
+                    Value = incoming.IsTombstone ? null : incoming.Value,
+                    Timestamp = incoming.Timestamp,
+                    IsTombstone = incoming.IsTombstone,
+                    ExpiresAtTicks = incoming.IsTombstone ? 0 : incoming.ExpiresAtTicks,
+                    OriginClusterId = incoming.OriginClusterId,
+                    VectorClock = incoming.VectorClock,
+                    TransactionId = transactionId,
+                    Category = maintenance,
+                    IsPrepared = false,
+                    IsMerge = true,
+                    ShardIndex = shardIndex,
+                };
+
+                // Emit the WAL append on the LeafWriteDuration histogram
+                // tagged `kind=merge` so operators can size sibling-
+                // redistribute / replication-apply / snapshot-restore
+                // traffic against ordinary writes on the same instrument.
+                var walStartTicks = Stopwatch.GetTimestamp();
+                try
+                {
+                    await writer.AppendAsync(mutation);
+                }
+                finally
+                {
+                    var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
+                    LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"));
+                }
+            }
 
             // Cross-leaf migration provenance: stamp IsMigrated=true on
             // the incoming value before merging. If the imported HLC
@@ -1435,8 +1561,6 @@ internal sealed partial class BPlusLeafGrain(
             PublishVersionAdvance(maxIncoming);
             BumpLocalRevision();
         }
-
-        await PersistAsync();
     }
 
     public async Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
@@ -1699,11 +1823,16 @@ internal sealed partial class BPlusLeafGrain(
                 await sibling.MergeManyAsync(siblingEntries, isCrossShardMigration);
             }
 
-            // Merge remaining local entries.
+            // Merge remaining local entries via the WAL-routed path so the
+            // surviving foreground commit invariant holds across split
+            // recovery too. The topology-only `PersistAsync()` above
+            // captures the split-complete state row; the local merge
+            // entries themselves flow through `ICommitLogWriter` inside
+            // `MergeIntoStateAsync` rather than re-using the legacy
+            // state-row persist.
             if (localEntries.Count > 0)
             {
-                MergeIntoState(localEntries, isCrossShardMigration);
-                await PersistAsync();
+                await MergeIntoStateAsync(localEntries, isCrossShardMigration);
             }
 
             return recovered;
@@ -1714,7 +1843,7 @@ internal sealed partial class BPlusLeafGrain(
             return null;
         }
 
-        MergeIntoState(entries, isCrossShardMigration);
+        await MergeIntoStateAsync(entries, isCrossShardMigration);
 
         SplitResult? splitResult = null;
         if (state.State.Entries.Count > (await GetOptionsAsync()).MaxLeafKeys)
@@ -1722,23 +1851,34 @@ internal sealed partial class BPlusLeafGrain(
             splitResult = await SplitAsync();
         }
 
-        await PersistAsync();
         return splitResult;
     }
 
-    private void MergeIntoState(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
+    private async Task MergeIntoStateAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
     {
         // Track the high-water timestamp of the incoming batch so we can
         // (a) advance state.State.Clock past it (audit bug #3), and (b)
         // publish it as Version[ReplicaId] so LeafCacheGrain delta checks
         // detect the new entries. See MergeEntriesAsync for the full
         // invariant.
+        //
+        // WAL-as-sole-commit-point: every accepted entry is durably
+        // committed by appending a LatticeMutation { Kind = Set | Delete,
+        // IsMerge = true, ... } to the per-shard WAL via ICommitLogWriter
+        // before the in-memory projection mutation. The asymmetric
+        // migration-vs-foreground guard runs first and silently drops
+        // imports that lose to an authoritative foreground commit on
+        // the destination - those skipped entries are not appended to
+        // the WAL because they are not committed.
+        var writer = ResolveCommitLogWriter();
+        var treeId = state.State.TreeId ?? string.Empty;
+        var shardIndex = state.State.ShardIndex ?? 0;
+        var maintenance = LatticeMaintenanceContext.Current;
+        var transactionId = LatticeTransactionContext.Current;
         var maxIncoming = HybridLogicalClock.Zero;
+        var appliedAny = false;
         foreach (var (key, incoming) in entries)
         {
-            if (incoming.Timestamp > maxIncoming)
-                maxIncoming = incoming.Timestamp;
-
             // Asymmetric migration-vs-foreground rule. Only fires on the
             // cross-shard migration callsites (TreeShardSplitGrain
             // -> ForwardMovedSlotEntriesAsync, and ShardRootGrain.Split.cs
@@ -1776,16 +1916,56 @@ internal sealed partial class BPlusLeafGrain(
                 continue;
             }
 
+            if (incoming.Timestamp > maxIncoming)
+                maxIncoming = incoming.Timestamp;
+
             // Stamp IsMigrated=true ONLY on the cross-shard migration
             // callsite. Non-migration callers preserve the incoming entry's
             // own IsMigrated flag verbatim - that flag is normally `false`
             // for foreground writes on the source and `true` only when the
             // source-side entry was itself a migration import being
             // re-replicated / re-merged forward.
-            StoreEntry(key, isCrossShardMigration ? (incoming with { IsMigrated = true }) : incoming);
+            var toStore = isCrossShardMigration ? (incoming with { IsMigrated = true }) : incoming;
+
+            if (writer is not null)
+            {
+                var mutation = new LatticeMutation
+                {
+                    TreeId = treeId,
+                    Kind = toStore.IsTombstone ? MutationKind.Delete : MutationKind.Set,
+                    Key = key,
+                    Value = toStore.IsTombstone ? null : toStore.Value,
+                    Timestamp = toStore.Timestamp,
+                    IsTombstone = toStore.IsTombstone,
+                    ExpiresAtTicks = toStore.IsTombstone ? 0 : toStore.ExpiresAtTicks,
+                    OriginClusterId = toStore.OriginClusterId,
+                    VectorClock = toStore.VectorClock,
+                    TransactionId = transactionId,
+                    Category = maintenance,
+                    IsPrepared = false,
+                    IsMerge = true,
+                    ShardIndex = shardIndex,
+                };
+
+                var walStartTicks = Stopwatch.GetTimestamp();
+                try
+                {
+                    await writer.AppendAsync(mutation);
+                }
+                finally
+                {
+                    var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
+                    LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"));
+                }
+            }
+
+            StoreEntry(key, toStore);
+            appliedAny = true;
         }
 
-        if (entries.Count > 0)
+        if (appliedAny)
         {
             // Advance the local HLC past the highest incoming timestamp so
             // subsequent local writes dominate the merged values (audit bug #3).

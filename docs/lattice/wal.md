@@ -108,9 +108,20 @@ and the observer publish must happen after both, inside a commit-log scope.
 
 The pipeline is implemented in
 [`BPlusLeafGrain.CommitSetAsync`](../../src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs)
-and the mirror paths for `DeleteAsync` and `DeleteRangeAsync`. Each step records
-its elapsed wall-clock duration to the `leaf.commit.duration` histogram tagged
-by `step`.
+and the mirror paths for `DeleteAsync`, `DeleteRangeAsync`, `MergeEntriesAsync`,
+`MergeManyAsync`, and `CompactTombstonesAsync`. Each step records its elapsed
+wall-clock duration to the `leaf.commit.duration` histogram tagged by `step`;
+the foreground-write histogram `leaf.write.duration` is tagged by `kind` so
+operators can size ordinary writes (`kind=set` / `kind=delete`), the
+cross-migration LWW backstop (`kind=backstop`), merge traffic (`kind=merge`),
+and tombstone compaction (`kind=compact`) independently.
+
+The merge family (`MergeEntriesAsync` / `MergeManyAsync`) emits one envelope
+per accepted entry with `Kind = Set | Delete` and `IsMerge = true`; the
+compactor (`CompactTombstonesAsync`) emits one envelope per reaped entry with
+`Kind = Tombstone` and `IsMerge = true`. The `IsMerge` flag is a ship-side
+metric tag - receivers apply the envelope as an ordinary write regardless of
+its value.
 
 ## Durability boundary
 
@@ -123,10 +134,12 @@ follow:
   the exception.
 - **In-memory projection is reconstructable from the WAL alone.** The
   projection has no independent durability guarantee. `PersistAsync` still
-  exists for the projection-checkpoint flush (below) and for a few maintenance
-  paths (sibling pointer updates, tree-id stamping, compaction bookkeeping),
-  but those are not on the foreground commit path and they do not extend the
-  durability boundary.
+  exists for the projection-checkpoint flush (below) and for tree-metadata
+  paths (sibling pointer updates, tree-id stamping, split lifecycle,
+  last-compaction-version snapshotting), but those persist *metadata*, not a
+  fallback copy of the entry values. The grain-state row never stores entry
+  values as a backup; entry values live in the WAL until they reach a
+  durable snapshot.
 - **Replication consumers see exactly the foreground commit ordering.** A peer
   replicating from this shard sees the same `LatticeMutation` envelopes in the
   same order that the local projection saw them. The WAL is the linearization
@@ -298,11 +311,16 @@ the WAL through `ILeafReplayCoordinatorGrain`. Two cases:
   few milliseconds.
 - **Fall-off-log rebuild.** The persisted checkpoint is older than the WAL trim
   watermark - the entries it would replay are no longer available. The
-  coordinator falls back to `ILeafProjection.Rebuild`, which reseeds from the
-  authoritative store (in current shipped configurations, the leaf's own
-  grain-state - which is still maintained for a separate set of background
-  paths, not as a foreground durability boundary). Drift detection is described
-  in [`projection-rebuild.md`](projection-rebuild.md).
+  coordinator falls back to `ILeafProjection.Rebuild`, which drains the leaf's
+  key range from `ILeafSnapshotProvider` (an internal seam over the streaming
+  as-of snapshot export), persists the snapshot offset as the new checkpoint,
+  then tail-replays the remaining WAL entries past the snapshot offset. The
+  default policy is `ProjectionRebuildPolicy.SnapshotThenWal`; alternative
+  policies (`FullRebuildFromWal`, `Fail`) are described on the enum and in
+  [`projection-rebuild.md`](projection-rebuild.md). The grain-state row holds
+  only tree metadata (sibling pointers, tree id, shard index, key range,
+  split lifecycle, last-compaction-version) plus the projection checkpoint
+  snapshot - it is never the source of truth for entry values.
 
 In both cases, the projection that a reader observes after activation is
 byte-equivalent to the projection at the moment the leaf last deactivated.

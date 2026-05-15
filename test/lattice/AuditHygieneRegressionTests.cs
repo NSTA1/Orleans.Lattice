@@ -70,24 +70,29 @@ public class AuditHygieneRegressionTests
     }
 
     /// <summary>
-    /// Regression: the cross-migration LWW backstop write authored by
-    /// <c>BPlusLeafGrain.ApplyTxTerminalAsync</c> must route through
-    /// <c>ICommitLogWriter</c> (per-shard WAL) rather than the legacy
-    /// <c>state.WriteStateAsync()</c> call. Scans every partial of the
-    /// <c>BPlusLeafGrain</c> class for <c>state.WriteStateAsync(</c>
-    /// call sites (after stripping comments) and asserts the only
-    /// surviving site is the dedicated <c>PersistAsync</c> seam in
-    /// <c>BPlusLeafGrain.Metrics.cs</c> - which is the
-    /// projection-checkpoint flush helper invoked from
-    /// <c>OnDeactivateAsync</c> and coalesced checkpoint paths, both
-    /// orthogonal to the foreground commit path. Any new
+    /// Regression: every foreground leaf commit path - the
+    /// cross-migration LWW backstop, the steady-state merge family
+    /// (<c>MergeEntriesAsync</c>, <c>MergeManyAsync</c>), and the
+    /// tombstone-reap compactor (<c>CompactTombstonesAsync</c>) -
+    /// must route durability through <c>ICommitLogWriter</c> (per-shard
+    /// WAL) rather than the legacy <c>state.WriteStateAsync()</c> call.
+    /// Scans every partial of the <c>BPlusLeafGrain</c> class for
+    /// <c>state.WriteStateAsync(</c> call sites (after stripping
+    /// comments) and asserts the only surviving site is the dedicated
+    /// <c>PersistAsync</c> seam in <c>BPlusLeafGrain.Metrics.cs</c>,
+    /// which centralises the projection-checkpoint flush helper invoked
+    /// from <c>OnDeactivateAsync</c>, coalesced checkpoint paths, and
+    /// topology-only persistence (split-recovery state-row flush) -
+    /// all orthogonal to the foreground commit path. Any new
     /// <c>state.WriteStateAsync</c> call site introduced by a future
     /// refactor fails this gate and must be either rerouted through
-    /// the WAL or, if legitimately a state-row flush, added to the
-    /// allow-list below with a justification comment.
+    /// the WAL or, if legitimately a state-row flush, routed through
+    /// the central <c>PersistAsync</c> seam (raising the allow-list
+    /// constant is reserved for a structural change that genuinely
+    /// adds a second flush helper).
     /// </summary>
     [Test]
-    public void Backstop_terminal_path_does_not_call_WriteStateAsync()
+    public void Foreground_leaf_commit_paths_route_through_WAL_not_WriteStateAsync()
     {
         var assembly = typeof(LatticeOptions).Assembly;
         var thisAssemblyDirectory = Path.GetDirectoryName(assembly.Location)

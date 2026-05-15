@@ -373,6 +373,17 @@ internal sealed partial class BPlusLeafGrain
     ///     upgrade.
     ///   </item>
     ///   <item>
+    ///     <see cref="MutationKind.Tombstone"/> reap envelopes
+    ///     authored by <c>CompactTombstonesAsync</c> are gated by the
+    ///     same shard-and-range filter as <see cref="MutationKind.Set"/>
+    ///     / <see cref="MutationKind.Delete"/>: a sibling leaf's reap
+    ///     must not unintentionally remove keys from this leaf's
+    ///     projection. Reap envelopes that pass the filter route into
+    ///     <c>ApplyTombstoneReap</c> which physically removes the
+    ///     stamped key iff the existing entry is still a tombstone or
+    ///     an expired live entry.
+    ///   </item>
+    ///   <item>
     ///     <see cref="MutationKind.DeleteRange"/> is applied
     ///     unconditionally. <see cref="BPlusLeafGrain"/>'s replay
     ///     handler iterates this leaf's own entries only, so the call
@@ -400,7 +411,7 @@ internal sealed partial class BPlusLeafGrain
         string? lowKeyInclusive,
         string? highKeyExclusive) => mutation.Kind switch
     {
-        MutationKind.Set or MutationKind.Delete =>
+        MutationKind.Set or MutationKind.Delete or MutationKind.Tombstone =>
             (leafShardIndex is null || mutation.ShardIndex == leafShardIndex.Value)
             && (lowKeyInclusive is null
                 || string.CompareOrdinal(mutation.Key, lowKeyInclusive) >= 0)

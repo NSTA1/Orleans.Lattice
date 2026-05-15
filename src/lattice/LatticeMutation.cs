@@ -277,4 +277,27 @@ public readonly record struct LatticeMutation
     /// </para>
     /// </summary>
     [Id(19)] public int AtomicShardCount { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when this mutation is a leaf-level merge write
+    /// authored by <c>BPlusLeafGrain.MergeEntriesAsync</c> or
+    /// <c>BPlusLeafGrain.MergeManyAsync</c> (replication apply, tree
+    /// merge, snapshot restore, sibling redistribute on split, or
+    /// cross-shard migration import) or a tombstone-of-tombstone
+    /// authored by <c>BPlusLeafGrain.CompactTombstonesAsync</c>.
+    /// Distinguishes the write from an ordinary
+    /// <see cref="MutationKind.Set"/> / <see cref="MutationKind.Delete"/>
+    /// on the wire and on the
+    /// <c>orleans.lattice.leaf.write.duration</c> histogram, where the
+    /// merge / compact paths are tagged <c>kind=merge</c> and
+    /// <c>kind=compact</c> so operators can size sibling-redistribute,
+    /// replication-apply, and compaction traffic against ordinary
+    /// writes. Semantically the merge / compact envelope is just a
+    /// Set / Delete at the projection level - receiver-side LWW
+    /// resolution treats it identically - but carrying the flag lets
+    /// downstream consumers filter, count, or alert on the routing
+    /// independently. Defaults to <c>false</c> for wire compatibility
+    /// with mutations persisted before this field existed.
+    /// </summary>
+    [Id(20)] public bool IsMerge { get; init; }
 }

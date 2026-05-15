@@ -372,6 +372,18 @@ internal sealed class TombstoneCompactionGrain(
 
     private async Task CompactShardAsync(string physicalTreeId, int shardIndex, TimeSpan gracePeriod)
     {
+        // Compaction is a maintenance pass: every WAL envelope emitted
+        // by the leaf-level reap loop must be classified
+        // `MutationCategory.Maintenance` so producer-side replication
+        // filtering can short-circuit it. The scope flows via
+        // `RequestContext` into the leaf grain call, where the inner
+        // `LatticeMaintenanceContext.BeginScope()` in
+        // `BPlusLeafGrain.CompactTombstonesAsync` is then a structural
+        // no-op (the bit is already set). Belt-and-braces: the outer
+        // scope here covers any future leaf path that emits without its
+        // own inner scope.
+        using var maintenanceScope = LatticeMaintenanceContext.BeginScope();
+
         var shardKey = $"{physicalTreeId}/{shardIndex}";
         var shardRoot = grainFactory.GetGrain<IShardRootGrain>(shardKey);
 

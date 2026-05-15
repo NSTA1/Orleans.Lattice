@@ -170,45 +170,69 @@ public class ChangeFeedTests
     [Test]
     public async Task Subscribe_excludes_local_origin_when_include_local_origin_is_false()
     {
+        // Under the WAL-as-sole-durability-boundary contract the WAL
+        // captures foreign-origin entries installed by
+        // `IReplicationApplier`; the change-feed contract
+        // ("locally-authored writes only") drops them unconditionally,
+        // so this test seeds only locally-authored rows (an empty-
+        // origin durability writer record and a local-origin observer
+        // record) to exercise the `includeLocalOrigin` filter in
+        // isolation.
         var (feed, factory) = CreateFeed(partitions: 1);
         var grain = Grain(
-            Entry("local", Hlc(1), origin: LocalCluster),
-            Entry("remote", Hlc(2), origin: RemoteCluster));
+            Entry("local-stamped", Hlc(1), origin: LocalCluster),
+            Entry("durability-only", Hlc(2), origin: string.Empty));
         factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
         var entries = await CollectAsync(
             feed.Subscribe(Tree, HybridLogicalClock.Zero, includeLocalOrigin: false));
 
-        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "remote" }));
+        // Local-origin entry is suppressed by the filter; the
+        // empty-origin durability-only entry survives because its
+        // origin does not match the local cluster id.
+        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "durability-only" }));
     }
 
     [Test]
     public async Task Subscribe_includes_local_origin_by_default()
     {
+        // Default `includeLocalOrigin=true` keeps both local-origin
+        // observer entries and empty-origin durability entries.
+        // Foreign-origin (apply-installed) entries remain filtered
+        // unconditionally and are covered by the dedicated regressions
+        // in `Subscribe_filters_foreign_origin_entries_*` below.
         var (feed, factory) = CreateFeed(partitions: 1);
         var grain = Grain(
             Entry("local", Hlc(1), origin: LocalCluster),
-            Entry("remote", Hlc(2), origin: RemoteCluster));
+            Entry("durability-only", Hlc(2), origin: string.Empty));
         factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
         var entries = await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero));
 
-        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "local", "remote" }));
+        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "local", "durability-only" }));
     }
 
     [Test]
-    public async Task Subscribe_does_not_filter_remote_origin_when_include_local_origin_is_false()
+    public async Task Subscribe_does_not_filter_durability_only_entries_when_include_local_origin_is_false()
     {
+        // Empty-origin (durability-only) entries are produced by the
+        // local `ICommitLogWriter` path on every authored write. They
+        // do not match the local cluster id, so the
+        // `includeLocalOrigin=false` filter must not suppress them -
+        // the filter targets observer-stamped local entries
+        // specifically. Foreign-origin entries are independently
+        // dropped by the apply-installed guard and are excluded from
+        // this scenario.
         var (feed, factory) = CreateFeed(partitions: 1);
         var grain = Grain(
-            Entry("a", Hlc(1), origin: RemoteCluster),
-            Entry("b", Hlc(2), origin: "site-c"));
+            Entry("durability-a", Hlc(1), origin: string.Empty),
+            Entry("durability-b", Hlc(2), origin: string.Empty));
         factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
         var entries = await CollectAsync(
             feed.Subscribe(Tree, HybridLogicalClock.Zero, includeLocalOrigin: false));
 
-        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "a", "b" }));
+        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "durability-a", "durability-b" }));
     }
 
     [Test]
@@ -291,5 +315,109 @@ public class ChangeFeedTests
 
         monitor.Received().Get("alpha");
         monitor.Received().Get("beta");
+    }
+
+    // --- Tombstone-reap filtering ---
+
+    private static WalRecord TombstoneReapEntry(string key, HybridLogicalClock ts, string origin = LocalCluster) => new()
+    {
+        TreeId = Tree,
+        Op = MutationKind.Tombstone,
+        Key = key,
+        Timestamp = ts,
+        IsTombstone = true,
+        OriginClusterId = origin,
+    };
+
+    [Test]
+    public async Task Subscribe_filters_out_tombstone_reap_envelopes()
+    {
+        // Tombstone-reap envelopes record a local structural cleanup
+        // (see `BPlusLeafGrain.CompactTombstonesAsync`). The change
+        // feed must drop them so bootstrap and replication consumers
+        // never observe a kind they have no apply rule for.
+        var (feed, factory) = CreateFeed(partitions: 1);
+        var grain = Grain(
+            Entry("alive", Hlc(1)),
+            TombstoneReapEntry("dead", Hlc(2)),
+            Entry("alive2", Hlc(3)));
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
+
+        var entries = await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero));
+
+        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "alive", "alive2" }));
+        Assert.That(entries.All(e => e.Op != MutationKind.Tombstone), Is.True,
+            "tombstone-reap envelopes must be filtered out at the change-feed boundary");
+    }
+
+    [Test]
+    public async Task Subscribe_filters_tombstone_reap_independently_of_origin_filter()
+    {
+        // A tombstone-reap whose OriginClusterId is local must still be
+        // dropped on the Op classification, not on origin. (Foreign-
+        // origin entries are independently filtered by the receiver-
+        // apply guard - see `Subscribe_filters_foreign_origin_entries`.)
+        var (feed, factory) = CreateFeed(partitions: 1);
+        var grain = Grain(
+            TombstoneReapEntry("dead-local", Hlc(1), origin: LocalCluster),
+            Entry("alive-local", Hlc(2), origin: LocalCluster));
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
+
+        var entries = await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero, includeLocalOrigin: true));
+
+        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "alive-local" }));
+    }
+
+    // --- Foreign-origin (apply-installed) filtering ---
+
+    [Test]
+    public async Task Subscribe_filters_foreign_origin_entries_under_wal_as_sole_durability_boundary()
+    {
+        // Receiver-apply contract regression: under the
+        // WAL-as-sole-durability-boundary contract the per-shard WAL
+        // captures every leaf commit, including entries installed by
+        // `IReplicationApplier` on this cluster (those entries stamp
+        // `OriginClusterId` with the *source* cluster). The change
+        // feed's documented contract ("locally-authored writes only")
+        // requires those foreign-origin records to be dropped at the
+        // feed boundary so the outbound ship loop and bootstrap
+        // consumers do not re-emit a peer's writes back across the
+        // wire. Without this filter, a three-cluster topology
+        // (A authors -> B applies -> B's feed surfaces the A-origin
+        // entry -> C consumes B's feed and observes A's entries as
+        // if they were B's) would loop.
+        var (feed, factory) = CreateFeed(partitions: 1);
+        var grain = Grain(
+            Entry("local", Hlc(1), origin: LocalCluster),
+            Entry("foreign", Hlc(2), origin: RemoteCluster),
+            Entry("durability-only", Hlc(3), origin: string.Empty));
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
+
+        var entries = await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero));
+
+        // Foreign-origin entries are dropped. Local-origin and
+        // empty-origin entries (durability-only authoring records) are
+        // retained because they represent locally-authored writes.
+        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "local", "durability-only" }));
+    }
+
+    [Test]
+    public async Task Subscribe_filters_foreign_origin_entries_even_when_include_local_origin_disabled()
+    {
+        // The foreign-origin filter is independent of
+        // `includeLocalOrigin`: with the flag disabled, local entries
+        // are also suppressed, but foreign-origin entries remain
+        // filtered out (they were never eligible to appear).
+        var (feed, factory) = CreateFeed(partitions: 1);
+        var grain = Grain(
+            Entry("local", Hlc(1), origin: LocalCluster),
+            Entry("foreign", Hlc(2), origin: RemoteCluster),
+            Entry("durability-only", Hlc(3), origin: string.Empty));
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
+
+        var entries = await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero, includeLocalOrigin: false));
+
+        // Only the durability-only entry (empty origin) survives.
+        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "durability-only" }));
     }
 }

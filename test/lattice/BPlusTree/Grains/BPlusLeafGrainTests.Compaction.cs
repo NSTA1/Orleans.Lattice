@@ -177,4 +177,129 @@ public partial class BPlusLeafGrainTests
             Assert.That(expired, Is.EqualTo(1), "TTL-expired live entry should count on expired");
         });
     }
+
+    // --- WAL routing: tombstone-reap envelopes ---
+
+    [Test]
+    public async Task CompactTombstones_appends_one_WAL_envelope_per_reaped_entry()
+    {
+        var commitLog = new FakeCommitLogWriter();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, commitLog: commitLog);
+
+        // Seed two old tombstones and one expired live entry, all
+        // beyond the grace cutoff.
+        var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
+        state.State.Entries["dead-a"] = LwwValue<byte[]>.Tombstone(oldClock);
+        state.State.Entries["dead-b"] = LwwValue<byte[]>.Tombstone(oldClock);
+        state.State.Entries["expired"] = LwwValue<byte[]>.CreateWithExpiry(
+            Encoding.UTF8.GetBytes("v"), oldClock, expiresAtTicks: 2);
+        state.State.Version.Tick("test");
+
+        var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
+
+        Assert.That(removed, Is.EqualTo(3));
+        Assert.That(commitLog.AppendCount, Is.EqualTo(3),
+            "every reaped entry must emit a tombstone-reap WAL envelope so a reactivated leaf "
+            + "observes the compacted state after replay returns.");
+        Assert.That(commitLog.Appended.All(m => m.Kind == MutationKind.Tombstone), Is.True);
+        Assert.That(commitLog.Appended.All(m => m.IsMerge), Is.True,
+            "tombstone-reap envelopes are tagged IsMerge=true to keep them out of ordinary "
+            + "Set / Delete telemetry rollups");
+        Assert.That(commitLog.Appended.All(m => m.IsTombstone), Is.True);
+    }
+
+    [Test]
+    public async Task CompactTombstones_does_not_call_state_write_state_async()
+    {
+        var commitLog = new FakeCommitLogWriter();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, commitLog: commitLog);
+
+        var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
+        state.State.Entries["dead"] = LwwValue<byte[]>.Tombstone(oldClock);
+        state.State.Version.Tick("test");
+        var writeCountBefore = state.WriteCount;
+
+        await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
+
+        Assert.That(state.WriteCount, Is.EqualTo(writeCountBefore),
+            "CompactTombstonesAsync must route durability through the WAL; the legacy "
+            + "state.WriteStateAsync() call site is gone now that compaction is WAL-routed.");
+    }
+
+    [Test]
+    public async Task CompactTombstones_does_not_append_when_nothing_in_grace_window()
+    {
+        var commitLog = new FakeCommitLogWriter();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, commitLog: commitLog);
+
+        // Recent tombstone within grace - must not be reaped or appended.
+        var recentClock = new HybridLogicalClock
+        {
+            WallClockTicks = DateTimeOffset.UtcNow.Ticks,
+            Counter = 0,
+        };
+        state.State.Entries["recent"] = LwwValue<byte[]>.Tombstone(recentClock);
+        state.State.Version.Tick("test");
+
+        var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
+
+        Assert.That(removed, Is.EqualTo(0));
+        Assert.That(commitLog.AppendCount, Is.EqualTo(0),
+            "a compaction pass that reaps nothing must not append a stray WAL envelope");
+    }
+
+    [Test]
+    public async Task CompactTombstones_stamps_maintenance_category_on_emitted_envelopes()
+    {
+        // The reap envelope's `LatticeMutation.Category` must be
+        // `MutationCategory.Maintenance` independently of whether the
+        // caller wrapped the leaf invocation in a maintenance scope. The
+        // grain opens its own `LatticeMaintenanceContext.BeginScope()`
+        // so a direct test or any future leaf-level call site stamps
+        // the WAL envelope correctly, which is the signal the producer-
+        // side replication shipper uses to short-circuit shipping.
+        var commitLog = new FakeCommitLogWriter();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, commitLog: commitLog);
+
+        var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
+        state.State.Entries["dead-a"] = LwwValue<byte[]>.Tombstone(oldClock);
+        state.State.Entries["dead-b"] = LwwValue<byte[]>.Tombstone(oldClock);
+        state.State.Version.Tick("test");
+
+        await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
+
+        Assert.That(commitLog.AppendCount, Is.EqualTo(2));
+        Assert.That(commitLog.Appended.All(m => m.Category == MutationCategory.Maintenance), Is.True,
+            "compaction-emitted WAL envelopes must carry Category=Maintenance so "
+            + "replication and observer paths can classify them as structural rewrites.");
+    }
+
+    [Test]
+    public async Task CompactTombstones_uses_tombstone_kind_and_is_merge_flag()
+    {
+        // Hardens the wire-shape contract that the producer-side
+        // tombstone filter in `ReplicationShipperGrain.ShouldShip` and
+        // `ChangeFeed.Subscribe` keys on (`Op == MutationKind.Tombstone`).
+        // A regression that flipped the kind back to `Delete` would
+        // pass merge / delete tests but silently break the receiver-
+        // side dead-letter avoidance for compaction.
+        var commitLog = new FakeCommitLogWriter();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, commitLog: commitLog);
+
+        var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
+        state.State.Entries["dead"] = LwwValue<byte[]>.Tombstone(oldClock);
+        state.State.Version.Tick("test");
+
+        await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
+
+        Assert.That(commitLog.AppendCount, Is.EqualTo(1));
+        Assert.That(commitLog.Appended[0].Kind, Is.EqualTo(MutationKind.Tombstone));
+        Assert.That(commitLog.Appended[0].IsMerge, Is.True);
+        Assert.That(commitLog.Appended[0].IsTombstone, Is.True);
+    }
 }
