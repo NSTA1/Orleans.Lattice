@@ -22,7 +22,7 @@ migration on silo loss without leader election.
 
 | Grain | Key | Cadence | Purpose |
 |---|---|---|---|
-| `IReplicationShipperGrain` | `{treeName}/{peerClusterId}` | 200 ms phase timer + 90 s reminder backstop + writer-side doorbell | Drains the per-tree change feed from the per-peer cursor, applies producer-side filters and the cycle-break, calls `IReplicationTransport.SendAsync`, advances the cursor on ack, applies exponential backoff on transient failure, parks malformed batches on the per-tree DLQ. |
+| `IReplicationShipperGrain` | `{treeName}/{peerClusterId}` | 100 ms phase timer + 90 s reminder backstop + writer-side doorbell | Drains the per-tree change feed from the per-peer cursor, applies producer-side filters and the cycle-break, calls `IReplicationTransport.SendAsync`, advances the cursor on ack, applies exponential backoff on transient failure, parks malformed batches on the per-tree DLQ. |
 | `IReplicationMaintenanceGrain` | `{treeName}` | 5 s phase timer + 60 s reminder backstop | Schedules WAL garbage collection (`ILatticeWalGc.RunOnceAsync`) and per-peer fall-off-the-log probes (`ILatticeFallOffLogDetector.CheckAndTriggerAsync`) on independent cadences. |
 
 The shipper is per-peer because per-peer back-pressure isolation must not
@@ -68,7 +68,7 @@ siloBuilder.AddLatticeReplication(opts =>
 
 ### Pump loop
 
-Every phase tick (default 200 ms) the shipper:
+Every phase tick (default 100 ms, `LatticeReplicationOptions.ShipPhaseTimerPeriod`) the shipper:
 
 1. Honours the backoff budget set by the previous failed attempt - if
    `_nextRetryAtUtc > now`, the tick returns immediately.
@@ -98,8 +98,8 @@ In addition to the phase timer, the shipper exposes
 `OnDoorbellAsync(CancellationToken)`. The producer-side `ShardedReplogSink`
 rings the doorbell after every successful WAL append for the affected
 `(tree, peer)` activations, so steady-state ship latency is sub-second
-rather than waiting for the next 200 ms timer tick. The doorbell is
-best-effort - a missed call only delays the next ship by one timer tick.
+The doorbell is
+best-effort - a missed call only delays the next ship by one timer tick (default 100 ms).
 
 ### Backoff schedule
 
@@ -305,7 +305,7 @@ shows which driver is the source of each.
 |---|---|---|
 | `wal.entries_appended` | (already wired by `ShardedReplogSink`) | Successful WAL append. |
 | `wal.entries_shipped` | Shipper grain via `IReplicationTransport.SendAsync` | Outbound batch acknowledged. |
-| `wal.entries_trimmed` | Maintenance grain GC pass | GC trim removed at least one entry. |
+| `wal.entries_trimmed` (on the core `orleans.lattice` meter, not `orleans.lattice.replication` - see `LatticeMetrics.WalEntriesTrimmed`) | Maintenance grain GC pass | GC trim removed at least one entry. |
 | `ship.duration` | Shipper grain via `IReplicationTransport.SendAsync` | Every send call (success or failure). |
 | `peer.fell_off_log` | Maintenance grain fall-off probe | Detector confirms peer's HWM precedes sender's oldest HLC. |
 | `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait_ms` / `apply.causal_violations_blocked` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |

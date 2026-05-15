@@ -2,6 +2,9 @@
 
 Cross-cluster replication for [Orleans.Lattice](../../README.md) - ships every captured mutation between Orleans clusters with CRDT-aware merges on the receiver.
 
+> [!IMPORTANT]
+> **Cross-cluster bootstrap is not yet shipped.** The default `LatticeSnapshotProvider` exports a snapshot from local Orleans state via in-cluster grain calls, which means snapshot bootstrap and auto-bootstrap currently work only for re-seeding peers **within the same Orleans cluster** as the source. Bootstrapping a brand-new peer in a remote cluster requires a transport-aware snapshot provider that has not yet been built; until then, cross-cluster peers must come up under steady-state incremental shipping while the source WAL still retains the relevant suffix. The full gap analysis and the planned remediation (a pull-based snapshot transport, a replication-aware `ISnapshotProvider`, and the receiver-side reconciliation work) is tracked in [`roadmap-cross-cluster-bootstrap.md`](../../src/lattice.replication/roadmap-cross-cluster-bootstrap.md). See [Snapshot Bootstrap](snapshot-bootstrap.md) for the per-cluster surface that does work today.
+
 ## What is it?
 
 `Orleans.Lattice.Replication` is the **on-the-wire replication engine** that layers on top of `Orleans.Lattice`. Mutations are captured at commit time on the producing cluster, shipped to peer clusters over a long-lived push transport, and applied on the receiver under the source cluster's HLC. No external broker, no shared database, no host-level outgoing-call filter.

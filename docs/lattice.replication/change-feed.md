@@ -85,4 +85,4 @@ This decision affects three downstream items:
 
 - The wire envelope's "resume from" field is HLC-shaped on the public transport contract; the internal gRPC stream may carry an opaque `WalResumeToken` alongside as a diagnostic fast-path.
 - The per-origin high-water-mark table continues to key on `(tree, originClusterId) → HLC` regardless of cursor shape - HLC is the dedup key, cursor shape only governs *resume* tokens.
-- The bootstrap snapshot pin takes a `HybridLogicalClock` argument, not an offset (see `ISnapshotProvider.OpenAsync`).
+- The bootstrap snapshot pin takes a `HybridLogicalClock` argument, not an offset (see `ISnapshotProvider.ExportAsync`).
