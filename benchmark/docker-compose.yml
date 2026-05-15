@@ -111,7 +111,7 @@ services:
       AtomicSagaDriver__Concurrency: ${BENCH_ATOMIC_SAGA_DRIVER_CONCURRENCY:-16}
       AtomicSagaDriver__BatchSize: ${BENCH_ATOMIC_SAGA_DRIVER_BATCH_SIZE:-16}
       AtomicSagaDriver__KeyspaceSize: ${BENCH_ATOMIC_SAGA_DRIVER_KEYSPACE:-4000}
-      AtomicSagaDriver__KeyPrefix: ${BENCH_ATOMIC SAGA_DRIVER_KEY_PREFIX:-atomic-}
+      AtomicSagaDriver__KeyPrefix: ${BENCH_ATOMIC_SAGA_DRIVER_KEY_PREFIX:-atomic-}
       AtomicSagaDriver__ValueSizeBytes: ${BENCH_ATOMIC_SAGA_DRIVER_VALUE_BYTES:-256}
       AtomicSagaDriver__WarmupDelay: ${BENCH_ATOMIC_SAGA_DRIVER_WARMUP:-00:00:15}
     expose:
