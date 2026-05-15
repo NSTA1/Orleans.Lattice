@@ -41,6 +41,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     ISnapshotProvider snapshotProvider,
+    IReplicationApplier replicationApplier,
     IReminderRegistry reminderRegistry,
     ILogger<LatticeBootstrapCoordinatorGrain> logger,
     [PersistentState("bootstrap-coordinator", LatticeOptions.StorageProviderName)]
@@ -62,6 +63,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
     private readonly ISnapshotProvider _snapshotProvider =
         snapshotProvider ?? throw new ArgumentNullException(nameof(snapshotProvider));
+    private readonly IReplicationApplier _replicationApplier =
+        replicationApplier ?? throw new ArgumentNullException(nameof(replicationApplier));
 
     private string TreeName => Context.GrainId.Key.ToString() ?? "";
 
@@ -287,7 +290,6 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         }
         await state.WriteStateAsync().ConfigureAwait(true);
 
-        var apply = _grainFactory.GetGrain<IReplicationApplyGrain>(treeName);
         var sourceClusterId = state.State.SourceClusterId;
         int sinceLastPersist = 0;
 
@@ -301,13 +303,32 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 continue;
             }
 
-            await apply.ApplySetAsync(
-                entry.Key,
-                entry.Value,
-                entry.Timestamp,
-                sourceClusterId,
-                sourceVectorClock: null,
-                expiresAtTicks: 0).ConfigureAwait(true);
+            // Route the snapshot entry through the canonical replication
+            // applier seam so every decorator stacked on
+            // <see cref="IReplicationApplier"/> (dead-letter tracking,
+            // causal-apply buffer, host-supplied observers) sees
+            // bootstrap-arrived entries identically to live-incremental
+            // entries. The legacy drain bypassed the applier and wrote
+            // straight to <see cref="IReplicationApplyGrain"/>,
+            // so any decorator that fired only on the applier path
+            // missed every bootstrap entry; the applier itself preserves
+            // the source HLC and origin id verbatim and routes through
+            // the per-origin HWM dedupe, so re-routing through it is
+            // correctness-preserving for the underlying tree.
+            var record = new WalRecord
+            {
+                TreeId = treeName,
+                Op = MutationKind.Set,
+                Key = entry.Key,
+                Value = entry.Value,
+                Timestamp = entry.Timestamp,
+                IsTombstone = false,
+                ExpiresAtTicks = 0,
+                OriginClusterId = sourceClusterId,
+                Mode = LatticeMergeMode.LwwRegister,
+                VectorClock = null,
+            };
+            await _replicationApplier.ApplyAsync(record, CancellationToken.None).ConfigureAwait(true);
 
             // Track the highest source HLC observed so a resume can
             // re-export from this point. The per-origin HWM dedupe
