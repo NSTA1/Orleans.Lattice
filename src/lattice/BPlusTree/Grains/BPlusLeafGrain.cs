@@ -10,14 +10,37 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// in a sorted dictionary. Splits when the entry count exceeds the leaf-sizing
 /// pin in the tree registry.
 /// </summary>
+// CS9113: 'originClusterIdResolver' is referenced only inside #if LATTICE_DIAG
+// blocks (used by DiagSiloTag to disambiguate Site A vs Site B emissions in the
+// shared file-based DiagSink log). Suppressed at the parameter list because in
+// non-diag builds the parameter is genuinely unread, but removing it would break
+// the activation-DI signature and the diag build's site-tagging behaviour.
+#pragma warning disable CS9113
 internal sealed partial class BPlusLeafGrain(
     IGrainContext context,
     [PersistentState("leaf", LatticeOptions.StorageProviderName)] IPersistentState<LeafNodeState> state,
     IGrainFactory grainFactory,
     LatticeOptionsResolver optionsResolver,
-    MutationObserverDispatcher mutationObservers) : IBPlusLeafGrain, ILeafProjection, IGrainBase
+    MutationObserverDispatcher mutationObservers,
+    ILatticeOriginClusterIdResolver originClusterIdResolver) : IBPlusLeafGrain, ILeafProjection, IGrainBase
+#pragma warning restore CS9113
 {
     IGrainContext IGrainBase.GrainContext => context;
+
+#if LATTICE_DIAG
+    /// <summary>
+    /// Cached cluster id of the silo hosting this leaf activation, used to
+    /// disambiguate Site A vs Site B emissions in the shared file-based
+    /// <see cref="DiagSink"/> log. Resolved lazily because <c>state.State.TreeId</c>
+    /// is null until activation completes; the resolver is keyed by tree id
+    /// only because the replication package's per-tree options map may carry
+    /// distinct cluster ids per tree (the common case is a single host-wide id).
+    /// </summary>
+    private string? _diagSiloTag;
+
+    private string DiagSiloTag => _diagSiloTag
+        ??= (originClusterIdResolver.Resolve(state.State.TreeId ?? string.Empty) is { Length: > 0 } id ? id : "(local)");
+#endif
 
     /// <summary>
     /// Synchronously flushes any pending projection-checkpoint advance
@@ -496,20 +519,20 @@ internal sealed partial class BPlusLeafGrain(
                         result[key] = pending.value.Value!;
 #if LATTICE_DIAG
                         // DIAG: pending-bucket-committed read path.
-                        DiagSink.Write($"[DIAG read-pending-committed] gid={context.GrainId} key={key} tx={pending.txid} valRound={DiagDecodeRound(pending.value.Value)} hlc={pending.value.Timestamp}");
+                        DiagSink.Write($"[DIAG read-pending-committed] silo={DiagSiloTag} gid={context.GrainId} key={key} tx={pending.txid} valRound={DiagDecodeRound(pending.value.Value)} hlc={pending.value.Timestamp}");
 #endif
                     }
                     else
                     {
 #if LATTICE_DIAG
-                        DiagSink.Write($"[DIAG read-pending-committed-tomb] gid={context.GrainId} key={key} tx={pending.txid}");
+                        DiagSink.Write($"[DIAG read-pending-committed-tomb] silo={DiagSiloTag} gid={context.GrainId} key={key} tx={pending.txid}");
 #endif
                     }
                     continue;
                 }
 #if LATTICE_DIAG
                 // DIAG: pending-bucket-fallthrough (InFlight, Aborted, or already-terminal'd).
-                DiagSink.Write($"[DIAG read-pending-fallthrough] gid={context.GrainId} key={key} tx={pending.txid} status={status} alreadyTerminal={(_recentlyTerminal is not null && _recentlyTerminal.Contains(pending.txid))}");
+                DiagSink.Write($"[DIAG read-pending-fallthrough] silo={DiagSiloTag} gid={context.GrainId} key={key} tx={pending.txid} status={status} alreadyTerminal={(_recentlyTerminal is not null && _recentlyTerminal.Contains(pending.txid))}");
 #endif
                 // InFlight, Aborted, or orphan-pending (committed bucket whose
                 // saga terminal has already landed on this leaf) - fall through
@@ -537,7 +560,7 @@ internal sealed partial class BPlusLeafGrain(
                     if (!await IsShadowedReadSafeAsync(shadowSagas))
                     {
 #if LATTICE_DIAG
-                        DiagSink.Write($"[DIAG read-shadow-stale] gid={context.GrainId} key={key} sagas=[{string.Join(',', shadowSagas)}]");
+                        DiagSink.Write($"[DIAG read-shadow-stale] silo={DiagSiloTag} gid={context.GrainId} key={key} sagas=[{string.Join(',', shadowSagas)}]");
 #endif
                         throw new StaleShardRoutingException(-1, -1, -1);
                     }
@@ -545,7 +568,7 @@ internal sealed partial class BPlusLeafGrain(
                 result[key] = lww.Value!;
 #if LATTICE_DIAG
                 // DIAG: read-return path - capture what each leaf returns per key.
-                DiagSink.Write($"[DIAG read] gid={context.GrainId} key={key} valRound={DiagDecodeRound(lww.Value)} " +
+                DiagSink.Write($"[DIAG read] silo={DiagSiloTag} gid={context.GrainId} key={key} valRound={DiagDecodeRound(lww.Value)} " +
                     $"hlc={lww.Timestamp} isMig={lww.IsMigrated} origin={lww.OriginClusterId ?? "(local)"}");
 #endif
             }

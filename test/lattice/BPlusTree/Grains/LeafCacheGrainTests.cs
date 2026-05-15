@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Tests.Fakes;
 using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -30,7 +31,7 @@ public partial class LeafCacheGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions());
 
-        var grain = new LeafCacheGrain(context, grainFactory, optionsMonitor);
+        var grain = new LeafCacheGrain(context, grainFactory, optionsMonitor, TestOriginClusterIdResolver.Default());
         return (grain, leafMock);
     }
 
@@ -76,7 +77,7 @@ public partial class LeafCacheGrainTests
     public async Task Get_returns_null_when_primary_has_no_data()
     {
         var (grain, leaf) = CreateGrain();
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         var result = await grain.GetAsync("k1");
         Assert.That(result, Is.Null);
@@ -86,7 +87,7 @@ public partial class LeafCacheGrainTests
     public async Task Get_returns_value_from_primary_delta()
     {
         var (grain, leaf) = CreateGrain();
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(("k1", Encoding.UTF8.GetBytes("v1"))));
 
         var result = await grain.GetAsync("k1");
@@ -98,7 +99,7 @@ public partial class LeafCacheGrainTests
     public async Task Get_returns_null_for_key_not_in_delta()
     {
         var (grain, leaf) = CreateGrain();
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(("k1", Encoding.UTF8.GetBytes("v1"))));
 
         var result = await grain.GetAsync("missing");
@@ -122,12 +123,12 @@ public partial class LeafCacheGrainTests
             },
             Version = new VersionVector()
         };
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(liveDelta);
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(liveDelta);
         Assert.That(await grain.GetAsync("k1"), Is.Not.Null);
 
         // Second call returns a tombstone with higher timestamp.
         var tombClock = HybridLogicalClock.Tick(clock);
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(TombstoneDelta("k1", tombClock));
 
         var result = await grain.GetAsync("k1");
@@ -153,7 +154,7 @@ public partial class LeafCacheGrainTests
             },
             Version = new VersionVector()
         };
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(expiredDelta);
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(expiredDelta);
 
         // Cache must filter the expired entry on read even though it was
         // merged into the local cache during refresh.
@@ -168,7 +169,7 @@ public partial class LeafCacheGrainTests
 
         var clock = HybridLogicalClock.Tick(default);
         var expiredTicks = DateTimeOffset.UtcNow.Ticks - TimeSpan.FromMinutes(1).Ticks;
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(new StateDelta
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(new StateDelta
         {
             Entries = new Dictionary<string, LwwValue<byte[]>>
             {
@@ -192,7 +193,7 @@ public partial class LeafCacheGrainTests
         var expiredTicks = nowTicks - TimeSpan.FromMinutes(1).Ticks;
         var futureTicks = nowTicks + TimeSpan.FromHours(1).Ticks;
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(new StateDelta
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(new StateDelta
         {
             Entries = new Dictionary<string, LwwValue<byte[]>>
             {
@@ -217,13 +218,13 @@ public partial class LeafCacheGrainTests
     public async Task Get_always_calls_delta_on_primary()
     {
         var (grain, leaf) = CreateGrain();
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         await grain.GetAsync("k1");
         await grain.GetAsync("k2");
         await grain.GetAsync("k3");
 
-        await leaf.Received(3).GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await leaf.Received(3).GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>());
     }
 
     [Test]
@@ -232,12 +233,12 @@ public partial class LeafCacheGrainTests
         var (grain, leaf) = CreateGrain();
 
         // First call populates cache.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(("k1", Encoding.UTF8.GetBytes("v1"))));
         await grain.GetAsync("k1");
 
         // Second call returns empty delta - cached value should still be there.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         var result = await grain.GetAsync("k1");
         Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("v1"));
@@ -260,7 +261,7 @@ public partial class LeafCacheGrainTests
             },
             Version = new VersionVector()
         };
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(delta1);
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(delta1);
         await grain.GetAsync("k1");
 
         // Second delta: k1 = v2 with higher clock.
@@ -273,7 +274,7 @@ public partial class LeafCacheGrainTests
             },
             Version = new VersionVector()
         };
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(delta2);
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(delta2);
 
         var result = await grain.GetAsync("k1");
         Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("v2"));
@@ -298,7 +299,7 @@ public partial class LeafCacheGrainTests
             },
             Version = new VersionVector()
         };
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(delta1);
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(delta1);
         await grain.GetAsync("k1");
 
         // Second delta: k1 = "older" with lower clock - should be ignored by LWW merge.
@@ -310,7 +311,7 @@ public partial class LeafCacheGrainTests
             },
             Version = new VersionVector()
         };
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(delta2);
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(delta2);
 
         var result = await grain.GetAsync("k1");
         Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("newer"));
@@ -322,7 +323,7 @@ public partial class LeafCacheGrainTests
     public async Task Cache_handles_multiple_keys_independently()
     {
         var (grain, leaf) = CreateGrain();
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(
                 ("a", Encoding.UTF8.GetBytes("1")),
                 ("b", Encoding.UTF8.GetBytes("2")),
@@ -331,7 +332,7 @@ public partial class LeafCacheGrainTests
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("a"))!), Is.EqualTo("1"));
 
         // Subsequent reads return empty delta, but cache retains all keys.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("b"))!), Is.EqualTo("2"));
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("c"))!), Is.EqualTo("3"));
@@ -345,7 +346,7 @@ public partial class LeafCacheGrainTests
         var (grain, leaf) = CreateGrain();
 
         // Populate cache with three entries: a, m, z.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(
                 ("a", Encoding.UTF8.GetBytes("1")),
                 ("m", Encoding.UTF8.GetBytes("2")),
@@ -359,11 +360,11 @@ public partial class LeafCacheGrainTests
             Version = new VersionVector(),
             SplitKey = "m"
         };
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(splitDelta);
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(splitDelta);
         await grain.GetAsync("a"); // triggers refresh with split key
 
         // "a" should still be cached; "m" and "z" should be pruned.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("a"))!), Is.EqualTo("1"));
         Assert.That(await grain.GetAsync("m"), Is.Null);
         Assert.That(await grain.GetAsync("z"), Is.Null);
@@ -375,7 +376,7 @@ public partial class LeafCacheGrainTests
         var (grain, leaf) = CreateGrain();
 
         // Populate cache.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(("a", Encoding.UTF8.GetBytes("1")), ("z", Encoding.UTF8.GetBytes("2"))));
         await grain.GetAsync("a");
 
@@ -389,11 +390,11 @@ public partial class LeafCacheGrainTests
             Version = new VersionVector(),
             SplitKey = "m"
         };
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(splitDelta);
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(splitDelta);
         await grain.GetAsync("a");
         await grain.GetAsync("a");
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("a"))!), Is.EqualTo("1"));
         Assert.That(await grain.GetAsync("z"), Is.Null);
     }
@@ -404,12 +405,12 @@ public partial class LeafCacheGrainTests
         var (grain, leaf) = CreateGrain();
 
         // Populate cache.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(("a", Encoding.UTF8.GetBytes("1")), ("z", Encoding.UTF8.GetBytes("2"))));
         await grain.GetAsync("a");
 
         // Delta with no split key - nothing pruned.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("a"))!), Is.EqualTo("1"));
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("z"))!), Is.EqualTo("2"));
@@ -440,7 +441,7 @@ public partial class LeafCacheGrainTests
             },
             Version = siblingVersion
         };
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(siblingDelta);
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(siblingDelta);
 
         var result = await grain.GetAsync("k1");
         Assert.That(result, Is.Not.Null);
@@ -466,7 +467,7 @@ public partial class LeafCacheGrainTests
 
         // First call: cache version is empty, sibling version is empty.
         // DominatesOrEquals(empty) → true → empty delta returned.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(new StateDelta
             {
                 Entries = new Dictionary<string, LwwValue<byte[]>>(),
@@ -484,7 +485,7 @@ public partial class LeafCacheGrainTests
     public async Task GetManyAsync_returns_existing_keys_from_cache()
     {
         var (grain, leaf) = CreateGrain();
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(
                 ("a", Encoding.UTF8.GetBytes("1")),
                 ("b", Encoding.UTF8.GetBytes("2")),
@@ -508,7 +509,7 @@ public partial class LeafCacheGrainTests
         version.Tick("primary");
         var tombClock = HybridLogicalClock.Tick(clock);
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(new StateDelta
             {
                 Entries = new Dictionary<string, LwwValue<byte[]>>
@@ -529,7 +530,7 @@ public partial class LeafCacheGrainTests
     public async Task GetManyAsync_returns_empty_for_empty_input()
     {
         var (grain, leaf) = CreateGrain();
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         var result = await grain.GetManyAsync([]);
 
@@ -544,7 +545,7 @@ public partial class LeafCacheGrainTests
         var (grain, leaf) = CreateGrain(new LatticeOptions { CacheTtl = TimeSpan.FromSeconds(30) });
 
         // First call populates cache.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(("k1", Encoding.UTF8.GetBytes("v1"))));
         await grain.GetAsync("k1");
 
@@ -554,7 +555,7 @@ public partial class LeafCacheGrainTests
 
         Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("v1"));
         // Only 1 delta call - the second was skipped due to TTL.
-        await leaf.Received(1).GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await leaf.Received(1).GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>());
     }
 
     [Test]
@@ -562,12 +563,12 @@ public partial class LeafCacheGrainTests
     {
         var (grain, leaf) = CreateGrain(new LatticeOptions { CacheTtl = TimeSpan.Zero });
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         await grain.GetAsync("k1");
         await grain.GetAsync("k2");
         await grain.GetAsync("k3");
 
-        await leaf.Received(3).GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await leaf.Received(3).GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>());
     }
 }

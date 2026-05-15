@@ -617,6 +617,7 @@ internal sealed partial class ReplicationApplier(
             shardIndex,
             entry.Timestamp,
             entry.OriginClusterId!,
+            entry.AtomicShardCount,
             cancellationToken);
     }
 

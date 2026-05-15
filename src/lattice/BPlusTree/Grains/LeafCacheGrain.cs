@@ -21,16 +21,47 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// the last successful refresh, reducing RPC overhead at the cost of
 /// potentially serving slightly stale data.
 /// </summary>
+// CS9113: 'originClusterIdResolver' is referenced only inside #if LATTICE_DIAG
+// blocks (used by DiagSiloTag to disambiguate Site A vs Site B emissions in the
+// shared file-based DiagSink log). Suppressed at the parameter list because in
+// non-diag builds the parameter is genuinely unread, but removing it would break
+// the activation-DI signature and the diag build's site-tagging behaviour.
+#pragma warning disable CS9113
 [StatelessWorker]
 internal sealed class LeafCacheGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
-    IOptionsMonitor<LatticeOptions> optionsMonitor) : ILeafCacheGrain
+    IOptionsMonitor<LatticeOptions> optionsMonitor,
+    ILatticeOriginClusterIdResolver originClusterIdResolver) : ILeafCacheGrain
+#pragma warning restore CS9113
 {
     private readonly Dictionary<string, LwwValue<byte[]>> _cache = new(StringComparer.Ordinal);
+
+#if LATTICE_DIAG
+    /// <summary>
+    /// Cached cluster id of the silo hosting this cache activation; see
+    /// <see cref="BPlusLeafGrain.DiagSiloTag"/> for the rationale.
+    /// </summary>
+    private string? _diagSiloTag;
+
+    private string DiagSiloTag => _diagSiloTag
+        ??= (originClusterIdResolver.Resolve(_treeId ?? string.Empty) is { Length: > 0 } id ? id : "(local)");
+#endif
     private VersionVector _version = new();
     private long _lastRefreshTicks;
     private string? _treeId;
+
+    /// <summary>
+    /// Activation-scoped delivery cursor obtained from the primary
+    /// leaf on every refresh. Decouples cache delivery from LWW HLC
+    /// ordering: an epoch mismatch forces a full snapshot, otherwise
+    /// the leaf ships only entries whose per-key sequence is strictly
+    /// greater than this value's
+    /// <see cref="LeafDeliveryCursor.Sequence"/>. Starts at
+    /// <see cref="LeafDeliveryCursor.Empty"/> so the first refresh
+    /// trips the epoch-mismatch fast path.
+    /// </summary>
+    private LeafDeliveryCursor _deliveryCursor = LeafDeliveryCursor.Empty;
 
     /// <summary>
     /// Keys this cache currently knows are covered by a pending-tx
@@ -181,7 +212,7 @@ internal sealed class LeafCacheGrain(
         if (_pendingKeys.Contains(key) || (hasCached && cached.IsMigrated))
         {
 #if LATTICE_DIAG
-            DiagSink.Write($"[DIAG cache-delegate-get] cache-gid={context.GrainId} primary={PrimaryLeafId} key={key} reason={(_pendingKeys.Contains(key) ? "pending" : "migrated")}");
+            DiagSink.Write($"[DIAG cache-delegate-get] silo={DiagSiloTag} cache-gid={context.GrainId} primary={PrimaryLeafId} key={key} reason={(_pendingKeys.Contains(key) ? "pending" : "migrated")}");
 #endif
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
             return await leaf.GetAsync(key);
@@ -273,7 +304,7 @@ internal sealed class LeafCacheGrain(
         if (delegated is not null)
         {
 #if LATTICE_DIAG
-            DiagSink.Write($"[DIAG cache-delegate-many] cache-gid={context.GrainId} primary={PrimaryLeafId} keys=[{string.Join(',', delegated)}]");
+            DiagSink.Write($"[DIAG cache-delegate-many] silo={DiagSiloTag} cache-gid={context.GrainId} primary={PrimaryLeafId} keys=[{string.Join(',', delegated)}]");
 #endif
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
             delegatedResult = await leaf.GetManyAsync(delegated);
@@ -303,7 +334,7 @@ internal sealed class LeafCacheGrain(
                 && !cached.IsExpired(nowTicks))
             {
 #if LATTICE_DIAG
-                DiagSink.Write($"[DIAG cache-hit-many] cache-gid={context.GrainId} primary={PrimaryLeafId} key={key} valRound={DiagSink.DecodeRound(cached.Value!)} hlc={cached.Timestamp} isMig={cached.IsMigrated}");
+                DiagSink.Write($"[DIAG cache-hit-many] silo={DiagSiloTag} cache-gid={context.GrainId} primary={PrimaryLeafId} key={key} valRound={DiagSink.DecodeRound(cached.Value!)} hlc={cached.Timestamp} isMig={cached.IsMigrated}");
 #endif
                 result[key] = cached.Value!;
                 hits++;
@@ -345,7 +376,7 @@ internal sealed class LeafCacheGrain(
             if (sameSiloRev == _lastSeenPrimaryRevision)
             {
 #if LATTICE_DIAG
-                DiagSink.Write($"[DIAG refresh-skip-revision] cache-gid={context.GrainId} primary={primaryId} rev={sameSiloRev}");
+                DiagSink.Write($"[DIAG refresh-skip-revision] silo={DiagSiloTag} cache-gid={context.GrainId} primary={primaryId} rev={sameSiloRev}");
 #endif
                 return; // provably fresh; nothing has changed on the primary.
             }
@@ -369,7 +400,7 @@ internal sealed class LeafCacheGrain(
                 if (elapsed < (long)ttl.TotalMilliseconds)
                 {
 #if LATTICE_DIAG
-                    DiagSink.Write($"[DIAG refresh-skip-ttl] cache-gid={context.GrainId} primary={primaryId} elapsedMs={elapsed} ttlMs={(long)ttl.TotalMilliseconds} lastSeenRev={_lastSeenPrimaryRevision}");
+                    DiagSink.Write($"[DIAG refresh-skip-ttl] silo={DiagSiloTag} cache-gid={context.GrainId} primary={primaryId} elapsedMs={elapsed} ttlMs={(long)ttl.TotalMilliseconds} lastSeenRev={_lastSeenPrimaryRevision}");
 #endif
                     return;
                 }
@@ -414,7 +445,16 @@ internal sealed class LeafCacheGrain(
         // bug we are avoiding.
         var pendingKeys = await primaryLeaf.GetPendingKeysAsync();
 
-        var delta = await primaryLeaf.GetDeltaSinceAsync(_version);
+        // Cursor-based delivery: decouples cache delivery from LWW
+        // HLC ordering so cross-cluster applies whose source HLC is
+        // below the destination leaf's published clock are still
+        // delivered correctly. An epoch mismatch (fresh cache or
+        // stale leaf activation) trips a full-snapshot rebuild; an
+        // epoch match scans the leaf's per-key sequence map and
+        // ships only entries newer than _deliveryCursor.Sequence.
+        var priorCursor = _deliveryCursor;
+        var delta = await primaryLeaf.GetDeltaSinceCursorAsync(priorCursor);
+        var epochFlipped = priorCursor.Epoch != delta.DeliveryCursor.Epoch;
 
 #if LATTICE_DIAG
         // Compact one-line summary of cache._version vs delta.Version: for each
@@ -436,8 +476,19 @@ internal sealed class LeafCacheGrain(
             }
             return string.Join(",", parts);
         }
-        DiagSink.Write($"[DIAG refresh-delta] cache-gid={context.GrainId} primary={primaryId} isEmpty={delta.IsEmpty} entryCount={delta.Entries.Count} splitKey={(delta.SplitKey ?? "<null>")} movedAwaySlotsCount={(delta.MovedAwaySlots?.Length ?? 0)} pendingCount={(pendingKeys?.Count ?? 0)} versions=[{FormatVer(_version, delta.Version)}]");
+        DiagSink.Write($"[DIAG refresh-delta] silo={DiagSiloTag} cache-gid={context.GrainId} primary={primaryId} isEmpty={delta.IsEmpty} entryCount={delta.Entries.Count} splitKey={(delta.SplitKey ?? "<null>")} movedAwaySlotsCount={(delta.MovedAwaySlots?.Length ?? 0)} pendingCount={(pendingKeys?.Count ?? 0)} versions=[{FormatVer(_version, delta.Version)}] cursor=[ours.Ep={priorCursor.Epoch}.Sq={priorCursor.Sequence}->leaf.Ep={delta.DeliveryCursor.Epoch}.Sq={delta.DeliveryCursor.Sequence} epochFlipped={epochFlipped}]");
 #endif
+
+        // Epoch flip means the leaf reactivated (or this is the
+        // first refresh ever): the delta now carries a full snapshot
+        // of every live entry. Clear the local cache so range-
+        // deleted / migrated-away keys that no longer exist on the
+        // leaf are evicted; the subsequent merge loop repopulates
+        // _cache from the snapshot.
+        if (epochFlipped)
+        {
+            _cache.Clear();
+        }
 
         // If the primary leaf has been split, prune any cached entries that
         // now belong to the new sibling (keys >= SplitKey). This is idempotent
@@ -496,7 +547,7 @@ internal sealed class LeafCacheGrain(
             if (keysToRemoveMoved is { Count: > 0 })
             {
 #if LATTICE_DIAG
-                DiagSink.Write($"[DIAG cache-prune-moved-away] cache-gid={context.GrainId} primary={PrimaryLeafId} pruneCount={keysToRemoveMoved.Count} pruneKeys=[{string.Join(',', keysToRemoveMoved)}]");
+                DiagSink.Write($"[DIAG cache-prune-moved-away] silo={DiagSiloTag} cache-gid={context.GrainId} primary={PrimaryLeafId} pruneCount={keysToRemoveMoved.Count} pruneKeys=[{string.Join(',', keysToRemoveMoved)}]");
 #endif
                 foreach (var key in keysToRemoveMoved)
                 {
@@ -521,7 +572,15 @@ internal sealed class LeafCacheGrain(
         }
 
         if (delta.IsEmpty)
+        {
+            // Even when no entries shipped, adopt the leaf's cursor
+            // and refresh the wall-clock so subsequent refreshes
+            // observe the up-to-date epoch / sequence and the TTL
+            // gate has a meaningful starting point.
+            _deliveryCursor = delta.DeliveryCursor;
+            _lastRefreshTicks = Environment.TickCount64;
             return;
+        }
 
         // Merge each entry using LWW semantics.
         foreach (var (key, lww) in delta.Entries)
@@ -538,6 +597,9 @@ internal sealed class LeafCacheGrain(
 
         // Advance our version vector to reflect what we've received.
         _version = VersionVector.Merge(_version, delta.Version);
+        // Adopt the leaf's current delivery cursor so the next
+        // refresh ships only the strictly-newer per-key sequences.
+        _deliveryCursor = delta.DeliveryCursor;
         _lastRefreshTicks = Environment.TickCount64;
     }
 

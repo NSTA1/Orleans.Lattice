@@ -251,5 +251,46 @@ public readonly record struct WalRecord
     /// receiver is keyed against the receiver's own routing).
     /// </summary>
     [Id(18)] public int ShardIndex { get; init; }
+
+    /// <summary>
+    /// Total number of source-cluster shards the enclosing atomic-write
+    /// saga touched - i.e. the count of distinct
+    /// <c>(originClusterId, sourceShardIndex)</c> terminal records the
+    /// producer ships for this transaction. Stamped only on terminal
+    /// records (<see cref="MutationKind.TxCommit"/> /
+    /// <see cref="MutationKind.TxAbort"/>) at terminal-broadcast time
+    /// from the saga coordinator's authoritative
+    /// <c>TxRegistryState.Participants</c> set - which records every
+    /// source shard that handled a prepare-phase write, including
+    /// shadow-forward destinations. Every prepare-phase entry stamps
+    /// <c>0</c>; non-saga writes stamp <c>0</c>.
+    /// <para>
+    /// Used by the receiver's <c>LatticeGrain.ApplyTxTerminalAsync</c>
+    /// to gate the per-tree <c>ITxRegistryGrain</c> linearization mark
+    /// until every per-shard terminal of the saga has arrived. Without
+    /// this gate a receiver reader concurrent with replication of a
+    /// multi-shard <c>SetManyAtomicAsync</c> can observe a strict
+    /// subset of the saga's keys at the new value while the remaining
+    /// shards still show the pre-saga value, because the first
+    /// terminal flips the registry to <c>Committed</c> and unblocks
+    /// reader-side resolution against the partial set of shards whose
+    /// prepared records have arrived. The gating tally is keyed by
+    /// source shard index, tolerates duplicate-delivery retries, and
+    /// adopts a monotonically non-decreasing
+    /// <c>max(seenExpected, incomingAtomicShardCount)</c> view of the
+    /// expected count so a source-side mid-saga shadow-forward split
+    /// that grows the touched-shard set between successive terminals
+    /// is absorbed without missing the gate.
+    /// </para>
+    /// <para>
+    /// Strictly additive on the wire: legacy peers and entries
+    /// authored before this slot existed decode as <c>0</c>, which
+    /// the receiver treats as "no gating information available" and
+    /// falls back to the legacy "mark on first terminal" semantics -
+    /// preserving today's best-effort cross-cluster atomic visibility
+    /// against legacy shippers.
+    /// </para>
+    /// </summary>
+    [Id(19)] public int AtomicShardCount { get; init; }
 }
 

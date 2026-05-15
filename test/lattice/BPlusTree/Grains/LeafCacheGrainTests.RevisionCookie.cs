@@ -71,7 +71,7 @@ public partial class LeafCacheGrainTests
         // cache.
         var mockPrimary = Substitute.For<IBPlusLeafGrain>();
         mockPrimary.GetTreeIdAsync().Returns("test-tree");
-        mockPrimary.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         var cacheContext = Substitute.For<IGrainContext>();
         cacheContext.GrainId.Returns(GrainId.Create("cache", leafId.ToString()));
@@ -84,7 +84,7 @@ public partial class LeafCacheGrainTests
         // (and not the TTL fast-path) on every read.
         optionsMonitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions { CacheTtl = TimeSpan.Zero });
 
-        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor);
+        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, TestOriginClusterIdResolver.Default());
         return (cache, registryPopulator, mockPrimary, leafId);
     }
 
@@ -105,7 +105,7 @@ public partial class LeafCacheGrainTests
         // unchanged, the gate is satisfied, RPC must be elided.
         await cache.GetAsync("any");
 
-        await mockPrimary.Received(1).GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await mockPrimary.Received(1).GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>());
     }
 
     [Test]
@@ -119,7 +119,7 @@ public partial class LeafCacheGrainTests
         await registryPopulator.SetAsync("k2", Encoding.UTF8.GetBytes("v2")); // cookie advances
         await cache.GetAsync("any");                                  // RPC #2: cookie advanced
 
-        await mockPrimary.Received(2).GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await mockPrimary.Received(2).GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>());
     }
 
     [Test]
@@ -136,7 +136,7 @@ public partial class LeafCacheGrainTests
 
         var mockPrimary = Substitute.For<IBPlusLeafGrain>();
         mockPrimary.GetTreeIdAsync().Returns("test-tree");
-        mockPrimary.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         var cacheContext = Substitute.For<IGrainContext>();
         cacheContext.GrainId.Returns(GrainId.Create("cache", leafId.ToString()));
@@ -147,7 +147,7 @@ public partial class LeafCacheGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions { CacheTtl = TimeSpan.Zero });
 
-        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor);
+        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, TestOriginClusterIdResolver.Default());
 
         // Pre-condition: registry has no entry for this leaf id.
         Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False,
@@ -157,7 +157,7 @@ public partial class LeafCacheGrainTests
         await cache.GetAsync("any");
         await cache.GetAsync("any");
 
-        await mockPrimary.Received(3).GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await mockPrimary.Received(3).GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>());
     }
 
     [Test]
@@ -179,7 +179,7 @@ public partial class LeafCacheGrainTests
         var first = BPlusLeafGrainTests.CreateLeafGrainForCrossFixtureUse(replicaId: unique);
         var mockPrimary = Substitute.For<IBPlusLeafGrain>();
         mockPrimary.GetTreeIdAsync().Returns("test-tree");
-        mockPrimary.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         var cacheContext = Substitute.For<IGrainContext>();
         cacheContext.GrainId.Returns(GrainId.Create("cache", leafId.ToString()));
@@ -190,7 +190,7 @@ public partial class LeafCacheGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions { CacheTtl = TimeSpan.Zero });
 
-        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor);
+        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, TestOriginClusterIdResolver.Default());
 
         // First activation: many writes -> cookie advances; cache
         // observes it via one RPC.
@@ -200,7 +200,7 @@ public partial class LeafCacheGrainTests
         }
         await cache.GetAsync("any");                  // RPC #1: snapshots cookie = 5
         await cache.GetAsync("any");                  // skip: cookie unchanged
-        await mockPrimary.Received(1).GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await mockPrimary.Received(1).GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>());
 
         // Deactivate the first activation and verify the registry
         // entry was pruned so the next bump runs against a fresh box.
@@ -218,7 +218,7 @@ public partial class LeafCacheGrainTests
         await second.SetAsync("kfirst", Encoding.UTF8.GetBytes("v"));
 
         await cache.GetAsync("any");                  // RPC #2: cookie diverges
-        await mockPrimary.Received(2).GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await mockPrimary.Received(2).GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>());
     }
 
     [Test]
@@ -244,6 +244,6 @@ public partial class LeafCacheGrainTests
             await cache.GetAsync("any");
         }
 
-        await mockPrimary.Received(1).GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await mockPrimary.Received(1).GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>());
     }
 }

@@ -26,7 +26,7 @@ public partial class BPlusLeafGrainTests
             maxLeafKeys: 128,
             shardCount: 1,
             factory: factory);
-        var grain = new BPlusLeafGrain(context, state, factory, resolver, TestMutationObservers.With(observer));
+        var grain = new BPlusLeafGrain(context, state, factory, resolver, TestMutationObservers.With(observer), TestOriginClusterIdResolver.Default());
         // Set the tree id so the observer sees a stable value instead of an empty string.
         grain.SetTreeIdAsync(treeId).GetAwaiter().GetResult();
         return grain;

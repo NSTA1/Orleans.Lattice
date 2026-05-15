@@ -41,10 +41,17 @@ internal static class DiagSink
 
     public static int DecodeRound(byte[]? value)
     {
-        if (value is null || value.Length < 6) return -1;
+        // Test values are authored as ASCII 'v-NNN' (5 bytes, e.g.
+        // 'v-001'). The previous Length < 6 guard rejected every legal
+        // value, making this method always return -1 - which masked
+        // the actual rounds in every diag trace and rendered the
+        // reader/leaf round-correlation pointless. The minimum legal
+        // length is 3 ('v-' + at least one digit); the loop below
+        // already caps the scan at the first non-digit or value.Length.
+        if (value is null || value.Length < 3) return -1;
         if (value[0] != (byte)'v' || value[1] != (byte)'-') return -1;
         int round = 0;
-        for (int i = 2; i < value.Length && i < 5; i++)
+        for (int i = 2; i < value.Length; i++)
         {
             var c = value[i];
             if (c < (byte)'0' || c > (byte)'9') return -1;

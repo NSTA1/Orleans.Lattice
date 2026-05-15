@@ -364,20 +364,147 @@ mutations belong to the same enclosing batch and reason about
 batch-level invariants without coordinating with the producer. They
 are *not* the atomicity primitive: tree-wide atomic visibility is
 delivered by the per-tree `ITxRegistryGrain` + per-leaf pending-tx
-mechanism described above. **Cross-cluster atomic visibility ships
-universally** through the same primitive: prepared writes ride the
-standard per-key WAL → replication transport carrying an additive
-`IsPrepared` slot and the saga's `TransactionId`, the per-shard
-`TxCommit` / `TxAbort` terminal mark ships as a single record exempt
-from the producer-side per-key filter, and on the receiver
+mechanism described above. The `AtomicBatchSize` and
+`AtomicBatchIndex` slots remain reserved for future receiver-side
+batch optimisations but are not consumed by the current apply path.
+See [Consistency: Atomic visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster).
+
+## Cross-cluster atomic visibility
+
+**Cross-cluster atomic visibility ships universally** through the
+same per-tree `ITxRegistryGrain` linearization point used locally.
+Prepared writes ride the standard per-key WAL → replication transport
+carrying an additive `IsPrepared` slot and the saga's
+`TransactionId`; every per-shard `TxCommit` / `TxAbort` terminal mark
+ships as a single record exempt from the producer-side per-key
+filter. On the receiver, prepared records route to
 `IReplicationApplyGrain.ApplyPreparedSetAsync` /
-`ApplyPreparedDeleteAsync` route each prepared entry into the local
-leaf's per-tx pending bucket, with `ApplyTxTerminalAsync` flipping
-visibility under the source HLC after marking the receiver's
-`ITxRegistryGrain`. The `AtomicBatchSize` and `AtomicBatchIndex`
-slots remain reserved for future receiver-side batch optimisations
-but are not consumed by the current apply path. See
-[Consistency: Atomic visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster).
+`ApplyPreparedDeleteAsync`, which install each entry into the
+destination leaf's per-tx pending bucket. Terminal records route to
+`ApplyTxTerminalAsync`, which gates the per-tree linearization flip
+on a per-source-shard arrival tally before fanning the terminal out
+to the receiver's leaves.
+
+### Multi-shard receiver gate
+
+A saga that touched **N** source shards emits **N** independent
+`TxCommit` (or `TxAbort`) WAL records, one per source shard. Each one
+ships through the change feed under its own backpressure / batching
+cadence, so the receiver can observe them in any order and arbitrarily
+spaced in wall-clock time. The receiver must therefore hold back the
+per-tree visibility flip until it has seen every per-source-shard
+terminal; otherwise a remote reader concurrent with replication can
+observe post-saga values on the drained-shard keys and pre-saga
+values on the still-pending-shard keys - a partial-batch visibility
+split the atomicity contract makes impossible.
+
+The producer stamps the saga's authoritative touched-shard count on
+each terminal record via the additive
+`LatticeMutation.AtomicShardCount` slot. The slot is published by
+`AtomicWriteGrain.MarkOneShardAsync` through the ambient
+`LatticeAtomicShardCountContext` and read inside
+`ShardRootGrain.AppendTxTerminalAsync` at the moment the terminal
+mutation is assembled - so a producer-side mid-saga shadow-forward
+split that grows the touched-shard set between successive per-shard
+terminals stamps the post-growth count on the later terminals and the
+receiver adopts the larger value (`max(seen, incoming)`) without ever
+under-counting.
+
+The receiver-side `TxRegistryGrain.RecordTerminalArrivalAsync(txid,
+sourceShardIndex, committed, atomicShardCount)` deduplicates arrivals
+per `(txid, sourceShardIndex)` into a persistent
+`TerminalArrivals: Dictionary<Guid, HashSet<int>>` slot and tracks
+the expected total in `ExpectedTerminals: Dictionary<Guid, int>`. The
+call returns a `TerminalTallyResult` carrying:
+
+| Field | Meaning |
+|---|---|
+| `IsFinal` | `true` once `arrivals.Count >= max(expected, atomicShardCount)` for the txid. |
+| `Committed` | The saga's outcome (commit or abort), latched on the first arrival. A mismatched-outcome arrival preserves the earlier abort. |
+| `ObservedSourceShards` | The full union of per-source-shard indices seen so far. Populated only on the final arrival; empty otherwise so the non-final path allocates no array. |
+
+`LatticeGrain.ApplyTxTerminalAsync` consults the tally first. A
+non-final tally leaves the per-tree linearization mark unset and the
+receiver leaves' pending buckets undrained - readers dialling back
+through `ITxRegistryGrain.GetStatusAsync` observe `InFlight` for the
+whole saga and fall through to the pre-saga value. Only on the final
+arrival does the receiver:
+
+1. Mark the registry's decision (`MarkCommittedAsync` /
+   `MarkAbortedAsync`) - the single per-tree visibility flip.
+2. Resolve the transitive split-forward closure of every observed
+   source-shard via `TerminalFanOutResolver` and dispatch the
+   per-shard terminal mark to each destination in a single parallel
+   hop, under the saga's source HLC and origin-cluster id.
+
+The gate handles producer/receiver shard-count divergence naturally
+because the tally key is the **producer**-stamped source-side shard
+index, not the receiver's shard layout. A receiver whose adaptive
+splits or operator resize have produced a different shard count than
+the source still observes exactly `atomicShardCount` distinct source
+terminals (one per source shard the saga touched).
+
+The slots are forward- and backward-compatible across mixed-version
+deployments. A legacy persisted `TxRegistryState` with no
+`TerminalArrivals` / `ExpectedTerminals` decodes to empty
+dictionaries (the correct "no terminals tallied yet" default). A
+receiver consuming records from a legacy producer that never stamps
+`AtomicShardCount` sees `atomicShardCount == 0` on every arrival,
+which the gate treats as "no expected-total information" and falls
+back to first-terminal-wins semantics - equivalent to the
+pre-gate behaviour. `ForgetAsync` clears both slots alongside the
+decision entry, so the persisted footprint stays bounded by the
+in-flight + recently-completed saga set.
+
+### Prepared writes never enter the receiver's batched merge path
+
+The receiver's `ReplicationApplier.ApplyBatchAsync` classifies
+inbound `WalRecord` entries into a fast-path batched LWW merge
+(`ApplyMergeManyAsync`) and a per-entry fallback (`ApplyPointAsync`).
+The classifier predicate explicitly excludes any entry with
+`IsPrepared == true`: prepared `Set` / `Delete` records are forced
+onto the per-entry path, where they reach
+`ApplyPreparedSetAsync` / `ApplyPreparedDeleteAsync` and land in the
+destination leaf's `_pendingTx` bucket. Unprepared writes continue to
+consume the batched merge path. Without this exclusion, prepared
+writes would commit directly into the receiver leaf's visible
+`Entries` and the saga's terminal mark would find no matching pending
+entries to flip - so the cross-cluster reader would observe the
+prepared write as visible *before* the registry gate ever flipped,
+purely as a function of whether the inbound run happened to be
+batched (steady-state load) or single-entry (cold start). The
+exclusion makes the strict-isolation invariant independent of the
+receiver's batching cadence.
+
+### Read cache: cursor-based delivery, not HLC-based
+
+A cross-cluster apply on the receiver preserves the **source**
+cluster's HLC verbatim on every committed entry - the destination
+leaf does not bump the source HLC into its local clock, because LWW
+convergence across clusters with skewed wall clocks requires the
+authoring cluster's HLC to remain the comparator. Whenever the
+source HLC is below the destination leaf's already-published
+`Version[ReplicaId]`, an HLC-based delta filter on the read cache
+silently drops the entry from the per-key delta and continues
+serving the stale local value indefinitely.
+
+To decouple cache delivery from LWW HLC ordering,
+`LeafCacheGrain.RefreshAsync` pulls from the primary leaf via the
+internal `IBPlusLeafGrain.GetDeltaSinceCursorAsync(LeafDeliveryCursor)`
+seam rather than the legacy HLC-keyed delta. The cursor is an
+activation-scoped `(Epoch, Sequence)` pair: `Sequence` is bumped
+once per `StoreEntry` / `RemoveEntry` on the leaf - regardless of the
+write's LWW HLC - so the cache pulls every write strictly newer than
+its last delivered sequence even when the underlying HLC has rewound.
+`Epoch` is bumped on every leaf activation, so a cache holding a
+stale cursor across a leaf re-activation falls back to a full-
+snapshot delivery on its next refresh. The cursor is intentionally
+non-persistent: the WAL replay path remains the sole projection
+source-of-truth, and the cursor adds zero per-write durable I/O. The
+cache also delegates reads back to the primary leaf for any cached
+row carrying `IsMigrated = true`, so the leaf-side shadow guard
+protecting an in-flight cross-shard migration is never bypassed by
+the cache fast path.
 
 ## Related
 

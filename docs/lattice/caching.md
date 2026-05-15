@@ -14,16 +14,45 @@ flowchart LR
         L[BPlusLeafGrain]
     end
 
-    CA -->|"GetDeltaSinceAsync(v₁)"| L
-    CB -->|"GetDeltaSinceAsync(v₂)"| L
+    CA -->|"GetDeltaSinceCursorAsync(c₁)"| L
+    CB -->|"GetDeltaSinceCursorAsync(c₂)"| L
     L -.->|"StateDelta"| CA
     L -.->|"StateDelta"| CB
 ```
 
-- **Delta refresh**: By default, every read calls `GetDeltaSinceAsync` on the primary leaf, passing the cache's current `VersionVector`. If the cache is already up to date, the primary short-circuits and returns an empty delta (a cheap version-vector comparison, no entry scan). If entries have changed, only the newer entries are returned and merged in. When [`CacheTtl`](configuration.md#cachettl) is set to a non-zero value, the cache skips the delta refresh if less than the configured duration has elapsed since the last successful refresh, serving reads entirely from local memory.
+- **Cursor-based delta refresh**: Every read calls
+  `GetDeltaSinceCursorAsync` on the primary leaf, passing the cache's
+  current `LeafDeliveryCursor` (an activation-scoped
+  `(Epoch, Sequence)` pair). `Sequence` is bumped on the leaf once per
+  `StoreEntry` / `RemoveEntry` regardless of the write's LWW HLC, so
+  the leaf ships every entry strictly newer than the cache's last
+  delivered sequence even when the underlying source HLC has rewound
+  (the cross-cluster apply case, where the destination leaf preserves
+  the source cluster's HLC verbatim and may publish a `Version[ReplicaId]`
+  higher than that HLC). An empty delta is a cheap cursor comparison
+  with no entry scan. When [`CacheTtl`](configuration.md#cachettl) is set
+  to a non-zero value, the cache skips the refresh entirely if less than
+  the configured duration has elapsed since the last successful refresh.
+- **Epoch-flip full snapshot**: A leaf re-activation bumps the
+  leaf-side epoch, so a cache holding a stale cursor falls back to a
+  full-snapshot delivery on its next refresh and adopts the new
+  cursor. The cursor is intentionally non-persistent: the WAL replay
+  path remains the sole projection source-of-truth and the cursor
+  adds zero per-write durable I/O.
 - **Freshness bound**: Cached reads are bounded by `CacheTtl + one delta round-trip`. See [Consistency](consistency.md#read-cache-staleness) for the full per-operation contract.
-- **Why keep a local cache at all?**: The `VersionVector` fast-path makes the delta call cheap when nothing has changed, but the local `Dictionary<string, LwwValue<byte[]>>` avoids deserialising the full entry set on every read. When the primary returns a non-empty delta, only the changed entries are merged - the rest are already in memory.
+- **Why keep a local cache at all?**: The cursor comparison fast-path makes the delta call cheap when nothing has changed, but the local `Dictionary<string, LwwValue<byte[]>>` avoids deserialising the full entry set on every read. When the primary returns a non-empty delta, only the changed entries are merged - the rest are already in memory.
 - **Split-aware pruning**: When a `StateDelta` contains a non-null `SplitKey`, the cache removes all entries with keys ≥ `SplitKey` from its local dictionary. These entries now belong to a different leaf grain and would otherwise become stale ghosts in the cache.
+- **Migrated-entry delegation and moved-away pruning**: An entry
+  arriving from a cross-shard migration is stamped `IsMigrated = true`
+  on the destination leaf until a higher-HLC non-migrated write
+  supersedes it. The cache delegates reads for any cached row
+  carrying `IsMigrated = true` back to the primary leaf so the
+  leaf-side shadow guard (which protects an in-flight cross-shard
+  migration window) is never bypassed by the cache fast path. When a
+  delta carries the cumulative `MovedAwaySlots` set, the cache drops
+  every cached entry whose key hashes into one of those virtual
+  slots so it stops serving the source's pre-migration snapshot once
+  the destination has taken authoritative ownership.
 
 ## Cache Invalidation via Tree Aliasing
 

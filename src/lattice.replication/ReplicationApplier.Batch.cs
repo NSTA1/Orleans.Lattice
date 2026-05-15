@@ -344,8 +344,32 @@ internal sealed partial class ReplicationApplier
                 // batchable. Typed-CRDT modes (OrSet, PnCounter,
                 // VersionVector) need per-entry CAS loops on the
                 // shard-root and stay on the per-entry path.
+                //
+                // Saga prepare-phase entries (IsPrepared==true) are
+                // explicitly excluded from the batched LWW path: the
+                // batched path collapses the per-entry route through
+                // ApplyMergeManyAsync, which calls into the shard-root's
+                // generic LWW merge primitive without honouring
+                // IsPrepared / TransactionId. Routing a prepared
+                // record through that primitive applies it directly
+                // into the visible projection, bypassing the per-tx
+                // pending bucket on the receiver leaf - the same
+                // failure mode the producer-side prepare path exists
+                // to prevent, manifesting on the wire instead of in
+                // memory. Cross-cluster atomic-visibility of a saga
+                // collapses to ad-hoc per-key arrival order: keys
+                // whose prepares are batched land as visible writes
+                // before the terminal arrives, and a receiver reader
+                // that scans the batch mid-flight observes a strict
+                // subset of the saga's keys. Forcing prepared entries
+                // back onto the per-entry path routes them through
+                // ApplyPointAsync's IsPrepared branch, which calls
+                // ApplyPreparedSetAsync / ApplyPreparedDeleteAsync on
+                // the receiver and parks them in the leaf's per-tx
+                // pending bucket until the matching terminal arrives.
                 var batchable = entry.Mode == LatticeMergeMode.LwwRegister
-                    && (entry.Op == MutationKind.Set || entry.Op == MutationKind.Delete);
+                    && (entry.Op == MutationKind.Set || entry.Op == MutationKind.Delete)
+                    && !entry.IsPrepared;
 
                 if (!batchable)
                 {

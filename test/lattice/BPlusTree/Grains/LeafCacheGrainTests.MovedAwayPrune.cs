@@ -52,7 +52,7 @@ public partial class LeafCacheGrainTests
         var movedKey2 = KeyForVirtualSlot(2, "moved-b");
         var keptKey = KeyForVirtualSlot(3, "kept-");
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(
                 (movedKey1, Encoding.UTF8.GetBytes("v1")),
                 (movedKey2, Encoding.UTF8.GetBytes("v2")),
@@ -60,14 +60,14 @@ public partial class LeafCacheGrainTests
         await grain.GetAsync(movedKey1); // triggers initial refresh
 
         // Now the primary reports that slot 2 has moved away.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MovedAwayDelta(new[] { 2 }, MovedAwayVsc));
         await grain.GetAsync(keptKey); // triggers refresh with moved slots
 
         // Subsequent reads for moved-slot keys must surface a routing
         // exception so the LatticeGrain retry loop re-routes against
         // the new owner. The retained key still resolves locally.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
         Assert.That(async () => await grain.GetAsync(movedKey1), Throws.TypeOf<StaleShardRoutingException>());
         Assert.That(async () => await grain.GetAsync(movedKey2), Throws.TypeOf<StaleShardRoutingException>());
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync(keptKey))!), Is.EqualTo("v3"));
@@ -81,7 +81,7 @@ public partial class LeafCacheGrainTests
         var movedKey = KeyForVirtualSlot(5, "moved-");
         var keptKey = KeyForVirtualSlot(6, "kept-");
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(
                 (movedKey, Encoding.UTF8.GetBytes("v1")),
                 (keptKey, Encoding.UTF8.GetBytes("v2"))));
@@ -89,13 +89,13 @@ public partial class LeafCacheGrainTests
 
         // Report the moved slot repeatedly; the second/third invocations
         // must remain no-ops for the already-pruned entries.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MovedAwayDelta(new[] { 5 }, MovedAwayVsc));
         await grain.GetAsync(keptKey);
         await grain.GetAsync(keptKey);
         await grain.GetAsync(keptKey);
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
         Assert.That(async () => await grain.GetAsync(movedKey), Throws.TypeOf<StaleShardRoutingException>());
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync(keptKey))!), Is.EqualTo("v2"));
     }
@@ -108,19 +108,19 @@ public partial class LeafCacheGrainTests
         var keyA = KeyForVirtualSlot(1, "a-");
         var keyB = KeyForVirtualSlot(2, "b-");
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(
                 (keyA, Encoding.UTF8.GetBytes("va")),
                 (keyB, Encoding.UTF8.GetBytes("vb"))));
         await grain.GetAsync(keyA);
 
         // Empty MovedAwaySlots array must not prune anything.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MovedAwayDelta(Array.Empty<int>(), MovedAwayVsc));
         await grain.GetAsync(keyA);
 
         // Null MovedAwaySlots / MovedAwayVsc must not prune anything either.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync(keyA))!), Is.EqualTo("va"));
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync(keyB))!), Is.EqualTo("vb"));
     }
@@ -134,7 +134,7 @@ public partial class LeafCacheGrainTests
         var movedB = KeyForVirtualSlot(4, "mb-");
         var kept = KeyForVirtualSlot(7, "ke-");
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(
                 (movedA, Encoding.UTF8.GetBytes("a")),
                 (movedB, Encoding.UTF8.GetBytes("b")),
@@ -144,11 +144,11 @@ public partial class LeafCacheGrainTests
         // Move slots 0 and 4 away in a single refresh. The prune step
         // walks the cache once with BinarySearch on a sorted array, so
         // pass slots in sorted order.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MovedAwayDelta(new[] { 0, 4 }, MovedAwayVsc));
         await grain.GetAsync(kept);
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
         Assert.That(async () => await grain.GetAsync(movedA), Throws.TypeOf<StaleShardRoutingException>());
         Assert.That(async () => await grain.GetAsync(movedB), Throws.TypeOf<StaleShardRoutingException>());
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync(kept))!), Is.EqualTo("c"));
@@ -181,17 +181,17 @@ public partial class LeafCacheGrainTests
 
         // Seed the cache with both keys, then publish a moved-away delta
         // covering the moved key's slot.
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith(
                 (movedKey, Encoding.UTF8.GetBytes("v-moved")),
                 (keptKey, Encoding.UTF8.GetBytes("v-kept"))));
         await grain.GetAsync(keptKey);
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MovedAwayDelta(new[] { 2 }, MovedAwayVsc));
         await grain.GetAsync(keptKey); // refresh consumes the moved-away set
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(EmptyDelta());
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
         // Single-key request: must throw.
         Assert.That(async () => await grain.GetManyAsync(new List<string> { movedKey }),
@@ -224,11 +224,11 @@ public partial class LeafCacheGrainTests
 
         var movedKey = KeyForVirtualSlot(2, "mv-");
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith((movedKey, Encoding.UTF8.GetBytes("v-moved"))));
         await grain.GetAsync(movedKey);
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MovedAwayDelta(new[] { 2 }, MovedAwayVsc));
 
         Assert.That(async () => await grain.GetAsync(movedKey),
@@ -248,11 +248,11 @@ public partial class LeafCacheGrainTests
 
         var movedKey = KeyForVirtualSlot(2, "mv-");
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(DeltaWith((movedKey, Encoding.UTF8.GetBytes("v-moved"))));
         await grain.GetAsync(movedKey);
 
-        leaf.GetDeltaSinceAsync(Arg.Any<VersionVector>())
+        leaf.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
             .Returns(MovedAwayDelta(new[] { 2 }, MovedAwayVsc));
 
         Assert.That(async () => await grain.ExistsAsync(movedKey),

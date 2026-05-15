@@ -177,7 +177,7 @@ internal sealed partial class BPlusLeafGrain
 
 #if LATTICE_DIAG
         // DIAG: prepare landed on this leaf.
-        DiagSink.Write($"[DIAG prepare] gid={context.GrainId} tx={transactionId} key={key} " +
+        DiagSink.Write($"[DIAG prepare] silo={DiagSiloTag} gid={context.GrainId} tx={transactionId} key={key} " +
             $"valRound={DiagDecodeRound(incoming.Value)} " +
             $"hlc={incoming.Timestamp} origin={incoming.OriginClusterId ?? "(local)"} " +
             $"clock={state.State.Clock}");
@@ -298,7 +298,7 @@ internal sealed partial class BPlusLeafGrain
             (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
 #if LATTICE_DIAG
             // DIAG: commit arrived on leaf with no bucket (fast-path).
-            DiagSink.Write($"[DIAG commit-empty] gid={context.GrainId} tx={transactionId} clock={state.State.Clock}");
+            DiagSink.Write($"[DIAG commit-empty] silo={DiagSiloTag} gid={context.GrainId} tx={transactionId} clock={state.State.Clock}");
 #endif
             return;
         }
@@ -307,11 +307,11 @@ internal sealed partial class BPlusLeafGrain
         // DIAG: commit will drain this bucket.
         {
             var keys = string.Join(",", bucket.Keys);
-            DiagSink.Write($"[DIAG commit] gid={context.GrainId} tx={transactionId} bucket=[{keys}] clock={state.State.Clock}");
+            DiagSink.Write($"[DIAG commit] silo={DiagSiloTag} gid={context.GrainId} tx={transactionId} bucket=[{keys}] clock={state.State.Clock}");
             foreach (var kvp in bucket)
             {
                 var hasExisting = state.State.Entries.TryGetValue(kvp.Key, out var existing);
-                DiagSink.Write($"[DIAG commit-key] gid={context.GrainId} tx={transactionId} key={kvp.Key} " +
+                DiagSink.Write($"[DIAG commit-key] silo={DiagSiloTag} gid={context.GrainId} tx={transactionId} key={kvp.Key} " +
                     $"prepared.Hlc={kvp.Value.Timestamp} " +
                     $"existing={(hasExisting ? $"hlc={existing.Timestamp},isMig={existing.IsMigrated}" : "(none)")}");
             }
@@ -403,7 +403,7 @@ internal sealed partial class BPlusLeafGrain
                     {
 #if LATTICE_DIAG
                         // DIAG: pre-scan skip - capture stuck-key signature.
-                        DiagSink.Write($"[DIAG pre-scan-skip] gid={context.GrainId} tx={transactionId} key={kvp.Key} " +
+                        DiagSink.Write($"[DIAG pre-scan-skip] silo={DiagSiloTag} gid={context.GrainId} tx={transactionId} key={kvp.Key} " +
                             $"existing.Hlc={preExisting.Timestamp} existing.IsMigrated={preExisting.IsMigrated} " +
                             $"existing.Origin={preExisting.OriginClusterId ?? "(local)"} " +
                             $"prepared.Hlc={kvp.Value.Timestamp} prepared.Origin={kvp.Value.OriginClusterId ?? "(local)"} " +
@@ -506,7 +506,7 @@ internal sealed partial class BPlusLeafGrain
                 {
 #if LATTICE_DIAG
                     // DIAG: drain-loop skip - capture stuck-key signature.
-                    DiagSink.Write($"[DIAG drain-skip] gid={context.GrainId} tx={transactionId} key={kvp.Key} " +
+                    DiagSink.Write($"[DIAG drain-skip] silo={DiagSiloTag} gid={context.GrainId} tx={transactionId} key={kvp.Key} " +
                         $"existing.Hlc={existing.Timestamp} existing.IsMigrated={existing.IsMigrated} " +
                         $"existing.Origin={existing.OriginClusterId ?? "(local)"} " +
                         $"prepared.Hlc={kvp.Value.Timestamp} prepared.Origin={kvp.Value.OriginClusterId ?? "(local)"} " +
@@ -551,7 +551,7 @@ internal sealed partial class BPlusLeafGrain
 
 #if LATTICE_DIAG
         // DIAG: abort entry.
-        DiagSink.Write($"[DIAG abort] gid={context.GrainId} tx={transactionId} hadPending={hadPending} clock={state.State.Clock}");
+        DiagSink.Write($"[DIAG abort] silo={DiagSiloTag} gid={context.GrainId} tx={transactionId} hadPending={hadPending} clock={state.State.Clock}");
 #endif
 
         // Bump the same-silo revision cookie so a co-located
@@ -895,7 +895,7 @@ internal sealed partial class BPlusLeafGrain
         // payload presence) can be reconstructed from the trace.
         var diagHadPending = _pendingTx is not null && _pendingTx.ContainsKey(transactionId);
         var diagAlreadyFlipped = _recentlyTerminal is not null && _recentlyTerminal.Contains(transactionId);
-        DiagSink.Write($"[DIAG terminal-leaf-apply] gid={context.GrainId} tx={transactionId} committed={committed} hadPending={diagHadPending} alreadyFlipped={diagAlreadyFlipped} committedValuesCount={committedValues?.Count ?? 0} committedKeys=[{(committedValues is null ? "<null>" : string.Join(",", committedValues.Keys))}]");
+        DiagSink.Write($"[DIAG terminal-leaf-apply] silo={DiagSiloTag} gid={context.GrainId} tx={transactionId} committed={committed} hadPending={diagHadPending} alreadyFlipped={diagAlreadyFlipped} committedValuesCount={committedValues?.Count ?? 0} committedKeys=[{(committedValues is null ? "<null>" : string.Join(",", committedValues.Keys))}]");
 #endif
 
         // Capture the bucket reference up-front. ApplyTxCommit/ApplyTxAbort
@@ -1396,10 +1396,12 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private static int DiagDecodeRound(byte[]? value)
     {
-        if (value is null || value.Length < 6) return -1;
+        // Mirror DiagSink.DecodeRound: 'v-NNN' is 5 bytes; the
+        // previous Length < 6 guard rejected every legal value.
+        if (value is null || value.Length < 3) return -1;
         if (value[0] != (byte)'v' || value[1] != (byte)'-') return -1;
         int round = 0;
-        for (int i = 2; i < value.Length && i < 5; i++)
+        for (int i = 2; i < value.Length; i++)
         {
             var c = value[i];
             if (c < (byte)'0' || c > (byte)'9') return -1;
