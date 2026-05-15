@@ -252,20 +252,24 @@ internal sealed class AtomicWriteGrain(
         BinaryPrimitives.WriteInt32LittleEndian(lenBuf, sortedKeys.Length);
         sha.AppendData(lenBuf);
 
-        // Per-key UTF-8 encoding scratch buffer. Stackalloc when the
-        // worst-case UTF-8 length fits in a small fixed bound; rent from
-        // the array pool for pathologically long keys. The previous shape
-        // (`Encoding.UTF8.GetBytes(key)`) allocated a fresh transient
-        // byte[] per key, which dominated the saga prepare allocation
-        // profile at 1.8% of total bytes (213 KB / op at batch=16,
-        // concurrency=64) before this change.
+        // Per-key UTF-8 encoding scratch buffer. A single stackalloc is
+        // hoisted out of the loop (CA2014: stackalloc inside a loop risks
+        // unbounded stack growth on a long input). The buffer is reused
+        // across every key whose worst-case UTF-8 length fits in the
+        // 256-byte bound; pathologically long keys fall back to an
+        // ArrayPool rental for that single iteration. The previous shape
+        // (`Encoding.UTF8.GetBytes(key)` per key) allocated a fresh
+        // transient byte[] per key, which dominated the saga prepare
+        // allocation profile at 1.8% of total bytes (213 KB / op at
+        // batch=16, concurrency=64) before this change.
         const int StackScratchBytes = 256;
+        Span<byte> stackScratch = stackalloc byte[StackScratchBytes];
         foreach (var key in sortedKeys)
         {
             var maxBytes = Encoding.UTF8.GetMaxByteCount(key.Length);
             byte[]? rented = null;
             Span<byte> scratch = maxBytes <= StackScratchBytes
-                ? stackalloc byte[StackScratchBytes].Slice(0, maxBytes)
+                ? stackScratch[..maxBytes]
                 : (rented = System.Buffers.ArrayPool<byte>.Shared.Rent(maxBytes)).AsSpan(0, maxBytes);
             try
             {
