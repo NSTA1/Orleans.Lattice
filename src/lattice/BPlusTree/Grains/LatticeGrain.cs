@@ -380,10 +380,18 @@ internal sealed partial class LatticeGrain(
         // tree surfaces on the second throw, not after 60 seconds.
         var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
         var invalidOpRetried = false;
+#if LATTICE_DIAG
+        var swSetCore = System.Diagnostics.Stopwatch.StartNew();
+        var setCoreAttempts = 0;
+        DiagSink.Write($"[DIAG setcore-enter] tree={TreeId} key={key} round=r{DiagSink.DecodeRound(value)} deadlineMs={StaleRoutingWriteRetryBudget.TotalMilliseconds:F0}");
+#endif
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var shard = await GetShardGrainAsync(key);
+#if LATTICE_DIAG
+            setCoreAttempts++;
+#endif
             try
             {
                 await shard.SetAsync(key, value);
@@ -391,21 +399,33 @@ internal sealed partial class LatticeGrain(
             }
             catch (StaleShardRoutingException)
             {
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG setcore-stale-shard] tree={TreeId} key={key} attempt={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0} deadlineRemainMs={(deadline - DateTime.UtcNow).TotalMilliseconds:F0}");
+#endif
                 if (DateTime.UtcNow >= deadline) throw;
                 InvalidateShardMap();
             }
             catch (StaleTreeRoutingException)
             {
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG setcore-stale-tree] tree={TreeId} key={key} attempt={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0} deadlineRemainMs={(deadline - DateTime.UtcNow).TotalMilliseconds:F0}");
+#endif
                 if (DateTime.UtcNow >= deadline) throw;
                 if (!TryInvalidateStaleAlias()) throw;
             }
             catch (InvalidOperationException)
             {
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG setcore-invalid-op] tree={TreeId} key={key} attempt={setCoreAttempts} retried={invalidOpRetried}");
+#endif
                 if (invalidOpRetried) throw;
                 if (!TryInvalidateStaleAlias()) throw;
                 invalidOpRetried = true;
             }
         }
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG setcore-exit] tree={TreeId} key={key} attempts={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0}");
+#endif
 
         await PublishEventAsync(LatticeTreeEventKind.Set, key);
     }
@@ -628,16 +648,31 @@ internal sealed partial class LatticeGrain(
     /// done inside the saga grain; no routing is needed here because the saga
     /// itself calls back through <see cref="ILattice"/> for each write.
     /// </summary>
-    public Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
+    public async Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
-        if (entries.Count == 0) return Task.CompletedTask;
+        if (entries.Count == 0) return;
 
         var operationId = Guid.NewGuid().ToString("N");
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
-        return saga.ExecuteAsync(TreeId, entries);
+#if LATTICE_DIAG
+        var swSetMany = System.Diagnostics.Stopwatch.StartNew();
+        DiagSink.Write($"[DIAG setmanyatomic-enter] tree={TreeId} op={operationId} entriesCount={entries.Count}");
+        try
+        {
+            await saga.ExecuteAsync(TreeId, entries);
+            DiagSink.Write($"[DIAG setmanyatomic-exit] tree={TreeId} op={operationId} entriesCount={entries.Count} elapsedMs={swSetMany.Elapsed.TotalMilliseconds:F0}");
+        }
+        catch (Exception ex)
+        {
+            DiagSink.Write($"[DIAG setmanyatomic-throw] tree={TreeId} op={operationId} entriesCount={entries.Count} elapsedMs={swSetMany.Elapsed.TotalMilliseconds:F0} ex={ex.GetType().Name} msg={ex.Message.Replace(System.Environment.NewLine, " | ")}");
+            throw;
+        }
+#else
+        await saga.ExecuteAsync(TreeId, entries);
+#endif
     }
 
     /// <summary>
@@ -647,7 +682,7 @@ internal sealed partial class LatticeGrain(
     /// the same id re-attach to the original saga and inherit its
     /// completion outcome.
     /// </summary>
-    public Task SetManyAtomicAsync(
+    public async Task SetManyAtomicAsync(
         List<KeyValuePair<string, byte[]>> entries,
         string operationId,
         CancellationToken cancellationToken = default)
@@ -656,10 +691,25 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(entries);
         ValidateOperationId(operationId);
         cancellationToken.ThrowIfCancellationRequested();
-        if (entries.Count == 0) return Task.CompletedTask;
+        if (entries.Count == 0) return;
 
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
-        return saga.ExecuteAsync(TreeId, entries);
+#if LATTICE_DIAG
+        var swSetMany = System.Diagnostics.Stopwatch.StartNew();
+        DiagSink.Write($"[DIAG setmanyatomic-enter] tree={TreeId} op={operationId} entriesCount={entries.Count} idempotent=true");
+        try
+        {
+            await saga.ExecuteAsync(TreeId, entries);
+            DiagSink.Write($"[DIAG setmanyatomic-exit] tree={TreeId} op={operationId} entriesCount={entries.Count} elapsedMs={swSetMany.Elapsed.TotalMilliseconds:F0}");
+        }
+        catch (Exception ex)
+        {
+            DiagSink.Write($"[DIAG setmanyatomic-throw] tree={TreeId} op={operationId} entriesCount={entries.Count} elapsedMs={swSetMany.Elapsed.TotalMilliseconds:F0} ex={ex.GetType().Name} msg={ex.Message.Replace(System.Environment.NewLine, " | ")}");
+            throw;
+        }
+#else
+        await saga.ExecuteAsync(TreeId, entries);
+#endif
     }
 
     private static void ValidateOperationId(string operationId)
@@ -1342,19 +1392,32 @@ internal sealed partial class LatticeGrain(
     /// <summary>
     /// Force-refresh overload. When <paramref name="forceRefresh"/> is
     /// <see langword="true"/>, invalidates the cached
-    /// <see cref="ShardMap"/> and <see cref="RoutingInfo"/> on this
-    /// activation before re-resolving. The resolved physical tree id is
-    /// preserved - alias swaps are handled by
-    /// <see cref="TryInvalidateStaleAlias"/> on the appropriate catch
-    /// clauses. External saga coordinators use this overload to break
-    /// out of stale-routing retry loops that the
-    /// <see cref="StatelessWorker"/> activation's per-instance cache
-    /// would otherwise sustain indefinitely.
+    /// <see cref="ShardMap"/>, the cached resolved physical tree id
+    /// (alias), and the <see cref="RoutingInfo"/> snapshot on this
+    /// activation before re-resolving. Clearing the alias too is
+    /// essential for callers using this hook to escape a
+    /// <see cref="StaleTreeRoutingException"/> retry loop after an
+    /// online resize / reshard swapped the alias - if only the shard
+    /// map were invalidated, the next resolve would still hand back
+    /// the same stale physical tree id and the caller would spin
+    /// against the same throw indefinitely. External saga coordinators
+    /// use this overload to break out of stale-routing retry loops
+    /// that the <see cref="StatelessWorker"/> activation's per-instance
+    /// cache would otherwise sustain.
     /// </summary>
     public ValueTask<RoutingInfo> GetRoutingAsync(bool forceRefresh, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (forceRefresh) InvalidateShardMap();
+        if (forceRefresh)
+        {
+            // Clear the alias too - a caller invoking forceRefresh:true is
+            // by definition trying to escape a StaleTreeRoutingException
+            // retry loop, which is an alias-level concern. Without this
+            // the next resolve hands back the cached alias and the
+            // caller spins against the same stale physical tree id.
+            TryInvalidateStaleAlias();
+            InvalidateShardMap();
+        }
         return GetRoutingAsync(cancellationToken);
     }
 

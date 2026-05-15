@@ -409,17 +409,22 @@ public interface ILattice : IGrainWithStringKey
     /// <summary>
     /// Force-refresh overload of <see cref="GetRoutingAsync(CancellationToken)"/>.
     /// When <paramref name="forceRefresh"/> is <see langword="true"/>, the
-    /// <see cref="LatticeGrain"/> activation's cached <see cref="ShardMap"/>
-    /// and <see cref="RoutingInfo"/> are invalidated before the routing
-    /// snapshot is re-resolved. Used by external coordinators (e.g. the
-    /// atomic-write saga's <c>CaptureShardAsync</c> /
-    /// <c>MarkOneShardAsync</c> retry loops) whose stale-routing recovery
-    /// would otherwise spin against the activation's cached snapshot
-    /// indefinitely - the <see cref="LatticeGrain"/> is a
+    /// <see cref="LatticeGrain"/> activation's cached <see cref="ShardMap"/>,
+    /// cached resolved physical tree id (alias), and <see cref="RoutingInfo"/>
+    /// are all invalidated before the routing snapshot is re-resolved.
+    /// Used by external coordinators (e.g. the atomic-write saga's
+    /// <c>CaptureShardAsync</c> / <c>MarkOneShardAsync</c> retry loops)
+    /// whose stale-routing recovery would otherwise spin against the
+    /// activation's cached snapshot indefinitely - the
+    /// <see cref="LatticeGrain"/> is a
     /// <see cref="Orleans.Placement.StatelessWorkerPlacement"/> with
-    /// per-activation routing caching, and its private invalidation hooks
-    /// only fire on the grain's own internal stale-routing throws, so an
-    /// external caller cannot otherwise force the cache to refresh.
+    /// per-activation routing caching, and its private invalidation
+    /// hooks only fire on the grain's own internal stale-routing throws,
+    /// so an external caller cannot otherwise force the cache to refresh.
+    /// Clearing the alias as well is required to escape a
+    /// <see cref="StaleTreeRoutingException"/> retry loop after an online
+    /// resize / reshard swapped the alias; refreshing only the shard map
+    /// would re-resolve to the same stale physical tree id.
     /// </summary>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     ValueTask<RoutingInfo> GetRoutingAsync(bool forceRefresh, CancellationToken cancellationToken = default);

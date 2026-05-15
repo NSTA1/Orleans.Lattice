@@ -136,6 +136,13 @@ internal sealed class AtomicWriteGrain(
         // Empty batch: fast success, no saga work, no reminder needed.
         if (entries.Count == 0) return;
 
+#if LATTICE_DIAG
+        var swExec = System.Diagnostics.Stopwatch.StartNew();
+        DiagSink.Write($"[DIAG saga-execute-enter] op={OperationKey} tree={treeId} entriesCount={entries.Count} phase={state.State.Phase}");
+        try
+        {
+#endif
+
         // Caller-supplied idempotency keys: if the same operationId is
         // re-submitted with a different key set, reject it rather than
         // silently replaying the original persisted entries. Only
@@ -168,11 +175,32 @@ internal sealed class AtomicWriteGrain(
         if (state.State.Phase == AtomicWritePhase.NotStarted)
         {
             ValidateInputs(entries);
+#if LATTICE_DIAG
+            var swRegKa = System.Diagnostics.Stopwatch.StartNew();
+            DiagSink.Write($"[DIAG saga-register-keepalive-enter] op={OperationKey} tree={treeId}");
+#endif
             await RegisterKeepaliveAsync();
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG saga-register-keepalive-exit] op={OperationKey} tree={treeId} elapsedMs={swRegKa.Elapsed.TotalMilliseconds:F0}");
+            var swPrep = System.Diagnostics.Stopwatch.StartNew();
+            DiagSink.Write($"[DIAG saga-prepare-enter] op={OperationKey} tree={treeId} entriesCount={entries.Count}");
+#endif
             await PrepareAsync(treeId, entries);
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG saga-prepare-exit] op={OperationKey} tree={treeId} elapsedMs={swPrep.Elapsed.TotalMilliseconds:F0} phase={state.State.Phase}");
+#endif
         }
 
         await RunSagaAsync();
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG saga-execute-exit] op={OperationKey} tree={treeId} entriesCount={entries.Count} elapsedMs={swExec.Elapsed.TotalMilliseconds:F0} phase={state.State.Phase}");
+        }
+        catch (Exception ex)
+        {
+            DiagSink.Write($"[DIAG saga-execute-throw] op={OperationKey} tree={treeId} entriesCount={entries.Count} elapsedMs={swExec.Elapsed.TotalMilliseconds:F0} phase={state.State.Phase} ex={ex.GetType().Name} msg={ex.Message.Replace(System.Environment.NewLine, " | ")}");
+            throw;
+        }
+#endif
     }
 
     /// <inheritdoc />
@@ -344,6 +372,10 @@ internal sealed class AtomicWriteGrain(
         }
 
         var lattice = grainFactory.GetGrain<ILattice>(treeId);
+#if LATTICE_DIAG
+        var swRouting = System.Diagnostics.Stopwatch.StartNew();
+        DiagSink.Write($"[DIAG saga-prepare-routing-enter] op={OperationKey} tree={treeId}");
+#endif
         // forceRefresh:true at saga entry: the saga's TouchedShards
         // capture, per-key SetAsync routing, and BroadcastTerminalsAsync
         // drift correction all derive from this initial snapshot. A
@@ -359,6 +391,9 @@ internal sealed class AtomicWriteGrain(
         // every subsequent ILattice call from this activation and so
         // anchors the saga to the post-migration topology.
         var routing = await lattice.GetRoutingAsync(forceRefresh: true);
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG saga-prepare-routing-exit] op={OperationKey} tree={treeId} physicalTree={routing.PhysicalTreeId} elapsedMs={swRouting.Elapsed.TotalMilliseconds:F0}");
+#endif
         var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
 
         // Touched-shard set capture. Populated from the routing
@@ -416,7 +451,14 @@ internal sealed class AtomicWriteGrain(
         // helper is unnecessary: GetRoutingAsync inside the helper
         // hands back a fresh snapshot only on a stale-routing throw,
         // and the outer loop here does not consult routing again.
+#if LATTICE_DIAG
+        var swCapture = System.Diagnostics.Stopwatch.StartNew();
+        DiagSink.Write($"[DIAG saga-prepare-capture-enter] op={OperationKey} tree={treeId} buckets={shardBuckets.Count}");
+#endif
         await Task.WhenAll(capturePending);
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG saga-prepare-capture-exit] op={OperationKey} tree={treeId} elapsedMs={swCapture.Elapsed.TotalMilliseconds:F0}");
+#endif
 
         // Materialise the array into the persisted list in input order.
         state.State.PreValues = new List<AtomicPreValue>(preValuesArray.Length);
@@ -426,12 +468,22 @@ internal sealed class AtomicWriteGrain(
         }
 
         state.State.Phase = AtomicWritePhase.Execute;
+#if LATTICE_DIAG
+        var swPersist = System.Diagnostics.Stopwatch.StartNew();
+        DiagSink.Write($"[DIAG saga-prepare-persist-enter] op={OperationKey} tree={treeId}");
+#endif
         try
         {
             await state.WriteStateAsync();
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG saga-prepare-persist-exit] op={OperationKey} tree={treeId} elapsedMs={swPersist.Elapsed.TotalMilliseconds:F0}");
+#endif
         }
         catch
         {
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG saga-prepare-persist-fail] op={OperationKey} tree={treeId} elapsedMs={swPersist.Elapsed.TotalMilliseconds:F0}");
+#endif
             state.State.Phase = prevPhase;
             state.State.TreeId = prevTreeId;
             state.State.Entries = prevEntries;
@@ -480,6 +532,11 @@ internal sealed class AtomicWriteGrain(
         // the loop condition and exit silently.
         var deadline = DateTime.UtcNow + StaleRoutingRetryBudget;
         var routing = initialRouting;
+#if LATTICE_DIAG
+        var swCapShard = System.Diagnostics.Stopwatch.StartNew();
+        int capAttempts = 0;
+        DiagSink.Write($"[DIAG capture-shard-enter] op={OperationKey} shard={shardIndex} physTree={routing.PhysicalTreeId} keys={bucket.Count}");
+#endif
         while (true)
         {
             var keys = new List<string>(bucket.Count);
@@ -490,7 +547,15 @@ internal sealed class AtomicWriteGrain(
             {
                 var shard = grainFactory.GetGrain<IShardRootGrain>(
                     $"{routing.PhysicalTreeId}/{shardIndex}");
+#if LATTICE_DIAG
+                capAttempts++;
+                var swCall = System.Diagnostics.Stopwatch.StartNew();
+                DiagSink.Write($"[DIAG capture-shard-call-enter] op={OperationKey} shard={shardIndex} physTree={routing.PhysicalTreeId} attempt={capAttempts}");
+#endif
                 raws = await shard.GetRawEntriesAsync(keys);
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG capture-shard-call-exit] op={OperationKey} shard={shardIndex} physTree={routing.PhysicalTreeId} attempt={capAttempts} elapsedMs={swCall.Elapsed.TotalMilliseconds:F0}");
+#endif
             }
             catch (StaleShardRoutingException)
             {
@@ -507,6 +572,9 @@ internal sealed class AtomicWriteGrain(
                 // catches; an external caller cannot otherwise force a
                 // cache refresh, so a plain GetRoutingAsync() retry
                 // would spin against the same stale map indefinitely.
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG capture-shard-stale-shard] op={OperationKey} shard={shardIndex} physTree={routing.PhysicalTreeId} attempt={capAttempts} elapsedMs={swCapShard.Elapsed.TotalMilliseconds:F0} deadlineRemainMs={(deadline - DateTime.UtcNow).TotalMilliseconds:F0}");
+#endif
                 if (DateTime.UtcNow >= deadline) throw;
                 routing = await lattice.GetRoutingAsync(forceRefresh: true);
                 var rebucketed = new Dictionary<int, List<(string Key, int Index)>>();
@@ -542,6 +610,9 @@ internal sealed class AtomicWriteGrain(
                 // swap does not remap virtual slots, only the physical
                 // tree's storage suffix. Same force-refresh rationale
                 // as the StaleShardRoutingException catch above.
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG capture-shard-stale-tree] op={OperationKey} shard={shardIndex} physTree={routing.PhysicalTreeId} attempt={capAttempts} elapsedMs={swCapShard.Elapsed.TotalMilliseconds:F0} deadlineRemainMs={(deadline - DateTime.UtcNow).TotalMilliseconds:F0}");
+#endif
                 if (DateTime.UtcNow >= deadline) throw;
                 routing = await lattice.GetRoutingAsync(forceRefresh: true);
                 continue;
@@ -567,6 +638,9 @@ internal sealed class AtomicWriteGrain(
                     VectorClock = existed ? raw!.Value.VectorClock : null,
                 };
             }
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG capture-shard-exit] op={OperationKey} shard={shardIndex} attempts={capAttempts} elapsedMs={swCapShard.Elapsed.TotalMilliseconds:F0}");
+#endif
             return;
         }
     }
@@ -1227,6 +1301,10 @@ internal sealed class AtomicWriteGrain(
     private async Task ExecutePhaseAsync()
     {
         var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
+#if LATTICE_DIAG
+        var swPhase = System.Diagnostics.Stopwatch.StartNew();
+        DiagSink.Write($"[DIAG saga-execute-phase-enter] op={OperationKey} tree={state.State.TreeId} nextIndex={state.State.NextIndex} totalEntries={state.State.Entries.Count} retriesOnCurrentStep={state.State.RetriesOnCurrentStep}");
+#endif
 
         // Stamp the prepare-phase ambient once for the entire saga prepare
         // loop rather than per-key. The leaf grain's commit pipeline reads
@@ -1264,7 +1342,14 @@ internal sealed class AtomicWriteGrain(
                         (state.State.AtomicBatchSize, state.State.NextIndex);
 
                     var entry = state.State.Entries[state.State.NextIndex];
+#if LATTICE_DIAG
+                    var swKey = System.Diagnostics.Stopwatch.StartNew();
+                    DiagSink.Write($"[DIAG saga-execute-key-enter] op={OperationKey} tree={state.State.TreeId} idx={state.State.NextIndex} key={entry.Key} round=r{DiagSink.DecodeRound(entry.Value)} retries={state.State.RetriesOnCurrentStep}");
+#endif
                     await lattice.SetAsync(entry.Key, entry.Value);
+#if LATTICE_DIAG
+                    DiagSink.Write($"[DIAG saga-execute-key-exit] op={OperationKey} tree={state.State.TreeId} idx={state.State.NextIndex} key={entry.Key} elapsedMs={swKey.Elapsed.TotalMilliseconds:F0}");
+#endif
 
                     // Class B snapshot/restore at Site 5 (success persist).
                     // Without this, a transient storage failure leaves the
@@ -1291,6 +1376,9 @@ internal sealed class AtomicWriteGrain(
                 {
                     if (state.State.RetriesOnCurrentStep < MaxRetriesPerStep)
                     {
+#if LATTICE_DIAG
+                        DiagSink.Write($"[DIAG saga-execute-key-retry] op={OperationKey} tree={state.State.TreeId} idx={state.State.NextIndex} retries={state.State.RetriesOnCurrentStep} ex={ex.GetType().Name} msg={ex.Message.Replace(System.Environment.NewLine, " | ")}");
+#endif
                         // Class B snapshot/restore at Site 6 (retry persist).
                         // A failure here without the restore would advance the
                         // retry counter in memory while disk still says the
@@ -1347,6 +1435,9 @@ internal sealed class AtomicWriteGrain(
         }
 
         // Every entry committed - switch to Completed marker on saga exit.
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG saga-execute-phase-exit] op={OperationKey} tree={state.State.TreeId} nextIndex={state.State.NextIndex} totalEntries={state.State.Entries.Count} elapsedMs={swPhase.Elapsed.TotalMilliseconds:F0}");
+#endif
     }
 
     /// <summary>
