@@ -41,8 +41,6 @@ before calling `AddLatticeReplication`.
   `IReplicationHighWaterMarkGrain.GetVectorAsync` - a strict superset
   of the meet that is safe as a snapshot cut-point. Receivers pin
   this on `IReplicationHighWaterMarkGrain.PinSnapshotAsync(asOfHlc, frontier)`
-
-
   before draining the entry stream so the causal dependency check on
   the first incremental entry runs from a non-empty frontier.
 - **Tombstoned and expired keys are not emitted.** Only live entries
@@ -51,15 +49,29 @@ before calling `AddLatticeReplication`.
 
 ## Default implementation
 
-The default `LatticeSnapshotProvider` enumerates the tree via the
-public `ILattice.EntriesAsync` surface and stamps each entry with its
-commit-time HLC via `ILattice.GetWithVersionAsync`. It is correct but
-pays a per-key version round-trip on top of the leaf-chain
-enumeration. A future revision will swap to a single-pass streaming
-HLC-threshold scan once the core library exposes a version-bearing
-leaf-scan primitive (a streaming entries-newer-than-HLC scan tracked on the core roadmap); hosts
-that need a faster export today can register their own
-`ISnapshotProvider` via DI.
+The default `LatticeSnapshotProvider` enumerates the **local** tree
+via the public `ILattice.EntriesAsync` surface and stamps each entry
+with its commit-time HLC via `ILattice.GetWithVersionAsync`. It is
+correct for **intra-cluster** seeding (snapshot-as-a-tool: an operator
+snapshots a tree and restores it later in the same cluster, where the
+local tree is the authoritative source) but pays a per-key version
+round-trip on top of the leaf-chain enumeration. A future revision
+will swap to a single-pass streaming HLC-threshold scan once the core
+library exposes a version-bearing leaf-scan primitive (tracked on the
+[core roadmap](../../src/lattice/roadmap.md)); hosts that need a
+faster export today can register their own `ISnapshotProvider` via DI.
+
+**Cross-cluster bootstrap is not yet covered by the default provider.**
+On a receiver whose local tree is empty (e.g. a fresh cluster joining
+an existing federation), the default `LatticeSnapshotProvider` yields
+zero entries because it reads the receiver's own tree rather than the
+sender's. The scoped
+[`roadmap-cross-cluster-bootstrap.md`](../../src/lattice.replication/roadmap-cross-cluster-bootstrap.md)
+tracks the transport contract, sender-side handler, receiver-side
+adapter, and gRPC binding required to close that gap; until those
+items land, multi-cluster federations must seed the receiver out of
+band or register a custom `ISnapshotProvider` that pulls from the
+remote sender.
 
 ## Sample usage
 
@@ -157,10 +169,23 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   the pump tears down. A subsequent `BootstrapAsync` call
   restarts the cycle from `RequestingSnapshot`.
 - **Source HLC + origin preservation.** Every snapshot entry is
-  applied through `IReplicationApplyGrain.ApplySetAsync` carrying the
-  entry's commit-time `Timestamp` and the supplied
-  `sourceClusterId`. Transitive replication paths (A → B → C) preserve
-  the originating HLC.
+  applied through `IReplicationApplier.ApplyAsync`, the same canonical
+  inbound apply seam used by live-incremental replication, carrying
+  the entry's commit-time `Timestamp` and the supplied
+  `sourceClusterId`. Transitive replication paths (A -> B -> C)
+  preserve the originating HLC.
+- **Bootstrap and live-incremental share the apply seam.** Routing
+  the snapshot drain through `IReplicationApplier` means every host
+  decorator stacked on the applier - dead-letter tracking, the
+  causal-apply buffer, and any host-supplied per-key change observer
+  - fires identically for bootstrap-arrived entries and
+  live-incremental entries. A receiver that catches up via bootstrap
+  therefore raises the same observable side-effects as a receiver
+  that catches up via the WAL tail, so UI live-update hooks and
+  audit observers see the bootstrap window rather than missing it.
+  The per-origin HWM dedupe in the applier suppresses any
+  re-delivery of bootstrap-arrived entries through the live-incremental
+  path.
 - **Snapshot/incremental handoff is exactly-once.** The coordinator
   pins `(AsOfHlc, CausalStableFrontier)` on
   `IReplicationHighWaterMarkGrain.PinSnapshotAsync` *after* every

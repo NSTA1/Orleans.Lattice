@@ -24,7 +24,7 @@ The sample runs as **two independent Orleans clusters** (`us` and `eu`), each wi
 
 Supporting documentation lives alongside the sample:
 
-- [`plan.md`](../../samples/MultiSiteManufacturing/plan.md) - design document and feature plan.
+- [`README.md`](../../samples/MultiSiteManufacturing/README.md) - overview, run instructions, and feature tour.
 - [`approach.md`](../../samples/MultiSiteManufacturing/approach.md) - implementation rationale, gotchas, and the reasoning behind each design choice.
 - [`architecture.md`](../../samples/MultiSiteManufacturing/architecture.md) - structural view: topology, component graph, grain interdependencies, Lattice trees, replication sequence.
 - [`glossary.md`](../../samples/MultiSiteManufacturing/glossary.md) - domain and implementation terms.

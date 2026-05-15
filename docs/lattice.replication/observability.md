@@ -1,10 +1,10 @@
 # Observability
 
-`Orleans.Lattice.Replication` publishes every instrument on a single meter, `orleans.lattice.replication`. An OpenTelemetry pipeline (or any `MeterListener`) subscribes once and receives every replication metric. The instruments fall into four shapes:
+`Orleans.Lattice.Replication` publishes every replication-side instrument on a single meter, `orleans.lattice.replication`. An OpenTelemetry pipeline (or any `MeterListener`) subscribes once and receives every replication metric. The instruments fall into four shapes:
 
 - **Per-peer gauges** - `entries_behind`, `bytes_behind`, `consecutive_errors`, `last_contact_seconds`. Owned by `ReplicationPeerStats`. Tagged `tree` + `peer`.
 - **Per-operation histograms** - `ship.duration`, `apply.duration`, `apply.lag`. Reported in milliseconds.
-- **Throughput counters** - `wal.entries_appended`, `wal.entries_shipped`, `wal.entries_trimmed`. Used to compute growth-rate vs. ship-rate ratios.
+- **Throughput counters** - `wal.entries_appended`, `wal.entries_shipped`. Used to compute growth-rate vs. ship-rate ratios. The companion `wal.entries_trimmed` counter belongs to the core library and is published on the `orleans.lattice` meter (`LatticeMetrics.WalEntriesTrimmed`); subscribe to both meters when correlating ship-rate against trim-rate.
 - **DLQ counters** - `dead_letter.enqueued`, `dead_letter.removed`. Tagged `tree` + `reason`.
 
 ## Replication-lag histogram (`apply.lag`)

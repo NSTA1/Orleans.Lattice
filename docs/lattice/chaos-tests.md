@@ -1,20 +1,25 @@
 # Chaos Tests
 
 Orleans.Lattice ships a suite of integration tests that bombard a running
-cluster with concurrent reads, writes, scans, and topology mutations,
-then assert that the system's public correctness guarantees hold. They
-act as the end-to-end contract for the properties described in
-[Consistency](consistency.md) - specifically that the public `ILattice`
-API is strongly consistent across arbitrary concurrent shard splits,
-online resizes, and online reshards - and that the recovery protocols
+cluster (single-cluster and multi-site) with concurrent reads, writes,
+scans, atomic-write sagas, topology mutations, and inter-site network
+partitions, then assert that the system's public correctness guarantees
+hold. They act as the end-to-end contract for the properties described
+in [Consistency](consistency.md) and [Replication](../lattice.replication/replication.md) -
+specifically that the public `ILattice` API is strongly consistent
+across arbitrary concurrent shard splits, online resizes, and online
+reshards; that `SetManyAtomicAsync` remains atomically visible
+(zero-or-all keys per poll) on the authoring site and on every
+receiver site; and that the per-merge-mode CRDT dispatch paths
+(`LwwRegister`, `OrSet`, `PnCounter`) converge across partitioned
+sites. The single-cluster suite also exercises the recovery protocols
 (resumable splits, two-phase root promotion, shadow-write atomicity,
 shadow-forwarding, registry version stamping, idempotent bulk graft)
-converge correctly even when storage writes fail at random.
+under random storage-write faults.
 
-All chaos tests live under `test/lattice/BPlusTree/`, use the
-`[NonParallelizable]` attribute so they have the cluster to themselves,
-and are tagged `[Category("Chaos")]` so the iterative-development test
-filter (`dotnet test --filter "TestCategory!=Chaos"`) skips them.
+Core chaos tests live under `test/lattice/BPlusTree/`; cross-cluster chaos tests live under `test/lattice.replication/Chaos/`. Every fixture uses the `[NonParallelizable]` attribute so it has the cluster to itself, and is tagged `[Category("Chaos")]` so the iterative-development test filter (`dotnet test --filter "TestCategory!=Chaos"`) skips them.
+
+### Core chaos suite (`test/lattice/BPlusTree/`)
 
 | Test class | File | Purpose |
 |---|---|---|
@@ -22,9 +27,21 @@ filter (`dotnet test --filter "TestCategory!=Chaos"`) skips them.
 | Chaos + storage faults | `ChaosWithFaultsIntegrationTests.cs` | Parametrized theory that injects random storage faults; asserts eventual convergence after the fault window closes. |
 | Chaos + online resize | `ChaosResizeIntegrationTests.cs` | Full-workload chaos while `ResizeAsync` changes fan-out in the background under `SnapshotMode.Online`. Exercises the `TreeResizeGrain` phase machine (Snapshot → Swap → Reject → Cleanup), shadow-forwarding on every source shard, and the alias swap. |
 | Chaos + online reshard | `ChaosReshardIntegrationTests.cs` | Full-workload chaos while `ReshardAsync` grows the physical shard count (4 → 8) in the background. Exercises the `TreeReshardGrain` migration loop, dispatch-budget clamping, `HotShardMonitorGrain` interlock, and `ShardMap` convergence when reshard-dispatched splits race with workload writes. |
-| Atomic-write reader isolation | `AtomicVisibilityChaosTests.cs` | Strict reader isolation: a continuous reader concurrent with `SetManyAtomicAsync` always observes either the full pre-saga snapshot, the full post-saga snapshot, or all keys hidden - never a partial view. |
-| Atomic-write reader isolation across reshard | `ReshardTopologyTests.cs` | Same zero-or-all visibility invariant as `AtomicVisibilityChaosTests`, but the topology mutator runs a 4-shard → 8-shard `ReshardAsync` concurrently with a chain of `SetManyAtomicAsync` sagas. Exercises the retroactive prepared-mutation sweep at `BeginShadowWrite`, the registry's `TxDecisionRetention` tombstone window, and the saga terminal-fan-out shadow-forward fallback that mirrors `TxCommit` / `TxAbort` marks onto the destination shard via the post-Complete `MovedAwaySlots` lookup. |
+| Atomic-write reader isolation | `AtomicVisibilityChaosTests.cs` | Strict reader isolation: a continuous reader concurrent with `SetManyAtomicAsync` always observes either the full pre-saga snapshot, the full post-saga snapshot, or all keys hidden - never a partial view. Quiescent topology (no concurrent split/resize/reshard). |
+| Atomic-write reader isolation across shard split | `ShardSplitTopologyTests.cs` | Same zero-or-all visibility invariant as `AtomicVisibilityChaosTests`, but the topology mutator drives a manual `SplitAsync` on shard 0 concurrently with a chain of `SetManyAtomicAsync` sagas. Exercises shadow-forward of saga prepares onto the destination shard and the saga terminal-broadcast retry onto the new owner via `StaleShardRoutingException`. |
+| Atomic-write reader isolation across online resize | `ResizeTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs an online `ResizeAsync` (`MaxLeafKeys` / `MaxInternalChildren` to 8) concurrently with the saga chain. Exercises shadow-forwarding from the source physical tree to the destination, the alias swap, and the saga terminal-broadcast retry onto the new owner via `StaleTreeRoutingException`. |
+| Atomic-write reader isolation across online reshard | `ReshardTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs a 4-shard → 8-shard `ReshardAsync` concurrently with the saga chain. Exercises the retroactive prepared-mutation sweep at `BeginShadowWrite`, the registry's `TxDecisionRetention` tombstone window, and the saga terminal-fan-out shadow-forward fallback that mirrors `TxCommit` / `TxAbort` marks onto the destination shard via the post-Complete `MovedAwaySlots` lookup. |
 | Digest determinism under load | `ChaosDigestIntegrationTests.cs` | `ILattice.GetLeafProjectionDigestAsync` is byte-stable across repeated calls in a write-quiescent window after concurrent writer / scanner load, and per-shard `EntryCount` sums equal `CountAsync`. |
+
+### Cross-cluster chaos suite (`test/lattice.replication/Chaos/`)
+
+| Test class | File | Purpose |
+|---|---|---|
+| Cross-cluster saga atomic visibility | `CrossClusterAtomicVisibilityChaosTests.cs` | Receiver-side reader-isolation invariant: a saga authored on one site and shipped to two peer sites via the WAL replication transport lands all-or-nothing on every receiver, even when the inter-site delivery topology is partitioned and healed mid-workload. |
+| LWW register convergence | `LwwRegisterConvergenceChaosTests.cs` | Three sites issue concurrent point writes against a single key under a mid-workload partition; after heal and drain, every site converges to the lexicographic `(HLC, originClusterId)` winner. |
+| OR-Set convergence | `OrSetConvergenceChaosTests.cs` | Three sites issue concurrent OR-Set adds (and, in the second test, observed-removes) against a single key under partition; after drain, every site observes exactly the union of authored adds minus the union of authored removes. |
+| PN-Counter convergence | `PnCounterConvergenceChaosTests.cs` | Three sites issue concurrent increments and decrements against a single counter under partition; after drain, every site reads the same algebraic sum. |
+| Multi-site fixture smoke | `MultiSiteClusterFixtureSmokeTests.cs` | Diagnostic smoke tests for `MultiSiteClusterFixture` + `ChaosDeliveryPump`. Not chaos tests themselves - they pin the simpler invariants the convergence suite relies on (per-site WAL capture, per-site change feed yield, end-to-end pump delivery). Tagged `[Category("Chaos")]` so they ship alongside the suite they diagnose. |
 
 ## The workload
 
@@ -330,9 +347,53 @@ The reader's `GetManyAsync` may observe `OperationCanceledException` at the roun
 
 ### Companion observability
 
-The `orleans.lattice.atomic_write.duration` (`Histogram<double>`, ms) and `orleans.lattice.atomic_write.batch_size` (`Histogram<int>`, `{entry}`) instruments are emitted on every saga terminal transition tagged `outcome=committed` / `compensated` / `failed`; pair them with `orleans.lattice.atomic_write.completed` to derive saga ops/sec and SLO percentiles when this fixture is run repeatedly. See [Metrics](metrics.md#saga--coordinator--lifecycle).
+See [Metrics](metrics.md#saga-coordinator-lifecycle).
 
-## Test 6 - Digest determinism under load (`ChaosDigestIntegrationTests`)
+## Test 6
+
+Three sibling fixtures extend Test 5's reader-isolation invariant
+across each of the three online topology mutations (shard split,
+online resize, online reshard). Every fixture seeds the same 16-key
+universe, then drives 15 sequential `SetManyAtomicAsync` rounds while
+the topology mutator runs in parallel; a continuous reader polls all
+16 keys every 10 ms and every poll must observe either the full
+pre-round value, the full post-round value, or all 16 keys hidden -
+never a partial subset.
+
+### What they prove
+
+| Invariant | Mechanism under test |
+|---|---|
+| Saga prepares survive a mid-flight shard split | Source shard's shadow-forward pipeline mirrors prepared entries to the destination during the split's drain phase; saga terminal-broadcast retries onto the new owner via `StaleShardRoutingException` |
+| Saga prepares survive a mid-flight online resize | Source physical tree shadow-forwards every live write (including saga prepares) to the destination physical tree during the snapshot drain; alias swap is observed via `StaleTreeRoutingException` and the saga terminal-broadcast retries onto the new owner |
+| Saga prepares survive a mid-flight online reshard | `TreeReshardGrain` migration loop dispatches per-shard splits; the retroactive prepared-mutation sweep at `BeginShadowWrite` and the terminal-fan-out shadow-forward fallback together mirror prepares and the saga's `TxCommit` / `TxAbort` marks onto the destination shard via the post-Complete `MovedAwaySlots` lookup; the registry's `TxDecisionRetention` tombstone window absorbs duplicate terminals |
+
+### Workload (per fixture)
+
+* **Seed phase** - `SetAsync` for each of 16 keys at round 0, followed by a single `SetManyAtomicAsync` at round 0 so the universe is pinned through the saga path before the topology mutator starts.
+* **Topology kick-off** - exactly once before the saga loop: `SplitAsync(shard 0)` for `ShardSplitTopologyTests`, `ResizeAsync(MaxLeafKeys=8, MaxInternalChildren=8)` for `ResizeTopologyTests`, or `ReshardAsync(8)` for `ReshardTopologyTests`. A background driver pumps the coordinator's `RunSplitPassAsync` / `RunResizePassAsync` / `RunReshardPassAsync` to completion while the saga loop runs.
+* **Saga loop** - 15 sequential rounds. Each round starts a continuous reader task that polls all 16 keys via `GetManyAsync` every 10 ms and concurrently issues `SetManyAtomicAsync` with the post-round value envelope.
+* **Reader classification** - identical to Test 5: `fullPre`, `fullPost`, `fullHidden`, or **split** (mixed observation, fails the test).
+* **Drain phase** - after the saga loop, the test pumps the coordinator to idle and asserts the final post-round value is present on every key.
+
+### Pass criteria (per fixture)
+
+* Zero split-view failures across all 15 rounds.
+* `totalPolls > 0` and `fullPostPolls > 0`.
+* Final `GetManyAsync` of all 16 keys yields the round-15 envelope on every key.
+* The topology coordinator reaches its terminal idle state (`IsIdleAsync` / `IsResizeCompleteAsync` / `IsReshardCompleteAsync` is true) before the test exits.
+
+### Tolerated transients
+
+* `StaleShardRoutingException` on the reader's `GetManyAsync` - retried inside the reader loop.
+* `StaleTreeRoutingException` on the reader's `GetManyAsync` (resize fixture only) - retried inside the reader loop.
+* `OperationCanceledException` at the round boundary when the reader's CTS fires.
+
+### Companion observability
+
+Same `atomic_write.*` histograms as Test 5, plus the topology-mutator's own metrics: `orleans.lattice.split.duration` / `orleans.lattice.resize.duration` / `orleans.lattice.reshard.duration`. See [Metrics](metrics.md).
+
+## Test 7 - Digest determinism under load (`ChaosDigestIntegrationTests`)
 
 This test exercises `ILattice.GetLeafProjectionDigestAsync` under
 sustained concurrent load and asserts two determinism invariants that
@@ -365,7 +426,7 @@ gate the digest's value as a cross-silo divergence detector:
 
 * `EnumerationAbortedException` from the scanner's `KeysAsync` enumeration when a stream cursor grain deactivates mid-iteration.
 
-## Test 7 - Cross-cluster atomic-visibility chaos (`CrossClusterAtomicVisibilityChaosTests`)
+## Test 8 - Cross-cluster atomic-visibility chaos (`CrossClusterAtomicVisibilityChaosTests`)
 
 This test asserts the **cross-cluster receiver-side reader-isolation
 invariant** for `SetManyAtomicAsync`: a saga authored on one site and
@@ -407,7 +468,75 @@ The chaos pump's per-edge loop catches and queues transient grain exceptions ont
 
 ### Companion observability
 
-Saga writes emit `orleans.lattice.atomic_write.duration` / `orleans.lattice.atomic_write.batch_size` on the authoring site (see [Metrics](metrics.md#saga--coordinator--lifecycle)). On the receiver side, the `apply.duration` histogram is tagged with the source cluster id so a chaos run produces three streams (one per receiver), each tagged with the two foreign origins.
+Saga writes emit `orleans.lattice.atomic_write.duration` / `orleans.lattice.atomic_write.batch_size` on the authoring site (see [Metrics](metrics.md#saga-coordinator-lifecycle)). On the receiver side
+
+## Test 9 - Per-mode convergence chaos (`LwwRegisterConvergenceChaosTests`, `OrSetConvergenceChaosTests`, `PnCounterConvergenceChaosTests`)
+
+Three sibling fixtures - one per `LatticeMergeMode` dispatch path -
+prove that the producer-side change-feed → shipper → receiver-side
+applier pipeline converges every site to the same final state under
+concurrent multi-site writes and mid-workload partitions. Every
+fixture wires three sites through `MultiSiteClusterFixture` /
+`ChaosDeliveryPump`, declares the test tree under the relevant merge
+mode, lets every site author a disjoint workload while one site is
+isolated and re-healed mid-flight, drains the pump, then asserts the
+mode-specific convergence invariant pointwise across sites.
+
+### What they prove
+
+| Fixture | Mode | Convergence invariant | Mechanism under test |
+|---|---|---|---|
+| `LwwRegisterConvergenceChaosTests` | `LwwRegister` | Every site reads the same `VersionedValue` after drain - the lexicographic `(HLC, originClusterId)` winner across all authored writes | LWW resolution under `SetIfVersionAsync` on the receiver side; per-edge change-feed cursors do not skip entries across partition heal |
+| `OrSetConvergenceChaosTests` | `OrSet` | Every site's `OrSet(key).GetAsync()` yields exactly the union of authored adds (test 1), or the union of authored adds minus the union of authored removes (test 2) | `ReplicationApplier.ApplyStateMergeAsync<OrSet>` under `LatticeOriginContext`; OR-Set's commutative-monoid merge absorbs out-of-order receive |
+| `PnCounterConvergenceChaosTests` | `PnCounter` | Every site's `PnCounter(key).ValueAsync()` returns the same algebraic sum of authored deltas | Receiver-side `ApplyStateMergeAsync<PnCounter>`; per-replica P/N maps merge by component-wise max |
+
+### Workload (per fixture)
+
+* **Topology** - 3 `TestCluster` instances wired through `MultiSiteClusterFixture` declared with the fixture's merge mode; `ChaosDeliveryPump` drives every inter-site edge.
+* **Author phase** - every site authors a disjoint family of writes against a single key (`k`):
+  * LWW: 40 sequential `SetAsync` calls per site.
+  * OR-Set test 1: 25 sequential `AddAsync` calls per site.
+  * OR-Set test 2: 15 adds + 2 observed-removes per site.
+  * PN-Counter: 30 increments + 10 decrements per site.
+* **Partition cycle** - one site's loop isolates a target site for the middle third of its workload (the exact (driver, target) pair varies per fixture: site 2 isolates site 1 for LWW; site 0 isolates site 2 for OR-Set; site 1 isolates site 0 for PN-Counter).
+* **Drain phase** - after every author task completes, `pump.HealAllAndDrainAsync(30 s)` heals every edge and waits for every per-edge cursor to catch up.
+
+### Pass criteria
+
+* LWW: pointwise equality of `(Value, Version)` across all 3 sites after drain.
+* OR-Set: pointwise set-equivalence of `Elements()` across all 3 sites against the closed-form expected union.
+* PN-Counter: pointwise equality of `ValueAsync()` across all 3 sites against `SiteCount * (IncrementsPerSite - DecrementsPerSite)`.
+
+### Tolerated transients
+
+* PN-Counter's call-site retry loop absorbs `CAS budget exhausted` from `IncrementAsync` / `DecrementAsync` under concurrent foreign-origin pump writes against the same key (8 attempts with linear backoff; mirrors what a real application would do). A final unretried call propagates the exception if the CAS contention is sustained.
+* OR-Set / LWW: no per-call retry needed - the pipeline is non-blocking from the producer side; transient pump errors queue onto `pump.PumpErrors` and surface in the post-drain assertion if convergence stalls.
+
+### Companion observability
+
+Producer-side: `orleans.lattice.replication.ship.*` histograms (see [Metrics](metrics.md)) - rate, batch size, retry counts per shipper. Receiver-side: `orleans.lattice.replication.apply.duration` tagged with the source cluster id and the merge mode, so a 3-site convergence run produces 6 streams per mode (2 inbound edges per receiver).
+
+## Test 10 - Multi-site fixture smoke (`MultiSiteClusterFixtureSmokeTests`)
+
+These are not chaos tests in the bombardment sense - they are
+deterministic single-write smoke tests that pin the simpler
+invariants the cross-cluster convergence suite relies on. They ship
+under `[Category("Chaos")]` so the strict-delta integration filter
+runs them alongside the suite they diagnose; a failure here
+short-circuits failure analysis on the larger convergence /
+atomic-visibility fixtures by isolating which seam broke.
+
+### What they prove
+
+| Test | Invariant |
+|---|---|
+| `Site_change_feed_yields_locally_authored_lww_entry` | A locally-authored `SetAsync` lands on the per-site producer-side WAL, the local `IChangeFeed` yields the captured `WalRecord`, and the record carries the site's `OriginClusterId` and declared `LatticeMergeMode` |
+| `Delivery_pump_ships_lww_entry_from_site_0_to_site_1` | A locally-authored `SetAsync` on site 0 propagates end-to-end through the chaos delivery pump to site 1, where a subsequent `GetAsync` returns the authored value |
+
+### Tolerated transients
+
+None - these tests run on a quiescent 2-site fixture with no partition / concurrency. Any exception is fatal.
+
 ## Observed recovery surfaces
 
 Between them, the chaos tests exercise every recovery path documented
@@ -415,7 +544,7 @@ in [shard-splitting.md](shard-splitting.md),
 [online-reshard.md](online-reshard.md),
 [tree-sizing.md](tree-sizing.md), and the architecture notes:
 
-The table below covers the four topology-mutation chaos fixtures (Tests 1–4). The atomic-write reader-isolation, digest-determinism, and cross-cluster atomic-visibility fixtures (Tests 5–7) target orthogonal invariants and are documented in their own sections above.
+The table below covers the four full-workload topology-mutation chaos fixtures (Tests 1-4). The atomic-write reader-isolation (Test 5), atomic-visibility-across-topology siblings (Test 6), digest-determinism (Test 7), cross-cluster atomic-visibility (Test 8), per-mode convergence chaos (Test 9), and multi-site smoke (Test 10) fixtures target orthogonal invariants and are documented in their own sections above.
 
 | Surface | Happy path | Faults | Resize | Reshard |
 |---|:---:|:---:|:---:|:---:|
@@ -435,27 +564,73 @@ The table below covers the four topology-mutation chaos fixtures (Tests 1–4). 
 | `TreeReshardGrain` migration loop + dispatch-budget clamping | - | - | - | ✅ |
 | `HotShardMonitorGrain` ↔ reshard interlock | - | - | - | ✅ |
 
+### Saga-atomicity surfaces (Tests 5, 6, 8)
+
+| Surface | Atomic vis. quiescent | Split + saga | Resize + saga | Reshard + saga | Cross-cluster |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Continuous reader observes zero-or-all keys per poll | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `AtomicWriteGrain` per-shard terminal broadcast idempotent under retry | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Prepared-write commit path holds keys hidden until terminal arrives | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Saga prepares shadow-forwarded onto destination shard mid-split | - | ✅ | - | ✅ | - |
+| Saga prepares shadow-forwarded onto destination physical tree mid-resize | - | - | ✅ | - | - |
+| Retroactive prepared-mutation sweep at `BeginShadowWrite` | - | - | - | ✅ | - |
+| Saga terminal-fan-out shadow-forward fallback via post-Complete `MovedAwaySlots` | - | - | - | ✅ | - |
+| Registry `TxDecisionRetention` tombstone absorbs duplicate terminals | - | - | - | ✅ | ✅ |
+| Receiver-side prepared/terminal apply seam holds prepares off projection | - | - | - | - | ✅ |
+| `LatticeHlcOverrideContext` preserves source HLC on receiver | - | - | - | - | ✅ |
+| `ShouldShip` bypass for `TxCommit` / `TxAbort` records | - | - | - | - | ✅ |
+
+### Per-mode convergence surfaces (Test 9)
+
+| Surface | LWW | OR-Set | PN-Counter |
+|---|:---:|:---:|:---:|
+| Producer-side change feed yields locally-authored mutations with origin id | ✅ | ✅ | ✅ |
+| Shipper drives delivery to every peer site under partition-cycled topology | ✅ | ✅ | ✅ |
+| Receiver-side mode-specific dispatch (`SetIfVersionAsync` / `ApplyStateMergeAsync<T>`) | ✅ | ✅ | ✅ |
+| `LatticeOriginContext` flagging foreign-origin writes during apply | ✅ | ✅ | ✅ |
+| Commutative-monoid CRDT merge absorbs out-of-order receive | - | ✅ | ✅ |
+| CAS-budget exhaustion handled by call-site retry under sustained foreign-origin contention | - | - | ✅ |
+
 ## Runtime characteristics
 
-| Property | Happy-path | Faults (per case) | Resize | Reshard | Atomic vis. | Digest | Cross-cluster atomic vis. |
-|---|---|---|---|---|---|---|---|
-| Chaos window | ~5 s | ~4 s | ~20 s | ~20 s | 50 saga rounds, ~10 ms each | ~8 s | 18 sagas across 3 sites, partition cycled mid-workload |
-| Heal / assert | ~1 s | up to 15 s | ~1 s | ~1 s | n/a | ~1 s | up to 60 s drain |
-| Wall-clock | ~8 s | ~20 s / case (~80 s total) | ~25 s | ~25 s | ~5–10 s | ~10 s | ~5 s |
-| Universe size | 500 | 200 | 200 | 200 | 16 | 200 | 72 keys (3 × 6 × 4) |
-| Parallel workers | 16 | 14 | 7 + resize driver | 7 + reshard driver | 1 reader + 1 saga writer | 4 writers + 2 scanners + 1 digest poller | 3 saga writers (one per site) + 6 inter-site delivery pumps |
-| Shards (initial / post) | 4 / up to ~8 | 4 / up to ~6 | 4 / 4 (fan-out changed, shard count unchanged) | 4 / ≥ 8 | 4 / 4 | 4 / 4 | default 64 / 64 (per site) |
+### Single-cluster suite (`test/lattice/BPlusTree/`)
+
+| Property | Happy-path | Faults (per case) | Resize | Reshard | Atomic vis. | Split + saga | Resize + saga | Reshard + saga | Digest |
+|---|---|---|---|---|---|---|---|---|---|
+| Chaos window | ~5 s | ~4 s | ~20 s | ~20 s | 50 saga rounds, ~10 ms each | 15 saga rounds | 15 saga rounds | 15 saga rounds | ~8 s |
+| Heal / assert | ~1 s | up to 15 s | ~1 s | ~1 s | n/a | drain to idle | drain to idle (up to 60 s) | drain to idle (up to 60 s) | ~1 s |
+| Wall-clock | ~8 s | ~20 s / case (~80 s total) | ~25 s | ~25 s | ~5-10 s | ~5-10 s | ~10-30 s | ~10-30 s | ~10 s |
+| Universe size | 500 | 200 | 200 | 200 | 16 | 16 | 16 | 16 | 200 |
+| Parallel workers | 16 | 14 | 7 + resize driver | 7 + reshard driver | 1 reader + 1 saga writer | 1 reader + 1 saga writer + split driver | 1 reader + 1 saga writer + resize driver | 1 reader + 1 saga writer + reshard driver | 4 writers + 2 scanners + 1 digest poller |
+| Shards (initial / post) | 4 / up to ~8 | 4 / up to ~6 | 4 / 4 (fan-out changed, shard count unchanged) | 4 / ≥ 8 | 4 / 4 | 4 / 5 (shard 0 split once) | 4 / 4 (fan-out 8/8) | 4 / 8 | 4 / 4 |
+
+### Cross-cluster suite (`test/lattice.replication/Chaos/`)
+
+| Property | Cross-cluster atomic vis. | LWW convergence | OR-Set convergence | PN-Counter convergence | Multi-site smoke |
+|---|---|---|---|---|---|
+| Sites | 3 | 3 | 3 | 3 | 2 |
+| Chaos window | 18 sagas across 3 sites, partition cycled mid-workload | 120 writes across 3 sites, site 1 partitioned mid-window | 75 adds (test 1) / 51 adds+removes (test 2) across 3 sites, site 2 partitioned mid-window | 120 increments + 30 decrements across 3 sites, site 0 partitioned mid-window | single deterministic write per test |
+| Drain timeout | up to 60 s | up to 30 s | up to 30 s | up to 30 s | up to 15 s |
+| Wall-clock | ~5 s | ~5 s | ~5 s / test | ~5-10 s | ~3 s / test |
+| Universe size | 72 keys (3 × 6 × 4) | 1 key | 1 key (set-valued) | 1 key (counter) | 1 key |
+| Parallel workers | 3 saga writers (one per site) + 6 inter-site delivery pumps | 3 writers + 6 delivery pumps | 3 writers + 6 delivery pumps | 3 writers + 6 delivery pumps | 1 writer + 2 delivery pumps |
+| Shards (per site) | default 64 / 64 | default 64 / 64 | default 64 / 64 | default 64 / 64 | default 64 / 64 |
 
 ## See also
 
 * [Consistency](consistency.md) - the per-operation guarantees these
   tests verify against the public API under topology mutation.
+* [Replication](../lattice.replication/replication.md) - the producer-side change-feed →
+  shipper → receiver-side applier pipeline that the cross-cluster
+  suite exercises.
 * [Adaptive Shard Splitting](shard-splitting.md) - the split protocol
-  exercised by the happy-path, faults, and reshard tests.
+  exercised by the happy-path, faults, reshard, and split + saga
+  tests.
 * [Online Reshard](online-reshard.md) - the reshard coordinator and
   its interaction with autonomic splits.
-* [Tree Sizing](tree-sizing.md#resizing-an_existing_tree) - the online
-  resize path exercised by `ChaosResizeIntegrationTests`.
+* [Tree Sizing](tree-sizing.md#resizing-an-existing-tree) - the online
+  resize path exercised by `ChaosResizeIntegrationTests` and
+  `ResizeTopologyTests`.
 * [Architecture](architecture.md) - grain layers, root promotion,
   bounded retry, and the invariants the chaos tests verify.
 * [State Primitives](state-primitives.md) - HLC and LWW, which

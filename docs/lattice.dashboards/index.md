@@ -2,12 +2,12 @@
 
 `Orleans.Lattice.Dashboards` is a sibling package that ships pre-built Grafana dashboards and provisioning templates for the `orleans.lattice` and `orleans.lattice.replication` meters. Install it when you want operator dashboards bundled with the library version - the core library has no dependency on it.
 
-> **Note:** v3.4.0 takes a direct project reference on `Orleans.Lattice.Replication` so the Replication dashboard always resolves. Splitting that into an optional reference (so local-only deployments can skip the replication meter entirely) is planned for a future minor version once both packages are published to NuGet.
+The dashboards are embedded JSON resources keyed by metric name; the package itself takes a runtime dependency only on `Orleans.Lattice` (the core library). The replication dashboard's `expr` strings reference instruments on the `orleans.lattice.replication` meter, but the package does not link against `Orleans.Lattice.Replication` - that meter is only emitted when the replication package is registered on the silo separately. Local-only deployments can install `Orleans.Lattice.Dashboards` without pulling in the replication package and simply omit `Replication` from the dashboards they import.
 
 ## Install
 
 ```xml
-<PackageReference Include="Orleans.Lattice.Dashboards" Version="3.4.0" />
+<PackageReference Include="Orleans.Lattice.Dashboards" Version="<X.Y.Z>" />
 ```
 
 ## Wire up the meters
