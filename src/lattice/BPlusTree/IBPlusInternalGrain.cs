@@ -77,4 +77,55 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// Used during tree purge to permanently remove internal node data.
     /// </summary>
     Task ClearGrainStateAsync();
+
+    /// <summary>
+    /// Stores a grain reference to the parent internal node so this node
+    /// can propagate its <see cref="ChildDigestSnapshot"/> upward when its
+    /// own subtree fold changes. Called once by the shard root after
+    /// creating the grain (or after a root-promotion that grafts this
+    /// node beneath a new parent). A <see langword="null"/> parent marks
+    /// this node as the shard root, so digest propagation stops here.
+    /// Idempotent: a re-call with the same id is a no-op; a re-call with
+    /// a different id (root rotation) overwrites the slot.
+    /// </summary>
+    Task SetParentAsync(GrainId? parentId);
+
+    /// <summary>
+    /// Hook invoked by a child grain (leaf or internal) when its
+    /// published <see cref="ChildDigestSnapshot"/> changes. This node
+    /// XOR-folds the delta between its persisted prior snapshot for
+    /// <paramref name="childId"/> (or 16 zero bytes when no prior
+    /// snapshot is recorded) and <paramref name="newSnapshot"/> into
+    /// its <c>SubtreeProjectionHash</c>, updates its
+    /// <c>SubtreeEntryCount</c> and <c>SubtreeHighestCheckpointOffset</c>
+    /// aggregates, persists the change, and (if its own subtree fold
+    /// changed) propagates a fresh snapshot to its own parent. The
+    /// <paramref name="childId"/> argument identifies the calling child
+    /// so the parent can record which slot supplied which snapshot.
+    /// </summary>
+    Task OnChildDigestPublishedAsync(GrainId childId, ChildDigestSnapshot newSnapshot);
+
+    /// <summary>
+    /// Returns this internal node's current subtree fold as a
+    /// <see cref="LeafProjectionDigest"/>: the <c>SubtreeProjectionHash</c>
+    /// chained with the subtree entry count and highest checkpoint
+    /// offset via XxHash128, in the same shape as the leaf-level
+    /// digest. Used by the shard root to satisfy
+    /// <c>GetShardProjectionDigestAsync</c> in one grain call when this
+    /// node is the shard's root internal node.
+    /// </summary>
+    Task<LeafProjectionDigest> GetSubtreeProjectionDigestAsync();
+
+    /// <summary>
+    /// Returns this internal node's current contribution to its own
+    /// parent's subtree fold: the raw 16-byte
+    /// <c>SubtreeProjectionHash</c>, the descendant entry count, and the
+    /// max-reduced checkpoint offset. Distinct from
+    /// <see cref="GetSubtreeProjectionDigestAsync"/>, which folds those
+    /// three fields into a single XxHash128 fingerprint for public
+    /// consumption. Used by the parent's lazy-backfill path when no
+    /// prior snapshot has been recorded for this node (e.g. an internal
+    /// node activating with legacy state, or a crash-recovery rebuild).
+    /// </summary>
+    Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync();
 }

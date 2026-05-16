@@ -32,12 +32,35 @@ namespace Orleans.Lattice;
 /// <see cref="CheckpointOffset"/> is the sum of the per-leaf checkpoint
 /// offsets so divergence at any leaf surfaces in the shard total.
 /// </para>
+/// <para>
+/// <b>Contribution-function compatibility contract.</b> The per-entry
+/// hashing function and the XOR-fold are part of the cross-cluster
+/// wire-compatibility surface: two clusters running at the same
+/// <see cref="Version"/> must produce byte-identical digests for the
+/// same applied prefix. The current shipping definition is version
+/// <see cref="CurrentVersion"/> (<c>0</c>) and is frozen for that
+/// version - any change to the contribution function or the fold
+/// algebra requires a new <see cref="Version"/> value and a negotiated
+/// upgrade across participating clusters. Future reconciliation tooling
+/// (e.g. Merkle-style range repair) negotiates the highest mutually
+/// supported version and falls back to v0.
+/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LeafProjectionDigest)]
 [Immutable]
 public readonly record struct LeafProjectionDigest
 {
+    /// <summary>
+    /// The current contribution-function version stamped by this build
+    /// into every <see cref="LeafProjectionDigest"/> it produces. Value
+    /// <c>0</c> is the original (and at present only) shipping shape;
+    /// future revisions of the hashing function or XOR-fold algebra
+    /// must increment this constant and the responsible producer
+    /// must stamp the new value into <see cref="Version"/>.
+    /// </summary>
+    public const int CurrentVersion = 0;
+
     /// <summary>The XxHash128 hash bytes (16 bytes) of the leaf or shard projection.</summary>
     [Id(0)] public byte[] Hash { get; init; }
 
@@ -58,4 +81,16 @@ public readonly record struct LeafProjectionDigest
     /// post-state happens to coincide.
     /// </summary>
     [Id(2)] public long CheckpointOffset { get; init; }
+
+    /// <summary>
+    /// The contribution-function version that produced <see cref="Hash"/>.
+    /// A consumer comparing two digests must verify that both carry the
+    /// same <see cref="Version"/> before treating the <see cref="Hash"/>
+    /// comparison as meaningful - cross-version digests are guaranteed
+    /// only to be self-consistent within a single version, not
+    /// interoperable across versions. Defaults to <c>0</c> for
+    /// backwards compatibility with persisted state that pre-dates the
+    /// field. New producers stamp <see cref="CurrentVersion"/>.
+    /// </summary>
+    [Id(3)] public int Version { get; init; }
 }

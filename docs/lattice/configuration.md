@@ -79,6 +79,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | `MaxLeafReplayEntries` | `int` | 10 000 | Yes |
 | `LeafProjectionRetention` | `TimeSpan` | 7 days | Yes |
 | `ProjectionRebuildPolicy` | enum | `SnapshotThenWal` | Yes |
+| `MaintainProjectionDigest` | `bool` | `true` | Yes |
 | `PublishEvents` | `bool` | `false` | Yes |
 | `EventStreamProviderName` | `string` | `"Default"` | Yes (on next publish) |
 | `WalPartitions` | `int` | 1 | No (per-tree, pinned on first WAL write) |
@@ -355,6 +356,33 @@ Selects the recovery strategy a leaf grain takes when one of the fall-off-log tr
 | `Fail` | Surfaces `LeafProjectionStaleException` at activation and waits for an operator-driven rebuild. |
 
 This option can be changed freely at any time.
+
+### `MaintainProjectionDigest`
+
+Controls whether each leaf maintains the per-mutation XOR fold and publishes a `ChildDigestSnapshot` upward to its internal-node ancestors after every write (default: `true`).
+
+When `true` (the default), `ILattice.GetLeafProjectionDigestAsync` returns a pre-folded `O(1)` shard aggregate that operators and chaos tests can poll to detect cross-silo drift. Each leaf mutation costs one in-memory XOR over the entry's contribution plus a `ChildDigestSnapshot` publish to the parent internal node, which in turn rewrites its `SubtreeProjectionHash` row and (if it changed) publishes upward to its own parent - the cost is `O(treeHeight)` writes per mutation.
+
+When `false`, leaf mutations take a trimmed path: they LWW-merge the value and bump the delivery sequence but skip both the XOR fold and the upward publication. The persisted `ProjectionHash` is left untouched. `ILattice.GetLeafProjectionDigestAsync` then fast-fails with `InvalidOperationException` at the public surface rather than returning a stale aggregate. Recommended for write-amplification-sensitive deployments that rely on audit logs or external reconciliation for cross-silo state-equivalence and do not poll the digest.
+
+```csharp verify
+// Global opt-out:
+siloBuilder.ConfigureLattice(opts => opts.MaintainProjectionDigest = false);
+
+// Or per-tree:
+siloBuilder.ConfigureLattice("audited-tree", opts =>
+{
+    opts.MaintainProjectionDigest = false;
+});
+```
+
+**Disabling is a one-way operation per tree.** The first mutation that lands while maintenance is disabled stamps an irreversible registry latch (`TreeRegistryEntry.ProjectionDigestPermanentlyDisabled`) on the tree. Once the latch is set, every subsequent activation resolves `MaintainProjectionDigest` as `false` regardless of the per-tree override or the silo-wide default, and `ILattice.GetLeafProjectionDigestAsync` keeps throwing. The latch exists because the digest is an XOR-fold aggregate: any mutation accepted while maintenance was off permanently invalidates the persisted aggregate, and silently re-engaging maintenance would publish a known-stale digest as if it were authoritative. The only way to re-engage digest maintenance for a latched tree is to rebuild it (or its leaf range) from scratch under a fresh registry entry.
+
+**System trees (those whose id begins with `_lattice_`) are always resolved as `false`** regardless of configuration, because system trees are not replicated and have no cross-silo drift-detection consumer.
+
+**Per-tree precedence.** When a per-tree override is set on the registry entry (`TreeRegistryEntry.MaintainProjectionDigest`), it overrides the silo-wide default; the latch overrides both.
+
+See [Projection Rebuild](projection-rebuild.md#opting-out-of-digest-maintenance) for the cost model and the WAL-storage rationale.
 
 ### `PublishEvents`
 

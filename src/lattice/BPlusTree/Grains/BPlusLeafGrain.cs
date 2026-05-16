@@ -134,8 +134,26 @@ internal sealed partial class BPlusLeafGrain(
             ? new ValueTask<ResolvedLatticeOptions>(_options)
             : ResolveOptionsSlowAsync();
 
-    private async ValueTask<ResolvedLatticeOptions> ResolveOptionsSlowAsync() =>
+    private async ValueTask<ResolvedLatticeOptions> ResolveOptionsSlowAsync()
+    {
         _options = await optionsResolver.ResolveAsync(state.State.TreeId ?? string.Empty);
+        _maintainProjectionDigest = _options.MaintainProjectionDigest;
+        return _options;
+    }
+
+    /// <summary>
+    /// Cached projection-digest maintenance flag. Mirrors
+    /// <see cref="LatticeOptions.MaintainProjectionDigest"/> from the
+    /// activation-resolved <see cref="_options"/> so the synchronous
+    /// digest funnels (<c>StoreEntry</c>, <c>RemoveEntry</c>,
+    /// <c>PublishDigestUpwardAsync</c>) can elide their work without
+    /// re-resolving options on every mutation. Defaults to <c>true</c>
+    /// to preserve maintenance for unit-test code paths that instantiate
+    /// the grain directly and never drive
+    /// <see cref="ResolveOptionsSlowAsync"/>; production activations
+    /// overwrite this from the resolver before the first mutation lands.
+    /// </summary>
+    private bool _maintainProjectionDigest = LatticeOptions.DefaultMaintainProjectionDigest;
 
     /// <summary>
     /// Advances the leaf's local <see cref="HybridLogicalClock"/> for a
@@ -790,6 +808,13 @@ internal sealed partial class BPlusLeafGrain(
         }
         RecordCommitStep("observer", observerStartTicks);
 
+        // Forward the projection-hash delta (if any) to the parent
+        // internal node so the chained subtree fold stays current.
+        // No-op when the running hash did not change (dominated
+        // re-application) or when this leaf has no parent (flat-tree
+        // root-is-leaf shape).
+        await PublishDigestUpwardAsync();
+
         return splitResult;
     }
 
@@ -898,6 +923,10 @@ internal sealed partial class BPlusLeafGrain(
         }
         RecordCommitStep("observer", observerStartTicks);
 
+        // Forward the projection-hash delta to the parent internal
+        // node. See CommitSetAsync for the no-op semantics.
+        await PublishDigestUpwardAsync();
+
         return true;
     }
 
@@ -1005,6 +1034,11 @@ internal sealed partial class BPlusLeafGrain(
         // skipped to avoid recording a zero-duration measurement that
         // would skew the histogram for the legitimate per-key emit
         // step on Set / Delete.
+
+        // Forward the projection-hash delta (an XOR-fold over every
+        // tombstoned key's contribution swap) to the parent internal
+        // node. A single publication covers the whole range.
+        await PublishDigestUpwardAsync();
 
         return new RangeDeleteResult { Deleted = keysToDelete.Count, PastRange = pastRange };
     }
@@ -1342,6 +1376,12 @@ internal sealed partial class BPlusLeafGrain(
             LatticeMetrics.LeafTombstonesReaped.Add(tombstonesRemoved, treeTag);
         if (expiredRemoved > 0)
             LatticeMetrics.LeafTombstonesExpired.Add(expiredRemoved, treeTag);
+
+        // Forward the projection-hash delta from the reaped tombstones
+        // (and the entry-count shrinkage) to the parent internal node.
+        // No-op when no entries were actually removed.
+        await PublishDigestUpwardAsync();
+
         return toRemove.Count;
     }
 
@@ -1561,6 +1601,10 @@ internal sealed partial class BPlusLeafGrain(
             PublishVersionAdvance(maxIncoming);
             BumpLocalRevision();
         }
+
+        // Forward the projection-hash delta to the parent internal
+        // node. See CommitSetAsync for the no-op semantics.
+        await PublishDigestUpwardAsync();
     }
 
     public async Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
@@ -1974,6 +2018,10 @@ internal sealed partial class BPlusLeafGrain(
             PublishVersionAdvance(maxIncoming);
             BumpLocalRevision();
         }
+
+        // Forward the projection-hash delta to the parent internal
+        // node. See MergeEntriesAsync for the no-op semantics.
+        await PublishDigestUpwardAsync();
     }
 
     public async Task ClearGrainStateAsync()

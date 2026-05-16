@@ -161,6 +161,19 @@ internal sealed partial class BPlusLeafGrain
             await ((ILeafProjection)this).SetCheckpointOffsetAsync(donorHead, CancellationToken.None);
         }
 
+        // Forward the donor's projection-hash delta (the XOR-fold
+        // over every removed entry's contribution) plus the new
+        // entry-count to the parent internal node. SetCheckpointOffsetAsync
+        // above already triggers an upward publish via
+        // FlushPendingCheckpointAsync when a WAL writer is present,
+        // but the no-WAL-writer path skips that flush - so an
+        // explicit publish here keeps the chain consistent across
+        // both shapes. PublishDigestUpwardAsync is a no-op when
+        // _digestDirty is false (no entries crossed the split) or
+        // when this leaf has no parent yet (the split-into-flat-tree
+        // case where the shard-root promotion is still pending).
+        await PublishDigestUpwardAsync();
+
         return new SplitResult
         {
             PromotedKey = splitKey,

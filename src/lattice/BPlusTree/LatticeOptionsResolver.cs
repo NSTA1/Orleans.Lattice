@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.BPlusTree;
@@ -14,13 +17,42 @@ namespace Orleans.Lattice.BPlusTree;
 /// pin is an invariant violation and causes <see cref="InvalidOperationException"/>.
 /// System trees (IDs beginning with <see cref="LatticeConstants.SystemTreePrefix"/>)
 /// resolve to the canonical defaults in <see cref="LatticeConstants"/>
-/// without consulting the registry, to avoid circular bootstrap.
+/// without consulting the registry, to avoid circular bootstrap. System
+/// trees additionally resolve
+/// <see cref="LatticeOptions.MaintainProjectionDigest"/> to <c>false</c>
+/// unconditionally because system trees are silo-internal metadata that
+/// is never replicated across clusters and so the cross-silo drift
+/// canary the digest exists to support is not applicable.
+/// </para>
+/// <para>
+/// The per-tree
+/// <see cref="State.TreeRegistryEntry.MaintainProjectionDigest"/> override,
+/// when present, takes priority over the silo-wide configured value;
+/// the per-tree
+/// <see cref="State.TreeRegistryEntry.ProjectionDigestPermanentlyDisabled"/>
+/// latch, when <c>true</c>, supersedes both and forces <c>false</c>
+/// regardless of any other configured value. The latch reflects that
+/// the tree has already accepted writes while maintenance was disabled,
+/// so re-enabling would expose a stale aggregate through the public
+/// digest API - the resolver enforces the one-way semantics rather than
+/// pushing the check to every leaf grain.
 /// </para>
 /// </summary>
 internal sealed class LatticeOptionsResolver(
     IGrainFactory grainFactory,
-    IOptionsMonitor<LatticeOptions> optionsMonitor)
+    IOptionsMonitor<LatticeOptions> optionsMonitor,
+    ILogger<LatticeOptionsResolver>? logger = null)
 {
+    private readonly ILogger _logger = (ILogger?)logger ?? NullLogger.Instance;
+
+    /// <summary>
+    /// Trees for which a "configured = true but latched-disabled" warning
+    /// has already been logged. Re-resolving the same tree must not spam
+    /// the log on every grain activation; the warning is informational
+    /// and the latch semantics are unconditional.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, byte> WarnedLatchedTrees = new(StringComparer.Ordinal);
+
     /// <summary>Resolves the effective options for <paramref name="treeId"/>.</summary>
     public async Task<ResolvedLatticeOptions> ResolveAsync(string treeId)
     {
@@ -28,11 +60,19 @@ internal sealed class LatticeOptionsResolver(
         var baseOptions = optionsMonitor.Get(treeId);
 
         int mlk, mic, sc;
+        bool maintainDigest;
         if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
             mlk = LatticeConstants.DefaultMaxLeafKeys;
             mic = LatticeConstants.DefaultMaxInternalChildren;
             sc = LatticeConstants.DefaultShardCount;
+            // System trees are silo-internal metadata that is never
+            // replicated across clusters. The digest is a cross-silo
+            // drift canary; for system trees it has no consumer, so
+            // we unconditionally take the trimmed mutation path to
+            // avoid paying maintenance cost for a feature that does
+            // not apply.
+            maintainDigest = false;
         }
         else
         {
@@ -70,6 +110,32 @@ internal sealed class LatticeOptionsResolver(
             mlk = entry?.MaxLeafKeys ?? LatticeConstants.DefaultMaxLeafKeys;
             mic = entry?.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren;
             sc = entry?.ShardCount ?? LatticeConstants.DefaultShardCount;
+
+            // Effective MaintainProjectionDigest precedence:
+            //   1. Latch (ProjectionDigestPermanentlyDisabled == true) forces false.
+            //   2. Per-tree override (entry.MaintainProjectionDigest) wins over silo default.
+            //   3. Silo-wide LatticeOptions.MaintainProjectionDigest is the fallback.
+            var latched = entry?.ProjectionDigestPermanentlyDisabled == true;
+            var configured = entry?.MaintainProjectionDigest ?? baseOptions.MaintainProjectionDigest;
+            if (latched && configured)
+            {
+                // One-shot warning per tree per process: configuration
+                // says re-enable, but the tree has accepted writes while
+                // disabled so the persisted aggregate is stale. The
+                // latch wins; the digest API stays unavailable until
+                // the operator rebuilds the tree (rewrite every key or
+                // take a snapshot-based reseed).
+                if (WarnedLatchedTrees.TryAdd(treeId, 0))
+                {
+                    _logger.LogWarning(
+                        "Tree {TreeId} has the projection-digest latch set (ProjectionDigestPermanentlyDisabled=true) " +
+                        "but the configured MaintainProjectionDigest is true. The latch overrides the configuration " +
+                        "because mutations landed while maintenance was disabled and the persisted aggregate is stale. " +
+                        "Re-enable requires a snapshot-based rebuild that rewrites every entry.",
+                        treeId);
+                }
+            }
+            maintainDigest = !latched && configured;
         }
 
         return new ResolvedLatticeOptions
@@ -100,6 +166,14 @@ internal sealed class LatticeOptionsResolver(
             MaterialiserCheckpointEntries = baseOptions.MaterialiserCheckpointEntries,
             LeafProjectionRetention = baseOptions.LeafProjectionRetention,
             ProjectionRebuildPolicy = baseOptions.ProjectionRebuildPolicy,
+            MaintainProjectionDigest = maintainDigest,
         };
     }
+
+    /// <summary>
+    /// Test-only seam to reset the per-process "configured = true but
+    /// latched-disabled" warning memo so multiple test cases can each
+    /// observe the warning behaviour independently.
+    /// </summary>
+    internal static void ResetWarnedLatchedTreesForTests() => WarnedLatchedTrees.Clear();
 }

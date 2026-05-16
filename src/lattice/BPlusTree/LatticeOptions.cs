@@ -461,6 +461,81 @@ public class LatticeOptions
     public ProjectionRebuildPolicy ProjectionRebuildPolicy { get; set; } = ProjectionRebuildPolicy.SnapshotThenWal;
 
     /// <summary>
+    /// When <c>true</c> (the default), every leaf mutation incrementally
+    /// updates the per-leaf <c>ProjectionHash</c> and publishes a
+    /// <c>ChildDigestSnapshot</c> upward so each internal node maintains
+    /// a pre-folded <c>SubtreeProjectionHash</c> aggregate. The pre-folded
+    /// aggregate is what makes
+    /// <see cref="ILattice.GetLeafProjectionDigestAsync(int, CancellationToken)"/>
+    /// cost <c>O(shardCount)</c> grain hops regardless of tree size, so it
+    /// must be left enabled for any deployment that polls the digest as a
+    /// cross-silo drift-detection signal.
+    /// <para>
+    /// Set to <c>false</c> to skip both halves of the maintenance work on
+    /// every mutation - the per-entry XOR fold on the leaf <i>and</i> the
+    /// cross-grain hop that updates each ancestor internal node's
+    /// aggregate. The trade-off is that
+    /// <see cref="ILattice.GetLeafProjectionDigestAsync(int, CancellationToken)"/>
+    /// will throw <see cref="InvalidOperationException"/> on every call
+    /// against the affected tree: the persisted aggregates are no longer
+    /// the source of truth and recomputing them on demand would defeat the
+    /// purpose of opting out.
+    /// </para>
+    /// <para>
+    /// Appropriate when the deployment has no cross-silo drift-detection
+    /// requirement (single-replica or single-cluster shapes), when an
+    /// external mechanism reconciles state independently (e.g. comparing
+    /// WAL offsets directly), or when profiling shows the per-mutation
+    /// publish chain is on the critical path of an otherwise
+    /// digest-indifferent workload. The leaf's existing
+    /// <c>ProjectionHash</c> column is preserved verbatim across the
+    /// toggle flip, but see the one-way-disable note below: in practice
+    /// the value is only safe to re-engage if no writes have landed under
+    /// the disabled setting.
+    /// </para>
+    /// <para>
+    /// <b>Disabling is a one-way operation per tree.</b> The first mutation
+    /// that lands while maintenance is disabled stamps an irreversible
+    /// registry latch (<c>TreeRegistryEntry.ProjectionDigestPermanentlyDisabled</c>)
+    /// on the tree's registry entry. Once stamped, the latch supersedes any
+    /// later attempt to flip this option, the per-tree override, or the
+    /// silo-wide default back to <c>true</c>: every subsequent activation
+    /// resolves <see cref="MaintainProjectionDigest"/> as <c>false</c> and
+    /// every <see cref="ILattice.GetLeafProjectionDigestAsync(int, CancellationToken)"/>
+    /// call against the tree keeps throwing. The latch exists because the
+    /// digest is an XOR-fold aggregate: any mutation accepted while
+    /// maintenance is off permanently invalidates the persisted aggregate,
+    /// and silently re-enabling maintenance would publish a known-stale
+    /// digest as if it were authoritative. The only way to re-engage
+    /// digest maintenance for a tree that has been latched off is to
+    /// rebuild the tree (or its leaf range) from scratch under a fresh
+    /// registry entry.
+    /// </para>
+    /// <para>
+    /// Per-tree overrides are honoured via the registry entry's
+    /// <c>MaintainProjectionDigest</c> column - operators can opt an
+    /// individual tree out (or, while no writes have yet landed under the
+    /// disabled setting, back in) without flipping the silo-wide default.
+    /// System trees (those whose id begins with <c>_lattice_</c>) are
+    /// always resolved as <c>false</c> regardless of configuration,
+    /// because they are not replicated and have no drift-detection
+    /// consumer.
+    /// </para>
+    /// <para>
+    /// Storage and wire format are unchanged: the persisted
+    /// <c>ProjectionHash</c> / <c>SubtreeProjectionHash</c> / per-child
+    /// snapshot tables remain in the leaf and internal-node state schemas
+    /// regardless of this setting, so trees may move freely between
+    /// digest-maintaining silos and digest-quiescent silos without
+    /// reformatting.
+    /// </para>
+    /// </summary>
+    public bool MaintainProjectionDigest { get; set; } = DefaultMaintainProjectionDigest;
+
+    /// <summary>Default value for <see cref="MaintainProjectionDigest"/> (<c>true</c>).</summary>
+    public const bool DefaultMaintainProjectionDigest = true;
+
+    /// <summary>
     /// Number of WAL partitions per tree. Each partition is an independent
     /// per-shard append-only log; the foreground commit-log writer hashes
     /// the mutation key modulo this value to pick the partition. Defaults

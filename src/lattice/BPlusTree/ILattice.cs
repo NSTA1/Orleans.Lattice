@@ -465,6 +465,13 @@ public interface ILattice : IGrainWithStringKey
     /// projection-checkpoint offset across every leaf so a digest
     /// mismatch can be triaged quickly.
     /// </para>
+    /// <para>
+    /// Throws <see cref="InvalidOperationException"/> when the per-tree
+    /// <see cref="LatticeOptions.MaintainProjectionDigest"/> opt-out is
+    /// set to <c>false</c>: the persisted aggregates are not maintained
+    /// in that mode, so polling the digest would return stale bytes; the
+    /// API fails loudly instead.
+    /// </para>
     /// </summary>
     /// <param name="shardIndex">The physical shard index resolved from the per-tree <c>ShardMap</c>.</param>
     /// <param name="cancellationToken">Cancels the leaf-chain walk before the next leaf.</param>

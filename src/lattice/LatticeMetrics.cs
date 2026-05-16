@@ -104,6 +104,18 @@ public static class LatticeMetrics
             description: "Write operations served by a shard root (SetAsync, DeleteAsync, MergeManyAsync, etc.).");
 
     /// <summary>
+    /// Counter incremented once per <c>IShardRootGrain.GetShardProjectionDigestAsync</c>
+    /// call, tagged with <see cref="TagTree"/> and <see cref="TagShard"/>. Lets operators
+    /// (and integration tests) verify that a whole-tree poll of
+    /// <see cref="ILattice.GetLeafProjectionDigestAsync"/> issues exactly one grain
+    /// call per physical shard - the chained-fold design's headline operational
+    /// invariant - rather than degrading to an O(shardCount x leafCount) walk.
+    /// </summary>
+    public static readonly Counter<long> ShardDigestReads =
+        Meter.CreateCounter<long>("orleans.lattice.shard.digest_reads", unit: "{op}",
+            description: "Projection-digest reads served by a shard root (one per GetShardProjectionDigestAsync call).");
+
+    /// <summary>
     /// Counter incremented once per adaptive shard-split commit, fired from
     /// <c>TreeShardSplitGrain.FinaliseAsync</c> immediately after the shard
     /// map swap succeeds.

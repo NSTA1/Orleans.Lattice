@@ -21,6 +21,18 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// SHA-256 on the per-mutation hot path; the digest is a drift-detection
 /// fingerprint, not an authentication tag, so collision resistance against
 /// an adversary is not required.
+/// <para>
+/// When <see cref="LatticeOptions.MaintainProjectionDigest"/> is set to
+/// <c>false</c> the funnels (<c>StoreEntry</c> / <c>RemoveEntry</c>) take a
+/// trimmed path that skips both the XOR fold and the upward
+/// <c>ChildDigestSnapshot</c> publication, and
+/// <see cref="GetProjectionDigestAsync"/> throws
+/// <see cref="InvalidOperationException"/> so callers cannot observe a
+/// stale aggregate. The persisted <c>ProjectionHash</c> column is left
+/// untouched across the quiescent period; mutations resume incremental
+/// maintenance from the persisted bytes the next time the option flips
+/// back to <c>true</c>.
+/// </para>
 /// </summary>
 internal sealed partial class BPlusLeafGrain
 {
@@ -60,11 +72,36 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private LwwValue<byte[]> StoreEntry(string key, in LwwValue<byte[]> incoming)
     {
+        if (!_maintainProjectionDigest)
+        {
+            // Maintenance disabled - take the minimum-cost path: LWW merge
+            // (or insert) the value, bump the delivery sequence, and skip
+            // both the per-entry XOR fold and the upward ChildDigestSnapshot
+            // publish. The persisted ProjectionHash is left untouched so
+            // it remains a valid prefix of a previous-enabled state.
+            if (state.State.Entries.TryGetValue(key, out var existingNoDigest))
+            {
+                var mergedNoDigest = LwwValue<byte[]>.Merge(existingNoDigest, incoming);
+                state.State.Entries[key] = mergedNoDigest;
+                BumpDeliverySequenceFor(key);
+                return mergedNoDigest;
+            }
+            state.State.Entries[key] = incoming;
+            BumpDeliverySequenceFor(key);
+            return incoming;
+        }
+
         EnsureProjectionHashInitialized();
         if (state.State.Entries.TryGetValue(key, out var existing))
         {
             var merged = LwwValue<byte[]>.Merge(existing, incoming);
             state.State.Entries[key] = merged;
+            // No-op merges (incoming dominated by existing) leave the
+            // entry's contribution bytes unchanged; the equality check
+            // inside UpdateProjectionHash skips both XORs and avoids
+            // flipping the dirty flag, so a re-application at or below
+            // the persisted Timestamp does not trigger a redundant
+            // upward publish.
             UpdateProjectionHash(key, existing, merged);
             BumpDeliverySequenceFor(key);
             return merged;
@@ -90,6 +127,14 @@ internal sealed partial class BPlusLeafGrain
         {
             return false;
         }
+        if (!_maintainProjectionDigest)
+        {
+            // Maintenance disabled - drop the entry and skip both the
+            // XOR-out of its contribution and the upward publish.
+            state.State.Entries.Remove(key);
+            BumpDeliverySequenceFor(key);
+            return true;
+        }
         EnsureProjectionHashInitialized();
         state.State.Entries.Remove(key);
         UpdateProjectionHash(key, existing, newValue: null);
@@ -105,8 +150,24 @@ internal sealed partial class BPlusLeafGrain
     internal byte[]? PersistedProjectionHash => state.State.ProjectionHash;
 
     /// <inheritdoc />
-    public Task<LeafProjectionDigest> GetProjectionDigestAsync()
+    public async Task<LeafProjectionDigest> GetProjectionDigestAsync()
     {
+        // Read-path entry must observe the resolved opt-out, even on a
+        // freshly-activated grain that has not yet seen a mutation. The
+        // cached field defaults to the option's compile-time default;
+        // a call to GetOptionsAsync() forces resolver hydration which
+        // overwrites the cache from the per-tree configured value
+        // before we branch on it.
+        var options = await GetOptionsAsync();
+        if (!options.MaintainProjectionDigest)
+        {
+            throw new InvalidOperationException(
+                $"Projection-digest maintenance is disabled for this tree " +
+                $"({nameof(LatticeOptions)}.{nameof(LatticeOptions.MaintainProjectionDigest)} = false), " +
+                "so the persisted running hash is not the source of truth and the " +
+                "digest API is unavailable. Set the option to true to resume maintenance.");
+        }
+
         EnsureProjectionHashInitialized();
 
         var hasher = new XxHash128();
@@ -127,12 +188,13 @@ internal sealed partial class BPlusLeafGrain
         hasher.Append(scratch[..8]);
 
         var hash = hasher.GetHashAndReset();
-        return Task.FromResult(new LeafProjectionDigest
+        return new LeafProjectionDigest
         {
             Hash = hash,
             EntryCount = entryCount,
             CheckpointOffset = checkpointOffset,
-        });
+            Version = LeafProjectionDigest.CurrentVersion,
+        };
     }
 
     /// <summary>
@@ -157,23 +219,57 @@ internal sealed partial class BPlusLeafGrain
     /// (self-inverse), <paramref name="newValue"/> is XOR'd in. Either may
     /// be <c>null</c> for pure insertion or pure deletion. Caller must have
     /// already invoked <see cref="EnsureProjectionHashInitialized"/>.
+    /// <para>
+    /// Flips <c>_digestDirty</c> when the running hash actually changes so
+    /// the parent-publication path can elide no-op publishes. A merge that
+    /// produces a contribution byte-identical to the prior contribution
+    /// (replay of an already-applied LWW value at the same Timestamp,
+    /// OriginClusterId, VectorClock, and value bytes) self-cancels under
+    /// the XOR and leaves the hash unchanged - the dirty flag stays as
+    /// it was.
+    /// </para>
     /// </summary>
     private void UpdateProjectionHash(string key, in LwwValue<byte[]>? oldValue, in LwwValue<byte[]>? newValue)
     {
         var hash = state.State.ProjectionHash!;
-        Span<byte> contribution = stackalloc byte[ProjectionHashSize];
+        Span<byte> oldContribution = stackalloc byte[ProjectionHashSize];
+        Span<byte> newContribution = stackalloc byte[ProjectionHashSize];
+        var hasOld = false;
+        var hasNew = false;
 
         if (oldValue is { } ov)
         {
-            ComputeEntryContribution(key, in ov, contribution);
-            for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= contribution[i];
+            ComputeEntryContribution(key, in ov, oldContribution);
+            hasOld = true;
         }
-
         if (newValue is { } nv)
         {
-            ComputeEntryContribution(key, in nv, contribution);
-            for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= contribution[i];
+            ComputeEntryContribution(key, in nv, newContribution);
+            hasNew = true;
         }
+
+        // Short-circuit a no-op update: both contributions present and
+        // byte-identical (a re-application of an already-applied LWW
+        // value) - the XOR pair would self-cancel and the publication
+        // would be a redundant cross-grain call.
+        if (hasOld && hasNew && oldContribution.SequenceEqual(newContribution))
+        {
+            return;
+        }
+
+        if (hasOld)
+        {
+            for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= oldContribution[i];
+        }
+        if (hasNew)
+        {
+            for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= newContribution[i];
+        }
+
+        // At this point the running hash has changed (we did not take
+        // the no-op fast path above), so the parent's snapshot for
+        // this leaf is stale and must be refreshed.
+        _digestDirty = true;
     }
 
     /// <summary>

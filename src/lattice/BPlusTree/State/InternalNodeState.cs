@@ -40,6 +40,56 @@ internal sealed class InternalNodeState
     [Id(7)] public List<ChildEntry>? SplitRightChildren { get; set; }
 
     /// <summary>
+    /// Grain reference to this internal node's parent, or
+    /// <see langword="null"/> when this node is the shard root.
+    /// Persisted exactly once by <c>SetParentAsync</c>, called by the
+    /// shard root at creation time and updated on root-promotion when
+    /// this node is grafted beneath a new parent. Consulted by
+    /// <see cref="IBPlusInternalGrain.OnChildDigestPublishedAsync"/> handling so this node
+    /// can forward its own fold change upward.
+    /// </summary>
+    [Id(8)] public GrainId? ParentId { get; set; }
+
+    /// <summary>
+    /// Running XOR-fold of every descendant leaf's
+    /// <c>ProjectionHash</c>. Maintained incrementally on every
+    /// <see cref="IBPlusInternalGrain.OnChildDigestPublishedAsync"/> call by
+    /// XORing the old child contribution out and the new child
+    /// contribution in. Bitwise-identical across silos at the same
+    /// applied-prefix because the XOR fold is commutative and
+    /// self-inverse. <see langword="null"/> on a freshly-initialised
+    /// node until the first child digest publishes; equivalent to a
+    /// 16-byte zero buffer for fold arithmetic.
+    /// </summary>
+    [Id(9)] public byte[]? SubtreeProjectionHash { get; set; }
+
+    /// <summary>
+    /// Sum of <c>EntryCount</c> across every descendant leaf
+    /// in this subtree. Maintained alongside
+    /// <see cref="SubtreeProjectionHash"/>.
+    /// </summary>
+    [Id(10)] public long SubtreeEntryCount { get; set; }
+
+    /// <summary>
+    /// Highest <c>ProjectionCheckpointOffset</c> across descendant
+    /// leaves (max-reduced upward, not summed, so two silos at the same
+    /// applied-prefix observe the same value regardless of shard
+    /// layout). Maintained alongside
+    /// <see cref="SubtreeProjectionHash"/>.
+    /// </summary>
+    [Id(11)] public long SubtreeHighestCheckpointOffset { get; set; }
+
+    /// <summary>
+    /// Per-child snapshot table indexed by child <see cref="GrainId"/>.
+    /// Records the last <see cref="ChildDigestSnapshot"/> each child
+    /// published, so a re-publish can XOR the prior contribution out
+    /// even when the parent's activation has been recycled between
+    /// calls. Persisted alongside the aggregates so crash recovery
+    /// reconstructs the exact same fold state on the next activation.
+    /// </summary>
+    [Id(12)] public Dictionary<GrainId, ChildDigestSnapshot> ChildDigests { get; set; } = new();
+
+    /// <summary>
     /// Routes a key to the correct child grain by finding the rightmost separator ≤ key.
     /// </summary>
     public GrainId Route(string key)

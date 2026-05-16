@@ -1240,6 +1240,14 @@ internal sealed partial class BPlusLeafGrain
         // visibility window for this leaf, and any shadow marker
         // installed for a different saga's txid is untouched.
         ClearSagaShadow(transactionId);
+
+        // Forward the projection-hash delta from any drained pending
+        // bucket and / or per-key backstop writes to the parent
+        // internal node so the chained subtree fold stays current.
+        // No-op when this terminal landed on the abort path or
+        // alreadyFlipped short-circuit branch (no StoreEntry calls
+        // ran, so _digestDirty is still false).
+        await PublishDigestUpwardAsync();
     }
 
     /// <summary>

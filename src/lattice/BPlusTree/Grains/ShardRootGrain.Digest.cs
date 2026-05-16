@@ -3,11 +3,25 @@ using System.IO.Hashing;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Shard-side projection-digest implementation. Walks the leaf
-/// chain (using the same leftmost-leaf + <see cref="IBPlusLeafGrain.GetNextSiblingAsync"/>
-/// traversal already used by <see cref="ITombstoneCompactionGrain"/>) and
-/// chains each leaf's digest through XxHash128 so cross-silo divergence at
-/// any leaf surfaces in the shard total.
+/// Shard-side projection-digest implementation.
+/// <para>
+/// When the shard's root is an internal node, the digest is satisfied
+/// by a single grain call to <see cref="IBPlusInternalGrain.GetSubtreeProjectionDigestAsync"/>:
+/// every internal node maintains an XOR-folded
+/// <c>SubtreeProjectionHash</c> plus aggregated entry-count and
+/// max-reduced checkpoint offset over its descendant leaves, updated
+/// incrementally as each leaf's
+/// <see cref="ChildDigestSnapshot"/> propagates upward through
+/// <see cref="IBPlusInternalGrain.OnChildDigestPublishedAsync"/>. A
+/// whole-tree poll therefore costs O(shardCount) grain hops rather
+/// than O(shardCount x leafCount).
+/// </para>
+/// <para>
+/// When the shard's root is a single leaf (flat-tree case), the
+/// digest is read directly from that leaf via
+/// <see cref="IBPlusLeafGrain.GetProjectionDigestAsync"/>. When the
+/// shard has no root (empty shard), an empty digest is returned.
+/// </para>
 /// </summary>
 internal sealed partial class ShardRootGrain
 {
@@ -18,34 +32,41 @@ internal sealed partial class ShardRootGrain
         await PrepareForOperationAsync();
         cancellationToken.ThrowIfCancellationRequested();
 
-        var hasher = new XxHash128();
+        // One counter increment per call, regardless of whether the shard is
+        // empty, flat, or fully-internal. Lets the integration oracle assert
+        // the chained-fold's headline invariant ("a whole-tree poll issues
+        // exactly one grain call per shard") via OpenTelemetry instead of a
+        // bespoke counting harness.
+        LatticeMetrics.ShardDigestReads.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex));
 
-        long totalEntries = 0;
-        long totalCheckpointOffset = 0;
-
-        var leafId = await GetLeftmostLeafIdAsync();
-        while (leafId is not null)
+        if (state.State.RootNodeId is null)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-            var leafDigest = await leaf.GetProjectionDigestAsync();
-
-            // Chain XxHash128: feed every leaf's hash bytes into the running hasher.
-            // The shard hash is therefore XxHash128(leaf_1.Hash || leaf_2.Hash || ...).
-            hasher.Append(leafDigest.Hash);
-
-            totalEntries += leafDigest.EntryCount;
-            totalCheckpointOffset += leafDigest.CheckpointOffset;
-
-            leafId = await leaf.GetNextSiblingAsync();
+            return new LeafProjectionDigest
+            {
+                Hash = new XxHash128().GetHashAndReset(),
+                EntryCount = 0,
+                CheckpointOffset = 0,
+                Version = LeafProjectionDigest.CurrentVersion,
+            };
         }
 
-        return new LeafProjectionDigest
+        if (state.State.RootIsLeaf)
         {
-            Hash = hasher.GetHashAndReset(),
-            EntryCount = totalEntries,
-            CheckpointOffset = totalCheckpointOffset,
-        };
+            // Flat-tree fallback: no internal node exists to host the
+            // chained fold, so read the single root leaf directly.
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
+            return await leaf.GetProjectionDigestAsync();
+        }
+
+        // Root is an internal node: read its pre-folded subtree digest
+        // in a single grain call. The internal node's
+        // SubtreeProjectionHash has been maintained incrementally by
+        // every leaf-mutation's PublishDigestUpwardAsync chain, so the
+        // returned value is bit-identical to a fresh walk over every
+        // descendant leaf.
+        var root = grainFactory.GetGrain<IBPlusInternalGrain>(state.State.RootNodeId!.Value);
+        return await root.GetSubtreeProjectionDigestAsync();
     }
 }

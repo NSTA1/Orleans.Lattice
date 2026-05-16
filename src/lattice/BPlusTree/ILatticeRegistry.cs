@@ -114,4 +114,37 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// Upserts the registry entry if the tree is not yet registered.
     /// </summary>
     Task SetPublishEventsAsync(string treeId, bool? enabled);
+
+    /// <summary>
+    /// Sets or clears the per-tree
+    /// <see cref="State.TreeRegistryEntry.MaintainProjectionDigest"/>
+    /// override for <paramref name="treeId"/>. Pass <c>true</c>/<c>false</c>
+    /// to pin the setting for this tree, or <c>null</c> to remove the
+    /// override and fall back to the silo-wide
+    /// <see cref="LatticeOptions.MaintainProjectionDigest"/>.
+    /// Upserts the registry entry if the tree is not yet registered.
+    /// <para>
+    /// Note: the
+    /// <see cref="State.TreeRegistryEntry.ProjectionDigestPermanentlyDisabled"/>
+    /// latch supersedes this override. Once mutations have landed while
+    /// digest maintenance was disabled, the latch forces the effective
+    /// resolved value to <c>false</c> regardless of what this method
+    /// pins, because the persisted aggregate has gaps that cannot be
+    /// reconstructed without rewriting every entry.
+    /// </para>
+    /// </summary>
+    Task SetMaintainProjectionDigestAsync(string treeId, bool? enabled);
+
+    /// <summary>
+    /// Stamps the
+    /// <see cref="State.TreeRegistryEntry.ProjectionDigestPermanentlyDisabled"/>
+    /// latch to <c>true</c> for <paramref name="treeId"/>. Idempotent
+    /// once stamped; the latch is one-way and never cleared. Called by
+    /// the leaf trimmed mutation path the first time a write lands
+    /// while the resolved
+    /// <see cref="LatticeOptions.MaintainProjectionDigest"/> is
+    /// <c>false</c>. Upserts the registry entry if the tree is not yet
+    /// registered.
+    /// </summary>
+    Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId);
 }
