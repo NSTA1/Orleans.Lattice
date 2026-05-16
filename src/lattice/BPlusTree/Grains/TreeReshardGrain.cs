@@ -75,7 +75,7 @@ internal sealed class TreeReshardGrain(
         // Inspect the current map to validate grow-only semantics.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var currentMap = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var currentCount = currentMap.GetPhysicalShardIndices().Count;
 
         // Empty-tree fast-path: if the tree has no live entries yet,
@@ -248,7 +248,7 @@ internal sealed class TreeReshardGrain(
         var resolved = await optionsResolver.ResolveAsync(TreeId);
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var currentMap = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
 
         var physicalShards = currentMap.GetPhysicalShardIndices();
         if (physicalShards.Count >= state.State.TargetShardCount)

@@ -94,7 +94,7 @@ internal sealed class TreeMergeGrain(
 
         var sourceResolvedOpts = await optionsResolver.ResolveAsync(sourceTreeId);
         var sourceMap = await registry.GetShardMapAsync(sourceTreeId)
-            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, sourceResolvedOpts.ShardCount);
+            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, sourceResolvedOpts.ShardCount);
         var sourcePhysicalShards = sourceMap.GetPhysicalShardIndices();
 
         // Snapshot every field the mutation set touches so a failing
@@ -365,7 +365,7 @@ internal sealed class TreeMergeGrain(
 
         var sourceResolvedOpts2 = await optionsResolver.ResolveAsync(sourceTreeId);
         var sourceMap = await registry.GetShardMapAsync(sourceTreeId)
-            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, sourceResolvedOpts2.ShardCount);
+            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, sourceResolvedOpts2.ShardCount);
         state.State.SourcePhysicalShards = [.. sourceMap.GetPhysicalShardIndices()];
     }
 
@@ -389,7 +389,7 @@ internal sealed class TreeMergeGrain(
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var targetResolvedOpts = await optionsResolver.ResolveAsync(TargetTreeId);
         var targetShardMap = await registry.GetShardMapAsync(TargetTreeId)
-            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, targetResolvedOpts.ShardCount);
+            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, targetResolvedOpts.ShardCount);
 
         // Walk the source leaf chain, flushing each leaf's delta through the
         // target shard map before loading the next leaf.

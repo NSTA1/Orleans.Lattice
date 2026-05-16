@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.IO.Hashing;
 using System.Text;
 
@@ -212,6 +213,13 @@ public sealed class ShardMap
     /// <paramref name="virtualShardCount"/> is an integer multiple of
     /// <paramref name="physicalShardCount"/>, this routing is bit-for-bit
     /// equivalent to the legacy <c>hash % physicalShardCount</c> formula.
+    /// <para>
+    /// Callers that need a fresh, mutable map (for example to hand to
+    /// <c>ILatticeRegistry.SetShardMapAsync</c>, which mutates <see cref="Version"/>)
+    /// must use this method. Read-only fallback callers should prefer
+    /// <see cref="GetOrCreateDefaultShared"/> to amortise the per-call
+    /// <c>int[virtualShardCount]</c> allocation across activations.
+    /// </para>
     /// </summary>
     public static ShardMap CreateDefault(int virtualShardCount, int physicalShardCount)
     {
@@ -228,5 +236,49 @@ public sealed class ShardMap
         for (int i = 0; i < virtualShardCount; i++)
             slots[i] = i % physicalShardCount;
         return new ShardMap { Slots = slots };
+    }
+
+    /// <summary>
+    /// Process-wide cache of identity <see cref="ShardMap"/> instances keyed
+    /// by <c>(virtualShardCount, physicalShardCount)</c>. The identity map is
+    /// fully determined by those two arguments, so a single instance can be
+    /// safely shared across all read-only fallback callers. See
+    /// <see cref="GetOrCreateDefaultShared"/> for the safety contract.
+    /// </summary>
+    private static readonly ConcurrentDictionary<(int VirtualShardCount, int PhysicalShardCount), ShardMap> SharedDefaults = new();
+
+    /// <summary>
+    /// Returns a shared, process-wide identity <see cref="ShardMap"/> for
+    /// <c>(virtualShardCount, physicalShardCount)</c>, allocating it on first
+    /// use and returning the same instance on every subsequent call. Use this
+    /// method only for the <c>?? ShardMap.CreateDefault(...)</c> fallback
+    /// shape where the returned map is consumed read-only (typical callers
+    /// invoke <see cref="Resolve"/>, <see cref="GetPhysicalShardIndices"/>,
+    /// or <see cref="VirtualShardCount"/>). Never pass a shared instance to
+    /// <c>ILatticeRegistry.SetShardMapAsync</c>, which mutates
+    /// <see cref="Version"/>; that path must keep using
+    /// <see cref="CreateDefault"/> to obtain a fresh map.
+    /// <para>
+    /// Sharing the instance also amortises the lazy
+    /// <see cref="GetPhysicalShardIndices"/> dedup walk: the first caller
+    /// populates the <c>[NonSerialized]</c> physical-shard cache and every
+    /// subsequent caller observes the memoised result.
+    /// </para>
+    /// </summary>
+    internal static ShardMap GetOrCreateDefaultShared(int virtualShardCount, int physicalShardCount)
+    {
+        if (virtualShardCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
+        if (physicalShardCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(physicalShardCount), "Must be greater than 0.");
+        if (virtualShardCount < physicalShardCount)
+            throw new ArgumentException(
+                $"{nameof(virtualShardCount)} must be greater than or equal to {nameof(physicalShardCount)}.",
+                nameof(virtualShardCount));
+
+        var key = (virtualShardCount, physicalShardCount);
+        if (SharedDefaults.TryGetValue(key, out var cached))
+            return cached;
+        return SharedDefaults.GetOrAdd(key, static k => CreateDefault(k.VirtualShardCount, k.PhysicalShardCount));
     }
 }
