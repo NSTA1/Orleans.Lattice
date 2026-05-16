@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// default dev loop.
 /// </summary>
 [TestFixture]
-public class AzureTableWalStorageProviderTests
+public partial class AzureTableWalStorageProviderTests
 {
     [Test]
     public void BuildEntryRowKey_pads_offsets_to_19_digits()
