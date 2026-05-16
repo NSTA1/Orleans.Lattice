@@ -411,7 +411,7 @@ internal sealed class TombstoneCompactionGrain(
         var physicalTreeId = string.IsNullOrEmpty(resolved) ? TreeId : resolved;
         var resolvedOpts = await optionsResolver.ResolveAsync(TreeId);
         var map = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolvedOpts.ShardCount);
+            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolvedOpts.ShardCount);
         return (physicalTreeId, map.GetPhysicalShardIndices());
     }
 

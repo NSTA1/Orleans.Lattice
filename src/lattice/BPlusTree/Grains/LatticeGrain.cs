@@ -1431,13 +1431,13 @@ internal sealed partial class LatticeGrain(
             {
                 // System trees never have a custom shard map; using the default
                 // also avoids a circular registry call.
-                _shardMap = ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+                _shardMap = ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
             }
             else
             {
                 var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
                 _shardMap = await registry.GetShardMapAsync(TreeId)
-                    ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+                    ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
             }
         }
         var routing = new RoutingInfo(physicalTreeId, _shardMap);

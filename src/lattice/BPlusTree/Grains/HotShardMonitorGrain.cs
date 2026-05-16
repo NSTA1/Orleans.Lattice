@@ -194,7 +194,7 @@ internal sealed class HotShardMonitorGrain(
         var physicalTreeId = await registry.ResolveAsync(TreeId);
         var resolved = await optionsResolver.ResolveAsync(TreeId);
         var map = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var physicalShards = map.GetPhysicalShardIndices();
 
         // Prune cooldown entries for shards no longer present in the current
