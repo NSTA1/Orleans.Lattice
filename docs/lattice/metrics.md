@@ -43,6 +43,7 @@ unbounded tag cardinality. All leaf instruments are aggregated to the tree level
 |---|---|---|---|
 | `orleans.lattice.shard.reads` | `Counter<long>` | `{op}` | Read operations served by a shard root (`GetAsync`, `ExistsAsync`, scan, count, etc.). |
 | `orleans.lattice.shard.writes` | `Counter<long>` | `{op}` | Write operations served by a shard root (`SetAsync`, `DeleteAsync`, `MergeManyAsync`, etc.). |
+| `orleans.lattice.shard.digest_reads` | `Counter<long>` | `{op}` | Projection-digest reads served by a shard root - one increment per `IShardRootGrain.GetShardProjectionDigestAsync` call. A whole-tree poll of `ILattice.GetLeafProjectionDigestAsync` produces exactly `shardCount` increments; a higher rate signals a regression that fell back to walking every leaf. Tagged `tree` and `shard`. |
 | `orleans.lattice.shard.splits_committed` | `Counter<long>` | `{split}` | Adaptive shard-split commits - fired once per successful `ShardMap` swap from `TreeShardSplitGrain.FinaliseAsync`. |
 | `orleans.lattice.split.retroactive_forward.entries` | `Counter<long>` | `{entry}` | Pending prepared mutations retroactively shadow-forwarded from a source shard's leaf chain into the destination shard's `_pendingTx` buckets at the start of an adaptive split's `BeginShadowWrite` phase. Tagged `tree` and `shard` (source). |
 | `orleans.lattice.split.retroactive_forward.duration` | `Histogram<double>` | `ms` | Wall-clock duration of the retroactive prepared-mutation sweep before the split coordinator transitions to the `Drain` phase. Tagged `tree` and `shard` (source). |

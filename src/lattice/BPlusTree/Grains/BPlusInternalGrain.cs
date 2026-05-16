@@ -8,7 +8,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// child references. Splits when the child count exceeds the internal-sizing
 /// pin in the tree registry.
 /// </summary>
-internal sealed class BPlusInternalGrain(
+internal sealed partial class BPlusInternalGrain(
     IGrainContext context,
     [PersistentState("internal", LatticeOptions.StorageProviderName)] IPersistentState<InternalNodeState> state,
     IGrainFactory grainFactory,
@@ -69,6 +69,14 @@ internal sealed class BPlusInternalGrain(
             state.State.Clock = clockSnapshot;
             throw;
         }
+
+        // Wire the digest chain: tell both children this node is their
+        // parent so a future mutation can publish a fresh
+        // ChildDigestSnapshot upward. SetParentAsync is idempotent on
+        // an unchanged parent id, so a re-call from a crash-recovery
+        // path is a no-op aside from a refresher publish.
+        await SeedChildParentAsync(leftChild, childrenAreLeaves);
+        await SeedChildParentAsync(rightChild, childrenAreLeaves);
     }
 
     public async Task InitializeWithChildrenAsync(List<string?> separatorKeys, List<GrainId> childIds, bool childrenAreLeaves)
@@ -97,6 +105,50 @@ internal sealed class BPlusInternalGrain(
             state.State.Clock = clockSnapshot;
             throw;
         }
+
+        // Seed the parent slot on every child so the digest-publication
+        // chain is live from the first mutation that touches one of
+        // them. See InitializeAsync for the chain rationale.
+        foreach (var id in childIds)
+        {
+            await SeedChildParentAsync(id, childrenAreLeaves);
+        }
+    }
+
+    /// <summary>
+    /// Sets <paramref name="childId"/>'s persisted parent slot to this
+    /// node's identity so the child publishes its
+    /// <see cref="ChildDigestSnapshot"/> upward on the next
+    /// digest-changing mutation. Dispatches to <c>IBPlusLeafGrain</c>
+    /// or <c>IBPlusInternalGrain</c> based on <paramref name="childIsLeaf"/>.
+    /// Idempotent (mirrors the per-grain <c>SetParentAsync</c> contract).
+    /// <para>
+    /// After persisting the parent slot, this method pulls the child's
+    /// current <see cref="ChildDigestSnapshot"/> and folds it into this
+    /// node's subtree aggregates via <see cref="ApplyChildSnapshotAsync"/>.
+    /// The pull-then-fold shape avoids a reentrant callback into this
+    /// non-reentrant internal grain that would otherwise deadlock when
+    /// the child's <c>SetParentAsync</c> publishes back into our
+    /// still-running mutation frame.
+    /// </para>
+    /// </summary>
+    private async Task SeedChildParentAsync(GrainId childId, bool childIsLeaf)
+    {
+        var myId = context.GrainId;
+        ChildDigestSnapshot snapshot;
+        if (childIsLeaf)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(childId);
+            await leaf.SetParentAsync(myId);
+            snapshot = await leaf.GetChildDigestSnapshotAsync();
+        }
+        else
+        {
+            var inner = grainFactory.GetGrain<IBPlusInternalGrain>(childId);
+            await inner.SetParentAsync(myId);
+            snapshot = await inner.GetChildDigestSnapshotAsync();
+        }
+        await ApplyChildSnapshotAsync(childId, snapshot);
     }
 
     public Task<(GrainId ChildId, bool ChildrenAreLeaves)> RouteWithMetadataAsync(string key) =>
@@ -246,6 +298,12 @@ internal sealed class BPlusInternalGrain(
             }
             throw;
         }
+
+        // The new child has just been grafted under this node, so its
+        // parent slot must point at us. Idempotent - if the child was
+        // already pointing here (e.g. crash recovery), this is a no-op
+        // aside from a refresher publish.
+        await SeedChildParentAsync(newChild, state.State.ChildrenAreLeaves);
 
         return pendingRecovery ?? splitResult;
     }

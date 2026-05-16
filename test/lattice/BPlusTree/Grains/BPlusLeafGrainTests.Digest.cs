@@ -29,6 +29,21 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task Digest_stamps_current_contribution_function_version()
+    {
+        // Every producer must stamp Version = CurrentVersion so cross-cluster
+        // reconciliation can negotiate compatibility before comparing hashes.
+        var emptyGrain = CreateGrain();
+        var emptyDigest = await emptyGrain.GetProjectionDigestAsync();
+        Assert.That(emptyDigest.Version, Is.EqualTo(LeafProjectionDigest.CurrentVersion));
+
+        var populated = CreateGrain();
+        await populated.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
+        var populatedDigest = await populated.GetProjectionDigestAsync();
+        Assert.That(populatedDigest.Version, Is.EqualTo(LeafProjectionDigest.CurrentVersion));
+    }
+
+    [Test]
     public async Task Digest_is_deterministic_for_identical_state()
     {
         var grain1 = CreateGrain();

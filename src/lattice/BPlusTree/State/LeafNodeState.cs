@@ -180,6 +180,21 @@ internal sealed class LeafNodeState
     /// </summary>
     [Id(17)] public int? MovedAwayVirtualShardCount { get; set; }
 
+    /// <summary>
+    /// Grain reference to this leaf's parent internal node, or
+    /// <see langword="null"/> when this leaf is the shard root (the
+    /// flat-tree case where the root is a leaf, or any leaf whose state
+    /// pre-dates this slot). Persisted exactly once by
+    /// <c>SetParentAsync</c>, called by the shard root at leaf-create
+    /// time and re-called on split when a new sibling is grafted
+    /// beneath a parent. Consulted whenever the leaf's incremental
+    /// <see cref="ProjectionHash"/> changes so the leaf can forward
+    /// a <see cref="ChildDigestSnapshot"/> upward to maintain the
+    /// chained internal-node fold (an internal-only optimisation
+    /// behind the public <see cref="LeafProjectionDigest"/> surface).
+    /// </summary>
+    [Id(18)] public GrainId? ParentId { get; set; }
+
     /// <summary>Returns the number of live (non-tombstoned) entries.</summary>
     public int LiveCount
     {

@@ -146,6 +146,11 @@ internal static class TypeAliases
     // Leaf projection digest (cross-silo determinism check)
     internal const string LeafProjectionDigest = "ol.lpd";
 
+    // Per-child digest snapshot folded into an internal node's
+    // SubtreeProjectionHash (chained-internal-fold value type carried
+    // by IBPlusInternalGrain.OnChildDigestPublishedAsync).
+    internal const string ChildDigestSnapshot = "ol.cds";
+
     // Write-ahead-log durability seam (consumed by the replication
     // package today; foreground commit-log adapter tomorrow)
     internal const string WalEntry = "ol.we";

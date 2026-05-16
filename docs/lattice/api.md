@@ -478,7 +478,7 @@ The saga's stamping is independent of `OriginClusterId`, `VectorClock`, and `Cat
 
 ## Leaf-projection digest
 
-`ILattice.GetLeafProjectionDigestAsync(int shardIndex, CancellationToken)` returns a deterministic XxHash128 fingerprint of a single physical shard's leaf-chain projection. The shard hash chains every leaf's per-leaf hash through XxHash128 (`XxHash128(leaf_1.Hash || leaf_2.Hash || ...)`); the per-leaf hash folds in `(key, hlc.WallClockTicks, hlc.Counter, isTombstone, expiresAtTicks, originClusterId, vector-clock-fingerprint, length-prefixed-value)` for every entry plus the leaf's entry count and persisted projection-checkpoint offset. Operators running multiple silos can poll the digest on each silo and compare bytes - equality is the strongest cross-silo state-equivalence check the library provides. Returned as `LeafProjectionDigest { byte[] Hash; long EntryCount; long CheckpointOffset; }` (alias `ol.lpd`).
+`LeafProjectionDigest { byte[] Hash; long EntryCount; long CheckpointOffset; int Version; }` (alias `ol.lpd`).
 
 ```csharp verify
 LeafProjectionDigest digest = await tree.GetLeafProjectionDigestAsync(
@@ -486,7 +486,7 @@ LeafProjectionDigest digest = await tree.GetLeafProjectionDigestAsync(
     cancellationToken);
 ```
 
-Throws `ArgumentOutOfRangeException` when `shardIndex` is not a physical shard of the per-tree map, `InvalidOperationException` for activations on reserved system-tree prefixes, and `OperationCanceledException` if the token was already cancelled. See [Projection Rebuild](projection-rebuild.md) for the full determinism contract, the cost model, and the related `ProjectionRebuildPolicy` recovery options.
+Throws `ArgumentOutOfRangeException` when `shardIndex` is not a physical shard of the per-tree map, `InvalidOperationException` for activations on reserved system-tree prefixes or when `LatticeOptions.MaintainProjectionDigest = false` (the per-tree opt-out makes the digest API unavailable), and `OperationCanceledException` if the token was already cancelled. See [Projection Rebuild](projection-rebuild.md) for the full determinism contract, the cost model, the opt-out semantics, and the related `ProjectionRebuildPolicy` recovery options.
 
 ## Metrics
 
@@ -612,6 +612,7 @@ See [Configuration](configuration.md) for detailed guidance on each option, immu
 | `MaxLeafReplayEntries` | `int` | 10 000 | Maximum WAL entries a cold leaf may replay at activation before falling back to the `ProjectionRebuildPolicy` recovery path. |
 | `LeafProjectionRetention` | `TimeSpan` | 7 days | Maximum age a leaf's persisted projection may have before activation forces the snapshot-then-WAL recovery path. `InfiniteTimeSpan` disables the age trigger. |
 | `ProjectionRebuildPolicy` | enum | `SnapshotThenWal` | Recovery strategy when a leaf's fall-off-log triggers fire. See [Configuration](configuration.md#projectionrebuildpolicy). |
+| `MaintainProjectionDigest` | `bool` | `true` | When `false`, leaf mutations skip the per-mutation XOR fold and the upward `ChildDigestSnapshot` publication, and `ILattice.GetLeafProjectionDigestAsync` fast-fails with `InvalidOperationException`. **Disabling is a one-way operation per tree**: the first mutation under the disabled setting stamps an irreversible registry latch so the option cannot be silently flipped back to `true` later. System trees (`_lattice_*`) are always resolved as `false`. Per-tree overrides on the registry entry override the silo-wide default. See [Configuration](configuration.md#maintainprojectiondigest). |
 | `PublishEvents` | `bool` | `false` | Opt-in publication of `LatticeTreeEvent` notifications onto an Orleans stream. See [Events](events.md). |
 | `EventStreamProviderName` | `string` | `"Default"` | Name of the Orleans stream provider Lattice publishes events onto when `PublishEvents` is `true`. |
 | `WalPartitions` | `int` | 1 | Number of independent WAL partitions per tree. Pinned per-tree on first WAL write. |
@@ -650,7 +651,8 @@ Public types below are annotated with `[EditorBrowsable(EditorBrowsableState.Nev
 | `RoutingInfo` | `ol.ri` | public (hidden) | Per-activation routing snapshot returned by `ILattice.GetRoutingAsync()`: physical tree id plus the resolved `ShardMap`. A second overload, `GetRoutingAsync(bool forceRefresh, CancellationToken)`, is also `public` but tagged `[EditorBrowsable(Never)]`; infrastructure callers (streaming bulk-load, replication apply) pass `forceRefresh: true` to invalidate the routing cache and re-fetch the authoritative map after observing a `StaleShardRoutingException`. |
 | `ShardCountResult` | `ol.scr` | internal | Per-shard count plus the set of virtual slots the shard observed in its `MovedAwaySlots` table during the count. Used by `IShardRootGrain.CountWithMovedAwayAsync` to coordinate strongly-consistent scans during shard splits. |
 | `PendingMutationSnapshot` | `ol.pms` | internal | Snapshot of a single in-flight prepared mutation produced by `IBPlusLeafGrain.GetPendingMutationsForSlotsAsync` and consumed by `TreeShardSplitGrain` during the retroactive shadow-forward sweep at `BeginShadowWrite`. Carries `TransactionId`, `Key`, `Value` (null for tombstones), `Timestamp` (HLC), `IsTombstone`, `ExpiresAtTicks`, `OriginClusterId`, `VectorClock`, and `WalOffset` so the destination shard replays the prepared write under verbatim source provenance. See [Shard Splitting](shard-splitting.md#how-it-works). |
-| `LeafProjectionDigest` | `ol.lpd` | public | `readonly record struct` returned by `ILattice.GetLeafProjectionDigestAsync`. Carries the XxHash128 hash bytes (16 bytes), entry count (live + tombstoned), and summed projection-checkpoint offset of a shard's leaf chain. See [Projection Rebuild](projection-rebuild.md). |
+| `LeafProjectionDigest` | `ol.lpd` | public | `readonly record struct` returned by `ILattice.GetLeafProjectionDigestAsync`. Carries the XxHash128 hash bytes (16 bytes), entry count (live + tombstoned), summed projection-checkpoint offset of a shard's leaf chain, and a `Version` field stamping the contribution-function shape (current shipping value: `LeafProjectionDigest.CurrentVersion = 0`). The `Version` field exists so future cross-cluster reconciliation can negotiate compatibility before comparing hashes: digests with different `Version` values must not be byte-compared. See [Projection Rebuild](projection-rebuild.md). |
+| `ChildDigestSnapshot` | `ol.cds` | internal | `readonly record struct` published by leaves and internal nodes to their parent on every digest-changing mutation. Carries the 16-byte XOR running hash, descendant entry count, and max-reduced checkpoint offset. Consumed by `IBPlusInternalGrain.OnChildDigestPublishedAsync` to maintain the internal-node `SubtreeProjectionHash` aggregate that backs `GetLeafProjectionDigestAsync`. |
 | `ProjectionRebuildPolicy` | - | public | Enum: `SnapshotThenWal` (default), `FullRebuildFromWal`, `Fail`. Selects the activation-time recovery strategy when a leaf falls off the WAL. See [Configuration](configuration.md#projectionrebuildpolicy). |
 
 ## Internal Grain Access Control

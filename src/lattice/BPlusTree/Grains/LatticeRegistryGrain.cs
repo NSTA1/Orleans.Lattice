@@ -230,6 +230,31 @@ internal sealed class LatticeRegistryGrain(
         await UpdateAsync(treeId, updated);
     }
 
+    public async Task SetMaintainProjectionDigestAsync(string treeId, bool? enabled)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var updated = existing with { MaintainProjectionDigest = enabled };
+        await UpdateAsync(treeId, updated);
+    }
+
+    public async Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        if (existing.ProjectionDigestPermanentlyDisabled == true)
+        {
+            // Idempotent: latch is one-way and re-stamping is a no-op.
+            // Skipping the write avoids unnecessary registry churn on
+            // every mutation funnel after the first.
+            return;
+        }
+        var updated = existing with { ProjectionDigestPermanentlyDisabled = true };
+        await UpdateAsync(treeId, updated);
+    }
+
     private static byte[] SerializeEntry(TreeRegistryEntry entry) =>
         JsonSerializer.SerializeToUtf8Bytes(entry, RegistryEntryContext.Default.TreeRegistryEntry);
 

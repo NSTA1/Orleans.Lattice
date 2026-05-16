@@ -59,4 +59,39 @@ internal sealed record TreeRegistryEntry
     /// refreshes its cached value every few seconds.
     /// </summary>
     [Id(6)] public bool? PublishEvents { get; init; }
+
+    /// <summary>
+    /// Per-tree override for <see cref="LatticeOptions.MaintainProjectionDigest"/>.
+    /// When <c>null</c> (the default), the silo-wide option value is used.
+    /// When set to <c>true</c> or <c>false</c>, the override takes priority
+    /// over the silo option for this tree only. Note this override is
+    /// itself superseded by <see cref="ProjectionDigestPermanentlyDisabled"/>:
+    /// once a tree has accepted mutations while digest maintenance was
+    /// disabled, the latch overrides any configured <c>true</c> value
+    /// because the persisted aggregate is no longer the source of truth
+    /// and re-enabling would expose a stale digest through the public API.
+    /// </summary>
+    [Id(7)] public bool? MaintainProjectionDigest { get; init; }
+
+    /// <summary>
+    /// One-way latch recording that this tree has accepted at least one
+    /// mutation while <see cref="LatticeOptions.MaintainProjectionDigest"/>
+    /// resolved to <c>false</c>. Stamped lazily by
+    /// <see cref="BPlusLeafGrain"/> on the first trimmed-path mutation
+    /// after activation, persists for the lifetime of the tree, and is
+    /// never cleared. Once <c>true</c>, the effective resolved value of
+    /// <see cref="LatticeOptions.MaintainProjectionDigest"/> for this
+    /// tree is forced to <c>false</c> regardless of the silo-wide
+    /// configuration or the per-tree
+    /// <see cref="MaintainProjectionDigest"/> override - the digest API
+    /// stays unavailable because the persisted aggregate has gaps that
+    /// cannot be reconstructed without rewriting every key. Cross-cluster
+    /// reconciliation tools must treat a latched tree as a non-participant.
+    /// <para>
+    /// A <c>null</c> value is equivalent to <c>false</c> (not latched);
+    /// the nullable shape is purely for backwards compatibility with
+    /// registry rows persisted before this field was added.
+    /// </para>
+    /// </summary>
+    [Id(8)] public bool? ProjectionDigestPermanentlyDisabled { get; init; }
 }

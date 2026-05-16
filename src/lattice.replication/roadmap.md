@@ -283,17 +283,42 @@ The R-080 → R-093 wave delivers causal+ for every write path the core library 
 57. **R-104 ✓ shipped - Documentation + operator playbook** `[deps: R-098 ✓, R-099 ✓, R-100 ✓, R-101 ✓, R-102 ✓, R-103 ✓]`
     New `docs/lattice.replication/atomic-batch-delivery.md` covering the contract, knobs, latency / GC-pin trade-offs, and orphan-timeout operator playbook. Marks the cross-cluster atomic visibility carve-out closed in `docs/lattice/consistency.md` and `docs/lattice/wal-causal-plus.md` §11; updates the R-089 retrospective in this roadmap.
 
+### Automatic Merkle-based drift remediation (additive on top of the digest chain)
+
+Today digests are an **observability surface** - a `digest_mismatch` alert tells an operator that two clusters diverged but provides no automatic repair path. The core library ships an additive Merkle-style chained digest (shard → internal nodes → leaves, each with a versioned `LeafProjectionDigest`), so cross-cluster reconciliation can localise drift to a small key range without scanning the entire keyspace. The opt-out latch on the core side guarantees that once digest maintenance has been disabled on a tree, the persisted aggregate cannot silently be trusted by a future remediation pass - the tree must be opted back in via a deliberate rebuild before any of the items below engage with it. The work is **purely additive**: no public surface area on the core library changes, no wire-format bump on the replication channel, and every step degrades to "do nothing" when either side advertises an incompatible `LeafProjectionDigest.Version`.
+
+58. **R-105 - Peer digest probe RPC + scheduler** `[deps: R-042 ✓, R-066, Core F-053 ✓]`
+    A low-frequency (default: 5 min, jittered) per-peer scheduler that calls `ILattice.GetLeafProjectionDigestAsync(shardIndex)` on the local cluster and over the existing push transport on each remote peer, for each replicated tree. Emits `replication.digest_probe.mismatch{tree,shard,peer}` and `replication.digest_probe.compared{tree,shard,peer,outcome}` counters. Respects the core opt-out: trees with `MaintainProjectionDigest = false` (including the system-tree default) are skipped; trees whose registry latch is set are skipped permanently. Version-skew (`local.Version != remote.Version`) records `outcome=version_skew` and does not raise a mismatch.
+
+59. **R-106 - Merkle-walk drift localisation** `[deps: R-105]`
+    When R-105 reports a shard-level mismatch, walk the internal-node tree top-down using `IBPlusInternalGrain.GetChildDigestSnapshotAsync` (already wire-stable from the digest chain) to localise the divergence to a single leaf or small set of leaves. Caps recursion depth and total bytes inspected per probe to avoid pathological cases; emits `replication.merkle_walk.localised{tree,depth}` and `replication.merkle_walk.aborted{reason}` counters. Strictly read-only - no repair attempt at this stage.
+
+60. **R-107 - Targeted leaf re-replay from WAL** `[deps: R-106, R-082 ✓, R-097 ✓]`
+    For each divergent leaf identified by R-106, ship the relevant key range from the local WAL to the remote peer using the existing causal+ apply pipeline (R-082 / R-097), so the repair travels through the same TX-aware causal-stable apply path as ordinary replication and respects atomic-batch boundaries. Producer-side selection uses the per-leaf `[FirstKey, LastKey)` covering range plus the diverged peer's HLC cursor to bound what gets re-sent. Falls back to "operator-only alert" if the WAL has been GC'd past the divergence point - a follow-up bootstrap-snapshot remediation belongs in R-109.
+
+61. **R-108 - Rate-limit, circuit breaker, and operator override** `[deps: R-107]`
+    Per-tree and per-peer caps on remediation traffic (default: 1 % of `ShipBatchSize` budget). Circuit breaker that disables automatic remediation for a tree after N consecutive failures and surfaces a `digest_remediation.disabled{tree,peer,reason}` gauge. Operator opt-in flag (`ReplicationOptions.AutoRemediateOnDigestMismatch`, default false for the first release) so the feature ships dark and is opted in per-deployment after operators have observed the probe signals from R-105.
+
+62. **R-109 - Bootstrap-snapshot fallback for GC'd divergence** `[deps: R-107, R-050 ✓, R-051 ✓]`
+    When R-107 can't reach the divergence point because the WAL has been trimmed, fall back to a scoped bootstrap snapshot of only the divergent leaf range using R-050 / R-051's existing snapshot machinery. Snapshot scope is bounded to the leaves identified by R-106 to keep the repair cost proportional to the drift, not to the tree.
+
+63. **R-110 - End-to-end remediation chaos test** `[Category("Chaos")]` `[deps: R-105, R-106, R-107, R-108, R-109]`
+    Three-node cluster with controlled drift injection (skipped writes, corrupted apply, partition-then-heal). Asserts that probes detect the mismatch within 2 × scheduler interval, Merkle walk localises within depth ≤ `log_k(N)` for fan-out `k`, and remediation closes the gap within the configured budget. Verifies the system-tree default-off and registry-latch paths short-circuit cleanly with zero remediation traffic.
+
+64. **R-111 - Documentation + operator playbook** `[deps: R-110]`
+    New `docs/lattice.replication/automatic-drift-remediation.md` covering the feature stack, default-off posture, opt-in path, metrics surface, and the failure-mode matrix (version skew, WAL-trimmed divergence, circuit-breaker tripped). Updates `docs/lattice/projection-rebuild.md` to cross-link from the digest opt-out section so an operator who disables digest maintenance is told what they lose.
+
 ### Extended CRDT modes (gated on outstanding core primitives)
 
 These ship as paired (core primitive ↔ replication delta) deliverables - building either side in isolation freezes a contract before its consumer validates it. Order between the three is by user demand, not technical dependency.
 
-58. **R-034 - MV-Register delta + dispatch** `[deps: Core F-039 outstanding]`
+65. **R-034 - MV-Register delta + dispatch** `[deps: Core F-039 outstanding]`
     Pair with F-039 in a single cycle.
 
-59. **R-035 - OR-Map delta + dispatch** `[deps: Core F-040 outstanding]`
+66. **R-035 - OR-Map delta + dispatch** `[deps: Core F-040 outstanding]`
     Pair with F-040. Includes the recursive `InnerMode` wire-envelope extension.
 
-60. **R-036 - RGA sequence delta + dispatch** `[deps: Core F-041 outstanding]`
+67. **R-036 - RGA sequence delta + dispatch** `[deps: Core F-041 outstanding]`
     Pair with F-041. Highest implementation complexity of the three (sequence convergence, back-pressure for high-frequency editors).
 
 ### Suggested concurrency

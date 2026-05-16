@@ -151,6 +151,36 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<string?> GetTreeIdAsync();
 
     /// <summary>
+    /// Stores a grain reference to the parent internal node so this leaf
+    /// can propagate its <see cref="ChildDigestSnapshot"/> upward when
+    /// its projection digest changes. Called once by the shard root
+    /// after creating the grain (next to <see cref="SetTreeIdAsync"/>);
+    /// also re-called when a split rotates the leaf beneath a new
+    /// parent. A <see langword="null"/> parent marks this leaf as the
+    /// shard root itself (the flat-tree case where the root is a leaf),
+    /// so digest propagation stops at the leaf and the shard reads the
+    /// leaf's digest directly. Idempotent: a re-call with the same id
+    /// is a no-op; a re-call with a different id overwrites the slot
+    /// and triggers a fresh full-fold republish so the new parent
+    /// converges with the leaf's current digest.
+    /// </summary>
+    Task SetParentAsync(GrainId? parentId);
+
+    /// <summary>
+    /// Returns this leaf's current contribution to its parent internal
+    /// node's subtree fold: the raw 16-byte
+    /// <c>ProjectionHash</c>, the total entry count (live plus
+    /// tombstoned), and the persisted projection-checkpoint offset.
+    /// Distinct from <see cref="GetProjectionDigestAsync"/>, which folds
+    /// these three fields into a single XxHash128 fingerprint for
+    /// public consumption. Used by the parent's lazy-backfill path when
+    /// no prior snapshot has been recorded for this leaf (e.g. a
+    /// freshly-activated internal node observing legacy state, or a
+    /// crash-recovery rebuild).
+    /// </summary>
+    Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync();
+
+    /// <summary>
     /// Persists the logical chain-shard index this leaf belongs to -
     /// the <c>shardIndex</c> half of the owning
     /// <c>ShardRootGrain</c>'s <c>{treeId}/{shardIndex}</c> grain key.

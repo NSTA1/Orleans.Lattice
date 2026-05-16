@@ -216,4 +216,56 @@ public class LatticeMetricsIntegrationTests
         Assert.That(recorder.Sum("orleans.lattice.leaf.splits", treeId),
             Is.GreaterThanOrEqualTo(1));
     }
+
+    /// <summary>
+    /// Operational invariant of the chained-fold digest design: a whole-tree
+    /// poll of <see cref="ILattice.GetLeafProjectionDigestAsync"/> issues
+    /// exactly one grain call per physical shard. A regression that fell back
+    /// to walking every leaf would manifest as more than
+    /// <see cref="FourShardClusterFixture.TestShardCount"/> increments on the
+    /// per-shard digest-read counter, even though the public surface still
+    /// returns the same digest.
+    /// </summary>
+    [Test]
+    public async Task WholeTreePoll_emits_one_digest_read_per_shard()
+    {
+        var treeId = $"metrics-digest-{Guid.NewGuid():N}";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+
+        // Seed enough keys to push at least one shard past a single leaf so the
+        // "one call per shard" property is being asserted against the
+        // internal-node aggregate path, not just the flat-tree fast path.
+        for (var i = 0; i < 30; i++)
+            await tree.SetAsync($"k{i:D3}", Encoding.UTF8.GetBytes($"v{i}"));
+
+        // Attach the recorder *after* the seed traffic so writes don't pollute
+        // the digest-read counter; only the poll loop below should produce data
+        // points on orleans.lattice.shard.digest_reads.
+        using var recorder = new MetricRecorder();
+
+        for (var s = 0; s < FourShardClusterFixture.TestShardCount; s++)
+        {
+            _ = await tree.GetLeafProjectionDigestAsync(s);
+        }
+
+        // Exactly one increment per shard - no more, no less. Going above N
+        // would mean the read path fanned out across leaves; going below N
+        // would mean the counter is missing one of the dispatch arms (empty
+        // shard, flat tree, or internal subtree).
+        Assert.That(recorder.Sum("orleans.lattice.shard.digest_reads", treeId),
+            Is.EqualTo(FourShardClusterFixture.TestShardCount),
+            "A whole-tree digest poll must issue exactly one shard-root grain call per physical shard.");
+
+        // Each data point must carry both the tree tag and a distinct shard
+        // tag so dashboards can attribute the call to a shard.
+        var perShard = recorder.Records
+            .Where(r => r.Name == "orleans.lattice.shard.digest_reads"
+                        && r.Tags.Any(t => t.Key == LatticeMetrics.TagTree && (t.Value as string) == treeId))
+            .Select(r => r.Tags.First(t => t.Key == LatticeMetrics.TagShard).Value)
+            .OfType<int>()
+            .OrderBy(i => i)
+            .ToArray();
+        Assert.That(perShard, Is.EqualTo(Enumerable.Range(0, FourShardClusterFixture.TestShardCount).ToArray()),
+            "Each shard index in [0, TestShardCount) must be tagged exactly once.");
+    }
 }

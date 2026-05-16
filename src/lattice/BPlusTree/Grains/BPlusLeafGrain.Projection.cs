@@ -180,9 +180,16 @@ internal sealed partial class BPlusLeafGrain
         {
             state.State.ProjectionCheckpointOffset = pending;
             _pendingCheckpointOffset = null;
+            // The checkpoint offset is a field of the published
+            // ChildDigestSnapshot, so an advance must propagate upward
+            // even when the projection hash itself is unchanged - the
+            // parent's SubtreeHighestCheckpointOffset aggregate
+            // depends on it.
+            MarkDigestDirty();
             await PersistAsync();
             _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
             await ReportCursorIfActiveAsync();
+            await PublishDigestUpwardAsync();
             return;
         }
 
@@ -191,6 +198,9 @@ internal sealed partial class BPlusLeafGrain
             await PersistAsync();
             _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
             await ReportCursorIfActiveAsync();
+            // Apply work may have updated ProjectionHash since the
+            // previous publish; flush any pending dirt.
+            await PublishDigestUpwardAsync();
         }
     }
 

@@ -32,19 +32,32 @@ LeafProjectionDigest digest = await tree.GetLeafProjectionDigestAsync(
 // digest.CheckpointOffset - sum of per-leaf projection-checkpoint offsets
 ```
 
-`GetLeafProjectionDigestAsync` walks the leaf chain of the requested
-**physical shard** and chains every leaf's XxHash128 digest into a single
-shard-level fingerprint. The shard hash is
+`GetLeafProjectionDigestAsync` reads the requested **physical shard**'s
+root and returns a pre-folded digest in `O(1)` grain hops at the shard
+level. The shard's internal-node root maintains a running
+**XOR-fold** over every descendant leaf's running per-leaf hash; each
+internal node tracks its subtree aggregate (`SubtreeProjectionHash`,
+`SubtreeEntryCount`, max-reduced `SubtreeHighestCheckpointOffset`),
+updated incrementally as each leaf publishes its
+`ChildDigestSnapshot` upward on every mutation. The public shard hash
+is
 
 ```text
-XxHash128( leaf_1.Hash || leaf_2.Hash || ... || leaf_N.Hash )
+XxHash128( xor_subtree_hash || subtree_entry_count || subtree_max_checkpoint )
 ```
 
-so a single-byte difference at any leaf - a stale tombstone, a missing
-TTL stamp, a divergent vector clock - surfaces as a different shard
-hash. Operators running multiple silos against the same WAL can poll
-the digest from each silo and compare bytes; equality is the strongest
-possible cross-silo state-equivalence check the library provides.
+where `xor_subtree_hash` is the bitwise XOR of every descendant leaf's
+16-byte running hash. A single-byte difference at any leaf - a stale
+tombstone, a missing TTL stamp, a divergent vector clock - surfaces as
+a different shard hash. Operators running multiple silos against the
+same WAL can poll the digest from each silo and compare bytes;
+equality is the strongest possible cross-silo state-equivalence check
+the library provides.
+
+When the shard's root is a single leaf (flat-tree case, no internal
+node yet exists), the digest is read directly from the root leaf. When
+the shard is empty, the public hash is the XxHash128 over an empty
+input with both counters at zero.
 
 XxHash128 is a non-cryptographic hash: it is chosen for ~10x lower CPU
 cost than SHA-256 on the per-mutation hot path and for its uniformly
@@ -81,11 +94,16 @@ independent of insertion order and idempotent re-application of the
 same mutation is a no-op - exactly the algebra LWW already provides
 for entry state.
 
-The public digest is the XxHash128 of `(running_xor || entryCount ||
-checkpointOffset)`, so two silos at different replay positions report
-distinct digests even if their post-state happens to coincide. The
-shard-level hasher then absorbs each leaf's resulting 16-byte hash, in
-leaf-chain order.
+The public per-leaf digest is the XxHash128 of `(running_xor ||
+entryCount || checkpointOffset)`, so two silos at different replay
+positions report distinct digests even if their post-state happens to
+coincide. The shard-level aggregate then XOR-folds each descendant
+leaf's `running_xor` directly (no per-leaf XxHash chaining step) and
+applies the same `(xor_subtree_hash || subtree_entry_count ||
+subtree_max_checkpoint)` framing at the root. The XOR-fold makes the
+shard aggregate commutative and self-inverse, which is what lets each
+internal node maintain it incrementally as children publish updates
+upward.
 
 ### Determinism contract
 
@@ -105,52 +123,43 @@ The digest is byte-stable across silos because every input is canonicalised:
 ### Cost and where to call it
 
 Because the per-entry XOR fold is maintained incrementally on every
-mutation, `GetLeafProjectionDigestAsync` does **not** re-walk the leaf's
-`Entries` on each call - the running hash is already on the leaf's
-in-memory state, so the per-leaf computation collapses to a single
-fixed-size XxHash128 over `(running_xor || entryCount || checkpointOffset)`.
-The call still flows through grain activation: a cold leaf will be
-activated (and its persisted state, including the running hash, loaded
-from storage) the first time it is queried, exactly as for any other
-RPC. The win versus the original O(N) walk is in the steady state:
-once a shard's leaves are warm, repeated digest polls cost one grain
-hop per leaf plus a constant-time hash, regardless of how many entries
-each leaf holds. Per-shard cost is therefore one grain hop per leaf in
-the chain plus one final XxHash128 chain through the leaf hashes - the
-digest visits exactly the leaves a normal scan would visit, and never
-re-hashes their entries.
+mutation, `GetLeafProjectionDigestAsync` does **not** re-walk the
+leaf's `Entries` on each call - the running hash is already on the
+leaf's in-memory state, so the per-leaf computation collapses to a
+single fixed-size XxHash128 over `(running_xor || entryCount ||
+checkpointOffset)`. The shard root delegates to the root internal
+node, which returns its persisted `SubtreeProjectionHash` aggregate in
+a single grain hop without re-visiting any descendant. The leaves
+themselves are not activated by the digest poll: each leaf already
+published its contribution upward when its last mutation persisted,
+and the internal-node aggregate is the source of truth at read time.
+A whole-tree poll therefore costs `O(shardCount)` grain hops,
+regardless of how many leaves each shard owns or how many entries
+each leaf holds.
+
+The cold-start path remains correct: if the shard root or any internal
+ancestor is activated for the first time, its persisted state is
+loaded from storage along with the aggregate it already stamped on the
+previous shutdown - no leaf walk is required to reconstruct it.
 
 Heap allocations on the hot path are bounded:
 
 | Allocation                              | Per call    |
 |-----------------------------------------|-------------|
-| `XxHash128` (one per shard, plus one cached per leaf grain activation) | reused via `TryGetHashAndReset` |
+| `XxHash128` (one per internal-node aggregator, plus one cached per leaf grain activation) | reused via `TryGetHashAndReset` |
 | `byte[16]` XxHash128 hash from `GetHashAndReset()` | unavoidable (the result) |
+| `byte[16]` `ChildDigestSnapshot.Hash` clone published upward on each leaf mutation | bounded by tree height; cloned so subsequent XOR updates do not retroactively mutate the parent's captured bytes |
 | String / VC scratch buffers             | pooled (`stackalloc 256` fast path; `ArrayPool<byte>.Shared` and `ArrayPool<string>.Shared` for the rare overflow) |
 
-The `O(1)` per-leaf cost makes the digest cheap enough for steady-state
-monitoring - including periodic cross-silo equality canaries - not just
-on-demand diagnostics. It is safe to call against a live shard under
-load: it observes the current in-memory projection without taking any
-kind of consistency freeze. The result is necessarily a snapshot at one
-wall-clock instant, however, so two calls under sustained writes will
-report different digests; equality is meaningful only between
-**quiescent observations** (no in-flight writes to the shard between
-the two reads being compared).
-
-> **Forward-looking note.** The per-shard cost above (one grain hop per
-> leaf in the chain) is a property of the current shipping topology -
-> a whole-tree poll still activates every leaf in every shard. A planned
-> follow-up promotes the same XOR running-hash up through
-> `IBPlusInternalGrain`: each internal node maintains a
-> `SubtreeProjectionHash` over its descendants, updated incrementally
-> on the same call path that already persists each leaf write. Once
-> shipped, `GetLeafProjectionDigestAsync(shardIndex, ct)` collapses to
-> one grain call per shard root regardless of leaf count, and a
-> whole-tree poll costs `O(shardCount)` rather than
-> `O(shardCount × leafCount)`. The public surface - return type, byte
-> framing, cross-silo equality semantics - is preserved verbatim, so
-> operator tooling written against today's API needs no change.
+The `O(shardCount)` per-tree cost makes the digest cheap enough for
+steady-state monitoring - including periodic cross-silo equality
+canaries - not just on-demand diagnostics. It is safe to call against
+a live shard under load: it observes the current in-memory projection
+without taking any kind of consistency freeze. The result is
+necessarily a snapshot at one wall-clock instant, however, so two
+calls under sustained writes will report different digests; equality
+is meaningful only between **quiescent observations** (no in-flight
+writes to the shard between the two reads being compared).
 
 ### Cross-silo divergence example
 
@@ -176,6 +185,121 @@ foreach (var shardIndex in routing.Map.GetPhysicalShardIndices())
 | `shardIndex` is not a physical shard of the per-tree map     | `ArgumentOutOfRangeException`      |
 | The activation's tree id starts with the reserved system prefix | `InvalidOperationException`     |
 | `cancellationToken` was already cancelled                    | `OperationCanceledException`       |
+| Tree has `LatticeOptions.MaintainProjectionDigest = false`   | `InvalidOperationException`        |
+
+### Opting out of digest maintenance
+
+The digest's per-mutation cost is small in absolute terms (one XOR
+fold at the leaf plus an upward `ChildDigestSnapshot` publish to each
+ancestor up to the shard root), but it is **per-mutation**. For trees
+that do not poll the digest - workloads that rely exclusively on
+audit logs, integration tests, application-level checksums, or
+external reconciliation, and never call
+`GetLeafProjectionDigestAsync` - the maintenance cost is pure write
+amplification.
+
+`LatticeOptions.MaintainProjectionDigest` (default `true`) flips the
+behaviour off:
+
+```csharp verify
+siloBuilder.ConfigureLattice(opts =>
+{
+    // Turn off digest maintenance globally - leaf mutations stop
+    // updating the running XOR fold and stop publishing
+    // ChildDigestSnapshot upward to internal-node ancestors.
+    opts.MaintainProjectionDigest = false;
+});
+
+// Or per-tree:
+siloBuilder.ConfigureLattice("audited-tree", opts =>
+{
+    opts.MaintainProjectionDigest = false;
+});
+```
+
+When the opt-out is in effect:
+
+- Leaf-mutation funnels (`StoreEntry` / `RemoveEntry`) take a trimmed
+  path that LWW-merges the value, bumps the delivery sequence, and
+  returns without touching the persisted `ProjectionHash`.
+- The leaf does not publish `ChildDigestSnapshot` upward, so no
+  internal-node ancestor updates its `SubtreeProjectionHash` for that
+  mutation. The whole upward chain is quiescent.
+- `ILattice.GetLeafProjectionDigestAsync` fast-fails with
+  `InvalidOperationException` at the public surface, before any
+  routing-table fetch or grain hop. The leaf and internal grains repeat
+  the check for defence-in-depth so a direct grain-handle caller hits
+  the same exception.
+- Persisted state is **not** rewritten. Any `ProjectionHash` already on
+  disk from a previous-enabled period remains untouched.
+
+#### Disabling is a one-way operation per tree
+
+The first mutation that lands while maintenance is disabled stamps an
+irreversible registry latch
+(`TreeRegistryEntry.ProjectionDigestPermanentlyDisabled`) on the tree.
+Once the latch is set, every subsequent activation resolves
+`MaintainProjectionDigest` as `false` regardless of the per-tree
+override or the silo-wide default, and
+`ILattice.GetLeafProjectionDigestAsync` keeps throwing.
+
+The latch exists because the digest is an XOR-fold aggregate over
+**every** mutation: any mutation accepted while maintenance was off
+permanently invalidates the persisted aggregate, and silently
+re-engaging maintenance would publish a known-stale digest as if it
+were authoritative. The one-way latch makes this impossible to
+mis-configure: an operator who turns the option back on for a tree
+that has already accepted writes under the disabled setting will see
+the resolved value stay at `false` and the digest API stay broken,
+rather than producing a digest that disagrees silently with the
+ground-truth entries.
+
+The only way to re-engage digest maintenance for a latched tree is to
+rebuild the tree (or its leaf range) from scratch under a fresh
+registry entry. If you anticipate needing the digest later, leave it
+enabled.
+
+#### Per-tree precedence and system trees
+
+Resolution order for `MaintainProjectionDigest`:
+
+1. **System-tree prefix override.** Trees whose id begins with the
+   reserved system prefix `_lattice_` (e.g. the internal registry
+   tree) always resolve as `false` regardless of configuration.
+   System trees are not replicated and have no cross-silo
+   drift-detection consumer, so the maintenance work is pure
+   overhead.
+2. **Registry latch.** If `ProjectionDigestPermanentlyDisabled` is
+   set, the resolved value is `false`.
+3. **Per-tree override.** If `TreeRegistryEntry.MaintainProjectionDigest`
+   is set, that value wins over the silo-wide default. Operators can
+   opt an individual tree out (or, while the latch is not yet set,
+   back in) without flipping the silo-wide default.
+4. **Silo-wide default.** Falls back to `LatticeOptions.MaintainProjectionDigest`.
+
+Disabling the digest is recommended for **write-amplification-sensitive
+deployments that do not need cross-silo drift telemetry**. Keep it
+enabled when you operate multiple silos against the same WAL and rely
+on the digest as a state-equivalence canary, or when chaos / soak
+tests use the digest as a post-condition oracle.
+
+#### Why not store the digest in the WAL?
+
+Moving the digest aggregate into the WAL would not eliminate the
+write amplification: the per-leaf XOR fold is already negligible
+(it lives inline in the leaf's persisted state - there is no extra
+WAL append for it today). The real amplification is the upward
+chain of internal-node updates that publishes a fresh
+`ChildDigestSnapshot` per leaf mutation and rewrites the
+`SubtreeProjectionHash` row on each ancestor up to the shard root.
+That cost lives in internal-node grain state, not in the WAL, and is
+the *whole point* of the incremental aggregate - readers need to
+find the pre-folded shard hash in `O(1)`. Reconstructing it by
+replaying the WAL on every digest poll would defeat the optimisation
+and produce a per-call cost proportional to WAL size, which is
+strictly worse than the per-leaf walk it replaced. The opt-out is
+the correct knob for deployments that do not need the aggregate at
+all.
 
 ## Recovery: fall-off-log triggers and `ProjectionRebuildPolicy`
 
@@ -228,6 +352,9 @@ siloBuilder.ConfigureLattice(o =>
 
 - `ILattice.GetLeafProjectionDigestAsync` - the public surface.
 - `LeafProjectionDigest` - the returned `readonly record struct`.
+- `LatticeOptions.MaintainProjectionDigest` - opt out of the
+  per-mutation XOR fold and upward publication for digest-indifferent
+  workloads.
 - `ProjectionRebuildPolicy` - the activation-time recovery policy.
 - `LatticeOptions.MaxLeafReplayEntries`, `LatticeOptions.LeafProjectionRetention`,
   `LatticeOptions.MaterialiserCheckpointInterval`,
