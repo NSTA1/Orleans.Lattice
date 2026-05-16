@@ -171,17 +171,29 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider
     /// SDK transaction surface. Exposed <c>internal</c> for that single
     /// (bench-only) caller; production callers reach it through
     /// <see cref="AppendBatchAsync"/>.
+    /// <para>
+    /// A single <see cref="ArrayBufferWriter{T}"/> is allocated for the whole
+    /// batch and reset between entries via <see cref="ArrayBufferWriter{T}.ResetWrittenCount"/>.
+    /// The previous implementation allocated a fresh writer per entry; at the
+    /// 99-entry transaction cap that materially dominated the encode-loop
+    /// allocation profile (measured on the in-process WAL encode microbench).
+    /// The shared writer's backing array is grown on demand as Orleans
+    /// serialisation writes; subsequent entries reuse the grown capacity
+    /// without reallocating until a payload exceeds the high-water mark.
+    /// </para>
     /// </summary>
     internal void EncodeEntriesForBatch(
         string partitionKey,
         IReadOnlyList<WalEntry> entries,
         List<TableTransactionAction> actions)
     {
+        var writer = new ArrayBufferWriter<byte>();
         for (var i = 0; i < entries.Count; i++)
         {
+            writer.ResetWrittenCount();
             actions.Add(new TableTransactionAction(
                 TableTransactionActionType.Add,
-                BuildEntryEntity(partitionKey, entries[i])));
+                BuildEntryEntity(partitionKey, entries[i], writer)));
         }
     }
 
@@ -373,14 +385,16 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider
         Payload = null,
     };
 
-    private AzureTableWalEntity BuildEntryEntity(string partitionKey, in WalEntry entry)
+    private AzureTableWalEntity BuildEntryEntity(string partitionKey, in WalEntry entry, ArrayBufferWriter<byte> buffer)
     {
         // Serialise via Orleans so the payload survives every
         // additive change to LatticeMutation under the existing
         // Orleans-serialization wire-compat rules. The provider does
         // not need to know the field layout - only that the bytes
-        // round-trip through the same serializer.
-        var buffer = new ArrayBufferWriter<byte>();
+        // round-trip through the same serializer. The caller hands in
+        // a buffer that has already been reset to zero written count;
+        // we own it for the duration of the call but never retain a
+        // reference past the WrittenSpan.ToArray copy below.
         _serializer.Serialize(entry.Mutation, buffer);
         return new AzureTableWalEntity
         {
