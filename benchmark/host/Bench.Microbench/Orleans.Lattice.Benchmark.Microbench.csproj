@@ -22,6 +22,13 @@
          Orleans silo, no shard routing, no grain dispatch - pure algorithmic
          cost. Orleans-native end-to-end cost is measured by current-state-no-replication+ instead. -->
     <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
+    <!-- The Azure-Table WAL provider is referenced directly so the bench host
+         can drive AzureTableWalStorageProvider.EncodeEntriesForBatch in-process,
+         isolating the per-entry encode allocation pattern from the live
+         Azure SDK transaction surface. Pulled in via InternalsVisibleTo on
+         the provider csproj so the helper is reachable without exposing it
+         on the public API. -->
+    <ProjectReference Include="..\..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
   </ItemGroup>
 
   <ItemGroup>

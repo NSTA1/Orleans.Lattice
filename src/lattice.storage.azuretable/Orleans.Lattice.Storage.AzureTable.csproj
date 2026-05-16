@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Storage.AzureTable.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.Microbench" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 

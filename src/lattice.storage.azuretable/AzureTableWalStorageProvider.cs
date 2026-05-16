@@ -158,14 +158,31 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider
                 BuildHeadEntity(partitionKey, highestOffset: firstOffset + entries.Count - 1)),
         };
 
+        EncodeEntriesForBatch(partitionKey, entries, actions);
+
+        await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Encodes <paramref name="entries"/> into <see cref="TableTransactionAction"/>
+    /// add-actions appended onto <paramref name="actions"/>. Extracted from the
+    /// <see cref="AppendBatchAsync"/> body so the per-entry encode hot path is
+    /// callable from the bench host in-process without going through the Azure
+    /// SDK transaction surface. Exposed <c>internal</c> for that single
+    /// (bench-only) caller; production callers reach it through
+    /// <see cref="AppendBatchAsync"/>.
+    /// </summary>
+    internal void EncodeEntriesForBatch(
+        string partitionKey,
+        IReadOnlyList<WalEntry> entries,
+        List<TableTransactionAction> actions)
+    {
         for (var i = 0; i < entries.Count; i++)
         {
             actions.Add(new TableTransactionAction(
                 TableTransactionActionType.Add,
                 BuildEntryEntity(partitionKey, entries[i])));
         }
-
-        await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

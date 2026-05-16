@@ -1,5 +1,6 @@
 using System.Globalization;
 using BenchmarkDotNet.Attributes;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -8,7 +9,9 @@ using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Storage.AzureTable;
 using Orleans.Runtime;
+using Orleans.Serialization;
 using Orleans.Timers;
 
 namespace Orleans.Lattice.Benchmark.Microbench;
@@ -425,6 +428,7 @@ public class LatticeMicroBenchmarks
         BuildAtomicFanoutTree();
         BuildAtomicConcurrentBatches();
         BuildAtomicReadFixture();
+        BuildWalEncodeFixture();
 
         // Last step in setup: open the optional EventPipe profile session.
         // We do this AFTER seeding so the multi-thousand pre-seed writes
@@ -1357,5 +1361,137 @@ public class LatticeMicroBenchmarks
         }
         Console.Error.WriteLine($"[microbench] invalid {name} value: {value}");
         return fallback;
+    }
+
+    // ===== WAL Azure-Table encode-batch instrument =====
+    // Drives Orleans.Lattice.Storage.AzureTable.AzureTableWalStorageProvider's
+    // per-entry encode loop in-process, without going through TableClient
+    // or the Azurite endpoint. The benchmark exercises the exact code path
+    // AppendBatchAsync runs between batch validation and the
+    // SubmitTransactionAsync await: one Serializer<LatticeMutation>.Serialize
+    // call into an ArrayBufferWriter<byte>, one WrittenSpan.ToArray, and
+    // one AzureTableWalEntity construction per WalEntry. This is the
+    // allocation-shaped hot path for any future pooled-writer optimisation
+    // on the WAL provider.
+    //
+    // Method-Provider seam: the bench reaches the loop through the
+    // internal helper EncodeEntriesForBatch, exposed via the provider's
+    // InternalsVisibleTo on this assembly. The List<TableTransactionAction>
+    // is freshly allocated per invocation (mirroring AppendBatchAsync)
+    // and is excluded from the measurement only inasmuch as BDN reports
+    // total bytes-per-op; the per-entry allocations are what dominate.
+    //
+    // Parameter sweep: 1, 10, 50, 99 entries. Azure Tables caps a single
+    // partition transaction at 100 actions and the provider reserves one
+    // for the HEAD sentinel, so 99 is the maximum legal entry batch.
+    private AzureTableWalStorageProvider _walProvider = null!;
+    private WalEntry[] _walEncodeEntries = null!;
+    private string _walEncodePartitionKey = null!;
+
+    private void BuildWalEncodeFixture()
+    {
+        // Build a self-contained ServiceProvider that exposes the Orleans
+        // Serializer<LatticeMutation> the provider needs. The rest of the
+        // microbench setup uses NSubstitute mocks for grain seams, but
+        // the WAL encode path does not touch IGrainFactory - only the
+        // serializer - so a minimal AddSerializer() container is enough.
+        var sp = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddSerializer()
+            .BuildServiceProvider();
+        var serializer = (Serializer<LatticeMutation>)sp.GetService(typeof(Serializer<LatticeMutation>))!;
+
+        var options = Microsoft.Extensions.Options.Options.Create(new AzureTableWalStorageOptions
+        {
+            // The encode path never inspects ConnectionString / TableName -
+            // those are only touched by EnsureTableAsync. Setting a benign
+            // value here keeps the option validator from complaining.
+            ConnectionString = "UseDevelopmentStorage=true",
+            TableName = "BenchEncodeProbe",
+        });
+        _walProvider = new AzureTableWalStorageProvider(options, serializer);
+
+        const int MaxEntries = 99;
+        var valueBytes = ReadIntEnv("BENCH_MICROBENCH_VALUE_BYTES", 128);
+        var payload = new byte[valueBytes];
+        for (var i = 0; i < payload.Length; i++)
+        {
+            payload[i] = (byte)(i & 0xFF);
+        }
+
+        _walEncodeEntries = new WalEntry[MaxEntries];
+        var hlc = HybridLogicalClock.Zero;
+        for (var i = 0; i < MaxEntries; i++)
+        {
+            hlc = HybridLogicalClock.Tick(hlc);
+            var mutation = new LatticeMutation
+            {
+                TreeId = "wal-encode-bench",
+                Kind = MutationKind.Set,
+                Key = "k-" + i.ToString("D6", CultureInfo.InvariantCulture),
+                Value = payload,
+                Timestamp = hlc,
+                IsTombstone = false,
+                ExpiresAtTicks = 0L,
+                OriginClusterId = "microbench-source",
+                Category = MutationCategory.User,
+                TransactionId = Guid.Empty,
+                AtomicBatchSize = 0,
+                AtomicBatchIndex = 0,
+                IsPrepared = false,
+                ShardIndex = 0,
+                IsBackstop = false,
+                AtomicShardCount = 0,
+                IsMerge = false,
+            };
+            _walEncodeEntries[i] = new WalEntry { Offset = i, Mutation = mutation };
+        }
+
+        _walEncodePartitionKey = AzureTableWalStorageProvider.BuildPartitionKey("wal-encode-bench", 0);
+    }
+
+    /// <summary>
+    /// Drives <see cref="AzureTableWalStorageProvider.EncodeEntriesForBatch"/>
+    /// over a pre-built <see cref="WalEntry"/> array of length
+    /// <paramref name="entryCount"/>. Each invocation encodes the same
+    /// pre-built entries into a fresh
+    /// <c>List&lt;TableTransactionAction&gt;</c>, so the measurement
+    /// surfaces:
+    /// <list type="bullet">
+    ///   <item>The Orleans Serializer&lt;LatticeMutation&gt; allocation per entry (currently a fresh <c>ArrayBufferWriter&lt;byte&gt;</c>).</item>
+    ///   <item>The <c>WrittenSpan.ToArray()</c> copy per entry.</item>
+    ///   <item>The <c>AzureTableWalEntity</c> object construction per entry.</item>
+    ///   <item>The <c>TableTransactionAction</c> wrapper construction per entry.</item>
+    /// </list>
+    /// Pre-iteration setup (the entries array, the partition key, the
+    /// serializer) is built once in <see cref="GlobalSetup"/> so the
+    /// reported alloc-bytes/op are dominated by the per-entry encode
+    /// pattern rather than fixture costs.
+    /// </summary>
+    [Benchmark(Description = "WAL encode batch (Azure Table)")]
+    [Arguments(1)]
+    [Arguments(10)]
+    [Arguments(50)]
+    [Arguments(99)]
+    public List<global::Azure.Data.Tables.TableTransactionAction> EncodeWalBatch_AzureTable(int entryCount)
+    {
+        // Slice to the parameterised batch size. ArraySegment<T> avoids an
+        // allocation here and IReadOnlyList<WalEntry> is satisfied because
+        // the encode helper accepts the interface. However the helper is
+        // typed against IReadOnlyList<WalEntry>; ArraySegment<T> does not
+        // implement that directly, so use the simpler approach of passing
+        // a freshly-allocated array view via the array's segment-as-list
+        // wrapper. The cheapest and most explicit option here is a
+        // pre-sized List<WalEntry> built once per call - the cost is
+        // captured by the measurement and is what the production
+        // AppendBatchAsync caller pays today (it receives an
+        // IReadOnlyList<WalEntry> from the WAL grain).
+        var slice = new List<WalEntry>(entryCount);
+        for (var i = 0; i < entryCount; i++)
+        {
+            slice.Add(_walEncodeEntries[i]);
+        }
+        var actions = new List<global::Azure.Data.Tables.TableTransactionAction>(entryCount + 1);
+        _walProvider.EncodeEntriesForBatch(_walEncodePartitionKey, slice, actions);
+        return actions;
     }
 }
