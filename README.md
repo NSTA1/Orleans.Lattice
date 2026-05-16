@@ -1,14 +1,14 @@
 # Orleans.Lattice
 
-A distributed [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree) library built on [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/) - a sorted, durable key-value store that runs entirely as a set of Orleans grains.
-
 ![CI](https://github.com/NSTA1/Orleans.Lattice/actions/workflows/ci.yml/badge.svg)
 ![Publish](https://github.com/NSTA1/Orleans.Lattice/actions/workflows/publish.yml/badge.svg)
 [![NuGet](https://img.shields.io/nuget/v/Orleans.Lattice)](https://www.nuget.org/packages/Orleans.Lattice)
 
 ## What is it?
 
-Orleans.Lattice is a **sorted, durable, horizontally-scalable key-value store** embedded in your Orleans cluster. Keys are `string`, values are `byte[]`, and typed-value helpers layer automatic serialization on top. No external database, no coordinator service, no external queue.
+Orleans.Lattice is a **sorted, durable, horizontally-scalable key-value store** embedded in your Orleans cluster.
+
+Keys are `string`, values are `byte[]`, and typed-value helpers layer automatic serialization on top. No external database, no coordinator service, no external queue.
 
 It supports:
 
@@ -18,9 +18,9 @@ It supports:
 - Bulk loading from one-shot batches or streaming `IAsyncEnumerable` sources.
 - Durable, resumable cursors that survive silo failovers and client restarts.
 - Online resize, online reshard, and online snapshots (offline mode also available).
-- Soft delete with a configurable retention window, and undo of resize/snapshot within the window.
+- Soft delete with a configurable retention window, and undo of resize within the window.
 - Per-tree event stream, diagnostics, and `System.Diagnostics.Metrics` instruments.
-- Optional cross-cluster replication via the sibling [`Orleans.Lattice.Replication`](src/lattice.replication/roadmap.md) package.
+- Optional cross-cluster replication via the sibling [`Orleans.Lattice.Replication`](docs/lattice.replication/replication.md) package.
 
 The name comes from its use of **lattice-based state primitives** - mathematical structures where merges are commutative, associative, and idempotent - which is what makes the system conflict-free and recoverable without distributed locks or consensus.
 
@@ -42,13 +42,13 @@ Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos
 | **Atomic writes** | `SetManyAtomicAsync` provides all-or-nothing semantics across multiple keys - locally, across shards, and across replicating clusters. No reader ever observes a partial-set state. | [Atomic Writes](docs/lattice/atomic-writes.md) |
 | **Bulk loading** | One-shot bottom-up build or streaming `IAsyncEnumerable` ingestion. Idempotent and retryable. | [Bulk Loading](docs/lattice/bulk-loading.md) |
 | **Conflict-free merges** | Concurrent writes converge deterministically. | [State Primitives](docs/lattice/state-primitives.md) |
-| **Cross-cluster replication** | Active-active replication between Orleans clusters. Any cluster can write to any tree; concurrent updates converge deterministically, and atomic multi-key writes remain all-or-nothing on every peer. | [Replication](docs/lattice.replication/replication.md) |
+| **Cross-cluster replication** | Active-active replication between Orleans clusters. Any cluster can write to any tree; concurrent updates converge deterministically, and atomic multi-key writes remain all-or-nothing on every peer. **Currently pending productionisation, do not ship to production.** | [Replication](docs/lattice.replication/replication.md) |
 | **Diagnostics** | `DiagnoseAsync` returns a per-tree health snapshot: per-shard depth, live keys, tombstones, hotness, and recent splits. | [Diagnostics](docs/lattice/diagnostics.md) |
 | **Durable cursors** | Server-checkpointed iterators that survive silo failovers, client restarts, and topology changes. Resume from the last yielded key automatically. | [Durable Cursors](docs/lattice/durable-cursors.md) |
 | **Events** | Per-tree `LatticeTreeEvent` Orleans stream with operation-id correlation. | [Events](docs/lattice/events.md) |
 | **Fast reads** | Per-silo read cache served via delta replication from the primary leaf. | [Read Caching](docs/lattice/caching.md) |
 | **Fault-tolerant** | Validated end-to-end against parametrised fault injection. | [Chaos Tests](docs/lattice/chaos-tests.md) |
-| **Metrics** | `System.Diagnostics.Metrics` instruments published on the `orleans.lattice` meter, with OpenTelemetry registration. | [Metrics](docs/lattice/metrics.md) |
+| **Metrics** | `System.Diagnostics.Metrics` instruments published on the `orleans.lattice` meter, ready for OpenTelemetry subscription. | [Metrics](docs/lattice/metrics.md) |
 | **Online reshard** | Grow-only online migration of the physical shard count. | [Online Reshard](docs/lattice/online-reshard.md) |
 | **Projection rebuild** | Cross-silo divergence detection with policy-driven recovery. | [Projection Rebuild](docs/lattice/projection-rebuild.md) |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on a live tree, undoable within the retention window. | [Tree Sizing](docs/lattice/tree-sizing.md) |
