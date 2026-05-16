@@ -167,4 +167,88 @@ public class ShardMapTests
         var map = new ShardMap { Slots = new int[16] };
         Assert.That(map.VirtualShardCount, Is.EqualTo(16));
     }
+
+    [Test]
+    public void GetOrCreateDefaultShared_returns_same_instance_for_same_key()
+    {
+        // The shared cache is keyed by (virtualShardCount, physicalShardCount).
+        // Two calls with the same key must return the same reference so the
+        // ten ?? fallback callsites stop allocating a fresh 16 KB int[] per call.
+        var a = ShardMap.GetOrCreateDefaultShared(4096, 4);
+        var b = ShardMap.GetOrCreateDefaultShared(4096, 4);
+        Assert.That(b, Is.SameAs(a));
+    }
+
+    [Test]
+    public void GetOrCreateDefaultShared_returns_distinct_instances_for_distinct_keys()
+    {
+        var a = ShardMap.GetOrCreateDefaultShared(4096, 4);
+        var bDifferentPhysical = ShardMap.GetOrCreateDefaultShared(4096, 8);
+        var cDifferentVirtual = ShardMap.GetOrCreateDefaultShared(2048, 4);
+        Assert.That(bDifferentPhysical, Is.Not.SameAs(a));
+        Assert.That(cDifferentVirtual, Is.Not.SameAs(a));
+        Assert.That(cDifferentVirtual, Is.Not.SameAs(bDifferentPhysical));
+    }
+
+    [Test]
+    public void GetOrCreateDefaultShared_returns_identity_map_with_zero_version()
+    {
+        // The cached map must be functionally identical to a CreateDefault map:
+        // Version 0, modulo-physical-count slots, matching VirtualShardCount.
+        var map = ShardMap.GetOrCreateDefaultShared(8, 4);
+        Assert.That(map.Version, Is.EqualTo(0L));
+        Assert.That(map.VirtualShardCount, Is.EqualTo(8));
+        Assert.That(map.Slots, Is.EqualTo(new[] { 0, 1, 2, 3, 0, 1, 2, 3 }));
+    }
+
+    [Test]
+    public void GetOrCreateDefaultShared_shares_memoised_physical_shard_indices()
+    {
+        // Bonus property: because the cache shares the instance, the lazy
+        // GetPhysicalShardIndices() result is computed once and observed by
+        // every subsequent caller. This is a positive side-effect of the cache
+        // and amortises the bool-bitmap dedup walk.
+        var first = ShardMap.GetOrCreateDefaultShared(4096, 16);
+        var firstIndices = first.GetPhysicalShardIndices();
+        var second = ShardMap.GetOrCreateDefaultShared(4096, 16);
+        var secondIndices = second.GetPhysicalShardIndices();
+        Assert.That(secondIndices, Is.SameAs(firstIndices));
+    }
+
+    [Test]
+    public void GetOrCreateDefaultShared_throws_when_virtual_count_not_positive()
+    {
+        Assert.That(
+            () => ShardMap.GetOrCreateDefaultShared(virtualShardCount: 0, physicalShardCount: 1),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public void GetOrCreateDefaultShared_throws_when_physical_count_not_positive()
+    {
+        Assert.That(
+            () => ShardMap.GetOrCreateDefaultShared(virtualShardCount: 8, physicalShardCount: 0),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public void GetOrCreateDefaultShared_throws_when_virtual_less_than_physical()
+    {
+        Assert.That(
+            () => ShardMap.GetOrCreateDefaultShared(virtualShardCount: 4, physicalShardCount: 8),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void CreateDefault_still_returns_distinct_instances_for_mutating_callers()
+    {
+        // The ?? fallback callsites use GetOrCreateDefaultShared; the
+        // mutating callsite (TreeReshardGrain's empty-tree fast-path)
+        // must still receive a fresh, writable map from CreateDefault so a
+        // downstream SetShardMapAsync (which mutates Version) cannot
+        // corrupt a cached instance.
+        var a = ShardMap.CreateDefault(4096, 4);
+        var b = ShardMap.CreateDefault(4096, 4);
+        Assert.That(b, Is.Not.SameAs(a));
+    }
 }

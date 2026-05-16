@@ -136,7 +136,7 @@ internal sealed class TreeShardSplitGrain(
         var resolved = await optionsResolver.ResolveAsync(TreeId);
 
         var currentMap = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
 
         // Find virtual slots currently owned by the source shard.
         var ownedSlots = new List<int>();
