@@ -65,13 +65,83 @@ faster export today can register their own `ISnapshotProvider` via DI.
 On a receiver whose local tree is empty (e.g. a fresh cluster joining
 an existing federation), the default `LatticeSnapshotProvider` yields
 zero entries because it reads the receiver's own tree rather than the
-sender's. The scoped
+sender's. The "Cross-cluster transport contract" section below
+documents the `IRemoteSnapshotTransport` abstraction a cross-cluster
+`ISnapshotProvider` adapter draws from. The scoped
 [`roadmap-cross-cluster-bootstrap.md`](../../src/lattice.replication/roadmap-cross-cluster-bootstrap.md)
-tracks the transport contract, sender-side handler, receiver-side
-adapter, and gRPC binding required to close that gap; until those
-items land, multi-cluster federations must seed the receiver out of
-band or register a custom `ISnapshotProvider` that pulls from the
-remote sender.
+tracks the remaining sender-side handler, receiver-side adapter, and
+gRPC binding required to wire the contract end-to-end; until those
+items land, multi-cluster federations must register a custom
+`ISnapshotProvider` (typically backed by an `IRemoteSnapshotTransport`
+implementation) or seed the receiver out of band.
+
+## Cross-cluster transport contract
+
+The first step of the cross-cluster bootstrap pipeline is the
+transport-shaped seam that delivers a snapshot stream from a sender
+cluster to a receiver cluster. It is a separate abstraction from the
+live-incremental `IReplicationTransport` so a host can plug a different
+binding for the bulk snapshot path (HTTP, blob-store, gRPC) without
+disturbing the live tail pipeline.
+
+| Type | Shape | Purpose |
+|------|-------|---------|
+| `IRemoteSnapshotTransport` | `Task<RemoteSnapshotMetadata> GetMetadataAsync(string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken ct)` + `IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync(string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken ct)` | Transport-shaped sub-interface used by a cross-cluster `ISnapshotProvider` adapter to fetch a snapshot from a sender cluster. |
+| `RemoteSnapshotMetadata` | `readonly record struct` with `TreeName`, `SourceClusterId`, `AsOfHlc`, `CausalStableFrontier` | Snapshot cut-point captured atomically with the start of the entry stream; alias `olr.sm`. |
+
+### Semantics
+
+- **Two RPCs, one cut-point.** The receiver invokes `GetMetadataAsync`
+  first to capture the sender's cut-point, then invokes
+  `RequestSnapshotAsync` with the same `treeName` /
+  `sourceClusterId` / `fromAsOfHlc` tuple to drain the stream. The
+  metadata RPC returns the `(AsOfHlc, CausalStableFrontier)` pair the
+  receiver pins on `IReplicationHighWaterMarkGrain.PinSnapshotAsync`
+  before the drain begins, so the snapshot/incremental handoff stays
+  exactly-once even though metadata and stream travel on separate
+  calls.
+- **Point-in-time view.** Implementations MUST guarantee that entries
+  committed on the sender after the metadata cut-point do not leak
+  into the corresponding stream call. Receivers treat the stream as a
+  point-in-time view at `metadata.AsOfHlc`; a moving-target stream
+  would violate the cut-point pin and break the causal-stable handoff
+  of the first incremental entry.
+- **Concurrency.** Implementations are safe to invoke concurrently
+  across distinct `(treeName, sourceClusterId)` pairs. Concurrent
+  invocation against the same pair is implementation-defined;
+  receivers serialise per pair through the bootstrap coordinator.
+- **Argument validation.** Both methods throw `ArgumentException`
+  when `treeName` or `sourceClusterId` is null or whitespace-only.
+- **Atomic-batch coordination is deferred.** The metadata DTO
+  intentionally omits prepared-transaction state. Reconstructing
+  receiver-side prepared-tx visibility across a cross-cluster
+  bootstrap is tracked as a follow-on; until it lands, a producer
+  running an in-flight multi-key transaction concurrent with a
+  cross-cluster bootstrap may deliver a split view to the
+  bootstrapping peer.
+
+### Contract test fixture
+
+Implementations import `RemoteSnapshotTransportContractTests` from
+the replication test project and derive a concrete fixture overriding
+`CreateTransportAsync` to plug the transport in front of a
+sender-side `StubSenderSnapshotProvider`. The inherited acceptance
+suite pins:
+
+- `GetMetadataAsync` returns `treeName` / `sourceClusterId` /
+  `AsOfHlc` / `CausalStableFrontier` matching the staged sender
+  snapshot.
+- `RequestSnapshotAsync` streams every staged entry verbatim.
+- `RequestSnapshotAsync` yields an empty stream when the sender has
+  no entries.
+- Metadata-then-stream is consistent under concurrent sender writes:
+  entries staged after the metadata cut-point do not leak.
+- `ArgumentException` invariants hold for both RPCs.
+- The stream observes cancellation tokens during enumeration.
+
+The exemplar `InMemoryRemoteSnapshotTransport` in the replication
+test project wraps a local `ISnapshotProvider` and is the smallest
+reference shape for what a wire-bound implementation must preserve.
 
 ## Sample usage
 

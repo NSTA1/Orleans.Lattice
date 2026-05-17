@@ -141,7 +141,7 @@ below.
 
 ## 3. Proposed features (priority + dependency order)
 
-- [ ] **R-150 - Cross-cluster `ISnapshotProvider` transport contract** *(no deps)*
+- [x] **R-150 ✓ shipped - Cross-cluster `ISnapshotProvider` transport contract** *(no deps)*
 
   Define the transport-shaped sub-interface that delivers a snapshot
   stream from a sender cluster to a receiver cluster. Pure abstraction
@@ -208,7 +208,7 @@ below.
 
 ---
 
-- [ ] **R-151 - Sender-side snapshot service handler** *(deps: R-150)*
+- [ ] **R-151 - Sender-side snapshot service handler** *(deps: R-150 ✓)*
 
   A service registered on the *sender* silo that responds to inbound
   `IRemoteSnapshotTransport.RequestSnapshotAsync` calls by invoking the
@@ -231,7 +231,7 @@ below.
 
 ---
 
-- [ ] **R-152 - Receiver-side `RemoteSnapshotProvider` adapter** *(deps: R-150, R-151)*
+- [ ] **R-152 - Receiver-side `RemoteSnapshotProvider` adapter** *(deps: R-150 ✓, R-151)*
 
   An `ISnapshotProvider` implementation that hosts can register *before*
   `AddLatticeReplication` to override the local-tree default. It calls
@@ -334,7 +334,7 @@ below.
 
 ---
 
-- [ ] **R-154 - gRPC binding for `IRemoteSnapshotTransport`** *(deps: R-150, R-151, R-153 ✓)*
+- [ ] **R-154 - gRPC binding for `IRemoteSnapshotTransport`** *(deps: R-150 ✓, R-151, R-153 ✓)*
 
   Concrete `IRemoteSnapshotTransport` implementation in
   `Orleans.Lattice.Replication.Grpc`, mirroring the existing
