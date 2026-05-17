@@ -143,6 +143,45 @@ The exemplar `InMemoryRemoteSnapshotTransport` in the replication
 test project wraps a local `ISnapshotProvider` and is the smallest
 reference shape for what a wire-bound implementation must preserve.
 
+### Sender-side handler
+
+`LatticeRemoteSnapshotService` is the canonical sender-side
+implementation of `IRemoteSnapshotTransport`. It is registered as a
+singleton by `AddLatticeReplication` and is the seam concrete bindings
+(gRPC, in-process loopback, custom HTTP) delegate to when an inbound
+metadata/stream RPC arrives on a producer silo. The handler is
+deliberately binding-agnostic: the same instance is shared across every
+concrete binding the host registers.
+
+| Type | Purpose |
+|------|---------|
+| `LatticeRemoteSnapshotService` | Sender-side `IRemoteSnapshotTransport` handler. Validates routing arguments, invokes the local `ISnapshotProvider`, and returns the resulting cut-point metadata or streams the resulting entries. Stateless and safe for concurrent invocation across distinct `(treeName, sourceClusterId)` pairs. |
+
+#### Semantics
+
+- **Delegation to the local provider.** `GetMetadataAsync` calls
+  `ISnapshotProvider.ExportAsync(treeName, fromAsOfHlc, ct)` and
+  returns a `RemoteSnapshotMetadata` carrying the resulting
+  `SnapshotStream.AsOfHlc` and `CausalStableFrontier`. A paired
+  `RequestSnapshotAsync` call invokes `ExportAsync` again with the
+  same `fromAsOfHlc` filter and drains `SnapshotStream.Entries`.
+- **Point-in-time view.** The canonical `LatticeSnapshotProvider`
+  reads the producer's causal-stable frontier once at the start of
+  the export and applies the receiver-supplied `fromAsOfHlc` filter
+  at entry-emission time. Writes committed on the sender after the
+  metadata cut-point are excluded from the matching stream call by
+  the per-entry HLC filter, so the stream remains a point-in-time
+  view at `metadata.AsOfHlc` even though the metadata RPC and the
+  stream RPC are separate calls.
+- **Host-replaceable provider.** Hosts that register a custom
+  `ISnapshotProvider` (for example, a storage-backend-aware export)
+  drive the handler through the standard DI seam: replacing the
+  provider replaces what `LatticeRemoteSnapshotService` exports, no
+  per-binding configuration change required. A custom provider must
+  preserve the point-in-time semantics above; otherwise the
+  cross-cluster bootstrap may lose entries committed during the
+  drain window.
+
 ## Sample usage
 
 ```csharp verify

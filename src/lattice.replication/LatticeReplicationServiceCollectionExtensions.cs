@@ -62,11 +62,17 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<IChangeFeed, ChangeFeed>();
 
         builder.Services.TryAddSingleton<ISnapshotProvider, LatticeSnapshotProvider>();
+        // Sender-side handler for IRemoteSnapshotTransport. Registered as
+        // a singleton so the concrete cross-cluster bindings (gRPC,
+        // in-process loopback, custom HTTP) can resolve it directly and
+        // delegate their inbound metadata/stream RPCs to the local
+        // ISnapshotProvider without duplicating the contract-level
+        // argument validation or the cut-point semantics.
+        builder.Services.TryAddSingleton<LatticeRemoteSnapshotService>();
         builder.Services.TryAddSingleton<ILatticeBootstrapCoordinator, LatticeBootstrapCoordinator>();
         builder.Services.TryAddSingleton<ILatticeWalIntrospection, LatticeWalIntrospection>();
         builder.Services.TryAddSingleton<ILatticeFallOffLogDetector, LatticeFallOffLogDetector>();
         builder.Services.TryAddSingleton<ILatticeReplicationAdmin, LatticeReplicationAdmin>();
-
         // Register the canonical applier as a concrete singleton so the
         // dead-letter tracking decorator and the inspection seam can
         // both share the exact same activation. The IReplicationApplier
