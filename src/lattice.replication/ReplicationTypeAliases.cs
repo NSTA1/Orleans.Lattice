@@ -78,6 +78,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.SnapshotEntry"/>.</summary>
     internal const string SnapshotEntry = "olr.se";
 
+    /// <summary>Alias for <see cref="Replication.RemoteSnapshotMetadata"/>.</summary>
+    internal const string RemoteSnapshotMetadata = "olr.sm";
+
     /// <summary>Alias for the per-tree bootstrap coordinator grain interface.</summary>
     internal const string ILatticeBootstrapCoordinatorGrain = "olr.gb";
 
