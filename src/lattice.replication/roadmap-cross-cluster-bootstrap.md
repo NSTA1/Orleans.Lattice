@@ -17,9 +17,10 @@ to the resolved entries.
 Items use a fresh `R-15X` numbering block to avoid collision with the
 existing `R-050`–`R-093` snapshot/bootstrap items and the in-flight
 `R-094`–`R-104` atomic-batch / WAL-GC items in the canonical roadmap.
-**Item ordering is topological:** prerequisite items always have a lower
-`R-1NN` number than the items that depend on them, so the implementation
-order is the same as the numeric order.
+Numeric ids are assigned in roughly the order the items were drafted; the
+authoritative implementation order is the sequencing chain in §5, not the
+numeric order (in particular `R-158` sequences ahead of `R-154` because
+`R-158` is a silent-correctness gate on first-payload-over-the-wire).
 
 ---
 
@@ -35,15 +36,32 @@ The default `ISnapshotProvider` registered by `AddLatticeReplication`
 (`LatticeSnapshotProvider`) reads the **local** tree:
 
 ```csharp
-// src/lattice.replication/LatticeSnapshotProvider.cs (~line 60)
-await foreach (var entry in _grainFactory
-    .GetGrain<ILattice>(treeName)
-    .EntriesAsync(default, default, ct)
-    .WithCancellation(ct))
+// src/lattice.replication/LatticeSnapshotProvider.cs (EnumerateAsync)
+var lattice = _grainFactory.GetGrain<ILattice>(treeName);
+await foreach (var pair in lattice
+    .EntriesAsync(cancellationToken: cancellationToken)
+    .ConfigureAwait(false))
 {
-    yield return new SnapshotEntry(entry.Key, entry.Value, ...);
+    var versioned = await lattice
+        .GetWithVersionAsync(pair.Key, cancellationToken)
+        .ConfigureAwait(false);
+    if (versioned.Value is null) continue;             // tombstoned mid-scan
+    if (hasUpperBound && versioned.Version > asOfHlc) continue;
+    yield return new SnapshotEntry
+    {
+        Key = pair.Key,
+        Value = versioned.Value,
+        Timestamp = versioned.Version,
+    };
 }
 ```
+
+Note the per-entry `GetWithVersionAsync` round-trip: the snapshot entry's
+`Timestamp` is the commit-time HLC recovered from a second RPC, not from
+the `EntriesAsync` enumeration. The sender-side handler in `R-151` must
+preserve that two-call shape (or expose a faster bulk equivalent), or
+the shipped entry's `Timestamp` will fall back to `default(HybridLogicalClock)`
+and the receiver's `PinSnapshotAsync` cut will be wrong.
 
 This is correct for the *intra-cluster* snapshot-as-a-tool path
 (`R-093 ✓ shipped`: an operator snapshots a tree, restores it later in
@@ -152,16 +170,31 @@ below.
   of the stream so the receiver can `PinSnapshotAsync` correctly without
   requiring the sender to embed cut-point markers inside the entry stream.
 
-  **Forward-compat with `R-102` (atomic-batch saga blacklist).** If
-  `R-102` has shipped before this item lands, `RemoteSnapshotMetadata`
-  also carries the snapshot's `SagaBlacklist` (the set of in-progress
-  saga `transactionId`s the sender excluded from the entry stream when
-  the snapshot-saga-quiesce timeout elapsed). Reserve the field on the
-  metadata DTO and on the wire format (`R-154`) up front so the
-  cross-cluster transport never silently drops the blacklist; if `R-102`
-  ships after this item, the field is empty until then. The receiver's
-  state machine (`R-051 ✓ shipped`) records the blacklist on
-  `BootstrapCoordinatorState` per `R-102`'s contract.
+  **Atomic-batch coordination is deferred.** Earlier drafts of this item
+  reserved a `SagaBlacklist` slot on the metadata DTO for forward-compat
+  with the staging-buffer + quiesce-timeout shape originally proposed in
+  the canonical `R-102` retrospective. That shape (`IReplicationTxBufferGrain`,
+  `AtomicBatchDelivery`, `SnapshotSagaQuiesceTimeout`, per-saga blacklist)
+  has since been **retired**: `test/lattice/DeletionMandateHygieneTests.cs`
+  lists those identifiers as `DoomedIdentifiers` and fails the build if
+  they reappear anywhere under `src/` or `test/`. The replacement
+  universal-visibility primitive lands per-leaf (`_pendingTx`) and is
+  surfaced through the receiver wire seams `ApplyPreparedSetAsync`,
+  `ApplyPreparedDeleteAsync`, and `ApplyTxTerminalAsync` on
+  `IReplicationApplyGrain`. How that primitive interacts with a
+  cross-cluster bootstrap drain (in particular, what producer-side
+  transactions are mid-prepare when `ExportAsync` is invoked, and how
+  the receiver-side prepared state is reconstructed during snapshot apply)
+  is **not yet a defined contract** in either the canonical roadmap or
+  this scoped one. Rather than reserve a metadata slot whose semantics
+  are unknown, this item ships without atomic-batch coordination; a
+  follow-up item must define the bootstrap/atomic-visibility handoff
+  against the actual `ITxRegistryGrain` + `_pendingTx` shape before any
+  prepared-transaction metadata is added to `RemoteSnapshotMetadata` or
+  to the `R-154` wire format. Until then, a producer running an in-flight
+  multi-key transaction concurrent with a cross-cluster bootstrap may
+  deliver a split view to the bootstrapping peer: this is a known
+  limitation, not silently masked.
 
   `IRemoteSnapshotTransport` is a separate seam from `IReplicationTransport`
   (which today carries live-incremental push only). Keeping them split
@@ -225,11 +258,38 @@ below.
   }
   ```
 
-  The `IRemoteSnapshotPeerResolver` indirection is required because the
-  receiver-side state machine knows the *tree* it is bootstrapping but
-  not the *cluster id* of the canonical sender; that mapping is a host
-  deployment concern (one peer per tree in a hub-spoke topology, multiple
-  peers in a mesh) and must not be hard-coded into the package.
+  The `IRemoteSnapshotPeerResolver` indirection is shown above as one
+  way to recover the sender cluster id from the tree name, on the
+  assumption that `ISnapshotProvider.ExportAsync` cannot itself receive
+  the cluster id. That assumption is **worth re-examining before this
+  item lands**: the receiver-side coordinator already has the value in
+  hand on `BootstrapCoordinatorState.SourceClusterId`
+  (`LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync` reads it at
+  `state.State.SourceClusterId` before calling `_snapshotProvider.ExportAsync`).
+  Two implementation shapes are therefore viable, and the choice must be
+  made up front because it determines `R-150`'s contract:
+
+  - **Resolver indirection (sketched above).** `ISnapshotProvider.ExportAsync`
+    keeps its current `(treeName, asOfHlc, ct)` shape; `RemoteSnapshotProvider`
+    injects `IRemoteSnapshotPeerResolver` to recover the sender id. Pro:
+    no change to the public `ISnapshotProvider` surface. Con: hosts must
+    keep the resolver and `LatticeReplicationOptions.ReplicationPeers` in
+    sync; resolver indirection is invisible to the coordinator that
+    already has the value.
+  - **Contract widening.** Add an overload
+    `ExportAsync(treeName, sourceClusterId, asOfHlc, ct)` to `ISnapshotProvider`
+    (default-impl delegates to the existing overload, ignoring the new
+    arg) and have `LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync`
+    call the new overload, passing `state.State.SourceClusterId` directly.
+    Pro: removes the resolver DI requirement and the
+    tree-to-peer-mapping-out-of-sync failure mode; the intra-cluster
+    `LatticeSnapshotProvider` simply ignores the new arg. Con: additive
+    public API surface on a v1-shipped interface.
+
+  Recommendation pending: contract widening is the smaller-blast-radius
+  shape because it eliminates a class of misconfiguration entirely and
+  the additive overload is non-breaking. Settle this before `R-150`
+  freezes.
 
   Listed as depending on `R-151` (not just `R-150`) because the
   acceptance suite below round-trips against the real sender-side
@@ -312,31 +372,44 @@ below.
 
 ---
 
-- [ ] **R-155 - Auto-bootstrap rate limit + concurrency floor** *(no new deps; refines `R-051 ✓ shipped` / `R-052 ✓ shipped`)*
+- [ ] **R-155 - Auto-bootstrap fall-off observability under coordinator absorption** *(no new deps; refines `R-051 ✓ shipped` / `R-052 ✓ shipped`)*
 
   Independent of the transport work but observable only once the transport
   work lands. Today `LatticeFallOffLogDetector.CheckAndTriggerAsync`
-  delegates idempotent kickoff to `ILatticeBootstrapCoordinator`
-  (per-tree, per-source-cluster mutex via grain activation) - but a
-  malformed `senderOldestAvailableHlc` source could trigger a fall-off
-  detection on every probe. In the current pre-transport state this
-  manifests as the harmless infinite-no-op loop seen in the
-  `MultiSiteManufacturing` sample. Once payload starts flowing it becomes
-  a real problem: a still-draining bootstrap is interrupted by a fresh
-  trigger that the coordinator absorbs as idempotent, but the metric
-  (`PeerFellOffLog`) inflates and operator alerts misfire.
+  unconditionally bumps `LatticeReplicationMetrics.PeerFellOffLog` and
+  emits a `LogWarning` (lines 62-69) **before** calling into
+  `ILatticeBootstrapCoordinator`, which already absorbs a duplicate
+  same-source kickoff at
+  `LatticeBootstrapCoordinatorGrain.TryInitiateBootstrapAsync` (the
+  in-progress branch at lines 120-132 returns without persisting any
+  state when the source cluster id matches). The coordinator-level
+  idempotency therefore makes the trigger semantically harmless, but
+  the detector-level metric and log fire on **every probe** while a
+  drain is in flight. In the current pre-transport state this manifests
+  as the harmless infinite-no-op loop seen in the `MultiSiteManufacturing`
+  sample. Once payload starts flowing it becomes a real problem: a
+  still-draining cross-cluster bootstrap may take minutes; every probe
+  during the drain re-bumps `PeerFellOffLog` and re-emits the warning,
+  inflating dashboards and misfiring operator alerts.
 
-  **Fix:** introduce a per-`(treeName, sourceClusterId)` minimum interval
-  on the *detector* (not the coordinator), default 30s, configurable via
-  `LatticeReplicationOptions.AutoBootstrapMinInterval`. Detector-side
-  suppression returns `BootstrapTriggered = false` and emits a new
-  `PeerFellOffLogSuppressed` counter so operators can tell "didn't
-  detect" from "detected and suppressed".
+  **Fix:** narrow the detector so it consults the coordinator's
+  `InProgress`-from-same-source state **before** bumping the metric and
+  emitting the warning. When the coordinator reports "already in progress
+  from `sourceClusterId`", the detector returns `BootstrapTriggered = true,
+  Suppressed = true` and emits a new `PeerFellOffLogSuppressed` counter
+  (so operators can distinguish "didn't detect" from "detected and
+  coordinator already running"); `PeerFellOffLog` is not double-counted
+  and the warning is downgraded to `Debug`. No new options or validator
+  needed - the coordinator's existing per-tree single activation is the
+  authoritative rate-limit, and this item is purely the
+  observability-side fix that makes the existing idempotency visible to
+  metrics consumers.
 
-  **Acceptance:** detector unit tests (within-window suppressed, after-window
-  honoured, per-tree + per-source independence, `TimeSpan.Zero` disables
-  suppression entirely). New options + validator (negative rejected,
-  zero allowed, positive allowed). New metric.
+  **Acceptance:** detector unit tests (`Suppressed = false` when no
+  drain is running, `Suppressed = true` when coordinator reports same-source
+  in-progress, `PeerFellOffLog` increments exactly once per drain cycle
+  across N probes within the drain, `PeerFellOffLogSuppressed` increments
+  on every suppressed probe).
 
 ---
 
@@ -395,7 +468,96 @@ below.
 
 ---
 
+- [ ] **R-158 - Bootstrap respects per-tree `LatticeMergeMode`** *(deps: R-152, R-153 ✓; sequence before R-154 ships payload)*
+
+  `LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync` constructs every
+  bootstrap-arrived `WalRecord` with `Mode = LatticeMergeMode.LwwRegister`
+  hardcoded (line 328 in the current source), regardless of the per-tree
+  merge mode configured on `LatticeReplicationOptions.ReplicatedTrees`
+  (`IReadOnlyDictionary<string, LatticeMergeMode>`, supporting `OrSet`,
+  `PnCounter`, and `LwwRegister`). In the current pre-transport state
+  the drain yields zero entries so the hardcode is invisible; the moment
+  cross-cluster bootstrap actually delivers payload (`R-154`), an
+  `OrSet`-mode tree on the receiver will merge incoming bootstrap entries
+  under LWW semantics - a silent CRDT-correctness regression.
+
+  **Fix:** resolve the merge mode from
+  `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName).ReplicatedTrees`
+  in `DrainSnapshotAsync` and stamp `WalRecord.Mode` from that lookup,
+  defaulting to `LatticeMergeMode.LwwRegister` when the tree is not
+  enumerated in `ReplicatedTrees` (preserves the current behaviour for
+  trees that bootstrap intra-cluster only).
+
+  **Sequencing rationale:** this is a one-line change today, but it must
+  land **before** `R-154` ships payload over the wire to avoid shipping
+  the silent-correctness window to operators on the same release as the
+  transport.
+
+  **Acceptance:** unit test that a `ReplicatedTrees[treeName] =
+  LatticeMergeMode.OrSet` configuration produces `WalRecord.Mode = OrSet`
+  in the records passed to `IReplicationApplier.ApplyAsync` during
+  `DrainSnapshotAsync`. Unit test that an unconfigured tree falls back
+  to `LwwRegister`. Existing bootstrap acceptance tests re-pass.
+
+---
+
+- [ ] **R-159 - Bootstrap drain resumes on transient transport faults** *(deps: R-154, R-156)*
+
+  `LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync` is wrapped in a
+  `try { ... } catch (Exception ex) { ... }` block (lines 205-260 of the
+  current source) that persists `Phase = Failed`, tears down the
+  keepalive reminder, and rethrows. Any exception from the snapshot
+  drain - including transient gRPC faults from a `RemoteSnapshotProvider`
+  built on `R-152` / `R-154` (typically `RpcException` with
+  `StatusCode.Unavailable` from a transient peer-side connection drop) -
+  therefore parks the bootstrap in `Failed` and requires operator
+  intervention via `ILatticeReplicationAdmin.ForceRequestSnapshotAsync`
+  (`R-157`) to retry.
+
+  For large cross-cluster trees over real networks this is the wrong
+  default: the existing per-origin HWM dedupe already makes a resumed
+  drain idempotent (the `CursorPersistEntryInterval = 100`-entry cursor
+  persistence at lines 342-346 caps the replay cost), so a bounded
+  auto-retry inside `DrainSnapshotAsync` is strictly cheaper than
+  surfacing every transient transport blip as a `Failed` phase.
+
+  **Fix:** introduce a transient-fault classification seam (initially:
+  `RpcException` with `StatusCode.Unavailable` / `DeadlineExceeded` /
+  `Cancelled-not-from-caller-ct` for the gRPC binding) and wrap the
+  drain with a bounded exponential-backoff retry inside the
+  `ApplyingSnapshot` phase, configurable via existing
+  `BoundedExponentialRetryPolicyOptions` style. Non-transient faults
+  (`InvalidOperationException`, schema mismatches, applier-level DLQ
+  exhaustion) still pivot to `Failed` as today.
+
+  **Acceptance:** unit tests with a stub `ISnapshotProvider` that fails
+  the first N drains with a classified-transient exception and succeeds
+  on the N+1th; assert `Phase` never observes `Failed`, `LastAppliedHlc`
+  advances monotonically, total replayed entries are bounded by
+  `CursorPersistEntryInterval * N`. Unit test that a non-transient
+  exception still parks `Failed` on the first failure.
+
+---
+
 ## 4. Non-goals
+
+- **Per-entry `OriginClusterId` and `VectorClock` preservation across
+  bootstrap.** `SnapshotEntry` carries only `Key`, `Value`, and
+  `Timestamp` (`[Id(0..2)]`); the bootstrap coordinator stamps every
+  applied record with `OriginClusterId = state.State.SourceClusterId`
+  and `VectorClock = null`
+  (`LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync` lines 327-329).
+  For a tree whose entries were originally authored by a third cluster
+  and reach the bootstrapping peer via an intermediate sender, the true
+  authoring origin is collapsed to the bootstrap sender's id. This is
+  acceptable for the v1 transport because the per-origin HWM is keyed
+  on `(treeName, sourceClusterId)` and the receiver's view of the
+  bootstrap-source as the origin is internally consistent under live
+  incremental delivery after handoff. Preserving per-entry origin and
+  VC across bootstrap is a separate concern that requires extending
+  `SnapshotEntry` with `[Id(3)] OriginClusterId` and `[Id(4)] VectorClock`
+  slots and an `LwwEntry`-level VC slot in the core library, and is
+  tracked elsewhere if needed.
 
 - **Cross-cluster compaction frontier coordination.** Today each cluster
   GCs its WAL by `min(local consumer cursor, ttl ceiling)`
@@ -427,18 +589,20 @@ below.
 
 ## 5. Sequencing notes
 
-Item ids are assigned in topological order so the numeric order is the
-implementation order:
+`R-153` has already shipped (ahead of the rest of this scoped roadmap as
+part of v4 readiness); the remaining items are sequenced as:
 
-`R-150` → `R-151` → `R-152` → `R-153` → `R-154` → `R-155` → `R-156` → `R-157`.
+`R-150` → `R-151` → `R-152` → `R-158` → `R-154` → { `R-155`, `R-156`,
+`R-157`, `R-159` }.
 
-`R-150` (the contract) blocks everything else. `R-151` (the sender
+`R-150` (the contract) blocks everything downstream. `R-151` (the sender
 handler) lands next so `R-152`'s acceptance suite can round-trip against
-a real handler rather than a stub. `R-153` (route the bootstrap drain
-through `IReplicationApplier`) lands before `R-154` (the gRPC binding)
-so the first cross-cluster bootstrap that actually delivers payload
-over the wire exhibits the intended decorator-fan-out behaviour.
-`R-155`, `R-156`, and `R-157` are quality-of-service refinements that
-become observable only once the core transport is real and can land in
-any order after `R-154`; they are listed in numeric order purely for
-convenience and do not depend on each other.
+a real handler rather than a stub. `R-158` (per-tree merge-mode
+propagation through the bootstrap drain) **must** land before `R-154`
+because `R-154` is the first item that delivers payload over the wire,
+and the current hardcoded `LatticeMergeMode.LwwRegister` would silently
+corrupt `OrSet` / `PnCounter` trees the moment payload arrives. `R-155`,
+`R-156`, `R-157`, and `R-159` are quality-of-service refinements that
+become observable only once the core transport is real; they can land in
+any order after `R-154` (`R-159`'s bounded-retry shape composes naturally
+with `R-156`'s observability surface but does not strictly depend on it).
