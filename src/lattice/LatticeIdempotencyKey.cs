@@ -45,6 +45,21 @@ namespace Orleans.Lattice;
 public readonly record struct LatticeIdempotencyKey
 {
     /// <summary>
+    /// Process-local monotonic high-water-mark backing <see cref="Fresh"/>.
+    /// Every successful CAS advances strictly past the previous value so
+    /// back-to-back callers each observe a distinct <see cref="HybridLogicalClock"/>
+    /// even when the underlying wall clock resolution is coarser than the
+    /// inter-call interval (notably true on Linux CI runners where two
+    /// <see cref="DateTimeOffset.UtcNow"/> reads inside the same JIT-compiled
+    /// method routinely return identical <c>Ticks</c> values). Kept private
+    /// to this type because the seam is specific to <see cref="Fresh"/>'s
+    /// contract; grain-side HLC stamping continues to use
+    /// <see cref="HybridLogicalClock.Tick(HybridLogicalClock)"/> against
+    /// the per-grain local frontier.
+    /// </summary>
+    private static long s_lastTicks;
+
+    /// <summary>
     /// The logical <see cref="HybridLogicalClock"/> every retry of the
     /// operation stamps onto its emitted
     /// <see cref="LwwValue{T}.Timestamp"/>. Stable across retries so
@@ -63,10 +78,34 @@ public readonly record struct LatticeIdempotencyKey
     /// restart should construct the key from a stable, derivable
     /// HLC source so every restarted attempt agrees on the
     /// timestamp bit-identically.
+    /// <para>
+    /// The factory is safe under arbitrary concurrency: it advances a
+    /// process-local 64-bit high-water-mark via lock-free
+    /// <see cref="Interlocked.CompareExchange(ref long, long, long)"/>
+    /// so any two completed calls observe strictly-ordered (and
+    /// therefore distinct) <see cref="HybridLogicalClock.WallClockTicks"/>
+    /// values regardless of wall-clock resolution. The wall clock is
+    /// consulted on every call, so steady-state output still tracks
+    /// real time; only same-tick races fall back to <c>last + 1</c>.
+    /// </para>
     /// </summary>
-    public static LatticeIdempotencyKey Fresh() =>
-        new()
+    public static LatticeIdempotencyKey Fresh()
+    {
+        var now = DateTimeOffset.UtcNow.Ticks;
+        long next;
+        while (true)
         {
-            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            var last = Interlocked.Read(ref s_lastTicks);
+            next = Math.Max(now, last + 1);
+            if (Interlocked.CompareExchange(ref s_lastTicks, next, last) == last)
+            {
+                break;
+            }
+        }
+        return new LatticeIdempotencyKey
+        {
+            Timestamp = new HybridLogicalClock { WallClockTicks = next, Counter = 0 },
         };
+    }
 }
+

@@ -26,6 +26,50 @@ public partial class PublicApiContractTests
     }
 
     [Test]
+    public void LatticeIdempotencyKey_Fresh_concurrent_calls_produce_distinct_keys()
+    {
+        // Pins the lock-free distinctness contract under contention.
+        // Two back-to-back calls inside a single JIT-compiled method on
+        // a Linux CI runner routinely complete within a single
+        // DateTimeOffset.UtcNow.Ticks resolution window, which is the
+        // scenario the original publish-pipeline failure exposed; many
+        // parallel callers amplify that race. The factory must
+        // nevertheless return strictly-distinct keys for every observed
+        // pair, so the count of distinct timestamps must equal the call
+        // count.
+        const int callsPerThread = 1_000;
+        var threadCount = Math.Max(4, Environment.ProcessorCount);
+        var keys = new LatticeIdempotencyKey[threadCount * callsPerThread];
+        var start = new ManualResetEventSlim(false);
+
+        var threads = new Thread[threadCount];
+        for (var t = 0; t < threadCount; t++)
+        {
+            var threadIndex = t;
+            threads[t] = new Thread(() =>
+            {
+                start.Wait();
+                var baseOffset = threadIndex * callsPerThread;
+                for (var i = 0; i < callsPerThread; i++)
+                {
+                    keys[baseOffset + i] = LatticeIdempotencyKey.Fresh();
+                }
+            });
+            threads[t].Start();
+        }
+
+        start.Set();
+        foreach (var thread in threads)
+        {
+            thread.Join();
+        }
+
+        var distinct = new HashSet<LatticeIdempotencyKey>(keys);
+        Assert.That(distinct.Count, Is.EqualTo(keys.Length),
+            "Every Fresh() call must produce a key whose Timestamp differs from every other concurrent call's Timestamp.");
+    }
+
+    [Test]
     public void LatticeIdempotencyKey_equality_compares_Timestamp()
     {
         var hlc = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
