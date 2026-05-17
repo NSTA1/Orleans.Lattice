@@ -272,8 +272,16 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     private async Task DrainSnapshotAsync()
     {
         var treeName = TreeName;
+        var sourceClusterId = state.State.SourceClusterId;
+
+        // Pass sourceClusterId through to the snapshot provider so that
+        // cross-cluster adapters (RemoteSnapshotProvider) can address
+        // the correct sender peer. The default intra-cluster provider's
+        // default interface implementation ignores the argument and
+        // delegates to the two-arg overload, so this is a no-op for
+        // hosts that do not register a cross-cluster adapter.
         var snapshot = await _snapshotProvider
-            .ExportAsync(treeName, state.State.LastAppliedHlc, CancellationToken.None)
+            .ExportAsync(treeName, sourceClusterId, state.State.LastAppliedHlc, CancellationToken.None)
             .ConfigureAwait(true);
 
         // Update the durable handoff metadata to whatever the latest
@@ -290,7 +298,6 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         }
         await state.WriteStateAsync().ConfigureAwait(true);
 
-        var sourceClusterId = state.State.SourceClusterId;
         int sinceLastPersist = 0;
 
         await foreach (var entry in snapshot.Entries.ConfigureAwait(true))

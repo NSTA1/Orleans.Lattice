@@ -225,6 +225,36 @@ public static class LatticeReplicationServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Replaces the default in-cluster <see cref="ISnapshotProvider"/>
+    /// (<c>LatticeSnapshotProvider</c>) with the cross-cluster
+    /// <see cref="RemoteSnapshotProvider"/> adapter, so the receiver-side
+    /// bootstrap state machine drains snapshots from a peer cluster via
+    /// the registered <see cref="IRemoteSnapshotTransport"/> instead of
+    /// from the local tree. Call this on a receiver-only cluster (or on
+    /// any cluster that needs to bootstrap an empty local tree from a
+    /// remote sender) after <see cref="AddLatticeReplication"/>, and
+    /// register a concrete <see cref="IRemoteSnapshotTransport"/>
+    /// binding (gRPC, loopback, custom HTTP) in the same composition
+    /// root.
+    /// <para>
+    /// Sender-only clusters do not call this method; their default
+    /// <see cref="ISnapshotProvider"/> is the local tree and the
+    /// inbound transport binding routes through
+    /// <see cref="LatticeRemoteSnapshotService"/> to drive it.
+    /// </para>
+    /// </summary>
+    /// <param name="builder">The silo builder.</param>
+    /// <returns>The same silo builder for chaining.</returns>
+    public static ISiloBuilder AddRemoteSnapshotProvider(this ISiloBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        builder.Services.RemoveAll<ISnapshotProvider>();
+        builder.Services.AddSingleton<ISnapshotProvider, RemoteSnapshotProvider>();
+        return builder;
+    }
+
+    /// <summary>
     /// <see cref="IPostConfigureOptions{TOptions}"/> that mirrors WAL-related
     /// fields from <see cref="LatticeReplicationOptions"/> onto
     /// <see cref="LatticeOptions"/> for the same tree id, so a host that

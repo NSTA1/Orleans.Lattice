@@ -73,4 +73,53 @@ public interface ISnapshotProvider
         string treeName,
         HybridLogicalClock asOfHlc,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Cross-cluster overload of <see cref="ExportAsync(string, HybridLogicalClock, CancellationToken)"/>
+    /// that carries the sender-cluster identifier the export is captured
+    /// on. Receiver-side adapters (notably the cross-cluster
+    /// <c>RemoteSnapshotProvider</c>) require <paramref name="sourceClusterId"/>
+    /// to address the correct sender peer; intra-cluster providers
+    /// (e.g. the default <c>LatticeSnapshotProvider</c>) ignore the
+    /// argument and delegate to the two-arg overload.
+    /// <para>
+    /// The default interface implementation preserves backward
+    /// compatibility: existing <see cref="ISnapshotProvider"/>
+    /// implementations that only override the two-arg overload continue
+    /// to work, and callers that have <paramref name="sourceClusterId"/>
+    /// in hand (e.g. the bootstrap coordinator reading
+    /// <c>BootstrapCoordinatorState.SourceClusterId</c>) call the
+    /// three-arg overload directly so that
+    /// <c>RemoteSnapshotProvider</c> never has to recover the sender id
+    /// out of band.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">
+    /// The logical tree id to export. Must be non-null and non-empty.
+    /// </param>
+    /// <param name="sourceClusterId">
+    /// The sender-cluster identifier the snapshot is captured on. Must
+    /// be non-null and non-empty. Intra-cluster implementations may
+    /// ignore this value; cross-cluster implementations use it to
+    /// address the correct sender peer.
+    /// </param>
+    /// <param name="asOfHlc">
+    /// Strict upper-bound timestamp. Entries with
+    /// <see cref="SnapshotEntry.Timestamp"/> &gt; <paramref name="asOfHlc"/>
+    /// are excluded. <see cref="HybridLogicalClock.Zero"/> disables
+    /// the upper-bound filter.
+    /// </param>
+    /// <param name="cancellationToken">
+    /// Observed during the up-front frontier read and on every yielded
+    /// entry from the returned stream.
+    /// </param>
+    Task<SnapshotStream> ExportAsync(
+        string treeName,
+        string sourceClusterId,
+        HybridLogicalClock asOfHlc,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceClusterId);
+        return ExportAsync(treeName, asOfHlc, cancellationToken);
+    }
 }
