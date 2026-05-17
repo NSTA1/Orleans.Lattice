@@ -188,4 +188,15 @@ public static class LatticeEventConstants
     /// <see cref="LatticeRegistrySnapshotContext"/>.
     /// </summary>
     internal const string RegistrySnapshotRequestContextKey = "ol.txregsnap";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry the caller-
+    /// supplied <see cref="LatticeIdempotencyKey"/> through the public
+    /// <see cref="ILattice"/> mutating entry-points so retries of the
+    /// same logical operation collapse through the WAL-append HWM dedup,
+    /// the LWW merge rule, and the
+    /// <see cref="PnCounterAccessor"/> counter-side dedup guard.
+    /// Internal - set through <see cref="LatticeIdempotencyContext"/>.
+    /// </summary>
+    internal const string IdempotencyKeyRequestContextKey = "ol.idk";
 }

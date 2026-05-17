@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
 
@@ -175,6 +176,48 @@ public static class LatticeServiceCollectionExtensions
         {
             builder.Services.TryAddSingleton<ILatticeWalGc>(factory);
         }
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures the shipped <see cref="BoundedExponentialRetryPolicy"/>
+    /// as the global <see cref="LatticeOptions.RetryPolicy"/> for every
+    /// tree on the silo. The policy is constructed once from the
+    /// populated <see cref="BoundedExponentialRetryPolicyOptions"/>
+    /// instance and assigned to <see cref="LatticeOptions.RetryPolicy"/>
+    /// via <c>ConfigureAll</c>. Hosts that want a per-tree policy
+    /// (different budgets for different trees) skip this convenience
+    /// and use <c>ConfigureLattice("tree", o =&gt; o.RetryPolicy = ...)</c>
+    /// directly.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The retry policy only takes effect when the caller has also
+    /// entered a <see cref="LatticeIdempotencyContext"/> scope so the
+    /// retried mutation re-stamps the same
+    /// <see cref="LwwValue{T}.Timestamp"/> and collapses through the
+    /// existing dedup paths. Authoring cluster identity is stamped
+    /// independently by the silo via
+    /// <see cref="LatticeOriginContext"/> /
+    /// <see cref="ILatticeOriginClusterIdResolver"/> and is not part
+    /// of the idempotency key. Mutating calls without an ambient
+    /// idempotency key bypass the policy entirely - retry without an
+    /// idempotency key would double-count a
+    /// <see cref="PnCounterAccessor"/> increment and produce N
+    /// distinct WAL appends per logical operation, which is exactly
+    /// the negative-control behaviour the feature is designed to
+    /// prevent.
+    /// </para>
+    /// </remarks>
+    public static ISiloBuilder AddLatticeRetryPolicy(
+        this ISiloBuilder builder,
+        Action<BoundedExponentialRetryPolicyOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        var options = new BoundedExponentialRetryPolicyOptions();
+        configure?.Invoke(options);
+        var policy = new BoundedExponentialRetryPolicy(options);
+        builder.Services.ConfigureAll<LatticeOptions>(o => o.RetryPolicy = policy);
         return builder;
     }
 }

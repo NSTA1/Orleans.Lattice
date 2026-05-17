@@ -20,6 +20,12 @@ internal static class TypeAliases
     internal const string PnCounter = "ol.pnc";
     internal const string LeafDeliveryCursor = "ol.ldc";
 
+    // Opt-in idempotency-key surface (carried on the ambient
+    // RequestContext via LatticeIdempotencyContext so retries of the
+    // same logical operation collapse through the existing WAL HWM /
+    // LWW / PnCounter dedup paths).
+    internal const string LatticeIdempotencyKey = "ol.idk";
+
     // BPlusTree State
     internal const string ChildEntry = "ol.ce";
     internal const string InternalNodeState = "ol.ins";

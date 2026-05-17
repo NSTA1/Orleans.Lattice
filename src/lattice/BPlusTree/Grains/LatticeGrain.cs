@@ -339,7 +339,9 @@ internal sealed partial class LatticeGrain(
     public Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
-        return SetAsyncCore(key, value, cancellationToken);
+        return LatticeIdempotencyContext.IsActive
+            ? RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken)
+            : SetAsyncCore(key, value, cancellationToken);
     }
 
     async Task ISystemLattice.SetAsync(string key, byte[] value, CancellationToken cancellationToken)
@@ -452,6 +454,20 @@ internal sealed partial class LatticeGrain(
         // per-entry lifetimes are not shifted by client-clock skew.
         var expiresAtTicks = nowUtc.Add(ttl).UtcTicks;
 
+        // Cold path: no idempotency scope, no closure, no helper state-machine.
+        if (!LatticeIdempotencyContext.IsActive)
+        {
+            await SetAsyncTtlCore(key, value, expiresAtTicks, cancellationToken);
+        }
+        else
+        {
+            await RunMutationAsync(ct => SetAsyncTtlCore(key, value, expiresAtTicks, ct), cancellationToken);
+        }
+        await PublishEventAsync(LatticeTreeEventKind.Set, key);
+    }
+
+    private async Task SetAsyncTtlCore(string key, byte[] value, long expiresAtTicks, CancellationToken cancellationToken)
+    {
         var shard = await GetShardGrainAsync(key);
         try
         {
@@ -475,7 +491,6 @@ internal sealed partial class LatticeGrain(
             shard = await GetShardGrainAsync(key);
             await shard.SetAsync(key, value, expiresAtTicks);
         }
-        await PublishEventAsync(LatticeTreeEventKind.Set, key);
     }
 
     public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default)
@@ -488,32 +503,40 @@ internal sealed partial class LatticeGrain(
         await EnsureCompactionReminderAsync();
         await EnsureMonitorAsync();
         cancellationToken.ThrowIfCancellationRequested();
+        var applied = LatticeIdempotencyContext.IsActive
+            ? await RunMutationAsync(ct => SetIfVersionAsyncCore(key, value, expectedVersion, ct), cancellationToken)
+            : await SetIfVersionAsyncCore(key, value, expectedVersion, cancellationToken);
+        if (applied) await PublishEventAsync(LatticeTreeEventKind.Set, key);
+        return applied;
+    }
+
+    private async Task<bool> SetIfVersionAsyncCore(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken)
+    {
         var shard = await GetShardGrainAsync(key);
-        bool applied;
+        bool ok;
         try
         {
-            applied = await shard.SetIfVersionAsync(key, value, expectedVersion);
+            ok = await shard.SetIfVersionAsync(key, value, expectedVersion);
         }
         catch (StaleShardRoutingException) when (InvalidateShardMap())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            applied = await shard.SetIfVersionAsync(key, value, expectedVersion);
+            ok = await shard.SetIfVersionAsync(key, value, expectedVersion);
         }
         catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            applied = await shard.SetIfVersionAsync(key, value, expectedVersion);
+            ok = await shard.SetIfVersionAsync(key, value, expectedVersion);
         }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            applied = await shard.SetIfVersionAsync(key, value, expectedVersion);
+            ok = await shard.SetIfVersionAsync(key, value, expectedVersion);
         }
-        if (applied) await PublishEventAsync(LatticeTreeEventKind.Set, key);
-        return applied;
+        return ok;
     }
 
     public async Task<byte[]?> GetOrSetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
@@ -526,33 +549,41 @@ internal sealed partial class LatticeGrain(
         await EnsureCompactionReminderAsync();
         await EnsureMonitorAsync();
         cancellationToken.ThrowIfCancellationRequested();
+        var existing = LatticeIdempotencyContext.IsActive
+            ? await RunMutationAsync(ct => GetOrSetAsyncCore(key, value, ct), cancellationToken)
+            : await GetOrSetAsyncCore(key, value, cancellationToken);
+        // Publish only when a new value was actually written (existing was null).
+        if (existing is null) await PublishEventAsync(LatticeTreeEventKind.Set, key);
+        return existing;
+    }
+
+    private async Task<byte[]?> GetOrSetAsyncCore(string key, byte[] value, CancellationToken cancellationToken)
+    {
         var shard = await GetShardGrainAsync(key);
-        byte[]? existing;
+        byte[]? prior;
         try
         {
-            existing = await shard.GetOrSetAsync(key, value);
+            prior = await shard.GetOrSetAsync(key, value);
         }
         catch (StaleShardRoutingException) when (InvalidateShardMap())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            existing = await shard.GetOrSetAsync(key, value);
+            prior = await shard.GetOrSetAsync(key, value);
         }
         catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            existing = await shard.GetOrSetAsync(key, value);
+            prior = await shard.GetOrSetAsync(key, value);
         }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
             shard = await GetShardGrainAsync(key);
-            existing = await shard.GetOrSetAsync(key, value);
+            prior = await shard.GetOrSetAsync(key, value);
         }
-        // Publish only when a new value was actually written (existing was null).
-        if (existing is null) await PublishEventAsync(LatticeTreeEventKind.Set, key);
-        return existing;
+        return prior;
     }
 
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
@@ -724,7 +755,9 @@ internal sealed partial class LatticeGrain(
     public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
-        return DeleteAsyncCore(key, cancellationToken);
+        return LatticeIdempotencyContext.IsActive
+            ? RunMutationAsync(ct => DeleteAsyncCore(key, ct), cancellationToken)
+            : DeleteAsyncCore(key, cancellationToken);
     }
 
     async Task<bool> ISystemLattice.DeleteAsync(string key, CancellationToken cancellationToken)
@@ -774,29 +807,37 @@ internal sealed partial class LatticeGrain(
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();
-        int deleted;
+        var deleted = LatticeIdempotencyContext.IsActive
+            ? await RunMutationAsync(ct => DeleteRangeAsyncOuter(startInclusive, endExclusive, ct), cancellationToken)
+            : await DeleteRangeAsyncOuter(startInclusive, endExclusive, cancellationToken);
+        if (deleted > 0)
+            await PublishEventAsync(LatticeTreeEventKind.DeleteRange, $"{startInclusive}..{endExclusive}");
+        return deleted;
+    }
+
+    private async Task<int> DeleteRangeAsyncOuter(string startInclusive, string endExclusive, CancellationToken cancellationToken)
+    {
+        int count;
         try
         {
-            deleted = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
+            count = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
         }
         catch (StaleShardRoutingException) when (InvalidateShardMap())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            deleted = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
+            count = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
         }
         catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            deleted = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
+            count = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
         }
         catch (InvalidOperationException) when (TryInvalidateStaleAlias())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            deleted = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
+            count = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
         }
-        if (deleted > 0)
-            await PublishEventAsync(LatticeTreeEventKind.DeleteRange, $"{startInclusive}..{endExclusive}");
-        return deleted;
+        return count;
     }
 
     private async Task<int> DeleteRangeAsyncCore(string startInclusive, string endExclusive, CancellationToken cancellationToken)

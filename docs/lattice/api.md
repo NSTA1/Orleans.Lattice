@@ -619,6 +619,29 @@ See [Configuration](configuration.md) for detailed guidance on each option, immu
 | `WalMaxBatchEntries` | `int` | 100 | Maximum WAL entries the partition grain coalesces into a single flush. |
 | `WalMaxBatchBytes` | `long` | 4 MiB | Maximum byte budget the partition grain coalesces into a single flush. |
 | `WalRetention` | `TimeSpan?` | `null` | Optional wall-clock hard ceiling for WAL retention. When set, the WAL GC trims entries older than `now - WalRetention` regardless of consumer cursors; lagging consumers then "fall off the log". When `null` the GC predicate is purely `min(consumer cursors)`. |
+| `RetryPolicy` | `ILatticeRetryPolicy?` | `null` | Optional opt-in retry policy applied at the boundary of every public `ILattice` mutating method. Only consulted when the caller has entered a `LatticeIdempotencyContext` scope (no scope = no retry, by design). `null` preserves the throw-and-revert default. See [Retry Policy](retry-policy.md). |
+
+
+## Idempotency keys and retry policy
+
+Opt-in surface for retrying transient storage faults under a caller-supplied identity. Default behavior is throw-and-revert; the library never installs a policy itself. See [Retry Policy](retry-policy.md) for the full contract, operational guidance, and code examples.
+
+| Type | Member | Description |
+|------|--------|-------------|
+| `LatticeIdempotencyKey` | `HybridLogicalClock Timestamp { get; init; }` | Pins the logical write time. Re-stamped verbatim on every retry under the same key so LWW resolution treats retries as ties. The key carries no other fields; authoring cluster id is owned by `LatticeOriginContext` / `ILatticeOriginClusterIdResolver` and stamped independently. |
+| `LatticeIdempotencyKey` | `static LatticeIdempotencyKey Fresh()` | Convenience factory minting a fresh HLC tick. Consecutive calls produce distinct keys. |
+| `LatticeIdempotencyContext` | `static LatticeIdempotencyKey? Current { get; set; }` | Reads / sets the ambient key on the current logical execution context. Flows across `await` points. |
+| `LatticeIdempotencyContext` | `static IDisposable With(LatticeIdempotencyKey? key)` | Opens a scope that restores the previous ambient value on dispose. Idempotent on repeated dispose. |
+| `LatticeIdempotencyContext` | `static IDisposable NewScope()` | Shorthand for `With(LatticeIdempotencyKey.Fresh())`. Use when the call site does not need to read the key back after the scope. |
+| `ILatticeRetryPolicy` | `Task ExecuteAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken)` | Untyped overload. Re-invokes `operation` on transient failure under the same ambient idempotency scope; rethrows the original failure verbatim on exhaustion. |
+| `ILatticeRetryPolicy` | `Task<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken cancellationToken)` | Typed overload for entry-points that return a value. |
+| `BoundedExponentialRetryPolicy` | `BoundedExponentialRetryPolicy(int maxAttempts = 4, TimeSpan? initialDelay = null, TimeSpan? maxDelay = null, Func<Exception, bool>? retryableExceptionClassifier = null)` | Shipped default implementation. Delay between attempts: `min(MaxDelay, InitialDelay * 2^(attempt-1))`. No jitter. |
+| `BoundedExponentialRetryPolicy` | `BoundedExponentialRetryPolicy(BoundedExponentialRetryPolicyOptions options)` | Options-based constructor used by the DI extension. |
+| `BoundedExponentialRetryPolicyOptions` | `int MaxAttempts { get; set; }` (default 4) | Total attempts (including the first). |
+| `BoundedExponentialRetryPolicyOptions` | `TimeSpan InitialDelay { get; set; }` (default 50 ms) | First retry backoff. |
+| `BoundedExponentialRetryPolicyOptions` | `TimeSpan MaxDelay { get; set; }` (default 2 s) | Per-attempt backoff cap. |
+| `BoundedExponentialRetryPolicyOptions` | `Func<Exception, bool>? RetryableExceptionClassifier { get; set; }` (default `null`) | When non-null, only exceptions accepted by the classifier are retried. `null` means every exception triggers a retry, up to the budget. |
+| `LatticeServiceCollectionExtensions` | `static ISiloBuilder AddLatticeRetryPolicy(this ISiloBuilder builder, Action<BoundedExponentialRetryPolicyOptions>? configure = null)` | DI helper that installs `BoundedExponentialRetryPolicy` as the per-tree `LatticeOptions.RetryPolicy` for every tree. |
 
 ## Serializable Types
 

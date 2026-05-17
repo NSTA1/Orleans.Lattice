@@ -596,6 +596,23 @@ public class LatticeOptions
     public TimeSpan? WalRetention { get; set; }
 
     /// <summary>
+    /// Optional caller-controlled retry policy applied at the boundary
+    /// of every public <see cref="ILattice"/> mutating call. When
+    /// <c>null</c> (the default), the library preserves today's
+    /// throw-and-revert contract: a failed grain write surfaces
+    /// verbatim to the caller and the grain's in-memory state is
+    /// reverted to match disk. When set, the policy re-runs the
+    /// caller's mutation under the same ambient
+    /// <see cref="LatticeIdempotencyContext"/> scope - which the
+    /// caller must have entered explicitly - for the policy's
+    /// budget; on exhaustion the original failure is surfaced
+    /// verbatim. Retry is therefore strictly opt-in at two layers
+    /// (policy registration + idempotency-key scope) so the library's
+    /// default behaviour is bit-identical to the pre-feature shape.
+    /// </summary>
+    public ILatticeRetryPolicy? RetryPolicy { get; set; }
+
+    /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.
     /// Used internally by <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
     /// and exposed for advanced scenarios where callers register storage directly.
