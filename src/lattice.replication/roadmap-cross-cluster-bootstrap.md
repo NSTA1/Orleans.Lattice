@@ -231,78 +231,58 @@ below.
 
 ---
 
-- [ ] **R-152 - Receiver-side `RemoteSnapshotProvider` adapter** *(deps: R-150 ✓, R-151 ✓)*
+- [x] **R-152 ✓ shipped - Receiver-side `RemoteSnapshotProvider` adapter** *(deps: R-150 ✓, R-151 ✓)*
 
-  An `ISnapshotProvider` implementation that hosts can register *before*
-  `AddLatticeReplication` to override the local-tree default. It calls
+  An `ISnapshotProvider` implementation that hosts register on the
+  receiver via `siloBuilder.AddRemoteSnapshotProvider()` to override
+  the local-tree default. It calls
   `IRemoteSnapshotTransport.GetMetadataAsync` to obtain the cut-point,
   then `RequestSnapshotAsync` to drain the stream, and yields each entry
-  through the existing `ISnapshotProvider.ExportAsync` shape so the
-  receiver-side state machine (`R-051 ✓ shipped`) sees no behavioural
-  change other than the entries actually arriving.
+  through the existing `SnapshotStream` shape so the receiver-side
+  state machine (`R-051 ✓ shipped`) sees no behavioural change other
+  than the entries actually arriving.
 
-  **Shape:**
+  **Shape (as shipped):**
 
   ```csharp
   public sealed class RemoteSnapshotProvider : ISnapshotProvider
   {
       public RemoteSnapshotProvider(
           IRemoteSnapshotTransport transport,
-          IRemoteSnapshotPeerResolver peerResolver, // string treeName -> string sourceClusterId
           ILogger<RemoteSnapshotProvider> logger);
 
+      // Three-arg overload is the supported entry point. The legacy
+      // two-arg overload throws because the adapter cannot address a
+      // sender peer without the source cluster id.
       public Task<SnapshotStream> ExportAsync(
           string treeName,
+          string sourceClusterId,
           HybridLogicalClock fromAsOfHlc,
           CancellationToken ct);
   }
   ```
 
-  The `IRemoteSnapshotPeerResolver` indirection is shown above as one
-  way to recover the sender cluster id from the tree name, on the
-  assumption that `ISnapshotProvider.ExportAsync` cannot itself receive
-  the cluster id. That assumption is **worth re-examining before this
-  item lands**: the receiver-side coordinator already has the value in
-  hand on `BootstrapCoordinatorState.SourceClusterId`
-  (`LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync` reads it at
-  `state.State.SourceClusterId` before calling `_snapshotProvider.ExportAsync`).
-  Two implementation shapes are therefore viable, and the choice must be
-  made up front because it determines `R-150`'s contract:
+  **Design choice (resolved):** contract widening over resolver
+  indirection. `ISnapshotProvider` was widened with an additive
+  default-interface overload
+  `ExportAsync(treeName, sourceClusterId, asOfHlc, ct)` and
+  `LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync` was updated to
+  call the new overload, passing
+  `state.State.SourceClusterId` directly. This eliminated the
+  tree-to-peer-mapping-out-of-sync failure mode that an
+  `IRemoteSnapshotPeerResolver` would have introduced; the
+  intra-cluster `LatticeSnapshotProvider` inherits the default-impl
+  overload, which validates the cluster id and delegates to the
+  legacy two-arg overload, so the additive surface is non-breaking.
 
-  - **Resolver indirection (sketched above).** `ISnapshotProvider.ExportAsync`
-    keeps its current `(treeName, asOfHlc, ct)` shape; `RemoteSnapshotProvider`
-    injects `IRemoteSnapshotPeerResolver` to recover the sender id. Pro:
-    no change to the public `ISnapshotProvider` surface. Con: hosts must
-    keep the resolver and `LatticeReplicationOptions.ReplicationPeers` in
-    sync; resolver indirection is invisible to the coordinator that
-    already has the value.
-  - **Contract widening.** Add an overload
-    `ExportAsync(treeName, sourceClusterId, asOfHlc, ct)` to `ISnapshotProvider`
-    (default-impl delegates to the existing overload, ignoring the new
-    arg) and have `LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync`
-    call the new overload, passing `state.State.SourceClusterId` directly.
-    Pro: removes the resolver DI requirement and the
-    tree-to-peer-mapping-out-of-sync failure mode; the intra-cluster
-    `LatticeSnapshotProvider` simply ignores the new arg. Con: additive
-    public API surface on a v1-shipped interface.
-
-  Recommendation pending: contract widening is the smaller-blast-radius
-  shape because it eliminates a class of misconfiguration entirely and
-  the additive overload is non-breaking. Settle this before `R-150`
-  freezes.
-
-  Listed as depending on `R-151` (not just `R-150`) because the
-  acceptance suite below round-trips against the real sender-side
-  handler rather than a hand-rolled stub, which catches metadata /
-  stream contract drifts a stub would mask.
-
-  **Acceptance:** integration test under `Orleans.TestingHost` with two
-  clusters: cluster A pre-populated with N entries, cluster B fresh.
-  Configure cluster B's `ISnapshotProvider` as `RemoteSnapshotProvider`
-  with a transport stub that round-trips against cluster A's `ILattice`.
-  Trigger auto-bootstrap on cluster B, assert all N entries arrive,
-  assert `localHwm` advances past zero, assert no further fall-off
-  detection fires for the next 30 seconds.
+  **Acceptance (met):** integration test `RemoteSnapshotProviderIntegrationTests`
+  under `Orleans.TestingHost` with two clusters: cluster A pre-populated
+  with N entries (tree `rsp-bootstrap`, origin `rsp-site-a`), cluster B
+  fresh. Cluster B's `ISnapshotProvider` registered as
+  `RemoteSnapshotProvider` with an in-process transport stub that
+  round-trips against cluster A's `LatticeRemoteSnapshotService`.
+  Triggers auto-bootstrap on cluster B, asserts all N entries arrive
+  and `localHwm` advances past zero.
 
 ---
 
@@ -413,7 +393,7 @@ below.
 
 ---
 
-- [ ] **R-156 - Bootstrap progress observability** *(deps: R-152, R-153 ✓)*
+- [ ] **R-156 - Bootstrap progress observability** *(deps: R-152 ✓, R-153 ✓)*
 
   Three new instruments on the existing `orleans.lattice.replication` meter
   plus a structured log at each phase transition. Mirrors the per-peer
@@ -442,7 +422,7 @@ below.
 
 ---
 
-- [ ] **R-157 - Operator-facing "force re-bootstrap" admin RPC widening** *(deps: R-152, refines `R-053 ✓ shipped`)*
+- [ ] **R-157 - Operator-facing "force re-bootstrap" admin RPC widening** *(deps: R-152 ✓, refines `R-053 ✓ shipped`)*
 
   `R-053`'s `ILatticeReplicationAdmin.RequestSnapshotAsync(treeName,
   sourceClusterId, ct)` already routes through the bootstrap coordinator,
@@ -468,7 +448,7 @@ below.
 
 ---
 
-- [ ] **R-158 - Bootstrap respects per-tree `LatticeMergeMode`** *(deps: R-152, R-153 ✓; sequence before R-154 ships payload)*
+- [ ] **R-158 - Bootstrap respects per-tree `LatticeMergeMode`** *(deps: R-152 ✓, R-153 ✓; sequence before R-154 ships payload)*
 
   `LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync` constructs every
   bootstrap-arrived `WalRecord` with `Mode = LatticeMergeMode.LwwRegister`

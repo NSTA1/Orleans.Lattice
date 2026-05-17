@@ -79,7 +79,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         // ExportAsync throws so DrainSnapshotAsync throws *before* any
         // state.WriteStateAsync call - control reaches the L174 catch
         // without first consuming the one-shot ThrowOnWrite.
-        provider.ExportAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+        provider.ExportAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("export boom"));
         // Make the catch-handler's L189 persist throw - the one site where a
         // failed write at L189 silently breaks the L207 "leave keepalive

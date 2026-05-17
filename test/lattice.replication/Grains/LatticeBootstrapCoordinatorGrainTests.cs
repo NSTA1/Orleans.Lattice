@@ -306,7 +306,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         Assert.That(fake.State.InProgress, Is.False);
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.Idle));
-        await provider.DidNotReceiveWithAnyArgs().ExportAsync(default!, default, default);
+        await provider.DidNotReceiveWithAnyArgs().ExportAsync(default!, default!, default, default);
     }
 
     [Test]
@@ -318,7 +318,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var asOf = Hlc(123);
         var frontier = new VersionVector();
         var entry = new SnapshotEntry { Key = "k", Value = new byte[] { 1 }, Timestamp = Hlc(50) };
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(asOf, frontier, Stream(entry))));
 
         await grain.ProcessNextPhaseAsync();
@@ -345,7 +345,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             new SnapshotEntry { Key = "b", Value = new byte[] { 2 }, Timestamp = Hlc(2) },
             new SnapshotEntry { Key = "c", Value = new byte[] { 3 }, Timestamp = Hlc(3) },
         };
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(10), new VersionVector(), Stream(entries))));
 
         await grain.ProcessNextPhaseAsync();
@@ -375,7 +375,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             new SnapshotEntry { Key = "live", Value = new byte[] { 1 }, Timestamp = Hlc(1) },
             new SnapshotEntry { Key = "ghost", Value = null!, Timestamp = Hlc(2) },
         };
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(10), new VersionVector(), Stream(entries))));
 
         await grain.ProcessNextPhaseAsync();
@@ -395,14 +395,14 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake, LatticeBootstrapState.ApplyingSnapshot, lastAppliedHlc: Hlc(75));
         var (grain, _, _, provider, _, apply, _) = Create(fake);
-        provider.ExportAsync(Tree, Hlc(75), Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, Hlc(75), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(150), new VersionVector(),
                 Stream(new SnapshotEntry { Key = "post-crash", Value = new byte[] { 9 }, Timestamp = Hlc(120) }))));
 
         await grain.ProcessNextPhaseAsync();
 
-        await provider.Received(1).ExportAsync(Tree, Hlc(75), Arg.Any<CancellationToken>());
-        await provider.DidNotReceive().ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>());
+        await provider.Received(1).ExportAsync(Tree, SourceCluster, Hlc(75), Arg.Any<CancellationToken>());
+        await provider.DidNotReceive().ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>());
         Assert.That(fake.State.LastAppliedHlc, Is.EqualTo(Hlc(120)));
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff));
         await apply.Received(1).ApplyAsync(
@@ -436,7 +436,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
         var (grain, _, _, provider, reminders, _, _) = Create(fake);
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("export boom"));
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
             .Returns(Task.FromResult<IGrainReminder?>(null));
@@ -454,7 +454,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
         var (grain, _, _, provider, reminders, apply, _) = Create(fake);
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(2), new VersionVector(),
                 Stream(new SnapshotEntry { Key = "k", Value = new byte[] { 1 }, Timestamp = Hlc(1) }))));
         apply.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
@@ -495,7 +495,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
         var (grain, _, _, provider, reminders, _, _) = Create(fake);
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(7), new VersionVector())));
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
             .Returns(Task.FromResult<IGrainReminder?>(null));
@@ -553,7 +553,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var entries = Enumerable.Range(1, 250)
             .Select(i => new SnapshotEntry { Key = $"k{i}", Value = new byte[] { 1 }, Timestamp = Hlc(i) })
             .ToArray();
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(1000), new VersionVector(), Stream(entries))));
 
         // Capture LastAppliedHlc at every write so we can confirm
@@ -588,7 +588,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             new SnapshotEntry { Key = "live", Value = new byte[] { 1 }, Timestamp = Hlc(1) },
             new SnapshotEntry { Key = "ghost", Value = null!, Timestamp = Hlc(99) },
         };
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(100), new VersionVector(), Stream(entries))));
 
         await grain.ProcessNextPhaseAsync();
@@ -611,7 +611,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             new SnapshotEntry { Key = "b", Value = new byte[] { 2 }, Timestamp = Hlc(5) },
             new SnapshotEntry { Key = "c", Value = new byte[] { 3 }, Timestamp = Hlc(20) },
         };
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(100), new VersionVector(), Stream(entries))));
 
         await grain.ProcessNextPhaseAsync();
@@ -633,7 +633,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake, LatticeBootstrapState.RequestingSnapshot);
         var (grain, _, _, provider, reminders, apply, _) = Create(fake);
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(2), new VersionVector(),
                 Stream(new SnapshotEntry { Key = "k", Value = new byte[] { 1 }, Timestamp = Hlc(1) }))));
 
@@ -662,7 +662,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         Seed(fake);
         var (grain, _, _, provider, _, apply, _) = Create(fake);
         var payload = new byte[] { 7, 8, 9, 10 };
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(2), new VersionVector(),
                 Stream(new SnapshotEntry { Key = "k", Value = payload, Timestamp = Hlc(1) }))));
 
@@ -687,7 +687,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var (grain, _, _, provider, reminders, _, hwm) = Create(fake);
         var asOf = Hlc(60);
         var frontier = new VersionVector();
-        provider.ExportAsync(Tree, Hlc(50), Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, Hlc(50), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(asOf, frontier)));
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
             .Returns(Task.FromResult<IGrainReminder?>(null));
@@ -722,7 +722,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         Assert.That(fake.State.InProgress, Is.False);
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
-        await provider.DidNotReceiveWithAnyArgs().ExportAsync(default!, default, default);
+        await provider.DidNotReceiveWithAnyArgs().ExportAsync(default!, default!, default, default);
         await hwm.DidNotReceiveWithAnyArgs().PinSnapshotAsync(default, default!, default);
     }
 
@@ -755,7 +755,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
         var (grain, _, _, provider, reminders, _, _) = Create(fake);
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("export boom"));
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
             .Returns(Task.FromResult<IGrainReminder?>(null));
@@ -814,7 +814,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             new SnapshotEntry { Key = "k1", Value = new byte[] { 1, 1 }, Timestamp = Hlc(10) },
             new SnapshotEntry { Key = "k2", Value = new byte[] { 2, 2 }, Timestamp = Hlc(20) },
         };
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(30), new VersionVector(), Stream(entries))));
 
         await grain.ProcessNextPhaseAsync();
@@ -848,7 +848,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
         var (grain, _, _, provider, reminders, apply, _) = Create(fake);
-        provider.ExportAsync(Tree, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(2), new VersionVector(),
                 Stream(new SnapshotEntry { Key = "k", Value = new byte[] { 1 }, Timestamp = Hlc(1) }))));
         apply.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
