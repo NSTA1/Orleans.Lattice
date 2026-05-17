@@ -52,6 +52,16 @@ public readonly record struct PnCounterAccessor
     /// Increments the positive component for <paramref name="replicaId"/>
     /// by <paramref name="amount"/>. <paramref name="amount"/> must be non-negative.
     /// </summary>
+    /// <remarks>
+    /// When the caller has entered an ambient
+    /// <see cref="LatticeIdempotencyContext"/> scope the accessor adds a
+    /// pre-CAS dedup guard: if the stored entry's HLC version already
+    /// equals the supplied <see cref="LatticeIdempotencyKey.Timestamp"/>
+    /// (and the origin matches), a previous attempt under the same key
+    /// already advanced the counter and the second call drops to a
+    /// no-op. Without the scope the counter advances on every call,
+    /// which is the negative-control behaviour for the dedup feature.
+    /// </remarks>
     public Task IncrementAsync(string replicaId, long amount = 1, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
@@ -68,6 +78,11 @@ public readonly record struct PnCounterAccessor
     /// Increments the negative component for <paramref name="replicaId"/>
     /// by <paramref name="amount"/>. <paramref name="amount"/> must be non-negative.
     /// </summary>
+    /// <remarks>
+    /// Honours the same ambient
+    /// <see cref="LatticeIdempotencyContext"/> dedup guard as
+    /// <see cref="IncrementAsync"/>.
+    /// </remarks>
     public Task DecrementAsync(string replicaId, long amount = 1, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
@@ -101,10 +116,36 @@ public readonly record struct PnCounterAccessor
         int maxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
+
+        // Hoist the ambient idempotency-key read out of the CAS loop:
+        // the AsyncLocal-backed RequestContext.Get on every iteration is
+        // a small but visible cost on contended paths, and the key is
+        // invariant across the call.
+        var idemKey = LatticeIdempotencyContext.Current;
+
         for (var attempt = 0; attempt < maxAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var versioned = await _lattice.GetWithVersionAsync(_key, cancellationToken).ConfigureAwait(false);
+
+            // Idempotency dedup guard: when an ambient
+            // LatticeIdempotencyContext scope is active, the foreground
+            // write below stamps versioned.Version with the supplied
+            // key's HLC. A retry of the same logical operation observes
+            // that HLC on the first GetWithVersionAsync read - which
+            // means the prior attempt's per-replica advance already
+            // landed and the retry must drop rather than advance the
+            // counter a second time. Without the scope the check is a
+            // no-op (versioned.Version is whatever the previous
+            // unrelated write stamped) and the counter advances on
+            // every call - which is the negative-control behaviour.
+            if (idemKey is { } key
+                && versioned.Version == key.Timestamp
+                && versioned.Value is not null)
+            {
+                return;
+            }
+
             var current = Decode(versioned.Value);
             var delta = mutate(current);
             var bytes = JsonLatticeSerializer<PnCounter>.Default.Serialize(current);

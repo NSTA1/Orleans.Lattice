@@ -52,6 +52,7 @@ Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos
 | **Online reshard** | Grow-only online migration of the physical shard count. | [Online Reshard](docs/lattice/online-reshard.md) |
 | **Projection rebuild** | Cross-silo divergence detection with policy-driven recovery. | [Projection Rebuild](docs/lattice/projection-rebuild.md) |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on a live tree, undoable within the retention window. | [Tree Sizing](docs/lattice/tree-sizing.md) |
+| **Retry policy** | Opt-in retry surface for transient storage faults with caller-supplied idempotency keys. Library default is zero ambient cost. | [Retry Policy](docs/lattice/retry-policy.md) |
 | **Scalable writes** | Keys are sharded across many independent sub-trees. No single-root bottleneck. | [Architecture](docs/lattice/architecture.md) |
 | **Snapshots** | Point-in-time copy of a tree - offline (source locked) or online (source available). | [Snapshots](docs/lattice/snapshots.md) |
 | **Soft delete & recovery** | Trees can be soft-deleted with a configurable retention window. Recovery restores full access; purge permanently removes all data. | [Tree Deletion](docs/lattice/tree-deletion.md) |
