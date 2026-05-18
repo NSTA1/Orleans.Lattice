@@ -507,7 +507,7 @@ below.
 
 ---
 
-- [ ] **R-158 - Bootstrap respects per-tree `LatticeMergeMode`** *(deps: R-152 ✓, R-153 ✓; sequence before R-154 ships payload)*
+- [x] **R-158 - Bootstrap respects per-tree `LatticeMergeMode`** *(deps: R-152 ✓, R-153 ✓; sequence before R-154 ships payload)* ✓ shipped
 
   `LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync` constructs every
   bootstrap-arrived `WalRecord` with `Mode = LatticeMergeMode.LwwRegister`

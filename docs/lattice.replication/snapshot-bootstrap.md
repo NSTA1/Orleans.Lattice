@@ -459,6 +459,18 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   whose `Value` is `null` (not emitted by the default provider, but
   permissible from a host-supplied `ISnapshotProvider`) are skipped
   rather than applied as deletes.
+- **Per-tree merge mode is honoured on bootstrap.** Every
+  `WalRecord` emitted by the bootstrap drain is stamped with the
+  merge mode declared for the tree in
+  `LatticeReplicationOptions.ReplicatedTrees`. Trees declared as
+  `LatticeMergeMode.OrSet` or `LatticeMergeMode.PnCounter` therefore
+  merge bootstrap-arrived entries under the correct CRDT semantics,
+  identical to how live-incremental entries are applied. Trees not
+  enumerated in `ReplicatedTrees` (and trees declared as
+  `LwwRegister`) default to `LatticeMergeMode.LwwRegister`. The
+  mode is resolved once at the start of the drain, not per entry:
+  the resolver is on the hot path's allocation budget but is
+  invariant for the lifetime of a single drain.
 
 ### Sample usage
 

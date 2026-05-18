@@ -59,14 +59,29 @@ public partial class PublicReplicationApiContractTests
             () =>
             {
                 snapshot = stats.Snapshot();
+                // The convergence on B passing only guarantees the
+                // receiver-side apply ran. The shipper's
+                // RecordSuccess (which stamps LastContactTimestamp)
+                // and RecordBacklog fire on a subsequent grain turn
+                // after AdvanceCursorAsync returns, and an earlier
+                // tick's RecordError can create the (tree, peer) row
+                // with LastContactTimestamp still null - which
+                // surfaces as double.NaN in LastContactSeconds per
+                // the documented gauge semantics ("seconds since the
+                // last *successful* contact"). Wait until a row
+                // exists with a real - i.e. non-NaN - timestamp so
+                // the downstream assertion observes a finalised
+                // success entry rather than a placeholder.
                 var hit = snapshot!.Any(r => r.Tree == treeId
-                    && r.Peer == PublicReplicationApiClusterFixture.SiteBClusterId);
+                    && r.Peer == PublicReplicationApiClusterFixture.SiteBClusterId
+                    && !double.IsNaN(r.LastContactSeconds));
                 return Task.FromResult(hit);
             },
-            "peer stats snapshot to include the configured peer/tree");
+            "peer stats snapshot to include the configured peer/tree with a recorded last-contact timestamp");
 
         var matched = snapshot!.First(r => r.Tree == treeId
-            && r.Peer == PublicReplicationApiClusterFixture.SiteBClusterId);
+            && r.Peer == PublicReplicationApiClusterFixture.SiteBClusterId
+            && !double.IsNaN(r.LastContactSeconds));
         Assert.Multiple(() =>
         {
             Assert.That(matched.Tree, Is.EqualTo(treeId));

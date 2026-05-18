@@ -44,6 +44,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     IBootstrapSnapshotSource snapshotProvider,
     IReplicationApplier replicationApplier,
     IReminderRegistry reminderRegistry,
+    ILatticeMergeModeResolver mergeModeResolver,
     ILogger<LatticeBootstrapCoordinatorGrain> logger,
     [PersistentState("bootstrap-coordinator", LatticeOptions.StorageProviderName)]
     IPersistentState<BootstrapCoordinatorState> state)
@@ -66,6 +67,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         snapshotProvider ?? throw new ArgumentNullException(nameof(snapshotProvider));
     private readonly IReplicationApplier _replicationApplier =
         replicationApplier ?? throw new ArgumentNullException(nameof(replicationApplier));
+    private readonly ILatticeMergeModeResolver _mergeModeResolver =
+        mergeModeResolver ?? throw new ArgumentNullException(nameof(mergeModeResolver));
 
     /// <summary>
     /// Per-activation stopwatch timestamp captured when the coordinator
@@ -325,6 +328,18 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         var treeName = TreeName;
         var sourceClusterId = state.State.SourceClusterId;
 
+        // Resolve the per-tree merge mode once up-front. The resolver
+        // is O(1) (a cached dictionary read in the default
+        // ConfiguredLatticeMergeModeResolver implementation) and the
+        // mode is invariant for the lifetime of the drain - re-resolving
+        // per entry would be both pointless and a hot-path allocation
+        // risk. A `null` return from the resolver means "this tree is
+        // not enumerated in ReplicatedTrees"; in that case we default
+        // to LwwRegister, preserving the historical hardcode for trees
+        // that bootstrap intra-cluster only without an explicit replication
+        // declaration.
+        var mergeMode = _mergeModeResolver.Resolve(treeName) ?? LatticeMergeMode.LwwRegister;
+
         // Pass sourceClusterId through to the snapshot provider so that
         // cross-cluster adapters (RemoteSnapshotProvider) can address
         // the correct sender peer. The default intra-cluster provider's
@@ -398,7 +413,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 IsTombstone = false,
                 ExpiresAtTicks = 0,
                 OriginClusterId = sourceClusterId,
-                Mode = LatticeMergeMode.LwwRegister,
+                Mode = mergeMode,
                 VectorClock = null,
             };
             await _replicationApplier.ApplyAsync(record, CancellationToken.None).ConfigureAwait(true);

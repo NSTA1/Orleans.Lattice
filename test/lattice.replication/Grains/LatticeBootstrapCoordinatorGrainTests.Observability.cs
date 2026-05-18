@@ -45,11 +45,17 @@ public partial class LatticeBootstrapCoordinatorGrainTests
                 Applied = true,
                 HighWaterMark = ((WalRecord)call[0]).Timestamp,
             }));
+        // Default merge-mode resolver returns null so DrainSnapshotAsync
+        // falls back to LwwRegister; observability tests do not exercise
+        // the per-tree merge-mode path - that is covered separately in
+        // LatticeBootstrapCoordinatorGrainTests.MergeMode.cs.
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns((LatticeMergeMode?)null);
         var logger = Substitute.For<ILogger<LatticeBootstrapCoordinatorGrain>>();
         logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
         var fakeState = existingState ?? new FakePersistentState<BootstrapCoordinatorState>();
         var grain = new LatticeBootstrapCoordinatorGrain(
-            context, factory, provider, apply, reminders, logger, fakeState);
+            context, factory, provider, apply, reminders, resolver, logger, fakeState);
         return (grain, fakeState, provider, apply, hwm, logger);
     }
 
@@ -64,7 +70,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, _, _, _) = Create(fake);
+        var (grain, _, _, provider, _, _, _, _) = Create(fake);
         var entries = new[]
         {
             new SnapshotEntry { Key = "a", Value = new byte[] { 1 }, Timestamp = Hlc(1) },
@@ -98,7 +104,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, _, _, _) = Create(fake);
+        var (grain, _, _, provider, _, _, _, _) = Create(fake);
         provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(10), new VersionVector(), Stream())));
 
@@ -118,7 +124,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, _, _, _) = Create(fake);
+        var (grain, _, _, provider, _, _, _, _) = Create(fake);
         var entries = new[]
         {
             new SnapshotEntry { Key = "a", Value = new byte[1], Timestamp = Hlc(1) },
@@ -154,7 +160,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         // Drive a full kickoff -> drain -> pin sequence so the
         // duration anchor is set on kickoff and the terminal record
         // fires from PinAndCompleteAsync.
-        var (grain, _, _, provider, _, _, _) = Create();
+        var (grain, _, _, provider, _, _, _, _) = Create();
         provider.ExportAsync(Tree, SourceCluster, Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(10), new VersionVector(), Stream())));
 
@@ -181,7 +187,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.BootstrapDurationName);
 
-        var (grain, _, _, provider, _, apply, _) = Create();
+        var (grain, _, _, provider, _, apply, _, _) = Create();
         provider.ExportAsync(Tree, SourceCluster, Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(10), new VersionVector(),
                 Stream(new SnapshotEntry { Key = "k", Value = new byte[] { 1 }, Timestamp = Hlc(1) }))));
@@ -208,7 +214,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.BootstrapDurationName);
 
-        var (grain, _, _, provider, _, _, _) = Create();
+        var (grain, _, _, provider, _, _, _, _) = Create();
         provider.ExportAsync(Tree, SourceCluster, Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(10), new VersionVector(), Stream())));
 

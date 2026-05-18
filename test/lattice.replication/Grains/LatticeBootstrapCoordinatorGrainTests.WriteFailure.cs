@@ -42,7 +42,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     [Test]
     public void TryInitiateBootstrap_reverts_in_memory_state_when_WriteStateAsync_throws()
     {
-        var (grain, state, _, _, _, _, _) = Create();
+        var (grain, state, _, _, _, _, _, _) = Create();
         state.ThrowOnWrite = new InvalidOperationException("write boom");
 
         Assert.That(async () => await grain.TryInitiateBootstrapAsync(SourceCluster),
@@ -75,7 +75,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake, phase: LatticeBootstrapState.ApplyingSnapshot);
-        var (grain, _, _, provider, reminders, _, _) = Create(fake);
+        var (grain, _, _, provider, reminders, _, _, _) = Create(fake);
         // ExportAsync throws so DrainSnapshotAsync throws *before* any
         // state.WriteStateAsync call - control reaches the L174 catch
         // without first consuming the one-shot ThrowOnWrite.
