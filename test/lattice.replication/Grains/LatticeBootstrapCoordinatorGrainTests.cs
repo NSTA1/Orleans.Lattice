@@ -38,9 +38,11 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         IBootstrapSnapshotSource Provider,
         IReminderRegistry Reminders,
         IReplicationApplier Apply,
-        IReplicationHighWaterMarkGrain Hwm) Create(
+        IReplicationHighWaterMarkGrain Hwm,
+        ILatticeMergeModeResolver MergeResolver) Create(
             FakePersistentState<BootstrapCoordinatorState>? existingState = null,
-            string treeName = Tree)
+            string treeName = Tree,
+            ILatticeMergeModeResolver? mergeResolver = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("bootstrap-coordinator", treeName));
@@ -59,11 +61,19 @@ public partial class LatticeBootstrapCoordinatorGrainTests
                 Applied = true,
                 HighWaterMark = ((WalRecord)call[0]).Timestamp,
             }));
+        // Default merge-mode resolver returns null so DrainSnapshotAsync
+        // falls back to LwwRegister - preserves the pre-R-158 behaviour
+        // for tests that pre-date the per-tree merge-mode plumbing.
+        var resolver = mergeResolver ?? Substitute.For<ILatticeMergeModeResolver>();
+        if (mergeResolver is null)
+        {
+            resolver.Resolve(Arg.Any<string>()).Returns((LatticeMergeMode?)null);
+        }
         var fakeState = existingState ?? new FakePersistentState<BootstrapCoordinatorState>();
         var grain = new LatticeBootstrapCoordinatorGrain(
-            context, factory, provider, apply, reminders,
+            context, factory, provider, apply, reminders, resolver,
             NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState);
-        return (grain, fakeState, factory, provider, reminders, apply, hwm);
+        return (grain, fakeState, factory, provider, reminders, apply, hwm, resolver);
     }
 
     /// <summary>
@@ -71,11 +81,18 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     /// <see cref="IReplicationApplier.ApplyAsync(WalRecord, CancellationToken)"/>:
     /// a Set mutation stamped with the supplied key + HLC, the configured
     /// <see cref="SourceCluster"/> origin, null vector clock, no expiry,
-    /// and the LwwRegister merge mode that <c>DrainSnapshotAsync</c> stamps.
+    /// and the supplied merge mode (default <see cref="LatticeMergeMode.LwwRegister"/>
+    /// matches the resolver's null-fallback path that
+    /// <c>DrainSnapshotAsync</c> stamps for unconfigured trees).
     /// Keeps assertion sites short and ensures every applier-seam contract
     /// field is checked at every call site.
     /// </summary>
-    private static bool IsBootstrapSet(WalRecord r, string key, HybridLogicalClock ts, string origin = SourceCluster) =>
+    private static bool IsBootstrapSet(
+        WalRecord r,
+        string key,
+        HybridLogicalClock ts,
+        string origin = SourceCluster,
+        LatticeMergeMode mode = LatticeMergeMode.LwwRegister) =>
         r.TreeId == Tree
         && r.Op == MutationKind.Set
         && r.Key == key
@@ -84,7 +101,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         && r.VectorClock == null
         && r.ExpiresAtTicks == 0
         && r.IsTombstone == false
-        && r.Mode == LatticeMergeMode.LwwRegister;
+        && r.Mode == mode;
 
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
         new() { WallClockTicks = ticks, Counter = counter };
@@ -131,10 +148,11 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var applier = Substitute.For<IReplicationApplier>();
         var reminders = Substitute.For<IReminderRegistry>();
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
         var fakeState = new FakePersistentState<BootstrapCoordinatorState>();
         Assert.That(
             () => new LatticeBootstrapCoordinatorGrain(
-                context, null!, provider, applier, reminders,
+                context, null!, provider, applier, reminders, resolver,
                 NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
             Throws.InstanceOf<ArgumentNullException>());
     }
@@ -146,10 +164,11 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var factory = Substitute.For<IGrainFactory>();
         var applier = Substitute.For<IReplicationApplier>();
         var reminders = Substitute.For<IReminderRegistry>();
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
         var fakeState = new FakePersistentState<BootstrapCoordinatorState>();
         Assert.That(
             () => new LatticeBootstrapCoordinatorGrain(
-                context, factory, null!, applier, reminders,
+                context, factory, null!, applier, reminders, resolver,
                 NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
             Throws.InstanceOf<ArgumentNullException>());
     }
@@ -161,10 +180,27 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var factory = Substitute.For<IGrainFactory>();
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var reminders = Substitute.For<IReminderRegistry>();
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
         var fakeState = new FakePersistentState<BootstrapCoordinatorState>();
         Assert.That(
             () => new LatticeBootstrapCoordinatorGrain(
-                context, factory, provider, null!, reminders,
+                context, factory, provider, null!, reminders, resolver,
+                NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_merge_mode_resolver_is_null()
+    {
+        var context = Substitute.For<IGrainContext>();
+        var factory = Substitute.For<IGrainFactory>();
+        var provider = Substitute.For<IBootstrapSnapshotSource>();
+        var applier = Substitute.For<IReplicationApplier>();
+        var reminders = Substitute.For<IReminderRegistry>();
+        var fakeState = new FakePersistentState<BootstrapCoordinatorState>();
+        Assert.That(
+            () => new LatticeBootstrapCoordinatorGrain(
+                context, factory, provider, applier, reminders, null!,
                 NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
             Throws.InstanceOf<ArgumentNullException>());
     }
@@ -174,7 +210,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     [Test]
     public async Task GetStateAsync_returns_idle_for_freshly_created_grain()
     {
-        var (grain, _, _, _, _, _, _) = Create();
+        var (grain, _, _, _, _, _, _, _) = Create();
         Assert.That(await grain.GetStateAsync(CancellationToken.None),
             Is.EqualTo(LatticeBootstrapState.Idle));
     }
@@ -184,7 +220,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake, LatticeBootstrapState.ApplyingSnapshot);
-        var (grain, _, _, _, _, _, _) = Create(fake);
+        var (grain, _, _, _, _, _, _, _) = Create(fake);
         Assert.That(await grain.GetStateAsync(CancellationToken.None),
             Is.EqualTo(LatticeBootstrapState.ApplyingSnapshot));
     }
@@ -192,7 +228,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     [Test]
     public void GetStateAsync_observes_cancellation()
     {
-        var (grain, _, _, _, _, _, _) = Create();
+        var (grain, _, _, _, _, _, _, _) = Create();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         Assert.That(
@@ -205,7 +241,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     [Test]
     public async Task GetStatusAsync_returns_idle_with_null_source_for_freshly_created_grain()
     {
-        var (grain, _, _, _, _, _, _) = Create();
+        var (grain, _, _, _, _, _, _, _) = Create();
         var status = await grain.GetStatusAsync(CancellationToken.None);
         Assert.Multiple(() =>
         {
@@ -219,7 +255,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake, LatticeBootstrapState.ApplyingSnapshot);
-        var (grain, _, _, _, _, _, _) = Create(fake);
+        var (grain, _, _, _, _, _, _, _) = Create(fake);
 
         var status = await grain.GetStatusAsync(CancellationToken.None);
 
@@ -240,7 +276,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         fake.State.InProgress = false;
         fake.State.Phase = LatticeBootstrapState.LiveIncremental;
         fake.State.SourceClusterId = SourceCluster;
-        var (grain, _, _, _, _, _, _) = Create(fake);
+        var (grain, _, _, _, _, _, _, _) = Create(fake);
 
         var status = await grain.GetStatusAsync(CancellationToken.None);
 
@@ -254,7 +290,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     [Test]
     public void GetStatusAsync_observes_cancellation()
     {
-        var (grain, _, _, _, _, _, _) = Create();
+        var (grain, _, _, _, _, _, _, _) = Create();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         Assert.That(
@@ -267,7 +303,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     [Test]
     public void BootstrapAsync_throws_when_source_cluster_id_is_null()
     {
-        var (grain, _, _, _, _, _, _) = Create();
+        var (grain, _, _, _, _, _, _, _) = Create();
         Assert.That(
             async () => await grain.BootstrapAsync(null!, CancellationToken.None),
             Throws.InstanceOf<ArgumentException>());
@@ -276,7 +312,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     [Test]
     public void BootstrapAsync_throws_when_source_cluster_id_is_empty()
     {
-        var (grain, _, _, _, _, _, _) = Create();
+        var (grain, _, _, _, _, _, _, _) = Create();
         Assert.That(
             async () => await grain.BootstrapAsync(string.Empty, CancellationToken.None),
             Throws.InstanceOf<ArgumentException>());
@@ -285,7 +321,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     [Test]
     public void BootstrapAsync_throws_when_cancelled_up_front()
     {
-        var (grain, _, _, _, _, _, _) = Create();
+        var (grain, _, _, _, _, _, _, _) = Create();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         Assert.That(
@@ -298,7 +334,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     [Test]
     public async Task TryInitiateBootstrap_persists_intent_with_RequestingSnapshot_phase()
     {
-        var (grain, fakeState, _, _, _, _, _) = Create();
+        var (grain, fakeState, _, _, _, _, _, _) = Create();
 
         var started = await grain.TryInitiateBootstrapAsync(SourceCluster);
 
@@ -318,7 +354,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
         fake.State.OperationId = "first-op";
-        var (grain, _, _, _, _, _, _) = Create(fake);
+        var (grain, _, _, _, _, _, _, _) = Create(fake);
 
         var started = await grain.TryInitiateBootstrapAsync(SourceCluster);
 
@@ -332,7 +368,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake, sourceClusterId: SourceCluster);
-        var (grain, _, _, _, _, _, _) = Create(fake);
+        var (grain, _, _, _, _, _, _, _) = Create(fake);
 
         Assert.That(
             async () => await grain.TryInitiateBootstrapAsync(OtherSource),
@@ -342,7 +378,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     [Test]
     public void TryInitiateBootstrap_throws_when_source_cluster_id_is_null()
     {
-        var (grain, _, _, _, _, _, _) = Create();
+        var (grain, _, _, _, _, _, _, _) = Create();
         Assert.That(
             async () => await grain.TryInitiateBootstrapAsync(null!),
             Throws.InstanceOf<ArgumentException>());
@@ -351,7 +387,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     [Test]
     public void TryInitiateBootstrap_throws_when_source_cluster_id_is_empty()
     {
-        var (grain, _, _, _, _, _, _) = Create();
+        var (grain, _, _, _, _, _, _, _) = Create();
         Assert.That(
             async () => await grain.TryInitiateBootstrapAsync(string.Empty),
             Throws.InstanceOf<ArgumentException>());
@@ -362,7 +398,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     [Test]
     public async Task ProcessNextPhase_in_idle_state_is_a_no_op()
     {
-        var (grain, fake, _, provider, _, _, _) = Create();
+        var (grain, fake, _, provider, _, _, _, _) = Create();
 
         await grain.ProcessNextPhaseAsync();
 
@@ -376,7 +412,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake, LatticeBootstrapState.RequestingSnapshot);
-        var (grain, _, _, provider, _, apply, _) = Create(fake);
+        var (grain, _, _, provider, _, apply, _, _) = Create(fake);
         var asOf = Hlc(123);
         var frontier = new VersionVector();
         var entry = new SnapshotEntry { Key = "k", Value = new byte[] { 1 }, Timestamp = Hlc(50) };
@@ -400,7 +436,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, _, apply, _) = Create(fake);
+        var (grain, _, _, provider, _, apply, _, _) = Create(fake);
         var entries = new[]
         {
             new SnapshotEntry { Key = "a", Value = new byte[] { 1 }, Timestamp = Hlc(1) },
@@ -431,7 +467,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, _, apply, _) = Create(fake);
+        var (grain, _, _, provider, _, apply, _, _) = Create(fake);
         var entries = new[]
         {
             new SnapshotEntry { Key = "live", Value = new byte[] { 1 }, Timestamp = Hlc(1) },
@@ -456,7 +492,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         // Simulate post-crash state: phase=ApplyingSnapshot, cursor=Hlc(75).
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake, LatticeBootstrapState.ApplyingSnapshot, lastAppliedHlc: Hlc(75));
-        var (grain, _, _, provider, _, apply, _) = Create(fake);
+        var (grain, _, _, provider, _, apply, _, _) = Create(fake);
         provider.ExportAsync(Tree, SourceCluster, Hlc(75), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(150), new VersionVector(),
                 Stream(new SnapshotEntry { Key = "post-crash", Value = new byte[] { 9 }, Timestamp = Hlc(120) }))));
@@ -481,7 +517,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var frontier = new VersionVector();
         fake.State.SnapshotAsOfHlc = asOf;
         fake.State.CausalStableFrontier = frontier;
-        var (grain, _, _, _, reminders, _, hwm) = Create(fake);
+        var (grain, _, _, _, reminders, _, hwm, _) = Create(fake);
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
             .Returns(Task.FromResult<IGrainReminder?>(null));
 
@@ -497,7 +533,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, reminders, _, _) = Create(fake);
+        var (grain, _, _, provider, reminders, _, _, _) = Create(fake);
         provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("export boom"));
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
@@ -515,7 +551,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, reminders, apply, _) = Create(fake);
+        var (grain, _, _, provider, reminders, apply, _, _) = Create(fake);
         provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(2), new VersionVector(),
                 Stream(new SnapshotEntry { Key = "k", Value = new byte[] { 1 }, Timestamp = Hlc(1) }))));
@@ -538,7 +574,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         Seed(fake, LatticeBootstrapState.IncrementalHandoff);
         fake.State.SnapshotAsOfHlc = Hlc(2);
         fake.State.CausalStableFrontier = new VersionVector();
-        var (grain, _, _, _, reminders, _, hwm) = Create(fake);
+        var (grain, _, _, _, reminders, _, hwm, _) = Create(fake);
         hwm.PinSnapshotAsync(Arg.Any<HybridLogicalClock>(), Arg.Any<VersionVector>(), Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("pin boom"));
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
@@ -556,7 +592,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, reminders, _, _) = Create(fake);
+        var (grain, _, _, provider, reminders, _, _, _) = Create(fake);
         provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(7), new VersionVector())));
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
@@ -580,7 +616,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         fake.State.InProgress = false;
         fake.State.Phase = LatticeBootstrapState.LiveIncremental;
         fake.State.LastAppliedHlc = Hlc(500);
-        var (grain, _, _, _, _, _, _) = Create(fake);
+        var (grain, _, _, _, _, _, _, _) = Create(fake);
 
         var started = await grain.TryInitiateBootstrapAsync(SourceCluster);
 
@@ -596,7 +632,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         fake.State.InProgress = false;
         fake.State.Phase = LatticeBootstrapState.Failed;
-        var (grain, _, _, _, _, _, _) = Create(fake);
+        var (grain, _, _, _, _, _, _, _) = Create(fake);
 
         var started = await grain.TryInitiateBootstrapAsync(SourceCluster);
 
@@ -611,7 +647,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, _, _, _) = Create(fake);
+        var (grain, _, _, provider, _, _, _, _) = Create(fake);
         var entries = Enumerable.Range(1, 250)
             .Select(i => new SnapshotEntry { Key = $"k{i}", Value = new byte[] { 1 }, Timestamp = Hlc(i) })
             .ToArray();
@@ -644,7 +680,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, _, _, _) = Create(fake);
+        var (grain, _, _, provider, _, _, _, _) = Create(fake);
         var entries = new[]
         {
             new SnapshotEntry { Key = "live", Value = new byte[] { 1 }, Timestamp = Hlc(1) },
@@ -666,7 +702,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, _, _, _) = Create(fake);
+        var (grain, _, _, provider, _, _, _, _) = Create(fake);
         var entries = new[]
         {
             new SnapshotEntry { Key = "a", Value = new byte[] { 1 }, Timestamp = Hlc(10) },
@@ -694,7 +730,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         // from scratch.
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake, LatticeBootstrapState.RequestingSnapshot);
-        var (grain, _, _, provider, reminders, apply, _) = Create(fake);
+        var (grain, _, _, provider, reminders, apply, _, _) = Create(fake);
         provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(2), new VersionVector(),
                 Stream(new SnapshotEntry { Key = "k", Value = new byte[] { 1 }, Timestamp = Hlc(1) }))));
@@ -722,7 +758,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, _, apply, _) = Create(fake);
+        var (grain, _, _, provider, _, apply, _, _) = Create(fake);
         var payload = new byte[] { 7, 8, 9, 10 };
         provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(2), new VersionVector(),
@@ -746,7 +782,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         // IncrementalHandoff and pin the frontier rather than spin.
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake, LatticeBootstrapState.ApplyingSnapshot, lastAppliedHlc: Hlc(50));
-        var (grain, _, _, provider, reminders, _, hwm) = Create(fake);
+        var (grain, _, _, provider, reminders, _, hwm, _) = Create(fake);
         var asOf = Hlc(60);
         var frontier = new VersionVector();
         provider.ExportAsync(Tree, SourceCluster, Hlc(50), Arg.Any<CancellationToken>())
@@ -776,7 +812,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         fake.State.InProgress = true;
         fake.State.Phase = LatticeBootstrapState.LiveIncremental;
         fake.State.SourceClusterId = SourceCluster;
-        var (grain, _, _, provider, reminders, _, hwm) = Create(fake);
+        var (grain, _, _, provider, reminders, _, hwm, _) = Create(fake);
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
             .Returns(Task.FromResult<IGrainReminder?>(null));
 
@@ -795,7 +831,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         Seed(fake, LatticeBootstrapState.IncrementalHandoff);
         fake.State.SnapshotAsOfHlc = Hlc(99);
         fake.State.CausalStableFrontier = new VersionVector();
-        var (grain, _, _, _, reminders, _, _) = Create(fake);
+        var (grain, _, _, _, reminders, _, _, _) = Create(fake);
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
             .Returns(Task.FromResult<IGrainReminder?>(null));
 
@@ -816,7 +852,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         // running" zombie.
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, reminders, _, _) = Create(fake);
+        var (grain, _, _, provider, reminders, _, _, _) = Create(fake);
         provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("export boom"));
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
@@ -858,7 +894,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         // observers missed every bootstrap entry.
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, _, apply, _) = Create(fake);
+        var (grain, _, _, provider, _, apply, _, _) = Create(fake);
         var observed = new List<WalRecord>();
         apply.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns(call =>
@@ -909,7 +945,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         // (mirroring the live-incremental apply path).
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
-        var (grain, _, _, provider, reminders, apply, _) = Create(fake);
+        var (grain, _, _, provider, reminders, apply, _, _) = Create(fake);
         provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(Hlc(2), new VersionVector(),
                 Stream(new SnapshotEntry { Key = "k", Value = new byte[] { 1 }, Timestamp = Hlc(1) }))));
