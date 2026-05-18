@@ -27,6 +27,16 @@ internal sealed class LatticeBootstrapCoordinator(IGrainFactory grainFactory) : 
     }
 
     /// <inheritdoc />
+    public Task<BootstrapCoordinatorStatus> GetStatusAsync(string treeName, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeName);
+        cancellationToken.ThrowIfCancellationRequested();
+        return _grainFactory
+            .GetGrain<ILatticeBootstrapCoordinatorGrain>(treeName)
+            .GetStatusAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task BootstrapAsync(
         string treeName,
         string sourceClusterId,

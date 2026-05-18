@@ -46,6 +46,27 @@ public interface ILatticeBootstrapCoordinator
     Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the current <see cref="BootstrapCoordinatorStatus"/>
+    /// for <paramref name="treeName"/>: the phase plus the source
+    /// cluster id of any in-flight bootstrap. Reports
+    /// <see cref="LatticeBootstrapState.Idle"/> with a
+    /// <see langword="null"/>
+    /// <see cref="BootstrapCoordinatorStatus.SourceClusterId"/> when
+    /// no bootstrap has been started for the tree on this receiver
+    /// cluster (or when the silo hosting the activation restarted,
+    /// which resets the in-memory state). The read is a single grain
+    /// RPC and may observe a transient state while a bootstrap is in
+    /// progress. Used by
+    /// <see cref="ILatticeFallOffLogDetector.CheckAndTriggerAsync"/>
+    /// to suppress duplicate alerting on probes that arrive while the
+    /// coordinator is already draining a snapshot from the same
+    /// source cluster.
+    /// </summary>
+    /// <param name="treeName">The logical tree id. Must be non-null and non-empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<BootstrapCoordinatorStatus> GetStatusAsync(string treeName, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Bootstraps <paramref name="treeName"/> from the snapshot
     /// produced by the configured <see cref="ISnapshotProvider"/>.
     /// Drives the state machine through

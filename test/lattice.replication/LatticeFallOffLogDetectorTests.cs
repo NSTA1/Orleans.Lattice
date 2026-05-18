@@ -295,4 +295,207 @@ public class LatticeFallOffLogDetectorTests
             async () => await detector.CheckAndTriggerAsync(Tree, Source, Hlc(100)),
             Throws.InstanceOf<TimeoutException>().With.Message.EqualTo("hwm down"));
     }
+
+    [Test]
+    public async Task CheckAndTriggerAsync_reports_not_suppressed_when_no_drain_running()
+    {
+        // Coordinator default substitute returns
+        // BootstrapCoordinatorStatus(Idle, null) - no in-flight drain -
+        // so the detector should follow the normal detection path:
+        // increment PeerFellOffLog (not the suppressed counter),
+        // kick off the bootstrap, and surface Suppressed = false.
+        var (detector, coordinator, _, _) = Create(Hlc(10));
+
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.PeerFellOffLogName);
+        using var suppressedCollector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.PeerFellOffLogSuppressedName);
+
+        var decision = await detector.CheckAndTriggerAsync(Tree, Source, Hlc(100));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.FellOffLog, Is.True);
+            Assert.That(decision.BootstrapTriggered, Is.True);
+            Assert.That(decision.Suppressed, Is.False);
+        });
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        Assert.That(suppressedCollector.Measurements, Is.Empty);
+        await coordinator.Received(1).BootstrapAsync(Tree, Source, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task CheckAndTriggerAsync_suppresses_probe_when_coordinator_in_progress_from_same_source()
+    {
+        // Coordinator reports ApplyingSnapshot from the same source -
+        // the detector should skip BootstrapAsync, leave PeerFellOffLog
+        // untouched, and increment PeerFellOffLogSuppressed instead.
+        var (detector, coordinator, _, _) = Create(Hlc(10));
+        coordinator.GetStatusAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BootstrapCoordinatorStatus(
+                LatticeBootstrapState.ApplyingSnapshot, Source)));
+
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.PeerFellOffLogName);
+        using var suppressedCollector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.PeerFellOffLogSuppressedName);
+
+        var decision = await detector.CheckAndTriggerAsync(Tree, Source, Hlc(100));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.FellOffLog, Is.True);
+            Assert.That(decision.BootstrapTriggered, Is.True);
+            Assert.That(decision.Suppressed, Is.True);
+        });
+
+        Assert.That(collector.Measurements, Is.Empty);
+        Assert.That(suppressedCollector.Measurements, Has.Count.EqualTo(1));
+        Assert.That(suppressedCollector.Measurements.Single().Value, Is.EqualTo(1));
+        Assert.That(suppressedCollector.Measurements.Single().Tags,
+            Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == LatticeReplicationMetrics.TagTree && (string?)t.Value == Tree));
+        Assert.That(suppressedCollector.Measurements.Single().Tags,
+            Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == LatticeReplicationMetrics.TagOrigin && (string?)t.Value == Source));
+
+        await coordinator.DidNotReceive().BootstrapAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [TestCase(LatticeBootstrapState.RequestingSnapshot)]
+    [TestCase(LatticeBootstrapState.ApplyingSnapshot)]
+    [TestCase(LatticeBootstrapState.IncrementalHandoff)]
+    public async Task CheckAndTriggerAsync_suppresses_probe_for_every_non_terminal_phase(
+        LatticeBootstrapState inFlight)
+    {
+        // The suppression path covers all three non-terminal phases.
+        var (detector, coordinator, _, _) = Create(Hlc(10));
+        coordinator.GetStatusAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BootstrapCoordinatorStatus(inFlight, Source)));
+
+        var decision = await detector.CheckAndTriggerAsync(Tree, Source, Hlc(100));
+        Assert.That(decision.Suppressed, Is.True);
+    }
+
+    [Test]
+    public async Task CheckAndTriggerAsync_does_not_suppress_when_in_progress_from_different_source()
+    {
+        // A bootstrap from a *different* source should not suppress
+        // the probe; the underlying coordinator.BootstrapAsync call
+        // will throw on the conflict, and that exception must
+        // propagate verbatim (covered by the existing
+        // propagates_coordinator_exception_verbatim test). Here we
+        // only assert that the detector chooses the non-suppressed
+        // branch.
+        var (detector, coordinator, _, _) = Create(Hlc(10));
+        coordinator.GetStatusAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BootstrapCoordinatorStatus(
+                LatticeBootstrapState.ApplyingSnapshot, "other-cluster")));
+
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.PeerFellOffLogName);
+        using var suppressedCollector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.PeerFellOffLogSuppressedName);
+
+        var decision = await detector.CheckAndTriggerAsync(Tree, Source, Hlc(100));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.FellOffLog, Is.True);
+            Assert.That(decision.Suppressed, Is.False);
+            Assert.That(decision.BootstrapTriggered, Is.True);
+        });
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        Assert.That(suppressedCollector.Measurements, Is.Empty);
+        await coordinator.Received(1).BootstrapAsync(Tree, Source, Arg.Any<CancellationToken>());
+    }
+
+    [TestCase(LatticeBootstrapState.Idle)]
+    [TestCase(LatticeBootstrapState.LiveIncremental)]
+    [TestCase(LatticeBootstrapState.Failed)]
+    public async Task CheckAndTriggerAsync_does_not_suppress_when_status_is_terminal(
+        LatticeBootstrapState phase)
+    {
+        // A terminal phase (Idle / LiveIncremental / Failed) means
+        // the coordinator is not actively draining, so a fresh
+        // detection should kick off a new cycle.
+        var (detector, coordinator, _, _) = Create(Hlc(10));
+        coordinator.GetStatusAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new BootstrapCoordinatorStatus(phase, Source)));
+
+        var decision = await detector.CheckAndTriggerAsync(Tree, Source, Hlc(100));
+
+        Assert.That(decision.Suppressed, Is.False);
+        await coordinator.Received(1).BootstrapAsync(Tree, Source, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task CheckAndTriggerAsync_increments_peer_fell_off_log_once_then_suppresses_subsequent_probes()
+    {
+        // First probe finds no drain in progress: PeerFellOffLog++,
+        // bootstrap kicked off. Simulate the coordinator transitioning
+        // to ApplyingSnapshot, then re-probe several times: every
+        // subsequent probe within the drain window must increment
+        // PeerFellOffLogSuppressed (not PeerFellOffLog).
+        var (detector, coordinator, _, _) = Create(Hlc(10));
+
+        // Status sequence: Idle for the first probe, then
+        // ApplyingSnapshot for every subsequent probe.
+        var statuses = new Queue<BootstrapCoordinatorStatus>();
+        statuses.Enqueue(new BootstrapCoordinatorStatus(LatticeBootstrapState.Idle, null));
+        for (var i = 0; i < 5; i++)
+        {
+            statuses.Enqueue(new BootstrapCoordinatorStatus(
+                LatticeBootstrapState.ApplyingSnapshot, Source));
+        }
+        coordinator.GetStatusAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(statuses.Dequeue()));
+
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.PeerFellOffLogName);
+        using var suppressedCollector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.PeerFellOffLogSuppressedName);
+
+        for (var i = 0; i < 6; i++)
+        {
+            await detector.CheckAndTriggerAsync(Tree, Source, Hlc(100));
+        }
+
+        var totalDetected = collector.Measurements.Sum(m => m.Value);
+        var totalSuppressed = suppressedCollector.Measurements.Sum(m => m.Value);
+        Assert.Multiple(() =>
+        {
+            Assert.That(totalDetected, Is.EqualTo(1),
+                "PeerFellOffLog must increment exactly once per drain cycle.");
+            Assert.That(totalSuppressed, Is.EqualTo(5),
+                "PeerFellOffLogSuppressed must increment on every suppressed probe.");
+        });
+
+        // Only the first probe actually called BootstrapAsync; the
+        // remaining five short-circuited at the suppression branch.
+        await coordinator.Received(1).BootstrapAsync(
+            Tree, Source, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void BootstrapCoordinatorStatus_default_value_reports_idle_and_null_source()
+    {
+        var status = default(BootstrapCoordinatorStatus);
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.Phase, Is.EqualTo(LatticeBootstrapState.Idle));
+            Assert.That(status.SourceClusterId, Is.Null);
+        });
+    }
 }

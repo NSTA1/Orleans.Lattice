@@ -85,6 +85,21 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     }
 
     /// <inheritdoc />
+    public Task<BootstrapCoordinatorStatus> GetStatusAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        // Project an empty SourceClusterId to null so the caller does
+        // not have to know about the persistent state's empty-string
+        // sentinel. A finished or never-started bootstrap also reports
+        // null even if the persisted source string survived a prior
+        // run, because InProgress is the authoritative liveness gate.
+        var source = state.State.InProgress && !string.IsNullOrEmpty(state.State.SourceClusterId)
+            ? state.State.SourceClusterId
+            : null;
+        return Task.FromResult(new BootstrapCoordinatorStatus(state.State.Phase, source));
+    }
+
+    /// <inheritdoc />
     public async Task BootstrapAsync(string sourceClusterId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);

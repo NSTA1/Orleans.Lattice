@@ -411,7 +411,7 @@ below.
 
 ---
 
-- [ ] **R-155 - Auto-bootstrap fall-off observability under coordinator absorption** *(no new deps; refines `R-051 ✓ shipped` / `R-052 ✓ shipped`)*
+- [x] **R-155 - Auto-bootstrap fall-off observability under coordinator absorption** *(no new deps; refines `R-051 ✓ shipped` / `R-052 ✓ shipped`)* ✓ shipped
 
   Independent of the transport work but observable only once the transport
   work lands. Today `LatticeFallOffLogDetector.CheckAndTriggerAsync`

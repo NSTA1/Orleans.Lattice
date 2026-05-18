@@ -29,6 +29,21 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     Task<LatticeBootstrapState> GetStateAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the current <see cref="BootstrapCoordinatorStatus"/>:
+    /// the phase plus the persisted
+    /// <see cref="BootstrapCoordinatorState.SourceClusterId"/>
+    /// projected as <see langword="null"/> when no bootstrap is in
+    /// flight (i.e. when
+    /// <see cref="BootstrapCoordinatorState.InProgress"/> is
+    /// <see langword="false"/> or the persisted source string is
+    /// empty). Surfaces the in-progress source identity to the
+    /// receiver-side fall-off detector so it can absorb duplicate
+    /// probes the coordinator would otherwise quietly no-op.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<BootstrapCoordinatorStatus> GetStatusAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Drives the bootstrap state machine through
     /// <see cref="LatticeBootstrapState.RequestingSnapshot"/> →
     /// <see cref="LatticeBootstrapState.ApplyingSnapshot"/> →

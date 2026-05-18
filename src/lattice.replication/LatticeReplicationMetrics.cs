@@ -478,4 +478,30 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="PeerFellOffLog"/> counter.
     /// </summary>
     public const string PeerFellOffLogName = "orleans.lattice.replication.peer.fell_off_log";
+
+    /// <summary>
+    /// Counter incremented once per call to
+    /// <see cref="ILatticeFallOffLogDetector.CheckAndTriggerAsync"/>
+    /// that detected a fall-off-the-log condition but was absorbed by
+    /// the receiver-side bootstrap coordinator because a bootstrap
+    /// for the same <c>(treeName, sourceClusterId)</c> was already in
+    /// flight (one of
+    /// <see cref="LatticeBootstrapState.RequestingSnapshot"/>,
+    /// <see cref="LatticeBootstrapState.ApplyingSnapshot"/>, or
+    /// <see cref="LatticeBootstrapState.IncrementalHandoff"/>). The
+    /// detector does **not** increment <see cref="PeerFellOffLog"/>
+    /// in that case so a long-running drain does not produce a
+    /// detection event per probe; instead it increments this counter
+    /// so operators can still observe the suppressed probes and tell
+    /// them apart from "no detection". Tagged by <see cref="TagTree"/>
+    /// and <see cref="TagOrigin"/>.
+    /// </summary>
+    public static readonly Counter<long> PeerFellOffLogSuppressed =
+        Meter.CreateCounter<long>("orleans.lattice.replication.peer.fell_off_log_suppressed", unit: "{event}",
+            description: "Receiver fall-off-the-log probes suppressed because the bootstrap coordinator is already draining from the same origin, tagged by tree and origin.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="PeerFellOffLogSuppressed"/> counter.
+    /// </summary>
+    public const string PeerFellOffLogSuppressedName = "orleans.lattice.replication.peer.fell_off_log_suppressed";
 }

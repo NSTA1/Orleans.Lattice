@@ -53,9 +53,23 @@ bootstrap kickoff is the operator's responsibility.
 ## Observability
 
 The `peer.fell_off_log` counter on the `orleans.lattice.replication` meter is
-incremented exactly once per detection, tagged `tree` and `origin`. An alert
-on `rate(peer.fell_off_log) > 0` flags a receiver that has lost incremental
-ground against a peer.
+incremented exactly once per fresh detection, tagged `tree` and `origin`. An
+alert on `rate(peer.fell_off_log) > 0` flags a receiver that has lost
+incremental ground against a peer.
+
+While a bootstrap is already draining for the same `(tree, sourceClusterId)`,
+the detector consults `ILatticeBootstrapCoordinator.GetStatusAsync` first and
+absorbs duplicate probes: `peer.fell_off_log` is **not** re-incremented, the
+warning log is downgraded to debug verbosity, and the
+`peer.fell_off_log_suppressed` counter (same tag set) increments instead.
+Operators wiring alerts should therefore:
+
+- Alert on `rate(peer.fell_off_log)` for fresh fall-off detection.
+- Surface `peer.fell_off_log_suppressed` as a non-alerting dashboard metric so
+  long-running drains remain visible without paging.
+- Use `FallOffLogDecision.Suppressed` (also surfaced on the detector return
+  value) to distinguish "the detector did not fire" from "the detector fired
+  and the coordinator was already handling it" inside diagnostic tooling.
 
 ## Idempotency
 
@@ -64,4 +78,5 @@ cleanly: a kickoff for the same `(tree, sourceClusterId)` while a bootstrap
 is already in flight from the same source is a no-op; a kickoff from a
 different source cluster throws and the exception propagates verbatim out of
 `CheckAndTriggerAsync`. Repeated detection while a bootstrap is already
-running is therefore harmless.
+running is therefore harmless, and the detector projects that idempotency
+into the `peer.fell_off_log_suppressed` counter so it remains observable.
