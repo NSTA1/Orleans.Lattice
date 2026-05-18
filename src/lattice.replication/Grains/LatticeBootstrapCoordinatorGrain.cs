@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -65,6 +66,20 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         snapshotProvider ?? throw new ArgumentNullException(nameof(snapshotProvider));
     private readonly IReplicationApplier _replicationApplier =
         replicationApplier ?? throw new ArgumentNullException(nameof(replicationApplier));
+
+    /// <summary>
+    /// Per-activation stopwatch timestamp captured when the coordinator
+    /// first observes an in-flight bootstrap. <see langword="null"/>
+    /// when the activation has not yet driven a drain. Reset to
+    /// <see langword="null"/> after the terminal
+    /// <see cref="LatticeReplicationMetrics.BootstrapDuration"/>
+    /// histogram emit so a subsequent re-bootstrap on the same
+    /// activation gets a fresh start anchor. Held in memory (not
+    /// persistent state) because a silo failover should report
+    /// "duration since most recent reactivation" - the per-entry
+    /// counters carry cross-failover progress.
+    /// </summary>
+    private long? _drainStartTimestamp;
 
     private string TreeName => Context.GrainId.Key.ToString() ?? "";
 
@@ -185,6 +200,17 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             state.State.CausalStableFrontier = prevCausalStableFrontier;
             throw;
         }
+
+        // Anchor the duration timer at the moment the kickoff is
+        // durable. A reactivation after a silo crash skips this path
+        // (the persisted Phase != Idle), so DrainSnapshotAsync lazy-
+        // initialises the anchor on resume.
+        _drainStartTimestamp = Stopwatch.GetTimestamp();
+
+        Logger.LogInformation(
+            "Bootstrap phase transition for tree '{TreeName}' from source '{SourceClusterId}': Idle -> RequestingSnapshot (LastAppliedHlc={LastAppliedHlc})",
+            treeName, sourceClusterId, state.State.LastAppliedHlc);
+
         return true;
     }
 
@@ -269,6 +295,16 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             // next tick retry the persist.
             if (persisted)
             {
+                // Terminal duration recording: outcome=failed. Emit
+                // before the structured log so a log-tail consumer who
+                // joins on (treeName, sourceClusterId) sees the metric
+                // and the log in the canonical order.
+                RecordBootstrapDuration(TreeName, state.State.SourceClusterId, LatticeReplicationMetrics.BootstrapOutcomeFailed);
+
+                Logger.LogInformation(
+                    "Bootstrap phase transition for tree '{TreeName}' from source '{SourceClusterId}': {PreviousPhase} -> Failed (LastAppliedHlc={LastAppliedHlc})",
+                    TreeName, state.State.SourceClusterId, prevPhase, state.State.LastAppliedHlc);
+
                 await CompleteCoordinatorAsync().ConfigureAwait(true);
             }
             throw;
@@ -307,11 +343,26 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // HWM dedupe makes any overlap a no-op.
         state.State.SnapshotAsOfHlc = snapshot.AsOfHlc;
         state.State.CausalStableFrontier = snapshot.CausalStableFrontier;
+        var pivotedToApplying = false;
         if (state.State.Phase != LatticeBootstrapState.ApplyingSnapshot)
         {
             state.State.Phase = LatticeBootstrapState.ApplyingSnapshot;
+            pivotedToApplying = true;
         }
         await state.WriteStateAsync().ConfigureAwait(true);
+
+        // Lazy-initialise the duration anchor on resume after a silo
+        // failover: TryInitiateBootstrapAsync set it on kickoff, but a
+        // crashed activation that reactivates here would otherwise
+        // produce a null timer and skip the terminal duration record.
+        _drainStartTimestamp ??= Stopwatch.GetTimestamp();
+
+        if (pivotedToApplying)
+        {
+            Logger.LogInformation(
+                "Bootstrap phase transition for tree '{TreeName}' from source '{SourceClusterId}': RequestingSnapshot -> ApplyingSnapshot (LastAppliedHlc={LastAppliedHlc})",
+                treeName, sourceClusterId, state.State.LastAppliedHlc);
+        }
 
         int sinceLastPersist = 0;
 
@@ -352,6 +403,17 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             };
             await _replicationApplier.ApplyAsync(record, CancellationToken.None).ConfigureAwait(true);
 
+            // Bootstrap progress instruments: increment once per
+            // successfully-applied entry so operators can watch
+            // entries/second and bytes/second in real time without
+            // waiting for the terminal duration histogram.
+            LatticeReplicationMetrics.BootstrapEntriesReceived.Add(1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId));
+            LatticeReplicationMetrics.BootstrapBytesReceived.Add(entry.Value.Length,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId));
+
             // Track the highest source HLC observed so a resume can
             // re-export from this point. The per-origin HWM dedupe
             // tolerates a stale cursor, so persisting in batches is
@@ -370,6 +432,10 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
 
         state.State.Phase = LatticeBootstrapState.IncrementalHandoff;
         await state.WriteStateAsync().ConfigureAwait(true);
+
+        Logger.LogInformation(
+            "Bootstrap phase transition for tree '{TreeName}' from source '{SourceClusterId}': ApplyingSnapshot -> IncrementalHandoff (LastAppliedHlc={LastAppliedHlc})",
+            treeName, sourceClusterId, state.State.LastAppliedHlc);
     }
 
     /// <summary>
@@ -395,6 +461,38 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         state.State.Phase = LatticeBootstrapState.LiveIncremental;
         state.State.InProgress = false;
         await state.WriteStateAsync().ConfigureAwait(true);
+
+        // Terminal duration recording: outcome=live. Reset the anchor
+        // so a subsequent re-bootstrap on the same activation does not
+        // double-count.
+        RecordBootstrapDuration(treeName, state.State.SourceClusterId, LatticeReplicationMetrics.BootstrapOutcomeLive);
+
+        Logger.LogInformation(
+            "Bootstrap phase transition for tree '{TreeName}' from source '{SourceClusterId}': IncrementalHandoff -> LiveIncremental (LastAppliedHlc={LastAppliedHlc})",
+            treeName, state.State.SourceClusterId, state.State.LastAppliedHlc);
+
         await CompleteCoordinatorAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Records the <see cref="LatticeReplicationMetrics.BootstrapDuration"/>
+    /// histogram (in milliseconds) with the supplied outcome tag and
+    /// resets the per-activation drain-start anchor. No-op when the
+    /// anchor is <see langword="null"/> (e.g. a Failed transition
+    /// without a prior kickoff anchor or a duplicate terminal call).
+    /// </summary>
+    private void RecordBootstrapDuration(string treeName, string sourceClusterId, string outcome)
+    {
+        if (_drainStartTimestamp is not long start)
+        {
+            return;
+        }
+
+        var elapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        LatticeReplicationMetrics.BootstrapDuration.Record(elapsedMs,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome));
+        _drainStartTimestamp = null;
     }
 }
