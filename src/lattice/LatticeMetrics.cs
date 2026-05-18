@@ -180,10 +180,18 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Histogram of per-step latency on the leaf commit path
-    /// (build-and-WAL-append, in-memory Apply, observer-publish).
-    /// Tagged with <see cref="TagStep"/> = <c>wal</c>, <c>apply</c>,
-    /// or <c>observer</c> so operators can attribute total commit
-    /// latency to its constituent stages.
+    /// (build-and-WAL-append, in-memory Apply, observer-publish,
+    /// parent-digest publish). Tagged with <see cref="TagStep"/> =
+    /// <c>wal</c>, <c>apply</c>, <c>observer</c>, or <c>digest</c> so
+    /// operators can attribute total commit latency to its constituent
+    /// stages. The <c>digest</c> step covers the awaited cross-grain
+    /// <c>OnChildDigestPublishedAsync</c> RPC to the parent internal
+    /// node emitted from every foreground write path (single-key
+    /// <c>SetAsync</c> / <c>DeleteAsync</c>, per-leaf
+    /// <c>DeleteRangeAsync</c>); cold / structural digest publishes
+    /// (leaf-split topology, projection-checkpoint flush, saga
+    /// terminal) are deliberately excluded so the histogram remains
+    /// attributable to the per-write pipeline.
     /// </summary>
     public static readonly Histogram<double> LeafCommitDuration =
         Meter.CreateHistogram<double>("orleans.lattice.leaf.commit.duration", unit: "ms",

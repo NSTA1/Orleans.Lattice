@@ -812,8 +812,13 @@ internal sealed partial class BPlusLeafGrain(
         // internal node so the chained subtree fold stays current.
         // No-op when the running hash did not change (dominated
         // re-application) or when this leaf has no parent (flat-tree
-        // root-is-leaf shape).
+        // root-is-leaf shape). Wrapped in the commit-step recorder so
+        // the per-write parent-digest RPC is attributable on
+        // LeafCommitDuration alongside the wal / apply / observer
+        // stages.
+        var digestStartTicks = Stopwatch.GetTimestamp();
         await PublishDigestUpwardAsync();
+        RecordCommitStep("digest", digestStartTicks);
 
         return splitResult;
     }
@@ -924,8 +929,13 @@ internal sealed partial class BPlusLeafGrain(
         RecordCommitStep("observer", observerStartTicks);
 
         // Forward the projection-hash delta to the parent internal
-        // node. See CommitSetAsync for the no-op semantics.
+        // node. See CommitSetAsync for the no-op semantics. Wrapped in
+        // the commit-step recorder so the per-write parent-digest RPC
+        // is attributable on LeafCommitDuration alongside the wal /
+        // apply / observer stages.
+        var digestStartTicks = Stopwatch.GetTimestamp();
         await PublishDigestUpwardAsync();
+        RecordCommitStep("digest", digestStartTicks);
 
         return true;
     }
@@ -1037,8 +1047,14 @@ internal sealed partial class BPlusLeafGrain(
 
         // Forward the projection-hash delta (an XOR-fold over every
         // tombstoned key's contribution swap) to the parent internal
-        // node. A single publication covers the whole range.
+        // node. A single publication covers the whole range. Wrapped
+        // in the commit-step recorder so the per-range parent-digest
+        // RPC is attributable on LeafCommitDuration alongside the wal
+        // / apply stages (DeleteRange has no per-leaf observer step;
+        // see the comment above).
+        var digestStartTicks = Stopwatch.GetTimestamp();
         await PublishDigestUpwardAsync();
+        RecordCommitStep("digest", digestStartTicks);
 
         return new RangeDeleteResult { Deleted = keysToDelete.Count, PastRange = pastRange };
     }
