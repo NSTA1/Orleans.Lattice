@@ -138,4 +138,49 @@ public class LatticeBootstrapCoordinatorTests
         factory.Received(1).GetGrain<ILatticeBootstrapCoordinatorGrain>(Tree);
         await grain.Received(1).BootstrapAsync(SourceCluster, Arg.Any<CancellationToken>());
     }
+
+    [Test]
+    public void GetStatusAsync_throws_when_tree_name_is_null()
+    {
+        var (coord, _, _) = Create();
+        Assert.That(
+            async () => await coord.GetStatusAsync(null!),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void GetStatusAsync_throws_when_tree_name_is_empty()
+    {
+        var (coord, _, _) = Create();
+        Assert.That(
+            async () => await coord.GetStatusAsync(string.Empty),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void GetStatusAsync_observes_cancellation_before_dispatch()
+    {
+        var (coord, _, _) = Create();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        Assert.That(
+            async () => await coord.GetStatusAsync(Tree, cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    public async Task GetStatusAsync_resolves_grain_by_tree_name_and_forwards_call()
+    {
+        var (coord, factory, grain) = Create();
+        var expected = new BootstrapCoordinatorStatus(
+            LatticeBootstrapState.ApplyingSnapshot, SourceCluster);
+        grain.GetStatusAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(expected));
+
+        var status = await coord.GetStatusAsync(Tree);
+
+        Assert.That(status, Is.EqualTo(expected));
+        factory.Received(1).GetGrain<ILatticeBootstrapCoordinatorGrain>(Tree);
+        await grain.Received(1).GetStatusAsync(Arg.Any<CancellationToken>());
+    }
 }

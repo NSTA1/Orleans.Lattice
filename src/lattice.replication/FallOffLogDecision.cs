@@ -36,7 +36,29 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="ILatticeBootstrapCoordinator.BootstrapAsync"/>
 /// manually).
 /// </param>
+/// <param name="Suppressed">
+/// <see langword="true"/> when the detector observed a fall-off
+/// condition but the bootstrap coordinator was already in flight from
+/// the same <c>sourceClusterId</c> (one of
+/// <see cref="LatticeBootstrapState.RequestingSnapshot"/>,
+/// <see cref="LatticeBootstrapState.ApplyingSnapshot"/>, or
+/// <see cref="LatticeBootstrapState.IncrementalHandoff"/>). In that
+/// case the detector treats this probe as a no-op for alerting
+/// purposes: <see cref="LatticeReplicationMetrics.PeerFellOffLog"/>
+/// is not incremented, the warning log is downgraded to debug
+/// verbosity, and
+/// <see cref="LatticeReplicationMetrics.PeerFellOffLogSuppressed"/>
+/// is incremented instead so operators can distinguish "detector did
+/// not fire" from "detector fired and the coordinator was already
+/// handling it". Always <see langword="false"/> when
+/// <see cref="FellOffLog"/> is <see langword="false"/>.
+/// <see cref="BootstrapTriggered"/> is reported as
+/// <see langword="true"/> alongside <see cref="Suppressed"/> because
+/// the coordinator's in-progress drain is, semantically, the
+/// triggered bootstrap.
+/// </param>
 public readonly record struct FallOffLogDecision(
     bool FellOffLog,
     HybridLogicalClock LocalHighWaterMark,
-    bool BootstrapTriggered);
+    bool BootstrapTriggered,
+    bool Suppressed);

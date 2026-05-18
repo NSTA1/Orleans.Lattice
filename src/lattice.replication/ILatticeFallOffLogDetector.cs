@@ -30,10 +30,17 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// The coordinator's idempotency contract handles concurrent
 /// detection cleanly: when a bootstrap is already in flight from the
-/// same source cluster, the kickoff is a no-op; from a different
-/// source cluster, the kickoff throws (and the exception propagates
-/// out of <see cref="CheckAndTriggerAsync"/> verbatim); when the
-/// bootstrap is in a terminal state
+/// same source cluster, the detector consults
+/// <see cref="ILatticeBootstrapCoordinator.GetStatusAsync"/> first
+/// and suppresses the probe - the kickoff is skipped, the
+/// <see cref="LatticeReplicationMetrics.PeerFellOffLog"/> counter is
+/// not bumped, the warning is downgraded to debug, and
+/// <see cref="LatticeReplicationMetrics.PeerFellOffLogSuppressed"/>
+/// is incremented instead so operators can still observe the
+/// absorbed probes. From a different source cluster, the kickoff
+/// throws (and the exception propagates out of
+/// <see cref="CheckAndTriggerAsync"/> verbatim); when the bootstrap
+/// is in a terminal state
 /// (<see cref="LatticeBootstrapState.LiveIncremental"/> or
 /// <see cref="LatticeBootstrapState.Failed"/>), the kickoff starts a
 /// fresh cycle.

@@ -55,7 +55,7 @@ public partial class ReplicationMaintenanceGrainTests
         var detector = Substitute.For<ILatticeFallOffLogDetector>();
         detector.CheckAndTriggerAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(new FallOffLogDecision(false, HybridLogicalClock.Zero, false));
+            .Returns(new FallOffLogDecision(false, HybridLogicalClock.Zero, false, false));
         var introspection = Substitute.For<ILatticeWalIntrospection>();
         var fakeState = new FakePersistentState<ReplicationMaintenanceState>();
         if (seed is not null)
@@ -341,7 +341,7 @@ public partial class ReplicationMaintenanceGrainTests
         detector.CheckAndTriggerAsync(Tree, "site-b", Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns<FallOffLogDecision>(_ => throw new InvalidOperationException("peer-b-failed"));
         detector.CheckAndTriggerAsync(Tree, "site-c", Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(new FallOffLogDecision(false, HybridLogicalClock.Zero, false));
+            .Returns(new FallOffLogDecision(false, HybridLogicalClock.Zero, false, false));
 
         await grain.ProcessNextPhaseAsync();
 

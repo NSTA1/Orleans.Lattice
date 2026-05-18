@@ -200,6 +200,68 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             Throws.InstanceOf<OperationCanceledException>());
     }
 
+    // --- GetStatusAsync ---
+
+    [Test]
+    public async Task GetStatusAsync_returns_idle_with_null_source_for_freshly_created_grain()
+    {
+        var (grain, _, _, _, _, _, _) = Create();
+        var status = await grain.GetStatusAsync(CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.Phase, Is.EqualTo(LatticeBootstrapState.Idle));
+            Assert.That(status.SourceClusterId, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task GetStatusAsync_reflects_persisted_phase_and_source_while_in_progress()
+    {
+        var fake = new FakePersistentState<BootstrapCoordinatorState>();
+        Seed(fake, LatticeBootstrapState.ApplyingSnapshot);
+        var (grain, _, _, _, _, _, _) = Create(fake);
+
+        var status = await grain.GetStatusAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.Phase, Is.EqualTo(LatticeBootstrapState.ApplyingSnapshot));
+            Assert.That(status.SourceClusterId, Is.EqualTo(SourceCluster));
+        });
+    }
+
+    [Test]
+    public async Task GetStatusAsync_projects_source_to_null_when_in_progress_flag_is_false()
+    {
+        // Even if a stale SourceClusterId survived a prior cycle, the
+        // façade must report null when InProgress is false so callers
+        // do not mistake a terminal state for an active drain.
+        var fake = new FakePersistentState<BootstrapCoordinatorState>();
+        fake.State.InProgress = false;
+        fake.State.Phase = LatticeBootstrapState.LiveIncremental;
+        fake.State.SourceClusterId = SourceCluster;
+        var (grain, _, _, _, _, _, _) = Create(fake);
+
+        var status = await grain.GetStatusAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.Phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
+            Assert.That(status.SourceClusterId, Is.Null);
+        });
+    }
+
+    [Test]
+    public void GetStatusAsync_observes_cancellation()
+    {
+        var (grain, _, _, _, _, _, _) = Create();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        Assert.That(
+            async () => await grain.GetStatusAsync(cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
+
     // --- BootstrapAsync argument guards ---
 
     [Test]

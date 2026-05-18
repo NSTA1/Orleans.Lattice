@@ -55,10 +55,41 @@ internal sealed class LatticeFallOffLogDetector(
         var fellOff = localHwm.CompareTo(senderOldestAvailableHlc) < 0;
         if (!fellOff)
         {
-            return new FallOffLogDecision(false, localHwm, false);
+            return new FallOffLogDecision(false, localHwm, false, false);
         }
 
         var options = _optionsMonitor.Get(treeName);
+
+        // Coordinator-absorption check. When a bootstrap is already in
+        // flight from the same source cluster (one of the non-terminal
+        // phases), the coordinator's same-source no-op branch would
+        // absorb the kickoff anyway; bumping PeerFellOffLog and
+        // re-emitting the warning on every probe during a multi-minute
+        // drain would inflate dashboards and misfire operator alerts.
+        // Project the suppression as a separate counter and a debug-
+        // verbosity log so the absorbed probes remain observable
+        // without being conflated with fresh detections.
+        var status = await _bootstrapCoordinator
+            .GetStatusAsync(treeName, cancellationToken)
+            .ConfigureAwait(false);
+        if (IsActiveSameSource(status, sourceClusterId))
+        {
+            LatticeReplicationMetrics.PeerFellOffLogSuppressed.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId));
+
+            _logger.LogDebug(
+                "Receiver fall-off probe suppressed for tree {Tree} origin {Origin}: bootstrap already in flight in phase {Phase} from same source; localHwm={LocalHwm} senderOldest={SenderOldest}",
+                treeName, sourceClusterId, status.Phase, localHwm, senderOldestAvailableHlc);
+
+            // Do not call BootstrapAsync; the coordinator already owns
+            // the drain. Report BootstrapTriggered=true because, from
+            // the caller's perspective, a bootstrap *is* running for
+            // this (tree, source) pair.
+            return new FallOffLogDecision(true, localHwm, true, true);
+        }
+
         LatticeReplicationMetrics.PeerFellOffLog.Add(
             1,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
@@ -70,12 +101,30 @@ internal sealed class LatticeFallOffLogDetector(
 
         if (!options.AutoBootstrapOnFallOffLog)
         {
-            return new FallOffLogDecision(true, localHwm, false);
+            return new FallOffLogDecision(true, localHwm, false, false);
         }
 
         await _bootstrapCoordinator
             .BootstrapAsync(treeName, sourceClusterId, cancellationToken)
             .ConfigureAwait(false);
-        return new FallOffLogDecision(true, localHwm, true);
+        return new FallOffLogDecision(true, localHwm, true, false);
+    }
+
+    /// <summary>
+    /// True iff the coordinator status reports an in-flight bootstrap
+    /// (any of the non-terminal phases) that was started by the same
+    /// source cluster currently triggering the detector. The
+    /// coordinator's same-source no-op branch (see
+    /// <c>LatticeBootstrapCoordinatorGrain.TryInitiateBootstrapAsync</c>)
+    /// is the authoritative rate-limit; this method just projects it
+    /// into a boolean the detector can branch on.
+    /// </summary>
+    private static bool IsActiveSameSource(BootstrapCoordinatorStatus status, string sourceClusterId)
+    {
+        if (status.SourceClusterId is null) return false;
+        if (!string.Equals(status.SourceClusterId, sourceClusterId, StringComparison.Ordinal)) return false;
+        return status.Phase is LatticeBootstrapState.RequestingSnapshot
+            or LatticeBootstrapState.ApplyingSnapshot
+            or LatticeBootstrapState.IncrementalHandoff;
     }
 }
