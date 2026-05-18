@@ -329,4 +329,110 @@ public class LatticeReplicationMetricsTests
         Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
             t.Key == "origin" && (string?)t.Value == "site-a"));
     }
+
+    [Test]
+    public void Bootstrap_instruments_have_expected_names_and_units()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.BootstrapEntriesReceived.Name,
+                Is.EqualTo("orleans.lattice.replication.bootstrap.entries_received"));
+            Assert.That(LatticeReplicationMetrics.BootstrapEntriesReceived.Unit, Is.EqualTo("{entry}"));
+            Assert.That(LatticeReplicationMetrics.BootstrapBytesReceived.Name,
+                Is.EqualTo("orleans.lattice.replication.bootstrap.bytes_received"));
+            Assert.That(LatticeReplicationMetrics.BootstrapBytesReceived.Unit, Is.EqualTo("By"));
+            Assert.That(LatticeReplicationMetrics.BootstrapDuration.Name,
+                Is.EqualTo("orleans.lattice.replication.bootstrap.duration"));
+            Assert.That(LatticeReplicationMetrics.BootstrapDuration.Unit, Is.EqualTo("ms"));
+        });
+    }
+
+    [Test]
+    public void Bootstrap_instrument_name_constants_match_canonical_names()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.BootstrapEntriesReceivedName,
+                Is.EqualTo("orleans.lattice.replication.bootstrap.entries_received"));
+            Assert.That(LatticeReplicationMetrics.BootstrapBytesReceivedName,
+                Is.EqualTo("orleans.lattice.replication.bootstrap.bytes_received"));
+            Assert.That(LatticeReplicationMetrics.BootstrapDurationName,
+                Is.EqualTo("orleans.lattice.replication.bootstrap.duration"));
+        });
+    }
+
+    [Test]
+    public void Bootstrap_outcome_constants_use_canonical_values()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.BootstrapOutcomeLive, Is.EqualTo("live"));
+            Assert.That(LatticeReplicationMetrics.BootstrapOutcomeFailed, Is.EqualTo("failed"));
+            Assert.That(LatticeReplicationMetrics.BootstrapOutcomeTimedOut, Is.EqualTo("timed_out"));
+        });
+    }
+
+    [Test]
+    public void Bootstrap_entries_received_counter_records_with_tree_and_origin_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.bootstrap.entries_received");
+
+        LatticeReplicationMetrics.BootstrapEntriesReceived.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, "site-a"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(1L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "t"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "origin" && (string?)t.Value == "site-a"));
+    }
+
+    [Test]
+    public void Bootstrap_bytes_received_counter_records_with_tree_and_origin_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.bootstrap.bytes_received");
+
+        LatticeReplicationMetrics.BootstrapBytesReceived.Add(2048,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, "site-a"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(2048L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "t"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "origin" && (string?)t.Value == "site-a"));
+    }
+
+    [Test]
+    public void Bootstrap_duration_histogram_records_with_tree_origin_and_outcome_tags()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.bootstrap.duration");
+
+        LatticeReplicationMetrics.BootstrapDuration.Record(42.5,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, "site-a"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome,
+                LatticeReplicationMetrics.BootstrapOutcomeLive));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(42.5));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "t"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "origin" && (string?)t.Value == "site-a"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "outcome" && (string?)t.Value == "live"));
+    }
 }

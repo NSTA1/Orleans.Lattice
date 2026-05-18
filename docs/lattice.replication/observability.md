@@ -133,3 +133,35 @@ The canonical `ReplicationApplier` records the most recently applied source HLC 
 A violation **does not change apply behaviour**: the entry is still applied, the HWM is still advanced. This is purely an observability surface - an alert on `rate > 0` flags a transport-side regression that broke the per-origin order, not a correctness defect on the receiver. Operators triage by joining the `tree` and `origin` tags against the producer-side topology to identify which sender path regressed.
 
 Cross-shard interleaving for the same origin is permitted by design and is **not** a FIFO violation under this contract: entries that have a genuine cross-shard causal dependency carry it in their `VectorClock` and route through the causal-apply buffer's dependency-check path instead. The current implementation tracks one entry per `(tree, origin)` because the canonical applier is one-instance-per-tree; a future per-shard applier partitioning will key the tracker by `(tree, shard, origin)` without changing the metric's tag dimensionality.
+
+## Bootstrap instruments
+
+The receiver-side bootstrap coordinator (`LatticeBootstrapCoordinatorGrain`) emits three instruments tracking the cross-cluster snapshot-drain pipeline plus a structured phase-transition log line. Together they let an operator dashboard the lifecycle of an in-flight bootstrap and tail a single run end-to-end through the silo log.
+
+| Instrument | Kind | Tags | Recorded when |
+|---|---|---|---|
+| `orleans.lattice.replication.bootstrap.entries_received` | `Counter<long>` | `tree`, `origin` | Incremented by 1 per snapshot entry successfully applied through the local replication applier (post-decorator chain). |
+| `orleans.lattice.replication.bootstrap.bytes_received` | `Counter<long>` (`By`) | `tree`, `origin` | Incremented by `entry.Value.Length` per applied entry. Mirrors the lifecycle of `entries_received`. |
+| `orleans.lattice.replication.bootstrap.duration` | `Histogram<double>` (`ms`) | `tree`, `origin`, `outcome` | Recorded once per terminal phase transition. `outcome` is one of `live`, `failed`, or `timed_out`. |
+
+The `origin` tag carries the source cluster id supplied at kickoff (`BootstrapAsync(sourceClusterId, ...)`), matching the tag dimensionality used by the per-origin fall-off-the-log counters so dashboards can join the two without a separate keying.
+
+The histogram's `outcome` values are exposed as `LatticeReplicationMetrics.BootstrapOutcomeLive`, `BootstrapOutcomeFailed`, and `BootstrapOutcomeTimedOut` constants. The `timed_out` value is reserved for a future transport-timeout policy; the in-tree coordinator emits only `live` and `failed` today, but the constant is published so dashboard rules referencing it remain valid across future releases.
+
+The duration timer is anchored on a per-activation in-memory stopwatch captured at kickoff (or lazy-initialised on the first drain pass after a silo failover). It records `Stopwatch.GetElapsedTime` from that anchor to the terminal transition; a silo failover between kickoff and completion therefore truncates the measured interval to the span since the most recent reactivation. Operators monitoring cross-failover total durations should pair the histogram with the per-entry counters, which are restartable across reactivations.
+
+Phase-transition structured logs are emitted at `LogLevel.Information` from `LatticeBootstrapCoordinatorGrain` with the message template
+
+```
+Bootstrap phase transition for tree '{TreeName}' from source '{SourceClusterId}': {Previous} -> {Next} (LastAppliedHlc={LastAppliedHlc})
+```
+
+covering the five transitions:
+
+- `Idle -> RequestingSnapshot` (kickoff persist).
+- `RequestingSnapshot -> ApplyingSnapshot` (snapshot stream opened, pivot persisted). Suppressed on crash-resume when the persisted phase is already `ApplyingSnapshot`.
+- `ApplyingSnapshot -> IncrementalHandoff` (end-of-stream, cursor persisted).
+- `IncrementalHandoff -> LiveIncremental` (HWM pinned, coordinator torn down).
+- `{previous} -> Failed` (catch-and-persist path; the previous phase is included so an operator can see where the drain aborted).
+
+Tailing the silo log for a single bootstrap run is `(treeName, sourceClusterId)` keyed: every transition log carries both. Pair with the metric tags above to correlate log-line timestamps against per-entry throughput.

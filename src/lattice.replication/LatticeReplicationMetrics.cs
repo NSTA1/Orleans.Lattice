@@ -504,4 +504,97 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="PeerFellOffLogSuppressed"/> counter.
     /// </summary>
     public const string PeerFellOffLogSuppressedName = "orleans.lattice.replication.peer.fell_off_log_suppressed";
+
+    // --- Bootstrap progress instruments ----------------------------------------
+    //
+    // Receiver-side bootstrap (cross-cluster snapshot drain) progress
+    // telemetry. The coordinator increments these counters per applied
+    // entry and records the histogram once per terminal phase
+    // transition. All three instruments are tagged with the local
+    // tree name and the remote source cluster id so a single bootstrap
+    // run is uniquely addressable across trees and origins.
+
+    /// <summary>
+    /// Counter incremented once per snapshot entry successfully applied
+    /// by the bootstrap coordinator, post-decorator chain. Lets
+    /// operators watch real-time drain progress and compute an entries
+    /// per second rate independent of the histogram's terminal recording.
+    /// Tagged by <see cref="TagTree"/> and <see cref="TagOrigin"/>.
+    /// </summary>
+    public static readonly Counter<long> BootstrapEntriesReceived =
+        Meter.CreateCounter<long>("orleans.lattice.replication.bootstrap.entries_received", unit: "{entry}",
+            description: "Snapshot entries applied by the bootstrap coordinator, tagged by tree and origin.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="BootstrapEntriesReceived"/> counter.
+    /// </summary>
+    public const string BootstrapEntriesReceivedName = "orleans.lattice.replication.bootstrap.entries_received";
+
+    /// <summary>
+    /// Counter incremented by the byte length of the applied entry's
+    /// value (<c>entry.Value?.Length ?? 0</c>) per snapshot entry
+    /// successfully applied by the bootstrap coordinator. Lets
+    /// operators watch real-time payload throughput during a drain.
+    /// Tagged by <see cref="TagTree"/> and <see cref="TagOrigin"/>.
+    /// </summary>
+    public static readonly Counter<long> BootstrapBytesReceived =
+        Meter.CreateCounter<long>("orleans.lattice.replication.bootstrap.bytes_received", unit: "By",
+            description: "Bytes applied by the bootstrap coordinator, tagged by tree and origin.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="BootstrapBytesReceived"/> counter.
+    /// </summary>
+    public const string BootstrapBytesReceivedName = "orleans.lattice.replication.bootstrap.bytes_received";
+
+    /// <summary>
+    /// Histogram recorded once per terminal bootstrap phase transition,
+    /// reporting the wall-clock duration from the
+    /// <see cref="LatticeBootstrapState.RequestingSnapshot"/> persist
+    /// to the terminal transition. Tagged by <see cref="TagTree"/>,
+    /// <see cref="TagOrigin"/>, and <see cref="TagOutcome"/>; the
+    /// outcome value is one of <see cref="BootstrapOutcomeLive"/>,
+    /// <see cref="BootstrapOutcomeFailed"/>, or
+    /// <see cref="BootstrapOutcomeTimedOut"/>.
+    /// </summary>
+    /// <remarks>
+    /// The duration timer is anchored on a per-activation in-memory
+    /// stopwatch, not persistent state, so a silo failover between
+    /// kickoff and completion truncates the measured interval to the
+    /// span since the most recent reactivation. This is the right
+    /// shape for "how long did the active drain take" but operators
+    /// monitoring cross-failover durations should pair the histogram
+    /// with the per-entry counters.
+    /// </remarks>
+    public static readonly Histogram<double> BootstrapDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.replication.bootstrap.duration", unit: "ms",
+            description: "Bootstrap drain duration from RequestingSnapshot to the terminal phase, tagged by tree, origin, and outcome.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="BootstrapDuration"/> histogram.
+    /// </summary>
+    public const string BootstrapDurationName = "orleans.lattice.replication.bootstrap.duration";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value used when the bootstrap reached
+    /// <see cref="LatticeBootstrapState.LiveIncremental"/> and the
+    /// snapshot/incremental handoff completed cleanly.
+    /// </summary>
+    public const string BootstrapOutcomeLive = "live";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value used when the bootstrap aborted
+    /// to <see cref="LatticeBootstrapState.Failed"/> via the
+    /// coordinator's catch-and-persist path.
+    /// </summary>
+    public const string BootstrapOutcomeFailed = "failed";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value reserved for the timeout path
+    /// (the receiver gave up waiting on the snapshot transport).
+    /// Not emitted by the in-tree coordinator today; reserved for a
+    /// future transport-timeout policy so consumers can dashboard
+    /// against the constant without a metrics schema churn when the
+    /// timeout path lands.
+    /// </summary>
+    public const string BootstrapOutcomeTimedOut = "timed_out";
 }
