@@ -455,6 +455,27 @@ Two independent receiver-side correctness gaps in the universal-saga design caus
 The atomic-visibility behaviour observable to a remote reader now matches the local-cluster strict-isolation contract exactly; the cross-cluster carve-out F-055 left implicit (and F-059 partially closed on the local path) is now closed end-to-end.
 
 
+### 12 · F-063 ✅ shipped
+**Observability / low impact (instrument the per-write parent-digest publish hop on the leaf commit path so operators can attribute commit-pipeline latency to all four constituent stages)** *(depends on Core F-029 ✓, F-049 ✓)*
+
+The leaf's `BPlusLeafGrain.CommitSetAsync` / `CommitDeleteAsync` / `DeleteRangeAsync` foreground write paths each end with an awaited cross-grain RPC to the parent internal node (`IBPlusInternalGrain.OnChildDigestPublishedAsync`) via `PublishDigestUpwardAsync()`. This hop runs on every write that mutates the running projection hash (i.e. effectively every Set / Delete / range Delete after the dirty-flag short-circuit gate at `BPlusLeafGrain.DigestPublication.cs:130`), but the existing `LatticeMetrics.LeafCommitDuration` histogram only attributes latency to three labels (`step=wal`, `step=apply`, `step=observer`). Under steady-state write load at the calibrated operating point, the digest hop is therefore the only unlabelled contributor to the full per-call wall-time (`orleans.lattice.leaf.commit.duration` aggregate vs. the labelled sum) and cannot be empirically separated from the labelled stages without this instrument.
+
+**Change.** A strictly-additive fourth `step="digest"` label is recorded on the existing `LatticeMetrics.LeafCommitDuration` histogram. No new instrument, no new instrument name, no new tag schema - the existing `RecordCommitStep(string step, long startTicks)` helper at `src/lattice/BPlusTree/Grains/BPlusLeafGrain.Metrics.cs:150` is reused verbatim from the three foreground call sites:
+
+- `BPlusLeafGrain.CommitSetAsync` (single-key foreground set).
+- `BPlusLeafGrain.CommitDeleteAsync` (single-key foreground delete).
+- `BPlusLeafGrain.DeleteRangeAsync` (per-leaf range-tombstone publish; one digest publish per range, matching the existing one-per-range WAL append and apply steps).
+
+**Out of scope.** Seven cold / structural / maintenance digest publishers do **not** record a `step="digest"` measurement (none of them emit the existing `step=wal` / `apply` / `observer` labels either, so the histogram remains scoped to the per-write commit pipeline): `BPlusLeafGrain.Split.cs:175` (post-split topology publish, one-shot per split), `BPlusLeafGrain.Projection.cs:192` / `:203` (post-checkpoint-flush publish, runs on the timer cadence rather than per write), `BPlusLeafGrain.PendingTx.cs:1250` (saga terminal publish, one per transaction), and the three bulk / maintenance publishes inside `BPlusLeafGrain.cs` itself (`CompactTombstonesAsync` post-reap publish at line 1399, `MergeEntriesAsync` cross-shard-migration publish at line 1623, `MergeManyAsync` bulk-merge publish at line 2040). Recording these alongside the per-write hot path would skew the histogram with one-shot structural latencies that are not part of the per-write pipeline and would confound the very attribution the new label is added to enable.
+
+**Acceptance.**
+- A `BPlusLeafGrainTests.CommitStepDigest` partial attaches a `MeterListener` to `LatticeMetrics.LeafCommitDuration` and confirms that `SetAsync` / `DeleteAsync` against a leaf with a registered parent each emit exactly one `step="digest"` measurement with the expected tree tag.
+- A `DeleteRangeAsync` test confirms a single `step="digest"` measurement per call (matching the one-shot per-range publish, not one per matched key).
+- A negative-control test confirms that calling `PublishDigestUpwardAsync` from the cold structural paths does **not** record a `step="digest"` measurement, preserving the histogram's hot-path attribution.
+- The `LatticeMetricsIntegrationTests` suite gains an end-to-end check that a `SetAsync` against the cluster fixture produces at least one `step="digest"` measurement on the `orleans.lattice.leaf.commit.duration` histogram alongside the existing `wal` / `apply` / `observer` measurements.
+- `docs/lattice/metrics.md` row 60 (instrument definition) and row 29 (`step` tag enumeration) list `digest` alongside `wal` / `apply` / `observer`.
+
+
 ---
 
 ## 🛠 Audit Follow-up Fixes
