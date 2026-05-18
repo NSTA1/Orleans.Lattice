@@ -220,13 +220,17 @@ public sealed class LatticeSink : ITelemetrySink, IHostedService, IAsyncDisposab
         {
             if (_options.KeyShape == KeyShape.EventLogTimestamped && _options.EventLogTtl is { } ttl)
             {
+                // ILattice has no bulk TTL overload; keep the serial path for this key shape.
                 foreach (var entry in batch)
                     await lattice.SetAsync(entry.Key, entry.Value, ttl, cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                foreach (var entry in batch)
-                    await lattice.SetAsync(entry.Key, entry.Value, cancellationToken).ConfigureAwait(false);
+                // Bulk fan-out across shards in one client→grain dispatch instead of one per entry.
+                // SetManyAsync fans out to shards in parallel inside the lattice grain; the prior
+                // foreach-await loop produced O(batch.Count) sequential round-trips per flush
+                // (cycle: perf/sink-flush-setmany).
+                await lattice.SetManyAsync(batch, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
