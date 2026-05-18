@@ -540,7 +540,7 @@ below.
 
 ---
 
-- [ ] **R-159 - Bootstrap drain resumes on transient transport faults** *(deps: R-154 ✓, R-156 ✓)*
+- [x] **R-159 - Bootstrap drain resumes on transient transport faults** *(deps: R-154 ✓, R-156 ✓)*
 
   `LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync` is wrapped in a
   `try { ... } catch (Exception ex) { ... }` block (lines 205-260 of the

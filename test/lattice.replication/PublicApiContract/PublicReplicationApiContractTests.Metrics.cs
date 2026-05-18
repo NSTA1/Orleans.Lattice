@@ -90,4 +90,23 @@ public partial class PublicReplicationApiContractTests
             Assert.That(matched.LastContactSeconds, Is.GreaterThanOrEqualTo(0d));
         });
     }
+
+    [Test]
+    public void LatticeReplicationMetrics_bootstrap_transient_retries_counter_is_exposed_with_documented_name()
+    {
+        // Lock the public instrument name so operators dashboarding
+        // off the canonical counter id are not broken by a silent
+        // rename. The instrument is registered on the public meter
+        // so a host-side MeterListener can subscribe by name alone.
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.BootstrapTransientRetriesName,
+                Is.EqualTo("orleans.lattice.replication.bootstrap.transient_retries"));
+            Assert.That(LatticeReplicationMetrics.BootstrapTransientRetries, Is.Not.Null);
+            Assert.That(LatticeReplicationMetrics.BootstrapTransientRetries.Name,
+                Is.EqualTo(LatticeReplicationMetrics.BootstrapTransientRetriesName));
+            Assert.That(LatticeReplicationMetrics.BootstrapTransientRetries.Meter,
+                Is.SameAs(LatticeReplicationMetrics.Meter));
+        });
+    }
 }

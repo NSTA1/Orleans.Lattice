@@ -377,7 +377,9 @@ has fallen off the WAL) and by operator-driven re-seed flows.
 | Type | Shape | Purpose |
 |------|-------|---------|
 | `LatticeBootstrapState` | `enum` with members `Idle`, `RequestingSnapshot`, `ApplyingSnapshot`, `IncrementalHandoff`, `LiveIncremental`, `Failed` | The state machine's observable position for a single tree. |
-| `ILatticeBootstrapCoordinator` | `Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken ct)` + `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public façade over the per-tree bootstrap coordinator grain. Registered as a singleton by `AddLatticeReplication`; the state machine itself lives in a per-tree internal grain whose cluster-wide single activation provides cross-silo mutual exclusion. |
+| `BootstrapCoordinatorStatus` | `readonly record struct (LatticeBootstrapState Phase, string? SourceClusterId)` | Observable status snapshot returned by `GetStatusAsync`; carries the phase plus the in-flight source cluster id (or `null` when no bootstrap is in flight). |
+| `ILatticeBootstrapCoordinator` | `Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken ct)` + `Task<BootstrapCoordinatorStatus> GetStatusAsync(string treeName, CancellationToken ct)` + `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public façade over the per-tree bootstrap coordinator grain. Registered as a singleton by `AddLatticeReplication`; the state machine itself lives in a per-tree internal grain whose cluster-wide single activation provides cross-silo mutual exclusion. |
+| `LatticeBootstrapTransientFaultClassifier` | `public static class` exposing `bool IsTransient(Exception)` | Default classifier consumed by the bootstrap drain's bounded-retry seam. Returns `true` for `TimeoutException`, `HttpRequestException`, `SocketException`, `IOException`, aggregate wrappers, and gRPC `RpcException` carrying `Unavailable`, `DeadlineExceeded`, or `Aborted`. Hosts can compose this with a custom predicate via `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`. |
 
 ### State transitions
 
@@ -429,6 +431,26 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   phase pump the state transitions to `Failed` (persisted) and
   the pump tears down. A subsequent `BootstrapAsync` call
   restarts the cycle from `RequestingSnapshot`.
+- **Bounded retry on transient transport faults.** When the
+  snapshot drain throws an exception classified as transient by
+  `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`
+  (default: `LatticeBootstrapTransientFaultClassifier.IsTransient` -
+  `TimeoutException`, `HttpRequestException`, `SocketException`,
+  `IOException`, aggregate wrappers, and gRPC `RpcException` carrying
+  `Unavailable`, `DeadlineExceeded`, or `Aborted`), the coordinator
+  retries the drain in-place using a bounded exponential backoff
+  (default: `DefaultBootstrapMaxAttempts = 4` attempts, initial delay
+  `500 ms`, capped at `30 s`). Each retry re-opens the snapshot from
+  the persisted `LastAppliedHlc` cursor, so the per-origin HWM
+  dedupe makes the overlap a correctness no-op. Every retry increments
+  the `orleans.lattice.replication.bootstrap.transient_retries`
+  counter (`LatticeReplicationMetrics.BootstrapTransientRetries`) so
+  operators can dashboard the rate. Non-transient faults still pivot
+  to `Failed` on the first failure exactly as they did before this
+  seam landed; budget exhaustion re-throws the captured transient and
+  pivots to `Failed` as the terminal outcome. Set
+  `BootstrapTransientRetry.MaxAttempts = 1` to disable retries
+  entirely (fail-fast).
 - **Source HLC + origin preservation.** Every snapshot entry is
   applied through `IReplicationApplier.ApplyAsync`, the same canonical
   inbound apply seam used by live-incremental replication, carrying

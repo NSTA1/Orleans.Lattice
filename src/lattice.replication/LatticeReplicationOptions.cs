@@ -267,6 +267,38 @@ public class LatticeReplicationOptions
     public TimeSpan OperatorReseedMinInterval { get; set; } = DefaultOperatorReseedMinInterval;
 
     /// <summary>
+    /// Bounded retry policy applied to the receiver-side bootstrap
+    /// drain
+    /// (<c>LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync</c>)
+    /// when the snapshot source surfaces a transient transport fault.
+    /// A failed export or apply call is matched against
+    /// <see cref="BoundedExponentialRetryPolicyOptions.RetryableExceptionClassifier"/>;
+    /// transient faults consume one retry budget slot and re-open the
+    /// snapshot from the persisted
+    /// <c>BootstrapCoordinatorState.LastAppliedHlc</c> cursor (so
+    /// replay is bounded by the cursor-persist interval and the
+    /// per-origin HWM dedupe makes the overlap a no-op). Non-transient
+    /// faults pivot the bootstrap to
+    /// <c>LatticeBootstrapState.Failed</c> on the first failure, as
+    /// they did before the retry seam landed; budget exhaustion
+    /// re-throws the captured transient and the catch block in
+    /// <c>ProcessNextPhaseAsync</c> persists <c>Failed</c> as the
+    /// terminal outcome.
+    /// <para>
+    /// When <see langword="null"/> (the default) the grain installs
+    /// a built-in policy with <see cref="DefaultBootstrapMaxAttempts"/>
+    /// attempts,
+    /// <see cref="DefaultBootstrapInitialRetryDelay"/> initial backoff,
+    /// <see cref="DefaultBootstrapMaxRetryDelay"/> ceiling, and
+    /// <see cref="LatticeBootstrapTransientFaultClassifier.IsTransient(Exception)"/>
+    /// as the classifier. Set the property to disable retries
+    /// entirely (<c>MaxAttempts = 1</c>) or to plug in a host-specific
+    /// classifier for non-default transports.
+    /// </para>
+    /// </summary>
+    public BoundedExponentialRetryPolicyOptions? BootstrapTransientRetry { get; set; }
+
+    /// <summary>
     /// Stable identifiers of the remote clusters this silo ships
     /// captured WAL entries to for the configured replicated trees.
     /// The transport-agnostic counterpart to per-transport endpoint
@@ -558,6 +590,42 @@ public class LatticeReplicationOptions
     /// session.
     /// </summary>
     public static readonly TimeSpan DefaultOperatorReseedMinInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Default value for the
+    /// <see cref="BootstrapTransientRetry"/>'s
+    /// <see cref="BoundedExponentialRetryPolicyOptions.MaxAttempts"/>:
+    /// four attempts total (one initial attempt + three retries).
+    /// Sized to absorb a brief gRPC channel reset or a peer-side
+    /// hiccup without dragging a bootstrap through a long retry
+    /// cascade. Operators that want a longer recovery window raise
+    /// this value; operators that prefer fail-fast set it to 1 to
+    /// disable retries entirely.
+    /// </summary>
+    public const int DefaultBootstrapMaxAttempts = 4;
+
+    /// <summary>
+    /// Default value for the
+    /// <see cref="BootstrapTransientRetry"/>'s
+    /// <see cref="BoundedExponentialRetryPolicyOptions.InitialDelay"/>:
+    /// 500 ms. Sized for cross-cluster transport recovery cadence
+    /// (a TCP retransmit / gRPC channel re-establish typically
+    /// completes within a single-digit-second window), not for the
+    /// in-cluster Orleans RPC fault model.
+    /// </summary>
+    public static readonly TimeSpan DefaultBootstrapInitialRetryDelay = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Default value for the
+    /// <see cref="BootstrapTransientRetry"/>'s
+    /// <see cref="BoundedExponentialRetryPolicyOptions.MaxDelay"/>:
+    /// 30 seconds. Caps the worst-case wall-clock delay between
+    /// retries so a long transient outage does not extend the
+    /// bootstrap window indefinitely; the bootstrap's keepalive
+    /// reminder period (1 minute) sets the practical ceiling on
+    /// how long any retry can sleep.
+    /// </summary>
+    public static readonly TimeSpan DefaultBootstrapMaxRetryDelay = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Default value for <see cref="ShipBatchSize"/>: 256 entries per
