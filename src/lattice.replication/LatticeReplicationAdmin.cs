@@ -87,4 +87,45 @@ internal sealed class LatticeReplicationAdmin(
             LastRequestedAt: now,
             RetryAfter: null);
     }
+
+    /// <inheritdoc />
+    public async Task<OperatorReseedDecision> ForceRequestSnapshotAsync(
+        string treeName,
+        string sourceClusterId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeName);
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var key = (treeName, sourceClusterId);
+        var now = _time.GetUtcNow();
+
+        // Audit every bypass call before dispatching so an operator
+        // mistake (forcing a re-seed against the wrong tree, or
+        // forcing repeatedly inside what the routine path would have
+        // rate-limited) leaves a Information-level trail in the silo
+        // log even when no other telemetry surface is wired up.
+        _logger.LogInformation(
+            "Operator re-seed FORCE bypass invoked for tree {Tree} from {Source} (rate limit skipped)",
+            treeName, sourceClusterId);
+
+        await _bootstrapCoordinator
+            .BootstrapAsync(treeName, sourceClusterId, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Update the rate-limit dictionary on a successful bypass so
+        // a follow-up routine RequestSnapshotAsync inside the window
+        // still observes the bypass as the "last honoured" request.
+        // This preserves the operator's mental model that the limiter
+        // knows about every actual re-seed, not just the rate-limited
+        // ones. A coordinator exception leaves the dictionary
+        // unchanged so a failed bypass does not silently consume the
+        // budget for a follow-up routine call.
+        _lastHonoured[key] = now;
+        return new OperatorReseedDecision(
+            Triggered: true,
+            LastRequestedAt: now,
+            RetryAfter: null);
+    }
 }

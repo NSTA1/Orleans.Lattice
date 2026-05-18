@@ -480,15 +480,25 @@ Beyond the receiver-driven auto-bootstrap path (`ILatticeFallOffLogDetector`), t
 | Type | Shape | Purpose |
 |------|-------|---------|
 | `ILatticeReplicationAdmin` | `Task<OperatorReseedDecision> RequestSnapshotAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public façade that gates the request behind a per-`(tree, sourceClusterId)` rate limit before delegating to the bootstrap coordinator. |
-| `OperatorReseedDecision` | `readonly record struct` with `Triggered`, `LastRequestedAt`, `RetryAfter` | Diagnostic return value indicating whether the call invoked the coordinator and, when denied, how long the operator should wait before retrying. |
+| `ILatticeReplicationAdmin` | `Task<OperatorReseedDecision> ForceRequestSnapshotAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Opt-in bypass that skips the rate-limit check entirely. Intended for disaster-recovery and scheduled re-seed scenarios where a real cross-cluster drain may exceed the configured window. Every call is audit-logged at `Information`. |
+| `OperatorReseedDecision` | `readonly record struct` with `Triggered`, `LastRequestedAt`, `RetryAfter` | Diagnostic return value indicating whether the call invoked the coordinator and, when denied, how long the operator should wait before retrying. Both overloads share this return shape. |
 
 ### Semantics
 
 - **Per-`(tree, sourceClusterId)` rate limit.** `LatticeReplicationOptions.OperatorReseedMinInterval` (default `1 minute`) bounds the minimum gap between honoured requests for the same pair. A second request inside the window returns `Triggered = false` with `RetryAfter` set to the remaining time; the coordinator is not invoked and no exception is thrown. `TimeSpan.Zero` disables the rate limit entirely (every request reaches the coordinator).
 - **Process-local rate-limit table.** The default implementation tracks honoured requests in process memory only; a silo restart resets the rate-limit window for every pair. Cross-silo coordination is not required because `ILatticeBootstrapCoordinator` is itself idempotent under concurrent invocations against the same tree from the same source cluster (the per-tree internal grain absorbs the second call as a no-op) and rejects mismatched-source concurrent kickoffs as `InvalidOperationException`. The rate limit is therefore a fairness mechanism, not a correctness one.
-- **Timestamp updates only on success.** The dictionary timestamp is stamped only after the coordinator call returns successfully, so a thrown coordinator exception (transport failure, conflicting in-flight bootstrap from a different source) does not consume the rate-limit budget against the operator.
+- **Timestamp updates only on success.** The dictionary timestamp is stamped only after the coordinator call returns successfully, so a thrown coordinator exception (transport failure, conflicting in-flight bootstrap from a different source) does not consume the rate-limit budget against the operator. The same rule applies to both the rate-limited overload and the bypass overload.
 - **Per-tree options resolution.** The minimum interval is resolved per-tree via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)`, so different replicated trees can run different re-seed cadences without separate seam instances.
-- **Argument validation.** `treeName` and `sourceClusterId` must be non-null and non-empty (`ArgumentNullException` when `null`, `ArgumentException` when whitespace-only); the cancellation token is observed before the rate-limit check and propagated to the underlying coordinator.
+- **Argument validation.** `treeName` and `sourceClusterId` must be non-null and non-empty (`ArgumentNullException` when `null`, `ArgumentException` when whitespace-only); the cancellation token is observed before the rate-limit check and propagated to the underlying coordinator. The bypass overload validates identically.
+
+### Force-bypass semantics
+
+The rate limit was originally sized assuming the underlying snapshot drain is intra-cluster and fast. Once cross-cluster transport is in play, a real re-seed against a large tree may exceed the configured window, and a routine retry would be denied even though the previous call's drain has not completed. `ForceRequestSnapshotAsync` is the escape hatch for that case.
+
+- **Always reaches the coordinator (on success).** When the coordinator call returns, `Triggered = true` unconditionally; the bypass overload never returns a denied decision. `RetryAfter` is always `null`.
+- **Audit-logged on every call.** A `LogLevel.Information` line tagged `FORCE` and carrying both `tree` and `sourceClusterId` is emitted **before** the coordinator dispatch, so a log-tailing operator sees the bypass even if the coordinator call subsequently throws.
+- **Stamps the dictionary on success.** A successful bypass updates the rate-limit dictionary timestamp so a follow-up routine `RequestSnapshotAsync` inside the window correctly observes the bypass as the last honoured request. This preserves the operator's mental model that the limiter knows about every actual re-seed, not just the rate-limited ones.
+- **Failure does not consume the rate-limit budget.** A coordinator exception leaves the dictionary unchanged so a follow-up routine call is still honourable.
 
 ### Sample usage
 
@@ -514,6 +524,28 @@ LatticeBootstrapState state = await client.ServiceProvider
     .GetRequiredService<ILatticeBootstrapCoordinator>()
     .GetStateAsync("orders", cancellationToken);
 _ = state;
+```
+
+### Sample usage (force bypass)
+
+```csharp verify
+ILatticeReplicationAdmin admin = client.ServiceProvider
+    .GetRequiredService<ILatticeReplicationAdmin>();
+
+// Disaster recovery: the previous routine re-seed against a large
+// cross-cluster tree is still draining and we need to retry under
+// a different sourceClusterId without waiting for the configured
+// OperatorReseedMinInterval window. ForceRequestSnapshotAsync
+// always reaches the coordinator and audit-logs at Information.
+OperatorReseedDecision decision = await admin.ForceRequestSnapshotAsync(
+    "orders", sourceClusterId: "site-b", cancellationToken);
+
+// On success, Triggered is always true and RetryAfter is null.
+// A coordinator exception (e.g. a conflicting in-flight bootstrap
+// against a different source) propagates verbatim; catch and
+// inspect at the caller.
+_ = decision.Triggered;
+_ = decision.LastRequestedAt;
 ```
 
 ## Snapshot and in-flight atomic visibility
