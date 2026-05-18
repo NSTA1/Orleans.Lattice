@@ -81,6 +81,21 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.RemoteSnapshotMetadata"/>.</summary>
     internal const string RemoteSnapshotMetadata = "olr.sm";
 
+    /// <summary>
+    /// Alias for <see cref="Replication.RemoteSnapshotMetadataRequest"/>
+    /// - the request DTO for the gRPC <c>GetMetadata</c> RPC defined in
+    /// <c>Orleans.Lattice.Replication.Grpc</c>.
+    /// </summary>
+    internal const string RemoteSnapshotMetadataRequest = "olr.sr";
+
+    /// <summary>
+    /// Alias for <see cref="Replication.RemoteSnapshotStreamItem"/>
+    /// - the per-message DTO for the gRPC server-streaming
+    /// <c>RequestSnapshot</c> RPC defined in
+    /// <c>Orleans.Lattice.Replication.Grpc</c>.
+    /// </summary>
+    internal const string RemoteSnapshotStreamItem = "olr.si";
+
     /// <summary>Alias for the per-tree bootstrap coordinator grain interface.</summary>
     internal const string ILatticeBootstrapCoordinatorGrain = "olr.gb";
 

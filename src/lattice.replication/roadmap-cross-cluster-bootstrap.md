@@ -233,19 +233,25 @@ below.
 
 - [x] **R-152 ✓ shipped - Receiver-side `RemoteSnapshotProvider` adapter** *(deps: R-150 ✓, R-151 ✓)*
 
-  An `ISnapshotProvider` implementation that hosts register on the
-  receiver via `siloBuilder.AddRemoteSnapshotProvider()` to override
-  the local-tree default. It calls
-  `IRemoteSnapshotTransport.GetMetadataAsync` to obtain the cut-point,
-  then `RequestSnapshotAsync` to drain the stream, and yields each entry
-  through the existing `SnapshotStream` shape so the receiver-side
-  state machine (`R-051 ✓ shipped`) sees no behavioural change other
-  than the entries actually arriving.
+  An `IBootstrapSnapshotSource` implementation that drains snapshots
+  from a peer cluster through a registered
+  `IRemoteSnapshotTransport`. `AddLatticeReplication` registers a
+  factory that resolves `IBootstrapSnapshotSource` to
+  `RemoteSnapshotProvider` whenever an `IRemoteSnapshotTransport` is
+  present in the same service collection (the active-active default),
+  and to a `LocalBootstrapSnapshotSource` wrapper over the local
+  `ISnapshotProvider` otherwise (the single-cluster recovery path).
+  The seam is split from sender-side `ISnapshotProvider` so a single
+  silo can simultaneously serve outbound snapshot requests via
+  `LatticeRemoteSnapshotService` and bootstrap its own tree from a
+  peer.
 
   **Shape (as shipped):**
 
   ```csharp
-  public sealed class RemoteSnapshotProvider : ISnapshotProvider
+  public interface IBootstrapSnapshotSource : ISnapshotProvider { }
+
+  public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
   {
       public RemoteSnapshotProvider(
           IRemoteSnapshotTransport transport,
@@ -275,14 +281,28 @@ below.
   overload, which validates the cluster id and delegates to the
   legacy two-arg overload, so the additive surface is non-breaking.
 
+  **Composition choice (resolved):** active-active by default. The
+  first cut of this entry exposed a `siloBuilder.AddRemoteSnapshotProvider()`
+  helper that swapped the silo's sole `ISnapshotProvider`
+  registration, forcing the host to choose sender-only or
+  receiver-only at composition time. The shipped shape replaces that
+  helper with an `IBootstrapSnapshotSource` seam separate from
+  sender-side `ISnapshotProvider`, plus a DI factory in
+  `AddLatticeReplication` that auto-selects the cross-cluster adapter
+  when an `IRemoteSnapshotTransport` is registered. Hosts that want
+  to force the local-only path can pre-register a custom
+  `IBootstrapSnapshotSource` before `AddLatticeReplication`; the
+  default factory then no-ops.
+
   **Acceptance (met):** integration test `RemoteSnapshotProviderIntegrationTests`
   under `Orleans.TestingHost` with two clusters: cluster A pre-populated
   with N entries (tree `rsp-bootstrap`, origin `rsp-site-a`), cluster B
-  fresh. Cluster B's `ISnapshotProvider` registered as
-  `RemoteSnapshotProvider` with an in-process transport stub that
-  round-trips against cluster A's `LatticeRemoteSnapshotService`.
-  Triggers auto-bootstrap on cluster B, asserts all N entries arrive
-  and `localHwm` advances past zero.
+  fresh. Cluster B's silo registers an in-process `IRemoteSnapshotTransport`
+  stub that round-trips against cluster A's `LatticeRemoteSnapshotService`;
+  `AddLatticeReplication`'s factory flips the bootstrap seam to
+  `RemoteSnapshotProvider` automatically. Triggers auto-bootstrap on
+  cluster B, asserts all N entries arrive and `localHwm` advances past
+  zero.
 
 ---
 
@@ -314,7 +334,7 @@ below.
 
 ---
 
-- [ ] **R-154 - gRPC binding for `IRemoteSnapshotTransport`** *(deps: R-150 ✓, R-151 ✓, R-153 ✓)*
+- [x] **R-154 ✓ shipped - gRPC binding for `IRemoteSnapshotTransport`** *(deps: R-150 ✓, R-151 ✓, R-153 ✓)*
 
   Concrete `IRemoteSnapshotTransport` implementation in
   `Orleans.Lattice.Replication.Grpc`, mirroring the existing
@@ -349,6 +369,45 @@ below.
   keys in the snapshot plus all keys in the post-bootstrap incremental
   stream - never a partial-snapshot view that splits the batch on the
   bootstrapped peer.
+
+  **Retrospective:** Shipped as a code-first gRPC binding rather than a
+  `Bootstrap.proto`-driven generator pipeline, matching the
+  `GrpcPushTransport` precedent. The new public surface in
+  `Orleans.Lattice.Replication.Grpc`: `GrpcRemoteSnapshotTransport`
+  (client `IRemoteSnapshotTransport`), `LatticeRemoteSnapshotGrpcService`
+  (server-side handler delegating to the `R-151`
+  `LatticeRemoteSnapshotService`), `GrpcRemoteSnapshotTransportOptions`
+  (per-source-cluster endpoint map, TLS-by-default gate, channel-config
+  hook), and three new DI helpers on
+  `LatticeReplicationGrpcServiceCollectionExtensions`:
+  `AddGrpcRemoteSnapshotTransport(...)`,
+  `AddLatticeReplicationGrpcSnapshotServer()`, and
+  `MapLatticeReplicationGrpcSnapshotService()`. Two new wire DTOs in the
+  core replication package (`RemoteSnapshotMetadataRequest`,
+  `RemoteSnapshotStreamItem`) carry the marshalled request and
+  per-message payload through Orleans serializers, with stable aliases
+  `olr.sr` / `olr.si`. The auth interceptor
+  (`LatticeReplicationGrpcAuthInterceptor`) was widened to recognise the
+  new `orleans.lattice.replication.LatticeRemoteSnapshot` service
+  prefix and to enforce on both unary and server-streaming RPCs so the
+  shared-secret gate covers the new binding identically to the push
+  transport. The client transport translates
+  `RpcException(StatusCode.Cancelled)` into the canonical
+  `OperationCanceledException` so receivers can rely on a single
+  cancellation contract regardless of binding. **Test coverage:** 140
+  non-Chaos tests under `Orleans.Lattice.Replication.Grpc.Tests`. The
+  gRPC-backed contract driver `GrpcRemoteSnapshotTransportContractTests`
+  inherits the shared `RemoteSnapshotTransportContractTests` acceptance
+  suite (linked into the gRPC test project as a `Compile` item rather
+  than via a project reference to avoid double-discovery of the
+  replication test fixtures) and runs every metadata, streaming,
+  point-in-time, validation, and cancellation case across a
+  `TestServer`-hosted `LatticeRemoteSnapshotGrpcService`. New unit
+  fixtures pin the marshaller round-trip, the method-holder
+  service/name slots, the client transport's argument-validation and
+  disposal contracts, the options defaults, and the server service's
+  validation surface. Full suite green: 140/140 gRPC + 1405/1405
+  replication + 34/34 Azure Table (non-Chaos).
 
 ---
 
@@ -481,7 +540,7 @@ below.
 
 ---
 
-- [ ] **R-159 - Bootstrap drain resumes on transient transport faults** *(deps: R-154, R-156)*
+- [ ] **R-159 - Bootstrap drain resumes on transient transport faults** *(deps: R-154 ✓, R-156)*
 
   `LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync` is wrapped in a
   `try { ... } catch (Exception ex) { ... }` block (lines 205-260 of the
@@ -516,6 +575,106 @@ below.
   advances monotonically, total replayed entries are bounded by
   `CursorPersistEntryInterval * N`. Unit test that a non-transient
   exception still parks `Failed` on the first failure.
+
+---
+
+- [ ] **R-160 - Snapshot-bootstrap-time atomic visibility for in-flight sagas** *(deps: R-154 ✓; refines `F-055` receiver-side atomic visibility across the bootstrap boundary)*
+
+  Closes the "commit-during-export" window currently documented as a
+  known limitation in `docs/lattice.replication/snapshot-bootstrap.md`
+  ("Snapshot and in-flight atomic visibility" section). The shipped
+  F-055 invariant proves all-or-nothing per-saga visibility on the
+  **steady-state WAL pipeline** (prepared+terminal hops routed through
+  `ApplyPreparedSetAsync` / `ApplyPreparedDeleteAsync` /
+  `ApplyTxTerminalAsync` on `IReplicationApplyGrain`, with the
+  receiver-side per-tree `ITxRegistryGrain` as the linearization
+  point). The chaos suite
+  `CrossClusterAtomicVisibilityChaosTests.Concurrent_cross_cluster_sagas_under_partition_remain_atomically_visible_on_every_site`
+  exercises that path under partition cycling. F-055 deliberately did
+  **not** preserve atomic visibility across the bootstrap boundary
+  itself: the prior staging-buffer mechanism
+  (`IReplicationTxBufferGrain` + `SnapshotSagaQuiesceTimeout` +
+  per-saga blacklist) that backed snapshot-during-saga atomicity was
+  retired in the same commit, along with the
+  `AtomicBatchDeliveryChaosTests.SnapshotDuringSaga` /
+  `SnapshotReplaceSemantics` /
+  `LatticeBootstrapCoordinatorGrainTests.SagaBlacklist` test files
+  that previously enforced it. The replacement is the documented
+  operator-quiesce workaround.
+
+  The remaining window is precise: `LatticeSnapshotProvider.EnumerateAsync`
+  walks the producer's committed `Entries` projection per leaf via
+  `ILattice.EntriesAsync` + `GetWithVersionAsync`. Prepared writes
+  live in the per-tx pending bucket and are deliberately invisible to
+  this enumerator; the terminal flip on the producer is the
+  linearization point that moves a saga's writes from `_pendingTx`
+  into `Entries` on each affected leaf. If a saga's terminal mark
+  fires between leaf reads (e.g. L1 -> terminal-flip -> L2 -> L3),
+  the snapshot captures L2/L3 keys but not L1 keys for that saga. The
+  receiver's incremental phase eventually re-delivers the L1 keys
+  (the per-origin HWM dedupe makes the L2/L3 overlap a no-op), but a
+  bootstrapping reader briefly observes a partial view across that
+  specific window.
+
+  **Fix shape (sketch; design lands as part of the item):** pin a
+  per-tree linearization point at the start of `ExportAsync` via the
+  receiver-side seam used by `ITxRegistryGrain`, then either
+
+  - (option A, exporter-side resolution) co-export each leaf's
+    `_pendingTx` slice alongside its committed `Entries` projection
+    plus the per-tree `ITxRegistryGrain` terminal-decision snapshot
+    captured at the linearization point. The receiver replays each
+    saga's prepared hops through `ApplyPreparedSetAsync` /
+    `ApplyPreparedDeleteAsync` and the captured terminal decisions
+    through `ApplyTxTerminalAsync`, so receiver-side visibility flips
+    atomically per saga at apply time exactly as in the steady-state
+    pipeline. This widens `SnapshotEntry` with prepared-state slots
+    (`[Id(3..5)]` on `SnapshotEntry` or a sibling DTO) and adds a
+    terminal-decisions section to the snapshot stream.
+
+  - (option B, exporter-side cut at terminal-only frontier) read the
+    per-tree `ITxRegistryGrain`'s "highest terminally-decided HLC at
+    snapshot start" `T` and walk the committed projection at `T`. Any
+    saga whose terminal mark on the producer lands at HLC > `T` is
+    treated as "not in the snapshot" for every key (including keys
+    whose terminal-flip on individual leaves already happened, by
+    suppressing them via a per-saga filter on the export stream). The
+    receiver gets a clean all-or-nothing-per-saga snapshot at `T` and
+    picks up post-`T` sagas through the existing incremental WAL.
+
+  Option B is the lower-blast-radius choice (no `SnapshotEntry`
+  widening, no receiver-side prepared-replay path on the bootstrap
+  drain) and is the working assumption for sequencing; option A is
+  the alternative if the per-saga filter in option B turns out to be
+  too costly under high saga churn. Either way the item must define
+  the bootstrap/atomic-visibility handoff against the actual
+  `ITxRegistryGrain` + `_pendingTx` shape - the deferred design that
+  `R-150`'s "atomic-batch coordination is deferred" note flagged.
+
+  **Acceptance:** new integration test
+  `BootstrapAtomicVisibilityTests.Concurrent_producer_saga_during_bootstrap_is_atomically_visible_or_absent_on_the_bootstrapped_peer`
+  under `Orleans.TestingHost` with the in-process loopback transport:
+  producer authors `SetManyAtomicAsync` sagas continuously across a
+  configurable key-range while a fresh receiver auto-bootstraps; the
+  bootstrapped peer's post-handoff view (sampled mid-bootstrap and at
+  steady state) must show every saga as either fully visible or
+  fully absent, never a partial subset, matching the steady-state
+  `CrossClusterAtomicVisibilityChaosTests` invariant across the
+  bootstrap boundary. Stretch goal: also a Chaos-category variant
+  under partition cycling that combines the two acceptance shapes
+  into one fixture. Documentation update removes the
+  "Snapshot and in-flight atomic visibility" workaround paragraph
+  from `docs/lattice.replication/snapshot-bootstrap.md` and replaces
+  it with the cross-bootstrap-boundary atomic-visibility invariant
+  statement.
+
+  **Sequencing rationale:** ships after `R-154` because it is observable
+  only when payload flows over the wire (today's empty drain trivially
+  satisfies the all-or-nothing predicate). Independent of `R-155`-`R-159`;
+  composes with `R-159`'s bounded-retry shape because a transient-fault
+  resumed drain must re-pin the same `T` (option B) or replay the same
+  prepared-state slice (option A) to keep the per-saga predicate
+  stable across the resume boundary.
 
 ---
 
@@ -573,7 +732,7 @@ below.
 part of v4 readiness); the remaining items are sequenced as:
 
 `R-150` → `R-151` → `R-152` → `R-158` → `R-154` → { `R-155`, `R-156`,
-`R-157`, `R-159` }.
+`R-157`, `R-159`, `R-160` }.
 
 `R-150` (the contract) blocks everything downstream. `R-151` (the sender
 handler) lands next so `R-152`'s acceptance suite can round-trip against
@@ -582,7 +741,10 @@ propagation through the bootstrap drain) **must** land before `R-154`
 because `R-154` is the first item that delivers payload over the wire,
 and the current hardcoded `LatticeMergeMode.LwwRegister` would silently
 corrupt `OrSet` / `PnCounter` trees the moment payload arrives. `R-155`,
-`R-156`, `R-157`, and `R-159` are quality-of-service refinements that
-become observable only once the core transport is real; they can land in
-any order after `R-154` (`R-159`'s bounded-retry shape composes naturally
-with `R-156`'s observability surface but does not strictly depend on it).
+`R-156`, `R-157`, `R-159`, and `R-160` are quality-of-service refinements
+that become observable only once the core transport is real; they can
+land in any order after `R-154` (`R-159`'s bounded-retry shape composes
+naturally with `R-156`'s observability surface, and `R-160`'s
+cross-bootstrap-boundary atomicity work composes naturally with
+`R-159`'s resume contract, but neither chain is a hard ordering
+requirement).

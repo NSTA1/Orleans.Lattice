@@ -101,7 +101,7 @@ public class GrpcReplicationHeaderCaptureTests
                     services.AddRouting();
                     services.AddSingleton<CapturedHeaders>(captured);
                     services.AddSingleton<CapturingInterceptor>();
-                    services.AddLatticeReplicationGrpcServer();
+                    services.AddLatticeReplicationGrpc();
                     // Add the capturing interceptor after the auth interceptor so
                     // it only runs on calls that already passed auth.
                     services.Configure<global::Grpc.AspNetCore.Server.GrpcServiceOptions>(o =>
@@ -111,7 +111,7 @@ public class GrpcReplicationHeaderCaptureTests
                 web.Configure(app =>
                 {
                     app.UseRouting();
-                    app.UseEndpoints(e => e.MapLatticeReplicationGrpcService());
+                    app.UseEndpoints(e => e.MapLatticeReplicationGrpc());
                 });
             });
 

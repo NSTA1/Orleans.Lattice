@@ -1,19 +1,15 @@
 namespace Orleans.Lattice.Replication.Grpc;
 
 /// <summary>
-/// Configuration options for the gRPC streaming push transport. Hosts
-/// register the transport via
-/// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpcPushTransport"/>
-/// and supply a delegate that populates this object.
+/// Internal per-transport options projected from the unified public
+/// <see cref="LatticeReplicationGrpcOptions"/> by
+/// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpc"/>.
+/// Consumed by <see cref="GrpcPushTransport"/>. Hosts configure the
+/// binding via the unified public options type; this projection exists
+/// so the transport implementation keeps a focused, single-purpose
+/// options surface.
 /// </summary>
-/// <remarks>
-/// The transport is sender-side only; the receiver-side route is wired
-/// up via
-/// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.MapLatticeReplicationGrpcService"/>
-/// on the ASP.NET Core endpoint route builder and does not consume
-/// these options.
-/// </remarks>
-public sealed class GrpcPushTransportOptions
+internal sealed class GrpcPushTransportOptions
 {
     /// <summary>
     /// Map of remote cluster id to the gRPC endpoint URI it accepts

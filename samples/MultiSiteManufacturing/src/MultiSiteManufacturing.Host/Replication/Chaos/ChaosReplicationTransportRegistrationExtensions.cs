@@ -18,7 +18,7 @@ internal static class ChaosReplicationTransportRegistrationExtensions
     /// singleton with <see cref="ChaosReplicationTransport"/>. Must be
     /// called after the underlying transport has been registered (for
     /// example via
-    /// <c>AddLatticeReplicationGrpcPushTransport</c>); throws otherwise.
+    /// <c>AddLatticeReplicationGrpc</c>); throws otherwise.
     /// </summary>
     /// <remarks>
     /// The package's gRPC push transport is registered as
@@ -40,7 +40,7 @@ internal static class ChaosReplicationTransportRegistrationExtensions
         var existing = services.LastOrDefault(d => d.ServiceType == typeof(IReplicationTransport))
             ?? throw new InvalidOperationException(
                 "IReplicationTransport must be registered before decorating it; "
-                + "call AddLatticeReplicationGrpcPushTransport first.");
+                + "call AddLatticeReplicationGrpc first.");
 
         services.Remove(existing);
 

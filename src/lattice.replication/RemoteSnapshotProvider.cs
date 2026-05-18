@@ -5,13 +5,19 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// Receiver-side <see cref="ISnapshotProvider"/> adapter that drives a
-/// cross-cluster snapshot drain through an
-/// <see cref="IRemoteSnapshotTransport"/> binding. Hosts register this
-/// implementation in place of the default <c>LatticeSnapshotProvider</c>
-/// when the local cluster is the snapshot receiver (the consumer side
-/// of cross-cluster bootstrap) and the sender lives on a peer cluster
-/// reachable only through a wire-shaped transport.
+/// Receiver-side <see cref="IBootstrapSnapshotSource"/> adapter that
+/// drives a cross-cluster snapshot drain through an
+/// <see cref="IRemoteSnapshotTransport"/> binding. Resolved
+/// automatically by
+/// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>
+/// whenever an <see cref="IRemoteSnapshotTransport"/> is registered
+/// alongside it, so a silo that registers a transport (the gRPC
+/// binding, an in-process loopback, a custom HTTP binding) gets the
+/// cross-cluster bootstrap path with no extra ceremony. The silo's
+/// local <see cref="ISnapshotProvider"/> is left untouched so the
+/// same silo can simultaneously serve outbound snapshot requests
+/// from peer receivers via <see cref="LatticeRemoteSnapshotService"/>
+/// (the active-active default).
 /// <para>
 /// The adapter implements the three-arg overload of
 /// <see cref="ISnapshotProvider.ExportAsync(string, string, HybridLogicalClock, CancellationToken)"/>:
@@ -36,7 +42,7 @@ namespace Orleans.Lattice.Replication;
 /// side bootstrap coordinator which serialises drains per pair.
 /// </para>
 /// </summary>
-public sealed class RemoteSnapshotProvider : ISnapshotProvider
+public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
 {
     private readonly IRemoteSnapshotTransport _transport;
     private readonly ILogger<RemoteSnapshotProvider> _logger;

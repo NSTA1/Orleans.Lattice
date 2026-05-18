@@ -61,18 +61,24 @@ library exposes a version-bearing leaf-scan primitive (tracked on the
 [core roadmap](../../src/lattice/roadmap.md)); hosts that need a
 faster export today can register their own `ISnapshotProvider` via DI.
 
-**Cross-cluster bootstrap uses a separate receiver-side adapter.**
+**Cross-cluster bootstrap uses a separate receiver-side seam.**
 On a receiver whose local tree is empty (e.g. a fresh cluster joining
 an existing federation), the default `LatticeSnapshotProvider` would
 yield zero entries because it reads the receiver's own tree rather
 than the sender's. The "Cross-cluster transport contract" section
 below documents the `IRemoteSnapshotTransport` abstraction and the
 sender-side `LatticeRemoteSnapshotService`; the "Receiver-side
-adapter" section documents `RemoteSnapshotProvider`, which a host
-registers via `siloBuilder.AddRemoteSnapshotProvider()` to replace
-the default in-cluster `ISnapshotProvider` with one that fetches the
-snapshot from a sender cluster through the configured transport
-binding.
+adapter" section documents `RemoteSnapshotProvider`, the
+`IBootstrapSnapshotSource` implementation the bootstrap state
+machine drains from when an `IRemoteSnapshotTransport` is registered.
+The seam is split from `ISnapshotProvider` so a single silo can
+simultaneously act as snapshot sender (its local `ISnapshotProvider`
+is exported to peer receivers via `LatticeRemoteSnapshotService`) and
+snapshot receiver (its `IBootstrapSnapshotSource` drains from an
+upstream peer through the registered transport). Registering an
+`IRemoteSnapshotTransport` alongside `AddLatticeReplication` is the
+active-active signal: the receiver-side seam auto-flips to
+`RemoteSnapshotProvider`, no separate opt-in call required.
 
 ## Cross-cluster transport contract
 
@@ -109,8 +115,10 @@ disturbing the live tail pipeline.
   across distinct `(treeName, sourceClusterId)` pairs. Concurrent
   invocation against the same pair is implementation-defined;
   receivers serialise per pair through the bootstrap coordinator.
-- **Argument validation.** Both methods throw `ArgumentException`
-  when `treeName` or `sourceClusterId` is null or whitespace-only.
+- **Argument validation.** Both methods throw
+  `ArgumentNullException` when `treeName` or `sourceClusterId` is
+  `null` and `ArgumentException` when either argument is empty or
+  whitespace-only.
 - **Atomic-batch coordination is deferred.** The metadata DTO
   intentionally omits prepared-transaction state. Reconstructing
   receiver-side prepared-tx visibility across a cross-cluster
@@ -135,7 +143,7 @@ suite pins:
   no entries.
 - Metadata-then-stream is consistent under concurrent sender writes:
   entries staged after the metadata cut-point do not leak.
-- `ArgumentException` invariants hold for both RPCs.
+- `ArgumentNullException` / `ArgumentException` invariants hold for both RPCs.
 - The stream observes cancellation tokens during enumeration.
 
 The exemplar `InMemoryRemoteSnapshotTransport` in the replication
@@ -184,21 +192,28 @@ concrete binding the host registers.
 ### Receiver-side adapter
 
 `RemoteSnapshotProvider` is the canonical receiver-side
-`ISnapshotProvider` implementation. A host registers it in place of
-the default in-cluster `LatticeSnapshotProvider` so the bootstrap
-state machine drains snapshots from a peer cluster through a
-configured `IRemoteSnapshotTransport` binding instead of from the
-local tree.
+`IBootstrapSnapshotSource` implementation. The bootstrap state
+machine drains from `IBootstrapSnapshotSource`; `AddLatticeReplication`
+registers a factory that resolves the seam to `RemoteSnapshotProvider`
+when an `IRemoteSnapshotTransport` is registered alongside it (the
+active-active default), or to a `LocalBootstrapSnapshotSource`
+wrapper over the silo's local `ISnapshotProvider` otherwise (the
+single-cluster recovery path). The silo's local `ISnapshotProvider`
+is untouched in either case, so a silo that is also a snapshot
+sender keeps serving outbound requests from peer receivers via
+`LatticeRemoteSnapshotService` while its own bootstrap drains from
+the registered transport.
 
 | Type | Purpose |
 |------|---------|
-| `RemoteSnapshotProvider` | Receiver-side `ISnapshotProvider` adapter. Calls `IRemoteSnapshotTransport.GetMetadataAsync` once to capture the sender-side cut-point, then drains `RequestSnapshotAsync` and yields each entry through the existing `SnapshotStream` shape. Stateless and safe for concurrent invocation across distinct `(treeName, sourceClusterId)` pairs. |
-| `LatticeReplicationServiceCollectionExtensions.AddRemoteSnapshotProvider` | DI helper that removes the default `ISnapshotProvider` registration and substitutes `RemoteSnapshotProvider`. |
+| `IBootstrapSnapshotSource` | Receiver-side seam consumed by the bootstrap state machine. Split from `ISnapshotProvider` so sender and receiver roles can coexist on a single silo without one DI slot overwriting the other. |
+| `RemoteSnapshotProvider` | Cross-cluster `IBootstrapSnapshotSource`. Calls `IRemoteSnapshotTransport.GetMetadataAsync` once to capture the sender-side cut-point, then drains `RequestSnapshotAsync` and yields each entry through the existing `SnapshotStream` shape. Stateless and safe for concurrent invocation across distinct `(treeName, sourceClusterId)` pairs. |
+| `LocalBootstrapSnapshotSource` | Single-cluster default `IBootstrapSnapshotSource`. Forwards both `ExportAsync` overloads to the silo's local `ISnapshotProvider`. |
 
 #### Semantics
 
-- **Three-arg overload only.** The adapter implements only the
-  three-arg `ExportAsync(treeName, sourceClusterId, asOfHlc, ct)`
+- **Three-arg overload only.** The cross-cluster adapter implements
+  only the three-arg `ExportAsync(treeName, sourceClusterId, asOfHlc, ct)`
   overload; the legacy two-arg overload throws
   `InvalidOperationException` because the adapter cannot address a
   sender peer without the sender cluster id. The bootstrap coordinator
@@ -218,16 +233,21 @@ local tree.
 - **Transport-agnostic.** The adapter knows nothing about the
   concrete binding (gRPC, in-process loopback, custom HTTP); the
   host wires the binding by registering an `IRemoteSnapshotTransport`
-  singleton in DI before calling `AddRemoteSnapshotProvider`.
-- **Receiver-only registration.** Sender clusters do not call
-  `AddRemoteSnapshotProvider`; their default `ISnapshotProvider` is
-  the local tree (`LatticeSnapshotProvider`) and inbound transport
-  bindings route through `LatticeRemoteSnapshotService` to drive it.
-  A cluster that both sends and receives can register the adapter
-  per-tree by host-specific composition; the default registration
-  shape is "one role per cluster".
+  singleton in DI alongside `AddLatticeReplication`.
+- **Active-active by default.** A silo that registers an
+  `IRemoteSnapshotTransport` becomes both a sender (serving outbound
+  snapshot requests via `LatticeRemoteSnapshotService`, which drives
+  the local `ISnapshotProvider`) and a receiver (draining inbound
+  snapshots through `RemoteSnapshotProvider`, which drives the
+  registered transport). The two seams do not collide: each grain
+  consumes its own DI slot. Hosts that want to force the local-only
+  bootstrap path even with a transport present can pre-register a
+  custom `IBootstrapSnapshotSource` before `AddLatticeReplication`
+  and the default factory becomes a no-op.
 
-Sample wiring on a receiver-side silo:
+Sample wiring on a silo that bootstraps from a peer cluster
+(registering the transport is sufficient - the bootstrap seam
+auto-flips to the cross-cluster adapter):
 
 ```csharp verify
 using Microsoft.Extensions.DependencyInjection;
@@ -241,12 +261,11 @@ siloBuilder.AddLatticeReplication(opts => opts.ClusterId = "site-b");
 // adapter resolves a stable instance per silo. A real implementation
 // connects to the sender's binding endpoint; the no-op shown here
 // stands in for the host-supplied implementation in this snippet.
+// Registering the transport is sufficient: AddLatticeReplication's
+// IBootstrapSnapshotSource factory observes the registration and
+// resolves the seam to RemoteSnapshotProvider automatically.
 siloBuilder.Services.AddSingleton<IRemoteSnapshotTransport>(_ =>
     throw new NotImplementedException("Plug in your transport binding."));
-
-// Replace the default in-cluster ISnapshotProvider with the
-// cross-cluster adapter.
-siloBuilder.AddRemoteSnapshotProvider();
 ```
 
 A reference for the receiver-side wiring lives in the replication
@@ -254,6 +273,66 @@ test project's `RemoteSnapshotProviderIntegrationTests`, which uses
 an in-process transport stub to round-trip the receiver-side adapter
 against the real sender-side `LatticeRemoteSnapshotService` running
 on a peer cluster.
+
+## gRPC binding
+
+The `Orleans.Lattice.Replication.Grpc` package ships the canonical
+`IRemoteSnapshotTransport` binding alongside the live-push
+`IReplicationTransport`. Both transports share a single options
+type, one peer-URI map, and the same TLS, shared-secret, and
+channel-reuse conventions.
+
+| Type | Role |
+|------|------|
+| `GrpcRemoteSnapshotTransport` | Client-side `IRemoteSnapshotTransport` that hosts the cross-cluster `GetMetadataAsync` unary call and the `RequestSnapshotAsync` server-streaming call. One gRPC channel is cached per `sourceClusterId` and shared with the live-push transport. |
+| `LatticeRemoteSnapshotGrpcService` | Sender-side ASP.NET Core gRPC service that delegates each call to the local `LatticeRemoteSnapshotService` (which in turn drives the host-registered `ISnapshotProvider`). |
+| `LatticeReplicationGrpcOptions` | Per-peer endpoint map (`Peers`), TLS-required-by-default gate (`AllowPlaintextEndpoints`), optional per-channel configuration hook (`ConfigureChannel`), and an override for the local cluster id used in outbound headers. The same options instance drives both the live-push transport and the snapshot transport. |
+
+A silo can simultaneously serve outbound snapshot requests *and*
+bootstrap its own tree from a peer; the default composition is
+active-active. A single helper pair wires both directions:
+
+```csharp verify
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Replication;
+using Orleans.Lattice.Replication.Grpc;
+
+siloBuilder.AddLatticeReplication(opts => opts.ClusterId = "site-b");
+
+// Cross-cluster gRPC binding: registers both the live-push
+// IReplicationTransport (outbound batches) and the snapshot
+// IRemoteSnapshotTransport (bootstrap pulls). Registering the
+// snapshot transport auto-flips the receiver-side
+// IBootstrapSnapshotSource seam to the cross-cluster adapter so
+// the bootstrap state machine drains through gRPC; the sender-side
+// ISnapshotProvider remains the local tree.
+siloBuilder.Services.AddLatticeReplicationGrpc(opts =>
+{
+    opts.Peers["site-a"] = new Uri("https://snap.site-a.example/");
+});
+
+// In the ASP.NET Core endpoint composition:
+// app.MapLatticeReplicationGrpc();
+```
+
+A silo that only sends snapshots (it never bootstraps from a peer)
+leaves `Peers` empty; a silo that only receives snapshots omits the
+`MapLatticeReplicationGrpc` endpoint mapping. The active-active
+default is opt-in by registration, not by a separate role flag.
+
+The shared-secret authentication interceptor that gates the existing
+`LatticeReplicationGrpc` push service was widened to recognise the
+new `orleans.lattice.replication.LatticeRemoteSnapshot` service
+prefix and to enforce on both unary and server-streaming RPCs, so the
+same `LATTICE_REPLICATION_SHARED_SECRET` environment variable (or
+`LatticeReplicationSecurityOptions` host configuration) covers
+inbound snapshot calls without additional wiring.
+
+The client translates `RpcException(StatusCode.Cancelled)` into the
+canonical `OperationCanceledException`, so receivers can rely on the
+same cancellation contract whether the transport is the gRPC binding,
+the in-process loopback, or a host-supplied custom binding.
 
 ## Sample usage
 
@@ -409,7 +488,7 @@ Beyond the receiver-driven auto-bootstrap path (`ILatticeFallOffLogDetector`), t
 - **Process-local rate-limit table.** The default implementation tracks honoured requests in process memory only; a silo restart resets the rate-limit window for every pair. Cross-silo coordination is not required because `ILatticeBootstrapCoordinator` is itself idempotent under concurrent invocations against the same tree from the same source cluster (the per-tree internal grain absorbs the second call as a no-op) and rejects mismatched-source concurrent kickoffs as `InvalidOperationException`. The rate limit is therefore a fairness mechanism, not a correctness one.
 - **Timestamp updates only on success.** The dictionary timestamp is stamped only after the coordinator call returns successfully, so a thrown coordinator exception (transport failure, conflicting in-flight bootstrap from a different source) does not consume the rate-limit budget against the operator.
 - **Per-tree options resolution.** The minimum interval is resolved per-tree via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)`, so different replicated trees can run different re-seed cadences without separate seam instances.
-- **Argument validation.** `treeName` and `sourceClusterId` must be non-null and non-empty (`ArgumentException` otherwise); the cancellation token is observed before the rate-limit check and propagated to the underlying coordinator.
+- **Argument validation.** `treeName` and `sourceClusterId` must be non-null and non-empty (`ArgumentNullException` when `null`, `ArgumentException` when whitespace-only); the cancellation token is observed before the rate-limit check and propagated to the underlying coordinator.
 
 ### Sample usage
 
