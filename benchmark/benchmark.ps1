@@ -253,6 +253,25 @@ $ScalarPanelExtra = [ordered]@{
     'lattice_wal_appends_per_second' =
         'sum(rate(orleans_lattice_leaf_commit_duration_milliseconds_count{step="wal"}[{Ws}s]))'
 
+    # ── Digest-publish step aliases (label-filtered cuts of the same
+    #    step-tagged orleans.lattice.leaf.commit.duration histogram for
+    #    the parent-digest publish hop instrumented on the foreground
+    #    leaf commit paths). Auto-discovery aggregates the histogram
+    #    across all step values and would otherwise dilute the digest
+    #    slice ~4x against the {wal, apply, observer, digest} fold,
+    #    making per-step optimisations of the digest hop invisible at
+    #    the aggregate percentile. Both p95 and p99 are exported because
+    #    the digest hop is the smallest of the four steps and its tail
+    #    behaviour at p95 carries as much signal as p99 (a smaller tail
+    #    has a lower noise floor). The publishes-per-second alias is the
+    #    throughput companion (count of digest-step samples). ──
+    'lattice_digest_publish_p95_ms' =
+        'histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_leaf_commit_duration_milliseconds_bucket{step="digest"}[{Ws}s])))'
+    'lattice_digest_publish_p99_ms' =
+        'histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_leaf_commit_duration_milliseconds_bucket{step="digest"}[{Ws}s])))'
+    'lattice_digest_publishes_per_second' =
+        'sum(rate(orleans_lattice_leaf_commit_duration_milliseconds_count{step="digest"}[{Ws}s]))'
+
     # ── Derived metrics (auto-discovery cannot synthesise ratios) ──
     #
     # IMPORTANT: aggregate each rate to a scalar BEFORE adding. PromQL's `+`
