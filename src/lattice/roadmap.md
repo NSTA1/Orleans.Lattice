@@ -204,7 +204,173 @@ Associate tags with keys and query by tag. Implementable as a secondary Lattice 
 
 ---
 
-### 4 · Documentation & Developer Experience
+### 4 · F-064
+**Feature / reliability / high impact (extends the per-call strict isolation already established for `GetManyAsync` / `CountAsync` to multi-page reads, both streaming and durable)** *(depends on Core F-033 ✓, F-055 ✓, F-058 ✓, F-062 ✓)*
+
+Point-in-time read views over multi-page enumerations. Today the `LatticeRegistrySnapshotContext` mechanism shipped under F-055 / F-058 / F-062 makes every *single-call* fan-out read (`GetManyAsync`, `CountAsync`, `CountPerShardAsync`) linearizable against the per-tree `ITxRegistryGrain` decision view, via a `snap1` / fan-out / `snap2` retry loop in `LatticeGrain.cs` (lines 285-310, 973, 1200-1247) that defaults out-of-snapshot decisions to `TxStatus.InFlight` on every participating leaf. The mechanism is precisely the one needed to deliver "no observable mid-saga `pre=N, post=M` split" within a single call. What it does **not** cover is **multi-page reads**: every streaming `KeysAsync` / `EntriesAsync` page (`LatticeGrain.Keys.cs:84`, `LatticeGrain.Entries.cs:59`) and every `Next*Async` step of a durable cursor (`docs/lattice/durable-cursors.md`, `BPlusLeafGrain.CursorRegistry.cs`) issues an independent `ScanKeysAsync` / `ScanEntriesAsync` fan-out with no registry-snapshot scope, so a saga that transitions `InFlight → Committed` (or `→ Aborted`) between pages presents a torn view: page *i* hides the saga's keys, page *i+1* surfaces them. This is the exact same gap F-055 closed for single-call reads, on the exact same mechanism.
+
+F-064 closes it for both surfaces in one change, because the design distinction between them is one paragraph (lifetime: streaming snapshots live in the iterator state machine; durable snapshots are persisted and pinned), not a feature boundary.
+
+**Design.** Two strictly-additive primitives sharing one registry-side helper:
+
+1. **Unconditional streaming-scan isolation.** `KeysAsyncCore` / `EntriesAsyncCore` capture a `Dictionary<Guid, TxStatus>` via `FetchRegistrySnapshotAsync()` once at scan entry (before the initial shard fan-out), open a single `LatticeRegistrySnapshotContext.BeginScope` for the lifetime of the `IAsyncEnumerable`, and dispose it in the iterator's `finally`. Every per-shard `ScanKeysAsync` / `ScanEntriesAsync` page issued during the enumeration - including reconciliation drains under concurrent splits (`DrainSlotsToBufferAsync` on lines 184-194 of `LatticeGrain.Keys.cs`) - reads the same decision view. No retry loop is needed: the snapshot is frozen by construction, so every page is internally consistent against it, and the only divergence a multi-page reader can observe is its own snapshot lagging the registry's live state (the same window any reader has between `GetManyAsync` calls). The change is binary-source-compatible (no public signature changes) and behaviourally aligned with the already-shipped `GetManyAsync` contract - a single-call fan-out and a streaming scan now share one definition of "what the registry says". Default behaviour, no opt-in.
+
+2. **Opt-in durable-cursor point-in-time isolation.** New `[Id(N)] bool PointInTime` slot on `LatticeCursorSpec` (default `false`, wire-compatible). When `true`, `LatticeCursorGrain.OpenAsync` captures the registry snapshot via `FetchRegistrySnapshotAsync()`, persists it onto a new `[Id(N)] Dictionary<Guid, TxStatus>? RegistrySnapshot` slot on `LatticeCursorState` alongside the existing `Spec` / `LastYieldedKey` / `Phase` / `DeletedTotal` fields, and on every `Next*Async` / `DeleteRangeStepAsync` rehydrates it via `LatticeRegistrySnapshotContext.BeginScope(state.RegistrySnapshot)` for the duration of the per-step fan-out. Persistence cost is `O(in-flight + retention-window saga count)` per cursor - bounded by the saga-throughput envelope and the `TxDecisionRetention` window, typically under 200 KB serialized on the F-055 acceptance benchmark. Default `PointInTime = false` preserves bit-for-bit the current cursor semantics; existing cursor consumers see no behaviour change.
+
+3. **Registry-side pin with three independent expiry caps.** A `PointInTime = true` cursor must keep the snapshot's referent decisions queryable for the cursor's lifetime, but the tombstone-prune path (`TxRegistryGrain.PruneExpired` invoked inline from `ForgetAsync`, bounded by `LatticeOptions.TxDecisionRetention` default 60 s) does not know about cursors. New seam: `ITxRegistryGrain.PinSnapshotAsync(Guid pinId, IReadOnlyCollection<Guid> txids, TimeSpan ttl)` records a `TxRegistryState.SnapshotPins: Dictionary<Guid, SnapshotPin>` entry (new `[Id(5)]` slot, alias `ol.sp`, fields `Txids: HashSet<Guid>, ExpiresAt: DateTimeOffset`). `PruneExpired` is tightened to skip any tombstoned decision whose txid is in the union of every unexpired pin's `Txids` set; expired pins prune themselves on the same `PruneExpired` pass. The persisted footprint is bounded absolutely by a new `LatticeOptions.MaxPinnedSagaDecisions` cap (default 100 000) - `PinSnapshotAsync` throws `LatticeCursorRegistryPinExhaustedException` if accepting the snapshot would exceed the cap, so an `OpenAsync(PointInTime: true)` against a degraded registry fails fast rather than silently degrading or unbounded-growing.
+
+   **Pin lifetime defence-in-depth (three independent caps).** A naive design pins for the cursor's full lifetime and unpins in `CloseAsync` / `OnTtlExpiredAsync`. That fails open under a single failure mode: an operator who configures `CursorIdleTtl = Timeout.InfiniteTimeSpan` (a supported configuration per `docs/lattice/durable-cursors.md`) plus an Orleans reminder-service degradation leaves a forgotten cursor pinning decisions forever. F-064 therefore uses three *independent* caps, any one of which is sufficient to bound pin lifetime:
+
+   * **Cap 1 - cursor-driven (cleanup path).** `LatticeCursorGrain.OnTtlExpiredAsync` (the existing `TtlGrain` reminder hook that already clears forgotten cursor state) calls `UnpinSnapshotAsync(pinId)` before `ClearStateAsync` and reminder-unregister. Bounded by `CursorIdleTtl` (default 48 h).
+   * **Cap 2 - registry-driven (defence-in-depth).** Every pin carries a server-recorded `ExpiresAt = now + LatticeOptions.MaxCursorSnapshotPinTtl` (new option, default 7 d, hard cap regardless of cursor TTL). `PruneExpired` evicts pins past `ExpiresAt` directly. A live cursor refreshes its pin on every `Next*Async` (slide alongside the existing `SlideTtlAsync()` reminder slide), so an actively-used long cursor extends its pin indefinitely. A cursor that misses a refresh window (silo failover slower than the pin TTL, or a client that quiesces for a week) throws `LatticeCursorSnapshotExpiredException` on the next step - the alternative of silently degrading to live reads would violate the point-in-time contract the cursor was opened under.
+   * **Cap 3 - footprint (back-pressure).** `MaxPinnedSagaDecisions` absolute cap on the registry-wide pin footprint. `OpenAsync(PointInTime: true)` is the only failure surface; `Next*Async` of an already-open cursor never throws for pin-exhaustion reasons.
+
+   The three caps compose: cap 1 covers the steady-state cleanup path, cap 2 covers reminder-degradation and infinite-`CursorIdleTtl` modes, cap 3 covers operator misconfiguration / saga-flood scenarios. No single failure mode leaves a permanent pin.
+
+**Atomicity scope.** Both surfaces inherit the same scope already established for `GetManyAsync`: linearizability is against **saga decisions only**. A plain `SetAsync` / `RemoveAsync` (non-saga) issued between pages becomes visible on the next page in both the streaming and the durable case. Callers who need stronger isolation (no observable foreground writes during iteration) route their writes through `SetManyAtomicAsync`; the point-in-time view then hides the entire batch consistently. A future WAL-replay-based snapshot (level 3 in the design exploration that produced this entry) is the path to "zero observable writes" semantics, but that requires F-049 / F-052 to land first and is out of scope here.
+
+**Cross-cluster.** The `F-062 ✅` `AtomicShardCount` / `TerminalArrivals` / `ExpectedTerminals` tally lives inside `ITxRegistryGrain.GetStatusAsync` / `SnapshotAsync`, so the captured snapshot already reflects the all-or-nothing cross-cluster gate. No additional wire surface, no additional replication-side change.
+
+**Surface.** Public-additive only:
+* `Orleans.Lattice.LatticeCursorSpec.PointInTime: bool` - new opt-in slot.
+* `Orleans.Lattice.LatticeCursorSnapshotExpiredException` - thrown by `Next*Async` / `DeleteRangeStepAsync` when the registry pin TTL has elapsed without a slide.
+* `Orleans.Lattice.LatticeCursorRegistryPinExhaustedException` - thrown by `OpenAsync(PointInTime: true)` when accepting the snapshot would exceed `MaxPinnedSagaDecisions`.
+* `LatticeOptions.MaxCursorSnapshotPinTtl: TimeSpan` (default 7 d) - registry-side hard cap on pin lifetime.
+* `LatticeOptions.MaxPinnedSagaDecisions: int` (default 100 000) - registry-wide footprint cap.
+
+Internal-additive:
+* `ITxRegistryGrain.PinSnapshotAsync(Guid pinId, IReadOnlyCollection<Guid> txids, TimeSpan ttl)` / `RefreshPinAsync(Guid pinId, TimeSpan ttl)` / `UnpinSnapshotAsync(Guid pinId)`.
+* `TxRegistryState.SnapshotPins: Dictionary<Guid, SnapshotPin>` (new `[Id(5)]` slot; legacy decode-default = empty).
+* `LatticeCursorState.RegistrySnapshot: Dictionary<Guid, TxStatus>?` (new slot; only populated for `PointInTime: true` cursors).
+* `TypeAliases.SnapshotPin = "ol.sp"`.
+
+**Observability.** Two new tag values on existing instruments rather than new meters:
+* `orleans.lattice.cursor.duration` gains a `point_in_time` tag (`true` / `false`) so operators can size point-in-time cursor steps against ordinary cursor steps.
+* `orleans.lattice.registry.snapshot.pin_count` (new `Gauge` on the existing `LatticeMetrics` source, tagged `tree`) tracks the current pin footprint so operators can alert before `MaxPinnedSagaDecisions` is hit.
+
+**Acceptance.**
+- *Streaming-scan isolation.* A fixture commits a 16-key `SetManyAtomicAsync` saga while a continuous reader holds a single `EntriesAsync` enumeration open. Across 50 trials the reader observes either zero or all keys from the saga at the boundary between pages, never a `pre=N, post=M` split.
+- *Durable-cursor isolation.* The equivalent fixture using `OpenEntryCursorAsync(spec with { PointInTime = true })` + `NextEntriesAsync` paging exhibits the same all-or-nothing behaviour across pages, and a `PointInTime = false` control reproduces the pre-F-064 torn-view behaviour (regression-pin against silent change).
+- *Pin lifetime - cleanup path.* A cursor opened, paged twice, then deactivated via `CloseCursorAsync` releases its pin within one registry round-trip; `TxRegistryGrain.SnapshotPins` is empty after the close.
+- *Pin lifetime - TTL expiry.* A `PointInTime` cursor whose host-side TTL exceeds `MaxCursorSnapshotPinTtl` and which goes idle past the pin TTL throws `LatticeCursorSnapshotExpiredException` on the next step, and the registry's `SnapshotPins` footprint returns to baseline.
+- *Pin lifetime - footprint cap.* A fixture configures `MaxPinnedSagaDecisions = 8` and opens point-in-time cursors against a workload exercising 12 in-flight sagas; the 9th `OpenAsync` throws `LatticeCursorRegistryPinExhaustedException` and existing cursors continue paging.
+- *Cross-cluster atomicity.* A two-cluster fixture commits a multi-shard atomic saga while a remote reader holds an `EntriesAsync` enumeration; across pages the reader observes zero or all of the saga's keys, exercising the `F-062 ✅` `AtomicShardCount` tally through the snapshot.
+- *Reminder-degradation defence-in-depth.* A fixture suppresses reminder firing for a cursor whose host-side TTL is `Timeout.InfiniteTimeSpan` and confirms the registry-side `MaxCursorSnapshotPinTtl` cap independently expires the pin within the configured window.
+- *Replication interaction.* The replication apply path is unchanged; receivers observe the snapshot-pinned decisions through the same `ITxRegistryGrain` seam as locally, so no companion R-### entry is required.
+- *Hygiene.* `LatticeCursorState`'s persisted footprint is asserted to round-trip through Orleans serialization with the new `RegistrySnapshot` slot decoding to empty for legacy persisted state.
+
+**Out of scope.** Snapshot-isolated `GetManyAsync` (already shipped under F-055 / F-058 / F-062), zero-observable-writes semantics (tracked separately as F-065 below; depends on F-049 ✓ + F-052), per-page snapshot refresh (defeats the point), cross-cluster snapshot rendezvous across multiple clusters' independent registries (a future entry if a real consumer asks for it).
+
+---
+
+### 5 · F-065
+**Feature / reliability / medium impact (zero-observable-writes snapshot reads via WAL-replay materialisation; the strict-isolation step F-064 explicitly defers)** *(depends on Core F-049 ✓, F-053 ✓, F-056 ✓, F-064 [unshipped], F-052 [unshipped])*
+
+Strict snapshot-isolation reads: a multi-page enumeration whose view of every key is fixed at `OpenAsync` time and *not* perturbed by any concurrent write - foreground `SetAsync` / `RemoveAsync`, saga `SetManyAtomicAsync`, range deletes, or replication apply. F-064 closes the saga-decision dimension; F-065 closes the only remaining dimension: foreground non-saga writes between pages. Together they deliver the literal "point-in-time, tree-wide atomic" contract the design exploration that produced this entry sketched at level 3.
+
+The mechanism is **deterministic WAL replay**, not MVCC. Lattice values are LWW, not versioned, so there is no per-key version history to walk - but the per-shard WAL established under F-049 ✓ is the deterministic source of truth for the projection (F-049d ✓ flipped the default and removed the legacy state-row commit path), and F-053 ✓ + F-056 ✓ give every reader the primitives needed to replay the WAL up to a chosen offset and verify the result. A snapshot is the projection produced by replaying records `0..P` for every shard, where `P` is captured atomically across shards at `OpenAsync` time. The expensive parts - the per-shard replay coordinator (`ILeafReplayCoordinatorGrain`), the WAL-as-rebuild-source contract (F-049c ✓), the chained projection digest (F-053 ✓), and the operator-side `RebuildLeafProjectionAsync` / `GetMaterialiserLagAsync` surface (F-052) - are either shipped or scheduled, so F-065 is mostly composition.
+
+**Design.** Three primitives:
+
+1. **Tree-wide snapshot offset capture.** New `IShardRootGrain.SnapshotWalHeadAsync(CancellationToken)` returning the shard's current WAL head offset (the next-to-be-assigned sequence number). At `OpenAsync` time `LatticeGrain.OpenSnapshotCursorAsync` fans this out across every shard the routing map currently advertises, then captures the `LatticeRegistrySnapshotContext` snapshot (F-064 / F-055 path) in the same scope. The captured tuple is `(treeMapVersion, perShardWalOffsets: Dictionary<int, long>, registrySnapshot)` - an immutable `LatticeSnapshotCoordinate` (alias `ol.lsc`) carried on `LatticeCursorState`. The fan-out is **not** linearizable across shards in real time (shards are independent grains, the fan-out is concurrent), but it does not need to be: every shard's WAL is independently deterministic, and a saga that committed mid-fan-out is resolved consistently across shards by the `registrySnapshot` half of the coordinate - if the captured snapshot shows the saga as `Committed`, every shard's WAL prefix replayed up to its captured offset will include the saga's prepared mutations and the snapshot view will see the post-saga state on every shard the saga touched; if `InFlight`, every shard hides the saga uniformly. The two halves of the coordinate together encode "the projection as of this tree-wide moment", not "the projection at any single wall-clock instant".
+
+2. **Materialised per-shard snapshot leaves.** A snapshot cursor's `Next*Async` does not delegate to live `ScanKeysAsync` / `ScanEntriesAsync` (which see the live `Entries` dictionary on each leaf). Instead, the cursor's first read materialises **per-shard snapshot leaves** on demand: for each shard the cursor visits, a new internal `ISnapshotLeafGrain` keyed `{treeId}/{shardIndex}/{snapshotCoordinateHash}` rebuilds the shard's leaf-projection state from the WAL by calling `ILeafReplayCoordinatorGrain.ReadSliceAsync(fromOffsetExclusive: 0, toOffsetInclusive: capturedOffset, budget)` in a streaming loop, applies each record through the same `((ILeafProjection)this).Apply` path the live leaf uses, and exposes a read-only `ScanKeysAsync` / `ScanEntriesAsync` surface against the rebuilt state. The snapshot leaf is **transient** (in-memory only, no `IPersistentState`, no WAL of its own); a grain reactivation re-runs the replay - which is deterministic and idempotent by construction. Replay cost is amortised across pages of a single snapshot cursor: the snapshot leaf stays activated for the cursor's lifetime, so subsequent `Next*Async` calls against the same shard hit the already-rebuilt state. A snapshot cursor that spans every shard pays `O(sum(capturedOffset_s))` total replay cost up-front, not per page.
+
+3. **Pinned WAL retention via the existing cursor registry.** A snapshot must keep the WAL prefix `0..max(capturedOffset_s)` alive for the cursor's lifetime, or replay re-runs (silo failover, snapshot leaf eviction) will fail with `WalEntryTrimmedException`. The existing `IWalCursorRegistry` is already the GC's `min(cursor)` input - F-065 reuses it verbatim: `LatticeCursorGrain.OpenAsync(PointInTime: true, SnapshotMode: ZeroObservableWrites)` calls `registry.ReportCursorAsync(treeName, consumerId: $"snapshot:{cursorId}", cursor: capturedHlc, blockedAtHlc: capturedHlc)` once per touched shard. The HLC-shaped report half pins the GC predicate's `min(cursor)` floor; the `blockedAtHlc` half pins the strict-less `entry.Timestamp < blockedFloor` clause. Every `Next*Async` re-reports (slides the pin, defends against TTL expiry of an inactive consumer registration). `CloseAsync` / `OnTtlExpiredAsync` unregister the consumer, releasing the WAL prefix back to the GC.
+
+   This is *the same shape* as F-064's registry-pin design (three caps: cursor TTL, registry TTL, footprint cap), with the registry being `IWalCursorRegistry` instead of `ITxRegistryGrain`. The seam is already plumbed through `LatticeWalGc`'s trim predicate - no GC changes are needed; the snapshot consumer is just another registered cursor. A snapshot that ages past `MaxCursorSnapshotPinTtl` (F-064 option, default 7 d) without a slide unregisters itself; the next `Next*Async` throws `LatticeSnapshotExpiredException` because the WAL prefix the replay needs has been trimmed.
+
+**Lifecycle.**
+
+```
+OpenSnapshotCursorAsync(spec, ct)
+    ↓
+LatticeGrain captures (treeMapVersion, perShardWalOffsets, registrySnapshot)
+    ↓
+LatticeCursorGrain.OpenAsync persists LatticeSnapshotCoordinate onto LatticeCursorState
+    ↓
+For every shard the spec touches:
+    IWalCursorRegistry.ReportCursorAsync(treeName, "snapshot:{cursorId}", capturedHlc_s, blockedAtHlc = capturedHlc_s)
+    ↓
+Cursor returns to client; opaque cursorId returned
+
+NextKeysAsync(cursorId, pageSize)
+    ↓
+LatticeCursorGrain resolves which shard(s) to consult next based on LastYieldedKey and Spec
+    ↓
+For each shard s involved in this page:
+    snapshotLeaf = grainFactory.GetGrain<ISnapshotLeafGrain>($"{treeId}/{s}/{coordHash}")
+    page = await snapshotLeaf.ScanKeysAsync(effStart, effEnd, ...)   // first call rebuilds via ILeafReplayCoordinatorGrain
+    ↓
+k-way merge across shards under LatticeRegistrySnapshotContext.BeginScope(coord.RegistrySnapshot)
+    ↓
+WriteStateAsync (checkpoint LastYieldedKey)
+    ↓
+IWalCursorRegistry.ReportCursorAsync (slide pin)
+    ↓
+return LatticeCursorKeysPage
+
+CloseAsync()
+    ↓
+For every shard: IWalCursorRegistry slide pin to TimeSpan.Zero (unregister)
+    ↓
+ClearStateAsync + DeactivateOnIdle
+```
+
+**Atomicity scope.** Strict isolation against every dimension the live read path is subject to:
+* **Saga decisions** - frozen by the captured `registrySnapshot` (inherited from F-064).
+* **Foreground non-saga writes** - frozen because the snapshot leaves replay only the WAL prefix `0..capturedOffset_s`; writes that append after the capture are invisible by construction.
+* **Range deletes** - same as above; tombstone entries appended after the capture are not in the replay set.
+* **Replication apply** - the receiver's WAL is the same WAL the snapshot replays from, so cross-cluster writes that land after the capture are invisible. A snapshot opened against a follower cluster shows the follower's `capturedOffset_s` view; cross-cluster snapshot rendezvous (one HLC barrier across multiple clusters' independent WALs) remains explicitly out of scope.
+* **Topology changes (split / reshard / resize)** - the captured `treeMapVersion` pins the routing snapshot. A split that commits after the capture is invisible: the snapshot cursor still routes to the pre-split shard layout because the materialised snapshot leaves rebuilt the pre-split projection. The migrated keys are present on the source shard's snapshot leaf (they were in `Entries` at the captured WAL offset) and absent on the destination shard's snapshot leaf (the destination's WAL had no entry for them at that offset). The k-way merge sees each key exactly once. A reshard that committed after the capture is similarly invisible.
+
+**Cost vs. F-064 isolation.** F-064 pages cost roughly `O(live-fan-out)` per page plus a single registry-snapshot capture at open. F-065 pages add a one-time replay cost at the first page that touches a given shard, then amortise to roughly `O(materialised-fan-out)` per page - comparable to live fan-out once the snapshot leaves are warm. The replay cost is `O(sum(capturedOffset_s))` total, scaling with WAL depth at open time. F-052's `GetMaterialiserLagAsync` is exactly the right knob to size this upfront: `OpenSnapshotCursorAsync` consults it and fails fast with `LatticeSnapshotReplayBudgetExceededException` if the projected replay would exceed `LatticeOptions.MaxSnapshotReplayEntries` (new option, default 10 000 000), giving operators a budget cap analogous to the existing `MaxLeafReplayEntries` on activation-time replay.
+
+**Surface.** Public-additive only:
+* `Orleans.Lattice.ILattice.OpenSnapshotCursorAsync(LatticeCursorSpec spec, CancellationToken ct)` - new method, returns opaque cursor id. Distinct from `OpenKeyCursorAsync` / `OpenEntryCursorAsync` because the snapshot variant has a different cost profile, a different failure mode (`WalEntryTrimmedException`), and a different acceptance gate (`MaxSnapshotReplayEntries`); making it a distinct entry point lets the public surface document the trade-offs without overloading `LatticeCursorSpec.PointInTime` from F-064 with a second-tier opt-in. (`OpenSnapshotKeyCursorAsync` / `OpenSnapshotEntryCursorAsync` / `OpenSnapshotDeleteRangeCursorAsync` if the surface needs to mirror the existing trio.)
+* `Orleans.Lattice.LatticeSnapshotCoordinate` - readonly record struct (`treeMapVersion`, `perShardWalOffsets`, `registrySnapshotHlc`). Exposed publicly so operators can diagnose snapshot lifetime against `GetMaterialiserLagAsync`.
+* `Orleans.Lattice.LatticeSnapshotExpiredException` - thrown by `Next*Async` when the WAL prefix has been trimmed past the captured offset (pin TTL elapsed without slide, or operator forced a trim via `LatticeOptions.WalGc.AggressiveTrim`).
+* `Orleans.Lattice.LatticeSnapshotReplayBudgetExceededException` - thrown by `OpenSnapshotCursorAsync` when the projected replay would exceed `MaxSnapshotReplayEntries`.
+* `LatticeOptions.MaxSnapshotReplayEntries: long` (default 10 000 000) - per-shard upfront replay-cost cap.
+* `LatticeOptions.SnapshotLeafIdleTtl: TimeSpan` (default 30 min) - eviction window for transient snapshot leaves (cheaper than holding all snapshot state for the full `CursorIdleTtl` window; the next `Next*Async` after eviction rebuilds via `ILeafReplayCoordinatorGrain` on demand).
+
+Internal-additive:
+* `IShardRootGrain.SnapshotWalHeadAsync(CancellationToken)` - per-shard offset capture.
+* `ISnapshotLeafGrain` keyed `{treeId}/{shardIndex}/{coordHash}` - transient per-snapshot leaf, no `IPersistentState`.
+* `LatticeCursorState.SnapshotCoordinate: LatticeSnapshotCoordinate?` - new persisted slot (only populated for snapshot cursors).
+* `TypeAliases.LatticeSnapshotCoordinate = "ol.lsc"`, `TypeAliases.ISnapshotLeafGrain = "ol.slg"`.
+
+**Observability.**
+* `orleans.lattice.snapshot.replay.entries` (new `Histogram<long>`, tagged `tree, shard`) - per-shard replay record count when a snapshot leaf rebuilds. Operators size `MaxSnapshotReplayEntries` against the long tail.
+* `orleans.lattice.snapshot.replay.duration` (new `Histogram<double>` ms, tagged `tree, shard`) - per-shard rebuild wall-time.
+* `orleans.lattice.snapshot.pin_count` (new `Gauge`, tagged `tree`) - count of active WAL-cursor pins owned by snapshot consumers. Alerts before WAL retention blows up.
+* `orleans.lattice.cursor.duration` (existing histogram) gains a `mode={live|frozen-registry|frozen-wal}` tag so all three cursor flavours share one instrument with clean attribution. (`live` = F-033 ✓ baseline, `frozen-registry` = F-064 snapshot, `frozen-wal` = F-065 snapshot.)
+
+**WAL GC interaction.** The snapshot pin is already covered by the existing GC predicate - `LatticeWalGc` trims entries with `entry.Timestamp <= min(reported cursors) AND entry.Timestamp < min(blockedAtHlc)`, both of which the snapshot consumer participates in. No predicate changes are needed. The footprint is bounded by `MaxCursorSnapshotPinTtl` (F-064 option, reused here) - the longest a snapshot can pin WAL retention is the same hard cap a F-064 cursor can pin registry decisions.
+
+**Replication interaction.** Universal - snapshot reads are local to the cluster the cursor was opened against, and they consume the same WAL the replication apply path writes to. No transport-level changes, no new replication-apply DTOs, no per-tree opt-in. A future cross-cluster snapshot rendezvous (synchronised `LatticeSnapshotCoordinate` across two clusters' independent WALs) is out of scope here and would require a new replication-side handshake; the design does not preclude it.
+
+**Acceptance.**
+- *Foreground-write isolation.* A fixture opens a snapshot cursor while a continuous writer issues `SetAsync` against keys in the cursor's range at 100 Hz; across 50 trials every page of the snapshot cursor returns the captured-time value for every key it observes, never a post-capture value.
+- *Saga isolation (composition with F-064).* A fixture commits a multi-key `SetManyAtomicAsync` saga between two pages of a snapshot cursor; the cursor's view does not change. A control fixture with `SnapshotMode: ZeroObservableWrites = false` (i.e. a F-064 cursor) sees the saga's keys flip from pre-saga to post-saga as expected.
+- *Topology-change isolation.* A fixture triggers a 4 → 8 reshard between two pages of a snapshot cursor that touches every shard. The cursor's view does not change: every key is yielded exactly once at the pre-reshard owner.
+- *Replay budget gate.* A fixture sets `MaxSnapshotReplayEntries = 1 000` against a tree whose deepest shard's WAL has 5 000 entries since the last checkpoint; `OpenSnapshotCursorAsync` fails with `LatticeSnapshotReplayBudgetExceededException` and no snapshot leaf is materialised.
+- *WAL retention pin.* A fixture opens a snapshot cursor, waits for two `LatticeWalGc` cycles, and confirms the WAL prefix below `capturedOffset_s` is intact on every touched shard. A control fixture closes the cursor and confirms the GC trims past the previously-pinned offset on the next cycle.
+- *Pin lifetime (three caps, mirrored from F-064).* (a) `CloseAsync` releases the pin within one registry round-trip. (b) An idle snapshot cursor whose host-side TTL exceeds `MaxCursorSnapshotPinTtl` is auto-unpinned by the registry; the next step throws `LatticeSnapshotExpiredException`. (c) A footprint test sets `MaxSnapshotReplayEntries` low and confirms the open-time fail-fast keeps the registry pin footprint bounded.
+- *Crash-recovery determinism.* A fixture opens a snapshot cursor, pages twice, kills the silo hosting the snapshot leaves, and on reactivation confirms the next `Next*Async` rebuilds the snapshot leaf and yields the same keys the pre-crash pages would have yielded next (deterministic replay assertion).
+- *Snapshot-leaf eviction.* A fixture opens a snapshot cursor, pages once, lets the snapshot leaves idle past `SnapshotLeafIdleTtl`, and confirms the next `Next*Async` transparently rebuilds the snapshot leaf - same yielded keys, same digest, with a fresh `orleans.lattice.snapshot.replay.entries` measurement.
+- *Hygiene.* `LatticeCursorState` round-trips through Orleans serialization with the new `SnapshotCoordinate` slot decoding to `null` for legacy persisted state; `ISnapshotLeafGrain` activations carry the same `LatticeMetrics` instruments as `BPlusLeafGrain` for the rebuilt scan paths.
+
+**Out of scope.**
+* *Cross-cluster snapshot rendezvous.* Synchronised `LatticeSnapshotCoordinate` across two clusters' independent WALs - requires a new replication-side handshake; a future entry if a real consumer asks for it.
+* *Writable snapshots.* A snapshot cursor is strictly read-only. `OpenDeleteRangeCursorAsync` with `SnapshotMode: ZeroObservableWrites` is rejected at `OpenAsync` (a delete-range against a frozen view would either be a no-op or write through to the live tree; both are surprising).
+* *Per-cursor WAL retention override.* The snapshot inherits `MaxCursorSnapshotPinTtl` (F-064) as its hard cap. A cursor that needs longer retention rebuilds the snapshot at a fresh coordinate.
+* *Live-vs-snapshot diff.* A consumer that wants "what changed since the snapshot" runs a F-064 `PointInTime: false` cursor against the same range; the diff is the caller's problem to compute. F-065 does not expose a diff API.
+* *Snapshot reuse across cursors.* Two cursors opened at logically identical coordinates do not share their materialised snapshot leaves - each cursor's `coordHash` is salted by `cursorId`, so two simultaneous "snapshot of tree at offset X" cursors pay independent replay cost. A future entry can add coordinate-keyed sharing if a real consumer asks for it.
+
+---
+
+### 6 · Documentation & Developer Experience
 
 - [ ] **F-021 - Migration guide**: Document how to migrate data from external stores (Redis, SQL, Cosmos DB) into Lattice using the streaming bulk-load API, including key-design and value-serialization best practices.
 - [ ] **F-022 - Troubleshooting guide (`docs/troubleshooting.md`)** *(follows F-014 ✓)*: Cover common issues - storage provider exceptions from oversized grains, concurrent split activity, slow scans, stale cache behavior - and how to interpret the output of `DiagnoseAsync`.
@@ -212,7 +378,7 @@ Associate tags with keys and query by tag. Implementable as a secondary Lattice 
 
 ---
 
-### 5 · F-055 ✅ shipped
+### 7 · F-055 ✅ shipped
 **Reliability / high impact (delivers universal cross-leaf, cross-shard, cross-cluster atomic-batch reader isolation)**
 
 Reader isolation during in-flight sagas. Today the consistency contract documented in [`docs/lattice/consistency.md`](../../docs/lattice/consistency.md) ("What Lattice does **not** guarantee" - *Reader isolation during in-flight sagas or range deletes*) explicitly warns that readers concurrent with `SetManyAtomicAsync` may observe a partial view of the mutation, and recommends version-guarded reads (`GetWithVersionAsync` + `SetIfVersionAsync`) as the user-side workaround. F-055 closes the carve-out with a WAL-metadata primitive that delivers cross-leaf, cross-shard, and cross-cluster strict reader isolation by construction, with no per-tree opt-in, zero leaf-state I/O on the saga prepare path, and **zero grain hops on the read path**.
@@ -257,7 +423,7 @@ After F-055 ships, `ILattice.SetManyAtomicAsync` "just works" on every tree - lo
 Integration acceptance (continuous-reader fixture, two-cluster fixture, topology-change fixtures, mid-batch failure compensation fixture, code-search hygiene against the deleted receiver-side surface) was covered in PR #197 and is asserted by `RoadmapIdentifierHygieneTests` plus the suite under `test/lattice/BPlusTree/AtomicWrite/` and `test/lattice.replication/AtomicVisibility/`.
 
 
-### 6 · F-057 ✅ shipped
+### 8 · F-057 ✅ shipped
 **Reliability / high impact (closes three concurrency bugs in the F-055 cross-migration LWW backstop that surfaced under sustained 4→8 reshard chaos load)**
 
 Hardening of the cross-migration LWW backstop branch on `BPlusLeafGrain.ApplyTxTerminalAsync` introduced by F-055. The F-055 universal-saga design pairs an in-leaf pending-tx bucket with a backstop that fires when a saga terminal arrives at a leaf holding committedValues for keys it never saw the saga's prepare for (the prepare-phase shadow-forward was dropped by a mid-saga shard-split / drain race, or the destination leaf inherited keys whose prepare landed elsewhere). Under the `ReshardTopologyTests` 4→8 reshard chaos fixture (15 rounds × 16 keys × continuous reader at 10 ms cadence), the backstop branch exhibited three sequential races that combined to a 1-in-8 atomic-visibility failure rate on the destination shard. F-057 fixes all three; the residual mid-saga visibility window that the fixes cannot eliminate is structurally documented and tracked as F-059 below.
@@ -276,7 +442,7 @@ Hardening of the cross-migration LWW backstop branch on `BPlusLeafGrain.ApplyTxT
 
 **Residual gaps explicitly out of scope.** Two structural issues that the three fixes cannot close are tracked as follow-on items below. F-058 retires the standalone `state.WriteStateAsync()` call at the tail of the backstop loop in favour of a WAL-routed commit (architectural-debt parity with F-049d's WAL-as-sole-commit-point invariant). F-059 closes the residual mid-saga atomic-visibility window observed on the destination shard for the `pre=1..3, post=13..15` pattern - the prepare-before-split race the backstop cannot retroactively repair, because it is post-terminal - via a retroactive shadow-forward of in-flight prepared mutations at split-begin.
 
-### 7 · F-058 ✅ shipped
+### 9 · F-058 ✅ shipped
 **Reliability / medium impact (closes the last leaf-side foreground commit path that bypasses the WAL; follow-on to F-057)**
 
 Route the cross-migration LWW backstop write through the per-shard WAL instead of through `state.WriteStateAsync()`. The backstop branch on `BPlusLeafGrain.ApplyTxTerminalAsync` is the only remaining foreground leaf-write site in the core library that commits durable state via the Orleans persisted state row rather than via `ICommitLogWriter` - every other write path was converted to WAL-as-sole-commit-point under F-049d. F-057 corrected the per-key correctness of the branch but kept the legacy state-row commit point to scope the change minimally; F-058 closes the architectural-debt gap so every foreground commit obeys the same durability invariant.
@@ -305,7 +471,7 @@ Route the cross-migration LWW backstop write through the per-shard WAL instead o
 
 All 336 `BPlusLeafGrainTests` and 3 `AuditHygieneRegressionTests` green on `dotnet test --filter "TestCategory!=Chaos"`.
 
-### 8 · F-059 ✅ shipped
+### 10 · F-059 ✅ shipped
 **Reliability / medium impact (closes the residual mid-saga atomic-visibility window across concurrent shard splits; follow-on to F-057)**
 
 Retroactive shadow-forward of in-flight prepared mutations when a shard split begins. The 4→8 reshard chaos fixture (`ReshardTopologyTests`) observes a residual atomic-visibility pattern that the F-055 + F-057 + F-058 fixes cannot eliminate on their own: a saga whose **prepare phase landed on the source shard before the split started** leaves no pending bucket on the destination leaf, because the destination did not exist as the slot's owner when the prepare's shadow-forward fired. The saga's terminal eventually backstops the migrated keys onto the destination, but for the **interval between split-commit and terminal-broadcast** the destination shard's `ShardMap`-routed reads see the drained pre-saga state (every key the saga touched is invisible on the destination, because the source's prepare-time shadow-forward stamped them into `_pendingTx` not `Entries`, and the source's drain copied only `Entries` to the destination). A continuous reader polling every key inside the 20 ms post-saga reader window observes the pre-saga state for a subset of the saga's keys - a `pre=1..3, post=13..15` visibility split - which is the precise atomicity invariant the universal-saga design F-055 claims to guarantee.
@@ -338,7 +504,7 @@ Retroactive shadow-forward of in-flight prepared mutations when a shard split be
 The end-to-end `ReshardTopologyTests` chaos surface is covered by the existing in-tree fixture; the retroactive sweep itself is a structural shape change behind the existing split state machine.
 
 
-### 9 · F-060 ✓ shipped
+### 11 · F-060 ✓ shipped
 **Reliability / medium impact (closes the residual foreground-commit sites that bypass the WAL; follow-on to F-058)** *(depends on Core F-058 ✓)*
 
 Route the remaining foreground leaf-write sites in `BPlusLeafGrain.MergeEntriesAsync`, `BPlusLeafGrain.MergeManyAsync`, and `BPlusLeafGrain.CompactTombstonesAsync` through `ICommitLogWriter` instead of through standalone `state.WriteStateAsync()` (via `PersistAsync()`). F-058 retired the cross-migration LWW backstop's legacy state-row commit but left an analogous architectural-debt gap on three sibling code paths: every merge of received entries (replication apply, sibling redistribute, split-recovery rebroadcast) and every tombstone-compaction pass mutates `Entries` directly and commits via the Orleans persisted state row, with no WAL append. A leaf reactivation that replays the WAL alone (the activation-time WAL materialiser established under F-049c) silently drops the merged or compacted state, because the projection checkpoint that captured the mutation has not yet flushed and the WAL holds no record of it.
@@ -360,7 +526,7 @@ Route the remaining foreground leaf-write sites in `BPlusLeafGrain.MergeEntriesA
 - The chaos suite (`ReshardTopologyTests`, `ChaosReshardIntegrationTests`, `ChaosResizeIntegrationTests`) continues to pass at the same rate as the F-058 baseline, with the WAL-routed merge / compaction paths observably exercising the same crash-recovery contract as every other foreground commit path under chaos.
 
 
-### 10 · F-061 ✅ shipped
+### 12 · F-061 ✅ shipped
 **API / reliability / medium impact (opt-in idempotency-key surface + caller-controlled retry policy for transient storage faults on the public `ILattice` mutating methods)** *(depends on Core F-036 ✓, F-049 ✓)*
 
 Today every public mutating method on `ILattice` (`SetAsync`, `RemoveAsync`, `SetManyAsync`, `SetManyAtomicAsync`, `IncrementAsync`, `DeleteRangeAsync`, `MergeAsync`, ...) follows the contract "on transient storage failure, throw to the caller and revert in-memory state to match disk". That contract is correct - cycles 1-30 of the bug-hunter sweep landed Class B revert-on-throw fixes across `BPlusLeafGrain`, `BPlusInternalGrain`, `ShardRootGrain`, `AtomicWriteGrain`, `WalShardGrain`, `BootstrapCoordinatorGrain`, and `ReplicationMaintenanceGrain`, so the in-memory / on-disk invariant holds at the activation boundary. What it does **not** do is give the caller a *safe* retry path: a naive caller-side `try / catch / retry` re-enters `SetAsync` and mints a fresh `HybridLogicalClock.Now()` for the retry, producing a second WAL entry, a second replication shipment, a second `IMutationObserver.OnMutation` callback, and (for `IncrementAsync` on a PnCounter) a real semantic double-count. F-061 closes that gap by exposing an explicit idempotency-key surface so a retried call replays under the same logical timestamp and the existing LWW / HWM / WAL-append dedup collapses it to a single observable mutation.
@@ -399,7 +565,7 @@ The shape is deliberately caller-controlled, not ambient. Silent retry inside th
 
 
 
-### 11 · F-062 ✅ shipped
+### 13 · F-062 ✅ shipped
 **Reliability / high impact (closes the residual cross-cluster atomic-visibility window left by F-055 + F-059 under multi-shard saga replication)**
 
 Two independent receiver-side correctness gaps in the universal-saga design caused a continuous remote reader, polling at 10 ms cadence during cross-cluster replication of a multi-shard `SetManyAtomicAsync`, to intermittently observe a partial subset of the saga's keys at the new value while the remaining keys still read pre-saga. F-055 + F-057 + F-058 + F-059 closed the equivalent local-cluster window, but the cross-cluster path inherited two latent issues that the local path did not exercise.
@@ -455,7 +621,7 @@ Two independent receiver-side correctness gaps in the universal-saga design caus
 The atomic-visibility behaviour observable to a remote reader now matches the local-cluster strict-isolation contract exactly; the cross-cluster carve-out F-055 left implicit (and F-059 partially closed on the local path) is now closed end-to-end.
 
 
-### 12 · F-063 ✅ shipped
+### 14 · F-063 ✅ shipped
 **Observability / low impact (instrument the per-write parent-digest publish hop on the leaf commit path so operators can attribute commit-pipeline latency to all four constituent stages)** *(depends on Core F-029 ✓, F-049 ✓)*
 
 The leaf's `BPlusLeafGrain.CommitSetAsync` / `CommitDeleteAsync` / `DeleteRangeAsync` foreground write paths each end with an awaited cross-grain RPC to the parent internal node (`IBPlusInternalGrain.OnChildDigestPublishedAsync`) via `PublishDigestUpwardAsync()`. This hop runs on every write that mutates the running projection hash (i.e. effectively every Set / Delete / range Delete after the dirty-flag short-circuit gate at `BPlusLeafGrain.DigestPublication.cs:130`), but the existing `LatticeMetrics.LeafCommitDuration` histogram only attributes latency to three labels (`step=wal`, `step=apply`, `step=observer`). Under steady-state write load at the calibrated operating point, the digest hop is therefore the only unlabelled contributor to the full per-call wall-time (`orleans.lattice.leaf.commit.duration` aggregate vs. the labelled sum) and cannot be empirically separated from the labelled stages without this instrument.
