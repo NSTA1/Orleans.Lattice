@@ -26,7 +26,7 @@ Every Lattice instrument carries a consistent set of low-cardinality tags:
 | `tree` | every instrument | Logical tree id (`ILattice.TreeId`) |
 | `shard` | shard-level instruments only | Physical shard index as an `int` |
 | `operation` | `orleans.lattice.leaf.scan.duration` only | `keys` or `entries` |
-| `step` | `orleans.lattice.leaf.commit.duration` only | `wal`, `apply`, or `observer` |
+| `step` | `orleans.lattice.leaf.commit.duration` only | `wal`, `apply`, `observer`, or `digest` |
 | `outcome` | `orleans.lattice.atomic_write.completed`, `orleans.lattice.atomic_write.duration`, `orleans.lattice.atomic_write.batch_size` | `committed`, `compensated`, or `failed` |
 | `kind` | `orleans.lattice.coordinator.completed`, `orleans.lattice.tree.lifecycle`, `orleans.lattice.events.published` | Discriminator - see each instrument below |
 | `reason` | `orleans.lattice.events.dropped` | `missing_provider` or `publish_error` |
@@ -57,7 +57,7 @@ drives autonomic splitting.
 | Name | Kind | Unit | Description |
 |---|---|---|---|
 | `orleans.lattice.leaf.write.duration` | `Histogram<double>` | `ms` | Duration of `IPersistentState.WriteStateAsync` calls from a leaf grain - i.e. storage-provider write latency. |
-| `orleans.lattice.leaf.commit.duration` | `Histogram<double>` | `ms` | Per-step latency on the `BPlusLeafGrain` commit path. Tagged `step=wal` (commit-log-writer append), `step=apply` (in-memory projection apply + state persist), or `step=observer` (`IMutationObserver` fan-out). Emitted from every commit-path code path (single-key `SetAsync` / `DeleteAsync`, batched `MergeManyAsync`, prepared-write commit) so operators can attribute latency between durability, projection, and observer overhead independently. |
+| `orleans.lattice.leaf.commit.duration` | `Histogram<double>` | `ms` | Per-step latency on the `BPlusLeafGrain` commit path. Tagged `step=wal` (commit-log-writer append), `step=apply` (in-memory projection apply + state persist), `step=observer` (`IMutationObserver` fan-out), or `step=digest` (awaited cross-grain `OnChildDigestPublishedAsync` RPC to the parent internal node). Emitted from every foreground commit-path code path (single-key `SetAsync` / `DeleteAsync`, per-leaf `DeleteRangeAsync`, prepared-write commit) so operators can attribute latency between durability, projection, observer overhead, and the parent-digest publish hop independently. Cold / structural digest publishes (leaf-split topology, projection-checkpoint flush, saga terminal, tombstone-reap compaction, cross-shard merge) are deliberately excluded so the histogram stays scoped to the per-write pipeline. |
 | `orleans.lattice.leaf.scan.duration` | `Histogram<double>` | `ms` | Duration of leaf-level range scans. Tagged `operation=keys` (from `GetKeysAsync`) or `operation=entries` (from `GetEntriesAsync`). |
 | `orleans.lattice.leaf.compaction.duration` | `Histogram<double>` | `ms` | Duration of `CompactTombstonesAsync` on a single leaf. |
 | `orleans.lattice.leaf.tombstones.reaped` | `Counter<long>` | `{tombstone}` | Tombstones (from explicit `DeleteAsync` / `DeleteRangeAsync`) permanently removed by compaction. |
@@ -137,7 +137,7 @@ dashboards keyed by `LatticeDashboardKind`:
 | Kind | Title | Focus |
 |---|---|---|
 | `Overview` | Orleans.Lattice - Overview | Per-tree throughput, leaf-write percentiles, cache hit-rate, tombstone churn, splits, atomic-write outcomes (rate), coordinator completions, tree-lifecycle, event publish/drop, runtime config changes. The dashboard now also includes a horizontal row of three atomic-write panels: saga duration p50/p95/p99, batch-size p50/p95/p99, and a dedicated saga-failure-rate panel. |
-| `CommitPath` | Orleans.Lattice - Commit Path | Per-step commit-pipeline latency (`wal` / `apply` / `observer`), storage-provider write duration, compaction duration, activation-time replay duration / entries by recovery outcome, and tombstone churn (reaped / expired / created). |
+| `CommitPath` | Orleans.Lattice - Commit Path | Per-step commit-pipeline latency (`wal` / `apply` / `observer` / `digest`), storage-provider write duration, compaction duration, activation-time replay duration / entries by recovery outcome, and tombstone churn (reaped / expired / created). |
 | `Replication` | Orleans.Lattice.Replication - Operator | Cross-cluster ship/apply/lag, WAL append vs trim, dead-letter churn, FIFO violations, fall-off-log events, per-peer cursor lag. Sources the `orleans.lattice.replication` meter. |
 | `AtomicWrites` | Orleans.Lattice - Atomic Writes | Dedicated `SetManyAtomicAsync` saga deep-dive: outcome rate (stacked area), saga duration p50/p95/p99 and p95 by outcome, batch size p50/p95/p99 and p95 by outcome, per-tree committed throughput, range-window non-committed saga count, and a separate saga-failure-rate panel with 1% / 5% threshold lines. |
 

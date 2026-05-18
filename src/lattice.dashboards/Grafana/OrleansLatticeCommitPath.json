@@ -98,7 +98,7 @@
   "panels": [
     {
       "id": 1,
-      "title": "Commit-step latency p95 (ms) - wal / apply / observer",
+      "title": "Commit-step latency p95 (ms) - wal / apply / observer / digest",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
