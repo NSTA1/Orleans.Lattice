@@ -425,6 +425,103 @@ public class LatticeReplicationOptionsValidatorTests
     }
 
     // ------------------------------------------------------------------
+    // BootstrapTransientRetry
+    // ------------------------------------------------------------------
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_bootstrap_transient_retry_max_attempts_is_non_positive(int maxAttempts)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            BootstrapTransientRetry = new BoundedExponentialRetryPolicyOptions
+            {
+                MaxAttempts = maxAttempts,
+            },
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.BootstrapTransientRetry)));
+            Assert.That(result.FailureMessage, Does.Contain(nameof(BoundedExponentialRetryPolicyOptions.MaxAttempts)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_bootstrap_transient_retry_initial_delay_is_negative()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            BootstrapTransientRetry = new BoundedExponentialRetryPolicyOptions
+            {
+                MaxAttempts = 3,
+                InitialDelay = TimeSpan.FromMilliseconds(-1),
+                MaxDelay = TimeSpan.FromSeconds(1),
+            },
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(BoundedExponentialRetryPolicyOptions.InitialDelay)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_bootstrap_transient_retry_max_delay_is_less_than_initial()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            BootstrapTransientRetry = new BoundedExponentialRetryPolicyOptions
+            {
+                MaxAttempts = 3,
+                InitialDelay = TimeSpan.FromSeconds(2),
+                MaxDelay = TimeSpan.FromSeconds(1),
+            },
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(BoundedExponentialRetryPolicyOptions.MaxDelay)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_when_bootstrap_transient_retry_is_null()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            BootstrapTransientRetry = null,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_when_bootstrap_transient_retry_uses_defaults()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            BootstrapTransientRetry = new BoundedExponentialRetryPolicyOptions(),
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    // ------------------------------------------------------------------
     // Production replication driver options (per-(tree, peer) shipper +
     // per-tree maintenance grain)
     // ------------------------------------------------------------------

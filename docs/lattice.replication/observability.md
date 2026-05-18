@@ -136,13 +136,14 @@ Cross-shard interleaving for the same origin is permitted by design and is **not
 
 ## Bootstrap instruments
 
-The receiver-side bootstrap coordinator (`LatticeBootstrapCoordinatorGrain`) emits three instruments tracking the cross-cluster snapshot-drain pipeline plus a structured phase-transition log line. Together they let an operator dashboard the lifecycle of an in-flight bootstrap and tail a single run end-to-end through the silo log.
+The receiver-side bootstrap coordinator (`LatticeBootstrapCoordinatorGrain`) emits four instruments tracking the cross-cluster snapshot-drain pipeline plus a structured phase-transition log line. Together they let an operator dashboard the lifecycle of an in-flight bootstrap and tail a single run end-to-end through the silo log.
 
 | Instrument | Kind | Tags | Recorded when |
 |---|---|---|---|
 | `orleans.lattice.replication.bootstrap.entries_received` | `Counter<long>` | `tree`, `origin` | Incremented by 1 per snapshot entry successfully applied through the local replication applier (post-decorator chain). |
 | `orleans.lattice.replication.bootstrap.bytes_received` | `Counter<long>` (`By`) | `tree`, `origin` | Incremented by `entry.Value.Length` per applied entry. Mirrors the lifecycle of `entries_received`. |
 | `orleans.lattice.replication.bootstrap.duration` | `Histogram<double>` (`ms`) | `tree`, `origin`, `outcome` | Recorded once per terminal phase transition. `outcome` is one of `live`, `failed`, or `timed_out`. |
+| `orleans.lattice.replication.bootstrap.transient_retries` | `Counter<long>` | `tree`, `origin` | Incremented by 1 each time the bootstrap drain catches a classified-transient transport fault and consumes one slot of the configured `LatticeReplicationOptions.BootstrapTransientRetry` budget. A bootstrap that completes on its first drain attempt records zero on this counter; a bootstrap that exhausts the budget and pivots to `Failed` records `MaxAttempts - 1` (one per consumed retry slot). |
 
 The `origin` tag carries the source cluster id supplied at kickoff (`BootstrapAsync(sourceClusterId, ...)`), matching the tag dimensionality used by the per-origin fall-off-the-log counters so dashboards can join the two without a separate keying.
 

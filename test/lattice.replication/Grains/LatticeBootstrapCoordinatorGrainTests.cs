@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.Primitives;
@@ -42,7 +43,8 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         ILatticeMergeModeResolver MergeResolver) Create(
             FakePersistentState<BootstrapCoordinatorState>? existingState = null,
             string treeName = Tree,
-            ILatticeMergeModeResolver? mergeResolver = null)
+            ILatticeMergeModeResolver? mergeResolver = null,
+            LatticeReplicationOptions? replicationOptions = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("bootstrap-coordinator", treeName));
@@ -69,9 +71,28 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         {
             resolver.Resolve(Arg.Any<string>()).Returns((LatticeMergeMode?)null);
         }
+        // Default replication options disable bootstrap transient
+        // retries (MaxAttempts = 1) so legacy tests that throw a
+        // non-classified exception still observe the immediate
+        // Failed pivot rather than the bounded retry loop. Tests
+        // covering the retry path supply their own configured
+        // options instance.
+        var options = replicationOptions ?? new LatticeReplicationOptions
+        {
+            ClusterId = "test-cluster",
+            BootstrapTransientRetry = new BoundedExponentialRetryPolicyOptions
+            {
+                MaxAttempts = 1,
+                InitialDelay = TimeSpan.Zero,
+                MaxDelay = TimeSpan.Zero,
+            },
+        };
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(options);
+        optionsMonitor.CurrentValue.Returns(options);
         var fakeState = existingState ?? new FakePersistentState<BootstrapCoordinatorState>();
         var grain = new LatticeBootstrapCoordinatorGrain(
-            context, factory, provider, apply, reminders, resolver,
+            context, factory, provider, apply, reminders, resolver, optionsMonitor,
             NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState);
         return (grain, fakeState, factory, provider, reminders, apply, hwm, resolver);
     }
@@ -141,6 +162,15 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
     // --- Constructor null guards ---
 
+    private static IOptionsMonitor<LatticeReplicationOptions> StubOptions()
+    {
+        var stub = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        var options = new LatticeReplicationOptions { ClusterId = "test-cluster" };
+        stub.Get(Arg.Any<string>()).Returns(options);
+        stub.CurrentValue.Returns(options);
+        return stub;
+    }
+
     [Test]
     public void Constructor_throws_when_grain_factory_is_null()
     {
@@ -152,7 +182,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fakeState = new FakePersistentState<BootstrapCoordinatorState>();
         Assert.That(
             () => new LatticeBootstrapCoordinatorGrain(
-                context, null!, provider, applier, reminders, resolver,
+                context, null!, provider, applier, reminders, resolver, StubOptions(),
                 NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
             Throws.InstanceOf<ArgumentNullException>());
     }
@@ -168,7 +198,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fakeState = new FakePersistentState<BootstrapCoordinatorState>();
         Assert.That(
             () => new LatticeBootstrapCoordinatorGrain(
-                context, factory, null!, applier, reminders, resolver,
+                context, factory, null!, applier, reminders, resolver, StubOptions(),
                 NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
             Throws.InstanceOf<ArgumentNullException>());
     }
@@ -184,7 +214,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fakeState = new FakePersistentState<BootstrapCoordinatorState>();
         Assert.That(
             () => new LatticeBootstrapCoordinatorGrain(
-                context, factory, provider, null!, reminders, resolver,
+                context, factory, provider, null!, reminders, resolver, StubOptions(),
                 NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
             Throws.InstanceOf<ArgumentNullException>());
     }
@@ -200,7 +230,24 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fakeState = new FakePersistentState<BootstrapCoordinatorState>();
         Assert.That(
             () => new LatticeBootstrapCoordinatorGrain(
-                context, factory, provider, applier, reminders, null!,
+                context, factory, provider, applier, reminders, null!, StubOptions(),
+                NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_options_monitor_is_null()
+    {
+        var context = Substitute.For<IGrainContext>();
+        var factory = Substitute.For<IGrainFactory>();
+        var provider = Substitute.For<IBootstrapSnapshotSource>();
+        var applier = Substitute.For<IReplicationApplier>();
+        var reminders = Substitute.For<IReminderRegistry>();
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        var fakeState = new FakePersistentState<BootstrapCoordinatorState>();
+        Assert.That(
+            () => new LatticeBootstrapCoordinatorGrain(
+                context, factory, provider, applier, reminders, resolver, null!,
                 NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
             Throws.InstanceOf<ArgumentNullException>());
     }

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
@@ -53,9 +54,22 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         resolver.Resolve(Arg.Any<string>()).Returns((LatticeMergeMode?)null);
         var logger = Substitute.For<ILogger<LatticeBootstrapCoordinatorGrain>>();
         logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = "test-cluster",
+            BootstrapTransientRetry = new BoundedExponentialRetryPolicyOptions
+            {
+                MaxAttempts = 1,
+                InitialDelay = TimeSpan.Zero,
+                MaxDelay = TimeSpan.Zero,
+            },
+        };
+        optionsMonitor.Get(Arg.Any<string>()).Returns(options);
+        optionsMonitor.CurrentValue.Returns(options);
         var fakeState = existingState ?? new FakePersistentState<BootstrapCoordinatorState>();
         var grain = new LatticeBootstrapCoordinatorGrain(
-            context, factory, provider, apply, reminders, resolver, logger, fakeState);
+            context, factory, provider, apply, reminders, resolver, optionsMonitor, logger, fakeState);
         return (grain, fakeState, provider, apply, hwm, logger);
     }
 

@@ -125,6 +125,40 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + $"{nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} to disable operator re-seed rate limiting entirely.");
         }
 
+        if (options.BootstrapTransientRetry is { } bootstrapRetry)
+        {
+            if (bootstrapRetry.MaxAttempts < 1)
+            {
+                return ValidateOptionsResult.Fail(
+                    $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.BootstrapTransientRetry)}."
+                    + $"{nameof(BoundedExponentialRetryPolicyOptions.MaxAttempts)} "
+                    + $"must be at least 1 ({scope}). A zero or negative attempt budget would prevent "
+                    + "the bootstrap drain from even making its first call. Set MaxAttempts to 1 to "
+                    + "disable retries entirely while still running the initial attempt.");
+            }
+
+            if (bootstrapRetry.InitialDelay < TimeSpan.Zero)
+            {
+                return ValidateOptionsResult.Fail(
+                    $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.BootstrapTransientRetry)}."
+                    + $"{nameof(BoundedExponentialRetryPolicyOptions.InitialDelay)} "
+                    + $"must be greater than or equal to {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                    + "A negative initial backoff has no meaningful interpretation for the doubling schedule.");
+            }
+
+            if (bootstrapRetry.MaxDelay < bootstrapRetry.InitialDelay)
+            {
+                return ValidateOptionsResult.Fail(
+                    $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.BootstrapTransientRetry)}."
+                    + $"{nameof(BoundedExponentialRetryPolicyOptions.MaxDelay)} "
+                    + $"must be greater than or equal to "
+                    + $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.BootstrapTransientRetry)}."
+                    + $"{nameof(BoundedExponentialRetryPolicyOptions.InitialDelay)} ({scope}). "
+                    + "The doubling sequence is capped at MaxDelay, so a cap below the seed leaves the "
+                    + "retry policy unable to apply even the first backoff delay.");
+            }
+        }
+
         if (options.ShipBatchSize < 1)
         {
             return ValidateOptionsResult.Fail(

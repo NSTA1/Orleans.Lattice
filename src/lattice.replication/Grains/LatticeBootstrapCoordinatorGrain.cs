@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
@@ -45,6 +46,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     IReplicationApplier replicationApplier,
     IReminderRegistry reminderRegistry,
     ILatticeMergeModeResolver mergeModeResolver,
+    IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
     ILogger<LatticeBootstrapCoordinatorGrain> logger,
     [PersistentState("bootstrap-coordinator", LatticeOptions.StorageProviderName)]
     IPersistentState<BootstrapCoordinatorState> state)
@@ -69,6 +71,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         replicationApplier ?? throw new ArgumentNullException(nameof(replicationApplier));
     private readonly ILatticeMergeModeResolver _mergeModeResolver =
         mergeModeResolver ?? throw new ArgumentNullException(nameof(mergeModeResolver));
+    private readonly IOptionsMonitor<LatticeReplicationOptions> _optionsMonitor =
+        optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
 
     /// <summary>
     /// Per-activation stopwatch timestamp captured when the coordinator
@@ -322,8 +326,145 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     /// stream is exhausted. Persists the cursor every
     /// <see cref="CursorPersistEntryInterval"/> entries so a mid-drain
     /// crash re-applies at most that many entries on resume.
+    /// <para>
+    /// Wraps the export + apply loop in a bounded transient-retry
+    /// policy
+    /// (<see cref="LatticeReplicationOptions.BootstrapTransientRetry"/>).
+    /// A classified-transient fault (e.g. a gRPC
+    /// <c>StatusCode.Unavailable</c> from
+    /// <c>RemoteSnapshotProvider</c>) consumes one retry slot and
+    /// re-opens the snapshot from the persisted cursor; the per-origin
+    /// HWM dedupe makes the overlap a no-op, so replay is bounded by
+    /// <see cref="CursorPersistEntryInterval"/> × consumed retries.
+    /// Non-transient faults pivot to <see cref="LatticeBootstrapState.Failed"/>
+    /// on the first failure via the catch block in
+    /// <see cref="ProcessNextPhaseAsync"/>. Budget exhaustion re-throws
+    /// the final classified-transient exception verbatim so the
+    /// same catch block records the failure outcome.
+    /// </para>
     /// </summary>
     private async Task DrainSnapshotAsync()
+    {
+        // Hand-rolled retry loop instead of delegating to
+        // BoundedExponentialRetryPolicy.ExecuteAsync. The shared policy
+        // internally uses ConfigureAwait(false), which strips the
+        // Orleans single-threaded grain scheduler on the retry hop.
+        // Subsequent state.WriteStateAsync() / grain calls inside
+        // DrainSnapshotOnceAsync would then run off-grain and surface
+        // as a hard failure (Orleans rejects grain-state writes from
+        // foreign schedulers), defeating the entire purpose of the
+        // retry. The grain-local loop below preserves
+        // TaskScheduler.Current across every awaiter via the existing
+        // ConfigureAwait(true) convention used throughout this grain.
+        var (maxAttempts, initial, max, classifier) = ResolveRetryPolicy();
+
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await DrainSnapshotOnceAsync(CancellationToken.None).ConfigureAwait(true);
+                return;
+            }
+            catch (Exception ex) when (attempt < maxAttempts && classifier(ex))
+            {
+                var delay = ComputeBackoff(attempt, initial, max);
+                if (delay > TimeSpan.Zero)
+                {
+                    await Task.Delay(delay).ConfigureAwait(true);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resolves the retry policy parameters from
+    /// <see cref="LatticeReplicationOptions.BootstrapTransientRetry"/>
+    /// (falling back to the public default constants) and wraps the
+    /// host-supplied (or default) classifier with the metric +
+    /// structured-log emit. The classifier returns
+    /// <see langword="true"/> for a classified-transient exception
+    /// so the caller's retry loop consumes one slot; for any other
+    /// shape the loop re-throws verbatim and
+    /// <see cref="ProcessNextPhaseAsync"/>'s catch block pivots to
+    /// <see cref="LatticeBootstrapState.Failed"/>.
+    /// </summary>
+    private (int MaxAttempts, TimeSpan InitialDelay, TimeSpan MaxDelay, Func<Exception, bool> Classifier)
+        ResolveRetryPolicy()
+    {
+        var options = _optionsMonitor.Get(TreeName);
+        var configured = options.BootstrapTransientRetry;
+
+        var maxAttempts = configured?.MaxAttempts ?? LatticeReplicationOptions.DefaultBootstrapMaxAttempts;
+        var initial = configured?.InitialDelay ?? LatticeReplicationOptions.DefaultBootstrapInitialRetryDelay;
+        var max = configured?.MaxDelay ?? LatticeReplicationOptions.DefaultBootstrapMaxRetryDelay;
+        var hostClassifier = configured?.RetryableExceptionClassifier
+            ?? LatticeBootstrapTransientFaultClassifier.IsTransient;
+
+        var treeName = TreeName;
+        var sourceClusterId = state.State.SourceClusterId;
+        bool ClassifyAndCount(Exception ex)
+        {
+            if (!hostClassifier(ex))
+            {
+                return false;
+            }
+
+            // Count classified-transient retries so a sustained
+            // non-zero rate is visible on dashboards regardless of
+            // whether the budget eventually exhausts. The counter
+            // fires before the policy's Task.Delay, so each tick
+            // matches one consumed retry slot.
+            LatticeReplicationMetrics.BootstrapTransientRetries.Add(1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId));
+
+            Logger.LogWarning(ex,
+                "Bootstrap drain for tree '{TreeName}' from source '{SourceClusterId}' encountered a transient fault; retrying within the configured bounded budget",
+                treeName, sourceClusterId);
+
+            return true;
+        }
+
+        return (maxAttempts, initial, max, ClassifyAndCount);
+    }
+
+    /// <summary>
+    /// Computes the bounded-exponential backoff for the supplied
+    /// 1-based attempt number. Mirrors
+    /// <see cref="BoundedExponentialRetryPolicy"/>'s schedule so an
+    /// operator who configures the policy via
+    /// <see cref="LatticeReplicationOptions.BootstrapTransientRetry"/>
+    /// observes the documented doubling cadence regardless of which
+    /// loop drives the retry.
+    /// </summary>
+    private static TimeSpan ComputeBackoff(int attempt, TimeSpan initial, TimeSpan max)
+    {
+        var shift = attempt - 1;
+        if (shift >= 31)
+        {
+            return max;
+        }
+        var multiplier = 1L << shift;
+        var ticks = initial.Ticks * multiplier;
+        if (ticks < 0 || ticks > max.Ticks)
+        {
+            return max;
+        }
+        return TimeSpan.FromTicks(ticks);
+    }
+
+    /// <summary>
+    /// Performs a single attempt of the snapshot export + apply
+    /// drain. Re-opens the snapshot stream from the current
+    /// <see cref="BootstrapCoordinatorState.LastAppliedHlc"/> cursor,
+    /// applies every entry, and transitions to
+    /// <see cref="LatticeBootstrapState.IncrementalHandoff"/> on a
+    /// clean completion. A throw from this method either re-enters
+    /// the retry policy (transient) or bubbles to
+    /// <see cref="ProcessNextPhaseAsync"/>'s catch-block (non-transient
+    /// / budget-exhausted).
+    /// </summary>
+    private async Task DrainSnapshotOnceAsync(CancellationToken cancellationToken)
     {
         var treeName = TreeName;
         var sourceClusterId = state.State.SourceClusterId;
@@ -347,7 +488,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // delegates to the two-arg overload, so this is a no-op for
         // hosts that do not register a cross-cluster adapter.
         var snapshot = await _snapshotProvider
-            .ExportAsync(treeName, sourceClusterId, state.State.LastAppliedHlc, CancellationToken.None)
+            .ExportAsync(treeName, sourceClusterId, state.State.LastAppliedHlc, cancellationToken)
             .ConfigureAwait(true);
 
         // Update the durable handoff metadata to whatever the latest
@@ -416,7 +557,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 Mode = mergeMode,
                 VectorClock = null,
             };
-            await _replicationApplier.ApplyAsync(record, CancellationToken.None).ConfigureAwait(true);
+            await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
 
             // Bootstrap progress instruments: increment once per
             // successfully-applied entry so operators can watch

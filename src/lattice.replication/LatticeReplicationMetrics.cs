@@ -597,4 +597,28 @@ public static class LatticeReplicationMetrics
     /// timeout path lands.
     /// </summary>
     public const string BootstrapOutcomeTimedOut = "timed_out";
+
+    /// <summary>
+    /// Counter incremented every time the receiver-side bootstrap
+    /// coordinator classifies an exception thrown by its snapshot
+    /// drain as transient and consumes one slot of the configured
+    /// bounded retry budget
+    /// (<see cref="LatticeReplicationOptions.BootstrapTransientRetry"/>).
+    /// Tagged by <see cref="TagTree"/> and <see cref="TagOrigin"/>;
+    /// a sustained non-zero rate signals either a flaky cross-cluster
+    /// transport or an over-aggressive classifier. The counter only
+    /// fires on retried attempts - the bootstrap reaching
+    /// <see cref="LatticeBootstrapState.Failed"/> after exhausting
+    /// the budget surfaces through the
+    /// <see cref="BootstrapDuration"/> histogram's
+    /// <see cref="BootstrapOutcomeFailed"/> tag instead.
+    /// </summary>
+    public static readonly Counter<long> BootstrapTransientRetries =
+        Meter.CreateCounter<long>("orleans.lattice.replication.bootstrap.transient_retries", unit: "{retry}",
+            description: "Number of transient-fault retries consumed by the receiver-side bootstrap drain, tagged by tree and origin.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="BootstrapTransientRetries"/> counter.
+    /// </summary>
+    public const string BootstrapTransientRetriesName = "orleans.lattice.replication.bootstrap.transient_retries";
 }
