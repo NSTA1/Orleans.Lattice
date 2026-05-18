@@ -54,10 +54,16 @@ var serviceId = builder.Configuration["Orleans:ServiceId"] ?? "VehicleFleetSimul
 // to measure ship/apply latency.
 //
 // What this block wires up:
-//   • Sender side: `AddLatticeReplicationGrpcPushTransport` swaps the no-op
-//     `IReplicationTransport` for the gRPC push transport when peers are configured.
-//   • Receiver side: `AddLatticeReplicationGrpcServer` + `MapLatticeReplicationGrpcService`
-//     register the receiver-side gRPC method so peer pushes land in `IReplicationApplier`.
+//   • Sender + receiver: a single `AddLatticeReplicationGrpc` call registers the
+//     live-push transport (outbound, client side), the snapshot transport (outbound,
+//     client side), the live-push receiver service (inbound, server side), and the
+//     snapshot sender service (inbound, server side). The composition is
+//     registration-driven: empty `Peers` means "no outbound dial", an empty endpoint
+//     map means "no receiver route binding required" (but the silo still binds it
+//     for symmetry when `GrpcServerEnabled` is set).
+//   • Receiver-side mapping: `MapLatticeReplicationGrpc` on the endpoint builder
+//     maps both the live-push route and the snapshot routes so peer pushes land in
+//     `IReplicationApplier` and snapshot pulls are served from the local store.
 //   • Tree opt-in: `LatticeReplicationOptions.ReplicatedTrees[treeId] = LwwRegister` so
 //     the producer-side observer accepts mutations and records WAL entries (without this
 //     the WAL is permanently empty on a replicated tree).
@@ -71,9 +77,11 @@ var serviceId = builder.Configuration["Orleans:ServiceId"] ?? "VehicleFleetSimul
 // The two "peers" knobs split by concern, on purpose:
 //   • `LatticeReplicationOptions.ReplicationPeers` - transport-agnostic membership list
 //     (the cluster ids); consumed by the production drivers in `Orleans.Lattice.Replication`.
-//   • `GrpcPushTransportOptions.PeerEndpoints` - transport-specific cluster-id-to-URL map;
-//     consumed by the gRPC push transport in `Orleans.Lattice.Replication.Grpc` to resolve
-//     a peer to a wire endpoint. The benchmark binds both from the same env-driven
+//   • `LatticeReplicationGrpcOptions.Peers` - transport-specific cluster-id-to-URL map;
+//     consumed by the unified gRPC binding in `Orleans.Lattice.Replication.Grpc` to
+//     resolve a peer to a wire endpoint (the unified options projection populates both
+//     the live-push and snapshot transports' internal per-transport endpoint maps from
+//     this single dictionary). The benchmark binds both from the same env-driven
 //     `Replication:GrpcPeers:<id>` configuration map so a single env var (e.g.
 //     `BENCH_ORIGIN_PEER_ENDPOINT=http://silo-replica:5001`) wires both sides coherently.
 //
@@ -286,26 +294,25 @@ builder.Host.UseOrleans(silo =>
             }
         });
 
-        // Receiver-side: register the gRPC Push handler so a peer that ships to this
-        // cluster lands its batches in the IReplicationApplier. Idempotent across
-        // multiple AddLatticeReplicationGrpcServer calls (uses TryAdd internally).
-        if (grpcServerEnabled)
+        // Replication gRPC binding (unified). A single AddLatticeReplicationGrpc call
+        // wires both the sender (live-push client + snapshot client) and the receiver
+        // (push server + snapshot server). The composition is registration-driven:
+        //   - Receiver-only silo: grpcPeers is empty, the Peers map stays empty, no
+        //     outbound dial is attempted but the server-side services are registered
+        //     and ready to accept inbound pushes once MapLatticeReplicationGrpc runs.
+        //   - Sender + receiver silo: grpcPeers is populated, the Peers map is
+        //     projected onto the internal per-transport options so outbound batches
+        //     hit the wire.
+        // The call is registered whenever either side is needed - that is, when the
+        // benchmark host has been told to expose the receiver, or has been told about
+        // at least one peer to dial.
+        if (grpcServerEnabled || grpcPeers.Count > 0)
         {
-            silo.ConfigureServices(services => services.AddLatticeReplicationGrpcServer());
-        }
-
-        // Sender-side: when peers are configured, swap the no-op transport for the
-        // gRPC push transport so outbound batches actually hit the wire. The
-        // dictionary is read once per peer on first dispatch (per the package
-        // contract) - adding peers at runtime is not supported, but since the
-        // benchmark stack is brought up once per scenario this is fine.
-        if (grpcPeers.Count > 0)
-        {
-            silo.ConfigureServices(services => services.AddLatticeReplicationGrpcPushTransport(opts =>
+            silo.ConfigureServices(services => services.AddLatticeReplicationGrpc(opts =>
             {
                 foreach (var (target, endpoint) in grpcPeers)
                 {
-                    opts.PeerEndpoints[target] = endpoint;
+                    opts.Peers[target] = endpoint;
                 }
             }));
         }
@@ -431,10 +438,11 @@ app.MapHealthChecks("/healthz");
 
 // Replication gRPC route - only when the server is enabled. The mapping is idempotent
 // against repeat host startups within the same process (only relevant in tests; the
-// benchmark binary always starts fresh).
+// benchmark binary always starts fresh). MapLatticeReplicationGrpc maps both the
+// live-push route and the snapshot routes on the endpoint builder in a single call.
 if (grpcServerEnabled)
 {
-    app.MapLatticeReplicationGrpcService();
+    app.MapLatticeReplicationGrpc();
 }
 
 await app.RunAsync();
