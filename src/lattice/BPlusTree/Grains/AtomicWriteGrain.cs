@@ -527,6 +527,46 @@ internal sealed class AtomicWriteGrain(
             state.State.TouchedShards = prevTouchedShards;
             throw;
         }
+
+        // Bulk pre-register the saga's pre-computed touched-shard set
+        // with the per-tree TxRegistry as a single linearised write.
+        // This collapses the N per-shard RegisterParticipantAsync
+        // writes that ShardRootGrain.RecordAffectedLeafIfPreparedAsync
+        // would otherwise issue (one WriteStateAsync per touched shard,
+        // serialised through the per-tree registry's single activation)
+        // into one WriteStateAsync per saga. The per-shard path stays
+        // in place as the drift-correction safety net for keys whose
+        // routing flips between Prepare and Execute, and short-circuits
+        // to a no-op for any slot this bulk call has already populated.
+        //
+        // Best-effort: a registry RPC failure here does NOT fail the
+        // saga. The per-shard RegisterParticipantAsync calls run from
+        // each ShardRootGrain's prepare-phase write and remain the
+        // authoritative population path; the bulk call is purely a
+        // write-coalescing optimisation. Swallowing the throw keeps
+        // saga semantics identical to the pre-bulk implementation
+        // when the registry is transiently unreachable.
+        if (state.State.TransactionId != Guid.Empty && touchedSorted.Count > 0)
+        {
+            try
+            {
+                var registry = grainFactory.GetGrain<ITxRegistryGrain>(treeId);
+                await registry.RegisterParticipantsAsync(state.State.TransactionId, touchedSorted);
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG saga-prepare-bulk-register-exit] op={OperationKey} tx={state.State.TransactionId} shards={touchedSorted.Count}");
+#endif
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(
+                    ex,
+                    "Atomic-write saga {OperationKey}: bulk participant pre-register failed; falling back to per-shard registration (saga unaffected).",
+                    OperationKey);
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG saga-prepare-bulk-register-fail] op={OperationKey} tx={state.State.TransactionId} shards={touchedSorted.Count} ex={ex.GetType().Name}");
+#endif
+            }
+        }
     }
 
     /// <summary>

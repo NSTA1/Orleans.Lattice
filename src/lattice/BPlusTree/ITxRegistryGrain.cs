@@ -116,6 +116,38 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     Task RegisterParticipantAsync(Guid txid, int shardIndex);
 
     /// <summary>
+    /// Bulk-register variant of <see cref="RegisterParticipantAsync"/>:
+    /// inserts every distinct entry of <paramref name="shardIndices"/>
+    /// into the saga's participant set under a single
+    /// <c>WriteStateAsync</c> turn. Per-shard
+    /// <see cref="RegisterParticipantAsync"/> calls that arrive
+    /// subsequently observe their slot already populated and
+    /// short-circuit without writing state.
+    /// <para>
+    /// Used by the saga coordinator to pre-register the touched-shard
+    /// set captured at <c>PrepareAsync</c> time, collapsing what would
+    /// otherwise be N per-shard registration RPCs (each with its own
+    /// <c>WriteStateAsync</c> against the per-tree registry, which is
+    /// non-reentrant and forces them to serialise) into one bulk
+    /// write. The per-shard <see cref="RegisterParticipantAsync"/>
+    /// path remains the authoritative drift-correction primitive: it
+    /// still runs from each <c>ShardRootGrain.RecordAffectedLeafIfPreparedAsync</c>
+    /// call and covers the case where a key's prepare lands on a
+    /// shard outside the saga's pre-registered set (e.g. an in-flight
+    /// shard split arriving between Prepare and Execute).
+    /// </para>
+    /// <para>
+    /// Idempotent: a duplicate bulk call (e.g. on saga reminder
+    /// replay) is a no-op when every requested index is already
+    /// present in the participant set. The implementation only writes
+    /// state when at least one index was newly added; an empty or
+    /// fully-redundant <paramref name="shardIndices"/> list is a free
+    /// in-memory check.
+    /// </para>
+    /// </summary>
+    Task RegisterParticipantsAsync(Guid txid, IReadOnlyList<int> shardIndices);
+
+    /// <summary>
     /// Returns the sorted set of physical shard indices that have
     /// registered as participants in the saga identified by
     /// <paramref name="txid"/>. Returns an empty list when no

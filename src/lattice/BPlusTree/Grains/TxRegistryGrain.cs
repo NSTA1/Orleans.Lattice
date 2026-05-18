@@ -356,6 +356,68 @@ internal sealed class TxRegistryGrain(
     }
 
     /// <inheritdoc />
+    public async Task RegisterParticipantsAsync(Guid txid, IReadOnlyList<int> shardIndices)
+    {
+        ArgumentNullException.ThrowIfNull(shardIndices);
+        if (shardIndices.Count == 0) return;
+
+        var createdSet = false;
+        if (!state.State.Participants.TryGetValue(txid, out var set))
+        {
+            set = [];
+            state.State.Participants[txid] = set;
+            createdSet = true;
+        }
+
+        // Track only the indices this call actually inserts so a
+        // failed WriteStateAsync can unwind the in-memory mutation
+        // without touching slots that pre-existed (e.g. from an
+        // earlier per-shard RegisterParticipantAsync that already
+        // persisted them, or a duplicate bulk replay).
+        List<int>? added = null;
+        foreach (var shardIndex in shardIndices)
+        {
+            if (set.Add(shardIndex))
+            {
+                (added ??= new List<int>(shardIndices.Count)).Add(shardIndex);
+            }
+        }
+
+        if (added is null)
+        {
+            // Every requested index was already present - no state
+            // mutation, so no WriteStateAsync. Also: if we created
+            // the set above for a never-seen txid AND every supplied
+            // index was a duplicate (impossible by construction, but
+            // defensive), `createdSet` is meaningless because `set`
+            // is currently empty; leave the empty entry rather than
+            // remove it, matching the RegisterParticipantAsync
+            // contract that a created-but-empty set is allowed.
+            return;
+        }
+
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            // Unwind only the indices this call inserted so a retry
+            // from the same activation re-issues the bulk insert
+            // rather than silently no-oping with disk still stale.
+            foreach (var idx in added)
+            {
+                set.Remove(idx);
+            }
+            if (createdSet && set.Count == 0)
+            {
+                state.State.Participants.Remove(txid);
+            }
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
     public Task<IReadOnlyList<int>> GetParticipantsAsync(Guid txid)
     {
         if (!state.State.Participants.TryGetValue(txid, out var set) || set.Count == 0)
