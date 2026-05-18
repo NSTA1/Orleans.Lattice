@@ -63,4 +63,45 @@ public interface ILatticeReplicationAdmin
         string treeName,
         string sourceClusterId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Bypasses the per-<c>(tree, sourceClusterId)</c> rate limit and
+    /// unconditionally invokes
+    /// <see cref="ILatticeBootstrapCoordinator.BootstrapAsync"/>.
+    /// Intended for disaster-recovery and scheduled re-seed scenarios
+    /// where a real cross-cluster snapshot drain may exceed the
+    /// configured <see cref="LatticeReplicationOptions.OperatorReseedMinInterval"/>
+    /// window and a routine retry would otherwise be denied. The
+    /// returned <see cref="OperatorReseedDecision.Triggered"/> is
+    /// always <see langword="true"/> when the coordinator call
+    /// succeeds; this overload never returns a denied decision.
+    /// <para>
+    /// Every call to this method is audit-logged at
+    /// <see cref="Microsoft.Extensions.Logging.LogLevel.Information"/>
+    /// before delegating to the coordinator so an operator-side
+    /// bypass is observable in the silo log even when no other
+    /// telemetry surface is wired up.
+    /// </para>
+    /// <para>
+    /// On a successful coordinator call the admin seam stamps the
+    /// rate-limit dictionary with the bypass timestamp, so a
+    /// subsequent rate-limited
+    /// <see cref="RequestSnapshotAsync"/> within the configured
+    /// window still observes the bypass as the "last honoured"
+    /// request and behaves accordingly. Coordinator exceptions
+    /// propagate verbatim and leave the dictionary unchanged, so a
+    /// failed bypass does not consume the rate-limit budget for a
+    /// follow-up routine call.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">The logical tree id to re-seed. Must be non-null and non-empty.</param>
+    /// <param name="sourceClusterId">
+    /// The id of the cluster the snapshot should be produced from.
+    /// Must be non-null and non-empty.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token observed before dispatch and propagated to the underlying coordinator.</param>
+    Task<OperatorReseedDecision> ForceRequestSnapshotAsync(
+        string treeName,
+        string sourceClusterId,
+        CancellationToken cancellationToken = default);
 }

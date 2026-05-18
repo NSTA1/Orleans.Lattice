@@ -481,7 +481,7 @@ below.
 
 ---
 
-- [ ] **R-157 - Operator-facing "force re-bootstrap" admin RPC widening** *(deps: R-152 ✓, refines `R-053 ✓ shipped`)*
+- [x] **R-157 - Operator-facing "force re-bootstrap" admin RPC widening** *(deps: R-152 ✓, refines `R-053 ✓ shipped`)* ✓ shipped
 
   `R-053`'s `ILatticeReplicationAdmin.RequestSnapshotAsync(treeName,
   sourceClusterId, ct)` already routes through the bootstrap coordinator,

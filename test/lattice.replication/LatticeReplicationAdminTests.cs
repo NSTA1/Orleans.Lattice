@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -330,5 +331,342 @@ public class LatticeReplicationAdminTests
 
         var second = await admin.RequestSnapshotAsync(Tree, Source);
         Assert.That(second.Triggered, Is.False);
+    }
+
+    // --- ForceRequestSnapshotAsync (rate-limit bypass) ---
+
+    /// <summary>
+    /// Sibling of <see cref="Create"/> that injects an NSubstitute
+    /// logger so tests can assert on <see cref="LogLevel.Information"/>
+    /// audit calls. Mirrors every other knob.
+    /// </summary>
+    private static (
+        LatticeReplicationAdmin Admin,
+        ILatticeBootstrapCoordinator Coordinator,
+        ManualTimeProvider Time,
+        ILogger<LatticeReplicationAdmin> Logger) CreateWithLogger(
+            TimeSpan? minInterval = null)
+    {
+        var coordinator = Substitute.For<ILatticeBootstrapCoordinator>();
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = "self",
+            OperatorReseedMinInterval = minInterval ?? TimeSpan.FromMinutes(1),
+        };
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(options);
+        var logger = Substitute.For<ILogger<LatticeReplicationAdmin>>();
+        logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        var time = new ManualTimeProvider();
+        var admin = new LatticeReplicationAdmin(coordinator, monitor, logger, time);
+        return (admin, coordinator, time, logger);
+    }
+
+    [Test]
+    public void ForceRequestSnapshotAsync_throws_when_tree_name_is_null()
+    {
+        var (admin, _, _, _) = Create();
+        Assert.That(
+            async () => await admin.ForceRequestSnapshotAsync(null!, Source),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void ForceRequestSnapshotAsync_throws_when_tree_name_is_empty()
+    {
+        var (admin, _, _, _) = Create();
+        Assert.That(
+            async () => await admin.ForceRequestSnapshotAsync(string.Empty, Source),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void ForceRequestSnapshotAsync_throws_when_source_cluster_id_is_null()
+    {
+        var (admin, _, _, _) = Create();
+        Assert.That(
+            async () => await admin.ForceRequestSnapshotAsync(Tree, null!),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void ForceRequestSnapshotAsync_throws_when_source_cluster_id_is_empty()
+    {
+        var (admin, _, _, _) = Create();
+        Assert.That(
+            async () => await admin.ForceRequestSnapshotAsync(Tree, string.Empty),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void ForceRequestSnapshotAsync_observes_cancellation_before_dispatch()
+    {
+        var (admin, coordinator, _, _) = Create();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.That(
+            async () => await admin.ForceRequestSnapshotAsync(Tree, Source, cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+
+        coordinator.DidNotReceive().BootstrapAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ForceRequestSnapshotAsync_first_call_is_honoured_and_delegates_to_coordinator()
+    {
+        var (admin, coordinator, _, time) = Create();
+
+        var decision = await admin.ForceRequestSnapshotAsync(Tree, Source);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.Triggered, Is.True);
+            Assert.That(decision.LastRequestedAt, Is.EqualTo(time.Now));
+            Assert.That(decision.RetryAfter, Is.Null);
+        });
+        await coordinator.Received(1).BootstrapAsync(Tree, Source, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ForceRequestSnapshotAsync_bypasses_rate_limit_within_window()
+    {
+        // The whole point of the bypass: a call inside the configured
+        // rate-limit window must still reach the coordinator and
+        // return Triggered=true.
+        var (admin, coordinator, _, time) = Create(TimeSpan.FromMinutes(1));
+
+        await admin.RequestSnapshotAsync(Tree, Source);
+        time.Now += TimeSpan.FromSeconds(5); // well inside the 60s window
+
+        var forced = await admin.ForceRequestSnapshotAsync(Tree, Source);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(forced.Triggered, Is.True);
+            Assert.That(forced.LastRequestedAt, Is.EqualTo(time.Now));
+            Assert.That(forced.RetryAfter, Is.Null);
+        });
+        await coordinator.Received(2).BootstrapAsync(Tree, Source, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ForceRequestSnapshotAsync_returns_same_OperatorReseedDecision_shape_as_RequestSnapshotAsync()
+    {
+        // Contract pin: both overloads return the same record-struct
+        // shape so an operator dashboard or admin UI can render
+        // results from either through the same renderer.
+        var (admin, _, _, time) = Create();
+
+        var routine = await admin.RequestSnapshotAsync(Tree, Source);
+        time.Now += TimeSpan.FromMinutes(2);
+        var forced = await admin.ForceRequestSnapshotAsync(Tree, Source);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(routine, Is.TypeOf<OperatorReseedDecision>());
+            Assert.That(forced, Is.TypeOf<OperatorReseedDecision>());
+            Assert.That(routine.Triggered, Is.True);
+            Assert.That(forced.Triggered, Is.True);
+            Assert.That(routine.RetryAfter, Is.Null);
+            Assert.That(forced.RetryAfter, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task ForceRequestSnapshotAsync_updates_rate_limit_dictionary_so_followup_routine_call_is_denied()
+    {
+        // The bypass MUST stamp the dictionary on success so a
+        // routine RequestSnapshotAsync inside the window observes
+        // the bypass as the last honoured request. Otherwise an
+        // operator could force-then-routine and accidentally hammer
+        // the coordinator twice.
+        var (admin, coordinator, _, time) = Create(TimeSpan.FromMinutes(1));
+
+        var forceAt = time.Now;
+        await admin.ForceRequestSnapshotAsync(Tree, Source);
+        time.Now += TimeSpan.FromSeconds(20);
+
+        var routine = await admin.RequestSnapshotAsync(Tree, Source);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(routine.Triggered, Is.False);
+            Assert.That(routine.LastRequestedAt, Is.EqualTo(forceAt));
+            Assert.That(routine.RetryAfter, Is.EqualTo(TimeSpan.FromSeconds(40)));
+        });
+        await coordinator.Received(1).BootstrapAsync(Tree, Source, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ForceRequestSnapshotAsync_audit_logs_at_information_on_every_call()
+    {
+        var (admin, _, _, logger) = CreateWithLogger();
+
+        await admin.ForceRequestSnapshotAsync(Tree, Source);
+        await admin.ForceRequestSnapshotAsync(Tree, Source);
+        await admin.ForceRequestSnapshotAsync(Tree, Source);
+
+        // Three calls, three audit lines - none deduplicated.
+        logger.Received(3).Log(
+            LogLevel.Information,
+            Arg.Any<EventId>(),
+            Arg.Is<object>(state => state.ToString()!.Contains("FORCE")
+                && state.ToString()!.Contains(Tree)
+                && state.ToString()!.Contains(Source)),
+            Arg.Any<Exception?>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    [Test]
+    public async Task ForceRequestSnapshotAsync_coordinator_exception_does_not_consume_rate_limit_budget()
+    {
+        var (admin, coordinator, _, time) = Create(TimeSpan.FromMinutes(1));
+        coordinator.BootstrapAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException(new InvalidOperationException("conflict")));
+
+        Assert.That(
+            async () => await admin.ForceRequestSnapshotAsync(Tree, Source),
+            Throws.InstanceOf<InvalidOperationException>());
+
+        // Failure must not stamp the dictionary - a follow-up routine
+        // call should still be honoured.
+        coordinator.BootstrapAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        time.Now += TimeSpan.FromSeconds(1);
+        var routine = await admin.RequestSnapshotAsync(Tree, Source);
+        Assert.That(routine.Triggered, Is.True);
+    }
+
+    [Test]
+    public async Task ForceRequestSnapshotAsync_propagates_cancellation_token_to_coordinator()
+    {
+        var (admin, coordinator, _, _) = Create();
+
+        using var cts = new CancellationTokenSource();
+        await admin.ForceRequestSnapshotAsync(Tree, Source, cts.Token);
+
+        await coordinator.Received(1).BootstrapAsync(Tree, Source, cts.Token);
+    }
+
+    [Test]
+    public void ForceRequestSnapshotAsync_does_not_audit_log_when_argument_validation_fails()
+    {
+        // Contract: the audit log fires "before the coordinator
+        // dispatch", but argument validation runs *before* the audit
+        // log so a malformed call leaves no trail in the silo log
+        // (otherwise an operator could spam the log with garbage
+        // treeName values). Pins ordering.
+        var (admin, _, _, logger) = CreateWithLogger();
+
+        Assert.That(
+            async () => await admin.ForceRequestSnapshotAsync(null!, Source),
+            Throws.InstanceOf<ArgumentException>());
+        Assert.That(
+            async () => await admin.ForceRequestSnapshotAsync(string.Empty, Source),
+            Throws.InstanceOf<ArgumentException>());
+        Assert.That(
+            async () => await admin.ForceRequestSnapshotAsync(Tree, null!),
+            Throws.InstanceOf<ArgumentException>());
+        Assert.That(
+            async () => await admin.ForceRequestSnapshotAsync(Tree, string.Empty),
+            Throws.InstanceOf<ArgumentException>());
+
+        logger.DidNotReceive().Log(
+            Arg.Any<LogLevel>(),
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception?>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    [Test]
+    public void ForceRequestSnapshotAsync_does_not_audit_log_when_cancellation_observed_before_dispatch()
+    {
+        // Contract: cancellation observed before dispatch must also
+        // skip the audit log so an aborted-before-start request does
+        // not leave a stale "FORCE bypass invoked" line. Mirrors the
+        // validation-failure ordering.
+        var (admin, _, _, logger) = CreateWithLogger();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.That(
+            async () => await admin.ForceRequestSnapshotAsync(Tree, Source, cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+
+        logger.DidNotReceive().Log(
+            Arg.Any<LogLevel>(),
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception?>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    [Test]
+    public void ForceRequestSnapshotAsync_audit_logs_even_when_coordinator_throws()
+    {
+        // Contract from snapshot-bootstrap.md: "the audit log line is
+        // emitted *before* the coordinator dispatch, so a log-tailing
+        // operator sees the bypass even if the coordinator call
+        // subsequently throws". Pins audit-before-await ordering.
+        var (admin, coordinator, _, logger) = CreateWithLogger();
+        coordinator.BootstrapAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException(new InvalidOperationException("conflict")));
+
+        Assert.That(
+            async () => await admin.ForceRequestSnapshotAsync(Tree, Source),
+            Throws.InstanceOf<InvalidOperationException>());
+
+        logger.Received(1).Log(
+            LogLevel.Information,
+            Arg.Any<EventId>(),
+            Arg.Is<object>(state => state.ToString()!.Contains("FORCE")
+                && state.ToString()!.Contains(Tree)
+                && state.ToString()!.Contains(Source)),
+            Arg.Any<Exception?>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    [Test]
+    public async Task ForceRequestSnapshotAsync_successive_calls_advance_the_dictionary_timestamp()
+    {
+        // Pins the contract that a re-bypass overwrites the
+        // dictionary timestamp with the latest now. A regression
+        // that forgot the second-call _lastHonoured[key] = now write
+        // would slip past every other test because no other test
+        // observes a *second* honoured bypass at a different
+        // timestamp.
+        var (admin, coordinator, _, time) = Create(TimeSpan.FromMinutes(1));
+
+        var firstAt = time.Now;
+        var first = await admin.ForceRequestSnapshotAsync(Tree, Source);
+
+        // Advance well past the window. The bypass does not gate on
+        // the window, but the *follow-up routine call* does and is
+        // the proxy by which we observe the dictionary state.
+        time.Now = firstAt + TimeSpan.FromMinutes(5);
+        var secondAt = time.Now;
+        var second = await admin.ForceRequestSnapshotAsync(Tree, Source);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.LastRequestedAt, Is.EqualTo(firstAt));
+            Assert.That(second.LastRequestedAt, Is.EqualTo(secondAt));
+        });
+
+        // Now prove the dictionary holds *secondAt*, not firstAt: a
+        // routine call within the *new* window must be denied
+        // against secondAt.
+        time.Now = secondAt + TimeSpan.FromSeconds(20);
+        var routine = await admin.RequestSnapshotAsync(Tree, Source);
+        Assert.Multiple(() =>
+        {
+            Assert.That(routine.Triggered, Is.False);
+            Assert.That(routine.LastRequestedAt, Is.EqualTo(secondAt));
+            Assert.That(routine.RetryAfter, Is.EqualTo(TimeSpan.FromSeconds(40)));
+        });
+        await coordinator.Received(2).BootstrapAsync(Tree, Source, Arg.Any<CancellationToken>());
     }
 }
