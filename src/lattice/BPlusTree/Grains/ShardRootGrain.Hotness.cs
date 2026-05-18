@@ -27,22 +27,36 @@ internal sealed partial class ShardRootGrain
         }
     }
 
+    // Per-activation cache of the two OTel tag pairs that RecordRead /
+    // RecordWrite stamp on every call. Both tag values are immutable for the
+    // lifetime of the activation: TreeId is parsed once from the grain key,
+    // and ShardIndex is parsed once from the same key. Without caching, every
+    // shard read/write allocates one int->object box (for ShardIndex) per
+    // RecordRead / RecordWrite call - O(writes) on the dominant per-call
+    // hot path. Holding the boxed value in a field reduces that to O(1) per
+    // activation.
+    private KeyValuePair<string, object?>[]? _cachedMetricTags;
+    private KeyValuePair<string, object?>[] GetMetricTags()
+    {
+        return _cachedMetricTags ??=
+        [
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
+        ];
+    }
+
     /// <summary>Increments the read operation counter and publishes a meter data point.</summary>
     private void RecordRead()
     {
         _readOps++;
-        LatticeMetrics.ShardReads.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex));
+        LatticeMetrics.ShardReads.Add(1, GetMetricTags());
     }
 
     /// <summary>Increments the write operation counter and publishes a meter data point.</summary>
     private void RecordWrite()
     {
         _writeOps++;
-        LatticeMetrics.ShardWrites.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex));
+        LatticeMetrics.ShardWrites.Add(1, GetMetricTags());
     }
 
     /// <inheritdoc />
