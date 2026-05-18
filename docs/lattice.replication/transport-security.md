@@ -97,9 +97,9 @@ siloBuilder.ConfigureLatticeReplicationSecurity(o =>
 
 The gRPC package (`Orleans.Lattice.Replication.Grpc`) layers transport mechanics on top of the core secret-source seam. The sender (`GrpcPushTransport`):
 
-- **Refuses non-`https://` endpoints** unless `GrpcPushTransportOptions.AllowPlaintextEndpoints` is explicitly set. The check runs at channel-resolution time, so a misconfigured `PeerEndpoints` entry fails fast on the first batch dispatched to that peer rather than silently downgrading.
+- **Refuses non-`https://` endpoints** unless `LatticeReplicationGrpcOptions.AllowPlaintextEndpoints` is explicitly set. The check runs at channel-resolution time, so a misconfigured `Peers` entry fails fast on the first batch dispatched to that peer rather than silently downgrading.
 - **Attaches the outbound secret as gRPC `CallCredentials`** whenever the secret source returns a non-empty value. The credentials are added to the channel options the package builds, then `ConfigureChannel(...)` runs - so a host that needs to replace the credentials chain entirely (e.g. mTLS-only with no shared secret) can do so unconditionally.
-- **Stamps the local cluster id** as the `x-lattice-replication-origin` header on every call, sourced from `GrpcPushTransportOptions.LocalClusterId` or, if unset, from `LatticeReplicationOptions.ClusterId`.
+- **Stamps the local cluster id** as the `x-lattice-replication-origin` header on every call, sourced from `LatticeReplicationGrpcOptions.LocalClusterId` or, if unset, from `LatticeReplicationOptions.ClusterId`.
 
 The receiver (`LatticeReplicationGrpcAuthInterceptor`) is registered globally on the gRPC service, scoped by service-name prefix so co-hosted gRPC services in the same ASP.NET Core app are unaffected. It rejects:
 
@@ -119,7 +119,7 @@ The legacy sample header `X-Replication-Token` is retired. Hosts that depended o
 
 ## mTLS
 
-mTLS is not a substitute for the shared-secret authenticator and not required by default, but the two compose. Wire the mTLS credentials through `GrpcPushTransportOptions.ConfigureChannel` and the receiver's ASP.NET Core authentication middleware; the shared-secret interceptor runs in addition to whatever authentication policy the host configures.
+mTLS is not a substitute for the shared-secret authenticator and not required by default, but the two compose. Wire the mTLS credentials through `LatticeReplicationGrpcOptions.ConfigureChannel` and the receiver's ASP.NET Core authentication middleware; the shared-secret interceptor runs in addition to whatever authentication policy the host configures.
 
 A host that needs mTLS-only and no shared secret can do so by registering a custom `ILatticeReplicationSecretSource` that returns empty for every peer and setting `LatticeReplicationSecurityOptions.RequireAuthentication = false`. The configuration safety validator still runs; the receiver's authentication is now whatever the ASP.NET Core middleware enforces.
 

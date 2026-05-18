@@ -192,14 +192,16 @@ public class RemoteSnapshotProviderIntegrationTests
 
             // Wire the loopback transport built in SetUp; this is what
             // RemoteSnapshotProvider drives instead of a real wire
-            // binding.
+            // binding. AddLatticeReplication registers an
+            // IBootstrapSnapshotSource factory that auto-selects the
+            // cross-cluster adapter whenever an IRemoteSnapshotTransport
+            // is present, so registering the transport is sufficient
+            // to flip the bootstrap state machine onto the remote drain
+            // path - no explicit opt-in call is required.
             if (SiteATransports.TryGetValue(SiteAClusterId, out var transport))
             {
                 siloBuilder.Services.AddSingleton<IRemoteSnapshotTransport>(transport);
             }
-
-            // Replace ISnapshotProvider with the cross-cluster adapter.
-            siloBuilder.AddRemoteSnapshotProvider();
 
             siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllLwwRegisterResolver>();
         }

@@ -23,7 +23,7 @@ using MultiSiteManufacturing.Host.Replication;
 // expose plaintext HTTP/2 on the silo HTTP ports; the grpc-dotnet
 // channel needs this AppContext switch enabled before constructing a
 // GrpcChannel against an http:// URI. Production deployments swap to
-// https:// + mTLS (configured via GrpcPushTransportOptions.ConfigureChannel)
+// https:// + mTLS (configured via LatticeReplicationGrpcOptions.ConfigureChannel)
 // and do not need this switch.
 AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
 
@@ -283,15 +283,14 @@ builder.Services.AddGrpc();
 // the bottom of this file alongside the other gRPC routes. Wired only
 // when a peer endpoint has been resolved from configuration so the
 // in-memory test path and partial local runs do not trip the
-// transport's strict "every peer must be in PeerEndpoints" check.
+// transport's strict "every peer must be in Peers" check.
 if (packageReplicationConfigured)
 {
     var peerUri = new Uri(packagePeerGrpcEndpoint!, UriKind.Absolute);
 
-    builder.Services.AddLatticeReplicationGrpcServer();
-    builder.Services.AddLatticeReplicationGrpcPushTransport(opts =>
+    builder.Services.AddLatticeReplicationGrpc(opts =>
     {
-        opts.PeerEndpoints[packagePeerClusterId!] = peerUri;
+        opts.Peers[packagePeerClusterId!] = peerUri;
         // The sample's docker-compose + run.ps1 topologies expose the
         // replication endpoint as plaintext h2c (HTTP/2 prior knowledge)
         // on an internal Docker network or localhost. The package
@@ -488,7 +487,7 @@ app.MapGrpcService<InventoryServiceImpl>();
 // startup.
 if (packageReplicationConfigured)
 {
-    app.MapLatticeReplicationGrpcService();
+    app.MapLatticeReplicationGrpc();
 }
 
 // Prometheus scrape endpoint - served at /metrics on the ASP.NET Core

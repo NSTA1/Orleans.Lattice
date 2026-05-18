@@ -85,7 +85,7 @@ public class GrpcReplicationAuthIntegrationTests
                     services.AddSingleton<IReplicationBatchEncoder>(sp =>
                         new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
-                    services.AddLatticeReplicationGrpcServer();
+                    services.AddLatticeReplicationGrpc();
 
                     // Replace the default env-var source with a fixed in-memory
                     // source so this fixture is hermetic.
@@ -94,7 +94,7 @@ public class GrpcReplicationAuthIntegrationTests
                 web.Configure(app =>
                 {
                     app.UseRouting();
-                    app.UseEndpoints(e => e.MapLatticeReplicationGrpcService());
+                    app.UseEndpoints(e => e.MapLatticeReplicationGrpc());
                 });
             });
 

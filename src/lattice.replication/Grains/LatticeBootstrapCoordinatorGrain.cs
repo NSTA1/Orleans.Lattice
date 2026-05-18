@@ -40,7 +40,7 @@ namespace Orleans.Lattice.Replication.Grains;
 internal sealed class LatticeBootstrapCoordinatorGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
-    ISnapshotProvider snapshotProvider,
+    IBootstrapSnapshotSource snapshotProvider,
     IReplicationApplier replicationApplier,
     IReminderRegistry reminderRegistry,
     ILogger<LatticeBootstrapCoordinatorGrain> logger,

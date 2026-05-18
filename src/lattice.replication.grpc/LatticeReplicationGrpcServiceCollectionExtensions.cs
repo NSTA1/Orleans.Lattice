@@ -2,133 +2,181 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Replication.Grpc;
 
 /// <summary>
-/// DI extensions for wiring up the gRPC streaming push transport on
-/// both the sender (silo) and the receiver (ASP.NET Core host).
+/// DI extensions for wiring up the unified
+/// <c>Orleans.Lattice.Replication.Grpc</c> binding (live push + snapshot
+/// bootstrap, sender + receiver) on a silo.
 /// </summary>
+/// <remarks>
+/// <para>
+/// The canonical wiring is two calls. In the silo composition root:
+/// </para>
+/// <code>
+/// siloBuilder.AddLatticeReplication(opts => opts.ClusterId = "site-b");
+/// siloBuilder.Services.AddLatticeReplicationGrpc(grpc =>
+/// {
+///     grpc.Peers["site-a"] = new Uri("https://site-a.example/");
+/// });
+/// </code>
+/// <para>
+/// And, in the ASP.NET Core endpoint composition:
+/// </para>
+/// <code>
+/// app.MapLatticeReplicationGrpc();
+/// </code>
+/// <para>
+/// <see cref="AddLatticeReplicationGrpc"/> registers both transports
+/// (live-push client + server, snapshot client + server), the shared
+/// auth interceptor, and the secret-provider chain.
+/// <see cref="MapLatticeReplicationGrpc"/> maps both the live-push
+/// route and the snapshot routes on the endpoint builder. Active-active
+/// is the zero-ceremony default: a silo that registers the binding is
+/// both a sender (peer receivers can pull live pushes and snapshot
+/// streams from it) and a receiver (the silo can dial peer endpoints
+/// listed in <see cref="LatticeReplicationGrpcOptions.Peers"/> to ship
+/// outbound batches and to bootstrap from a peer).
+/// </para>
+/// <para>
+/// Push-only deployments (a silo that ships outbound but never expects
+/// peers to dial it) omit the endpoint-mapping call;
+/// receiver-only deployments (a silo that accepts inbound pushes /
+/// snapshot pulls but never bootstraps from a peer) leave
+/// <see cref="LatticeReplicationGrpcOptions.Peers"/> empty. The
+/// composition is registration-driven, not role-flag-driven.
+/// </para>
+/// </remarks>
 public static class LatticeReplicationGrpcServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers <see cref="GrpcPushTransport"/> as the silo's
-    /// <see cref="IReplicationTransport"/>, replacing the no-op
-    /// transport <c>AddLatticeReplication</c> registers by default.
-    /// Binds the supplied <paramref name="configure"/> delegate to the
-    /// unnamed <see cref="GrpcPushTransportOptions"/> instance.
+    /// Registers the unified <c>Orleans.Lattice.Replication.Grpc</c>
+    /// binding. Wires the live-push client + server, the snapshot
+    /// client + server, the shared-secret auth interceptor, and the
+    /// secret-provider chain in a single call. Idempotent: a host
+    /// that calls this more than once layers the supplied
+    /// <paramref name="configure"/> delegate over the existing
+    /// options binding rather than re-registering singletons.
     /// </summary>
+    /// <param name="services">The silo's service collection.</param>
+    /// <param name="configure">
+    /// Optional delegate that populates the unified
+    /// <see cref="LatticeReplicationGrpcOptions"/>. Omit when this
+    /// silo is receiver-only and never dials peer endpoints.
+    /// </param>
     /// <remarks>
-    /// Call this after <c>AddLatticeReplication</c>. The replacement
-    /// uses <see cref="ServiceCollectionDescriptorExtensions.Replace"/>
-    /// so the no-op singleton registered earlier is removed before the
-    /// gRPC transport is added; subsequent calls to
-    /// <c>AddLatticeReplicationGrpcPushTransport</c> are idempotent and
-    /// do not stack additional transports.
+    /// Call after <c>AddLatticeReplication</c>. The replacement of
+    /// the no-op <see cref="IReplicationTransport"/> uses
+    /// <see cref="ServiceCollectionDescriptorExtensions.Replace"/>
+    /// so the no-op singleton registered earlier is removed before
+    /// the gRPC transport is added; the snapshot transport uses the
+    /// same pattern. Subsequent calls are idempotent and do not
+    /// stack additional transports.
     /// </remarks>
-    public static IServiceCollection AddLatticeReplicationGrpcPushTransport(
+    public static IServiceCollection AddLatticeReplicationGrpc(
         this IServiceCollection services,
-        Action<GrpcPushTransportOptions> configure)
+        Action<LatticeReplicationGrpcOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);
-        ArgumentNullException.ThrowIfNull(configure);
 
-        services.Configure(configure);
-        RegisterMethodFactory(services);
+        if (configure is not null)
+        {
+            services.Configure(configure);
+        }
+        else
+        {
+            services.AddOptions<LatticeReplicationGrpcOptions>();
+        }
 
-        // The transport now depends on IReplicationSecretProvider and
-        // IOptionsMonitor<LatticeReplicationOptions>. AddLatticeReplication
-        // is the canonical registration site for both, but a host that
-        // wires the gRPC transport without the core seam (e.g. a test
-        // that injects a stub applier directly) still needs a working
-        // DI graph. TryAdd preserves any registration the host did
-        // first and supplies safe defaults otherwise.
+        // Project the unified public options onto the two internal
+        // per-transport options instances. The projection runs every
+        // time the unified options are reloaded, so an IOptionsMonitor
+        // reload propagates to both transports without per-transport
+        // wiring on the host's side.
+        services.AddSingleton<IConfigureOptions<GrpcPushTransportOptions>>(sp =>
+            new ProjectPushOptions(sp.GetRequiredService<IOptionsMonitor<LatticeReplicationGrpcOptions>>()));
+        services.AddSingleton<IConfigureOptions<GrpcRemoteSnapshotTransportOptions>>(sp =>
+            new ProjectSnapshotOptions(sp.GetRequiredService<IOptionsMonitor<LatticeReplicationGrpcOptions>>()));
+
+        // Common security defaults. TryAdd preserves any registration
+        // the host did first (typically AddLatticeReplication has
+        // already supplied these); the entries are a safe fallback
+        // for a stand-alone gRPC host (e.g. a test that wires only
+        // the gRPC surface against a stub applier).
         services.TryAddSingleton<ILatticeReplicationSecretSource, EnvironmentVariableSecretSource>();
         services.TryAddSingleton<TimeProvider>(_ => TimeProvider.System);
         services.TryAddSingleton<IReplicationSecretProvider, CachingReplicationSecretProvider>();
         services.AddOptions<LatticeReplicationSecurityOptions>();
         services.AddOptions<LatticeReplicationOptions>();
 
-        services.Replace(ServiceDescriptor.Singleton<IReplicationTransport, GrpcPushTransport>());
-        return services;
-    }
-
-    /// <summary>
-    /// Adds the receiver-side gRPC service to the host's service
-    /// collection. Call <see cref="MapLatticeReplicationGrpcService"/>
-    /// on the endpoint route builder during request-pipeline
-    /// configuration to expose the route.
-    /// </summary>
-    public static IServiceCollection AddLatticeReplicationGrpcServer(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-
+        // Register the auth interceptor globally so every gRPC
+        // service hosted on this pipeline runs through the
+        // shared-secret authenticator. The interceptor itself
+        // scopes enforcement to LatticeReplication methods by
+        // matching on the service-name prefix, so unrelated gRPC
+        // services on the same host are unaffected.
         services.AddGrpc(options =>
         {
-            // Register the auth interceptor globally so every gRPC
-            // service hosted on this pipeline runs through the
-            // shared-secret authenticator. The interceptor itself
-            // scopes enforcement to LatticeReplication methods by
-            // matching on the service-name prefix, so unrelated
-            // gRPC services on the same host are unaffected.
             options.Interceptors.Add<LatticeReplicationGrpcAuthInterceptor>();
         });
         services.TryAddSingleton<LatticeReplicationGrpcAuthInterceptor>();
 
-        // Security defaults: TryAdd so a host that called
-        // AddLatticeReplication first wins (its registrations land
-        // before these), and a stand-alone gRPC server host that
-        // doesn't have AddLatticeReplication still gets a complete DI
-        // graph for the interceptor. The accepted-set returned by the
-        // default EnvironmentVariableSecretSource is empty when no
-        // env vars are set, so the interceptor will reject every call
-        // with PermissionDenied; tests that don't configure a secret
-        // must set LatticeReplicationSecurityOptions.RequireAuthentication
-        // to false explicitly.
-        services.TryAddSingleton<ILatticeReplicationSecretSource, EnvironmentVariableSecretSource>();
-        services.TryAddSingleton<TimeProvider>(_ => TimeProvider.System);
-        services.TryAddSingleton<IReplicationSecretProvider, CachingReplicationSecretProvider>();
-        services.AddOptions<LatticeReplicationSecurityOptions>();
+        // Live-push transport (outbound, client side).
+        RegisterPushMethodFactory(services);
+        services.Replace(ServiceDescriptor.Singleton<IReplicationTransport, GrpcPushTransport>());
 
-        RegisterMethodFactory(services);
-        // Defensive default: hosts that don't call AddLatticeReplication
-        // (e.g. test hosts that wire only the gRPC service against a
-        // substituted IReplicationApplier) still need a concrete
-        // IWalCursorRegistry for the gRPC service's
-        // post-apply blocked-floor read. TryAdd preserves any explicit
-        // registration the host already made (production hosts that
-        // called AddLatticeReplication land their canonical
-        // InMemoryWalCursorRegistry singleton first).
+        // Live-push receiver service (inbound, server side).
         services.TryAddSingleton<IWalCursorRegistry, InMemoryWalCursorRegistry>();
         services.TryAddSingleton<LatticeReplicationGrpcService>();
-        services.TryAddSingleton<LatticeReplicationGrpcServiceBase>(sp => sp.GetRequiredService<LatticeReplicationGrpcService>());
+        services.TryAddSingleton<LatticeReplicationGrpcServiceBase>(
+            sp => sp.GetRequiredService<LatticeReplicationGrpcService>());
+
+        // Snapshot transport (outbound, client side).
+        RegisterSnapshotMethodFactory(services);
+        services.Replace(ServiceDescriptor.Singleton<IRemoteSnapshotTransport, GrpcRemoteSnapshotTransport>());
+
+        // Snapshot sender service (inbound, server side).
+        services.TryAddSingleton<LatticeRemoteSnapshotService>();
+        services.TryAddSingleton<LatticeRemoteSnapshotGrpcService>();
+        services.TryAddSingleton<LatticeRemoteSnapshotGrpcServiceBase>(
+            sp => sp.GetRequiredService<LatticeRemoteSnapshotGrpcService>());
+
         return services;
     }
 
     /// <summary>
-    /// Maps the receiver-side gRPC <c>Push</c> route on the supplied
-    /// <paramref name="endpoints"/>. The host must have called
-    /// <c>AddLatticeReplication</c> (for the
+    /// Maps both the live-push <c>Push</c> route and the snapshot
+    /// <c>GetMetadata</c>/<c>RequestSnapshot</c> routes on the
+    /// supplied <paramref name="endpoints"/>. The host must have
+    /// called <c>AddLatticeReplication</c> (for the
     /// <see cref="IReplicationApplier"/> + encoder dependencies) and
-    /// <see cref="AddLatticeReplicationGrpcServer"/> before this call.
+    /// <see cref="AddLatticeReplicationGrpc"/> before this call.
     /// </summary>
-    public static GrpcServiceEndpointConventionBuilder MapLatticeReplicationGrpcService(
+    /// <returns>The endpoint route builder for chaining.</returns>
+    public static IEndpointRouteBuilder MapLatticeReplicationGrpc(
         this IEndpointRouteBuilder endpoints)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
 
-        // Pre-resolve the method singleton so its factory populates
-        // LatticeReplicationGrpcMethodHolder.Current before
-        // Grpc.AspNetCore reflects [BindServiceMethod] and invokes the
-        // static BindService callback at startup. MapGrpcService
-        // targets the abstract base class because that is the type
-        // bearing the [BindServiceMethod] attribute.
+        // Pre-resolve the method singletons so their factories populate
+        // the static method holders before Grpc.AspNetCore reflects
+        // [BindServiceMethod] and invokes the static BindService
+        // callback at startup. MapGrpcService targets the abstract base
+        // classes because those are the types bearing the
+        // [BindServiceMethod] attribute.
         endpoints.ServiceProvider.GetRequiredService<LatticeReplicationGrpcMethod>();
-        return endpoints.MapGrpcService<LatticeReplicationGrpcServiceBase>();
+        endpoints.MapGrpcService<LatticeReplicationGrpcServiceBase>();
+
+        endpoints.ServiceProvider.GetRequiredService<LatticeRemoteSnapshotGrpcMethods>();
+        endpoints.MapGrpcService<LatticeRemoteSnapshotGrpcServiceBase>();
+
+        return endpoints;
     }
 
-    private static void RegisterMethodFactory(IServiceCollection services)
+    private static void RegisterPushMethodFactory(IServiceCollection services)
     {
         // Singleton factory bridges the DI-resolved Method<,> into the
         // static LatticeReplicationGrpcMethodHolder, because the static
@@ -142,5 +190,50 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
             LatticeReplicationGrpcMethodHolder.Current = method;
             return method;
         });
+    }
+
+    private static void RegisterSnapshotMethodFactory(IServiceCollection services)
+    {
+        services.TryAddSingleton<LatticeRemoteSnapshotGrpcMethods>(sp =>
+        {
+            var requestSerializer = sp.GetRequiredService<Serializer<RemoteSnapshotMetadataRequest>>();
+            var metadataSerializer = sp.GetRequiredService<Serializer<RemoteSnapshotMetadata>>();
+            var streamItemSerializer = sp.GetRequiredService<Serializer<RemoteSnapshotStreamItem>>();
+            var methods = new LatticeRemoteSnapshotGrpcMethods(requestSerializer, metadataSerializer, streamItemSerializer);
+            LatticeRemoteSnapshotGrpcMethodsHolder.Current = methods;
+            return methods;
+        });
+    }
+
+    private sealed class ProjectPushOptions(IOptionsMonitor<LatticeReplicationGrpcOptions> source)
+        : IConfigureOptions<GrpcPushTransportOptions>
+    {
+        public void Configure(GrpcPushTransportOptions options)
+        {
+            var u = source.CurrentValue;
+            foreach (var kvp in u.Peers)
+            {
+                options.PeerEndpoints[kvp.Key] = kvp.Value;
+            }
+            options.AllowPlaintextEndpoints = u.AllowPlaintextEndpoints;
+            options.ConfigureChannel = u.ConfigureChannel;
+            options.LocalClusterId = u.LocalClusterId;
+        }
+    }
+
+    private sealed class ProjectSnapshotOptions(IOptionsMonitor<LatticeReplicationGrpcOptions> source)
+        : IConfigureOptions<GrpcRemoteSnapshotTransportOptions>
+    {
+        public void Configure(GrpcRemoteSnapshotTransportOptions options)
+        {
+            var u = source.CurrentValue;
+            foreach (var kvp in u.Peers)
+            {
+                options.SenderEndpoints[kvp.Key] = kvp.Value;
+            }
+            options.AllowPlaintextEndpoints = u.AllowPlaintextEndpoints;
+            options.ConfigureChannel = u.ConfigureChannel;
+            options.LocalClusterId = u.LocalClusterId;
+        }
     }
 }

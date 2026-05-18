@@ -9,9 +9,9 @@ namespace Orleans.Lattice.Replication.Grpc.Tests.PublicApiContract;
 /// <summary>
 /// DI-registration contract tests for the public gRPC service-collection
 /// extensions:
-/// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpcPushTransport"/>
+/// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpc"/>
 /// and
-/// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpcServer"/>.
+/// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.MapLatticeReplicationGrpc"/>.
 /// These extensions are the canonical seams hosts compose against; this
 /// suite pins idempotency, replacement semantics, and option-monitor
 /// resolution so any silent change to the registration shape is caught.
@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Replication.Grpc.Tests.PublicApiContract;
 public partial class GrpcPublicApiContractTests
 {
     [Test]
-    public async Task AddLatticeReplicationGrpcPushTransport_resolves_a_single_transport_singleton()
+    public async Task AddLatticeReplicationGrpc_resolves_a_single_transport_singleton()
     {
         await using var sender = _fixture.BuildSenderServices();
         var first = sender.GetRequiredService<IReplicationTransport>();
@@ -30,9 +30,9 @@ public partial class GrpcPublicApiContractTests
     }
 
     [Test]
-    public async Task AddLatticeReplicationGrpcPushTransport_is_idempotent_on_repeat_registration()
+    public async Task AddLatticeReplicationGrpc_is_idempotent_on_repeat_registration()
     {
-        // Build a service collection, register the transport twice, and
+        // Build a service collection, register the binding twice, and
         // verify the second registration replaces (does not stack) the
         // first. The contract here is the same as the docs: calls land
         // via Replace<IReplicationTransport>, so the resolved transport
@@ -47,26 +47,26 @@ public partial class GrpcPublicApiContractTests
         {
             o.ClusterId = GrpcPublicApiContractFixture.SenderClusterId;
         });
-        services.AddLatticeReplicationGrpcPushTransport(opts =>
+        services.AddLatticeReplicationGrpc(opts =>
         {
-            opts.PeerEndpoints["x"] = new Uri("https://x.example/");
+            opts.Peers["x"] = new Uri("https://x.example/");
             opts.LocalClusterId = "first";
         });
-        services.AddLatticeReplicationGrpcPushTransport(opts =>
+        services.AddLatticeReplicationGrpc(opts =>
         {
-            opts.PeerEndpoints["x"] = new Uri("https://x.example/");
+            opts.Peers["x"] = new Uri("https://x.example/");
             opts.LocalClusterId = "second";
         });
 
         await using var sp = services.BuildServiceProvider();
 
         var transports = sp.GetServices<IReplicationTransport>().ToList();
-        var monitor = sp.GetRequiredService<IOptionsMonitor<GrpcPushTransportOptions>>();
+        var monitor = sp.GetRequiredService<IOptionsMonitor<LatticeReplicationGrpcOptions>>();
 
         Assert.Multiple(() =>
         {
             Assert.That(transports, Has.Count.EqualTo(1),
-                "Repeat AddLatticeReplicationGrpcPushTransport calls must not stack additional transports.");
+                "Repeat AddLatticeReplicationGrpc calls must not stack additional transports.");
             Assert.That(transports[0], Is.InstanceOf<GrpcPushTransport>());
             Assert.That(monitor.CurrentValue.LocalClusterId, Is.EqualTo("second"),
                 "Subsequent configure callbacks compose; the most recent assignment wins.");
@@ -74,9 +74,9 @@ public partial class GrpcPublicApiContractTests
     }
 
     [Test]
-    public async Task AddLatticeReplicationGrpcServer_registers_method_holder_and_service_singletons()
+    public async Task AddLatticeReplicationGrpc_registers_method_holder_and_service_singletons()
     {
-        // The fixture already calls AddLatticeReplicationGrpcServer; we
+        // The fixture already calls AddLatticeReplicationGrpc; we
         // reach into its services to confirm the registration shape.
         var sp = _fixture.ReceiverHost.Services;
 
@@ -95,12 +95,12 @@ public partial class GrpcPublicApiContractTests
     }
 
     [Test]
-    public void MapLatticeReplicationGrpcService_route_responds_to_inbound_calls()
+    public void MapLatticeReplicationGrpc_route_responds_to_inbound_calls()
     {
         // The smoke test in the root partial already proves the route
         // is mapped end-to-end; this test is a structural assertion
         // that the route survives a no-op sender build (i.e. that
-        // MapLatticeReplicationGrpcService runs as part of the
+        // MapLatticeReplicationGrpc runs as part of the
         // fixture's pipeline configuration without throwing).
         Assert.That(_fixture.ReceiverServer, Is.Not.Null);
         Assert.That(_fixture.ReceiverBaseAddress, Is.Not.Null);

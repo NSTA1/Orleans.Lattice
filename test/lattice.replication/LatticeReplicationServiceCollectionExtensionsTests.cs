@@ -591,6 +591,103 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeReplication_bootstrap_source_wraps_local_provider_when_no_transport_registered()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var source = provider.GetRequiredService<IBootstrapSnapshotSource>();
+        Assert.That(source, Is.InstanceOf<LocalBootstrapSnapshotSource>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_bootstrap_source_resolves_remote_adapter_when_transport_registered()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        services.AddSingleton(Substitute.For<IRemoteSnapshotTransport>());
+        services.AddLogging();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var source = provider.GetRequiredService<IBootstrapSnapshotSource>();
+        Assert.That(source, Is.InstanceOf<RemoteSnapshotProvider>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_bootstrap_source()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var custom = Substitute.For<IBootstrapSnapshotSource>();
+        services.AddSingleton(custom);
+        // Even with a transport present, the host's explicit
+        // IBootstrapSnapshotSource registration wins - the
+        // active-active default is opt-out, not forced.
+        services.AddSingleton(Substitute.For<IRemoteSnapshotTransport>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<IBootstrapSnapshotSource>(), Is.SameAs(custom));
+    }
+
+    [Test]
+    public void AddLatticeReplication_bootstrap_source_is_registered_as_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<IBootstrapSnapshotSource>();
+        var second = provider.GetRequiredService<IBootstrapSnapshotSource>();
+        Assert.That(first, Is.SameAs(second));
+    }
+
+    [Test]
+    public void AddLatticeReplication_keeps_local_snapshot_provider_when_transport_registered()
+    {
+        // Active-active default: registering an IRemoteSnapshotTransport
+        // flips the bootstrap source to the cross-cluster adapter but
+        // must leave the sender-side ISnapshotProvider pointing at the
+        // local tree so LatticeRemoteSnapshotService can still serve
+        // outbound snapshot requests from peer receivers.
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        services.AddSingleton(Substitute.For<IRemoteSnapshotTransport>());
+        services.AddLogging();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var local = provider.GetRequiredService<ISnapshotProvider>();
+        var bootstrap = provider.GetRequiredService<IBootstrapSnapshotSource>();
+        Assert.Multiple(() =>
+        {
+            Assert.That(local, Is.InstanceOf<LatticeSnapshotProvider>(),
+                "Sender-side ISnapshotProvider must remain the local tree even when active-active.");
+            Assert.That(bootstrap, Is.InstanceOf<RemoteSnapshotProvider>(),
+                "Receiver-side bootstrap source must flip to the cross-cluster adapter when a transport is present.");
+        });
+    }
+
+    [Test]
     public void AddLatticeReplication_registers_leaf_cursor_reporter_by_default()
     {
         var services = new ServiceCollection();

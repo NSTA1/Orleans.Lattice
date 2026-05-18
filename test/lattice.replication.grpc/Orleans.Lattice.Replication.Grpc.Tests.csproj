@@ -28,4 +28,17 @@
     <ProjectReference Include="..\..\src\lattice.replication.grpc\Orleans.Lattice.Replication.Grpc.csproj" />
   </ItemGroup>
 
+  <!--
+    Link the abstract cross-package contract base (RemoteSnapshotTransportContractTests
+    + StubSenderSnapshotProvider) from the replication test project. The doc
+    snapshot-bootstrap.md explicitly names this base as the shared acceptance
+    suite that every IRemoteSnapshotTransport binding derives from. We link
+    the source file rather than referencing the test project to avoid
+    double-running every [TestFixture] in the replication test assembly
+    under the gRPC test discovery context.
+  -->
+  <ItemGroup>
+    <Compile Include="..\lattice.replication\RemoteSnapshotTransportContractTests.cs" Link="Shared\RemoteSnapshotTransportContractTests.cs" />
+  </ItemGroup>
+
 </Project>

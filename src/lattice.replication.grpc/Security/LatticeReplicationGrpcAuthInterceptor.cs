@@ -19,10 +19,10 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// <remarks>
 /// The interceptor is registered globally via
 /// <c>AddGrpc(o =&gt; o.Interceptors.Add&lt;LatticeReplicationGrpcAuthInterceptor&gt;())</c>
-/// inside <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpcServer"/>.
+/// inside <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpc"/>.
 /// Hosts that wire their own gRPC services into the same ASP.NET Core
 /// pipeline are unaffected: this interceptor's enforcement is scoped
-/// to the receiver-side service registered by this package.
+/// to the receiver-side services registered by this package.
 /// </remarks>
 internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
 {
@@ -55,19 +55,47 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        // Scope the auth check to the Lattice replication service so a
+        // Scope the auth check to the Lattice replication services so a
         // host that mounts other gRPC services in the same pipeline is
         // unaffected. The full method name is "/{service}/{method}";
         // we match by service-name prefix to keep the interceptor
-        // resilient to future RPC additions on the same service.
+        // resilient to future RPC additions on the same services.
         if (!IsLatticeReplicationMethod(context.Method))
         {
             return await continuation(request, context).ConfigureAwait(false);
         }
 
+        await EnforceAuthAsync(context).ConfigureAwait(false);
+        return await continuation(request, context).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public override async Task ServerStreamingServerHandler<TRequest, TResponse>(
+        TRequest request,
+        IServerStreamWriter<TResponse> responseStream,
+        ServerCallContext context,
+        ServerStreamingServerMethod<TRequest, TResponse> continuation)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(responseStream);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(continuation);
+
+        if (!IsLatticeReplicationMethod(context.Method))
+        {
+            await continuation(request, responseStream, context).ConfigureAwait(false);
+            return;
+        }
+
+        await EnforceAuthAsync(context).ConfigureAwait(false);
+        await continuation(request, responseStream, context).ConfigureAwait(false);
+    }
+
+    private async Task EnforceAuthAsync(ServerCallContext context)
+    {
         if (!_options.CurrentValue.RequireAuthentication)
         {
-            return await continuation(request, context).ConfigureAwait(false);
+            return;
         }
 
         var presented = ReadHeader(context, LatticeReplicationGrpcMetadataNames.SecretHeader);
@@ -93,22 +121,23 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
                 "Replication batch credential did not match any accepted secret on this cluster. "
                 + "Rotate by publishing the next-generation secret in LATTICE_REPLICATION_ACCEPTED_SECRETS on every peer before flipping LATTICE_REPLICATION_SECRET on the sender."));
         }
-
-        return await continuation(request, context).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Returns <see langword="true"/> when the call targets a method
-    /// hosted by this package's gRPC service. Matching by the
-    /// service-id segment of the method-name keeps the interceptor
-    /// from inspecting headers on unrelated services in a shared
-    /// ASP.NET Core pipeline.
+    /// hosted by one of this package's gRPC services (the live push
+    /// transport or the cross-cluster snapshot transport). Matching
+    /// by the service-id segment of the method-name keeps the
+    /// interceptor from inspecting headers on unrelated services in
+    /// a shared ASP.NET Core pipeline.
     /// </summary>
     private static bool IsLatticeReplicationMethod(string fullMethodName)
     {
         // Method-name format is "/{ServiceId}/{MethodName}".
-        const string ServicePrefix = "/" + LatticeReplicationGrpcMethod.ServiceName + "/";
-        return fullMethodName.StartsWith(ServicePrefix, StringComparison.Ordinal);
+        const string PushServicePrefix = "/" + LatticeReplicationGrpcMethod.ServiceName + "/";
+        const string SnapshotServicePrefix = "/" + LatticeRemoteSnapshotGrpcMethods.ServiceName + "/";
+        return fullMethodName.StartsWith(PushServicePrefix, StringComparison.Ordinal)
+            || fullMethodName.StartsWith(SnapshotServicePrefix, StringComparison.Ordinal);
     }
 
     private static string? ReadHeader(ServerCallContext context, string key)

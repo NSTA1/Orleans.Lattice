@@ -296,7 +296,7 @@ public class LatticeReplicationGrpcServiceTests
     public void BindService_throws_when_method_holder_not_initialised()
     {
         // Reset the holder to simulate a cold start before
-        // AddLatticeReplicationGrpcServer ran.
+        // AddLatticeReplicationGrpc / MapLatticeReplicationGrpc ran.
         var saved = LatticeReplicationGrpcMethodHolder.Current;
         LatticeReplicationGrpcMethodHolder.Current = null;
         try

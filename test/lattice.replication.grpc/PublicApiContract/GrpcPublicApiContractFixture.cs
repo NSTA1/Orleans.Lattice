@@ -15,11 +15,10 @@ namespace Orleans.Lattice.Replication.Grpc.Tests.PublicApiContract;
 
 /// <summary>
 /// Shared fixture for the gRPC package public-API contract suite. The
-/// surface this package contributes is small but composed:
-/// <see cref="GrpcPushTransportOptions"/>,
-/// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpcPushTransport"/>,
-/// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpcServer"/>, and
-/// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.MapLatticeReplicationGrpcService"/>.
+/// surface this package contributes is a single unified helper pair:
+/// <see cref="LatticeReplicationGrpcOptions"/>,
+/// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpc"/>, and
+/// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.MapLatticeReplicationGrpc"/>.
 /// The fixture wires a real ASP.NET Core
 /// <see cref="TestServer"/>-hosted receiver and exposes a builder for
 /// sender-side service providers that target it, so every contract
@@ -46,7 +45,7 @@ internal sealed class GrpcPublicApiContractFixture
     /// <summary>Cluster id stamped on every outbound batch.</summary>
     public const string SenderClusterId = "site-sender";
 
-    /// <summary>Cluster id used to address the receiver in <see cref="GrpcPushTransportOptions.PeerEndpoints"/>.</summary>
+    /// <summary>Cluster id used to address the receiver in <see cref="LatticeReplicationGrpcOptions.Peers"/>.</summary>
     public const string ReceiverClusterId = "site-receiver";
 
     /// <summary>The receiver-side ASP.NET Core host.</summary>
@@ -88,14 +87,14 @@ internal sealed class GrpcPublicApiContractFixture
                     services.AddSingleton<IReplicationApplier>(ReceiverApplier);
                     services.AddSingleton<IReplicationBatchEncoder>(sp =>
                         new EnvelopeSerializerEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
-                    services.AddLatticeReplicationGrpcServer();
+                    services.AddLatticeReplicationGrpc();
                     services.Configure<LatticeReplicationSecurityOptions>(o =>
                         o.RequireAuthentication = false);
                 });
                 web.Configure(app =>
                 {
                     app.UseRouting();
-                    app.UseEndpoints(endpoints => endpoints.MapLatticeReplicationGrpcService());
+                    app.UseEndpoints(endpoints => endpoints.MapLatticeReplicationGrpc());
                 });
             });
 
@@ -126,14 +125,14 @@ internal sealed class GrpcPublicApiContractFixture
 
     /// <summary>
     /// Builds a sender-side <see cref="IServiceProvider"/> wired with
-    /// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpcPushTransport"/>
+    /// <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpc"/>
     /// pointing at the receiver via <see cref="ReceiverBaseAddress"/>.
     /// The supplied <paramref name="configure"/> delegate runs after the
     /// fixture's defaults so tests can override <c>RequireHttps</c>,
     /// <c>AllowPlaintextEndpoints</c>, <c>LocalClusterId</c>, or the
     /// <c>ConfigureChannel</c> callback as needed.
     /// </summary>
-    public ServiceProvider BuildSenderServices(Action<GrpcPushTransportOptions>? configure = null)
+    public ServiceProvider BuildSenderServices(Action<LatticeReplicationGrpcOptions>? configure = null)
     {
         var handler = ReceiverServer.CreateHandler();
         var services = new ServiceCollection();
@@ -145,9 +144,9 @@ internal sealed class GrpcPublicApiContractFixture
         {
             o.ClusterId = SenderClusterId;
         });
-        services.AddLatticeReplicationGrpcPushTransport(opts =>
+        services.AddLatticeReplicationGrpc(opts =>
         {
-            opts.PeerEndpoints[ReceiverClusterId] = ReceiverBaseAddress;
+            opts.Peers[ReceiverClusterId] = ReceiverBaseAddress;
             opts.LocalClusterId = SenderClusterId;
             // TestServer is plaintext (http://); the package's hardened
             // default refuses non-https unless the host opts in.

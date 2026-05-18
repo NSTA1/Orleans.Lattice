@@ -74,21 +74,22 @@ builder.Host.UseOrleans(silo =>
         });
 });
 
-// Outbound gRPC push transport - one entry per peer cluster.
-builder.Services.AddLatticeReplicationGrpcPushTransport(grpc =>
+// Cross-cluster gRPC binding - one entry per peer cluster wires both
+// the live-push transport and the bootstrap snapshot transport.
+builder.Services.AddLatticeReplicationGrpc(grpc =>
 {
-    grpc.PeerEndpoints["site-b"] = new Uri("https://site-b.example:5001");
+    grpc.Peers["site-b"] = new Uri("https://site-b.example:5001");
 });
 ```
 
-On the receiver silo, register the gRPC server and map the endpoint route:
+On the receiver silo, register the binding (same single helper) and map the endpoint routes:
 
 ```csharp verify
 var builder = WebApplication.CreateBuilder();
-builder.Services.AddLatticeReplicationGrpcServer();
+builder.Services.AddLatticeReplicationGrpc();
 
 var app = builder.Build();
-app.MapLatticeReplicationGrpcService();
+app.MapLatticeReplicationGrpc();
 ```
 
 For a working multi-cluster example exercising HLC-ordered facts, typed OR-Set replication, and gRPC push, see the `MultiSiteManufacturing` project under [`samples/`](../../samples).

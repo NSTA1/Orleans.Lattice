@@ -35,7 +35,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         LatticeBootstrapCoordinatorGrain Grain,
         FakePersistentState<BootstrapCoordinatorState> State,
         IGrainFactory Factory,
-        ISnapshotProvider Provider,
+        IBootstrapSnapshotSource Provider,
         IReminderRegistry Reminders,
         IReplicationApplier Apply,
         IReplicationHighWaterMarkGrain Hwm) Create(
@@ -45,7 +45,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("bootstrap-coordinator", treeName));
         var factory = Substitute.For<IGrainFactory>();
-        var provider = Substitute.For<ISnapshotProvider>();
+        var provider = Substitute.For<IBootstrapSnapshotSource>();
         var reminders = Substitute.For<IReminderRegistry>();
         var apply = Substitute.For<IReplicationApplier>();
         var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
@@ -128,7 +128,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     public void Constructor_throws_when_grain_factory_is_null()
     {
         var context = Substitute.For<IGrainContext>();
-        var provider = Substitute.For<ISnapshotProvider>();
+        var provider = Substitute.For<IBootstrapSnapshotSource>();
         var applier = Substitute.For<IReplicationApplier>();
         var reminders = Substitute.For<IReminderRegistry>();
         var fakeState = new FakePersistentState<BootstrapCoordinatorState>();
@@ -159,7 +159,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var context = Substitute.For<IGrainContext>();
         var factory = Substitute.For<IGrainFactory>();
-        var provider = Substitute.For<ISnapshotProvider>();
+        var provider = Substitute.For<IBootstrapSnapshotSource>();
         var reminders = Substitute.For<IReminderRegistry>();
         var fakeState = new FakePersistentState<BootstrapCoordinatorState>();
         Assert.That(

@@ -85,7 +85,7 @@ public class TransportMetadataPassthroughContractTests
                     services.AddSingleton<IReplicationBatchEncoder>(sp =>
                         new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
-                    services.AddLatticeReplicationGrpcServer();
+                    services.AddLatticeReplicationGrpc();
                     // This contract fixture validates the transport metadata
                     // pass-through round-trip rather than the shared-secret
                     // authenticator; disable the receiver-side auth gate so
@@ -95,7 +95,7 @@ public class TransportMetadataPassthroughContractTests
                 web.Configure(app =>
                 {
                     app.UseRouting();
-                    app.UseEndpoints(e => e.MapLatticeReplicationGrpcService());
+                    app.UseEndpoints(e => e.MapLatticeReplicationGrpc());
                 });
             });
 

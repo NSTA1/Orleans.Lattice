@@ -62,6 +62,28 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<IChangeFeed, ChangeFeed>();
 
         builder.Services.TryAddSingleton<ISnapshotProvider, LatticeSnapshotProvider>();
+        // Receiver-side bootstrap source. The bootstrap state machine
+        // drains from this seam; the seam is split from
+        // ISnapshotProvider so a single silo can be both a sender
+        // (its ISnapshotProvider streams the local tree out to peer
+        // receivers via LatticeRemoteSnapshotService) and a receiver
+        // (its IBootstrapSnapshotSource drains from an upstream peer
+        // via the cross-cluster RemoteSnapshotProvider) at the same
+        // time. The factory below makes active-active the zero-
+        // ceremony default: when any IRemoteSnapshotTransport is
+        // registered alongside AddLatticeReplication (the gRPC
+        // binding, an in-process loopback, a custom HTTP binding,
+        // etc.), the bootstrap seam resolves to the cross-cluster
+        // adapter; when no transport is registered (the single-
+        // cluster recovery path) it resolves to a local wrapper that
+        // forwards to the silo's ISnapshotProvider. Hosts that want
+        // to force the local-only path even with a transport present
+        // can pre-register their own IBootstrapSnapshotSource before
+        // AddLatticeReplication and the TryAdd below is a no-op.
+        builder.Services.TryAddSingleton<IBootstrapSnapshotSource>(sp =>
+            sp.GetService<IRemoteSnapshotTransport>() is null
+                ? new LocalBootstrapSnapshotSource(sp.GetRequiredService<ISnapshotProvider>())
+                : ActivatorUtilities.CreateInstance<RemoteSnapshotProvider>(sp));
         // Sender-side handler for IRemoteSnapshotTransport. Registered as
         // a singleton so the concrete cross-cluster bindings (gRPC,
         // in-process loopback, custom HTTP) can resolve it directly and
@@ -221,36 +243,6 @@ public static class LatticeReplicationServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(configure);
 
         builder.Services.Configure(treeName, configure);
-        return builder;
-    }
-
-    /// <summary>
-    /// Replaces the default in-cluster <see cref="ISnapshotProvider"/>
-    /// (<c>LatticeSnapshotProvider</c>) with the cross-cluster
-    /// <see cref="RemoteSnapshotProvider"/> adapter, so the receiver-side
-    /// bootstrap state machine drains snapshots from a peer cluster via
-    /// the registered <see cref="IRemoteSnapshotTransport"/> instead of
-    /// from the local tree. Call this on a receiver-only cluster (or on
-    /// any cluster that needs to bootstrap an empty local tree from a
-    /// remote sender) after <see cref="AddLatticeReplication"/>, and
-    /// register a concrete <see cref="IRemoteSnapshotTransport"/>
-    /// binding (gRPC, loopback, custom HTTP) in the same composition
-    /// root.
-    /// <para>
-    /// Sender-only clusters do not call this method; their default
-    /// <see cref="ISnapshotProvider"/> is the local tree and the
-    /// inbound transport binding routes through
-    /// <see cref="LatticeRemoteSnapshotService"/> to drive it.
-    /// </para>
-    /// </summary>
-    /// <param name="builder">The silo builder.</param>
-    /// <returns>The same silo builder for chaining.</returns>
-    public static ISiloBuilder AddRemoteSnapshotProvider(this ISiloBuilder builder)
-    {
-        ArgumentNullException.ThrowIfNull(builder);
-
-        builder.Services.RemoveAll<ISnapshotProvider>();
-        builder.Services.AddSingleton<ISnapshotProvider, RemoteSnapshotProvider>();
         return builder;
     }
 

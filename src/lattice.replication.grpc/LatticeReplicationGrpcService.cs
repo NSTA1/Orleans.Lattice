@@ -44,9 +44,9 @@ internal abstract class LatticeReplicationGrpcServiceBase
         var method = LatticeReplicationGrpcMethodHolder.Current
             ?? throw new InvalidOperationException(
                 "LatticeReplicationGrpcMethodHolder.Current was not initialised before BindService. "
-                + $"Ensure {nameof(LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpcServer)} "
+                + $"Ensure {nameof(LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpc)} "
                 + "ran and that "
-                + $"{nameof(LatticeReplicationGrpcServiceCollectionExtensions.MapLatticeReplicationGrpcService)} "
+                + $"{nameof(LatticeReplicationGrpcServiceCollectionExtensions.MapLatticeReplicationGrpc)} "
                 + "pre-resolved LatticeReplicationGrpcMethod before Grpc.AspNetCore reflected on the service type.");
 
         if (serviceImpl is null)
@@ -64,7 +64,7 @@ internal abstract class LatticeReplicationGrpcServiceBase
 
 /// <summary>
 /// Process-wide holder for the resolved <see cref="LatticeReplicationGrpcMethod"/>.
-/// Populated by <see cref="LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpcServer"/>.
+/// Populated by <see cref="LatticeReplicationGrpcServiceCollectionExtensions.MapLatticeReplicationGrpc"/>.
 /// </summary>
 /// <remarks>
 /// gRPC's static <c>BindService</c> binding hook cannot accept DI
