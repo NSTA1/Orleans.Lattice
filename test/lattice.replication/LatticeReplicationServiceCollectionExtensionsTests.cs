@@ -888,7 +888,7 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
-        builder.AddLatticeReplication(_ => { });
+        builder.AddLatticeReplication(o => o.ClusterId = "site-a");
 
         var provider = services.BuildServiceProvider();
         var hostedServices = provider.GetServices<Microsoft.Extensions.Hosting.IHostedService>().ToArray();
@@ -905,8 +905,8 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
-        builder.AddLatticeReplication(_ => { });
-        builder.AddLatticeReplication(_ => { });
+        builder.AddLatticeReplication(o => o.ClusterId = "site-a");
+        builder.AddLatticeReplication(o => o.ClusterId = "site-a");
 
         var provider = services.BuildServiceProvider();
         var hostedServices = provider
@@ -914,6 +914,64 @@ public class LatticeReplicationServiceCollectionExtensionsTests
             .OfType<ReplicationDriverActivationService>()
             .ToArray();
         Assert.That(hostedServices, Has.Length.EqualTo(1));
+    }
+
+    // ------------------------------------------------------------------
+    // Replication topology (R-066)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void AddLatticeReplication_registers_options_replication_topology_by_default()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IGrainFactory>(Substitute.For<IGrainFactory>());
+        services.AddLogging();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(o => o.ClusterId = "site-a");
+
+        var provider = services.BuildServiceProvider();
+        var topology = provider.GetRequiredService<IReplicationTopology>();
+        Assert.That(topology, Is.InstanceOf<OptionsReplicationTopology>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_registers_replication_topology_as_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IGrainFactory>(Substitute.For<IGrainFactory>());
+        services.AddLogging();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(o => o.ClusterId = "site-a");
+
+        var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<IReplicationTopology>();
+        var second = provider.GetRequiredService<IReplicationTopology>();
+        Assert.That(second, Is.SameAs(first));
+    }
+
+    [Test]
+    public void AddLatticeReplication_preserves_pre_registered_replication_topology()
+    {
+        // Hosts can swap the default topology by pre-registering their
+        // own singleton before AddLatticeReplication runs. The default
+        // uses TryAddSingleton, so the host's registration must win.
+        var services = new ServiceCollection();
+        services.AddSingleton<IGrainFactory>(Substitute.For<IGrainFactory>());
+        services.AddLogging();
+        var custom = new FakeReplicationTopology();
+        services.AddSingleton<IReplicationTopology>(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(_ => { });
+
+        var provider = services.BuildServiceProvider();
+        var resolved = provider.GetRequiredService<IReplicationTopology>();
+        Assert.That(resolved, Is.SameAs(custom));
     }
 
     // ------------------------------------------------------------------

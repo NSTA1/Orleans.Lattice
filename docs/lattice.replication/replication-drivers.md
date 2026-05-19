@@ -62,6 +62,138 @@ siloBuilder.AddLatticeReplication(opts =>
 });
 ```
 
+### Runtime topology changes
+
+Peer membership is sourced from `IReplicationTopology` (the new
+runtime-observable peer topology seam), not snapshotted once at silo
+startup. The default implementation, `OptionsReplicationTopology`,
+projects `LatticeReplicationOptions.ReplicationPeers` via
+`IOptionsMonitor<LatticeReplicationOptions>.OnChange` and diffs each
+reload against the last-seen set so callers see one `PeerChanged` event
+per net add and per net remove.
+
+A consumer that needs to react to peer arrivals - for example, a
+custom dashboard or a metrics publisher - takes a dependency on
+`IReplicationTopology` and calls `Subscribe`:
+
+```csharp verify
+// Resolve the topology and observe peer membership at runtime.
+// In real code this would be injected via constructor parameter.
+var topology = client.ServiceProvider.GetRequiredService<IReplicationTopology>();
+
+// Read the current snapshot before subscribing so the consumer does
+// not need to replay arrivals it already knows about.
+IReadOnlyCollection<string> initialPeers = topology.CurrentPeers;
+
+// Subscribe receives one PeerChanged event per net membership change.
+// The returned IDisposable unsubscribes when disposed.
+using IDisposable subscription = topology.Subscribe(change =>
+{
+    if (change.Kind == PeerChangeKind.Added)
+    {
+        // React to a peer arriving at runtime.
+    }
+    else if (change.Kind == PeerChangeKind.Removed)
+    {
+        // React to a peer being removed.
+    }
+});
+```
+
+Hosts that source their topology from a service registry, configuration
+provider, or any other dynamic surface can replace the registration by
+pre-registering their own `IReplicationTopology` singleton before
+`AddLatticeReplication` runs - the default registration uses
+`TryAddSingleton`, so a pre-registered implementation wins. The custom
+topology only needs to implement the two-member surface:
+`IReadOnlyCollection<string> CurrentPeers` and
+`IDisposable Subscribe(Action<PeerChanged>)`.
+
+`ReplicationDriverActivationService` subscribes for the lifetime of the
+silo: when a peer arrives at runtime (`PeerChangeKind.Added`), one
+shipper grain is activated per replicated tree under the same
+retry-with-backoff loop as the startup pass, without a silo restart.
+Removal events (`PeerChangeKind.Removed`) intentionally do not tear
+down the shipper grain - it stays activated to drain its remaining
+backlog.
+
+#### Topology vs. `ReplicationPeers`: who owns what
+
+`IReplicationTopology` is **not** the single source of truth for peer
+membership across the whole replication pipeline. It governs the
+*activation* side of the pipeline; several operational reads still
+consult `LatticeReplicationOptions.ReplicationPeers` directly via
+`IOptionsMonitor<LatticeReplicationOptions>`. The matrix below lists
+every consumer and the source it reads from:
+
+| Consumer | Source it reads | What it does with the peer list |
+|---|---|---|
+| `ReplicationDriverActivationService` (startup pass + runtime adds) | `IReplicationTopology` | Activates one `IReplicationShipperGrain` per `(replicated tree, peer)`. Runtime adds activate new shippers without a silo restart. |
+| `ShardedReplogSink` (doorbell fan-out per WAL append) | `LatticeReplicationOptions.ReplicationPeers` (live snapshot) | Rings every shipper's doorbell after a successful WAL append to drive sub-second ship latency. Best-effort; a missed ring only delays the next phase tick. |
+| `ReplicationMaintenanceGrain.ProbeFallOffAsync` (per-cadence fall-off probe) | `LatticeReplicationOptions.ReplicationPeers` (live snapshot) | Walks the peer list each cadence to check whether any peer's persisted cursor has fallen off the local WAL retention window. |
+| `ReplicationShipperGrain` (per-peer pump) | Grain key (one activation per `(tree, peer)`) - neither source is re-read | Ships its own backlog. Once activated it is bound to a specific peer for its lifetime; topology and options reloads do not migrate or retarget an existing shipper. |
+
+This split is intentional in the default configuration and does not
+produce mismatches: `OptionsReplicationTopology` is a diffed projection
+of the exact same `IOptionsMonitor<LatticeReplicationOptions>` instance
+that `ShardedReplogSink` and `ReplicationMaintenanceGrain` read, so both
+sides observe the same writes within one option-reload tick. Removing
+`"site-c"` from `ReplicationPeers` causes the doorbell ring to stop
+firing for `"site-c"` on the next WAL append *and* causes the topology
+to emit `PeerChanged(site-c, Removed)` from the same `OnChange`
+callback.
+
+**The two sources can diverge only when a host replaces the default
+topology** by pre-registering its own `IReplicationTopology` singleton
+(typically a service-registry-backed source) without keeping
+`LatticeReplicationOptions.ReplicationPeers` in sync. When they do
+diverge, the conflict resolution is per-concern, not global - there is
+no "winner" that overrides the other:
+
+- **Activation follows the topology.** A peer that appears only in the
+  custom topology will get a shipper grain activated; a peer that
+  appears only in `ReplicationPeers` will not.
+- **Doorbells follow `ReplicationPeers`.** A peer that appears only in
+  the custom topology will *not* receive doorbell rings - its shipper
+  will still drain on the phase timer (default 100 ms), so ship
+  latency degrades from sub-second-via-doorbell to bounded-by-the-
+  phase-timer but correctness is preserved. A peer that appears only
+  in `ReplicationPeers` will get a doorbell ring per WAL append, but
+  the ring lands on a shipper grain that the activation service never
+  activated; the ring will idly activate the shipper on demand (gRPC
+  / Orleans on-demand activation) and the pump will start from cursor
+  zero.
+- **Fall-off probes follow `ReplicationPeers`.** A peer that appears
+  only in the custom topology is not walked by the fall-off probe and
+  will not get a `FallOffLogTriggered` notification if its cursor
+  drops below the local WAL retention window. This is the only
+  divergence that has a *correctness* consequence at the protocol
+  level: an unprotected peer can silently fall off the log and need
+  manual reseeding.
+
+**Recommended discipline for custom topologies.** Treat
+`LatticeReplicationOptions.ReplicationPeers` as the canonical
+configuration surface and have the custom `IReplicationTopology`
+mirror it (for example, by writing peer registrations back into
+options on the way in). The narrow interpretation - the custom
+topology purely *observes* membership changes that some other
+component has already reflected into `ReplicationPeers` - keeps the
+three consumers in lockstep and avoids the asymmetries above. Widening
+`IReplicationTopology` to be the single source of truth for doorbell
+fan-out and fall-off probing is tracked as a follow-up to the original
+topology seam and is not yet implemented.
+
+#### Why not `IObservable<PeerChanged>`?
+
+The seam is intentionally a callback (`IDisposable Subscribe(Action<PeerChanged>)`)
+rather than `IObservable<PeerChanged>`. Full Rx semantics
+(`OnCompleted`, `OnError`, schedulers, replay buffering) buy nothing for
+membership diffs, and an `IObservable<T>`-shaped seam tempts callers to
+pull in `System.Reactive` for what is otherwise a one-line lambda. An
+`IObservable<PeerChanged>` adapter can be added later as a thin
+extension method (`topology.AsObservable()`) without breaking the
+primary surface; the reverse change would be a breaking one.
+
 ---
 
 ## Shipper grain

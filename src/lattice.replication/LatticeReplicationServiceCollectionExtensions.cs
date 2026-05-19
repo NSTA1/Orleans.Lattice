@@ -158,6 +158,14 @@ public static class LatticeReplicationServiceCollectionExtensions
         builder.AddWalCursorRegistry();
         builder.AddLatticeWalGc();
         builder.Services.TryAddSingleton<ReplicationPeerStats>();
+        // Default runtime-observable peer topology: projects
+        // LatticeReplicationOptions.ReplicationPeers via
+        // IOptionsMonitor.OnChange so hosts can add or remove peers at
+        // runtime without restarting the silo. Hosts that source their
+        // topology from a service registry or other dynamic surface
+        // can replace the registration by pre-registering their own
+        // IReplicationTopology singleton before AddLatticeReplication.
+        builder.Services.TryAddSingleton<IReplicationTopology, OptionsReplicationTopology>();
         // Producer-side per-(silo, tree) local vector clock cache.
         // Read by ReplicationMutationObserver to stamp every emit's
         // VectorClock when the caller does not supply one via
