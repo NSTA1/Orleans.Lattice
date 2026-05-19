@@ -213,6 +213,62 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
         int sourceShardIndex,
         bool committed,
         int expectedShardCount);
+
+    /// <summary>
+    /// Installs a snapshot pin against the registry. Every txid in
+    /// <paramref name="txids"/> is held back from tombstone-prune
+    /// physical removal for the lifetime of the pin (the union of every
+    /// unexpired pin's txid set is the "do not prune" predicate
+    /// consulted by <c>PruneExpired</c>). The pin's
+    /// <see cref="State.SnapshotPin.ExpiresAt"/> is set to
+    /// <c>now + ttl</c>; a cursor refreshes its pin on every step via
+    /// <see cref="RefreshPinAsync"/>, and a pin past <c>ExpiresAt</c> is
+    /// evicted by the next prune pass regardless of subsequent
+    /// <see cref="RefreshPinAsync"/> attempts.
+    /// <para>
+    /// Throws <see cref="LatticeCursorRegistryPinExhaustedException"/>
+    /// when accepting the pin would push the registry-wide union of
+    /// pinned txids over
+    /// <see cref="LatticeOptions.MaxPinnedSagaDecisions"/>. The new pin
+    /// is not recorded; existing pins are untouched.
+    /// </para>
+    /// <para>
+    /// Idempotent on repeated calls with the same <paramref name="pinId"/>:
+    /// the second call replaces the prior pin's txid set and expiry
+    /// timestamp wholesale, which matches the cursor-open code path
+    /// (a single cursor only ever installs one pin under one pinId).
+    /// </para>
+    /// </summary>
+    Task PinSnapshotAsync(Guid pinId, IReadOnlyCollection<Guid> txids, TimeSpan ttl);
+
+    /// <summary>
+    /// Slides the <see cref="State.SnapshotPin.ExpiresAt"/> on the pin
+    /// identified by <paramref name="pinId"/> to <c>now + ttl</c>.
+    /// Returns <c>true</c> when the pin was found and refreshed;
+    /// returns <c>false</c> when the pin has already been evicted
+    /// (either by an explicit <see cref="UnpinSnapshotAsync"/> or by
+    /// expiry past its prior <c>ExpiresAt</c>). The cursor grain
+    /// surfaces a <c>false</c> result as
+    /// <see cref="LatticeCursorSnapshotExpiredException"/> on its next
+    /// step.
+    /// </summary>
+    Task<bool> RefreshPinAsync(Guid pinId, TimeSpan ttl);
+
+    /// <summary>
+    /// Removes the pin identified by <paramref name="pinId"/>. A
+    /// missing pinId is a safe no-op (the pin may have been expired by
+    /// the prune pass before the cursor's close call arrived).
+    /// </summary>
+    Task UnpinSnapshotAsync(Guid pinId);
+
+    /// <summary>
+    /// Returns the registry-wide union of pinned saga txids - the size
+    /// of the set the prune pass holds back from physical removal.
+    /// Exposed for diagnostics and observability (the
+    /// <c>orleans.lattice.registry.snapshot.pin_count</c> gauge reads
+    /// this).
+    /// </summary>
+    Task<int> GetPinnedDecisionCountAsync();
 }
 
 /// <summary>

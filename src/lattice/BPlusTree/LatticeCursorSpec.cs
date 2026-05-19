@@ -38,4 +38,23 @@ public readonly record struct LatticeCursorSpec
     /// range deletes are always forward.
     /// </summary>
     [Id(3)] public bool Reverse { get; init; }
+
+    /// <summary>
+    /// When <c>true</c>, the cursor is opened in point-in-time mode:
+    /// every page is served against the registry snapshot captured at
+    /// open time, and the registry pins the snapshot's saga decisions
+    /// against tombstone-prune eviction for the cursor's lifetime.
+    /// Repeated <c>Next*Async</c> calls observe a stable, linearizable
+    /// view of the tree even as concurrent atomic writes commit.
+    /// <para>
+    /// A point-in-time cursor whose pin TTL elapses (because the
+    /// caller stalled past <see cref="LatticeOptions.MaxCursorSnapshotPinTtl"/>)
+    /// fails its next step with
+    /// <see cref="LatticeCursorSnapshotExpiredException"/>; opening a
+    /// point-in-time cursor when the registry-wide pin footprint cap
+    /// would be exceeded throws
+    /// <see cref="LatticeCursorRegistryPinExhaustedException"/>.
+    /// </para>
+    /// </summary>
+    [Id(4)] public bool PointInTime { get; init; }
 }

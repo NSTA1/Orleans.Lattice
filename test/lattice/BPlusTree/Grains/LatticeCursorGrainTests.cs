@@ -22,6 +22,15 @@ public partial class LatticeCursorGrainTests
         FakePersistentState<LatticeCursorState>? existingState = null,
         LatticeOptions? options = null,
         IReminderRegistry? reminderRegistry = null)
+        => CreateGrainWithRegistry(existingState, options, reminderRegistry, registry: null);
+
+    private static (LatticeCursorGrain grain,
+                     FakePersistentState<LatticeCursorState> state,
+                     ILattice lattice) CreateGrainWithRegistry(
+        FakePersistentState<LatticeCursorState>? existingState,
+        LatticeOptions? options,
+        IReminderRegistry? reminderRegistry,
+        ITxRegistryGrain? registry)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice-cursor", $"{TreeId}/{CursorId}"));
@@ -30,8 +39,17 @@ public partial class LatticeCursorGrainTests
         var lattice = Substitute.For<ILattice>();
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
 
-        var registry = reminderRegistry ?? Substitute.For<IReminderRegistry>();
-        registry.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
+        // Wire a TxRegistry substitute - point-in-time cursors call
+        // SnapshotAsync / PinSnapshotAsync / RefreshPinAsync /
+        // UnpinSnapshotAsync at open / step / close time. Non-point-in-
+        // time tests never touch the registry, so a default Substitute
+        // returns Task.FromResult(default) for every call (snapshot is
+        // null, refresh returns false, pin / unpin are no-ops).
+        var effectiveRegistry = registry ?? Substitute.For<ITxRegistryGrain>();
+        grainFactory.GetGrain<ITxRegistryGrain>(TreeId).Returns(effectiveRegistry);
+
+        var reminders = reminderRegistry ?? Substitute.For<IReminderRegistry>();
+        reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
             .Returns(Task.FromResult<IGrainReminder?>(Substitute.For<IGrainReminder>()));
 
         var opts = options ?? new LatticeOptions();
@@ -44,7 +62,7 @@ public partial class LatticeCursorGrainTests
         var grain = new LatticeCursorGrain(
             context,
             grainFactory,
-            registry,
+            reminders,
             optionsMonitor,
             new LoggerFactory().CreateLogger<LatticeCursorGrain>(),
             state);

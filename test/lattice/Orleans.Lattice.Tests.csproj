@@ -33,6 +33,14 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.4.0" />
     <PackageReference Include="Microsoft.Orleans.TestingHost" Version="10.1.0" />
     <PackageReference Include="Microsoft.Orleans.Streaming" Version="10.1.0" />
+    <!--
+      Pulled in solely so docs/lattice/api.md can show the canonical
+      Azure Table grain-storage wiring as a `csharp verify` snippet. The
+      DocsSnippetCompilationTests harness compiles every `csharp verify`
+      fence under docs/ against this test project's reference graph; the
+      example uses `AddAzureTableGrainStorage`, which lives here.
+    -->
+    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.1.0" />
     <PackageReference Include="NSubstitute" Version="5.3.0" />
     <PackageReference Include="NUnit" Version="4.5.1" />
     <PackageReference Include="NUnit3TestAdapter" Version="6.2.0" />

@@ -95,6 +95,27 @@ internal sealed partial class LatticeGrain
         var usePrefetch = prefetch ?? Options.PrefetchKeysScan;
         var isSystemTree = TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal);
 
+        // Streaming-scan isolation: capture one registry snapshot at
+        // scan entry and pin it on the ambient
+        // LatticeRegistrySnapshotContext for the lifetime of the
+        // IAsyncEnumerable, so every per-shard page (including
+        // reconciliation drains under concurrent splits) reads the
+        // same decision view. System trees never carry sagas through
+        // the TxRegistry, so the scope is a no-op there. A higher-level
+        // caller (durable point-in-time cursor) that already set the
+        // ambient retains its own snapshot - we never overwrite an
+        // existing scope, so the durable-cursor pin always wins.
+        Dictionary<Guid, TxStatus>? scanSnapshot = null;
+        var ownsScanSnapshotScope = !isSystemTree
+            && LatticeRegistrySnapshotContext.Current is null;
+        if (ownsScanSnapshotScope)
+        {
+            scanSnapshot = await FetchRegistrySnapshotAsync();
+        }
+        using var scanSnapshotScope = ownsScanSnapshotScope
+            ? LatticeRegistrySnapshotContext.BeginScope(scanSnapshot)
+            : null;
+
         IComparer<string> comparer = reverse ? ReverseOrdinal : StringComparer.Ordinal;
 
         // Live shard cursors - one per start-of-scan physical shard.

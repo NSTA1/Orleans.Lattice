@@ -237,6 +237,14 @@ splitting.
   onto an ambient context so every leaf in the scan reuses it). The
   coordinator does not block, lock, or serialise reads - the registry
   RPC is the entire visibility cost.
+- Multi-page enumerations (streaming `ScanKeysAsync` /
+  `ScanEntriesAsync` and point-in-time durable cursors opened with
+  `pointInTime: true`) take the same single `SnapshotAsync` once and
+  reuse it across every page, so the per-page registry cost is zero
+  after the initial capture. Point-in-time durable cursors additionally
+  pin the captured decision set on the registry so a saga that
+  completes mid-enumeration still has its verdict resolvable for the
+  cursor's lifetime; see [Durable Cursors - Point-in-time cursors](durable-cursors.md#point-in-time-cursors).
 
 ## Caller-supplied idempotency keys
 

@@ -58,4 +58,30 @@ internal sealed class LatticeCursorState
     /// cursor across all steps. Zero for key/entry cursors.
     /// </summary>
     [Id(4)] public int DeletedTotal { get; set; }
+
+    /// <summary>
+    /// The registry snapshot captured on
+    /// <see cref="ILatticeCursorGrain.OpenAsync"/> when
+    /// <see cref="LatticeCursorSpec.PointInTime"/> is <c>true</c>.
+    /// Replayed on every <c>Next*Async</c> step via
+    /// <see cref="LatticeRegistrySnapshotContext.BeginScope"/> so a
+    /// resumed cursor (after silo failover or activation recycling)
+    /// continues to serve the same point-in-time view it opened with.
+    /// <c>null</c> for non-point-in-time cursors and on every closed /
+    /// exhausted cursor (we proactively clear it on
+    /// <see cref="LatticeCursorPhase.Closed"/> /
+    /// <see cref="LatticeCursorPhase.Exhausted"/> to free state - the
+    /// pin has already been released by then).
+    /// </summary>
+    [Id(5)] public Dictionary<Guid, TxStatus>? PointInTimeSnapshot { get; set; }
+
+    /// <summary>
+    /// Identifier of the registry-side pin that holds the cursor's
+    /// captured saga-decision snapshot against tombstone-prune
+    /// eviction. Server-assigned (<see cref="Guid.NewGuid"/>) at open
+    /// time, persisted so a reactivated cursor can refresh / release
+    /// the same pin its snapshot belongs to. <see cref="Guid.Empty"/>
+    /// for non-point-in-time cursors.
+    /// </summary>
+    [Id(6)] public Guid SnapshotPinId { get; set; }
 }

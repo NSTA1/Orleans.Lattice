@@ -1,40 +1,42 @@
 # Consistency Guarantees
 
-This document is the **single source of truth** for the consistency model
-of every operation on `ILattice`. Other documents in this repository
-describe *how* a given guarantee is implemented (shard-map routing,
-shadow-forward splits, LWW merge, version-vector caches, saga
-compensation, etc.) - but the statement of what a caller is actually
-guaranteed to see lives here.
+This document is the **contract** for what a caller of `ILattice` is
+guaranteed to observe. It states each guarantee in caller-visible terms
+only and does not describe how Lattice delivers them.
 
-If you are looking for the algorithmic details of a specific mechanism,
-follow the cross-references:
+For the implementation of any guarantee, follow the cross-references in
+each section:
 
 - Topology changes - [Shard Splitting](shard-splitting.md), [Online Reshard](online-reshard.md)
+- Atomic batches - [Atomic Writes](atomic-writes.md)
+- Multi-page enumerations - [Durable Cursors](durable-cursors.md)
 - Durable copies - [Snapshots](snapshots.md), [Tree Sizing](tree-sizing.md), [Tree Storage](tree-storage.md)
 - Read path - [Read Caching](caching.md)
-- State merge algebra - [State Primitives](state-primitives.md)
-- Atomic batches - [Atomic Writes](atomic-writes.md)
-- Checkpointed scans - [Durable Cursors](durable-cursors.md)
+- State merge - [State Primitives](state-primitives.md)
 - TTL expiry - [TTL](ttl.md)
 
 ---
 
-## Consistency levels used in this document
+## Consistency levels
 
-Lattice offers four distinct guarantees, from strongest to weakest. Every
-public `ILattice` method is classified against exactly one of these.
+Every public `ILattice` method is classified against exactly one of the
+following four levels.
 
-| Level | Meaning |
-|-------|---------|
-| **Linearizable** | Each call appears to take effect instantaneously at a single point between its invocation and its return. Subsequent reads - from any silo, any client - observe the write once it has returned (subject to the read-cache staleness note below). |
-| **Strongly consistent** | The caller observes a state that is consistent with some real-time point (usually the moment the operation started), with no entry missed, double-counted, or misattributed even when the underlying shard topology is mutating concurrently. For scans this means no phantom or missing keys; for counts it means the exact live key count. |
-| **Snapshot (online)** | The operation sees a best-effort point-in-time view. No single global snapshot is taken, so a key updated between two shard visits may be observed in its pre-update state in one shard and its post-update state in the next. Equivalent to a *non-repeatable read* isolation level. |
-| **Eventually consistent** | The operation may reflect a read-cache delta lag or a replication window, but converges to the authoritative state within a bounded, configurable interval. |
+| Level | What the caller observes |
+|-------|--------------------------|
+| **Linearizable** | The call takes effect at a single point between its invocation and its return. After the call returns, any subsequent read on any client at any silo observes the new value (subject to the cache-staleness note below). |
+| **Strongly consistent** | The call observes a result consistent with some real-time point during its execution - no entry is missed, double-counted, or misattributed even when the underlying topology is changing concurrently. For scans this means no phantom or missing keys; for counts it means the exact live key count. |
+| **Snapshot (online)** | The call observes a best-effort point-in-time view that is correct per-key but is not guaranteed to be a single global instant. Equivalent to a *non-repeatable read* isolation level. |
+| **Eventually consistent** | The call may reflect a bounded staleness window (read-cache staleness, replication lag), but converges to the authoritative state within a configurable interval. |
 
 An additional property - **atomicity** - is called out for batch
-operations: *all-or-nothing* commit. Atomicity is orthogonal to the
-visibility model of concurrent readers; both are stated where they apply.
+operations and means *all-or-nothing commit*. Atomicity is orthogonal to
+the visibility model of concurrent readers, and both are stated where
+they apply.
+
+A separate property - **atomic visibility** - is called out for atomic
+batches and snapshot reads, and means a concurrent reader observes
+either the full effect of a saga or none of it, never a partial view.
 
 ---
 
@@ -42,17 +44,17 @@ visibility model of concurrent readers; both are stated where they apply.
 
 | Operation | Guarantee | Notes |
 |-----------|-----------|-------|
-| `GetAsync` | **Linearizable** under default `CacheTtl = TimeSpan.Zero`; **eventually consistent** when `CacheTtl > 0` | Served via the per-silo `LeafCacheGrain`. Under the default `CacheTtl = TimeSpan.Zero` every read round-trips a `GetDeltaSinceAsync` against the primary leaf - same linearization point as `GetWithVersionAsync`, just with the cached bytes returned when the version-vector comparison shows no change. Setting `CacheTtl > 0` lets the cache serve reads from its local dictionary without contacting the primary; staleness is then bounded by `CacheTtl + one delta round-trip`. |
-| `GetWithVersionAsync` | **Linearizable** | Bypasses the read cache and hits the primary leaf directly so the returned `HybridLogicalClock` version reflects the authoritative state. Designed for CAS loops. |
-| `ExistsAsync` | **Linearizable** under default `CacheTtl = TimeSpan.Zero`; **eventually consistent** when `CacheTtl > 0` | Same path and same dual classification as `GetAsync`. |
-| `SetAsync` (with or without TTL) | **Linearizable** | The write is durably persisted at the primary leaf before the call returns; the HLC tick is monotonic per-leaf. Point-consistent across shard splits because shadow-forwarding mirrors writes to the new owner during drain, and the post-swap reject phase forces stale routing to retry against the new owner. |
-| `SetIfVersionAsync` | **Linearizable CAS** | Atomic compare-and-set: the HLC is checked and the new value is committed under the same leaf activation turn. |
-| `GetOrSetAsync` | **Linearizable** | The leaf grain short-circuits on a live value under a single turn; no read-then-write race. |
-| `DeleteAsync` | **Linearizable** | Writes a tombstone at the primary leaf. The tombstone is visible to the same guarantees as any other write; actual byte reclamation is deferred to [tombstone compaction](tombstone-compaction.md). |
+| `GetAsync` | **Linearizable** under default `CacheTtl = TimeSpan.Zero`; **eventually consistent** when `CacheTtl > 0` | The default cache configuration refreshes on every read, so the call observes the latest committed value. Raising `CacheTtl` trades freshness for fewer round-trips; staleness is then bounded by `CacheTtl + one cache refresh`. |
+| `GetWithVersionAsync` | **Linearizable** | Returns the value along with its authoritative HLC version for use in CAS loops. Bypasses the read cache. |
+| `ExistsAsync` | **Linearizable** under default `CacheTtl = TimeSpan.Zero`; **eventually consistent** when `CacheTtl > 0` | Same dual classification as `GetAsync`. |
+| `SetAsync` (with or without TTL) | **Linearizable** | The write is durably persisted before the call returns. Continues to hold across shard splits, resize, and reshard - callers never see topology-change exceptions. |
+| `SetIfVersionAsync` | **Linearizable CAS** | Atomic compare-and-set against the HLC version returned by `GetWithVersionAsync`. |
+| `GetOrSetAsync` | **Linearizable** | No read-then-write race. |
+| `DeleteAsync` | **Linearizable** | The deletion is visible to subsequent reads under the same guarantee as any other write. |
 
-Point operations transparently retry on `StaleShardRoutingException` and
-`StaleTreeRoutingException` during shard-map swaps, resize alias swaps,
-and snapshot drain rejects. Callers never see these exceptions.
+Single-key operations transparently retry on any topology-change
+exception. Callers never see `StaleShardRoutingException` or
+`StaleTreeRoutingException`.
 
 ---
 
@@ -60,12 +62,12 @@ and snapshot drain rejects. Callers never see these exceptions.
 
 | Operation | Guarantee | Notes |
 |-----------|-----------|-------|
-| `GetManyAsync` | **Per-key linearizable** under default `CacheTtl = TimeSpan.Zero`; **per-key eventually consistent** when `CacheTtl > 0` | Each key is fetched independently via the read-cache path and inherits `GetAsync`'s dual classification. The batch is **not** snapshot-atomic across keys: under any setting, two keys in a single call may reflect different real-time points (each is linearized at its own primary delta-check). When `CacheTtl > 0`, different keys in a single call may additionally reflect different cache refresh instants. |
-| `SetManyAsync` | **Per-key linearizable, batch non-atomic** | Each key's write is linearizable; the batch as a whole is **not** atomic. A partial failure leaves the batch half-applied with no compensating rollback. |
-| `SetManyAtomicAsync` | **Per-key linearizable, batch atomic, strictly isolated tree-wide, atomic across clusters** | All-or-nothing: on success every key holds its new value; on any failure every already-committed key is rolled back via LWW compensation with a fresh HLC tick. **Readers concurrent with an in-flight saga observe the saga atomically** - the per-tree `ITxRegistryGrain` is the single tree-wide linearization point, and every read path (direct leaf, read-cache, multi-shard scan) dials back through it for any key sitting in a leaf's pending-tx bucket. The post-decision / pre-terminal-fan-out window is invisible to readers. **The atomic guarantee extends across clusters**: a destination-cluster reader observes either none or all of a replicated saga's keys, because the receiver stages prepared writes through the same `ITxRegistryGrain` and only flips visibility once every source-shard terminal has arrived (gated by the producer-stamped `AtomicShardCount`). See [Atomic Writes](atomic-writes.md). |
-| `DeleteRangeAsync` | **Strongly consistent** | Walks the leaf chain in every shard under the authoritative `ShardMap`, tombstoning matching entries. Robust against sparse multi-shard distributions (`RangeDeleteResult.PastRange` ensures the scan does not short-circuit on an empty leaf). For resumable, crash-safe range deletes prefer `OpenDeleteRangeCursorAsync`. |
-| `CountAsync` | **Strongly consistent** | Partitions virtual slots by current owner via the authoritative `ShardMap`, asks each physical shard to count only its owned slots via `IShardRootGrain.CountForSlotsAsync`, re-reads the map version, and retries on version change up to `LatticeOptions.MaxScanRetries`. Every virtual slot is counted exactly once. Throws `InvalidOperationException` on retry exhaustion. |
-| `CountPerShardAsync` | **Strongly consistent** | Same per-slot routing as `CountAsync`; per-shard counts are topology-consistent with the observed `ShardMap` snapshot. |
+| `GetManyAsync` | **Per-key linearizable** (default `CacheTtl`); **per-key eventually consistent** (`CacheTtl > 0`) | **Atomic visibility tree-wide**: a concurrent `SetManyAtomicAsync` is observed either entirely or not at all across the requested key set. The batch is *not* a global snapshot across non-saga keys - two unrelated keys may reflect different real-time points. |
+| `SetManyAsync` | **Per-key linearizable, batch non-atomic** | Each key is written under its own linearization point. A partial failure leaves the batch half-applied with no rollback. |
+| `SetManyAtomicAsync` | **Per-key linearizable, batch atomic, atomic-visible tree-wide, atomic-visible across clusters** | All-or-nothing: on success every key holds its new value; on failure every key holds its pre-saga value. **A concurrent reader observes the saga atomically** - the post-decision visibility flip is a single tree-wide point. The atomic-visibility guarantee extends across every cluster the tree replicates to. See [Atomic Writes](atomic-writes.md). |
+| `DeleteRangeAsync` | **Strongly consistent** | Every key in the range is tombstoned. Robust against sparse multi-shard distributions. For resumable or crash-safe range deletes use `OpenDeleteRangeCursorAsync` instead. |
+| `CountAsync` | **Strongly consistent, atomic-visible tree-wide** | Exact live key count under the topology snapshot the call observes. A concurrent `SetManyAtomicAsync` is observed atomically (included entirely or excluded entirely). Throws `InvalidOperationException` if topology changes outrun the retry budget (`LatticeOptions.MaxScanRetries`, default 3). |
+| `CountPerShardAsync` | **Strongly consistent, atomic-visible tree-wide** | Per-shard counts are topology-consistent with the observed shard layout. Same atomic-visibility guarantee as `CountAsync`. |
 
 ---
 
@@ -73,31 +75,28 @@ and snapshot drain rejects. Callers never see these exceptions.
 
 | Operation | Guarantee | Notes |
 |-----------|-----------|-------|
-| `ScanKeysAsync` | **Strongly consistent, strictly ordered** | Paginated k-way merge across shards. When a shard reports moved-away slots or the `ShardMap` version advances mid-scan, the orchestrator drains the affected slots from their current owners into a sorted in-memory cursor and injects it into the same priority queue, so output remains globally sorted end-to-end. A per-call `HashSet<string>` suppresses duplicates across pre- and post-swap views. Bounded by `LatticeOptions.MaxScanRetries`; throws `InvalidOperationException` on exhaustion. Transparently recovers from `Orleans.Runtime.EnumerationAbortedException` up to the `maxAttempts` parameter (default 8; see `LatticeExtensions.DefaultScanReconnectAttempts`). |
-| `ScanEntriesAsync` | **Strongly consistent, strictly ordered** | Same reconciliation-cursor injection algorithm as `ScanKeysAsync`. Values read alongside keys reflect the authoritative leaf state at the moment the key was dequeued from the priority queue. Same enumeration-abort recovery as `ScanKeysAsync`. |
-| Durable cursor steps (`NextKeysAsync`, `NextEntriesAsync`, `DeleteRangeStepAsync`) | **Per-step strongly consistent, cross-step snapshot** | Each step is routed through the stateless `ScanKeysAsync` / `ScanEntriesAsync` / `DeleteRangeAsync` path, inheriting its guarantee. Global ordering is preserved across steps by strictly excluding every previously-yielded key from the next step's range. **Values are snapshot-as-read per step, not per cursor** - a key updated between two steps is observed at its newest value when it is next visited, but once yielded by a cursor it is never re-yielded by the same cursor. **Atomic visibility is per-leaf, not tree-wide**: each step consults `ITxRegistryGrain` once per leaf RPC (no `LatticeRegistrySnapshotContext` is established), so a saga that transitions `InFlight` → `Committed` during a step's fan-out can be observed as `InFlight` on one leaf and `Committed` on another within that step; once the step yields a key, that key's visibility is final for the cursor. Use `GetManyAsync` if tree-wide atomic visibility across a known key set is required. See [Durable Cursors](durable-cursors.md). |
+| `ScanKeysAsync` | **Strongly consistent, strictly ordered, atomic-visible for the lifetime of the enumeration** | Keys are yielded in lexicographic order with no duplicates and no gaps, even when shard splits or rebalances run concurrently. A concurrent `SetManyAtomicAsync` is observed identically across every page: either all of its keys appear or none. Bounded by `LatticeOptions.MaxScanRetries` (default 3); throws `InvalidOperationException` if the retry budget is exhausted. Transparently recovers from server-side enumeration aborts up to the wrapper's `maxAttempts` parameter (default 8). |
+| `ScanEntriesAsync` | **Strongly consistent, strictly ordered, atomic-visible for the lifetime of the enumeration** | Same key ordering and atomic-visibility guarantees as `ScanKeysAsync`. Values reflect the authoritative state at the moment each key is yielded. |
+| Durable cursor steps - **live mode** (`NextKeysAsync`, `NextEntriesAsync`, `DeleteRangeStepAsync`) | **Per-step strongly consistent and atomic-visible, cross-step snapshot** | Each step is a strongly consistent scan, atomic-visible tree-wide *within* that step. Across steps, a key updated between two pages is observed at its newest value when it is next visited, but once yielded by a cursor it is never re-yielded. A saga that commits between page *i* and page *i+1* may have its keys split across the two pages - use point-in-time mode (below) for cross-step atomicity. See [Durable Cursors](durable-cursors.md). |
+| Durable cursor steps - **point-in-time mode** (opened with `pointInTime: true`) | **Strongly consistent, strictly ordered, atomic-visible for the cursor's lifetime** | Every page reads against the saga-decision view captured at `OpenAsync` time. A `SetManyAtomicAsync` that commits between two pages is observed identically on every page (either all of its keys, or none). A stalled cursor whose pin lifetime is exceeded surfaces `LatticeCursorSnapshotExpiredException` on its next call and must be reopened. Not available for `DeleteRangeStepAsync`. See [Durable Cursors - Point-in-time cursors](durable-cursors.md#point-in-time-cursors). |
 
 ### Retry exhaustion
 
-`CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` use a bounded retry budget
+`CountAsync`, `CountPerShardAsync`, `ScanKeysAsync`, and
+`ScanEntriesAsync` use a bounded retry budget
 (`LatticeOptions.MaxScanRetries`, default 3) to reconcile against
-concurrent shard splits. If the topology keeps mutating beyond the
-budget, the scan throws `InvalidOperationException` rather than returning
-a silently incomplete result. This is not a realistic concern under
-default settings (`MaxConcurrentAutoSplits = 2`,
-`HotShardSplitCooldown = 2 min`); see
-[API Reference - Scan reliability](api.md#scan-reliability) for
-mitigation options.
+concurrent topology changes. If the topology continues to mutate beyond
+the budget the call throws `InvalidOperationException` rather than
+returning a silently incomplete result. This is not a realistic concern
+under default settings; see
+[API Reference - Scan reliability](api.md#scan-reliability) for tuning
+guidance.
 
-`ScanKeysAsync` / `ScanEntriesAsync` additionally recover from
-`Orleans.Runtime.EnumerationAbortedException` - raised when the
-orchestrator enumerator is reclaimed mid-scan (silo failover, idle
-expiry, cold start). This is bounded separately by the `maxAttempts`
-parameter on the wrapper (default 8; see
-`LatticeExtensions.DefaultScanReconnectAttempts`); the wrapper
-reopens the scan with a tightened bound based on the last yielded
-key so the stream is deterministic - no duplicates, no gaps,
-original ordering preserved.
+The streaming scan wrappers (`ScanKeysAsync`, `ScanEntriesAsync`)
+additionally recover from mid-scan enumeration aborts (silo failover,
+idle expiry, cold start) up to the wrapper's `maxAttempts` parameter
+(default 8). On reconnect the stream resumes with no duplicates, no
+gaps, and ordering preserved.
 
 ---
 
@@ -105,197 +104,93 @@ original ordering preserved.
 
 | Operation | Guarantee | Notes |
 |-----------|-----------|-------|
-| `BulkLoadAsync` | **Linearizable on an empty tree** | Throws if any shard already has data. After return, all entries are visible with the guarantees above on subsequent operations. |
-| `SnapshotAsync(Offline)` | **Linearizable point-in-time copy** | Source tree is locked (reads and writes throw `InvalidOperationException`) for the duration of the copy; the destination is an exact snapshot of the source at the lock instant, with HLC versions and TTL metadata preserved verbatim. |
-| `SnapshotAsync(Online)` | **Strongly consistent** | Source tree remains available for linearizable point traffic throughout the drain. Concurrent writes are mirrored to the destination via the shadow-forward primitive with their original HLCs; LWW commutativity guarantees the destination converges to a consistent view of the source at the drain's completion instant regardless of drain/live-write interleaving. |
-| `ResizeAsync` | **Linearizable (online)** | The tree continues to serve linearizable point operations and strongly-consistent scans throughout the drain. At the alias swap the stateless-worker `LatticeGrain` transparently absorbs the transient `StaleTreeRoutingException` and re-routes to the destination - callers observe at most a single retry delay. Zero data loss under concurrent load (LWW commutativity). |
-| `UndoResizeAsync` | **Linearizable (online)** | See [Tree Sizing](tree-sizing.md#resizing-an-existing-tree) for the drain-window vs post-swap dual path; both paths preserve point and scan consistency. |
-| `ReshardAsync` | **Linearizable (online)** | Dispatches up to `LatticeOptions.MaxConcurrentMigrations` concurrent per-shard splits, each of which atomically grows the `ShardMap` via its own shadow-write + swap phases. Reads and writes remain linearizable throughout. |
-| `MergeAsync(sourceTreeId)` | **Eventually convergent (LWW)** | For each key present in both trees, the entry with the higher HLC wins. The operation completes when every source entry has been merged; the resulting tree is *strongly consistent with the LWW merge of both inputs*. The source tree is unmodified. |
-| `DeleteTreeAsync` | **Linearizable (takes tree offline)** | After the call returns every subsequent `ILattice` read or write throws `InvalidOperationException` until `RecoverTreeAsync`. Data is retained for `SoftDeleteDuration` before purge. |
-| `RecoverTreeAsync` | **Linearizable** | Restores full linearizable availability. |
+| `BulkLoadAsync` | **Linearizable on an empty tree** | Throws if any shard already has data. After return, all entries are visible under the guarantees above. |
+| `SnapshotAsync(Offline)` | **Linearizable point-in-time copy** | The source tree is locked (reads and writes throw `InvalidOperationException`) for the duration of the copy. The destination is an exact snapshot of the source at the lock instant. |
+| `SnapshotAsync(Online)` | **Strongly consistent** | The source tree remains available for linearizable point traffic and strongly-consistent scans throughout. The destination converges to a consistent view of the source at the drain's completion instant regardless of how live writes interleave with the drain. |
+| `ResizeAsync` / `UndoResizeAsync` | **Linearizable (online)** | Point operations and strongly-consistent scans continue throughout. Callers observe at most a single transparent retry at the alias swap. Zero data loss under concurrent load. |
+| `ReshardAsync` | **Linearizable (online)** | Reads and writes remain linearizable across every concurrent shard split. |
+| `MergeAsync(sourceTreeId)` | **Eventually convergent (LWW)** | For each key present in both trees, the entry with the higher HLC wins. On completion the destination is strongly consistent with the LWW merge of both inputs. The source tree is unmodified. |
+| `DeleteTreeAsync` | **Linearizable (takes tree offline)** | After return, every subsequent read or write throws `InvalidOperationException` until `RecoverTreeAsync`. Data is retained for `SoftDeleteDuration` before purge. |
+| `RecoverTreeAsync` | **Linearizable** | Restores full availability. |
 | `PurgeTreeAsync` | **Linearizable, destructive** | Permanently removes all data. |
-| `TreeExistsAsync`, `GetAllTreeIdsAsync` | **Eventually consistent (registry read)** | Registry reads reflect the latest persisted state but may briefly lag a concurrent registration/deletion observed by a different client. |
-| `IsMergeCompleteAsync`, `IsSnapshotCompleteAsync`, `IsResizeCompleteAsync`, `IsReshardCompleteAsync` | **Monotonic** | Once `true` for a given operation, a subsequent query for the same operation will never return `false`. Vacuously `true` when no operation of that kind has ever been initiated. |
-| `DiagnoseAsync` | **Point-in-time snapshot (non-linearizable)** | Aggregates a per-shard health sample across all physical shards; the fan-out is not atomic, so a concurrent split commit can race individual shard reports. Repeat calls within `LatticeOptions.DiagnosticsCacheTtl` return the same cached snapshot (identical `SampledAt`); the cache is invalidated on split commit so the next call after a topology change is guaranteed fresh. Per-shard RPC failures surface as empty shard entries rather than failing the whole report, so the method is safe to call during ongoing resize/reshard. **Not for hot-path or correctness-critical decisions** - use the operation-specific APIs (`GetRoutingAsync`, `CountAsync`) instead. See [Diagnostics](diagnostics.md). |
+| `TreeExistsAsync`, `GetAllTreeIdsAsync` | **Eventually consistent (registry read)** | May briefly lag a concurrent registration or deletion observed by another client. |
+| `IsMergeCompleteAsync`, `IsSnapshotCompleteAsync`, `IsResizeCompleteAsync`, `IsReshardCompleteAsync` | **Monotonic** | Once `true` for a given operation, never returns `false` again. Vacuously `true` when no operation of that kind has ever been initiated. |
+| `DiagnoseAsync` | **Point-in-time snapshot (non-linearizable)** | A best-effort per-shard health sample for dashboards and post-mortems. Repeat calls within `LatticeOptions.DiagnosticsCacheTtl` return the same cached result. **Not for hot-path or correctness-critical decisions** - use the operation-specific APIs instead. See [Diagnostics](diagnostics.md). |
+
+---
+
+## Atomic visibility
+
+`SetManyAtomicAsync` delivers **strict atomic visibility tree-wide and
+across clusters**: no reader, on any silo, in any cluster, ever
+observes a partial view of an in-flight saga. Concretely, once
+`SetManyAtomicAsync` returns without throwing, every key in the batch
+holds its target value across every silo in the local cluster with no
+intermediate partial-visibility window observable to any reader. As
+the saga's writes propagate to each peer cluster, the same
+all-or-nothing window holds on every remote tree.
+
+Atomic visibility is observed by every read path that does not stream
+across multiple grain calls:
+
+| Read path | Atomic visibility |
+|-----------|-------------------|
+| `GetAsync`, `ExistsAsync`, `GetWithVersionAsync`, `GetOrSetAsync`, `SetIfVersionAsync` | Per-key linearizable; an in-flight saga's keys are hidden until the saga commits, at which point all of its keys flip atomically. |
+| `GetManyAsync`, `CountAsync`, `CountPerShardAsync` | Tree-wide for the call. |
+| `ScanKeysAsync`, `ScanEntriesAsync` | Tree-wide for the lifetime of the `IAsyncEnumerable`. |
+| Durable key/entry cursor (point-in-time mode) | Tree-wide for the lifetime of the cursor. |
+| Durable key/entry/delete-range cursor (live mode) | Tree-wide *within* each step; not preserved across steps. |
+| `DeleteRangeAsync` (one-shot) | Per-key only; a concurrent saga may be observed as committed for some keys and pending for others. Use `SetManyAtomicAsync` to layer atomic deletion semantics on top. |
+
+See [Atomic Writes](atomic-writes.md) for the saga primitive and
+[Durable Cursors](durable-cursors.md#point-in-time-cursors) for the
+point-in-time cursor mode.
 
 ---
 
 ## Topology and durability notes
 
-### Shard splits (autonomic and `ReshardAsync`-driven)
+### Shard splits and reshards
 
-Every guarantee in the tables above holds **during an active shard
-split**. The shadow-write primitive mirrors every mutation accepted by
-the source shard to the new owner during the drain phase, and a
-**retroactive prepared-mutation sweep** at `BeginShadowWrite` replays
-every in-flight `_pendingTx` entry from the source's leaves into the
-destination's pending buckets under the original
-`(txid, hlc, origin, vc)` provenance - so a `SetManyAtomicAsync` saga
-whose Prepare landed on the source shard before the split commits and
-completes against the new owner with no observable interruption. At
-swap, the source shard enters a reject phase that throws
-`StaleShardRoutingException` for keys whose slots have moved; the
-`LatticeGrain` orchestrator catches this, refreshes the cached
-`ShardMap`, and retries against the new owner within the same grain
-call. Scans use in-line reconciliation-cursor injection to preserve
-strict order across the topology boundary. See
-[Shard Splitting](shard-splitting.md) for the algorithm.
+Every guarantee in this document holds **during an active shard split
+or reshard**. Callers do not observe topology-change exceptions: point
+operations transparently retry; scans use bounded reconciliation; in
+the rare case of retry exhaustion, the affected call throws
+`InvalidOperationException` rather than returning silently incomplete
+results. See [Shard Splitting](shard-splitting.md).
 
 ### Read-cache staleness
 
-`GetAsync`, `ExistsAsync`, and `GetManyAsync` are the only `ILattice`
-surface methods that read through `LeafCacheGrain`. Staleness is bounded
-by `LatticeOptions.CacheTtl` (default `TimeSpan.Zero` - refresh on every
-read, which reduces to a version-vector delta check when nothing has
-changed). Raising `CacheTtl` trades freshness for fewer primary-leaf
-round trips; the effective staleness bound is
-`CacheTtl + one delta round-trip`. `GetWithVersionAsync` bypasses the
-cache for CAS safety. For keys covered by an in-flight
-`SetManyAtomicAsync` saga the cache delegates to the primary leaf
-regardless of `CacheTtl` so the per-tree `ITxRegistryGrain` verdict
-applies - strict per-tree atomic visibility is independent of cache
-staleness.
+`GetAsync`, `ExistsAsync`, and `GetManyAsync` are the only methods on
+`ILattice` that may be served from the per-silo read cache. Staleness
+is bounded by `LatticeOptions.CacheTtl` (default `TimeSpan.Zero` -
+refresh on every read). Raising `CacheTtl` trades freshness for fewer
+round-trips. `GetWithVersionAsync` bypasses the cache for CAS safety.
+**Cache staleness never weakens atomic visibility**: keys covered by
+an in-flight saga always observe the registry-coordinated outcome
+regardless of `CacheTtl`.
 
 ### TTL expiry
 
-TTL is resolved to an absolute UTC instant on the silo that accepts the
-write. Expired entries are filtered on every user-facing read path and
-the read cache; they are **intentionally preserved on the replication
-layer** (`GetDeltaSinceAsync`, `MergeEntriesAsync`, `MergeManyAsync`) so
-CRDT merge can still resolve LWW by HLC timestamp after expiry. See
-[TTL](ttl.md).
+Expired entries are filtered on every user-facing read path. See [TTL](ttl.md).
 
 ### Clock skew
 
-The guarantees above assume HLC causality, which depends on reasonably
-synchronised **silo** clocks (not client clocks). Two concurrent writes
-resolve by HLC: the silo with the later wall-clock tick wins. In
-pathological drift scenarios the tombstone-grace window
+The guarantees in this document assume reasonably synchronised **silo**
+clocks (not client clocks). Two concurrent writes resolve by HLC: the
+write with the later wall-clock tick wins. In pathological drift
+scenarios the tombstone-grace window
 (`LatticeOptions.TombstoneGracePeriod`, default 24 h) gives a lagging
-replica time to observe and converge before physical reclamation.
+replica time to converge before physical reclamation.
 
 ### Cancellation
 
 Every `ILattice` method accepts a `CancellationToken`. Cancellation
-triggered before a mutation has committed leaves the operation as if it
-had never been attempted; cancellation triggered after a long-running
-coordinator (saga, resize, snapshot, reshard, merge) has accepted the
-request does **not** roll back - the coordinator drives itself to a
-terminal state via reminders and the corresponding `Is*CompleteAsync`
-eventually returns `true`.
-
----
-
-## Atomic visibility (single-tree, foreground and cross-cluster)
-
-`SetManyAtomicAsync` delivers **strict per-tree atomic visibility**: the
-per-tree `ITxRegistryGrain` is the single tree-wide linearization point
-for the saga's commit/abort decision, and every read path consults it
-for any key sitting in a leaf's pending-tx bucket. Concretely:
-
-- **Direct-leaf reads** (`GetWithVersionAsync`, `SetIfVersionAsync`,
-  `GetOrSetAsync`) - `BPlusLeafGrain.ResolvePendingStatusAsync` calls
-  `registry.GetStatusAsync(txid)`. `Committed` surfaces the prepared
-  value, `Aborted` falls through to the pre-saga value, `InFlight`
-  hides the key (the strict-isolation default).
-- **Cached reads** (`GetAsync`, `ExistsAsync`, `GetManyAsync`) -
-  `LeafCacheGrain` tracks pending keys via
-  `IBPlusLeafGrain.GetPendingKeysAsync` and round-trips any
-  pending-keyed read to the primary leaf so the registry-driven verdict
-  applies. Non-pending keys continue to be served from cache under the
-  normal `CacheTtl` bound.
-- **Tree-wide-snapshot reads** (`GetManyAsync`, `CountAsync`,
-  `CountPerShardAsync`) - the entry point makes one
-  `registry.SnapshotAsync()` call before fan-out, stamps it onto the
-  ambient `LatticeRegistrySnapshotContext`, and every leaf in the call
-  reads the same snapshot. A second snapshot taken after fan-out is
-  compared against the first to detect any `InFlight` → `Committed`
-  transition during the call; a transition triggers a retry under the
-  fresh snapshot, closing the split-observation window between drained
-  and undrained leaves. This is the path to use when atomic visibility
-  across a known key set must hold tree-wide.
-- **Per-leaf-snapshot reads** (`KeysAsync` / `ScanKeysAsync`,
-  `EntriesAsync` / `ScanEntriesAsync`, `DeleteRangeAsync`, and the
-  durable cursor steps `NextKeysAsync` / `NextEntriesAsync` /
-  `DeleteRangeStepAsync`) - no tree-wide snapshot is taken. Each leaf
-  consults `ITxRegistryGrain` independently per RPC and applies the
-  saga verdict locally (`Committed` surfaces the prepared value,
-  `InFlight` / `Aborted` fall through to the pre-saga value). Per-key
-  visibility is correct, but a saga that transitions
-  `InFlight` → `Committed` mid-fan-out can be observed as `InFlight`
-  on one leaf and `Committed` on another within a single step. Use
-  `GetManyAsync` / `CountAsync` if tree-wide atomic visibility across
-  a known key set is required.
-
-**Cross-cluster atomic visibility ships universally.** Saga prepare
-writes flow through the standard per-key WAL → replication transport
-carrying an additive `IsPrepared` slot and the saga's `TransactionId`;
-each terminal mark (`TxCommit` / `TxAbort`) ships as a single per-shard
-record exempt from the producer-side `KeyFilter` / `KeyPrefixes`
-filters and stamped with the saga's authoritative touched-shard count
-in the additive `AtomicShardCount` slot. On the receiver, prepared
-records route to `IReplicationApplyGrain.ApplyPreparedSetAsync` /
-`ApplyPreparedDeleteAsync`, which install each entry into the
-destination leaf's per-tx pending bucket under the source HLC
-verbatim. The receiver's `ReplicationApplier.ApplyBatchAsync`
-classifier excludes any entry with `IsPrepared == true` from the
-batched LWW fast-path so prepared writes are always routed through
-the per-entry prepared-apply seam - committing them directly into
-visible `Entries` would let the cross-cluster reader observe the
-prepared write before the registry gate ever flipped.
-
-`ApplyTxTerminalAsync` then drives a **per-source-shard arrival
-tally** before the visibility flip: each terminal arrival calls
-`ITxRegistryGrain.RecordTerminalArrivalAsync(txid, sourceShardIndex,
-committed, atomicShardCount)`, which deduplicates per `(txid,
-sourceShardIndex)`, latches the outcome on the first arrival (a
-mismatched-outcome arrival preserves the earlier abort), and adopts
-`max(seen, incoming)` into the expected total so a producer-side
-mid-saga shadow-forward split that grows the touched-shard count is
-absorbed without under-counting. The tally returns `IsFinal = false`
-until every per-source-shard terminal has arrived; while the tally is
-pending the receiver leaves' pending buckets stay in place and
-readers dialling back through `ITxRegistryGrain.GetStatusAsync`
-observe `InFlight` for the whole saga and fall through to the
-pre-saga value. Only on the final arrival does the receiver mark the
-registry's decision (the single per-tree visibility flip) and resolve
-the transitive split-forward closure of every observed source-shard
-in a single parallel hop to dispatch the terminal mark to every
-destination on the receiver. The gate handles producer / receiver
-shard-count divergence naturally because the tally key is the
-producer-stamped source-side shard index, not the receiver's shard
-layout - a receiver whose adaptive splits or operator resize have
-produced a different shard count than the source still observes
-exactly `atomicShardCount` distinct source terminals (one per source
-shard the saga touched). The slot is wire-compatible: a legacy
-producer that never stamps `AtomicShardCount` ships `0`, which the
-gate treats as "no expected-total information" and falls back to
-first-terminal-wins semantics. Receiver-side reads consult the same
-`ITxRegistryGrain` they consult locally, so a remote reader
-concurrent with replication of a `SetManyAtomicAsync` observes either
-zero or all of the saga's keys - never a partial view.
-
-Once `SetManyAtomicAsync` returns without throwing, every key in the
-batch holds its target value across the local tree with no
-intermediate partial-visibility window observable to any reader at any
-silo in that cluster. As the saga's WAL records propagate to each
-peer, the same all-or-nothing window holds on every remote tree:
-prepared entries are invisible until the terminal mark arrives, and
-the terminal flip is atomic per-leaf and registry-coordinated
-tree-wide.
-
-The registry retains each completed decision as a tombstone for
-`LatticeOptions.TxDecisionRetention` (default 60 s) after the saga
-calls `ForgetAsync`. The retention window is invisible to direct
-readers (the verdict has the same outcome as before the call) but is
-essential when a concurrent adaptive shard split's retroactive
-shadow-forward sweep installs a *new* pending bucket on the saga's
-txid on a destination shard after the terminal has already broadcast:
-the sweep's post-sweep cleanup pass resolves the verdict against the
-retained tombstone and drains the orphan bucket directly. See
-[Atomic Writes - Phase 4 Complete](atomic-writes.md#phase-4---complete)
-and [Configuration - `TxDecisionRetention`](configuration.md#txdecisionretention).
+before a mutation has committed leaves the operation as if it had never
+been attempted. Cancellation after a long-running coordinator (saga,
+resize, snapshot, reshard, merge) has accepted the request does **not**
+roll back: the coordinator drives itself to a terminal state on its
+own, and the matching `Is*CompleteAsync` eventually returns `true`.
 
 ---
 
@@ -304,22 +199,20 @@ and [Configuration - `TxDecisionRetention`](configuration.md#txdecisionretention
 - **Global transaction ordering.** Two concurrent `SetManyAtomicAsync`
   calls touching overlapping keys resolve pairwise by LWW; there is no
   serializable global order across sagas.
-- **Reader isolation during range deletes.** `DeleteRangeAsync` is
-  per-key linearizable but is not registry-coordinated, so a reader
+- **Reader isolation during one-shot range deletes.** `DeleteRangeAsync`
+  is per-key linearizable but is not registry-coordinated, so a reader
   concurrent with a long-running range delete may observe some keys
   tombstoned and others still live. For an isolated range delete,
-  layer `GetWithVersionAsync` + `SetIfVersionAsync` on top, or stage
-  the deletion via `OpenDeleteRangeCursorAsync` and gate visibility
-  with an application-level marker key. (`SetManyAtomicAsync` does
-  guarantee reader isolation tree-wide - see "Atomic visibility"
-  above.)
-- **Multi-tree transactions.** Operations that touch more than one tree
-  (e.g. `MergeAsync`, `SnapshotAsync`) are not atomic across the tree
-  boundary; they are LWW-convergent on the destination but readers of
-  both trees may observe the in-flight state.
+  stage it via `SetManyAtomicAsync` or gate visibility with an
+  application-level marker key. (`SetManyAtomicAsync` itself does
+  guarantee reader isolation tree-wide.)
+- **Cross-tree atomicity.** Atomic visibility is scoped to a single
+  `ILattice` tree. Operations that touch more than one tree (e.g.
+  `MergeAsync`, `SnapshotAsync`) are LWW-convergent on the destination
+  but readers of both trees may observe the in-flight state. There is
+  no cross-tree saga primitive.
 - **Cross-tree causality.** The causal+ guarantees shipped in the
   replication package are scoped to single-tree writes; a multi-tree
-  operation (e.g. one saga touching two `ILattice` trees, or a merge
-  fanning into a destination tree) does not establish a causal edge
-  between those trees on remote peers. Each tree converges independently
-  under its own per-tree vector clock.
+  operation does not establish a causal edge between those trees on
+  remote peers. Each tree converges independently under its own
+  per-tree vector clock.

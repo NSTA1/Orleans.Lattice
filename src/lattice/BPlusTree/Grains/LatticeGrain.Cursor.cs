@@ -13,6 +13,7 @@ internal sealed partial class LatticeGrain
         string? startInclusive = null,
         string? endExclusive = null,
         bool reverse = false,
+        bool pointInTime = false,
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
@@ -25,6 +26,7 @@ internal sealed partial class LatticeGrain
             StartInclusive = startInclusive,
             EndExclusive = endExclusive,
             Reverse = reverse,
+            PointInTime = pointInTime,
         });
         return cursorId;
     }
@@ -34,6 +36,7 @@ internal sealed partial class LatticeGrain
         string? startInclusive = null,
         string? endExclusive = null,
         bool reverse = false,
+        bool pointInTime = false,
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
@@ -46,6 +49,7 @@ internal sealed partial class LatticeGrain
             StartInclusive = startInclusive,
             EndExclusive = endExclusive,
             Reverse = reverse,
+            PointInTime = pointInTime,
         });
         return cursorId;
     }

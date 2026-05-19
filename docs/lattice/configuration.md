@@ -70,6 +70,8 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | `AutoSplitMinTreeAge` | `TimeSpan` | 60 seconds | Yes |
 | `MaxScanRetries` | `int` | 3 | Yes |
 | `CursorIdleTtl` | `TimeSpan` | 48 hours | Yes |
+| `MaxCursorSnapshotPinTtl` | `TimeSpan` | 7 days | Yes |
+| `MaxPinnedSagaDecisions` | `int` | 100 000 | Yes |
 | `AtomicWriteRetention` | `TimeSpan` | 48 hours | Yes |
 | `TxDecisionRetention` | `TimeSpan` | 60 seconds | Yes |
 | `VersionVectorRetention` | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
@@ -270,6 +272,22 @@ This option can be changed freely at any time.
 ### `CursorIdleTtl`
 
 Sliding idle timeout for stateful cursors opened via `OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `OpenDeleteRangeCursorAsync` (default: 48 hours). Each successful cursor step refreshes the reminder; if it fires without intervening activity the cursor grain clears its persisted state, unregisters the reminder, and deactivates. Minimum effective interval is **1 minute** (Orleans reminder granularity); smaller values are clamped to the floor. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup - cursors then live until `CloseCursorAsync` is called. See [Durable Cursors](durable-cursors.md).
+
+This option can be changed freely at any time.
+
+### `MaxCursorSnapshotPinTtl`
+
+Hard upper bound on how long the per-tree `ITxRegistryGrain` will retain the saga-decision snapshot captured by a point-in-time durable cursor (default: 7 days). A live point-in-time cursor slides this TTL on every `Next*Async`; a stalled cursor that misses the slide will eventually have its pin reaped by the registry, after which the next call surfaces `LatticeCursorSnapshotExpiredException` and the cursor must be reopened.
+
+The cap exists so a forgotten point-in-time cursor cannot stall registry-tombstone pruning forever. Set `Timeout.InfiniteTimeSpan` to disable the registry-side cap entirely - cursor lifetime then depends solely on `CursorIdleTtl` and on `MaxPinnedSagaDecisions`. See [Durable Cursors - Point-in-time cursors](durable-cursors.md#point-in-time-cursors).
+
+This option can be changed freely at any time.
+
+### `MaxPinnedSagaDecisions`
+
+Registry-wide footprint cap on the number of saga decisions that may be pinned across all live point-in-time cursors on a single tree (default: 100 000). `OpenKeyCursorAsync` / `OpenEntryCursorAsync` opened with `pointInTime: true` consult the registry: if accepting the new snapshot would push the pinned-decision count past this cap, the open call throws `LatticeCursorRegistryPinExhaustedException` and no pin is installed. Existing pinned cursors continue paging.
+
+Sized for a tree carrying a steady-state in-flight-saga set in the low thousands plus a handful of overlapping long-running point-in-time cursors. Raise if a workload routinely opens many concurrent multi-day point-in-time cursors against a saga-heavy tree; lower if a single tree must keep registry footprint tightly bounded.
 
 This option can be changed freely at any time.
 

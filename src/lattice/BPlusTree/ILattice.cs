@@ -491,15 +491,30 @@ public interface ILattice : IGrainWithStringKey
     /// <param name="startInclusive">Inclusive lower bound, or <c>null</c> for the first key.</param>
     /// <param name="endExclusive">Exclusive upper bound, or <c>null</c> for the end of the tree.</param>
     /// <param name="reverse">When <c>true</c>, the cursor walks keys in descending lexicographic order.</param>
+    /// <param name="pointInTime">
+    /// When <c>true</c>, the cursor captures a saga-decision snapshot at
+    /// open time and serves every subsequent <see cref="NextKeysAsync"/>
+    /// page against that same snapshot, so a multi-page scan is
+    /// linearizable against atomic-write sagas committing concurrently
+    /// with the cursor. The captured snapshot is pinned by the
+    /// per-tree TxRegistry against tombstone-prune eviction for the
+    /// cursor's lifetime; a step past
+    /// <see cref="LatticeOptions.MaxCursorSnapshotPinTtl"/> throws
+    /// <see cref="LatticeCursorSnapshotExpiredException"/>, and opening a
+    /// point-in-time cursor when the registry-wide pin footprint cap
+    /// would be exceeded throws
+    /// <see cref="LatticeCursorRegistryPinExhaustedException"/>.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the open before any state is persisted.</param>
     /// <returns>An opaque cursor handle scoped to this tree.</returns>
-    Task<string> OpenKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
+    Task<string> OpenKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Opens a stateful entry-enumeration cursor. Semantically identical to
     /// <see cref="OpenKeyCursorAsync"/> but yields
     /// <see cref="KeyValuePair{TKey,TValue}"/> via <see cref="NextEntriesAsync"/>.
     /// </summary>
-    Task<string> OpenEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
+    Task<string> OpenEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Opens a stateful, resumable range-delete cursor over
