@@ -249,6 +249,9 @@ public partial class WalShardGrainTests
         public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
             => inner.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken);
 
+        public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+            => inner.GetLowestOffsetAsync(treeId, shardIndex, cancellationToken);
+
         public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
             => inner.TrimAsync(treeId, shardIndex, throughOffsetInclusive, cancellationToken);
     }
@@ -277,6 +280,9 @@ public partial class WalShardGrainTests
 
         public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
             => inner.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken);
+
+        public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+            => inner.GetLowestOffsetAsync(treeId, shardIndex, cancellationToken);
 
         public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
             => inner.TrimAsync(treeId, shardIndex, throughOffsetInclusive, cancellationToken);

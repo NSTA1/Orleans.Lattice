@@ -219,6 +219,31 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
     }
 
     /// <inheritdoc />
+    public Task<long> GetLowestOffsetAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_shards.TryGetValue(Key(treeId, shardIndex), out var shard))
+        {
+            return Task.FromResult(-1L);
+        }
+
+        lock (shard.Gate)
+        {
+            // Entries are kept sorted ascending by offset by every
+            // mutation path in this provider (tail-append fast path,
+            // sorted insertion for out-of-order arrival, and prefix
+            // trim leaves the surviving suffix sorted), so the lowest
+            // live offset is at index 0 when the list is non-empty.
+            return Task.FromResult(shard.Entries.Count == 0 ? -1L : shard.Entries[0].Offset);
+        }
+    }
+
+    /// <inheritdoc />
     public Task TrimAsync(
         string treeId,
         int shardIndex,

@@ -40,6 +40,61 @@ public class InMemoryWalStorageProviderTests
     }
 
     [Test]
+    public async Task GetLowestOffsetAsync_returns_minus_one_for_empty_shard()
+    {
+        var sut = new InMemoryWalStorageProvider();
+
+        var lowest = await sut.GetLowestOffsetAsync(Tree, 0, CancellationToken.None);
+
+        Assert.That(lowest, Is.EqualTo(-1L));
+    }
+
+    [Test]
+    public async Task GetLowestOffsetAsync_returns_zero_on_untrimmed_shard()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync(Tree, 0, new[] { Entry(0), Entry(1), Entry(2) }, CancellationToken.None);
+
+        var lowest = await sut.GetLowestOffsetAsync(Tree, 0, CancellationToken.None);
+
+        Assert.That(lowest, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public async Task GetLowestOffsetAsync_returns_first_surviving_offset_after_partial_trim()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync(Tree, 0, new[] { Entry(0), Entry(1), Entry(2), Entry(3) }, CancellationToken.None);
+
+        await sut.TrimAsync(Tree, 0, throughOffsetInclusive: 1, CancellationToken.None);
+
+        var lowest = await sut.GetLowestOffsetAsync(Tree, 0, CancellationToken.None);
+        Assert.That(lowest, Is.EqualTo(2L));
+    }
+
+    [Test]
+    public async Task GetLowestOffsetAsync_returns_minus_one_after_full_trim()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync(Tree, 0, new[] { Entry(0), Entry(1) }, CancellationToken.None);
+
+        await sut.TrimAsync(Tree, 0, throughOffsetInclusive: 1, CancellationToken.None);
+
+        var lowest = await sut.GetLowestOffsetAsync(Tree, 0, CancellationToken.None);
+        Assert.That(lowest, Is.EqualTo(-1L));
+    }
+
+    [Test]
+    public void GetLowestOffsetAsync_throws_on_null_treeId()
+    {
+        var sut = new InMemoryWalStorageProvider();
+
+        Assert.That(
+            async () => await sut.GetLowestOffsetAsync(null!, 0, CancellationToken.None),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
     public async Task AppendBatchAsync_persists_entries_with_dense_offsets()
     {
         var sut = new InMemoryWalStorageProvider();
@@ -287,6 +342,9 @@ public class InMemoryWalStorageProviderTests
                 Throws.InstanceOf<OperationCanceledException>());
             Assert.That(
                 async () => await sut.GetHighestOffsetAsync(Tree, 0, cts.Token),
+                Throws.InstanceOf<OperationCanceledException>());
+            Assert.That(
+                async () => await sut.GetLowestOffsetAsync(Tree, 0, cts.Token),
                 Throws.InstanceOf<OperationCanceledException>());
             Assert.That(
                 async () => await sut.TrimAsync(Tree, 0, 0, cts.Token),

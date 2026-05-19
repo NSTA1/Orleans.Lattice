@@ -280,6 +280,44 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider
     }
 
     /// <inheritdoc />
+    public async Task<long> GetLowestOffsetAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
+        var partitionKey = BuildPartitionKey(treeId, shardIndex);
+
+        // One Top(1) query against the entry-row range, ordered
+        // ascending by RowKey (Azure Tables always returns within a
+        // partition in RowKey ascending order). The entry row-key
+        // format `E{offset:D19}` sorts lexicographically iff the
+        // numeric offsets sort, so the first row in the range is the
+        // entry with the lowest stored offset. The head sentinel row
+        // (`HEAD`) is excluded by the `lt 'F'` upper bound because
+        // `'F' < 'H'`, matching the upper bound used by the trim path.
+        var filter =
+            $"PartitionKey eq '{Escape(partitionKey)}' and RowKey ge '{EntryRowKeyPrefix}' and RowKey lt 'F'";
+        await foreach (var page in table
+            .QueryAsync<AzureTableWalEntity>(filter, maxPerPage: 1, cancellationToken: cancellationToken)
+            .AsPages(pageSizeHint: 1)
+            .ConfigureAwait(false))
+        {
+            if (page.Values.Count > 0)
+            {
+                return page.Values[0].Offset;
+            }
+            // Defensive: an empty first page should never happen given
+            // maxPerPage=1, but if it does we want to short-circuit.
+            break;
+        }
+        return -1L;
+    }
+
+    /// <inheritdoc />
     public async Task TrimAsync(
         string treeId,
         int shardIndex,

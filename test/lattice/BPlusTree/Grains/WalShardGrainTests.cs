@@ -478,27 +478,110 @@ public partial class WalShardGrainTests
     }
 
     [Test]
-    public async Task GetEntryCountAsync_reflects_appended_entries()
+    public async Task GetLiveEntryCountAsync_reflects_appended_entries()
     {
         var grain = await CreateGrainAsync();
         await grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
         await grain.AppendAsync(MakeEntry("b"), CancellationToken.None);
         await grain.AppendAsync(MakeEntry("c"), CancellationToken.None);
 
-        var count = await grain.GetEntryCountAsync(CancellationToken.None);
+        var count = await grain.GetLiveEntryCountAsync(CancellationToken.None);
 
         Assert.That(count, Is.EqualTo(3L));
     }
 
     [Test]
-    public async Task GetEntryCountAsync_observes_cancellation()
+    public async Task GetLiveEntryCountAsync_returns_zero_on_empty_shard()
+    {
+        var grain = await CreateGrainAsync();
+
+        var count = await grain.GetLiveEntryCountAsync(CancellationToken.None);
+
+        Assert.That(count, Is.Zero);
+    }
+
+    [Test]
+    public async Task GetLiveEntryCountAsync_drops_after_trim()
+    {
+        // Append 100 entries, trim through offset 49, and assert the
+        // live count is 50 (the surviving suffix from offset 50 to 99).
+        var provider = new InMemoryWalStorageProvider();
+        var grain = await CreateGrainAsync(provider);
+
+        for (var i = 0; i < 100; i++)
+        {
+            await grain.AppendAsync(MakeEntry("k" + i), CancellationToken.None);
+        }
+
+        var beforeTrim = await grain.GetLiveEntryCountAsync(CancellationToken.None);
+        await provider.TrimAsync(TreeId, ShardIndex, 49L, CancellationToken.None);
+        var afterTrim = await grain.GetLiveEntryCountAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(beforeTrim, Is.EqualTo(100L));
+            Assert.That(afterTrim, Is.EqualTo(50L));
+        });
+    }
+
+    [Test]
+    public async Task GetLiveEntryCountAsync_returns_zero_after_full_trim()
+    {
+        var provider = new InMemoryWalStorageProvider();
+        var grain = await CreateGrainAsync(provider);
+
+        for (var i = 0; i < 5; i++)
+        {
+            await grain.AppendAsync(MakeEntry("k" + i), CancellationToken.None);
+        }
+        await provider.TrimAsync(TreeId, ShardIndex, 4L, CancellationToken.None);
+
+        var count = await grain.GetLiveEntryCountAsync(CancellationToken.None);
+
+        Assert.That(count, Is.Zero);
+    }
+
+    [Test]
+    public async Task GetLiveEntryCountAsync_observes_cancellation()
     {
         var grain = await CreateGrainAsync();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
         Assert.That(
+            async () => await grain.GetLiveEntryCountAsync(cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    public async Task GetEntryCountAsync_obsolete_forwarder_still_returns_next_offset()
+    {
+        // The obsolete forwarder preserves the pre-R-077 behaviour
+        // (trim-unaware next-offset count) for one minor version so
+        // existing callers compile without immediate change.
+        var grain = await CreateGrainAsync();
+        await grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
+        await grain.AppendAsync(MakeEntry("b"), CancellationToken.None);
+        await grain.AppendAsync(MakeEntry("c"), CancellationToken.None);
+
+#pragma warning disable LATTICE0001 // Intentionally exercising the obsolete forwarder.
+        var count = await grain.GetEntryCountAsync(CancellationToken.None);
+#pragma warning restore LATTICE0001
+
+        Assert.That(count, Is.EqualTo(3L));
+    }
+
+    [Test]
+    public async Task GetEntryCountAsync_obsolete_forwarder_observes_cancellation()
+    {
+        var grain = await CreateGrainAsync();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.That(
+#pragma warning disable LATTICE0001 // Intentionally exercising the obsolete forwarder.
             async () => await grain.GetEntryCountAsync(cts.Token),
+#pragma warning restore LATTICE0001
             Throws.InstanceOf<OperationCanceledException>());
     }
 
@@ -615,6 +698,9 @@ public partial class WalShardGrainTests
         public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
             => Task.FromResult(-1L);
 
+        public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+            => Task.FromResult(-1L);
+
         public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
             => Task.CompletedTask;
     }
@@ -638,6 +724,9 @@ public partial class WalShardGrainTests
 
         public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
             => _active.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken);
+
+        public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+            => _active.GetLowestOffsetAsync(treeId, shardIndex, cancellationToken);
 
         public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
             => _active.TrimAsync(treeId, shardIndex, throughOffsetInclusive, cancellationToken);
@@ -664,6 +753,9 @@ public partial class WalShardGrainTests
 
         public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
             => inner.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken);
+
+        public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+            => inner.GetLowestOffsetAsync(treeId, shardIndex, cancellationToken);
 
         public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
             => inner.TrimAsync(treeId, shardIndex, throughOffsetInclusive, cancellationToken);
@@ -692,6 +784,9 @@ public partial class WalShardGrainTests
 
         public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
             => inner.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken);
+
+        public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+            => inner.GetLowestOffsetAsync(treeId, shardIndex, cancellationToken);
 
         public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
             => inner.TrimAsync(treeId, shardIndex, throughOffsetInclusive, cancellationToken);

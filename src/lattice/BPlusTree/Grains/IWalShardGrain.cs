@@ -53,8 +53,30 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<long> GetNextSequenceAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// Returns the number of entries currently persisted in this WAL
-    /// shard. Diagnostic helper for tests and metrics.
+    /// Returns the number of <i>live</i> entries currently persisted in
+    /// this WAL shard - i.e. the count of entries between the lowest
+    /// still-stored offset and the highest assigned offset, inclusive.
+    /// For an untrimmed shard this equals the next sequence number
+    /// (the canonical "how many entries have I written" answer). After
+    /// <see cref="IWalStorageProvider.TrimAsync"/> removes a prefix
+    /// (driven by <see cref="ILatticeWalGc"/> once every consumer has
+    /// acked past that point) the live count drops by exactly the
+    /// trimmed prefix length, so dashboards, alerts, and the
+    /// back-pressure health check observe the persisted footprint
+    /// rather than a monotonically-growing offset counter.
     /// </summary>
+    Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Diagnostic helper: returns the number of entries currently
+    /// persisted in this WAL shard. <b>Trim-unaware</b> -
+    /// <see cref="IWalStorageProvider.TrimAsync"/> reduces the
+    /// persisted footprint without updating this counter, so callers
+    /// that want the live footprint (dashboards, alerts, back-pressure)
+    /// must use <see cref="GetLiveEntryCountAsync"/> instead. Retained
+    /// as an obsolete forwarder for one minor version so existing
+    /// callers compile without immediate change.
+    /// </summary>
+    [Obsolete("Use GetLiveEntryCountAsync instead. GetEntryCountAsync is not trim-aware and will be removed in a future minor version.", DiagnosticId = "LATTICE0001")]
     Task<long> GetEntryCountAsync(CancellationToken cancellationToken);
 }

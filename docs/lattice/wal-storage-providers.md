@@ -12,13 +12,15 @@ The write-ahead log (WAL) is the per-shard, durable, ordered record of every com
 | **Dense offsets** | Caller-assigned offsets are dense (gap-free) per shard. Implementations must preserve offsets verbatim so `GetHighestOffsetAsync` on activation always returns a value exactly one less than the next offset the caller will assign. |
 | **Read order** | `ReadAsync` yields entries with `Offset` strictly greater than `fromOffsetExclusive`, in ascending offset order, capped at `maxEntries`. Pass `-1` to read from the start. |
 | **Trim is idempotent** | `TrimAsync` removes every entry with offset `<= throughOffsetInclusive`. Trimming through an offset that has already been trimmed is a no-op; trimming through an offset that does not yet exist reserves the trim point for a future append. The persisted head sentinel is never rolled back. |
+| **Lowest-offset query** | `GetLowestOffsetAsync` returns the lowest still-persisted offset, or `-1` for an empty / fully-trimmed shard. Together with `GetHighestOffsetAsync` it lets a caller compute the live entry count (`highest - lowest + 1`) without scanning the log, so trim-aware diagnostics observe the persisted footprint rather than the monotonically-growing offset counter. |
 
-The four-method contract:
+The five-method contract:
 
 ```text
 Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken);
 IAsyncEnumerable<WalEntry> ReadAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken cancellationToken);
 Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken);
+Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken);
 Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken);
 ```
 
@@ -117,7 +119,7 @@ Azure Tables caps a single transaction at **100 actions and 4 MiB**. Because eve
 
 #### Operational characteristics
 
-- **Recovery**: `GetHighestOffsetAsync` resolves in **one point read** of the head sentinel - O(1) regardless of log length.
+- **Recovery**: `GetHighestOffsetAsync` resolves in **one point read** of the head sentinel - O(1) regardless of log length. `GetLowestOffsetAsync` resolves in **one ascending `Top(1)` query** over the entry-row range - O(1) symmetric to the high-water-mark read.
 - **Reads**: `ReadAsync` issues a tightly-bounded `(PartitionKey, RowKey)` range query so paging is server-side. The provider yields entries lazily through `IAsyncEnumerable<WalEntry>` so a caller that only needs the first N entries pays for one Azure Tables page rather than the full log.
 - **Trim**: chunked delete in 100-action transactions with `ETag.All` (unconditional). A crash mid-trim leaves a contiguous live tail and a stale prefix; the next trim resumes from the new head. The head sentinel is never deleted, so the monotonic offset counter survives both trims and silo restarts.
 - **Concurrency**: instances are safe for concurrent calls across distinct partitions. Concurrent calls targeting the same partition rely on Azure Tables' partition-level transactional serialisation; the WAL grain is single-writer per shard so this is the documented usage.
@@ -144,11 +146,11 @@ If Azurite is not reachable, the fixture's `[OneTimeSetUp]` falls through to `As
 
 ## Implementing a custom provider
 
-Authoring a custom provider is purely an exercise in implementing the four-method contract. The guide-rails are:
+Authoring a custom provider is purely an exercise in implementing the five-method contract. The guide-rails are:
 
 1. Validate the supplied offsets are dense (`entries[i].Offset == entries[0].Offset + i`) **before** issuing any I/O so a rejected batch leaves observable state untouched.
 2. Treat `cancellationToken` as a pre-condition - check it on entry to every public method.
-3. Persist a head pointer (or equivalent O(1)-readable structure) so `GetHighestOffsetAsync` does not require scanning the log on activation.
+3. Persist a head pointer (or equivalent O(1)-readable structure) so `GetHighestOffsetAsync` does not require scanning the log on activation. Symmetrically, expose the lowest still-persisted offset in O(1) so `GetLowestOffsetAsync` does not scan either - the live entry count is computed from both endpoints on the hot diagnostic path.
 4. Make `TrimAsync` idempotent and safe to interrupt - a crash mid-trim must leave the WAL in a state where a subsequent trim resumes correctly.
 
 The `InMemoryWalStorageProvider` source under `src/lattice/InMemoryWalStorageProvider.cs` is the canonical reference implementation; the `AzureTableWalStorageProvider` source under `src/lattice.storage.azuretable/` is the canonical durable reference implementation.

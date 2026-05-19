@@ -71,9 +71,9 @@ public class WalShardWalIntegrationTests
         var lattice = _cluster.Client.GetGrain<ILattice>(tree);
         var wal = _cluster.Client.GetGrain<IWalShardGrain>($"{tree}/0");
 
-        var before = await wal.GetEntryCountAsync(CancellationToken.None);
+        var before = await wal.GetLiveEntryCountAsync(CancellationToken.None);
         await lattice.SetAsync("k", new byte[] { 1, 2, 3 });
-        var after = await wal.GetEntryCountAsync(CancellationToken.None);
+        var after = await wal.GetLiveEntryCountAsync(CancellationToken.None);
 
         Assert.That(after, Is.GreaterThan(before));
     }
