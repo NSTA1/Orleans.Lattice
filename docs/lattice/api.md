@@ -64,11 +64,15 @@ siloBuilder.AddAzureTableWalStorage(o =>
 });
 ```
 
-Managed-identity deployments configure each extension independently
-against the same storage account: `AddAzureTableGrainStorage` accepts
+Managed-identity deployments can either configure each extension
+independently against the same storage account, or - for the canonical
+"one credential, one client" shape - share a single pre-built
+`TableServiceClient` between them: `AddAzureTableGrainStorage` accepts
 a pre-built `TableServiceClient(serviceUri, credential)` via its
 `options.TableServiceClient` slot, and `AddAzureTableWalStorage`
-accepts `ServiceUri` + `TokenCredential` (e.g.
+accepts the same instance via `options.ServiceClient`. Hosts that prefer
+per-extension wiring can instead configure `AddAzureTableWalStorage`
+with `ServiceUri` + `TokenCredential` (e.g.
 `new DefaultAzureCredential()`) directly on its options object. See
 [WAL Storage Providers](wal-storage-providers.md) for the full set of
 WAL authentication modes.

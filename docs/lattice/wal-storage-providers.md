@@ -103,9 +103,19 @@ siloBuilder.AddAzureTableWalStorage(o =>
     o.ServiceUri = new Uri("https://myaccount.table.core.windows.net");
     o.SharedKeyCredential = new TableSharedKeyCredential("myaccount", "<base64 key>");
 });
+
+// Pre-built TableServiceClient mode (shared with other Orleans components):
+siloBuilder.AddAzureTableWalStorage(o =>
+{
+    // Host already constructs one TableServiceClient (typically with
+    // DefaultAzureCredential) and routes every Azure-backed component
+    // through it - the same shape AddAzureTableGrainStorage's
+    // options.TableServiceClient slot expects.
+    o.ServiceClient = sharedTableServiceClient;
+});
 ```
 
-Exactly one authentication mode must be configured. `Validate()` throws `InvalidOperationException` at first use if zero or more than one mode is set, or if `ServiceUri` is supplied without a credential. The optional `ConfigureClientOptions` callback lets the host attach custom retry policies, diagnostics, or transport without the provider having to surface a pass-through option per setting.
+Exactly one authentication mode must be configured. `Validate()` throws `InvalidOperationException` at first use if zero or more than one mode is set, or if `ServiceUri` is supplied without a credential. The optional `ConfigureClientOptions` callback lets the host attach custom retry policies, diagnostics, or transport without the provider having to surface a pass-through option per setting - except in pre-built `ServiceClient` mode, where the callback is ignored because the host already owns the client's `TableClientOptions` and lifetime.
 
 #### Storage layout
 

@@ -10,11 +10,15 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// and supply a delegate that populates this object.
 /// <para>
 /// Exactly one of <see cref="ConnectionString"/>,
-/// <see cref="ServiceUri"/> + <see cref="TokenCredential"/>, or
-/// <see cref="ServiceUri"/> + <see cref="SharedKeyCredential"/> must be
-/// configured. The provider reads the populated authentication mode at
-/// first use and constructs a long-lived <see cref="TableServiceClient"/>
-/// from it; subsequent edits to these fields are not observed.
+/// <see cref="ServiceUri"/> + <see cref="TokenCredential"/>,
+/// <see cref="ServiceUri"/> + <see cref="SharedKeyCredential"/>, or
+/// a pre-built <see cref="ServiceClient"/> must be configured. The
+/// provider reads the populated authentication mode at first use and,
+/// for the three credential-based modes, constructs a long-lived
+/// <see cref="TableServiceClient"/> from it; subsequent edits to these
+/// fields are not observed. When <see cref="ServiceClient"/> is set,
+/// the supplied instance is returned verbatim and the host owns its
+/// lifetime and <see cref="TableClientOptions"/>.
 /// </para>
 /// </summary>
 public sealed class AzureTableWalStorageOptions
@@ -59,6 +63,25 @@ public sealed class AzureTableWalStorageOptions
     public TableSharedKeyCredential? SharedKeyCredential { get; set; }
 
     /// <summary>
+    /// Optional pre-built <see cref="TableServiceClient"/> supplied by
+    /// the host. When set, the provider uses this instance verbatim
+    /// instead of constructing its own from
+    /// <see cref="ConnectionString"/> / <see cref="ServiceUri"/> +
+    /// credential; <see cref="ConfigureClientOptions"/> is ignored and
+    /// the host owns the client's <see cref="TableClientOptions"/> and
+    /// lifetime. Mirrors the canonical Orleans wiring shape used by
+    /// <c>AddAzureTableGrainStorage</c>'s <c>TableServiceClient</c>
+    /// slot so a silo configured with one shared
+    /// <see cref="TableServiceClient"/> (typically constructed once
+    /// with <c>DefaultAzureCredential</c> for managed-identity
+    /// deployments) can route every Azure-backed component through the
+    /// same client. Mutually exclusive with <see cref="ConnectionString"/>,
+    /// <see cref="ServiceUri"/>, <see cref="TokenCredential"/>, and
+    /// <see cref="SharedKeyCredential"/>.
+    /// </summary>
+    public TableServiceClient? ServiceClient { get; set; }
+
+    /// <summary>
     /// The Azure Table that backs the WAL. Defaults to
     /// <see cref="DefaultTableName"/>. The table is created on first
     /// use (idempotent) so hosts do not need to provision it
@@ -95,6 +118,15 @@ public sealed class AzureTableWalStorageOptions
         var hasServiceUri = ServiceUri is not null;
         var hasTokenCredential = TokenCredential is not null;
         var hasSharedKey = SharedKeyCredential is not null;
+        var hasServiceClient = ServiceClient is not null;
+
+        if (hasServiceClient && (hasConnectionString || hasServiceUri || hasTokenCredential || hasSharedKey))
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(ServiceClient)} is mutually exclusive with "
+                + $"{nameof(ConnectionString)} / {nameof(ServiceUri)} / {nameof(TokenCredential)} / {nameof(SharedKeyCredential)}. "
+                + "Configure exactly one authentication mode.");
+        }
 
         if (hasConnectionString && (hasServiceUri || hasTokenCredential || hasSharedKey))
         {
@@ -103,10 +135,11 @@ public sealed class AzureTableWalStorageOptions
                 + $"{nameof(ServiceUri)} / {nameof(TokenCredential)} / {nameof(SharedKeyCredential)}. Configure exactly one authentication mode.");
         }
 
-        if (!hasConnectionString && !hasServiceUri)
+        if (!hasConnectionString && !hasServiceUri && !hasServiceClient)
         {
             throw new InvalidOperationException(
-                $"{nameof(AzureTableWalStorageOptions)} requires either {nameof(ConnectionString)} or {nameof(ServiceUri)} (with a credential) to be configured.");
+                $"{nameof(AzureTableWalStorageOptions)} requires one of {nameof(ConnectionString)}, "
+                + $"{nameof(ServiceUri)} (with a credential), or {nameof(ServiceClient)} to be configured.");
         }
 
         if (hasServiceUri && hasTokenCredential && hasSharedKey)
@@ -124,13 +157,22 @@ public sealed class AzureTableWalStorageOptions
 
     /// <summary>
     /// Builds a fresh <see cref="TableServiceClient"/> from the
-    /// configured authentication mode. Called once per provider
-    /// instance at first use; the resulting client is reused for the
-    /// lifetime of the provider.
+    /// configured authentication mode, or returns the host-supplied
+    /// <see cref="ServiceClient"/> verbatim when that mode is in use.
+    /// Called once per provider instance at first use; the resulting
+    /// client is reused for the lifetime of the provider.
     /// </summary>
     internal TableServiceClient BuildServiceClient()
     {
         Validate();
+
+        if (ServiceClient is not null)
+        {
+            // Host owns the client's TableClientOptions and lifetime;
+            // ConfigureClientOptions is intentionally ignored in this
+            // mode because the client is already fully constructed.
+            return ServiceClient;
+        }
 
         var clientOptions = new TableClientOptions();
         ConfigureClientOptions?.Invoke(clientOptions);
