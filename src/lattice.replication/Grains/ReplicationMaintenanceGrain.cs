@@ -14,6 +14,20 @@ namespace Orleans.Lattice.Replication.Grains;
 /// replicated tree using the shared
 /// <see cref="CoordinatorGrain{TSelf}"/> reminder + phase-timer
 /// scaffold.
+/// <para>
+/// The peer list driving the fall-off probe is sourced from
+/// <see cref="IReplicationTopology.CurrentPeers"/>, not from
+/// <see cref="LatticeReplicationOptions.ReplicationPeers"/> directly.
+/// In the default configuration the two are equivalent because the
+/// registered <see cref="OptionsReplicationTopology"/> projects the
+/// same <see cref="IOptionsMonitor{TOptions}"/> instance; hosts that
+/// register a custom <see cref="IReplicationTopology"/> singleton
+/// have that topology drive which peers get walked each cadence,
+/// closing the only correctness asymmetry that remained after the
+/// initial activation-only topology seam (an unprotected peer can
+/// no longer silently fall off the WAL retention window when the
+/// custom topology and options diverge).
+/// </para>
 /// </summary>
 internal sealed class ReplicationMaintenanceGrain(
     IGrainContext context,
@@ -23,6 +37,7 @@ internal sealed class ReplicationMaintenanceGrain(
     ILatticeWalGc gc,
     ILatticeFallOffLogDetector fallOffDetector,
     ILatticeWalIntrospection walIntrospection,
+    IReplicationTopology topology,
     IGrainFactory grainFactory,
     [PersistentState("replication-maintenance", LatticeOptions.StorageProviderName)]
     IPersistentState<ReplicationMaintenanceState> state)
@@ -37,6 +52,8 @@ internal sealed class ReplicationMaintenanceGrain(
         fallOffDetector ?? throw new ArgumentNullException(nameof(fallOffDetector));
     private readonly ILatticeWalIntrospection _walIntrospection =
         walIntrospection ?? throw new ArgumentNullException(nameof(walIntrospection));
+    private readonly IReplicationTopology _topology =
+        topology ?? throw new ArgumentNullException(nameof(topology));
     private readonly IGrainFactory _grainFactory =
         grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
 
@@ -172,7 +189,7 @@ internal sealed class ReplicationMaintenanceGrain(
             var prevFallOffTicks = state.State.LastFallOffCheckTicks;
             try
             {
-                await ProbeFallOffAsync(options).ConfigureAwait(true);
+                await ProbeFallOffAsync().ConfigureAwait(true);
                 state.State.LastFallOffCheckTicks = nowTicks;
                 await state.WriteStateAsync().ConfigureAwait(true);
             }
@@ -188,9 +205,14 @@ internal sealed class ReplicationMaintenanceGrain(
         }
     }
 
-    private async Task ProbeFallOffAsync(LatticeReplicationOptions options)
+    private async Task ProbeFallOffAsync()
     {
-        if (options.ReplicationPeers is not { } peers || peers.Count == 0)
+        // Snapshot the topology once per cadence so a runtime peer-
+        // membership change mid-pass is observed atomically: the
+        // probe walks either the pre-change or the post-change set,
+        // never a torn one.
+        var peers = _topology.CurrentPeers;
+        if (peers.Count == 0)
         {
             return;
         }

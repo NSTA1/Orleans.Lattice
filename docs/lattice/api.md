@@ -97,6 +97,14 @@ siloBuilder.ConfigureLattice("my-tree", o =>
 });
 ```
 
+> **Cross-cluster replication** is layered on top of the core library
+> by the `Orleans.Lattice.Replication` package via
+> `AddLatticeReplication`. Peer membership (who this silo ships its
+> WAL to) is configured through `LatticeReplicationOptions.ReplicationPeers`
+> or a custom `IReplicationTopology` registration - both are documented
+> in [Replication drivers: Peer configuration](../lattice.replication/replication-drivers.md#peer-configuration-topology-vs-replicationpeers).
+> The core `LatticeOptions` surface does not carry peer state.
+
 > Structural sizing (`MaxLeafKeys`, `MaxInternalChildren`,
 > `ShardCount`) is **not** configured here. Those values are pinned
 > per-tree in the registry. See [Tree Sizing](tree-sizing.md) for how
