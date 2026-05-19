@@ -38,11 +38,14 @@ public class ReplicationDriverActivationServiceTests
         IGrainFactory Factory) Create(
             IReadOnlyDictionary<string, LatticeMergeMode>? trees,
             IReadOnlyCollection<string>? peers = null,
-            IGrainFactory? customFactory = null)
+            IGrainFactory? customFactory = null,
+            IReplicationTopology? topology = null)
     {
         var factory = customFactory ?? Substitute.For<IGrainFactory>();
+        var resolvedTopology = topology ?? new FakeReplicationTopology(peers);
         var service = new ReplicationDriverActivationService(
             factory, Monitor(trees, peers),
+            resolvedTopology,
             NullLogger<ReplicationDriverActivationService>.Instance,
             new ReplicationPeerStats());
         return (service, factory);
@@ -295,6 +298,101 @@ public class ReplicationDriverActivationServiceTests
             Throws.InstanceOf<OperationCanceledException>());
     }
 
+    // --- Runtime topology subscription ---
+
+    [Test]
+    public async Task ExecuteAsync_activates_shipper_for_runtime_added_peer()
+    {
+        // Initial topology has no peers; once ExecuteAsync has run
+        // past its initial pass, a runtime EmitAdded should drive
+        // shipper activation for every replicated tree.
+        var trees = new Dictionary<string, LatticeMergeMode>
+        {
+            ["alpha"] = LatticeMergeMode.LwwRegister,
+            ["beta"] = LatticeMergeMode.LwwRegister,
+        };
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<IReplicationMaintenanceGrain>(Arg.Any<string>())
+            .Returns(Substitute.For<IReplicationMaintenanceGrain>());
+        var shipperAlpha = Substitute.For<IReplicationShipperGrain>();
+        var shipperBeta = Substitute.For<IReplicationShipperGrain>();
+        factory.GetGrain<IReplicationShipperGrain>("alpha/site-c").Returns(shipperAlpha);
+        factory.GetGrain<IReplicationShipperGrain>("beta/site-c").Returns(shipperBeta);
+        var topology = new FakeReplicationTopology();
+        var (service, _) = Create(trees, peers: null, customFactory: factory, topology: topology);
+
+        await RunExecuteAsync(service, CancellationToken.None);
+
+        // Initial pass: no shippers activated yet.
+        factory.DidNotReceive().GetGrain<IReplicationShipperGrain>(Arg.Any<string>());
+
+        // Runtime add: both per-tree shippers must be activated.
+        topology.EmitAdded("site-c");
+
+        // The runtime activation path is fire-and-forget; allow a few
+        // event-loop ticks for the inner task to finish.
+        for (var i = 0; i < 50; i++)
+        {
+            if (shipperAlpha.ReceivedCalls().Any() && shipperBeta.ReceivedCalls().Any())
+            {
+                break;
+            }
+            await Task.Delay(20);
+        }
+
+        await shipperAlpha.Received(1).EnsureActiveAsync(Arg.Any<CancellationToken>());
+        await shipperBeta.Received(1).EnsureActiveAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ignores_runtime_peer_removed_event()
+    {
+        // A Removed event must not trigger any teardown or activation;
+        // the shipper grain stays activated to drain its remaining
+        // backlog. Verified by asserting GetGrain<IReplicationShipperGrain>
+        // is never called after the Removed event.
+        var trees = new Dictionary<string, LatticeMergeMode>
+        {
+            ["alpha"] = LatticeMergeMode.LwwRegister,
+        };
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<IReplicationMaintenanceGrain>(Arg.Any<string>())
+            .Returns(Substitute.For<IReplicationMaintenanceGrain>());
+        var initial = Substitute.For<IReplicationShipperGrain>();
+        factory.GetGrain<IReplicationShipperGrain>("alpha/site-b").Returns(initial);
+        var topology = new FakeReplicationTopology(new[] { "site-b" });
+        var (service, _) = Create(trees, peers: new[] { "site-b" }, customFactory: factory, topology: topology);
+
+        await RunExecuteAsync(service, CancellationToken.None);
+        factory.ClearReceivedCalls();
+
+        topology.EmitRemoved("site-b");
+        await Task.Delay(50);
+
+        factory.DidNotReceive().GetGrain<IReplicationShipperGrain>(Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task ExecuteAsync_disposes_topology_subscription_on_service_dispose()
+    {
+        var trees = new Dictionary<string, LatticeMergeMode>
+        {
+            ["alpha"] = LatticeMergeMode.LwwRegister,
+        };
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<IReplicationMaintenanceGrain>(Arg.Any<string>())
+            .Returns(Substitute.For<IReplicationMaintenanceGrain>());
+        var topology = new FakeReplicationTopology();
+        var (service, _) = Create(trees, customFactory: factory, topology: topology);
+
+        await RunExecuteAsync(service, CancellationToken.None);
+        Assert.That(topology.SubscriberCount, Is.EqualTo(1));
+
+        service.Dispose();
+
+        Assert.That(topology.SubscriberCount, Is.EqualTo(0));
+    }
+
     // --- Constructor null guards ---
 
     [Test]
@@ -304,6 +402,7 @@ public class ReplicationDriverActivationServiceTests
             () => new ReplicationDriverActivationService(
                 null!,
                 Monitor(trees: null),
+                new FakeReplicationTopology(),
                 NullLogger<ReplicationDriverActivationService>.Instance,
                 new ReplicationPeerStats()),
             Throws.InstanceOf<ArgumentNullException>());
@@ -315,6 +414,20 @@ public class ReplicationDriverActivationServiceTests
         Assert.That(
             () => new ReplicationDriverActivationService(
                 Substitute.For<IGrainFactory>(),
+                null!,
+                new FakeReplicationTopology(),
+                NullLogger<ReplicationDriverActivationService>.Instance,
+                new ReplicationPeerStats()),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_topology_is_null()
+    {
+        Assert.That(
+            () => new ReplicationDriverActivationService(
+                Substitute.For<IGrainFactory>(),
+                Monitor(trees: null),
                 null!,
                 NullLogger<ReplicationDriverActivationService>.Instance,
                 new ReplicationPeerStats()),
@@ -328,6 +441,7 @@ public class ReplicationDriverActivationServiceTests
             () => new ReplicationDriverActivationService(
                 Substitute.For<IGrainFactory>(),
                 Monitor(trees: null),
+                new FakeReplicationTopology(),
                 null!,
                 new ReplicationPeerStats()),
             Throws.InstanceOf<ArgumentNullException>());
@@ -347,6 +461,7 @@ public class ReplicationDriverActivationServiceTests
             () => new ReplicationDriverActivationService(
                 Substitute.For<IGrainFactory>(),
                 Monitor(trees: null),
+                new FakeReplicationTopology(),
                 NullLogger<ReplicationDriverActivationService>.Instance,
                 null!),
             Throws.InstanceOf<ArgumentNullException>());

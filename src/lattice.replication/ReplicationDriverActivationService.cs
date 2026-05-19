@@ -20,6 +20,21 @@ namespace Orleans.Lattice.Replication;
 /// keeps the activation alive even after the activating silo shuts
 /// down.
 /// <para>
+/// Peer membership is sourced from <see cref="IReplicationTopology"/>
+/// rather than read once from
+/// <see cref="LatticeReplicationOptions.ReplicationPeers"/>: the
+/// initial snapshot drives the startup activation pass, and a
+/// long-lived <see cref="IReplicationTopology.Subscribe"/> subscription
+/// activates one shipper per replicated tree for every peer added at
+/// runtime. <see cref="PeerChangeKind.Removed"/> events do not trigger
+/// any teardown - the shipper grain stays activated to drain its
+/// remaining backlog, and the producer-side doorbell ring stops firing
+/// for the removed peer automatically because
+/// <c>ShardedReplogSink</c> reads
+/// <see cref="LatticeReplicationOptions.ReplicationPeers"/> per WAL
+/// append.
+/// </para>
+/// <para>
 /// <see cref="IHostedService.StartAsync"/> ordering is not guaranteed
 /// across hosted services: the host queues every registered service's
 /// <see cref="BackgroundService.ExecuteAsync"/> on a tracked task in
@@ -31,7 +46,7 @@ namespace Orleans.Lattice.Replication;
 /// driver activation reliable rather than flaky, this service uses a
 /// retry-with-backoff loop: every grain that fails to activate is
 /// kept in the pending set and retried on the next pass, with
-/// exponential backoff between passes (1 s initial, doubling, 30 s
+/// exponential backoff between passes (250ms initial, doubling, 30s
 /// cap, reset on any per-item success). The loop only exits when the
 /// pending set is empty or <paramref name="stoppingToken"/> is
 /// cancelled.
@@ -54,7 +69,9 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
 {
     private readonly IGrainFactory _grainFactory;
     private readonly IOptionsMonitor<LatticeReplicationOptions> _optionsMonitor;
+    private readonly IReplicationTopology _topology;
     private readonly ILogger<ReplicationDriverActivationService> _logger;
+    private IDisposable? _topologySubscription;
 
     /// <summary>
     /// Initialises the service. The <paramref name="peerStats"/> dependency
@@ -72,11 +89,13 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
     public ReplicationDriverActivationService(
         IGrainFactory grainFactory,
         IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
+        IReplicationTopology topology,
         ILogger<ReplicationDriverActivationService> logger,
         ReplicationPeerStats peerStats)
     {
         _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
         _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
+        _topology = topology ?? throw new ArgumentNullException(nameof(topology));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         ArgumentNullException.ThrowIfNull(peerStats);
         // peerStats is intentionally not stored: the DI container roots
@@ -100,8 +119,9 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
     {
         // Resolve the unnamed (default) options instance. Per-tree
         // overrides apply when each grain calls IOptionsMonitor.Get;
-        // the activation service only needs the membership set
-        // (ReplicatedTrees + ReplicationPeers) which is cluster-wide.
+        // the activation service only needs the replicated-tree
+        // membership (peer membership now flows through
+        // IReplicationTopology).
         var options = _optionsMonitor.CurrentValue;
 
         if (options.ReplicatedTrees is not { } trees || trees.Count == 0)
@@ -110,7 +130,49 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
             return;
         }
 
-        var peers = options.ReplicationPeers ?? Array.Empty<string>();
+        // Subscribe to the topology BEFORE snapshotting the initial
+        // peer set so a peer added between the snapshot read and the
+        // subscribe call is not lost. The subscription stays alive
+        // for the lifetime of this service so runtime-added peers
+        // get their shippers activated without restarting the silo;
+        // it is disposed in Dispose() below.
+        var stableTrees = trees;
+        _topologySubscription = _topology.Subscribe(change =>
+        {
+            if (change.Kind != PeerChangeKind.Added)
+            {
+                // Removed events do not trigger any teardown - the
+                // shipper grain stays activated to drain its
+                // remaining backlog, and the doorbell ring on
+                // ShardedReplogSink already keys off the live
+                // ReplicationPeers snapshot.
+                return;
+            }
+
+            // Fire-and-forget activation per (tree, newly-added peer).
+            // Bounded by stoppingToken so a host shutdown cancels
+            // pending retries cleanly.
+            foreach (var (treeName, _) in stableTrees)
+            {
+                if (string.IsNullOrEmpty(treeName))
+                {
+                    continue;
+                }
+                var capturedTree = treeName;
+                var capturedPeer = change.PeerClusterId;
+                _ = Task.Run(
+                    () => ActivateWithRetryAsync(
+                        kind: "shipper",
+                        label: $"({capturedTree}, {capturedPeer})",
+                        activate: ct => _grainFactory
+                            .GetGrain<IReplicationShipperGrain>($"{capturedTree}/{capturedPeer}")
+                            .EnsureActiveAsync(ct),
+                        stoppingToken),
+                    stoppingToken);
+            }
+        });
+
+        var initialPeers = _topology.CurrentPeers;
 
         // Build the pending work list once. Each work item carries a
         // closure that performs the activation call, plus a
@@ -136,7 +198,7 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
                     .GetGrain<IReplicationMaintenanceGrain>(capturedTree)
                     .EnsureActiveAsync(ct)));
 
-            foreach (var peer in peers)
+            foreach (var peer in initialPeers)
             {
                 if (string.IsNullOrEmpty(peer))
                 {
@@ -222,6 +284,70 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
             var nextTicks = Math.Min(MaxRetryDelay.Ticks, delay.Ticks * 2);
             delay = TimeSpan.FromTicks(nextTicks);
         }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="activate"/> with the same retry-with-backoff
+    /// loop the initial activation pass uses. Invoked off the
+    /// <see cref="IReplicationTopology.Subscribe"/> callback for
+    /// runtime-added peers so the topology subscriber stays
+    /// non-blocking. Cancellation via <paramref name="stoppingToken"/>
+    /// is the only graceful termination path; the loop swallows
+    /// transient errors and retries until activation succeeds.
+    /// </summary>
+    private async Task ActivateWithRetryAsync(
+        string kind,
+        string label,
+        Func<CancellationToken, Task> activate,
+        CancellationToken stoppingToken)
+    {
+        var delay = InitialRetryDelay;
+        var pass = 0;
+        while (true)
+        {
+            if (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            pass++;
+            try
+            {
+                await activate(stoppingToken).ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Replication driver runtime activation failed for {Kind} {Label} on pass {Pass}; will retry",
+                    kind, label, pass);
+            }
+
+            try
+            {
+                await Task.Delay(delay, stoppingToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var nextTicks = Math.Min(MaxRetryDelay.Ticks, delay.Ticks * 2);
+            delay = TimeSpan.FromTicks(nextTicks);
+        }
+    }
+
+    /// <inheritdoc />
+    public override void Dispose()
+    {
+        // Release the topology subscription before base.Dispose so
+        // no Added callback fires after the underlying CTS is gone.
+        _topologySubscription?.Dispose();
+        _topologySubscription = null;
+        base.Dispose();
     }
 
     /// <summary>
