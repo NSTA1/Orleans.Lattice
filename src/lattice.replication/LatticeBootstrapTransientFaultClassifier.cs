@@ -33,6 +33,18 @@ namespace Orleans.Lattice.Replication;
 ///     type name rather than a typed reference so the replication
 ///     package does not take a <c>Grpc.Core</c> dependency; a host
 ///     that wires a non-gRPC transport pays no cost.</description></item>
+///   <item><description><c>Orleans.Runtime.EnumerationAbortedException</c> -
+///     the Orleans cross-grain <c>IAsyncEnumerable</c> session has
+///     expired or been deactivated mid-stream. This is the canonical
+///     transient surface for a bootstrap drain whose producer-side
+///     snapshot stream is interrupted by a long receiver-side apply
+///     pause, a producer-side reactivation, or simply a busy
+///     producer that lets the per-call enumerator state expire while
+///     the receiver is still consuming. The receiver's retry path
+///     reopens the stream from <c>LastAppliedHlc</c>, so resuming
+///     after an enumerator session expiry is correctness-preserving.
+///     Matched by type name so the replication package does not
+///     take a runtime dependency on Orleans internals.</description></item>
 /// </list>
 /// <para>
 /// A non-transient exception - <see cref="InvalidOperationException"/>
@@ -65,6 +77,14 @@ public static class LatticeBootstrapTransientFaultClassifier
     /// package does not take a <c>Grpc.Core</c> dependency.
     /// </summary>
     private const string GrpcRpcExceptionTypeName = "Grpc.Core.RpcException";
+
+    /// <summary>
+    /// Fully-qualified name of the Orleans cross-grain async-enumerable
+    /// session-expiry exception. Matched by name so the replication
+    /// package does not take a runtime dependency on Orleans
+    /// internals.
+    /// </summary>
+    private const string EnumerationAbortedExceptionTypeName = "Orleans.Runtime.EnumerationAbortedException";
 
     /// <summary>
     /// gRPC status code <c>DeadlineExceeded</c> (4) - the deadline
@@ -120,6 +140,21 @@ public static class LatticeBootstrapTransientFaultClassifier
             || exception is IOException)
         {
             return true;
+        }
+
+        // Orleans cross-grain IAsyncEnumerable session expiry. Match
+        // by full type name so a host that does not stream across
+        // grain boundaries (synchronous-only providers) pays no cost,
+        // and so the replication package does not link
+        // Orleans.Runtime types into its public surface. Walks the
+        // inheritance chain because the runtime occasionally raises
+        // derived types from the same family.
+        for (var t = exception.GetType(); t is not null; t = t.BaseType)
+        {
+            if (string.Equals(t.FullName, EnumerationAbortedExceptionTypeName, StringComparison.Ordinal))
+            {
+                return true;
+            }
         }
 
         // gRPC RpcException - matched by type name so the

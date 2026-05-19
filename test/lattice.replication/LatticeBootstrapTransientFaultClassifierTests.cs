@@ -105,4 +105,22 @@ public sealed class LatticeBootstrapTransientFaultClassifierTests
         var ex = StubRpcException.Create(statusCode: 12, message: "Unimplemented");
         Assert.That(LatticeBootstrapTransientFaultClassifier.IsTransient(ex), Is.False);
     }
+
+    /// <summary>
+    /// Asserts the by-name match for Orleans' cross-grain
+    /// <c>EnumerationAbortedException</c> classifies as transient. The
+    /// receiver-side bootstrap drain reads the producer's snapshot
+    /// stream through a cross-grain <c>IAsyncEnumerable</c>; a heavy
+    /// producer-side workload can cause the Orleans-managed
+    /// enumerator session to expire mid-drain, and the receiver's
+    /// retry path reopens the stream from <c>LastAppliedHlc</c> so
+    /// resuming after such an expiry is correctness-preserving.
+    /// </summary>
+    [Test]
+    public void IsTransient_returns_true_for_orleans_enumeration_aborted()
+    {
+        var ex = new Orleans.Runtime.EnumerationAbortedException(
+            "Enumeration aborted: the remote target does not have a record of this enumerator.");
+        Assert.That(LatticeBootstrapTransientFaultClassifier.IsTransient(ex), Is.True);
+    }
 }

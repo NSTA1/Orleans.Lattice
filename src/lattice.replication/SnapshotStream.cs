@@ -53,12 +53,36 @@ public sealed class SnapshotStream
     public VersionVector CausalStableFrontier { get; }
 
     /// <summary>
-    /// Async stream of every live entry in the source tree whose
+    /// Async stream of every key the source tree carries at
+    /// <see cref="AsOfHlc"/>: every live committed entry whose
     /// <see cref="SnapshotEntry.Timestamp"/> is less than or equal to
     /// <see cref="AsOfHlc"/> (or every live entry, when
-    /// <see cref="AsOfHlc"/> is <see cref="HybridLogicalClock.Zero"/>).
-    /// Entries are emitted in lexicographic key order. Tombstoned and
-    /// expired keys are not emitted in v1.
+    /// <see cref="AsOfHlc"/> is <see cref="HybridLogicalClock.Zero"/>),
+    /// plus the producer's saga-prepared per-key mutations that the
+    /// producer's tx registry had not yet decided at the snapshot's
+    /// linearization point. The committed-projection rows are emitted
+    /// in lexicographic key order; saga-prepared rows
+    /// (<see cref="SnapshotEntry.IsPrepared"/> =
+    /// <see langword="true"/>) may be interleaved or trailing
+    /// depending on the producer's enumeration strategy. Tombstoned
+    /// and expired keys are not emitted on the committed-projection
+    /// path; prepared deletes are emitted with
+    /// <see cref="SnapshotEntry.IsTombstone"/> set.
+    /// <para>
+    /// Prepared entries carry the source saga's transaction id so the
+    /// receiver can route them into the per-tx pending bucket via
+    /// <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyPreparedSetAsync"/>
+    /// / <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyPreparedDeleteAsync"/>;
+    /// the matching terminal record arrives subsequently via the
+    /// post-snapshot incremental WAL stream and flips visibility
+    /// atomically per saga through
+    /// <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyTxTerminalAsync"/>.
+    /// Sagas the producer's tx registry already decided at snapshot
+    /// time are folded into the committed-projection stream (Committed
+    /// outcomes inline the post-saga value; Aborted outcomes drop the
+    /// prepared mutation entirely), so no separate terminal-decision
+    /// segment is required.
+    /// </para>
     /// </summary>
     public IAsyncEnumerable<SnapshotEntry> Entries { get; }
 

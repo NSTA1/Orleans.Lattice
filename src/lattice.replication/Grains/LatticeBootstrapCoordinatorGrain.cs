@@ -522,13 +522,70 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
 
         int sinceLastPersist = 0;
 
+        // Open the bootstrap-drain ambient scope ONCE for the entire
+        // drain rather than per entry. The scope is invariant across
+        // every <see cref="IReplicationApplier.ApplyAsync"/> call in
+        // this loop, so a per-entry <c>BeginScope()</c> would generate
+        // one scope value per snapshot row - millions of redundant
+        // operations on a large snapshot. Hoisting also makes the
+        // scope's lifetime exactly match the drain's lifetime: the
+        // <c>using</c> deterministically restores the prior ambient
+        // value before the post-drain
+        // <see cref="PinAndCompleteAsync"/> tick re-enters
+        // <see cref="ProcessNextPhaseAsync"/>. The
+        // <see cref="LatticeReplicationOptions.BootstrapTransientRetry"/>
+        // outer retry loop reopens the scope on every retry attempt
+        // (the catch unwinds the <c>using</c> normally), so the flag
+        // is also correctly restored on a fault path.
+        //
+        // The applier-side bypass is documented at length on
+        // <see cref="LatticeBootstrapApplyContext"/>; the short version
+        // is: the snapshot exporter walks shards/leaves in arbitrary
+        // order, so applying the steady-state per-origin HWM gate to
+        // bootstrap entries can drop a still-pending saga key with a
+        // strictly-earlier source HLC and break per-saga all-or-nothing
+        // visibility on the bootstrapped peer. The post-drain
+        // <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+        // in <see cref="PinAndCompleteAsync"/> atomically installs the
+        // per-origin HWM at the snapshot's AsOfHlc, so steady-state
+        // dedup is preserved across the bootstrap-to-incremental
+        // handoff. Receiver-side idempotency during the drain is
+        // upheld by leaf-level LWW and the per-leaf / per-tree saga
+        // dedup primitives.
+        using var bootstrapScope = LatticeBootstrapApplyContext.BeginScope();
+
         await foreach (var entry in snapshot.Entries.ConfigureAwait(true))
         {
-            if (entry.Value is null)
+            // Discriminate prepared-saga rows from committed-projection
+            // rows. A prepared row routes through the per-tx pending
+            // bucket on the receiver via the IsPrepared/TransactionId
+            // slots on WalRecord; the matching terminal record arrives
+            // through the post-snapshot incremental WAL stream and
+            // flips visibility atomically per saga. A committed
+            // projection row routes through the canonical Set/Delete
+            // apply path. The single WalRecord shape covers both
+            // because the steady-state replication path uses the
+            // identical discriminators.
+            var isPrepared = entry.IsPrepared;
+            var isTombstone = entry.IsTombstone;
+
+            if (!isPrepared && entry.Value is null)
             {
-                // Tombstones are not emitted by the default provider,
-                // but defend against custom providers that might
-                // surface them.
+                // Tombstones are not emitted by the default provider
+                // on the committed-projection path (it skips dead
+                // keys), but defend against custom providers that
+                // might surface them.
+                continue;
+            }
+
+            if (isPrepared && entry.TransactionId == Guid.Empty)
+            {
+                // A prepared row without a transaction id has no
+                // routing key for the receiver-side per-tx pending
+                // bucket. The default provider never emits one; treat
+                // a custom provider's malformed entry as a no-op
+                // rather than throwing - a throw here would loop the
+                // entire drain on the same bad entry every retry.
                 continue;
             }
 
@@ -541,21 +598,30 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             // straight to <see cref="IReplicationApplyGrain"/>,
             // so any decorator that fired only on the applier path
             // missed every bootstrap entry; the applier itself preserves
-            // the source HLC and origin id verbatim and routes through
-            // the per-origin HWM dedupe, so re-routing through it is
-            // correctness-preserving for the underlying tree.
+            // the source HLC and origin id verbatim, so re-routing
+            // through it is correctness-preserving for the underlying
+            // tree.
+            var op = (isPrepared, isTombstone) switch
+            {
+                (true, true) => MutationKind.Delete,
+                _ => MutationKind.Set,
+            };
             var record = new WalRecord
             {
                 TreeId = treeName,
-                Op = MutationKind.Set,
+                Op = op,
                 Key = entry.Key,
-                Value = entry.Value,
+                Value = isTombstone ? null : entry.Value,
                 Timestamp = entry.Timestamp,
-                IsTombstone = false,
-                ExpiresAtTicks = 0,
+                IsTombstone = isTombstone,
+                ExpiresAtTicks = entry.ExpiresAtTicks,
                 OriginClusterId = sourceClusterId,
                 Mode = mergeMode,
                 VectorClock = null,
+                IsPrepared = isPrepared,
+                TransactionId = entry.TransactionId,
+                AtomicBatchSize = entry.AtomicBatchSize,
+                AtomicBatchIndex = entry.AtomicBatchIndex,
             };
             await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
 
@@ -566,7 +632,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             LatticeReplicationMetrics.BootstrapEntriesReceived.Add(1,
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId));
-            LatticeReplicationMetrics.BootstrapBytesReceived.Add(entry.Value.Length,
+            var byteCount = entry.Value?.Length ?? 0;
+            LatticeReplicationMetrics.BootstrapBytesReceived.Add(byteCount,
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId));
 

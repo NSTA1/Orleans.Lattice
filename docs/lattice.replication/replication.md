@@ -1,13 +1,18 @@
 # Orleans.Lattice.Replication
 
-Cross-cluster replication for [Orleans.Lattice](../../README.md) - ships every captured mutation between Orleans clusters with CRDT-aware merges on the receiver.
-
-> [!IMPORTANT]
-> **Cross-cluster bootstrap is not yet shipped.** The default `LatticeSnapshotProvider` exports a snapshot from local Orleans state via in-cluster grain calls, which means snapshot bootstrap and auto-bootstrap currently work only for re-seeding peers **within the same Orleans cluster** as the source. Bootstrapping a brand-new peer in a remote cluster requires a transport-aware snapshot provider that has not yet been built; until then, cross-cluster peers must come up under steady-state incremental shipping while the source WAL still retains the relevant suffix. The full gap analysis and the planned remediation (a pull-based snapshot transport, a replication-aware `ISnapshotProvider`, and the receiver-side reconciliation work) is tracked in [`roadmap-cross-cluster-bootstrap.md`](../../src/lattice.replication/roadmap-cross-cluster-bootstrap.md). See [Snapshot Bootstrap](snapshot-bootstrap.md) for the per-cluster surface that does work today.
+Cross-cluster replication for [Orleans.Lattice](../../README.md) - captures every mutation at commit time, ships it between Orleans clusters under the source cluster's HLC, and applies it on the receiver with CRDT-aware merges, causal delivery, snapshot bootstrap, and dead-letter quarantine.
 
 ## What is it?
 
-`Orleans.Lattice.Replication` is the **on-the-wire replication engine** that layers on top of `Orleans.Lattice`. Mutations are captured at commit time on the producing cluster, shipped to peer clusters over a long-lived push transport, and applied on the receiver under the source cluster's HLC. No external broker, no shared database, no host-level outgoing-call filter.
+`Orleans.Lattice.Replication` is the **end-to-end cross-cluster replication subsystem** that layers on top of `Orleans.Lattice`. It is more than a wire format - it covers the full producer/transport/receiver pipeline plus the operational surface around it:
+
+- **Capture.** Mutations are intercepted at commit time on the producing cluster and written to a per-tree WAL via the pluggable `IWalStorageProvider` seam (in-memory default, optional Azure Table Storage backend).
+- **Ship.** A per-peer `IReplicationShipperGrain` streams batches to each peer over a long-lived push transport (`IReplicationTransport`, with gRPC as the canonical binding).
+- **Apply.** Inbound entries flow through `IReplicationApplier`, which performs per-origin HWM dedup, causal-dependency parking via the causal-apply buffer, shadow-forward de-duplication, and CRDT-aware merges (LWW-Register, OR-Set, PN-Counter, VersionVector).
+- **Bootstrap.** New or fallen-off-the-log peers seed via the snapshot subsystem (`ISnapshotProvider`, `IRemoteSnapshotTransport`, `LatticeRemoteSnapshotService`, `RemoteSnapshotProvider`) coordinated by the per-tree `LatticeBootstrapCoordinatorGrain` with crash-resumable state.
+- **Operate.** Dead-letter quarantine for poison entries, per-tree merge-mode resolution, operator-driven re-seed, fall-off-log detection, admin introspection (`ILatticeReplicationAdmin`, `ILatticeWalIntrospection`), shared-secret-based mutual auth between clusters, and first-class metrics (apply duration, lag, FIFO violations, bootstrap retries, dead-letter rates) are all in-scope.
+
+No external broker, no shared database, no host-level outgoing-call filter.
 
 It supports:
 

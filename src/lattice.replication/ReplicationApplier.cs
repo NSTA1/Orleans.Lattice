@@ -201,7 +201,32 @@ internal sealed partial class ReplicationApplier(
 
             var hwmGrain = GetHwmGrain(entry.TreeId);
             var hwm = await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
-            if (entry.Timestamp <= hwm)
+
+            // Bootstrap-drain bypass: the receiver-side coordinator
+            // wraps its per-entry ApplyAsync calls in a
+            // <see cref="LatticeBootstrapApplyContext"/> scope. The
+            // snapshot exporter walks shards and leaves in arbitrary
+            // order rather than HLC order, so prepared rows for the
+            // same saga across different shards can arrive with
+            // non-monotonic per-origin HLCs. Applying the per-origin
+            // HWM gate to those entries drops every row whose source
+            // HLC is below the highest already-seen source HLC -
+            // leaving the saga's per-tx pending bucket with a strict
+            // subset of its keys and producing a partial-saga view
+            // when the matching terminal arrives. The post-drain
+            // <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+            // call atomically establishes the per-origin HWM at the
+            // snapshot's AsOfHlc, so steady-state dedup is preserved
+            // across the bootstrap-to-incremental handoff. Receiver-side
+            // idempotency during the drain is upheld by leaf-level LWW
+            // (re-delivery is a no-op), the per-leaf _recentlyTerminal
+            // guard (re-arriving terminals are dropped), and the
+            // per-tree ITxRegistryGrain repeat-same-outcome rule
+            // (re-marking a saga is a no-op). See
+            // <see cref="LatticeBootstrapApplyContext"/> for the
+            // rationale and the dedup primitives that remain in force.
+            var isBootstrapDrain = LatticeBootstrapApplyContext.IsActive;
+            if (!isBootstrapDrain && entry.Timestamp <= hwm)
             {
                 outcome = LatticeReplicationMetrics.OutcomeDedup;
                 return new ApplyResult { Applied = false, HighWaterMark = hwm };
@@ -269,6 +294,38 @@ internal sealed partial class ReplicationApplier(
 
                 await ApplyPointAsync(entry);
                 RecordApplyLag(entry);
+
+                // Bootstrap-drain bypass: skip the per-origin HWM
+                // advance and the per-(tree, origin) FIFO-violation
+                // tracker for entries delivered through a
+                // <see cref="LatticeBootstrapApplyContext"/> scope.
+                // The drain produces entries whose per-origin HLCs
+                // are not globally ordered (the snapshot exporter
+                // visits shards/leaves in arbitrary order), so a
+                // mid-drain advance can later suppress a still-pending
+                // saga key with a strictly-earlier HLC and break
+                // per-saga all-or-nothing visibility, and recording
+                // those non-monotonic HLCs on
+                // <c>_lastAppliedSourceHlc</c> would surface every
+                // out-of-order shard arrival as a spurious
+                // <see cref="LatticeReplicationMetrics.ApplyFifoViolations"/>
+                // increment (the counter is documented as a
+                // transport-side FIFO-regression signal, which is
+                // expressly not what bootstrap delivery is). The
+                // post-drain
+                // <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+                // call installs the per-origin HWM at the snapshot
+                // cut atomically; the first live-incremental entry
+                // delivered after the pin seeds
+                // <c>_lastAppliedSourceHlc</c> at the producer's
+                // first post-pin HLC, which is the canonical FIFO
+                // anchor for steady-state replication.
+                if (isBootstrapDrain)
+                {
+                    outcome = LatticeReplicationMetrics.OutcomeSuccess;
+                    return new ApplyResult { Applied = true, HighWaterMark = hwm };
+                }
+
                 RecordFifoState(entry);
 
                 // Advance the HWM only after the apply commits.
