@@ -94,4 +94,23 @@ internal sealed partial class ShardRootGrain
         var lag = head - minCheckpoint;
         return lag < 0 ? 0 : lag;
     }
+
+    /// <inheritdoc />
+    public async Task<long> SnapshotWalHeadAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await PrepareForOperationAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // The replay coordinator's head offset IS the next-to-be-
+        // assigned WAL sequence number on this shard: the canonical
+        // "open snapshot at this moment" capture point for the
+        // zero-observable-writes cursor design. Snapshot leaves will
+        // replay records [0, value) to materialise the shard's
+        // projection view of the snapshot.
+        var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
+            $"{TreeId}/{ShardIndex}");
+        return await coordinator.GetHeadOffsetAsync(cancellationToken);
+    }
 }
+
