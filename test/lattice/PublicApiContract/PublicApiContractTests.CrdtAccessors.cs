@@ -313,4 +313,76 @@ public partial class PublicApiContractTests
             async () => await accessor.GetAsync(),
             Throws.InstanceOf<InvalidOperationException>());
     }
+
+    // ── MvRegisterAccessor ──────────────────────────────────────────────
+
+    [Test]
+    public async Task MvRegister_GetAsync_on_missing_key_returns_empty_register()
+    {
+        var treeId = "pac-crdt-mv-empty-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var register = await tree.MvRegister<string>("absent").GetAsync();
+        Assert.That(register, Is.Not.Null);
+        Assert.That(register.IsEmpty, Is.True);
+    }
+
+    [Test]
+    public async Task MvRegister_SetAsync_stores_value()
+    {
+        var treeId = "pac-crdt-mv-set-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var accessor = tree.MvRegister<string>("reg");
+        await accessor.SetAsync("r1", "alpha");
+
+        var values = await accessor.ValuesAsync();
+        Assert.That(values, Is.EquivalentTo(new[] { "alpha" }));
+    }
+
+    [Test]
+    public async Task MvRegister_MergeAsync_preserves_concurrent_values()
+    {
+        var treeId = "pac-crdt-mv-merge-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var accessor = tree.MvRegister<string>("reg");
+        await accessor.SetAsync("r1", "alpha");
+
+        var remote = new MvRegister();
+        remote.Set("r2", JsonLatticeSerializer<string>.Default.Serialize("beta"));
+        await accessor.MergeAsync(remote);
+
+        var values = await accessor.ValuesAsync();
+        Assert.That(values, Is.EquivalentTo(new[] { "alpha", "beta" }));
+    }
+
+    [Test]
+    public async Task MvRegister_SetAsync_with_empty_replica_throws()
+    {
+        var treeId = "pac-crdt-mv-emptyrep-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.MvRegister<string>("reg").SetAsync(string.Empty, "x"),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task MvRegister_MergeAsync_with_null_other_throws()
+    {
+        var treeId = "pac-crdt-mv-mergenull-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.MvRegister<string>("reg").MergeAsync(null!),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void MvRegisterAccessor_default_throws_on_use()
+    {
+        var accessor = default(MvRegisterAccessor<string>);
+        Assert.That(
+            async () => await accessor.GetAsync(),
+            Throws.InstanceOf<InvalidOperationException>());
+    }
 }

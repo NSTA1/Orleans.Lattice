@@ -266,8 +266,9 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                         + $"{nameof(LatticeMergeMode)} value '{(int)kvp.Value}' ({scope}). "
                         + $"Use one of {nameof(LatticeMergeMode.LwwRegister)}, "
                         + $"{nameof(LatticeMergeMode.OrSet)}, "
-                        + $"{nameof(LatticeMergeMode.PnCounter)}, or "
-                        + $"{nameof(LatticeMergeMode.VersionVector)}.");
+                        + $"{nameof(LatticeMergeMode.PnCounter)}, "
+                        + $"{nameof(LatticeMergeMode.VersionVector)}, or "
+                        + $"{nameof(LatticeMergeMode.MvRegister)}.");
                 }
             }
         }

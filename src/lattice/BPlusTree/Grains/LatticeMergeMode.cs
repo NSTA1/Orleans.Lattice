@@ -61,4 +61,18 @@ public enum LatticeMergeMode
     /// entry. Late or duplicate delivery is a no-op.
     /// </summary>
     VersionVector = 3,
+
+    /// <summary>
+    /// Multi-value register. Receivers merge the full
+    /// <see cref="Primitives.MvRegister"/> state carried by the value bytes
+    /// (the producer authored the value through
+    /// <see cref="CrdtLatticeExtensions.MvRegister{T}(ILattice, string, ILatticeSerializer{T}?)"/>)
+    /// by keeping entries whose dots are not dominated by the other side's
+    /// dot context and taking the pointwise-max of the two contexts.
+    /// Concurrent active-active writes from different clusters survive the
+    /// merge as distinct dot-tagged values so application code can resolve
+    /// the conflict rather than the wire contract silently dropping one
+    /// side as <see cref="LwwRegister"/> would.
+    /// </summary>
+    MvRegister = 4,
 }

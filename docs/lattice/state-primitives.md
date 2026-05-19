@@ -98,3 +98,23 @@ sequenceDiagram
 ```
 
 Because both `LwwValue.Merge` and `VersionVector.Merge` are lattice operations, applying the same delta twice is a no-op. This makes the protocol tolerant of duplicate deliveries and message reordering.
+
+## Multi-Value Register (MV-Register)
+
+Where `LwwValue` collapses concurrent writes by picking the higher HLC, the multi-value register `MvRegister` preserves every concurrent write as a dot-tagged entry so the application can resolve the conflict itself (e.g. surface every candidate to a user, or merge in a domain-aware way). Like the OR-Set, the register uses **causal dots** - `(replicaId, counter)` pairs - to distinguish concurrent updates from sequential overwrites.
+
+```
+MvRegisterEntry = (ReplicaId, Counter, Value)
+MvRegister      = { Entries: [MvRegisterEntry], Context: { replicaId -> highestCounter } }
+```
+
+The `Context` map records the highest counter each replica has minted, so a write that observed `r1:5` and overwrote it can safely supersede `r1:5` on merge but **must not** drop a concurrent `r2:3` it never observed. The merge rule is:
+
+- Keep every entry whose `(replicaId, counter)` pair is **not** subsumed by the other side's context.
+- Take the pointwise-max of the two contexts.
+
+This is commutative, associative, and idempotent.
+
+`MvRegister.Set(replicaId, value)` drops every entry the writer has observed locally and mints a fresh dot `(replicaId, NextCounter(replicaId))`. Concurrent writes from other replicas that have not been observed survive the next merge, producing a multi-value result that `MvRegisterAccessor<T>.ValuesAsync()` deserialises to `IReadOnlyList<T>`.
+
+Use the multi-value register when **losing a concurrent write is unacceptable** (shopping carts, collaborative-edit content, tag sets where order does not matter but presence does). Use `LwwValue` when last-writer-wins is the desired semantics and the application is happy to drop the loser silently.

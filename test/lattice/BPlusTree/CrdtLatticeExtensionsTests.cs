@@ -98,4 +98,45 @@ public class CrdtLatticeExtensionsTests
         var accessor = default(VersionVectorAccessor);
         Assert.That(async () => await accessor.GetAsync(), Throws.InstanceOf<InvalidOperationException>());
     }
+
+    [Test]
+    public void MvRegister_returns_accessor_bound_to_lattice_and_key()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var accessor = lattice.MvRegister<string>("k1");
+        Assert.That(accessor.Lattice, Is.SameAs(lattice));
+        Assert.That(accessor.Key, Is.EqualTo("k1"));
+        Assert.That(accessor.Serializer, Is.Not.Null);
+    }
+
+    [Test]
+    public void MvRegister_uses_supplied_serializer_when_provided()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var serializer = JsonLatticeSerializer<int>.Default;
+        var accessor = lattice.MvRegister<int>("k1", serializer);
+        Assert.That(accessor.Serializer, Is.SameAs(serializer));
+    }
+
+    [Test]
+    public void MvRegister_throws_on_null_lattice()
+    {
+        ILattice lattice = null!;
+        Assert.That(() => lattice.MvRegister<string>("k"), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void MvRegister_throws_on_empty_key()
+    {
+        var lattice = Substitute.For<ILattice>();
+        Assert.That(() => lattice.MvRegister<string>(""), Throws.InstanceOf<ArgumentException>());
+        Assert.That(() => lattice.MvRegister<string>(null!), Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void Default_MvRegisterAccessor_throws_InvalidOperationException_on_use()
+    {
+        var accessor = default(MvRegisterAccessor<string>);
+        Assert.That(async () => await accessor.GetAsync(), Throws.InstanceOf<InvalidOperationException>());
+    }
 }

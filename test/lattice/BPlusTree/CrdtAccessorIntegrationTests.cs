@@ -274,4 +274,69 @@ public class CrdtAccessorIntegrationTests
         var tree = await CreateTreeAsync();
         Assert.That(async () => await tree.VersionVector("k").MergeAsync(null!), Throws.ArgumentNullException);
     }
+
+    // ── MvRegister ────────────────────────────────────────────
+
+    [Test]
+    public async Task MvRegister_GetAsync_returns_empty_for_missing_key()
+    {
+        var tree = await CreateTreeAsync();
+        var register = await tree.MvRegister<string>("missing").GetAsync();
+        Assert.That(register.IsEmpty, Is.True);
+    }
+
+    [Test]
+    public async Task MvRegister_SetAsync_stores_value()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.MvRegister<string>("k");
+        await accessor.SetAsync("r1", "alpha");
+
+        var values = await accessor.ValuesAsync();
+        Assert.That(values, Is.EquivalentTo(new[] { "alpha" }));
+    }
+
+    [Test]
+    public async Task MvRegister_SetAsync_sequential_writes_supersede_prior_value()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.MvRegister<string>("k");
+        await accessor.SetAsync("r1", "a1");
+        await accessor.SetAsync("r1", "a2");
+
+        var values = await accessor.ValuesAsync();
+        Assert.That(values, Is.EquivalentTo(new[] { "a2" }));
+    }
+
+    [Test]
+    public async Task MvRegister_MergeAsync_keeps_concurrent_writes()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.MvRegister<string>("k");
+        await accessor.SetAsync("r1", "alpha");
+
+        // The remote register's value bytes must be encoded through the
+        // same serializer the accessor uses (default JSON) so the
+        // accessor's ValuesAsync round-trip below can decode them.
+        var remote = new MvRegister();
+        remote.Set("r2", JsonLatticeSerializer<string>.Default.Serialize("beta"));
+        await accessor.MergeAsync(remote);
+
+        var values = await accessor.ValuesAsync();
+        Assert.That(values, Is.EquivalentTo(new[] { "alpha", "beta" }));
+    }
+
+    [Test]
+    public async Task MvRegister_SetAsync_throws_on_empty_replica_id()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(async () => await tree.MvRegister<string>("k").SetAsync("", "x"), Throws.ArgumentException);
+    }
+
+    [Test]
+    public async Task MvRegister_MergeAsync_throws_on_null_other()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(async () => await tree.MvRegister<string>("k").MergeAsync(null!), Throws.ArgumentNullException);
+    }
 }

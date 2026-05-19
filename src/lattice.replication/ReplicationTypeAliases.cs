@@ -55,6 +55,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="VersionVectorDelta"/>.</summary>
     internal const string VersionVectorDelta = "olr.vd";
 
+    /// <summary>Alias for <see cref="MvRegisterDelta"/>.</summary>
+    internal const string MvRegisterDelta = "olr.md";
+
     // Transport-side resume token
 
     /// <summary>Alias for <see cref="WalResumeToken"/>.</summary>

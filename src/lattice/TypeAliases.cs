@@ -18,6 +18,8 @@ internal static class TypeAliases
     internal const string OrSet = "ol.ors";
     internal const string OrSetDot = "ol.osd";
     internal const string PnCounter = "ol.pnc";
+    internal const string MvRegister = "ol.mvr";
+    internal const string MvRegisterDot = "ol.mvd";
     internal const string LeafDeliveryCursor = "ol.ldc";
 
     // Opt-in idempotency-key surface (carried on the ambient
