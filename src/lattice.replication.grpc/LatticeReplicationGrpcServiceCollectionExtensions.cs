@@ -130,6 +130,13 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
 
         // Live-push receiver service (inbound, server side).
         services.TryAddSingleton<IWalCursorRegistry, InMemoryWalCursorRegistry>();
+        // Default receiver-side flow-control policy. Hosts that wire
+        // a custom policy via AddLatticeReplication retain their
+        // registration because both call sites use TryAddSingleton;
+        // hosts that wire the gRPC stack without AddLatticeReplication
+        // (e.g. integration tests that compose pieces directly) get
+        // the no-op default and ack with null hint slots.
+        services.TryAddSingleton<IReceiverFlowControlPolicy>(_ => NoOpReceiverFlowControlPolicy.Instance);
         services.TryAddSingleton<LatticeReplicationGrpcService>();
         services.TryAddSingleton<LatticeReplicationGrpcServiceBase>(
             sp => sp.GetRequiredService<LatticeReplicationGrpcService>());

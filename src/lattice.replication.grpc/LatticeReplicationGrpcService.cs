@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree.Grains;
+using System.Diagnostics;
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
@@ -97,6 +98,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
 {
     private readonly IReplicationApplier _applier;
     private readonly IWalCursorRegistry _cursorRegistry;
+    private readonly IReceiverFlowControlPolicy _flowControlPolicy;
     private readonly ILogger<LatticeReplicationGrpcService> _logger;
 
     /// <summary>
@@ -115,15 +117,18 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         LatticeReplicationGrpcMethod method,
         IReplicationApplier applier,
         IWalCursorRegistry cursorRegistry,
+        IReceiverFlowControlPolicy flowControlPolicy,
         ILogger<LatticeReplicationGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(method);
         ArgumentNullException.ThrowIfNull(applier);
         ArgumentNullException.ThrowIfNull(cursorRegistry);
+        ArgumentNullException.ThrowIfNull(flowControlPolicy);
         ArgumentNullException.ThrowIfNull(logger);
 
         _applier = applier;
         _cursorRegistry = cursorRegistry;
+        _flowControlPolicy = flowControlPolicy;
         _logger = logger;
     }
 
@@ -149,7 +154,13 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
 
         var entries = request.Entries;
 
+        // Time the apply call so the flow-control policy can shape
+        // its hint against the real receiver-side cost of the just-
+        // applied batch. Stopwatch.GetTimestamp is allocation-free;
+        // Stopwatch.GetElapsedTime materialises a TimeSpan only on
+        // the success path where we actually need the ms value.
         ApplyResult result;
+        var applyStart = Stopwatch.GetTimestamp();
         try
         {
             result = await _applier.ApplyBatchAsync(entries, context.CancellationToken).ConfigureAwait(false);
@@ -177,6 +188,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                     + "see server logs for the underlying exception."),
                 ex.Message);
         }
+
+        var applyDurationMs = Stopwatch.GetElapsedTime(applyStart).TotalMilliseconds;
 
         // Stamp the receiver-side blocked-floor pin (the lowest
         // staged HLC across every partially-buffered atomic batch on
@@ -207,6 +220,39 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 request.TreeName);
         }
 
+        // Evaluate the receiver-side flow-control policy and stamp
+        // any returned hint onto the ack. Failure is swallowed: a
+        // policy outage must not unwind the successful apply, and a
+        // subsequent push's ack will re-evaluate the policy. The
+        // default registration is NoOpReceiverFlowControlPolicy,
+        // which always returns ReceiverFlowControlHint.None - so the
+        // ack carries SuggestedBatchSize = null / PauseForMs = null
+        // and the sender resumes at its configured ShipBatchSize on
+        // the next pump tick (the canonical re-acceleration shape).
+        var hint = ReceiverFlowControlHint.None;
+        try
+        {
+            hint = await _flowControlPolicy.EvaluateAsync(
+                new ReceiverFlowControlContext
+                {
+                    TreeName = request.TreeName,
+                    OriginClusterId = request.OriginClusterId,
+                    EntryCount = entries.Count,
+                    ApplyDurationMs = applyDurationMs,
+                },
+                context.CancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Receiver flow-control policy threw for tree {Tree}; ack will omit hint slots.",
+                request.TreeName);
+        }
+
         return new ReplicationAckBox
         {
             Value = new ReplicationAck
@@ -214,6 +260,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 Accepted = true,
                 HighestAppliedHlc = result.HighWaterMark,
                 BlockedAtHlc = blockedAtHlc,
+                SuggestedBatchSize = hint.SuggestedBatchSize,
+                PauseForMs = hint.PauseForMs,
             },
         };
     }

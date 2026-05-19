@@ -15,7 +15,7 @@ public class LatticeReplicationGrpcServiceTests
 {
     private static LatticeReplicationGrpcService CreateService(IReplicationApplier applier, out LatticeReplicationGrpcMethod method)
     {
-        return CreateService(applier, new InMemoryWalCursorRegistry(), out method);
+        return CreateService(applier, new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, out method);
     }
 
     private static LatticeReplicationGrpcService CreateService(
@@ -23,12 +23,21 @@ public class LatticeReplicationGrpcServiceTests
         IWalCursorRegistry cursorRegistry,
         out LatticeReplicationGrpcMethod method)
     {
+        return CreateService(applier, cursorRegistry, NoOpReceiverFlowControlPolicy.Instance, out method);
+    }
+
+    private static LatticeReplicationGrpcService CreateService(
+        IReplicationApplier applier,
+        IWalCursorRegistry cursorRegistry,
+        IReceiverFlowControlPolicy policy,
+        out LatticeReplicationGrpcMethod method)
+    {
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
         var ackSerializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
         var envSerializer = sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>();
         var encoder = new TestEncoder(envSerializer);
         method = new LatticeReplicationGrpcMethod(encoder, ackSerializer);
-        return new LatticeReplicationGrpcService(method, applier, cursorRegistry, NullLogger<LatticeReplicationGrpcService>.Instance);
+        return new LatticeReplicationGrpcService(method, applier, cursorRegistry, policy, NullLogger<LatticeReplicationGrpcService>.Instance);
     }
 
     private sealed class TestEncoder : IReplicationBatchEncoder
@@ -84,7 +93,7 @@ public class LatticeReplicationGrpcServiceTests
     public void Constructor_throws_when_method_null()
     {
         Assert.That(
-            () => new LatticeReplicationGrpcService(null!, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NullLogger<LatticeReplicationGrpcService>.Instance),
+            () => new LatticeReplicationGrpcService(null!, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, NullLogger<LatticeReplicationGrpcService>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -96,7 +105,19 @@ public class LatticeReplicationGrpcServiceTests
         var method = new LatticeReplicationGrpcMethod(encoder, sp.GetRequiredService<Serializer<ReplicationAck>>());
 
         Assert.That(
-            () => new LatticeReplicationGrpcService(method, null!, new InMemoryWalCursorRegistry(), NullLogger<LatticeReplicationGrpcService>.Instance),
+            () => new LatticeReplicationGrpcService(method, null!, new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, NullLogger<LatticeReplicationGrpcService>.Instance),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Constructor_throws_when_flow_control_policy_null()
+    {
+        var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var encoder = new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>());
+        var method = new LatticeReplicationGrpcMethod(encoder, sp.GetRequiredService<Serializer<ReplicationAck>>());
+
+        Assert.That(
+            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), null!, NullLogger<LatticeReplicationGrpcService>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -108,7 +129,7 @@ public class LatticeReplicationGrpcServiceTests
         var method = new LatticeReplicationGrpcMethod(encoder, sp.GetRequiredService<Serializer<ReplicationAck>>());
 
         Assert.That(
-            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), null!),
+            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, null!),
             Throws.ArgumentNullException);
     }
 
@@ -449,6 +470,167 @@ public class LatticeReplicationGrpcServiceTests
 
         Assert.That(ack.Value.BlockedAtHlc, Is.Null,
             "ack for tree-B must not carry tree-A's pin");
+    }
+
+    // ---- Receiver-side flow control (R-062 surface) ---------------------
+
+    /// <summary>
+    /// Captures the <see cref="ReceiverFlowControlContext"/> the policy
+    /// was invoked with, and returns a caller-supplied
+    /// <see cref="ReceiverFlowControlHint"/> on every call.
+    /// </summary>
+    private sealed class CapturingFlowControlPolicy : IReceiverFlowControlPolicy
+    {
+        private readonly ReceiverFlowControlHint _hint;
+        public ReceiverFlowControlContext? LastContext { get; private set; }
+        public int Calls { get; private set; }
+
+        public CapturingFlowControlPolicy(ReceiverFlowControlHint hint) => _hint = hint;
+
+        public ValueTask<ReceiverFlowControlHint> EvaluateAsync(
+            ReceiverFlowControlContext context,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            LastContext = context;
+            Calls++;
+            return ValueTask.FromResult(_hint);
+        }
+    }
+
+    private sealed class ThrowingFlowControlPolicy : IReceiverFlowControlPolicy
+    {
+        public ValueTask<ReceiverFlowControlHint> EvaluateAsync(
+            ReceiverFlowControlContext context,
+            CancellationToken cancellationToken)
+            => throw new InvalidOperationException("policy boom");
+    }
+
+    [Test]
+    public async Task Push_stamps_suggested_batch_size_from_policy_onto_ack()
+    {
+        var applier = Substitute.For<IReplicationApplier>();
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
+
+        var policy = new CapturingFlowControlPolicy(new ReceiverFlowControlHint
+        {
+            SuggestedBatchSize = 16,
+            PauseForMs = null,
+        });
+
+        var svc = CreateService(applier, new InMemoryWalCursorRegistry(), policy, out _);
+        var box = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = "tree",
+                OriginClusterId = "remote",
+                Entries = new[] { MakeSet("a", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 }) },
+            },
+        };
+
+        var ack = await svc.Push(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ack.Value.SuggestedBatchSize, Is.EqualTo(16));
+            Assert.That(ack.Value.PauseForMs, Is.Null);
+            Assert.That(policy.Calls, Is.EqualTo(1));
+            Assert.That(policy.LastContext, Is.Not.Null);
+            Assert.That(policy.LastContext!.Value.TreeName, Is.EqualTo("tree"));
+            Assert.That(policy.LastContext!.Value.OriginClusterId, Is.EqualTo("remote"));
+            Assert.That(policy.LastContext!.Value.EntryCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task Push_stamps_pause_for_ms_from_policy_onto_ack()
+    {
+        var applier = Substitute.For<IReplicationApplier>();
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
+
+        var policy = new CapturingFlowControlPolicy(new ReceiverFlowControlHint
+        {
+            SuggestedBatchSize = null,
+            PauseForMs = 500,
+        });
+
+        var svc = CreateService(applier, new InMemoryWalCursorRegistry(), policy, out _);
+        var box = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = "tree",
+                OriginClusterId = "remote",
+                Entries = Array.Empty<WalRecord>(),
+            },
+        };
+
+        var ack = await svc.Push(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ack.Value.SuggestedBatchSize, Is.Null);
+            Assert.That(ack.Value.PauseForMs, Is.EqualTo(500));
+        });
+    }
+
+    [Test]
+    public async Task Push_default_policy_returns_null_hint_slots()
+    {
+        var applier = Substitute.For<IReplicationApplier>();
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
+
+        // CreateService overloads default to NoOpReceiverFlowControlPolicy.Instance.
+        var svc = CreateService(applier, out _);
+        var box = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = "tree",
+                OriginClusterId = "remote",
+                Entries = Array.Empty<WalRecord>(),
+            },
+        };
+
+        var ack = await svc.Push(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ack.Value.SuggestedBatchSize, Is.Null);
+            Assert.That(ack.Value.PauseForMs, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task Push_swallows_policy_failure_and_returns_null_hint_slots()
+    {
+        var applier = Substitute.For<IReplicationApplier>();
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
+
+        var svc = CreateService(applier, new InMemoryWalCursorRegistry(), new ThrowingFlowControlPolicy(), out _);
+        var box = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = "tree",
+                OriginClusterId = "remote",
+                Entries = Array.Empty<WalRecord>(),
+            },
+        };
+
+        var ack = await svc.Push(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ack.Value.Accepted, Is.True);
+            Assert.That(ack.Value.SuggestedBatchSize, Is.Null);
+            Assert.That(ack.Value.PauseForMs, Is.Null);
+        });
     }
 }
 
