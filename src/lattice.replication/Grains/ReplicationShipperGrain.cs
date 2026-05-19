@@ -310,9 +310,12 @@ internal sealed class ReplicationShipperGrain(
         // Encode the batch into a buffer; the gRPC transport hands
         // the gRPC stream's IBufferWriter through directly so the
         // encoded bytes never round-trip through a managed array.
-        // The opaque-bytes-shaped IReplicationTransport seam still
-        // requires us to land bytes into a buffer here (the typed-envelope transport widens
-        // the seam to remove this round-trip).
+        // The IReplicationTransport seam carries both the opaque
+        // bytes (for transports that ship them verbatim) and the
+        // typed envelope (for transports that re-marshal it onto
+        // their own wire); the typed slot lets the gRPC push
+        // transport skip a per-send decode-then-re-encode round-trip
+        // that would otherwise allocate one `WalRecord[]` per ship.
         //
         // The framing buffer is activation-scoped and reused across
         // ticks: in the steady state we ResetWrittenCount() (which
@@ -330,9 +333,10 @@ internal sealed class ReplicationShipperGrain(
         {
             _writeBuffer.ResetWrittenCount();
         }
+        ReplicationBatchEnvelope envelope;
         try
         {
-            var envelope = new ReplicationBatchEnvelope
+            envelope = new ReplicationBatchEnvelope
             {
                 WireVersion = _encoder.CurrentWireVersion,
                 TreeName = _treeName,
@@ -366,6 +370,16 @@ internal sealed class ReplicationShipperGrain(
                 TreeName = _treeName,
                 OriginClusterId = options.ClusterId,
                 Payload = _writeBuffer.WrittenMemory,
+                // Hand the typed envelope through alongside the
+                // opaque bytes so transports that frame the envelope
+                // onto their own wire (e.g. the gRPC streaming push
+                // transport) can skip the per-send decode-then-re-encode
+                // round-trip the bytes-shaped seam would force. The
+                // reference points at the activation-scoped drain
+                // buffer; Orleans serialises grain turns and
+                // SendAsync awaits inline, so the entry list is
+                // stable for the duration of the call.
+                Envelope = envelope,
             };
             ack = await _transport.SendAsync(batch, cancellationToken);
         }
