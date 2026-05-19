@@ -15,12 +15,13 @@ public partial class TxRegistryGrainTests
         FakePersistentState<TxRegistryState>? state = null,
         string treeId = "tree-x",
         TimeSpan? retention = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        LatticeOptions? options = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("tx-registry", treeId));
         state ??= new FakePersistentState<TxRegistryState>();
-        var options = new LatticeOptions
+        var effectiveOptions = options ?? new LatticeOptions
         {
             // Default to TimeSpan.Zero so the long-standing tests (which
             // were written before tombstone-with-TTL semantics existed)
@@ -29,8 +30,12 @@ public partial class TxRegistryGrainTests
             // retention to exercise the new path.
             TxDecisionRetention = retention ?? TimeSpan.Zero,
         };
+        if (options is null && retention is not null)
+        {
+            effectiveOptions = new LatticeOptions { TxDecisionRetention = retention.Value };
+        }
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(options);
+        optionsMonitor.Get(Arg.Any<string>()).Returns(effectiveOptions);
         var grain = new TxRegistryGrain(context, optionsMonitor, state);
         if (timeProvider is not null) grain.TimeProvider = timeProvider;
         return (grain, state);

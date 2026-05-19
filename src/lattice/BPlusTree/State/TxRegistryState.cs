@@ -135,4 +135,22 @@ internal sealed class TxRegistryState
     /// </para>
     /// </summary>
     [Id(4)] public Dictionary<Guid, int> ExpectedTerminals { get; set; } = [];
+
+    /// <summary>
+    /// Per-cursor pin records protecting a point-in-time saga-decision
+    /// snapshot captured by <see cref="LatticeCursorSpec.PointInTime"/>
+    /// cursor opens. Each entry's <see cref="SnapshotPin.Txids"/> set is
+    /// honoured by the registry's prune pass: a tombstoned decision
+    /// whose txid is in the union of every unexpired pin's <c>Txids</c>
+    /// is held back from physical removal even when its tombstone TTL
+    /// has elapsed. Pins themselves are evicted from this map when
+    /// their <see cref="SnapshotPin.ExpiresAt"/> elapses, or explicitly
+    /// via <c>UnpinSnapshotAsync</c>.
+    /// <para>
+    /// Wire-compatibility: legacy persisted state with no Id-5 slot
+    /// decodes to an empty dictionary, which is the correct semantic
+    /// default (no active pins).
+    /// </para>
+    /// </summary>
+    [Id(5)] public Dictionary<Guid, SnapshotPin> SnapshotPins { get; set; } = [];
 }

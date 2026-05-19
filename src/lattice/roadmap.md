@@ -204,7 +204,7 @@ Associate tags with keys and query by tag. Implementable as a secondary Lattice 
 
 ---
 
-### 4 · F-064
+### 4 · F-064 ✅ shipped
 **Feature / reliability / high impact (extends the per-call strict isolation already established for `GetManyAsync` / `CountAsync` to multi-page reads, both streaming and durable)** *(depends on Core F-033 ✓, F-055 ✓, F-058 ✓, F-062 ✓)*
 
 Point-in-time read views over multi-page enumerations. Today the `LatticeRegistrySnapshotContext` mechanism shipped under F-055 / F-058 / F-062 makes every *single-call* fan-out read (`GetManyAsync`, `CountAsync`, `CountPerShardAsync`) linearizable against the per-tree `ITxRegistryGrain` decision view, via a `snap1` / fan-out / `snap2` retry loop in `LatticeGrain.cs` (lines 285-310, 973, 1200-1247) that defaults out-of-snapshot decisions to `TxStatus.InFlight` on every participating leaf. The mechanism is precisely the one needed to deliver "no observable mid-saga `pre=N, post=M` split" within a single call. What it does **not** cover is **multi-page reads**: every streaming `KeysAsync` / `EntriesAsync` page (`LatticeGrain.Keys.cs:84`, `LatticeGrain.Entries.cs:59`) and every `Next*Async` step of a durable cursor (`docs/lattice/durable-cursors.md`, `BPlusLeafGrain.CursorRegistry.cs`) issues an independent `ScanKeysAsync` / `ScanEntriesAsync` fan-out with no registry-snapshot scope, so a saga that transitions `InFlight → Committed` (or `→ Aborted`) between pages presents a torn view: page *i* hides the saga's keys, page *i+1* surfaces them. This is the exact same gap F-055 closed for single-call reads, on the exact same mechanism.
@@ -264,7 +264,7 @@ Internal-additive:
 ---
 
 ### 5 · F-065
-**Feature / reliability / medium impact (zero-observable-writes snapshot reads via WAL-replay materialisation; the strict-isolation step F-064 explicitly defers)** *(depends on Core F-049 ✓, F-053 ✓, F-056 ✓, F-064 [unshipped], F-052 [unshipped])*
+**Feature / reliability / medium impact (zero-observable-writes snapshot reads via WAL-replay materialisation; the strict-isolation step F-064 explicitly defers)** *(depends on Core F-049 ✓, F-053 ✓, F-056 ✓, F-064 ✓, F-052 [unshipped])*
 
 Strict snapshot-isolation reads: a multi-page enumeration whose view of every key is fixed at `OpenAsync` time and *not* perturbed by any concurrent write - foreground `SetAsync` / `RemoveAsync`, saga `SetManyAtomicAsync`, range deletes, or replication apply. F-064 closes the saga-decision dimension; F-065 closes the only remaining dimension: foreground non-saga writes between pages. Together they deliver the literal "point-in-time, tree-wide atomic" contract the design exploration that produced this entry sketched at level 3.
 

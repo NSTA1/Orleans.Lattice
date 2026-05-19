@@ -92,6 +92,7 @@ internal static class TypeAliases
     internal const string TxRegistryState = "ol.txr";
     internal const string TxStatus = "ol.txo";
     internal const string TerminalTallyResult = "ol.ttr";
+    internal const string SnapshotPin = "ol.sp";
 
     // Stateful cursor / iterator
     internal const string LatticeCursorKind = "ol.lck";

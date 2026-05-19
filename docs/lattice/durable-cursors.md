@@ -24,6 +24,7 @@ characteristics.
 | Range delete that must survive interruption | `OpenDeleteRangeCursorAsync` - tracks tombstoning progress across steps |
 | Topology under aggressive splitting, `MaxScanRetries` exhaustion | Durable cursor - each step has its own retry budget; topology churn only affects one step at a time |
 | Cursor ID must be handed off between processes or services | Durable cursor - any client that knows the opaque ID can resume |
+| Multi-page scan that must observe the same saga-decision view across every page | Durable key/entry cursor opened with `pointInTime: true` - see [Point-in-time cursors](#point-in-time-cursors) |
 
 ## Architecture
 
@@ -108,10 +109,12 @@ step.
 | Field | Type | Purpose |
 |-------|------|---------|
 | `TreeId` | `string` | Target tree grain key |
-| `Spec` | `LatticeCursorSpec` | Kind, start/end bounds, direction - frozen at `OpenAsync` |
+| `Spec` | `LatticeCursorSpec` | Kind, start/end bounds, direction, `PointInTime` - frozen at `OpenAsync` |
 | `Phase` | `LatticeCursorPhase` | `NotStarted` / `Open` / `Exhausted` / `Closed` |
 | `LastYieldedKey` | `string?` | Last key returned or tombstoned. `null` before the first step. |
 | `DeletedTotal` | `int` | Cumulative tombstone count (delete-range cursors only) |
+| `PointInTimeSnapshot` | `Dictionary<Guid, TxStatus>?` | The `ITxRegistryGrain.SnapshotAsync()` captured at `OpenAsync` time. Persisted only for point-in-time cursors; `null` for live-mode cursors. |
+| `SnapshotPinId` | `Guid` | The registry-side pin handle returned by `PinSnapshotAsync`. Empty for live-mode cursors and for point-in-time cursors whose captured snapshot was empty (no in-flight sagas at open). |
 
 ### Step sequence
 
@@ -163,6 +166,104 @@ Across steps, global ordering is preserved by the effective-range logic: the
 continuation bound strictly excludes every previously-yielded key, so a split
 that moves keys between steps is naturally handled by the next step's sharded
 range query.
+
+## Point-in-time cursors
+
+A durable key or entry cursor opened with `pointInTime: true` extends the
+tree-wide atomic-visibility guarantee that already covers single-call reads
+(`GetManyAsync`, `CountAsync`, `CountPerShardAsync`) to a multi-page
+enumeration. The cursor freezes the per-tree saga-decision view at open time
+and every subsequent page reads against that frozen view - a
+`SetManyAtomicAsync` saga that commits between two pages is observed
+identically on every page (either all of its keys, or none), never as a torn
+pre/post split.
+
+```csharp verify
+var cursorId = await tree.OpenEntryCursorAsync(
+    startInclusive: null,
+    endExclusive: null,
+    reverse: false,
+    pointInTime: true);
+try
+{
+    while (true)
+    {
+        var page = await tree.NextEntriesAsync(cursorId, pageSize: 500);
+        foreach (var (k, v) in page.Entries)
+        {
+            // Every page sees the same in-flight-saga view captured at
+            // OpenEntryCursorAsync time. Sagas that commit between pages
+            // are atomically visible across the cursor.
+        }
+        if (!page.HasMore) break;
+    }
+}
+finally
+{
+    await tree.CloseCursorAsync(cursorId);
+}
+```
+
+### How it works
+
+1. **Capture at open.** `OpenAsync` calls
+   `ITxRegistryGrain.SnapshotAsync()` once and persists the resulting
+   `Dictionary<Guid, TxStatus>` in `LatticeCursorState.PointInTimeSnapshot`.
+2. **Pin retention.** If the snapshot contains any decisions, the cursor
+   calls `ITxRegistryGrain.PinSnapshotAsync(snapshot, ttl)` to ask the
+   registry to retain every observed decision (including any
+   `ForgetAsync`'d tombstones) for the cursor's lifetime. The
+   registry's `LatticeOptions.MaxCursorSnapshotPinTtl` (default 7 days)
+   is the hard upper bound. The returned `Guid` handle is persisted in
+   `LatticeCursorState.SnapshotPinId`.
+3. **Per-step replay.** Every `NextKeysAsync` / `NextEntriesAsync`
+   re-enters the captured snapshot via
+   `LatticeRegistrySnapshotContext.BeginScope(...)` before fanning out
+   to leaves. Every leaf RPC for the step reads the same registry view
+   - identical to the steady-state behaviour of
+   `GetManyAsync` / `CountAsync` / `CountPerShardAsync`, just held
+   across multiple pages.
+4. **Pin refresh.** Each step also calls
+   `ITxRegistryGrain.RefreshPinAsync(pinId, ttl)` to slide the
+   registry-side TTL. A cursor that pages actively never runs out the
+   pin TTL; a stalled cursor that misses the slide will eventually be
+   reaped by the registry.
+5. **Release on close / TTL expiry.** `CloseCursorAsync` and the
+   cursor's own idle-TTL reminder both call
+   `ITxRegistryGrain.UnpinSnapshotAsync(pinId)`, freeing the retained
+   decisions so registry tombstone-prune can resume.
+
+### Caps and failure modes
+
+Three independent caps bound the registry footprint a forgotten or
+stalled point-in-time cursor can occupy:
+
+| Cap | Default | Effect |
+|-----|---------|--------|
+| `LatticeOptions.CursorIdleTtl` | 48 h | Cursor-grain idle reminder releases the pin on inactivity. |
+| `LatticeOptions.MaxCursorSnapshotPinTtl` | 7 d | Registry-side hard cap on a single pin's lifetime. A live cursor slides this on every `Next*Async`; a stalled cursor that misses the slide surfaces `LatticeCursorSnapshotExpiredException` on its next call and the cursor must be reopened. |
+| `LatticeOptions.MaxPinnedSagaDecisions` | 100 000 | Registry-wide footprint cap across all live pins. `OpenAsync(pointInTime: true)` throws `LatticeCursorRegistryPinExhaustedException` when accepting the new snapshot would breach the cap; existing pinned cursors continue paging. |
+
+| Condition | Exception |
+|-----------|-----------|
+| `OpenAsync(pointInTime: true)` would push the registry pinned-decision count past `MaxPinnedSagaDecisions` | `LatticeCursorRegistryPinExhaustedException` |
+| `NextKeysAsync` / `NextEntriesAsync` on a point-in-time cursor whose pin has been evicted (TTL elapsed or registry reaper ran) | `LatticeCursorSnapshotExpiredException` |
+| `OpenDeleteRangeCursorAsync` with `pointInTime: true` (range deletes are mutations, not snapshot reads) | `ArgumentException` |
+
+### Cost vs. live mode
+
+Live-mode and point-in-time cursors share the same per-step
+checkpoint and shard fan-out cost. Point-in-time mode adds:
+
+- One `PinSnapshotAsync` call at open (skipped when the captured
+  snapshot is empty).
+- One `RefreshPinAsync` call per step (interleaved with the existing
+  checkpoint write).
+- One `UnpinSnapshotAsync` call at close or TTL expiry.
+
+The persisted `PointInTimeSnapshot` adds one dictionary entry per
+in-flight or recently-completed saga at open time to the cursor's
+storage row; it does not grow as the cursor pages.
 
 ## Self-cleanup (idle-TTL reminder)
 
@@ -268,25 +369,30 @@ stateless scans, plus the per-step overhead per cursor.
 
 ## Stateless vs. durable - decision guide
 
-| Dimension | Stateless (`ScanKeysAsync` / `ScanEntriesAsync`) | Durable cursor |
-|-----------|------------------------------------------|----------------|
-| Survives silo failover | ✗ - stream terminates | ✓ - resumes from checkpoint |
-| Survives client restart | ✗ | ✓ - cursor ID is the resume token |
-| Caller retry code needed | Required for robustness under splits | None needed |
-| Per-page overhead | Zero | ~2–10 ms (checkpoint + reminder slide) |
-| Ordering under splits | Per-call reconciliation (see [Shard Splitting](shard-splitting.md)) | Per-step reconciliation |
-| Max scan duration | Bounded by `MaxScanRetries` | Unbounded - each step has its own budget |
-| Idle cleanup | No state to clean up | Automatic via idle-TTL reminder |
-| Cursor ID transferable across processes | ✗ | ✓ |
-| Best for | Interactive queries, short scans | Long exports, ETL, background sweeps |
+| Dimension | Stateless (`ScanKeysAsync` / `ScanEntriesAsync`) | Durable cursor (live mode) | Durable cursor (point-in-time) |
+|-----------|------------------------------------------|----------------|----------------|
+| Survives silo failover | ✗ - stream terminates | ✓ - resumes from checkpoint | ✓ - resumes from checkpoint *and* retained registry pin |
+| Survives client restart | ✗ | ✓ - cursor ID is the resume token | ✓ |
+| Caller retry code needed | Required for robustness under splits | None needed | None needed |
+| Per-page overhead | Zero | ~2-10 ms (checkpoint + reminder slide) | ~2-10 ms (adds one registry refresh RPC) |
+| Ordering under splits | Per-call reconciliation (see [Shard Splitting](shard-splitting.md)) | Per-step reconciliation | Per-step reconciliation |
+| Atomic visibility | Scan-lifetime tree-wide | Per-step tree-wide; *not* preserved across pages | **Cursor-lifetime tree-wide** - identical saga view on every page |
+| Max scan duration | Bounded by `MaxScanRetries` | Unbounded - each step has its own budget | Bounded by `MaxCursorSnapshotPinTtl` (default 7 d, slides on activity) |
+| Idle cleanup | No state to clean up | Automatic via idle-TTL reminder | Idle-TTL reminder + registry-pin TTL |
+| Cursor ID transferable across processes | ✗ | ✓ | ✓ |
+| Available for range delete | ✗ | ✓ via `OpenDeleteRangeCursorAsync` | ✗ - range deletes are mutations, not snapshot reads |
+| Best for | Interactive queries, short scans | Long exports, ETL, background sweeps | Long exports that must observe a single saga-decision view across every page |
 
 ## See also
 
 - [API Reference - Stateful Cursors](api.md#stateful-cursors) -
   full method signatures, return types, error surface, and code examples.
+- [Consistency - Enumeration](consistency.md#enumeration) - the formal
+  consistency classification of live-mode and point-in-time cursor steps.
+- [Atomic Writes](atomic-writes.md) - the saga primitive whose
+  visibility flip point-in-time cursors freeze for the cursor's lifetime.
 - [Shard Splitting](shard-splitting.md) - ordering preservation under
   concurrent topology changes (applied within each cursor step).
-- [Atomic Writes](atomic-writes.md) - the related saga pattern for durable
-  multi-key writes; shares the `TtlGrain` self-cleanup machinery.
-- [Configuration](configuration.md) - `CursorIdleTtl`, `MaxScanRetries`, and
-  other tunables.
+- [Configuration](configuration.md) - `CursorIdleTtl`,
+  `MaxCursorSnapshotPinTtl`, `MaxPinnedSagaDecisions`, `MaxScanRetries`,
+  and other tunables.

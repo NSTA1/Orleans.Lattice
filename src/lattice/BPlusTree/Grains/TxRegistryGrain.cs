@@ -264,17 +264,18 @@ internal sealed class TxRegistryGrain(
         var hadExpectedTotal = state.State.ExpectedTerminals.ContainsKey(txid);
         var droppedExpected = state.State.ExpectedTerminals.Remove(txid);
 
-        // Inline prune of expired tombstones from earlier ForgetAsync
-        // calls. Folding the GC pass into the natural caller (saga
-        // post-cleanup) means tombstones are pruned at roughly the
-        // same cadence as new sagas land - no separate timer reminder
-        // is required. PruneExpired returns the list of pruned entries
-        // so a failing WriteStateAsync can restore them.
+        // Inline prune of expired tombstones and pins from earlier
+        // ForgetAsync calls. Folding the GC pass into the natural
+        // caller (saga post-cleanup) means tombstones are pruned at
+        // roughly the same cadence as new sagas land - no separate
+        // timer reminder is required. The returned PruneResult carries
+        // the dropped tombstones AND expired pins so a failing
+        // WriteStateAsync can restore them in lockstep.
         var pruned = PruneExpired(now, retention);
 
         var changed = droppedDecision || addedForgottenAt || droppedParticipants
             || droppedArrivals || droppedExpected
-            || (pruned is { Count: > 0 });
+            || pruned.Any;
 
         if (changed)
         {
@@ -298,9 +299,9 @@ internal sealed class TxRegistryGrain(
                 {
                     state.State.ExpectedTerminals[txid] = prevExpectedTotal;
                 }
-                if (pruned is not null)
+                if (pruned.Tombstones is { } tombstones)
                 {
-                    foreach (var entry in pruned)
+                    foreach (var entry in tombstones)
                     {
                         // PruneExpired removes both the Decisions row
                         // and the ForgottenAt row in lockstep, so the
@@ -312,6 +313,13 @@ internal sealed class TxRegistryGrain(
                         if (entry.HadDecision)
                             state.State.Decisions[entry.Txid] = entry.Decision;
                         state.State.ForgottenAt[entry.Txid] = entry.ForgottenAt;
+                    }
+                }
+                if (pruned.ExpiredPins is { } evicted)
+                {
+                    foreach (var (pinId, pin) in evicted)
+                    {
+                        state.State.SnapshotPins[pinId] = pin;
                     }
                 }
                 throw;
@@ -557,6 +565,170 @@ internal sealed class TxRegistryGrain(
         };
     }
 
+    /// <inheritdoc />
+    public async Task PinSnapshotAsync(Guid pinId, IReadOnlyCollection<Guid> txids, TimeSpan ttl)
+    {
+        ArgumentNullException.ThrowIfNull(txids);
+
+        var now = TimeProvider.GetUtcNow();
+        var options = optionsMonitor.Get(TreeId);
+        var effectiveTtl = ClampPinTtl(ttl, options);
+
+        // Build the proposed pin set and assert the new union does not
+        // exceed the per-tree footprint cap. The check ignores expired
+        // pins (they're about to be pruned anyway) but does include
+        // the existing entry under pinId so a refresh-via-replace
+        // doesn't double-count the snapshot the cursor already paid
+        // for on open.
+        var proposed = new HashSet<Guid>(txids);
+
+        var futureUnion = new HashSet<Guid>(proposed);
+        foreach (var (existingPinId, existingPin) in state.State.SnapshotPins)
+        {
+            if (existingPinId == pinId) continue;
+            if (existingPin.ExpiresAt <= now) continue;
+            foreach (var t in existingPin.Txids) futureUnion.Add(t);
+        }
+        if (futureUnion.Count > options.MaxPinnedSagaDecisions)
+        {
+            throw new LatticeCursorRegistryPinExhaustedException(
+                $"TxRegistry '{TreeId}' cannot accept pin {pinId:N}: " +
+                $"the resulting union of {futureUnion.Count} pinned saga decisions " +
+                $"would exceed MaxPinnedSagaDecisions={options.MaxPinnedSagaDecisions}. " +
+                $"Reduce concurrent point-in-time cursor count or raise the cap.");
+        }
+
+        // Snapshot prior pin so a failing WriteStateAsync can be
+        // unwound. A repeat call with the same pinId replaces the
+        // prior pin wholesale (matches the OpenAsync contract: one
+        // cursor, one pinId).
+        var hadPrior = state.State.SnapshotPins.TryGetValue(pinId, out var prior);
+        state.State.SnapshotPins[pinId] = new SnapshotPin
+        {
+            Txids = proposed,
+            ExpiresAt = now + effectiveTtl,
+        };
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            if (hadPrior && prior is not null) state.State.SnapshotPins[pinId] = prior;
+            else state.State.SnapshotPins.Remove(pinId);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> RefreshPinAsync(Guid pinId, TimeSpan ttl)
+    {
+        var now = TimeProvider.GetUtcNow();
+
+        if (!state.State.SnapshotPins.TryGetValue(pinId, out var pin))
+        {
+            return false;
+        }
+        // A pin that has already expired (between the prior step's
+        // refresh and this one) is treated as missing - the caller
+        // surfaces this as LatticeCursorSnapshotExpiredException so
+        // the cursor terminates rather than silently extending an
+        // already-evicted pin.
+        if (pin.ExpiresAt <= now)
+        {
+            // The prune pass in ForgetAsync drops expired pins on its
+            // own cadence; we don't bother dropping it here because
+            // returning false is enough to fail the cursor cleanly.
+            return false;
+        }
+
+        var options = optionsMonitor.Get(TreeId);
+        var effectiveTtl = ClampPinTtl(ttl, options);
+        var newExpiresAt = now + effectiveTtl;
+        if (newExpiresAt == pin.ExpiresAt)
+        {
+            // No-op: identical ttl was already recorded (e.g. two
+            // refreshes within the same TimeProvider tick).
+            return true;
+        }
+
+        var prior = pin.ExpiresAt;
+        pin.ExpiresAt = newExpiresAt;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            pin.ExpiresAt = prior;
+            throw;
+        }
+        return true;
+    }
+
+    /// <inheritdoc />
+    public async Task UnpinSnapshotAsync(Guid pinId)
+    {
+        if (!state.State.SnapshotPins.TryGetValue(pinId, out var prior))
+        {
+            return;
+        }
+        state.State.SnapshotPins.Remove(pinId);
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.SnapshotPins[pinId] = prior;
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<int> GetPinnedDecisionCountAsync()
+    {
+        if (state.State.SnapshotPins.Count == 0)
+        {
+            return Task.FromResult(0);
+        }
+        // Honour the expiry semantic of the prune pass: an expired
+        // pin contributes nothing to the diagnostics count even
+        // though the prune pass has not yet physically removed it.
+        var now = TimeProvider.GetUtcNow();
+        var union = new HashSet<Guid>();
+        foreach (var pin in state.State.SnapshotPins.Values)
+        {
+            if (pin.ExpiresAt <= now) continue;
+            foreach (var txid in pin.Txids) union.Add(txid);
+        }
+        return Task.FromResult(union.Count);
+    }
+
+    /// <summary>
+    /// Clamps a caller-supplied pin TTL against the per-tree hard cap
+    /// (<see cref="LatticeOptions.MaxCursorSnapshotPinTtl"/>) and the
+    /// tombstone-retention floor: a pin shorter than
+    /// <see cref="LatticeOptions.TxDecisionRetention"/> is silently
+    /// floored to the retention, because the registry's own tombstone
+    /// prune pass already covers anything shorter.
+    /// </summary>
+    private static TimeSpan ClampPinTtl(TimeSpan requested, LatticeOptions options)
+    {
+        if (requested <= TimeSpan.Zero) requested = options.MaxCursorSnapshotPinTtl;
+        if (options.MaxCursorSnapshotPinTtl > TimeSpan.Zero
+            && requested > options.MaxCursorSnapshotPinTtl)
+        {
+            requested = options.MaxCursorSnapshotPinTtl;
+        }
+        if (options.TxDecisionRetention > TimeSpan.Zero
+            && requested < options.TxDecisionRetention)
+        {
+            requested = options.TxDecisionRetention;
+        }
+        return requested;
+    }
+
     /// <summary>
     /// Returns <see langword="true"/> when <paramref name="txid"/> has
     /// a tombstone whose age exceeds the per-tree retention window.
@@ -593,48 +765,105 @@ internal sealed class TxRegistryGrain(
     /// <see cref="TimeSpan.Zero"/> retention purges the entire
     /// tombstone map (covers the legacy path where a non-zero retention
     /// was downgraded to zero at runtime).
+    /// <para>
+    /// Pin-aware: a tombstoned decision whose txid is in the union of
+    /// every unexpired pin's <see cref="SnapshotPin.Txids"/> is held
+    /// back from physical removal even when its tombstone TTL has
+    /// elapsed - that's the whole point of the pin. Expired pins
+    /// (<see cref="SnapshotPin.ExpiresAt"/> &lt;= <paramref name="now"/>)
+    /// are dropped on the same pass, so a pin that has lapsed releases
+    /// its retention on the next prune cycle without an explicit
+    /// <c>UnpinSnapshotAsync</c>.
+    /// </para>
     /// </summary>
-    private List<PrunedEntry>? PruneExpired(DateTimeOffset now, TimeSpan retention)
+    private PruneResult PruneExpired(DateTimeOffset now, TimeSpan retention)
     {
-        if (state.State.ForgottenAt.Count == 0) return null;
+        // First sweep: drop expired pins. Their txids fall out of the
+        // pin union and become candidates for the tombstone sweep
+        // below. The dropped-pin list is folded into the parent caller's
+        // write-state unwind via the returned PruneResult.
+        Dictionary<Guid, SnapshotPin>? expiredPins = null;
+        foreach (var (pinId, pin) in state.State.SnapshotPins)
+        {
+            if (pin.ExpiresAt <= now)
+            {
+                (expiredPins ??= new Dictionary<Guid, SnapshotPin>()).Add(pinId, pin);
+            }
+        }
+        if (expiredPins is not null)
+        {
+            foreach (var pinId in expiredPins.Keys)
+            {
+                state.State.SnapshotPins.Remove(pinId);
+            }
+        }
+
+        if (state.State.ForgottenAt.Count == 0)
+        {
+            return new PruneResult(null, expiredPins);
+        }
+
+        // Compute the union of pinned txids once per prune pass.
+        var pinned = state.State.SnapshotPins.Count == 0 ? null : BuildPinnedUnion();
 
         if (retention == TimeSpan.Zero)
         {
             // Tombstoning is disabled - flush any residual tombstones
             // (and their decisions) accumulated under a previous
-            // non-zero retention. This is rare in practice but the
-            // option monitor allows runtime reconfiguration so the
-            // path must terminate cleanly.
+            // non-zero retention. Pinned tombstones are retained even
+            // under zero retention so a cursor in flight never sees a
+            // saga decision evaporate under a runtime reconfiguration.
             var flushed = new List<PrunedEntry>(state.State.ForgottenAt.Count);
             foreach (var (txid, ts) in state.State.ForgottenAt)
             {
+                if (pinned is not null && pinned.Contains(txid)) continue;
                 var hadDecision = state.State.Decisions.TryGetValue(txid, out var decision);
                 flushed.Add(new PrunedEntry(txid, hadDecision, decision, ts));
             }
             foreach (var entry in flushed)
             {
                 state.State.Decisions.Remove(entry.Txid);
+                state.State.ForgottenAt.Remove(entry.Txid);
             }
-            state.State.ForgottenAt.Clear();
-            return flushed;
+            return new PruneResult(flushed.Count == 0 ? null : flushed, expiredPins);
         }
 
         List<PrunedEntry>? expired = null;
         foreach (var (txid, ts) in state.State.ForgottenAt)
         {
+            if (pinned is not null && pinned.Contains(txid)) continue;
             if (now - ts > retention)
             {
                 var hadDecision = state.State.Decisions.TryGetValue(txid, out var decision);
                 (expired ??= new List<PrunedEntry>()).Add(new PrunedEntry(txid, hadDecision, decision, ts));
             }
         }
-        if (expired is null) return null;
+        if (expired is null)
+        {
+            return new PruneResult(null, expiredPins);
+        }
         foreach (var entry in expired)
         {
             state.State.Decisions.Remove(entry.Txid);
             state.State.ForgottenAt.Remove(entry.Txid);
         }
-        return expired;
+        return new PruneResult(expired, expiredPins);
+    }
+
+    /// <summary>
+    /// Computes the registry-wide union of pinned saga txids. Used by
+    /// both the prune pass (the "do not remove" predicate) and the
+    /// open-time footprint cap on
+    /// <see cref="PinSnapshotAsync(Guid, IReadOnlyCollection{Guid}, TimeSpan)"/>.
+    /// </summary>
+    private HashSet<Guid> BuildPinnedUnion()
+    {
+        var pinned = new HashSet<Guid>();
+        foreach (var pin in state.State.SnapshotPins.Values)
+        {
+            foreach (var txid in pin.Txids) pinned.Add(txid);
+        }
+        return pinned;
     }
 
     /// <summary>
@@ -647,4 +876,21 @@ internal sealed class TxRegistryGrain(
         bool HadDecision,
         TxStatus Decision,
         DateTimeOffset ForgottenAt);
+
+    /// <summary>
+    /// Aggregated outcome of one <see cref="PruneExpired"/> pass:
+    /// tombstones pruned plus pins evicted. Returned together so a
+    /// failing <c>WriteStateAsync</c> can unwind both in lockstep.
+    /// </summary>
+    private readonly record struct PruneResult(
+        List<PrunedEntry>? Tombstones,
+        Dictionary<Guid, SnapshotPin>? ExpiredPins)
+    {
+        /// <summary>
+        /// <see langword="true"/> when at least one tombstone or pin
+        /// was removed - drives the <c>changed</c> guard in
+        /// <see cref="ForgetAsync(Guid)"/>.
+        /// </summary>
+        public bool Any => (Tombstones is { Count: > 0 }) || ExpiredPins is { Count: > 0 };
+    }
 }

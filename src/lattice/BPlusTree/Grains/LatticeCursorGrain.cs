@@ -66,6 +66,13 @@ internal sealed class LatticeCursorGrain(
         Logger.LogInformation(
             "Cursor {CursorKey}: idle TTL expired; clearing persisted state.",
             CursorKey);
+
+        // Best-effort pin release on idle eviction so the registry
+        // does not retain a snapshot for a cursor that has gone
+        // silent. A failure here only delays pin release until its
+        // own TTL elapses on the registry side.
+        await ReleasePointInTimePinAsync(rethrow: false);
+
         await state.ClearStateAsync();
     }
 
@@ -87,6 +94,13 @@ internal sealed class LatticeCursorGrain(
                 throw new ArgumentException(
                     "DeleteRange cursors cannot be reverse.", nameof(spec));
             }
+            if (spec.PointInTime)
+            {
+                throw new ArgumentException(
+                    "DeleteRange cursors cannot run in point-in-time mode: range " +
+                    "deletes are themselves mutations, not snapshot reads.",
+                    nameof(spec));
+            }
         }
 
         if (state.State.Phase == LatticeCursorPhase.NotStarted)
@@ -94,9 +108,42 @@ internal sealed class LatticeCursorGrain(
             var prevTreeId = state.State.TreeId;
             var prevSpec = state.State.Spec;
             var prevPhase = state.State.Phase;
+            var prevSnapshot = state.State.PointInTimeSnapshot;
+            var prevPinId = state.State.SnapshotPinId;
+
+            Dictionary<Guid, TxStatus>? snapshot = null;
+            Guid pinId = Guid.Empty;
+            if (spec.PointInTime)
+            {
+                var registry = grainFactory.GetGrain<ITxRegistryGrain>(treeId);
+                snapshot = await registry.SnapshotAsync();
+                if (snapshot is { Count: > 0 })
+                {
+                    // Pin every txid whose decision the snapshot
+                    // captured. InFlight entries are excluded because
+                    // they don't yet have a tombstone to protect - if
+                    // they later commit or abort, the cursor falls
+                    // back to the snapshot's InFlight reading anyway,
+                    // which masks the post-snapshot transition.
+                    var pinned = new List<Guid>(snapshot.Count);
+                    foreach (var (txid, status) in snapshot)
+                    {
+                        if (status != TxStatus.InFlight) pinned.Add(txid);
+                    }
+                    if (pinned.Count > 0)
+                    {
+                        pinId = Guid.NewGuid();
+                        var ttl = optionsMonitor.Get(treeId).MaxCursorSnapshotPinTtl;
+                        await registry.PinSnapshotAsync(pinId, pinned, ttl);
+                    }
+                }
+            }
+
             state.State.TreeId = treeId;
             state.State.Spec = spec;
             state.State.Phase = LatticeCursorPhase.Open;
+            state.State.PointInTimeSnapshot = snapshot;
+            state.State.SnapshotPinId = pinId;
             try
             {
                 await state.WriteStateAsync();
@@ -109,6 +156,27 @@ internal sealed class LatticeCursorGrain(
                 state.State.TreeId = prevTreeId;
                 state.State.Spec = prevSpec;
                 state.State.Phase = prevPhase;
+                state.State.PointInTimeSnapshot = prevSnapshot;
+                state.State.SnapshotPinId = prevPinId;
+
+                // Also drop the pin we just installed - persisting
+                // the cursor failed, so the pin would leak retention
+                // for a cursor that does not exist.
+                if (pinId != Guid.Empty)
+                {
+                    try
+                    {
+                        var registry = grainFactory.GetGrain<ITxRegistryGrain>(treeId);
+                        await registry.UnpinSnapshotAsync(pinId);
+                    }
+                    catch (Exception unpinEx)
+                    {
+                        Logger.LogWarning(unpinEx,
+                            "Cursor {CursorKey}: failed to unpin snapshot {PinId} after open " +
+                            "persist failure; pin will expire via TTL.",
+                            CursorKey, pinId);
+                    }
+                }
                 throw;
             }
             await SlideTtlAsync();
@@ -123,6 +191,12 @@ internal sealed class LatticeCursorGrain(
                 $"Cursor '{CursorKey}' is already open with a different specification.");
         }
 
+        // Refresh the pin on re-open of a still-open point-in-time
+        // cursor. A re-open is one of the natural touchpoints (the
+        // client decided to keep paging after a pause), so it should
+        // slide the registry-side TTL alongside the local idle TTL.
+        await RefreshPointInTimePinAsync();
+
         await SlideTtlAsync();
     }
 
@@ -135,14 +209,19 @@ internal sealed class LatticeCursorGrain(
         if (state.State.Phase == LatticeCursorPhase.Exhausted)
             return new LatticeCursorKeysPage { Keys = Array.Empty<string>(), HasMore = false };
 
+        await RefreshPointInTimePinAsync();
+
         var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
         var (effStart, effEnd) = ComputeEffectiveRange();
 
         var collected = new List<string>(pageSize);
-        await foreach (var key in lattice.KeysAsync(effStart, effEnd, state.State.Spec.Reverse))
+        using (BeginPointInTimeScopeIfNeeded())
         {
-            collected.Add(key);
-            if (collected.Count >= pageSize) break;
+            await foreach (var key in lattice.KeysAsync(effStart, effEnd, state.State.Spec.Reverse))
+            {
+                collected.Add(key);
+                if (collected.Count >= pageSize) break;
+            }
         }
 
         var hasMore = collected.Count >= pageSize;
@@ -190,14 +269,19 @@ internal sealed class LatticeCursorGrain(
             };
         }
 
+        await RefreshPointInTimePinAsync();
+
         var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
         var (effStart, effEnd) = ComputeEffectiveRange();
 
         var collected = new List<KeyValuePair<string, byte[]>>(pageSize);
-        await foreach (var entry in lattice.EntriesAsync(effStart, effEnd, state.State.Spec.Reverse))
+        using (BeginPointInTimeScopeIfNeeded())
         {
-            collected.Add(entry);
-            if (collected.Count >= pageSize) break;
+            await foreach (var entry in lattice.EntriesAsync(effStart, effEnd, state.State.Spec.Reverse))
+            {
+                collected.Add(entry);
+                if (collected.Count >= pageSize) break;
+            }
         }
 
         var hasMore = collected.Count >= pageSize;
@@ -346,6 +430,13 @@ internal sealed class LatticeCursorGrain(
         // never fires a redundant cleanup tick.
         await UnregisterTtlAsync();
 
+        // Release the registry-side snapshot pin (if any) ahead of the
+        // state clear, so a CloseAsync that races with a registry
+        // outage at least drops the local cursor cleanly. A failed
+        // unpin only leaks until the pin's TTL elapses on the
+        // registry side; it does not block close.
+        await ReleasePointInTimePinAsync(rethrow: false);
+
         if (state.State.Phase == LatticeCursorPhase.NotStarted
             || state.State.Phase == LatticeCursorPhase.Closed)
         {
@@ -426,5 +517,110 @@ internal sealed class LatticeCursorGrain(
             : (string.Compare(afterLast, spec.StartInclusive, StringComparison.Ordinal) > 0
                 ? afterLast : spec.StartInclusive);
         return (newStart, spec.EndExclusive);
+    }
+
+    /// <summary>
+    /// Wraps the current step's tree-read fan-out in a
+    /// <see cref="LatticeRegistrySnapshotContext"/> scope when the
+    /// cursor was opened with
+    /// <see cref="LatticeCursorSpec.PointInTime"/> set; returns a
+    /// no-op disposable otherwise. Centralising the conditional keeps
+    /// the page-fetch loops branch-free.
+    /// </summary>
+    private IDisposable BeginPointInTimeScopeIfNeeded()
+    {
+        if (!state.State.Spec.PointInTime) return NoopScope.Instance;
+        return LatticeRegistrySnapshotContext.BeginScope(state.State.PointInTimeSnapshot);
+    }
+
+    /// <summary>
+    /// Slides the registry-side pin's <c>ExpiresAt</c> forward when
+    /// the cursor was opened in point-in-time mode and actually pinned
+    /// at least one decision. A <see langword="false"/> result from
+    /// <see cref="ITxRegistryGrain.RefreshPinAsync"/> means the pin
+    /// has been evicted (either by an out-of-band
+    /// <c>UnpinSnapshotAsync</c> or by expiry past
+    /// <see cref="LatticeOptions.MaxCursorSnapshotPinTtl"/>) - the
+    /// cursor surfaces this as
+    /// <see cref="LatticeCursorSnapshotExpiredException"/> on the
+    /// current step and self-closes so the local activation does not
+    /// keep serving a snapshot whose retention has lapsed.
+    /// </summary>
+    private async Task RefreshPointInTimePinAsync()
+    {
+        if (!state.State.Spec.PointInTime) return;
+        if (state.State.SnapshotPinId == Guid.Empty) return; // nothing to refresh
+
+        var registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
+        var ttl = optionsMonitor.Get(state.State.TreeId).MaxCursorSnapshotPinTtl;
+        var refreshed = await registry.RefreshPinAsync(state.State.SnapshotPinId, ttl);
+        if (refreshed) return;
+
+        // Pin has been evicted. Mark the cursor closed so a follow-up
+        // call sees a deterministic Closed phase rather than a state
+        // mismatch, and forward a typed exception to the caller. The
+        // captured snapshot is also cleared because it no longer has
+        // retention behind it.
+        state.State.Phase = LatticeCursorPhase.Closed;
+        state.State.PointInTimeSnapshot = null;
+        state.State.SnapshotPinId = Guid.Empty;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Cursor {CursorKey}: failed to persist Closed phase after snapshot pin expiry; " +
+                "in-memory state still reflects closure.",
+                CursorKey);
+        }
+
+        throw new LatticeCursorSnapshotExpiredException(
+            $"Cursor '{CursorKey}': point-in-time snapshot pin has been evicted from the " +
+            "TxRegistry (TTL elapsed or out-of-band unpin). Open a fresh point-in-time " +
+            "cursor to resume the scan against a new snapshot.");
+    }
+
+    /// <summary>
+    /// Best-effort release of the registry-side pin held by this
+    /// cursor (if any). Called from <see cref="CloseAsync"/>,
+    /// <see cref="OnTtlExpiredAsync"/>, and the snapshot-expiry
+    /// fallback so a cursor never leaks tombstone-retention beyond
+    /// its own lifetime. A failure on the registry side is logged
+    /// and swallowed when <paramref name="rethrow"/> is
+    /// <see langword="false"/> - the pin will fall out on its own
+    /// TTL.
+    /// </summary>
+    private async Task ReleasePointInTimePinAsync(bool rethrow)
+    {
+        var pinId = state.State.SnapshotPinId;
+        if (pinId == Guid.Empty) return;
+
+        try
+        {
+            var registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
+            await registry.UnpinSnapshotAsync(pinId);
+        }
+        catch (Exception ex)
+        {
+            if (rethrow) throw;
+            Logger.LogWarning(ex,
+                "Cursor {CursorKey}: failed to release point-in-time snapshot pin {PinId}; " +
+                "pin will expire via its own TTL.",
+                CursorKey, pinId);
+        }
+    }
+
+    /// <summary>
+    /// Reusable no-op disposable for the non-point-in-time cursor
+    /// path so the <c>using</c> block in the page-fetch loops does
+    /// not allocate when point-in-time mode is off.
+    /// </summary>
+    private sealed class NoopScope : IDisposable
+    {
+        public static readonly NoopScope Instance = new();
+        private NoopScope() { }
+        public void Dispose() { }
     }
 }

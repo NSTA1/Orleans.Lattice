@@ -294,6 +294,44 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultTxDecisionRetention = TimeSpan.FromSeconds(60);
 
     /// <summary>
+    /// Hard cap on how long the per-tree <see cref="Grains.TxRegistryGrain"/>
+    /// will retain a point-in-time snapshot pin recorded for a
+    /// <see cref="LatticeCursorSpec.PointInTime"/> cursor. The cursor grain
+    /// refreshes its pin on every step (<c>Next*Async</c> /
+    /// <c>DeleteRangeStepAsync</c>); a cursor that misses a refresh window
+    /// past this TTL has its pin expired by the registry's own prune pass,
+    /// and the next step throws
+    /// <see cref="LatticeCursorSnapshotExpiredException"/>. Acts as a
+    /// defence-in-depth bound against reminder-service degradation or
+    /// <c>CursorIdleTtl = Timeout.InfiniteTimeSpan</c> configurations that
+    /// would otherwise leave a forgotten cursor pinning registry decisions
+    /// forever. Default 7 days. The minimum effective interval is
+    /// <see cref="TxDecisionRetention"/> - a pin shorter than the tombstone
+    /// retention is silently floored, because the registry's own
+    /// tombstone-prune pass already covers anything shorter.
+    /// </summary>
+    public TimeSpan MaxCursorSnapshotPinTtl { get; set; } = DefaultMaxCursorSnapshotPinTtl;
+
+    /// <summary>Default value for <see cref="MaxCursorSnapshotPinTtl"/> (7 days).</summary>
+    public static readonly TimeSpan DefaultMaxCursorSnapshotPinTtl = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// Absolute footprint cap on the union of saga decisions pinned by all
+    /// active <see cref="LatticeCursorSpec.PointInTime"/> cursors against
+    /// the per-tree <see cref="Grains.TxRegistryGrain"/>. A new
+    /// <c>OpenAsync(PointInTime: true)</c> whose snapshot would push the
+    /// total pinned-decision footprint over this cap throws
+    /// <see cref="LatticeCursorRegistryPinExhaustedException"/> rather than
+    /// silently degrading or growing unbounded. <c>Next*Async</c> on an
+    /// already-open cursor never throws for pin-exhaustion reasons.
+    /// Default 100 000 decisions.
+    /// </summary>
+    public int MaxPinnedSagaDecisions { get; set; } = DefaultMaxPinnedSagaDecisions;
+
+    /// <summary>Default value for <see cref="MaxPinnedSagaDecisions"/> (100 000).</summary>
+    public const int DefaultMaxPinnedSagaDecisions = 100_000;
+
+    /// <summary>
     /// Optional retention window for <see cref="Primitives.VersionVector"/>
     /// entries. When a merge pipeline calls
     /// <see cref="Primitives.VersionVector.PruneOlderThan(long)"/> with
