@@ -35,6 +35,28 @@ internal interface ILatticeCursorGrain : IGrainWithStringKey
     Task OpenAsync(string treeId, LatticeCursorSpec spec);
 
     /// <summary>
+    /// Opens the cursor in zero-observable-writes snapshot mode against
+    /// the captured <paramref name="coordinate"/>. Persists the
+    /// coordinate alongside <paramref name="spec"/> so reactivations
+    /// continue to serve the same tree-wide snapshot view, and
+    /// (when an <see cref="IWalCursorRegistry"/> is registered with
+    /// the silo) reports a WAL retention pin so the
+    /// <see cref="ILatticeWalGc"/> does not trim the per-shard WAL
+    /// prefixes the snapshot replays from.
+    /// <para>
+    /// Idempotent on the same <paramref name="spec"/> /
+    /// <paramref name="coordinate"/> pair - a second open is a no-op.
+    /// A mismatch throws <see cref="InvalidOperationException"/>; a
+    /// caller wanting a different snapshot view must open a fresh
+    /// cursor id.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The logical tree ID the cursor scans.</param>
+    /// <param name="spec">The scan specification. Must have <see cref="LatticeCursorSpec.ZeroObservableWrites"/> set.</param>
+    /// <param name="coordinate">Tree-wide snapshot coordinate captured at open time by the public surface.</param>
+    Task OpenSnapshotAsync(string treeId, LatticeCursorSpec spec, LatticeSnapshotCoordinate coordinate);
+
+    /// <summary>
     /// Returns the next page of up to <paramref name="pageSize"/> keys.
     /// Valid only when the cursor was opened with
     /// <see cref="LatticeCursorKind.Keys"/>; throws

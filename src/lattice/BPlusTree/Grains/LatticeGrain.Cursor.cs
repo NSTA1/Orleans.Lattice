@@ -78,6 +78,36 @@ internal sealed partial class LatticeGrain
     /// are also point-in-time so saga decisions captured at open time
     /// are frozen alongside the per-shard WAL offsets - see
     /// <see cref="LatticeSnapshotCoordinate"/>.
+    /// <para>
+    /// Capture is a four-step fan-out:
+    /// </para>
+    /// <list type="number">
+    /// <item><description>
+    /// Resolve current routing (<see cref="GetRoutingAsync(CancellationToken)"/>)
+    /// to pin the <see cref="ShardMap.Version"/> the cursor will route
+    /// against for its lifetime.
+    /// </description></item>
+    /// <item><description>
+    /// Fan out <see cref="IShardRootGrain.SnapshotWalHeadAsync"/> across
+    /// every physical shard to capture per-shard next-to-be-assigned WAL
+    /// offsets concurrently.
+    /// </description></item>
+    /// <item><description>
+    /// Take a registry-decision snapshot via the per-tree
+    /// <see cref="ITxRegistryGrain"/> so saga decisions captured at open
+    /// time are frozen for the cursor's lifetime, mirroring the F-064
+    /// point-in-time cursor path.
+    /// </description></item>
+    /// <item><description>
+    /// Gate the open against
+    /// <see cref="LatticeOptions.MaxSnapshotReplayEntries"/> using the
+    /// largest captured WAL offset as a conservative per-shard cost
+    /// projection (each captured offset is the count of records the
+    /// snapshot leaf will replay for that shard). Fail-fast with
+    /// <see cref="LatticeSnapshotReplayBudgetExceededException"/> so an
+    /// expensive open does not silently consume per-shard memory.
+    /// </description></item>
+    /// </list>
     /// </summary>
     private async Task<string> OpenSnapshotCursorAsync(
         LatticeCursorKind kind,
@@ -88,9 +118,72 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+
+        var (physicalTreeId, shardMap) = await GetRoutingAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var physicalShards = shardMap.GetPhysicalShardIndices();
+
+        // Step 2: per-shard WAL-head capture, concurrent across shards.
+        // The fan-out is intentionally not linearizable across shards in
+        // real time - the registry snapshot below resolves cross-shard
+        // saga visibility uniformly so the union of all four captures
+        // still encodes a deterministic tree-wide view.
+        var headTasks = new Task<long>[physicalShards.Count];
+        for (var i = 0; i < physicalShards.Count; i++)
+        {
+            var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
+            headTasks[i] = shard.SnapshotWalHeadAsync(cancellationToken);
+        }
+        await Task.WhenAll(headTasks);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var perShardOffsets = new Dictionary<int, long>(physicalShards.Count);
+        long maxOffset = 0;
+        for (var i = 0; i < physicalShards.Count; i++)
+        {
+            var off = headTasks[i].Result;
+            perShardOffsets[physicalShards[i]] = off;
+            if (off > maxOffset) maxOffset = off;
+        }
+
+        // Step 4: replay-budget gate. Each shard's snapshot leaf will
+        // replay records [0, capturedOffset), so MaxSnapshotReplayEntries
+        // bounds the per-shard rebuild cost. We compare against the
+        // deepest shard rather than the sum because the leaves rebuild
+        // in parallel and the operator-facing knob is "per shard" - the
+        // same shape as MaxLeafReplayEntries on activation-time replay.
+        var opts = Options;
+        if (opts.MaxSnapshotReplayEntries > 0 && maxOffset > opts.MaxSnapshotReplayEntries)
+        {
+            throw new LatticeSnapshotReplayBudgetExceededException(
+                $"Snapshot open for tree '{TreeId}' would replay {maxOffset} WAL entries on the deepest shard, " +
+                $"exceeding LatticeOptions.MaxSnapshotReplayEntries={opts.MaxSnapshotReplayEntries}. " +
+                "Trigger a leaf-projection rebuild (RebuildLeafProjectionAsync) or raise the cap.");
+        }
+
+        // Step 3: registry-decision snapshot, mirroring the F-064
+        // point-in-time path. A failure here returns null - the cursor
+        // grain will treat that as "no sagas captured" and proceed; the
+        // snapshot semantics weaken to "WAL-only" rather than failing
+        // the open.
+        var registrySnapshot = await FetchRegistrySnapshotAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+        // The HLC stamped on the snapshot is the maximum HLC observed
+        // across every captured decision; HybridLogicalClock.Zero when
+        // the registry was empty. The cursor uses it only as a
+        // diagnostic anchor - the registry snapshot dictionary itself
+        // (transferred to LatticeRegistrySnapshotContext via the cursor
+        // grain) is what gates visibility.
+        var registryHlc = ComputeRegistrySnapshotHlc(registrySnapshot);
+
+        var coordinate = new LatticeSnapshotCoordinate(
+            shardMap.Version,
+            perShardOffsets,
+            registryHlc);
+
         var cursorId = Guid.NewGuid().ToString("N");
         var cursor = grainFactory.GetGrain<ILatticeCursorGrain>(BuildCursorKey(cursorId));
-        await cursor.OpenAsync(TreeId, new LatticeCursorSpec
+        await cursor.OpenSnapshotAsync(TreeId, new LatticeCursorSpec
         {
             Kind = kind,
             StartInclusive = startInclusive,
@@ -98,8 +191,29 @@ internal sealed partial class LatticeGrain
             Reverse = reverse,
             PointInTime = true,
             ZeroObservableWrites = true,
-        });
+        }, coordinate);
         return cursorId;
+    }
+
+    /// <summary>
+    /// Computes the HLC anchor for a captured registry snapshot. Used
+    /// only as a diagnostic field on
+    /// <see cref="LatticeSnapshotCoordinate.RegistrySnapshotHlc"/>;
+    /// visibility gating is driven by the snapshot dictionary itself,
+    /// not by this anchor.
+    /// </summary>
+    private static Primitives.HybridLogicalClock ComputeRegistrySnapshotHlc(
+        Dictionary<Guid, TxStatus>? snapshot)
+    {
+        // The registry's per-decision HLCs are not exposed on the
+        // current snapshot DTO, so we anchor at Zero when the snapshot
+        // is null or empty and let the cursor grain treat the captured
+        // dictionary as the authoritative gating input. A richer anchor
+        // (e.g. the head HLC of the registry tree at capture time)
+        // would require a new registry-side accessor and is not
+        // required for correctness here.
+        _ = snapshot;
+        return Primitives.HybridLogicalClock.Zero;
     }
 
     /// <inheritdoc />

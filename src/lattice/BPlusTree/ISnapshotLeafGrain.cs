@@ -47,14 +47,22 @@ internal interface ISnapshotLeafGrain : IGrainWithStringKey
     /// before exclusive bounds for continuation-token pagination)
     /// but serves them off the snapshot leaf's replayed projection
     /// state rather than the live <c>Entries</c> dictionary.
+    /// <para>
+    /// When <paramref name="limit"/> is non-negative the result is
+    /// truncated to at most that many keys, allowing the snapshot
+    /// cursor's per-page k-way merge to bound its per-shard fetch
+    /// cost. <c>0</c> returns an empty list; the default
+    /// <see cref="int.MaxValue"/> preserves the unbounded contract.
+    /// </para>
     /// </summary>
-    Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null);
+    Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue);
 
     /// <summary>
     /// Returns the sorted list of live key-value pairs this snapshot
     /// leaf observes in the optional [<paramref name="startInclusive"/>,
     /// <paramref name="endExclusive"/>) range. Same filter contract
-    /// as <see cref="GetKeysAsync"/>.
+    /// as <see cref="GetKeysAsync"/>, including the
+    /// <paramref name="limit"/> truncation knob.
     /// </summary>
-    Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null);
+    Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue);
 }

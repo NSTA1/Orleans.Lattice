@@ -113,9 +113,11 @@ internal sealed class SnapshotLeafGrain(
     }
 
     /// <inheritdoc />
-    public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
+    public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue)
     {
         EnsureOpened();
+        if (limit <= 0)
+            return Task.FromResult(new List<string>());
         var result = new List<string>();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         foreach (var (key, value) in _entries)
@@ -136,14 +138,18 @@ internal sealed class SnapshotLeafGrain(
             if (value.IsTombstone || value.IsExpired(nowTicks))
                 continue;
             result.Add(key);
+            if (result.Count >= limit)
+                break;
         }
         return Task.FromResult(result);
     }
 
     /// <inheritdoc />
-    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
+    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue)
     {
         EnsureOpened();
+        if (limit <= 0)
+            return Task.FromResult(new List<KeyValuePair<string, byte[]>>());
         var result = new List<KeyValuePair<string, byte[]>>();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         foreach (var (key, value) in _entries)
@@ -161,6 +167,8 @@ internal sealed class SnapshotLeafGrain(
             if (value.Value is null)
                 continue;
             result.Add(new KeyValuePair<string, byte[]>(key, value.Value));
+            if (result.Count >= limit)
+                break;
         }
         return Task.FromResult(result);
     }

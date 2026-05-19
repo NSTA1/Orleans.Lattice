@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -64,6 +65,7 @@ public partial class LatticeCursorGrainTests
             grainFactory,
             reminders,
             optionsMonitor,
+            new ServiceCollection().BuildServiceProvider(),
             new LoggerFactory().CreateLogger<LatticeCursorGrain>(),
             state);
         return (grain, state, lattice);
