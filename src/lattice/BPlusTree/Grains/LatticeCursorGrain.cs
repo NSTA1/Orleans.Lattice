@@ -1,6 +1,8 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
 using Orleans.Timers;
 
@@ -32,11 +34,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="Timeout.InfiniteTimeSpan"/> to disable.
 /// </para>
 /// </summary>
-internal sealed class LatticeCursorGrain(
+internal sealed partial class LatticeCursorGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    IServiceProvider services,
     ILogger<LatticeCursorGrain> logger,
     [PersistentState("lattice-cursor", LatticeOptions.StorageProviderName)]
     IPersistentState<LatticeCursorState> state)
@@ -44,8 +47,33 @@ internal sealed class LatticeCursorGrain(
 {
     private const string IdleReminderName = "cursor-ttl";
 
+    /// <summary>
+    /// Stable consumer-id prefix for snapshot WAL pins. Pairs with the
+    /// per-cursor id so a snapshot consumer is uniquely identifiable in
+    /// <see cref="IWalCursorRegistry"/> snapshots and so a tree-wide
+    /// unregister can target only this cursor's pin.
+    /// </summary>
+    internal const string SnapshotConsumerIdPrefix = "_lattice_snapshot_cursor_";
+
     /// <summary>Composite cursor grain key (<c>{treeId}/{cursorId}</c>).</summary>
     private string CursorKey => GrainContext.GrainId.Key.ToString()!;
+
+    /// <summary>
+    /// Optional WAL cursor registry. <see langword="null"/> when the host
+    /// did not opt into <c>AddWalCursorRegistry(...)</c>; in that case
+    /// snapshot cursors degrade to "best-effort retention" (the WAL GC
+    /// remains free to trim under its TTL / cursor / blocked-floor
+    /// predicates) and any subsequent rebuild that observes a trimmed
+    /// prefix surfaces as the coordinator's underlying failure.
+    /// </summary>
+    private IWalCursorRegistry? WalCursorRegistry => services.GetService<IWalCursorRegistry>();
+
+    /// <summary>
+    /// Stable consumer id this cursor reports under. Includes the
+    /// cursor key so concurrent snapshot cursors on the same tree
+    /// register distinct pins.
+    /// </summary>
+    private string SnapshotConsumerId => SnapshotConsumerIdPrefix + CursorKey;
 
     /// <inheritdoc />
     protected override string TtlReminderName => IdleReminderName;
@@ -72,6 +100,7 @@ internal sealed class LatticeCursorGrain(
         // silent. A failure here only delays pin release until its
         // own TTL elapses on the registry side.
         await ReleasePointInTimePinAsync(rethrow: false);
+        await TryUnregisterSnapshotPinAsync();
 
         await state.ClearStateAsync();
     }
@@ -209,6 +238,14 @@ internal sealed class LatticeCursorGrain(
         if (state.State.Phase == LatticeCursorPhase.Exhausted)
             return new LatticeCursorKeysPage { Keys = Array.Empty<string>(), HasMore = false };
 
+        // Snapshot cursors (ZeroObservableWrites) route through the
+        // snapshot-leaf fan-out partial; they do not touch the live
+        // shard projection at all.
+        if (state.State.Spec.ZeroObservableWrites)
+        {
+            return await NextSnapshotKeysAsync(pageSize);
+        }
+
         await RefreshPointInTimePinAsync();
 
         var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
@@ -267,6 +304,14 @@ internal sealed class LatticeCursorGrain(
                 Entries = Array.Empty<KeyValuePair<string, byte[]>>(),
                 HasMore = false,
             };
+        }
+
+        // Snapshot cursors (ZeroObservableWrites) route through the
+        // snapshot-leaf fan-out partial; they do not touch the live
+        // shard projection at all.
+        if (state.State.Spec.ZeroObservableWrites)
+        {
+            return await NextSnapshotEntriesAsync(pageSize);
         }
 
         await RefreshPointInTimePinAsync();
@@ -436,6 +481,12 @@ internal sealed class LatticeCursorGrain(
         // unpin only leaks until the pin's TTL elapses on the
         // registry side; it does not block close.
         await ReleasePointInTimePinAsync(rethrow: false);
+
+        // Release the WAL retention pin held by a snapshot cursor (if
+        // any). Mirrors the registry-side pin release above so a
+        // closed snapshot cursor does not retain WAL prefix that the
+        // GC would otherwise be free to trim.
+        await TryUnregisterSnapshotPinAsync();
 
         if (state.State.Phase == LatticeCursorPhase.NotStarted
             || state.State.Phase == LatticeCursorPhase.Closed)

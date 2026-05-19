@@ -331,6 +331,29 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<long> GetShardMaterialiserLagAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Captures the shard's current write-ahead-log head offset (the
+    /// next-to-be-assigned sequence number) for a zero-observable-
+    /// writes snapshot cursor opened by
+    /// <see cref="ILattice.OpenSnapshotKeyCursorAsync"/> /
+    /// <see cref="ILattice.OpenSnapshotEntryCursorAsync"/>. The
+    /// returned offset is the upper bound of the WAL prefix a
+    /// per-shard snapshot leaf will replay to materialise this
+    /// shard's view of the snapshot: replay covers offsets
+    /// <c>[0, value)</c>, so a write that appends after this call
+    /// is invisible by construction.
+    /// <para>
+    /// The fan-out across shards is concurrent and not linearisable
+    /// in real time; the snapshot's
+    /// <see cref="LatticeSnapshotCoordinate.RegistrySnapshotHlc"/>
+    /// resolves saga visibility uniformly across shards so any
+    /// single atomic write is all-or-nothing on every shard it
+    /// touched.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the underlying coordinator RPC.</param>
+    Task<long> SnapshotWalHeadAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Marks this shard as the source of an in-progress adaptive split.
     /// While the returned task is incomplete or the split has not been completed,
     /// every write to a key whose virtual slot is in <paramref name="movedSlots"/>

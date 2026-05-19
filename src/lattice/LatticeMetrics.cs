@@ -337,6 +337,43 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.leaf.replay.entries", unit: "{entry}",
             description: "Mutations seen by activation-time leaf-projection replay, tagged by outcome.");
 
+    // --- Snapshot-cursor instruments ----------------------------------------
+
+    /// <summary>
+    /// Histogram of per-shard WAL-replay duration observed during
+    /// snapshot-leaf open. Emitted by <c>SnapshotLeafGrain</c> after a
+    /// successful replay over <c>[0, capturedOffset)</c>. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/> (the virtual
+    /// shard the snapshot leaf materialises).
+    /// </summary>
+    public static readonly Histogram<double> SnapshotReplayDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.snapshot.replay.duration", unit: "ms",
+            description: "Per-shard WAL-replay duration observed during zero-observable-writes snapshot-leaf open.");
+
+    /// <summary>
+    /// Counter of WAL entries fed to the snapshot-leaf replay engine
+    /// during a snapshot-leaf open. Tagged with <see cref="TagTree"/>
+    /// and <see cref="TagShard"/>. One increment per
+    /// <c>CommitLogSliceEntry</c> processed; filtered or skipped
+    /// records are still counted because they contribute to wall-clock
+    /// replay cost.
+    /// </summary>
+    public static readonly Counter<long> SnapshotReplayEntries =
+        Meter.CreateCounter<long>("orleans.lattice.snapshot.replay.entries", unit: "{entry}",
+            description: "WAL entries consumed by the zero-observable-writes snapshot-leaf replay engine.");
+
+    /// <summary>
+    /// Up-down counter tracking the number of live WAL retention pins
+    /// registered by snapshot cursors against
+    /// <see cref="IWalCursorRegistry"/>. Incremented on
+    /// <c>OpenSnapshotKeyCursorAsync</c> / <c>OpenSnapshotEntryCursorAsync</c>
+    /// after a successful pin report and decremented on close /
+    /// idle-TTL eviction. Tagged with <see cref="TagTree"/>.
+    /// </summary>
+    public static readonly UpDownCounter<long> SnapshotPinCount =
+        Meter.CreateUpDownCounter<long>("orleans.lattice.snapshot.pins", unit: "{pin}",
+            description: "Live WAL retention pins held by zero-observable-writes snapshot cursors.");
+
     // --- WAL garbage-collector instruments ----------------------------------
 
     /// <summary>

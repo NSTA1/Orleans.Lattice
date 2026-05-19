@@ -426,4 +426,112 @@ public static class LatticeExtensions
             ? (originalStart, lastKey)
             : (lastKey + "\u0000", originalEnd);
     }
+
+    // --- Scoped cursors ---
+    //
+    // Thin IAsyncDisposable wrappers around the underlying string-id
+    // cursor surface. These do not change the durability contract of
+    // the cursor grain (the cursor is still server-side and survives
+    // a client crash); they only bind the close call to a using-block.
+    // Callers that need to persist or share a cursor ID should keep
+    // using the raw Open*CursorAsync / CloseCursorAsync shape.
+
+    /// <summary>
+    /// Opens a key-enumeration cursor and returns it as an
+    /// <see cref="IAsyncDisposable"/> scope. Disposing the scope calls
+    /// <see cref="ILattice.CloseCursorAsync(string, CancellationToken)"/>
+    /// exactly once. Parameters mirror
+    /// <see cref="ILattice.OpenKeyCursorAsync"/>.
+    /// </summary>
+    public static async Task<LatticeScopedCursor> OpenKeyCursorScopeAsync(
+        this ILattice lattice,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool pointInTime = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        var cursorId = await lattice.OpenKeyCursorAsync(
+            startInclusive, endExclusive, reverse, pointInTime, cancellationToken)
+            .ConfigureAwait(false);
+        return new LatticeScopedCursor(lattice, cursorId);
+    }
+
+    /// <summary>
+    /// Opens an entry-enumeration cursor and returns it as an
+    /// <see cref="IAsyncDisposable"/> scope. Parameters mirror
+    /// <see cref="ILattice.OpenEntryCursorAsync"/>.
+    /// </summary>
+    public static async Task<LatticeScopedCursor> OpenEntryCursorScopeAsync(
+        this ILattice lattice,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool pointInTime = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        var cursorId = await lattice.OpenEntryCursorAsync(
+            startInclusive, endExclusive, reverse, pointInTime, cancellationToken)
+            .ConfigureAwait(false);
+        return new LatticeScopedCursor(lattice, cursorId);
+    }
+
+    /// <summary>
+    /// Opens a zero-observable-writes snapshot key cursor and returns
+    /// it as an <see cref="IAsyncDisposable"/> scope. Parameters mirror
+    /// <see cref="ILattice.OpenSnapshotKeyCursorAsync"/>.
+    /// </summary>
+    public static async Task<LatticeScopedCursor> OpenSnapshotKeyCursorScopeAsync(
+        this ILattice lattice,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        var cursorId = await lattice.OpenSnapshotKeyCursorAsync(
+            startInclusive, endExclusive, reverse, cancellationToken)
+            .ConfigureAwait(false);
+        return new LatticeScopedCursor(lattice, cursorId);
+    }
+
+    /// <summary>
+    /// Opens a zero-observable-writes snapshot entry cursor and returns
+    /// it as an <see cref="IAsyncDisposable"/> scope. Parameters mirror
+    /// <see cref="ILattice.OpenSnapshotEntryCursorAsync"/>.
+    /// </summary>
+    public static async Task<LatticeScopedCursor> OpenSnapshotEntryCursorScopeAsync(
+        this ILattice lattice,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        var cursorId = await lattice.OpenSnapshotEntryCursorAsync(
+            startInclusive, endExclusive, reverse, cancellationToken)
+            .ConfigureAwait(false);
+        return new LatticeScopedCursor(lattice, cursorId);
+    }
+
+    /// <summary>
+    /// Opens a resumable range-delete cursor and returns it as an
+    /// <see cref="IAsyncDisposable"/> scope. Parameters mirror
+    /// <see cref="ILattice.OpenDeleteRangeCursorAsync"/>.
+    /// </summary>
+    public static async Task<LatticeScopedCursor> OpenDeleteRangeCursorScopeAsync(
+        this ILattice lattice,
+        string startInclusive,
+        string endExclusive,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        var cursorId = await lattice.OpenDeleteRangeCursorAsync(
+            startInclusive, endExclusive, cancellationToken)
+            .ConfigureAwait(false);
+        return new LatticeScopedCursor(lattice, cursorId);
+    }
 }
+
