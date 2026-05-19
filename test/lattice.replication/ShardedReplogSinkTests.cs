@@ -9,7 +9,7 @@ using Orleans.Lattice.Replication.Grains;
 namespace Orleans.Lattice.Replication.Tests;
 
 [TestFixture]
-public class ShardedReplogSinkTests
+public partial class ShardedReplogSinkTests
 {
     private static IOptionsMonitor<LatticeReplicationOptions> Monitor(int partitions, string clusterId = "site-a")
     {
@@ -31,7 +31,12 @@ public class ShardedReplogSinkTests
         var defaultGrain = Substitute.For<IWalShardGrain>();
         defaultGrain.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(0L);
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(defaultGrain);
-        var sink = new ShardedReplogSink(factory, Monitor(partitions), new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(
+            factory,
+            Monitor(partitions),
+            new FakeReplicationTopology(),
+            new LocalVectorClockCache(factory),
+            NullLogger<ShardedReplogSink>.Instance);
         return (sink, factory, defaultGrain);
     }
 
@@ -149,7 +154,7 @@ public class ShardedReplogSinkTests
         monitor.CurrentValue.Returns(new LatticeReplicationOptions { ClusterId = "x", ReplogPartitions = 8 });
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(Substitute.For<IWalShardGrain>());
-        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, new FakeReplicationTopology(), new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync(MakeEntry("hot", "k"), CancellationToken.None);
 
@@ -166,7 +171,7 @@ public class ShardedReplogSinkTests
         grain.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns<long>(_ => throw new InvalidOperationException("boom"));
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(grain);
-        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, new FakeReplicationTopology(), new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         Assert.That(
             async () => await sink.WriteAsync(MakeEntry("tree", "k"), CancellationToken.None),
@@ -202,7 +207,7 @@ public class ShardedReplogSinkTests
         grain.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns<long>(_ => throw new InvalidOperationException("boom"));
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(grain);
-        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, new FakeReplicationTopology(), new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         Assert.That(
             async () => await sink.WriteAsync(MakeEntry("tree", "k"), CancellationToken.None),
@@ -218,8 +223,7 @@ public class ShardedReplogSinkTests
     // Writer-side doorbell fan-out (production replication drivers)
     // ------------------------------------------------------------------
 
-    private static IOptionsMonitor<LatticeReplicationOptions> MonitorWithPeers(
-        IReadOnlyCollection<string>? peers,
+    private static IOptionsMonitor<LatticeReplicationOptions> MonitorWithDoorbell(
         bool doorbellEnabled = true,
         int partitions = 1)
     {
@@ -228,7 +232,6 @@ public class ShardedReplogSinkTests
         {
             ClusterId = "site-a",
             ReplogPartitions = partitions,
-            ReplicationPeers = peers,
             ShipDoorbellEnabled = doorbellEnabled,
         };
         monitor.CurrentValue.Returns(options);
@@ -239,7 +242,8 @@ public class ShardedReplogSinkTests
     [Test]
     public async Task WriteAsync_rings_each_peer_doorbell_when_enabled()
     {
-        var monitor = MonitorWithPeers(new[] { "site-b", "site-c" });
+        var monitor = MonitorWithDoorbell();
+        var topology = new FakeReplicationTopology(new[] { "site-b", "site-c" });
         var factory = Substitute.For<IGrainFactory>();
         var shard = Substitute.For<IWalShardGrain>();
         shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(0L);
@@ -248,7 +252,7 @@ public class ShardedReplogSinkTests
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(shard);
         factory.GetGrain<IReplicationShipperGrain>("orders/site-b").Returns(shipperB);
         factory.GetGrain<IReplicationShipperGrain>("orders/site-c").Returns(shipperC);
-        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, topology, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
         // Doorbell ring is fire-and-forget; let the continuations drain.
@@ -262,14 +266,15 @@ public class ShardedReplogSinkTests
     [Test]
     public async Task WriteAsync_skips_doorbell_when_disabled()
     {
-        var monitor = MonitorWithPeers(new[] { "site-b" }, doorbellEnabled: false);
+        var monitor = MonitorWithDoorbell(doorbellEnabled: false);
+        var topology = new FakeReplicationTopology(new[] { "site-b" });
         var factory = Substitute.For<IGrainFactory>();
         var shard = Substitute.For<IWalShardGrain>();
         shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(0L);
         var shipperB = Substitute.For<IReplicationShipperGrain>();
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(shard);
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipperB);
-        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, topology, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
         await Task.Delay(20);
@@ -278,25 +283,26 @@ public class ShardedReplogSinkTests
     }
 
     [Test]
-    public async Task WriteAsync_skips_doorbell_when_peers_null_or_empty()
+    public async Task WriteAsync_skips_doorbell_when_topology_peers_empty()
     {
-        var monitor = MonitorWithPeers(peers: null);
+        var monitor = MonitorWithDoorbell();
+        var topology = new FakeReplicationTopology(peers: null);
         var factory = Substitute.For<IGrainFactory>();
         var shard = Substitute.For<IWalShardGrain>();
         shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(0L);
         var shipper = Substitute.For<IReplicationShipperGrain>();
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(shard);
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
-        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, topology, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
         await Task.Delay(20);
 
         await shipper.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());
 
-        // And again with an empty collection.
-        var monitor2 = MonitorWithPeers(peers: Array.Empty<string>());
-        var sink2 = new ShardedReplogSink(factory, monitor2, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        // And again with an explicitly empty collection.
+        var topology2 = new FakeReplicationTopology(Array.Empty<string>());
+        var sink2 = new ShardedReplogSink(factory, monitor, topology2, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
         await sink2.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
         await Task.Delay(20);
         await shipper.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());
@@ -305,7 +311,8 @@ public class ShardedReplogSinkTests
     [Test]
     public async Task WriteAsync_swallows_doorbell_failures()
     {
-        var monitor = MonitorWithPeers(new[] { "site-b" });
+        var monitor = MonitorWithDoorbell();
+        var topology = new FakeReplicationTopology(new[] { "site-b" });
         var factory = Substitute.For<IGrainFactory>();
         var shard = Substitute.For<IWalShardGrain>();
         shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(0L);
@@ -314,7 +321,7 @@ public class ShardedReplogSinkTests
             .Returns<Task>(_ => Task.FromException(new InvalidOperationException("doorbell-failed")));
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(shard);
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
-        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, topology, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         // The producer-side commit path must never fault on a
         // doorbell ring failure; WriteAsync awaits the WAL append
@@ -329,14 +336,19 @@ public class ShardedReplogSinkTests
     [Test]
     public async Task WriteAsync_skips_doorbell_for_null_or_empty_peer_entries()
     {
-        var monitor = MonitorWithPeers(new[] { "", null!, "" });
+        var monitor = MonitorWithDoorbell();
+        // FakeReplicationTopology's ctor filters out null/whitespace
+        // peers, so to exercise the sink's own inner skip-empty-peer
+        // guard the topology is stubbed directly with malformed entries.
+        var topology = Substitute.For<IReplicationTopology>();
+        topology.CurrentPeers.Returns(new[] { "", null!, "" });
         var factory = Substitute.For<IGrainFactory>();
         var shard = Substitute.For<IWalShardGrain>();
         shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(0L);
         var shipper = Substitute.For<IReplicationShipperGrain>();
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(shard);
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
-        var sink = new ShardedReplogSink(factory, monitor, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, topology, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
         await Task.Delay(20);

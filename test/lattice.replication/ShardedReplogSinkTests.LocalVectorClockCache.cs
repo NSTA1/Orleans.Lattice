@@ -62,7 +62,7 @@ public class ShardedReplogSinkLocalVectorClockCacheTests
         hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
         var cache = new LocalVectorClockCache(factory);
-        var sink = new ShardedReplogSink(factory, Monitor(), cache, NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, Monitor(), new FakeReplicationTopology(), cache, NullLogger<ShardedReplogSink>.Instance);
         return (sink, factory, walGrain, cache);
     }
 

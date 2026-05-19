@@ -31,6 +31,21 @@ namespace Orleans.Lattice.Replication;
 /// doorbell only delays the affected peer by one timer tick (~200ms).
 /// </para>
 /// <para>
+/// The peer list driving the doorbell fan-out is read from
+/// <see cref="IReplicationTopology.CurrentPeers"/>, not from
+/// <see cref="LatticeReplicationOptions.ReplicationPeers"/> directly.
+/// In the default configuration the two are equivalent because the
+/// registered <see cref="OptionsReplicationTopology"/> projects the
+/// same <see cref="IOptionsMonitor{TOptions}"/> instance; hosts that
+/// register a custom <see cref="IReplicationTopology"/> singleton
+/// (e.g. service-registry-backed) have that topology drive the
+/// doorbell loop without needing to mirror membership back into
+/// <see cref="LatticeReplicationOptions.ReplicationPeers"/>.
+/// <see cref="LatticeReplicationOptions.ShipDoorbellEnabled"/> and the
+/// partition count remain options-resolved because they are
+/// behaviour knobs rather than membership.
+/// </para>
+/// <para>
 /// The partition count is read from the unnamed (default) options
 /// instance via <see cref="IOptionsMonitor{TOptions}.CurrentValue"/>.
 /// Per-tree partition-count overrides are not supported - if a future
@@ -41,9 +56,13 @@ namespace Orleans.Lattice.Replication;
 internal sealed class ShardedReplogSink(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeReplicationOptions> options,
+    IReplicationTopology topology,
     LocalVectorClockCache localVectorClockCache,
     ILogger<ShardedReplogSink> logger) : IReplogSink
 {
+    private readonly IReplicationTopology _topology =
+        topology ?? throw new ArgumentNullException(nameof(topology));
+
     /// <inheritdoc />
     public async Task WriteAsync(WalRecord entry, CancellationToken cancellationToken)
     {
@@ -80,22 +99,29 @@ internal sealed class ShardedReplogSink(
             localVectorClockCache.AdvanceLocal(treeId, originClusterId, entry.Timestamp);
         }
 
-        // Doorbell fan-out: wake every configured shipper for
-        // this tree so newly-committed entries reach peers at
-        // sub-second latency. Best-effort and fire-and-forget - the
+        // Doorbell fan-out: wake every shipper for this tree so
+        // newly-committed entries reach peers at sub-second latency.
+        // Peer membership is sourced from IReplicationTopology, not
+        // from LatticeReplicationOptions.ReplicationPeers, so a host-
+        // supplied dynamic topology drives this loop without having
+        // to mirror membership back into options. ShipDoorbellEnabled
+        // stays options-resolved because it is a per-tree behaviour
+        // knob, not membership. Best-effort and fire-and-forget - the
         // commit-path semantics never depend on a doorbell ring.
         if (resolved.ShipDoorbellEnabled
-            && resolved.ReplicationPeers is { } peers
-            && peers.Count > 0
             && entry.TreeId is { Length: > 0 } doorbellTreeId)
         {
-            foreach (var peer in peers)
+            var peers = _topology.CurrentPeers;
+            if (peers.Count > 0)
             {
-                if (string.IsNullOrEmpty(peer))
+                foreach (var peer in peers)
                 {
-                    continue;
+                    if (string.IsNullOrEmpty(peer))
+                    {
+                        continue;
+                    }
+                    _ = RingDoorbellAsync(doorbellTreeId, peer);
                 }
-                _ = RingDoorbellAsync(doorbellTreeId, peer);
             }
         }
     }

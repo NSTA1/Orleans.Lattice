@@ -446,6 +446,18 @@ Lattice grains use the storage provider named `"lattice"` (exposed as `LatticeOp
 siloBuilder.AddMemoryGrainStorage(LatticeOptions.StorageProviderName);
 ```
 
+## Replication options
+
+Cross-cluster replication is configured by the
+`Orleans.Lattice.Replication` package, not by `LatticeOptions`. The
+full options reference - including `ReplicatedTrees`, `ReplicationPeers`,
+`ShipDoorbellEnabled`, the backoff triple, and the maintenance cadence
+knobs - lives on `LatticeReplicationOptions` and is documented in
+[Replication drivers](../lattice.replication/replication-drivers.md).
+Peer membership in particular has its own resolution model (topology
+seam vs. `ReplicationPeers` projection) covered in
+[Peer configuration](../lattice.replication/replication-drivers.md#peer-configuration-topology-vs-replicationpeers).
+
 ## Full Example
 
 ```csharp verify

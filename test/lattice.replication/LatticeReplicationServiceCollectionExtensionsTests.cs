@@ -82,7 +82,7 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
-        builder.AddLatticeReplication(_ => { });
+        builder.AddLatticeReplication(o => o.ClusterId = "test-cluster");
 
         var provider = services.BuildServiceProvider();
         var sink = provider.GetRequiredService<IReplogSink>();
@@ -261,7 +261,7 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
-        builder.AddLatticeReplication(_ => { });
+        builder.AddLatticeReplication(o => o.ClusterId = "test-cluster");
 
         var provider = services.BuildServiceProvider();
         var observers = provider.GetServices<IMutationObserver>().ToArray();
@@ -321,7 +321,7 @@ public class LatticeReplicationServiceCollectionExtensionsTests
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
-        builder.AddLatticeReplication(_ => { });
+        builder.AddLatticeReplication(o => o.ClusterId = "test-cluster");
         builder.AddLatticeReplication(_ => { });
 
         var provider = services.BuildServiceProvider();

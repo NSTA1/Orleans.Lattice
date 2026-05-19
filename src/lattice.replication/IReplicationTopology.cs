@@ -26,21 +26,26 @@ namespace Orleans.Lattice.Replication;
 /// runs.
 /// </para>
 /// <para>
-/// This seam governs the <em>activation</em> side of the replication
-/// pipeline only. Several operational reads still consult
-/// <see cref="LatticeReplicationOptions.ReplicationPeers"/> directly:
-/// <c>ShardedReplogSink</c>'s per-append doorbell fan-out and
-/// <c>ReplicationMaintenanceGrain</c>'s fall-off-log probe. In the
-/// default configuration this is invisible because both sides project
-/// the same <see cref="Microsoft.Extensions.Options.IOptionsMonitor{TOptions}"/>
-/// instance. Hosts that replace the default topology with a source
-/// that does <em>not</em> mirror its membership into
-/// <see cref="LatticeReplicationOptions.ReplicationPeers"/> will see
-/// per-concern divergence: activation follows this topology, while
-/// doorbell rings and fall-off probes follow the options snapshot. See
-/// <c>docs/lattice.replication/replication-drivers.md</c> ("Topology
-/// vs. ReplicationPeers: who owns what") for the full table and
-/// recommended discipline.
+/// This seam is the canonical source of replication peer membership
+/// across the entire replication pipeline: activation
+/// (<c>ReplicationDriverActivationService</c>), producer-side
+/// doorbell fan-out (<c>ShardedReplogSink</c>), and per-cadence
+/// fall-off-log probing (<c>ReplicationMaintenanceGrain</c>) all
+/// resolve their peer list from <see cref="CurrentPeers"/>. The
+/// default <see cref="OptionsReplicationTopology"/> projects
+/// <see cref="LatticeReplicationOptions.ReplicationPeers"/> so
+/// option-driven configuration continues to work unchanged; hosts
+/// that register a custom <see cref="IReplicationTopology"/>
+/// singleton drive every membership-sensitive concern without
+/// having to mirror their dynamic source back into options.
+/// Per-tree behaviour knobs (e.g.
+/// <see cref="LatticeReplicationOptions.ShipDoorbellEnabled"/>,
+/// cadence intervals) remain options-resolved because they are
+/// configuration rather than membership. The one residual coupling
+/// is per-shipper-grain lifetime: a shipper grain bound at activation
+/// time to <c>(tree, peer)</c> stays bound for its lifetime; runtime
+/// peer removals intentionally do not tear down an existing shipper
+/// so it can drain its remaining backlog.
 /// </para>
 /// <para>
 /// The seam is deliberately <em>not</em> modelled as

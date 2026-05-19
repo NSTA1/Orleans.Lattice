@@ -33,7 +33,8 @@ public partial class ReplicationMaintenanceGrainTests
         IGrainFactory GrainFactory) Create(
             LatticeReplicationOptions? options = null,
             ReplicationMaintenanceState? seed = null,
-            string treeName = Tree)
+            string treeName = Tree,
+            IReplicationTopology? topology = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("maintenance-grain", treeName));
@@ -63,9 +64,16 @@ public partial class ReplicationMaintenanceGrainTests
             fakeState.State = seed;
         }
         var grainFactory = Substitute.For<IGrainFactory>();
+        // When no explicit topology is supplied, project the
+        // options-snapshot peer list so existing tests written against
+        // ReplicationPeers continue to drive the probe (mirroring the
+        // production OptionsReplicationTopology projection that the DI
+        // registration installs by default).
+        var effectiveTopology = topology
+            ?? new FakeReplicationTopology(resolved.ReplicationPeers);
         var grain = new ReplicationMaintenanceGrain(
             context, reminders, NullLogger<ReplicationMaintenanceGrain>.Instance,
-            monitor, gc, detector, introspection, grainFactory, fakeState);
+            monitor, gc, detector, introspection, effectiveTopology, grainFactory, fakeState);
         return (grain, fakeState, monitor, gc, detector, introspection, resolved, grainFactory);
     }
 
@@ -83,6 +91,7 @@ public partial class ReplicationMaintenanceGrainTests
                 null!, Substitute.For<ILatticeWalGc>(),
                 Substitute.For<ILatticeFallOffLogDetector>(),
                 Substitute.For<ILatticeWalIntrospection>(),
+                new FakeReplicationTopology(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationMaintenanceState>()),
             Throws.InstanceOf<ArgumentNullException>());
@@ -100,6 +109,7 @@ public partial class ReplicationMaintenanceGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 null!, Substitute.For<ILatticeFallOffLogDetector>(),
                 Substitute.For<ILatticeWalIntrospection>(),
+                new FakeReplicationTopology(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationMaintenanceState>()),
             Throws.InstanceOf<ArgumentNullException>());
@@ -117,6 +127,7 @@ public partial class ReplicationMaintenanceGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 Substitute.For<ILatticeWalGc>(),
                 null!, Substitute.For<ILatticeWalIntrospection>(),
+                new FakeReplicationTopology(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationMaintenanceState>()),
             Throws.InstanceOf<ArgumentNullException>());
@@ -134,6 +145,26 @@ public partial class ReplicationMaintenanceGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 Substitute.For<ILatticeWalGc>(),
                 Substitute.For<ILatticeFallOffLogDetector>(),
+                null!,
+                new FakeReplicationTopology(),
+                Substitute.For<IGrainFactory>(),
+                new FakePersistentState<ReplicationMaintenanceState>()),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_topology_is_null()
+    {
+        var ctx = Substitute.For<IGrainContext>();
+        ctx.GrainId.Returns(GrainId.Create("maintenance-grain", Tree));
+        Assert.That(
+            () => new ReplicationMaintenanceGrain(
+                ctx, Substitute.For<IReminderRegistry>(),
+                NullLogger<ReplicationMaintenanceGrain>.Instance,
+                Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
+                Substitute.For<ILatticeWalGc>(),
+                Substitute.For<ILatticeFallOffLogDetector>(),
+                Substitute.For<ILatticeWalIntrospection>(),
                 null!,
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationMaintenanceState>()),
@@ -153,6 +184,7 @@ public partial class ReplicationMaintenanceGrainTests
                 Substitute.For<ILatticeWalGc>(),
                 Substitute.For<ILatticeFallOffLogDetector>(),
                 Substitute.For<ILatticeWalIntrospection>(),
+                new FakeReplicationTopology(),
                 null!,
                 new FakePersistentState<ReplicationMaintenanceState>()),
             Throws.InstanceOf<ArgumentNullException>());
@@ -174,6 +206,7 @@ public partial class ReplicationMaintenanceGrainTests
             Substitute.For<ILatticeWalGc>(),
             Substitute.For<ILatticeFallOffLogDetector>(),
             Substitute.For<ILatticeWalIntrospection>(),
+            new FakeReplicationTopology(),
             Substitute.For<IGrainFactory>(),
             new FakePersistentState<ReplicationMaintenanceState>());
 
