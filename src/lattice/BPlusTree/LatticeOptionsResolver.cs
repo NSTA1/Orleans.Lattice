@@ -166,6 +166,7 @@ internal sealed class LatticeOptionsResolver(
             MaterialiserCheckpointEntries = baseOptions.MaterialiserCheckpointEntries,
             LeafProjectionRetention = baseOptions.LeafProjectionRetention,
             ProjectionRebuildPolicy = baseOptions.ProjectionRebuildPolicy,
+            MaxLeafReplayEntries = baseOptions.MaxLeafReplayEntries,
             MaintainProjectionDigest = maintainDigest,
         };
     }

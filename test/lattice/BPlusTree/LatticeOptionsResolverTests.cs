@@ -178,4 +178,36 @@ public class LatticeOptionsResolverTests
 
         Assert.That(resolved.MaintainProjectionDigest, Is.True);
     }
+
+    [Test]
+    public async Task MaxLeafReplayEntries_is_propagated_from_base_options()
+    {
+        // Regression: the resolver builds a fresh ResolvedLatticeOptions
+        // via an object initializer and originally omitted
+        // MaxLeafReplayEntries, so a host that lowered the replay budget
+        // via IOptionsMonitor<LatticeOptions> would see the base-class
+        // default (10 000) leak through to LatticeFallOffLogDetector. The
+        // detector's gap-vs-budget arithmetic must observe the configured
+        // value end-to-end.
+        var (resolver, _) = Build(new LatticeOptions { MaxLeafReplayEntries = 5 });
+
+        var resolved = await resolver.ResolveAsync("user-tree");
+
+        Assert.That(resolved.MaxLeafReplayEntries, Is.EqualTo(5));
+    }
+
+    [Test]
+    public async Task MaxLeafReplayEntries_propagates_default_when_not_overridden()
+    {
+        // Companion to the regression test above: when the host leaves
+        // MaxLeafReplayEntries at its default, the resolved view exposes
+        // the same default (10 000). Asserting both directions guards
+        // against a future "override default with a different constant"
+        // mistake in the resolver path.
+        var (resolver, _) = Build(new LatticeOptions());
+
+        var resolved = await resolver.ResolveAsync("user-tree");
+
+        Assert.That(resolved.MaxLeafReplayEntries, Is.EqualTo(LatticeOptions.DefaultMaxLeafReplayEntries));
+    }
 }

@@ -296,6 +296,41 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<LeafProjectionDigest> GetShardProjectionDigestAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Operator-tooling rebuild: clears the materialised projection state
+    /// (entries, projection hash, persisted checkpoint offset, pending-tx
+    /// machinery) on every leaf in this shard's chain and forces each
+    /// leaf to deactivate so its next activation replays the per-shard
+    /// write-ahead log from offset <c>0</c> through the existing
+    /// activation-time materialiser. Topology-bearing slots (tree id,
+    /// shard index, sibling pointers, key range bounds, parent pointer,
+    /// split markers) are preserved verbatim so the rebuild observes
+    /// the same WAL-filter ownership context the pre-rebuild leaves
+    /// used. Used after a corrupt-projection incident or a
+    /// <see cref="LatticeOptions.MaxLeafReplayEntries"/> blow-out to
+    /// recover the shard state from the durable WAL source of truth.
+    /// <para>
+    /// Failures propagate. A transient storage failure on a single leaf
+    /// aborts the fan-out with the unaffected leaves' rebuilds already
+    /// applied; the operation is safe to retry because every leaf
+    /// rebuild is independently idempotent.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the leaf-chain walk between leaves.</param>
+    Task RebuildShardProjectionAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Returns the materialiser-lag value for this shard - the gap
+    /// between the per-shard write-ahead log head offset and the
+    /// minimum projection-checkpoint offset across every leaf in this
+    /// shard's chain. A non-zero return value means the shard's
+    /// projection has not yet caught up to the durable WAL head and is
+    /// the back-pressure signal that complements the replication
+    /// receiver's apply-lag gauge.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the leaf-chain walk between leaves.</param>
+    Task<long> GetShardMaterialiserLagAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Marks this shard as the source of an in-progress adaptive split.
     /// While the returned task is incomplete or the split has not been completed,
     /// every write to a key whose virtual slot is in <paramref name="movedSlots"/>

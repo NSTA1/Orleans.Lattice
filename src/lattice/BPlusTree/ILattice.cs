@@ -477,6 +477,52 @@ public interface ILattice : IGrainWithStringKey
     /// <param name="cancellationToken">Cancels the leaf-chain walk before the next leaf.</param>
     Task<LeafProjectionDigest> GetLeafProjectionDigestAsync(int shardIndex, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Operator-tooling rebuild: clears the materialised projection
+    /// state (entries, projection hash, persisted checkpoint offset,
+    /// pending-tx machinery) on every leaf in the shard's chain and
+    /// forces each leaf to deactivate so its next activation replays
+    /// the per-shard write-ahead log from offset <c>0</c> through the
+    /// existing activation-time materialiser. Topology-bearing slots
+    /// (tree id, shard index, sibling pointers, key range bounds,
+    /// parent pointer, split markers) are preserved verbatim so the
+    /// rebuild observes the same WAL-filter ownership context the
+    /// pre-rebuild leaves used. Used after a corrupt-projection
+    /// incident or a <see cref="LatticeOptions.MaxLeafReplayEntries"/>
+    /// blow-out to recover the shard state from the durable WAL
+    /// source of truth.
+    /// <para>
+    /// The operator surface deliberately does not expose "edit the
+    /// projection in place" or "skip a WAL entry" - those would defeat
+    /// the determinism contract. The recourse for a deterministically
+    /// failing entry is the replication dead-letter queue or, for a
+    /// structural rewrite, an explicit compensating WAL entry committed
+    /// via <c>MutationCategory.Maintenance</c>.
+    /// </para>
+    /// <para>
+    /// Failures propagate. A transient storage failure on a single leaf
+    /// aborts the fan-out with the unaffected leaves' rebuilds already
+    /// applied; the operation is safe to retry because every leaf
+    /// rebuild is independently idempotent.
+    /// </para>
+    /// </summary>
+    /// <param name="shardIndex">The physical shard index resolved from the per-tree <c>ShardMap</c>.</param>
+    /// <param name="cancellationToken">Cancels the rebuild fan-out before the next leaf.</param>
+    Task RebuildLeafProjectionAsync(int shardIndex, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the largest materialiser-lag value across every
+    /// physical shard of this tree - the gap between each shard's
+    /// per-shard write-ahead-log head offset and the minimum
+    /// projection-checkpoint offset across that shard's leaf chain.
+    /// A non-zero return value means at least one shard's projection
+    /// has not yet caught up to the durable WAL head and is the
+    /// back-pressure signal that complements the replication
+    /// receiver's apply-lag gauge.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the per-shard fan-out before the next shard.</param>
+    Task<long> GetMaterialiserLagAsync(CancellationToken cancellationToken = default);
+
     // ── Stateful cursors ────────────────────────────────
 
     /// <summary>
