@@ -346,4 +346,46 @@ public class ReplicationApplyIntegrationTests
         Assert.That(merged.Contains(new byte[] { 9 }), Is.False,
             "Entry below the per-origin HWM must not be merged.");
     }
+
+    [Test]
+    public async Task ApplyAsync_mv_register_state_merge_preserves_concurrent_writes()
+    {
+        // Receiver-side R-034 dispatch path: a Site-A-origin MV-Register
+        // payload carrying a fresh dot from "site-a" must be merged
+        // with a locally-authored "site-b" dot so both values survive
+        // (the whole point of MV-Register over LWW). Verifies the
+        // applier routes `LatticeMergeMode.MvRegister` through
+        // `ApplyStateMergeAsync<MvRegister>`.
+        const string tree = "ri-mvregister";
+        const string key = "k";
+        var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
+        var applier = CreateSiteBApplier();
+
+        // Site B authors a concurrent local write.
+        await lattice.MvRegister<string>(key).SetAsync("site-b", "v-b");
+
+        // Build a Site A-origin MV-Register payload carrying a
+        // concurrent dot from "site-a". Because "site-a" never observed
+        // "site-b"'s dot, the merge must preserve both values.
+        var remote = new MvRegister();
+        remote.Set("site-a", JsonLatticeSerializer<string>.Default.Serialize("v-a"));
+        var entry = new WalRecord
+        {
+            TreeId = tree,
+            Op = MutationKind.Set,
+            Key = key,
+            Value = JsonLatticeSerializer<MvRegister>.Default.Serialize(remote),
+            Timestamp = Hlc(1_000),
+            Mode = LatticeMergeMode.MvRegister,
+            OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
+        };
+
+        var result = await applier.ApplyAsync(entry);
+
+        Assert.That(result.Applied, Is.True);
+
+        var merged = await lattice.MvRegister<string>(key).ValuesAsync();
+        Assert.That(merged, Is.EquivalentTo(new[] { "v-a", "v-b" }),
+            "Both concurrent MV-Register dots must survive the merge.");
+    }
 }

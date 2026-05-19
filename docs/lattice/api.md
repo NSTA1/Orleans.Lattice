@@ -635,9 +635,9 @@ using (LatticeDeltaContext.With("my.delta.kind", new byte[] { 1, 2, 3 }))
 ```
 
 The CRDT value-surface accessors (`OrSet`, `PnCounter`,
-`VersionVector`) and the atomic-write saga set the context on the
-caller's behalf - observers downstream see typed delta payloads
-automatically.
+`VersionVector`, `MvRegister`) and the atomic-write saga set the
+context on the caller's behalf - observers downstream see typed
+delta payloads automatically.
 
 ### Atomic-batch metadata (`AtomicBatchSize` / `AtomicBatchIndex`)
 
@@ -761,15 +761,16 @@ Every method also has a parameterless overload that defaults to
 
 ## CRDT value-surface accessors
 
-`ILattice.OrSet(key)`, `ILattice.PnCounter(key)`, and
-`ILattice.VersionVector(key)` return lightweight, allocation-free
-accessors that read and write a single key under optimistic
-concurrency. Each accessor exposes the primitive's natural mutation
-API - add/remove, increment/decrement, tick/merge - instead of
-forcing callers to hand-roll byte arrays and CAS retry loops. The
-underlying state types are CRDTs whose `Merge` is commutative,
-associative, and idempotent, so concurrent updates from multiple
-replicas converge without coordination.
+`ILattice.OrSet(key)`, `ILattice.PnCounter(key)`,
+`ILattice.VersionVector(key)`, and `ILattice.MvRegister<T>(key)`
+return lightweight, allocation-free accessors that read and write a
+single key under optimistic concurrency. Each accessor exposes the
+primitive's natural mutation API - add/remove, increment/decrement,
+tick/merge, set/values - instead of forcing callers to hand-roll
+byte arrays and CAS retry loops. The underlying state types are
+CRDTs whose `Merge` is commutative, associative, and idempotent, so
+concurrent updates from multiple replicas converge without
+coordination.
 
 ```csharp verify
 // Observed-remove set: concurrent adds and removes converge.
@@ -785,6 +786,10 @@ long hits = await tree.PnCounter("hits:home").ValueAsync();
 // Version vector: track per-replica causal history.
 await tree.VersionVector("vv:order:1").TickAsync("siloA");
 var vv = await tree.VersionVector("vv:order:1").GetAsync();
+
+// Multi-value register: concurrent writes survive as conflict candidates.
+await tree.MvRegister<string>("cart:42").SetAsync("siloA", "Alice's cart");
+IReadOnlyList<string> candidates = await tree.MvRegister<string>("cart:42").ValuesAsync();
 ```
 
 | Accessor | Method | Description |
@@ -802,11 +807,16 @@ var vv = await tree.VersionVector("vv:order:1").GetAsync();
 | `VersionVectorAccessor` | `Task<VersionVector> GetAsync()` | Reads the current vector state. |
 | `VersionVectorAccessor` | `Task TickAsync(string replicaId)` | Advances the entry for `replicaId` and persists the result. |
 | `VersionVectorAccessor` | `Task MergeAsync(VersionVector other)` | Merges `other` into the stored state under CAS. |
+| `MvRegisterAccessor<T>` | `Task<MvRegister> GetAsync()` | Reads the raw register state, including every dot-tagged entry. |
+| `MvRegisterAccessor<T>` | `Task<IReadOnlyList<T>> ValuesAsync()` | Returns the live deserialised values. A single-valued register returns one element; a concurrently-written register returns every conflict candidate in deterministic order. |
+| `MvRegisterAccessor<T>` | `Task SetAsync(string replicaId, T value)` | Writes `value` from `replicaId`. Drops every dot the writer observed and mints a fresh one - concurrent writes from other replicas survive the next merge. |
+| `MvRegisterAccessor<T>` | `Task MergeAsync(MvRegister other)` | Merges `other` into the stored state under CAS. Entries observed in only one side are preserved; pointwise-max is applied to the dot context. |
 
 Mutating methods retry on CAS failure up to a per-call budget
 (default `OrSetAccessor.DefaultMaxAttempts` /
 `PnCounterAccessor.DefaultMaxAttempts` /
-`VersionVectorAccessor.DefaultMaxAttempts` = 16). When the budget is
+`VersionVectorAccessor.DefaultMaxAttempts` /
+`MvRegisterAccessor<T>.DefaultMaxAttempts` = 16). When the budget is
 exhausted the accessor throws `InvalidOperationException`; raise the
 budget or reduce contention. Values are JSON-serialized via
 `JsonLatticeSerializer<T>`, so the bytes are inspectable through

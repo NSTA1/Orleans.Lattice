@@ -401,6 +401,13 @@ public partial class ReplicationApplierTests
         return JsonLatticeSerializer<VersionVector>.Default.Serialize(vector);
     }
 
+    private static byte[] EncodeMvRegister(Action<MvRegister>? configure = null)
+    {
+        var register = new MvRegister();
+        configure?.Invoke(register);
+        return JsonLatticeSerializer<MvRegister>.Default.Serialize(register);
+    }
+
     private static readonly byte[] OrSetMember = new byte[] { 0xab };
 
     [Test]
@@ -464,6 +471,28 @@ public partial class ReplicationApplierTests
         await lattice.Received(1).SetIfVersionAsync(
             "k",
             Arg.Is<byte[]>(b => JsonLatticeSerializer<VersionVector>.Default.Deserialize(b).GetClock("site-b") == remoteHlc),
+            Arg.Any<HybridLogicalClock>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_dispatches_mv_register_through_lattice_state_merge()
+    {
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+        var entry = SetEntry("k", Hlc(17)) with
+        {
+            Mode = LatticeMergeMode.MvRegister,
+            Value = EncodeMvRegister(r => r.Set("site-b", new byte[] { 0xab })),
+        };
+
+        var result = await applier.ApplyAsync(entry);
+
+        Assert.That(result.Applied, Is.True);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await lattice.Received(1).SetIfVersionAsync(
+            "k",
+            Arg.Is<byte[]>(b =>
+                JsonLatticeSerializer<MvRegister>.Default.Deserialize(b).Context.ContainsKey("site-b")),
             Arg.Any<HybridLogicalClock>(),
             Arg.Any<CancellationToken>());
     }

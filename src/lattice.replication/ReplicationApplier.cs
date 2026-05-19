@@ -572,6 +572,10 @@ internal sealed partial class ReplicationApplier(
                     entry,
                     static (existing, incoming) => existing.MergeFrom(incoming),
                     static () => new VersionVector()),
+                LatticeMergeMode.MvRegister => ApplyStateMergeAsync<MvRegister>(
+                    entry,
+                    static (existing, incoming) => existing.MergeFrom(incoming),
+                    static () => new MvRegister()),
                 _ => throw new InvalidOperationException(
                     $"WalRecord on tree '{entry.TreeId}' carries unrecognised replication mode '{entry.Mode}' "
                     + "(value="
@@ -698,10 +702,12 @@ internal sealed partial class ReplicationApplier(
     /// <summary>
     /// CAS retry budget for the read-merge-write loop used by typed CRDT
     /// state-merge applies (<see cref="LatticeMergeMode.OrSet"/>,
-    /// <see cref="LatticeMergeMode.PnCounter"/>, <see cref="LatticeMergeMode.VersionVector"/>).
+    /// <see cref="LatticeMergeMode.PnCounter"/>, <see cref="LatticeMergeMode.VersionVector"/>,
+    /// <see cref="LatticeMergeMode.MvRegister"/>).
     /// Mirrors the budget the typed accessors (<see cref="OrSetAccessor.DefaultMaxAttempts"/>,
     /// <see cref="PnCounterAccessor.DefaultMaxAttempts"/>,
-    /// <see cref="VersionVectorAccessor.DefaultMaxAttempts"/>) use for the
+    /// <see cref="VersionVectorAccessor.DefaultMaxAttempts"/>,
+    /// <see cref="MvRegisterAccessor{T}.DefaultMaxAttempts"/>) use for the
     /// authoring side, so a typical fan-in matches.
     /// </summary>
     private const int StateMergeMaxAttempts = 16;

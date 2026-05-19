@@ -39,6 +39,12 @@ internal static class CrdtDeltaKinds
 
     /// <summary>A version-vector state merge: the supplied other-state was pointwise-max'd in.</summary>
     public const string VersionVectorMerge = "ol.crdt.vvc.mrg";
+
+    /// <summary>An MV-Register set: a fresh dot was minted by one replica, dropping every entry the writer had observed.</summary>
+    public const string MvRegisterSet = "ol.crdt.mvr.set";
+
+    /// <summary>An MV-Register state merge: the supplied other-state was merged via dot-context dominance.</summary>
+    public const string MvRegisterMerge = "ol.crdt.mvr.mrg";
 }
 
 /// <summary>
@@ -98,4 +104,24 @@ internal static class CrdtDeltaPayloads
 
     /// <summary>An HLC expressed as JSON-friendly primitives.</summary>
     internal sealed record HlcPayload(long WallClockTicks, int Counter);
+
+    /// <summary>
+    /// An MV-Register set: a fresh dot <c>(ReplicaId, Counter)</c> with <c>Value</c>
+    /// stamped by the author, plus the writer's post-write dot context so a
+    /// downstream replication consumer can decide which prior dots the
+    /// write observed-and-superseded.
+    /// </summary>
+    internal sealed record MvRegisterSetDelta(
+        string ReplicaId,
+        long Counter,
+        byte[] Value,
+        Dictionary<string, long> Context);
+
+    /// <summary>An MV-Register merge: the merged-in dot-tagged entries and context.</summary>
+    internal sealed record MvRegisterMergeDelta(
+        MvRegisterEntryPayload[] Entries,
+        Dictionary<string, long> Context);
+
+    /// <summary>An MV-Register entry expressed as JSON-friendly primitives.</summary>
+    internal sealed record MvRegisterEntryPayload(string ReplicaId, long Counter, byte[] Value);
 }

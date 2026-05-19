@@ -986,6 +986,67 @@ public class ReplicationMutationObserverTests
         Assert.That(sink.Entries.Single().DeltaPayload, Is.SameAs(payload));
     }
 
+    [Test]
+    public async Task MvRegister_set_delta_kind_and_payload_are_forwarded_verbatim()
+    {
+        // MV-Register producer-side delta passthrough: the typed
+        // accessor stamps `CrdtDeltaKinds.MvRegisterSet` with a
+        // JSON-encoded `MvRegisterSetDelta` payload via
+        // `LatticeDeltaContext`. The observer must forward both slots
+        // verbatim so a future receiver-side dispatch path can replay
+        // the *added* dot rather than reconstruct it from the
+        // post-merge full state.
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var payload = new byte[] { 0xAA, 0xBB, 0xCC };
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "t",
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            DeltaKind = "ol.crdt.mvr.set",
+            DeltaPayload = payload,
+        }, CancellationToken.None);
+
+        var entry = sink.Entries.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.DeltaKind, Is.EqualTo("ol.crdt.mvr.set"));
+            Assert.That(entry.DeltaPayload, Is.SameAs(payload));
+        });
+    }
+
+    [Test]
+    public async Task MvRegister_merge_delta_kind_and_payload_are_forwarded_verbatim()
+    {
+        // The accessor's out-of-band merge path stamps
+        // `CrdtDeltaKinds.MvRegisterMerge` with a JSON-encoded
+        // `MvRegisterMergeDelta` payload. Forwarded verbatim like
+        // every other typed CRDT delta.
+        var sink = new CapturingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var payload = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "t",
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            DeltaKind = "ol.crdt.mvr.mrg",
+            DeltaPayload = payload,
+        }, CancellationToken.None);
+
+        var entry = sink.Entries.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.DeltaKind, Is.EqualTo("ol.crdt.mvr.mrg"));
+            Assert.That(entry.DeltaPayload, Is.SameAs(payload));
+        });
+    }
+
     // ----------------------------------------------------------------__
     // R-090 - MutationCategory classification + maintenance skip
     // ------------------------------------------------------------------
