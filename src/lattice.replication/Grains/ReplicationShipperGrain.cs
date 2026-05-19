@@ -55,6 +55,18 @@ internal sealed class ReplicationShipperGrain(
     private readonly ReplicationPeerStats _peerStats =
         peerStats ?? throw new ArgumentNullException(nameof(peerStats));
 
+    /// <summary>
+    /// Cached typed-transport probe. Non-<see langword="null"/> when the
+    /// configured <see cref="IReplicationTransport"/> also implements
+    /// <see cref="ITypedReplicationTransport"/>, in which case the
+    /// per-tick <c>_encoder.Encode(envelope, _writeBuffer)</c> call is
+    /// skipped (the typed transport consumes
+    /// <see cref="ReplicationBatch.Envelope"/> directly). Resolved once
+    /// at activation rather than re-cast on every pump tick.
+    /// </summary>
+    private readonly ITypedReplicationTransport? _typedTransport =
+        transport as ITypedReplicationTransport;
+
     private string _treeName = "";
     private string _peerClusterId = "";
     private bool _keyParsed;
@@ -342,6 +354,14 @@ internal sealed class ReplicationShipperGrain(
         // transport skip a per-send decode-then-re-encode round-trip
         // that would otherwise allocate one `WalRecord[]` per ship.
         //
+        // When the configured transport implements
+        // <see cref="ITypedReplicationTransport"/> we skip the encode
+        // into _writeBuffer entirely: the typed transport consumes
+        // ReplicationBatch.Envelope directly, and the bytes form was
+        // observably never read on that path. ReplicationBatch.Payload
+        // is then ReadOnlyMemory<byte>.Empty for the typed call; the
+        // typed-transport interface documents this guarantee.
+        //
         // The framing buffer is activation-scoped and reused across
         // ticks: in the steady state we ResetWrittenCount() (which
         // keeps the underlying array, just rewinds the write index),
@@ -350,13 +370,17 @@ internal sealed class ReplicationShipperGrain(
         // array on the heap forever. The encoder consumes _drainBuffer
         // synchronously inside Encode, so reuse is safe (no aliasing
         // past the call).
-        if (_writeBuffer.Capacity >= LargeWriteBufferThreshold)
+        var typedTransport = _typedTransport;
+        if (typedTransport is null)
         {
-            _writeBuffer = new ArrayBufferWriter<byte>();
-        }
-        else
-        {
-            _writeBuffer.ResetWrittenCount();
+            if (_writeBuffer.Capacity >= LargeWriteBufferThreshold)
+            {
+                _writeBuffer = new ArrayBufferWriter<byte>();
+            }
+            else
+            {
+                _writeBuffer.ResetWrittenCount();
+            }
         }
         ReplicationBatchEnvelope envelope;
         try
@@ -368,7 +392,10 @@ internal sealed class ReplicationShipperGrain(
                 OriginClusterId = options.ClusterId,
                 Entries = _drainBuffer,
             };
-            _encoder.Encode(envelope, _writeBuffer);
+            if (typedTransport is null)
+            {
+                _encoder.Encode(envelope, _writeBuffer);
+            }
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -394,7 +421,10 @@ internal sealed class ReplicationShipperGrain(
                 TargetClusterId = _peerClusterId,
                 TreeName = _treeName,
                 OriginClusterId = options.ClusterId,
-                Payload = _writeBuffer.WrittenMemory,
+                // Payload is the encoded bytes for bytes-only transports;
+                // for typed transports we leave it empty (the typed
+                // transport consumes Envelope directly).
+                Payload = typedTransport is null ? _writeBuffer.WrittenMemory : ReadOnlyMemory<byte>.Empty,
                 // Hand the typed envelope through alongside the
                 // opaque bytes so transports that frame the envelope
                 // onto their own wire (e.g. the gRPC streaming push
@@ -406,7 +436,9 @@ internal sealed class ReplicationShipperGrain(
                 // stable for the duration of the call.
                 Envelope = envelope,
             };
-            ack = await _transport.SendAsync(batch, cancellationToken);
+            ack = typedTransport is not null
+                ? await typedTransport.SendTypedAsync(batch, cancellationToken)
+                : await _transport.SendAsync(batch, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -477,7 +509,16 @@ internal sealed class ReplicationShipperGrain(
         _peerStats.RecordSuccess(_treeName, _peerClusterId);
         var hitBatchCap = _drainBuffer.Count >= maxPerBatch;
         var entriesBehind = hitBatchCap ? (long)_drainBuffer.Count : 0L;
-        var bytesBehind = hitBatchCap ? (long)_writeBuffer.WrittenCount : 0L;
+        // For bytes-only transports we report the encoded payload
+        // length; for typed transports we skip the encode entirely
+        // so the byte length is unobservable here without re-encoding
+        // (which would defeat the optimisation). Fall back to a
+        // conservative floor of zero in that case - operators can
+        // derive an estimate from entries_behind on the dashboard if
+        // needed.
+        var bytesBehind = hitBatchCap && _typedTransport is null
+            ? (long)_writeBuffer.WrittenCount
+            : 0L;
         _peerStats.RecordBacklog(_treeName, _peerClusterId, entriesBehind, bytesBehind);
     }
 
