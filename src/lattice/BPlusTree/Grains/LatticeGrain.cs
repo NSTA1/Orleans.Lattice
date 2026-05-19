@@ -97,7 +97,10 @@ internal sealed partial class LatticeGrain(
     }
 
     async Task<byte[]?> ISystemLattice.GetAsync(string key, CancellationToken cancellationToken)
-        => await GetAsyncCore(key, cancellationToken);
+    {
+        using var _ = LatticeSystemTreeBoundary.Enter();
+        return await GetAsyncCore(key, cancellationToken);
+    }
 
     private async Task<byte[]?> GetAsyncCore(string key, CancellationToken cancellationToken)
     {
@@ -165,7 +168,10 @@ internal sealed partial class LatticeGrain(
     }
 
     async Task<bool> ISystemLattice.ExistsAsync(string key, CancellationToken cancellationToken)
-        => await ExistsAsyncCore(key, cancellationToken);
+    {
+        using var _ = LatticeSystemTreeBoundary.Enter();
+        return await ExistsAsyncCore(key, cancellationToken);
+    }
 
     private async Task<bool> ExistsAsyncCore(string key, CancellationToken cancellationToken)
     {
@@ -345,7 +351,10 @@ internal sealed partial class LatticeGrain(
     }
 
     async Task ISystemLattice.SetAsync(string key, byte[] value, CancellationToken cancellationToken)
-        => await SetAsyncCore(key, value, cancellationToken);
+    {
+        using var _ = LatticeSystemTreeBoundary.Enter();
+        await SetAsyncCore(key, value, cancellationToken);
+    }
 
     private async Task SetAsyncCore(string key, byte[] value, CancellationToken cancellationToken)
     {
@@ -761,7 +770,10 @@ internal sealed partial class LatticeGrain(
     }
 
     async Task<bool> ISystemLattice.DeleteAsync(string key, CancellationToken cancellationToken)
-        => await DeleteAsyncCore(key, cancellationToken);
+    {
+        using var _ = LatticeSystemTreeBoundary.Enter();
+        return await DeleteAsyncCore(key, cancellationToken);
+    }
 
     private async Task<bool> DeleteAsyncCore(string key, CancellationToken cancellationToken)
     {

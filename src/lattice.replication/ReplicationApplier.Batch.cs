@@ -150,6 +150,25 @@ internal sealed partial class ReplicationApplier
         var hwmGrain = GetHwmGrain(treeId);
         var hwm = await hwmGrain.GetAsync(origin!, cancellationToken).ConfigureAwait(false);
 
+        // Bootstrap-drain mode: receiver-side bootstrap replay opens a
+        // <see cref="LatticeBootstrapApplyContext"/> scope around the
+        // entire drain. While that scope is active the per-origin HWM
+        // gate must be suppressed and the end-of-run HWM advance must
+        // be skipped, mirroring the per-entry path's bypass at
+        // <see cref="ApplyAsync"/>. The snapshot exporter visits
+        // shards / leaves in arbitrary order, so applying steady-state
+        // HWM dedup during bootstrap replay can drop a still-pending
+        // saga key with a strictly-earlier source HLC and break
+        // per-saga all-or-nothing visibility on the bootstrapped peer.
+        // The post-drain
+        // <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+        // installs the HWM at the snapshot's AsOfHlc atomically. The
+        // current bootstrap coordinator routes through the per-entry
+        // path, so this branch is defence-in-depth for any future
+        // drainer that batches; the matching test fixture covers it
+        // verbatim.
+        var bootstrapMode = LatticeBootstrapApplyContext.IsActive;
+
         // Per-tree shadow-forward dedupe cache (see ApplyAsync for the
         // race scenario it closes). The cache instance is fetched once
         // per run; per-entry TryAdd is performed after the runningHwm
@@ -245,7 +264,14 @@ internal sealed partial class ReplicationApplier
                 var (deferredIdx, deferredStartTs) = dispatchApplies[p];
                 var deferredEntry = entries[deferredIdx];
                 RecordApplyLag(deferredEntry);
-                RecordFifoState(deferredEntry);
+                if (!bootstrapMode)
+                {
+                    // Bootstrap drain is intentionally non-monotonic
+                    // per (tree, origin) - see the bootstrapMode
+                    // comment at run entry - so the steady-state FIFO
+                    // regression counter must stay silent.
+                    RecordFifoState(deferredEntry);
+                }
                 RecordApplyDuration(treeId, origin!, deferredStartTs, LatticeReplicationMetrics.OutcomeSuccess);
 
                 if (deferredEntry.Timestamp.CompareTo(runningHwm) > 0)
@@ -295,7 +321,7 @@ internal sealed partial class ReplicationApplier
                     continue;
                 }
 
-                if (entry.Timestamp.CompareTo(runningHwm) <= 0)
+                if (!bootstrapMode && entry.Timestamp.CompareTo(runningHwm) <= 0)
                 {
                     outcome = LatticeReplicationMetrics.OutcomeDedup;
                     continue;
@@ -381,7 +407,13 @@ internal sealed partial class ReplicationApplier
                     // outcome for non-failure paths).
                     cacheReservedForCurrent = false;
                     RecordApplyLag(entry);
-                    RecordFifoState(entry);
+                    if (!bootstrapMode)
+                    {
+                        // Bootstrap drain suppresses FIFO state tracking
+                        // for the same reason the deferred-apply branch
+                        // does above.
+                        RecordFifoState(entry);
+                    }
 
                     if (entry.Timestamp.CompareTo(runningHwm) > 0)
                     {
@@ -478,7 +510,7 @@ internal sealed partial class ReplicationApplier
         // End-of-run flush of any remaining deferred items.
         await FlushPendingAsync().ConfigureAwait(false);
 
-        if (advancedAtAll)
+        if (advancedAtAll && !bootstrapMode)
         {
             var advanced = await hwmGrain.TryAdvanceAsync(origin!, highestApplied, cancellationToken)
                 .ConfigureAwait(false);
@@ -500,6 +532,13 @@ internal sealed partial class ReplicationApplier
             return new ApplyResult { Applied = anyApplied, HighWaterMark = newHwm };
         }
 
+        // Bootstrap mode: the per-origin HWM is pinned atomically at
+        // the snapshot's AsOfHlc by
+        // <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+        // after the drain completes; advancing it mid-drain would
+        // suppress still-pending saga keys with strictly-earlier source
+        // HLCs. Surface the pre-drain HWM so callers observe the
+        // canonical pre-pin frontier.
         return new ApplyResult { Applied = anyApplied, HighWaterMark = hwm };
     }
 

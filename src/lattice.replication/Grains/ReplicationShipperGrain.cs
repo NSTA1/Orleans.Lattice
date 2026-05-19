@@ -963,6 +963,31 @@ internal sealed class ReplicationShipperGrain(
         _treeName = key[..slash];
         _peerClusterId = key[(slash + 1)..];
         _keyParsed = true;
+
+        // System trees (any id starting with
+        // LatticeConstants.SystemTreePrefix - the tree registry
+        // _lattice_trees, every _lattice_replog_* WAL tree, and any
+        // future internal tree) describe local topology and durability,
+        // not user data. Their WAL records must never propagate to
+        // peer clusters: every cluster runs its own registry / WAL
+        // independently, and routing a system-tree mutation through a
+        // peer's IReplicationApplier would either (a) collide with the
+        // peer's own registry state under the same transaction id when
+        // a user-tree apply path inadvertently writes to the registry
+        // under saga ambient context, or (b) install a meaningless
+        // tree-registration record on the peer. The
+        // ReplicationDriverActivationService only iterates user
+        // ReplicatedTrees, so this branch is also a defense-in-depth
+        // guard against future seams (custom shipping registrations,
+        // bespoke driver hosts) that might activate a shipper for a
+        // system tree.
+        if (_treeName.StartsWith(Orleans.Lattice.BPlusTree.LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{nameof(ReplicationShipperGrain)} cannot be activated for system tree '{_treeName}'. "
+                + $"Names starting with '{Orleans.Lattice.BPlusTree.LatticeConstants.SystemTreePrefix}' "
+                + "are reserved for internal Lattice system trees and are not eligible for cross-cluster replication.");
+        }
     }
 
     /// <summary>

@@ -28,9 +28,14 @@ before calling `AddLatticeReplication`.
   cursor yet.
 - **`asOfHlc > Zero`** filters out entries whose stamped commit-time
   HLC is strictly greater than `asOfHlc`. The receiver resumes
-  incremental replication from `asOfHlc`, and the per-origin
-  high-water-mark dedupe in `IReplicationApplier` makes the handoff
-  exactly-once across the snapshot/incremental boundary.
+  incremental replication from `asOfHlc`; the post-drain
+  `IReplicationHighWaterMarkGrain.PinSnapshotAsync` installs the
+  per-origin HWM at `asOfHlc` atomically and the steady-state
+  HWM dedupe in `IReplicationApplier` makes the handoff
+  exactly-once across the snapshot/incremental boundary. See
+  "Bootstrap drain bypasses the per-origin HWM gate" below for the
+  receiver-side state machine that keeps the in-drain apply
+  idempotent without relying on HWM dedup.
 - **`CausalStableFrontier`** is the producer's causal-stable frontier
   at snapshot time - the pointwise minimum `VersionVector` across
   every consumer that has reported a vector through
@@ -425,7 +430,10 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   is persisted every 100 entries; on resume, the snapshot stream
   is re-opened at `LastAppliedHlc` (not `Zero`), so the cost
   of a crash is bounded re-application of at most ~100 entries - 
-  and the per-origin HWM dedupe makes that re-application a
+  and the receiver-side LWW reconciliation on each leaf grain
+  (plus the per-leaf `_recentlyTerminal` and per-tx
+  registry no-op described under "Bootstrap drain bypasses the
+  per-origin HWM gate" below) makes that re-application a
   correctness no-op.
 - **`Failed` is restartable.** On any thrown exception inside the
   phase pump the state transitions to `Failed` (persisted) and
@@ -441,8 +449,9 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   retries the drain in-place using a bounded exponential backoff
   (default: `DefaultBootstrapMaxAttempts = 4` attempts, initial delay
   `500 ms`, capped at `30 s`). Each retry re-opens the snapshot from
-  the persisted `LastAppliedHlc` cursor, so the per-origin HWM
-  dedupe makes the overlap a correctness no-op. Every retry increments
+  the persisted `LastAppliedHlc` cursor; the bootstrap-drain HWM
+  bypass plus receiver-side LWW reconciliation make the overlap
+  between attempts a correctness no-op. Every retry increments
   the `orleans.lattice.replication.bootstrap.transient_retries`
   counter (`LatticeReplicationMetrics.BootstrapTransientRetries`) so
   operators can dashboard the rate. Non-transient faults still pivot
@@ -466,9 +475,48 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   therefore raises the same observable side-effects as a receiver
   that catches up via the WAL tail, so UI live-update hooks and
   audit observers see the bootstrap window rather than missing it.
-  The per-origin HWM dedupe in the applier suppresses any
-  re-delivery of bootstrap-arrived entries through the live-incremental
-  path.
+- **Bootstrap drain bypasses the per-origin HWM gate.** The applier
+  reads an ambient `LatticeBootstrapApplyContext` flag on every
+  inbound call; when the flag is set (the bootstrap coordinator
+  opens one scope around the entire drain) the per-origin
+  high-water-mark check and the post-apply
+  `TryAdvanceAsync` are skipped, and the steady-state
+  `orleans.lattice.replication.apply.fifo_violations` counter is
+  suppressed. This is required because the snapshot exporter
+  enumerates shards/leaves in arbitrary order rather than HLC order:
+  per-shard HLCs are not globally monotonic across a single
+  bootstrap stream, so applying the steady-state HWM dedup gate
+  during the drain can drop a still-pending saga key with a
+  strictly-earlier source HLC and break per-saga all-or-nothing
+  visibility on the bootstrapped peer; and the FIFO regression
+  signal must stay silent during the drain so operators retain it as
+  an unambiguous transport-defect alert. The drain is still
+  idempotent end-to-end because:
+  - **Receiver-side LWW** on each leaf grain reconciles concurrent
+    arrivals of the same key by `(HLC, originClusterId)`, so a
+    re-applied snapshot entry that has already been delivered is a
+    no-op rather than an over-write.
+  - The per-leaf `_recentlyTerminal` short-circuit on
+    `BPlusLeafGrain` suppresses a re-arriving saga terminal whose
+    bucket has already drained, so saga-terminal re-delivery is
+    correctness-preserving.
+  - The per-tree `ITxRegistryGrain` "repeat-same-outcome no-op"
+    drops a commit/abort mark that matches a transaction id already
+    in the requested terminal state.
+
+  The post-drain
+  `IReplicationHighWaterMarkGrain.PinSnapshotAsync` atomically
+  installs the per-origin HWM at the snapshot's `AsOfHlc`, so the
+  bootstrap-to-incremental handoff retains exactly-once semantics on
+  the live tail. Range deletes, terminal records, and tombstone-reap
+  envelopes carry `HybridLogicalClock.Zero` and never interact with
+  the HWM gate; they are unaffected by the bootstrap scope.
+- **Live-incremental dedup is unchanged.** The per-origin HWM dedupe
+  in the applier continues to suppress any re-delivery of
+  bootstrap-arrived entries through the live-incremental path -
+  the pin at the end of the drain seeds the HWM at the snapshot's
+  `AsOfHlc`, so the first live entry below or at the pin is deduped
+  canonically.
 - **Snapshot/incremental handoff is exactly-once.** The coordinator
   pins `(AsOfHlc, CausalStableFrontier)` on
   `IReplicationHighWaterMarkGrain.PinSnapshotAsync` *after* every
@@ -584,29 +632,60 @@ _ = decision.LastRequestedAt;
 
 ## Snapshot and in-flight atomic visibility
 
-A snapshot export reads the producer's committed
-tree state at the moment `ExportAsync` is invoked. The snapshot
-captures only the per-leaf `Entries` projection - the per-tx pending
-bucket that holds an in-flight saga's prepared writes is **not**
-exported, because prepared entries are deliberately invisible to
-readers and to the snapshot exporter. After bootstrap apply, the
-incremental WAL replay drives the receiver-side prepared / terminal
-apply hops described in
-[`replication-apply.md`](replication-apply.md), which populate the
-receiver's pending bucket and flip visibility through the per-tree
-`ITxRegistryGrain` linearization point. Steady-state cross-cluster
-atomic visibility therefore holds across the bootstrap-to-incremental
-boundary: no in-flight saga's keys appear in the snapshot, and any
-saga that commits before the receiver's incremental cursor reaches its
-terminal mark stays invisible until that mark is replayed locally.
+The default snapshot provider preserves cross-cluster saga atomic
+visibility across the bootstrap boundary: a saga whose prepare-commit
+pair straddles the producer's snapshot cut is observed by the
+bootstrapped peer either at every key or at none, never at a strict
+subset.
 
-The remaining narrow window: a saga whose **terminal mark on the
-producer** lands during the export window may have its `Entries`
-captured for some leaves (those exported after the terminal flip)
-but not others (those exported before). The receiver's incremental
-phase converges the missing keys under causal+/LWW as the producer
-ships them, but a bootstrapping reader may briefly observe a partial
-view across that specific commit-during-export window. Hosts that
-need strict atomic visibility across the bootstrap boundary itself
-should quiesce writes on the producer for the duration of the
-export.
+The export operates in two passes against a single frozen view of the
+producer's per-tree `ITxRegistryGrain` decisions:
+
+1. **Prepared rows pass (runs first).** Walks every shard's leaf
+   chain and emits a `SnapshotEntry` with `IsPrepared = true` for
+   every `(transactionId, key)` pair in any leaf's per-tx pending
+   bucket whose registry status in the captured snapshot is
+   `InFlight` (or absent). The emitted row carries the source-stamped
+   prepare-time HLC verbatim, plus `IsTombstone`, `TransactionId`,
+   `AtomicBatchSize`, `AtomicBatchIndex`, and `ExpiresAtTicks` so the
+   receiver can route it identically to a steady-state prepared WAL
+   record.
+
+2. **Committed projection pass.** Drains `ILattice.EntriesAsync`
+   under the same frozen registry scope (via
+   `LatticeRegistrySnapshotContext`). Sagas the snapshot recorded as
+   `Committed` surface their prepared value as the live one; sagas
+   recorded as `Aborted` are dropped; sagas still `InFlight` against
+   the snapshot are hidden from the committed scan because the
+   prepared rows pass above has already shipped them.
+
+The receiver replays prepared rows through
+`IReplicationApplyGrain.ApplyPreparedSetAsync` /
+`ApplyPreparedDeleteAsync` into its per-tx pending bucket. The
+matching terminal record - delivered subsequently by the
+post-snapshot incremental WAL stream - flips visibility atomically
+via `ApplyTxTerminalAsync` and the receiver's local
+`ITxRegistryGrain` linearization point.
+
+**Ordering matters.** The prepared rows pass runs before the
+committed projection pass because a source-side terminal that drains
+a pending bucket between the two would otherwise erase the saga from
+the export entirely: the committed pass under the frozen snapshot
+would hide the saga (the snapshot still says `InFlight`), the
+prepared pass would find the bucket already drained, and the
+prepare-time WAL records - stamped at HLC <= `asOfHlc` - would never
+re-arrive through the post-snapshot incremental stream (which starts
+at `asOfHlc`). Capturing prepared rows first guarantees every
+`InFlight` saga's per-key state is shipped to the receiver's pending
+bucket, and the incremental stream delivers the terminal record to
+flip visibility.
+
+A saga the producer's registry recorded as `Committed` before the
+snapshot is naturally folded into the committed projection by the
+existing scan-time `SnapshotPendingForReadAsync` path - which honors
+the frozen registry scope - so the receiver observes the post-saga
+value directly without a separate prepared/terminal round trip. The
+same applies in reverse for `Aborted`: the prepared mutation is
+correctly dropped from the committed pass and not shipped as a
+prepared row.
+

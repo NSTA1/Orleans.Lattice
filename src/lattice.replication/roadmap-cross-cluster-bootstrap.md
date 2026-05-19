@@ -578,7 +578,7 @@ below.
 
 ---
 
-- [ ] **R-160 - Snapshot-bootstrap-time atomic visibility for in-flight sagas** *(deps: R-154 ✓; refines `F-055` receiver-side atomic visibility across the bootstrap boundary)*
+- [x] **R-160 - Snapshot-bootstrap-time atomic visibility for in-flight sagas** *(deps: R-154 ✓; refines `F-055` receiver-side atomic visibility across the bootstrap boundary)* ✓ shipped
 
   Closes the "commit-during-export" window currently documented as a
   known limitation in `docs/lattice.replication/snapshot-bootstrap.md`

@@ -334,6 +334,12 @@ internal sealed partial class LatticeGrain
                 nameof(transactionId));
         }
 
+#if LATTICE_DIAG
+        Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
+            $"[DIAG xc-apply-prepared-set] tree={TreeId} key={key} tx={transactionId} hlc={sourceHlc} " +
+            $"origin={originClusterId} batchSize={atomicBatchSize} batchIndex={atomicBatchIndex}");
+#endif
+
         // Re-establish the same ambient-context stack the source-side
         // saga's prepare step produced so the receiver leaf:
         //   - routes this mutation into its _pendingTx[transactionId]
@@ -462,6 +468,13 @@ internal sealed partial class LatticeGrain
         var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
         var tally = await registry.RecordTerminalArrivalAsync(
             transactionId, shardIndex, committed, atomicShardCount);
+
+#if LATTICE_DIAG
+        Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
+            $"[DIAG xc-tx-terminal-arrival] tree={TreeId} tx={transactionId} committed={committed} " +
+            $"shardIndex={shardIndex} atomicShardCount={atomicShardCount} terminalHlc={terminalHlc} " +
+            $"origin={originClusterId} tallyFinal={tally.IsFinal} observedShards=[{string.Join(",", tally.ObservedSourceShards)}]");
+#endif
 
         if (!tally.IsFinal)
         {
