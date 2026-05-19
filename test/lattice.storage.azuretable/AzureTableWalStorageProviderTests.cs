@@ -138,11 +138,15 @@ public partial class AzureTableWalStorageProviderTests
     }
 
     [Test]
-    public void MaxEntriesPerBatch_reserves_one_action_for_head_upsert()
+    public void MaxEntriesPerBatch_uses_full_transaction_action_cap()
     {
-        // Azure caps a transaction at 100 actions; the provider reserves
-        // one for the head upsert. Pin the constant so a future change
-        // on either side trips this regression.
-        Assert.That(AzureTableWalStorageProvider.MaxEntriesPerBatch, Is.EqualTo(99));
+        // Azure caps a transaction at 100 actions. The two-phase
+        // per-batch schema (roadmap R-079) drops the per-batch HEAD
+        // sentinel from phase 1 so the full 100-action budget is
+        // available for entries; reconciliation derives
+        // endOffsetInclusive from a Top(1) DESC query over the batch
+        // partition. Pin the constant so a future change on either
+        // side trips this regression.
+        Assert.That(AzureTableWalStorageProvider.MaxEntriesPerBatch, Is.EqualTo(100));
     }
 }
