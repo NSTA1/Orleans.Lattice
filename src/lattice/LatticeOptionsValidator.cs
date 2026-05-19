@@ -29,6 +29,12 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
             return ValidateOptionsResult.Fail(
                 $"{nameof(LatticeOptions.ProjectionRebuildPolicy)} must be a defined {nameof(ProjectionRebuildPolicy)} value.");
         }
+        if (options.WalMaxPendingBatches < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.WalMaxPendingBatches)} must be greater than or equal to 1. "
+                + "The in-memory backlog cap must permit at least one in-flight flush.");
+        }
         return ValidateOptionsResult.Success;
     }
 }

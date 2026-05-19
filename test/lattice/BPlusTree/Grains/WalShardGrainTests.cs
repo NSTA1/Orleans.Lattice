@@ -9,7 +9,7 @@ using Orleans.Runtime;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 [TestFixture]
-public class WalShardGrainTests
+public partial class WalShardGrainTests
 {
     private const string TreeId = "tree";
     private const int ShardIndex = 0;

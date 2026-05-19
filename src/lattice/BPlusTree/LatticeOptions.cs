@@ -607,6 +607,28 @@ public class LatticeOptions
     public const long DefaultWalMaxBatchBytes = 4L * 1024 * 1024;
 
     /// <summary>
+    /// Maximum number of in-flight + pending batches the per-shard WAL
+    /// grain will hold before applying back-pressure to new
+    /// <c>Append</c> callers. The grain serialises offset assignment
+    /// under the grain turn but lets each batch's
+    /// <see cref="IWalStorageProvider.AppendBatchAsync"/> call proceed
+    /// independently, so up to this many batches can be "in the system"
+    /// at once. New appends beyond the cap await the oldest in-flight
+    /// flush before being enqueued; this provides natural back-pressure
+    /// under sustained burst load without changing the dense-offset
+    /// invariant. Defaults to <see cref="DefaultWalMaxPendingBatches"/>
+    /// (1) - bit-identical to the original single-in-flight behaviour.
+    /// Raise to pipeline writer-side burst absorption against a
+    /// higher-latency durable provider. Must be at least <c>1</c>; the
+    /// registered options validator rejects non-positive values at
+    /// first-resolve time.
+    /// </summary>
+    public int WalMaxPendingBatches { get; set; } = DefaultWalMaxPendingBatches;
+
+    /// <summary>Default value for <see cref="WalMaxPendingBatches"/> (1, wire-compat).</summary>
+    public const int DefaultWalMaxPendingBatches = 1;
+
+    /// <summary>
     /// Optional per-tree <see cref="IWalStorageProvider"/> resolver. When
     /// supplied, takes precedence over the DI-registered default for the
     /// matching tree id. <c>null</c> falls back to the singleton default

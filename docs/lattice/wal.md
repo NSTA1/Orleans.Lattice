@@ -215,17 +215,21 @@ user-supplied resolver is preserved.
 
 The WAL grain's `AppendAsync` hot path implements a turn-safe batching
 protocol. Each call accumulates into an in-memory pending batch held on
-the grain instance; a single in-flight flush at a time fans the batch out
-to `IWalStorageProvider.AppendBatchAsync` and completes per-caller
-`TaskCompletionSource<long>` instances when the provider acknowledges
-durability.
+the grain instance; up to `WalMaxPendingBatches` flushes can be in
+motion against `IWalStorageProvider.AppendBatchAsync` simultaneously,
+each independently completing per-caller `TaskCompletionSource<long>`
+instances when the provider acknowledges durability. Offset assignment
+remains serialised under the grain turn, so each in-flight flush owns a
+strictly-increasing, non-overlapping offset window by construction.
 
 ```text
 AppendAsync(entry)
     │  assigns offset = _nextOffset++
     │  appends WalEntry to _pendingBatch
     │  parks a TCS in _pendingAcks
-    │  if no flush in flight → StartFlush()
+    │  if _inFlight.Count == 0     → StartFlush()
+    │  if would-overflow batch AND _inFlight.Count < cap → StartFlush()
+    │  if would-overflow batch AND _inFlight.Count >= cap → await head
     ▼
 returns await tcs.Task    ◄── completes once provider acks the batch
 ```
@@ -236,11 +240,12 @@ Two batch limits are enforced at append time:
 |---|---|---|
 | `WalMaxBatchEntries` | `100` | Adding the new entry would push the pending count above the cap; the current batch is flushed first, then the new entry starts the next batch. |
 | `WalMaxBatchBytes` | `4 MB` | Adding the new entry's estimated serialised size would exceed the byte budget; same cutover. The size estimate is `key.Length * 2 + value.Length + 128` bytes - UTF-16 worst case for the key plus a constant envelope overhead. |
+| `WalMaxPendingBatches` | `1` | Maximum number of in-flight + just-started flushes the grain holds against the provider concurrently. The default reproduces the original single-in-flight protocol bit-for-bit. Raise to pipeline writer-side burst absorption against a higher-latency durable provider; the cap is the only synchronisation point new appends see, so cap values above the steady-state burst depth do not buy further throughput. |
 
-Cutovers wait for the in-flight flush before the next batch can start,
-which provides natural back-pressure under burst load: a single shard
-cannot accumulate more than two batches' worth of pending state at any
-instant.
+Cutovers below the in-flight cap start a fresh flush immediately;
+cutovers at the cap await the oldest in-flight flush before starting
+another, which provides natural back-pressure under sustained burst
+load.
 
 ### Activation recovery
 
@@ -251,24 +256,36 @@ next-offset counter - the grain holds no Orleans grain state of its own.
 
 ### Deactivation drain
 
-`OnDeactivateAsync` awaits any in-flight flush and then triggers (and
-awaits) a final flush of any remaining pending entries, so a graceful
-deactivation never leaves a caller observing a hung TCS.
+`OnDeactivateAsync` awaits every in-flight flush in chronological order
+and then triggers (and awaits) a final flush of any remaining pending
+entries, so a graceful deactivation never leaves a caller observing a
+hung TCS regardless of the configured `WalMaxPendingBatches`.
 
 ### Append-failure semantics
 
 A flush failure is fail-fast for every affected caller:
 
-1. The next-offset counter rolls back to the start of the failed batch
-   (`_nextOffset = batch[0].Offset`) so the dense-offset invariant against
-   the provider is preserved.
-2. Every TCS in the failed batch is faulted with the underlying storage
+1. A *sticky-failure* latch is set the moment any flush in the chain
+   throws. New `AppendAsync` calls (and the cutover loop's in-progress
+   waiters) short-circuit with that exception until the post-failure
+   resync clears the latch, so a fault that already faulted later
+   windows is never masked by a fresh successful append.
+2. Every TCS in the failed window is faulted with the underlying storage
    exception.
-3. Every TCS in the *currently-accumulating* pending batch is also faulted
-   - those entries had been assigned offsets above the now-rolled-back
-   gap, so their offsets are stale and the calls must restart fresh.
-4. The pending batch is reset; subsequent `AppendAsync` calls resume
-   cleanly from the rolled-back `_nextOffset`.
+3. Every TCS in *every later in-flight window* is faulted with the same
+   exception. Their provider calls may still be in motion - the chain
+   waits for them to settle - but their result-setting is short-circuited
+   so they never produce a success that contradicts the failure latch.
+4. Every TCS in the *currently-accumulating* pending batch is faulted -
+   those entries had been assigned offsets above the failed window, so
+   their offsets are logically orphaned.
+5. Once the chain drains, the grain re-reads
+   `IWalStorageProvider.GetHighestOffsetAsync` to recover the provider's
+   real tail. Concurrent later flushes may have already committed
+   against now-orphaned offset windows; the resync restores the dense-
+   offset invariant against the provider rather than against the failed
+   window's start. The sticky-failure latch is then cleared and new
+   appends resume.
 
 This contract makes WAL-append failures observable inline at the
 originating writer rather than being silently coalesced into a later
@@ -276,22 +293,17 @@ batch.
 
 > **Contributor note - synchronously-completing providers.** `FlushAsync`
 > starts with `await Task.Yield()` so the returned `Task` is observably
-> incomplete by the time `StartFlush` assigns it to `_inFlightFlush`.
+> incomplete by the time `StartFlush` stores it on the in-flight slot.
 > Without that yield, an `IWalStorageProvider` whose `AppendBatchAsync`
 > returns a synchronously-completed task (the in-memory provider does
-> this) would run the entire flush body inline before the assignment
-> lands; the `finally { _inFlightFlush = null; }` would clear a field
-> that was not yet set, then `StartFlush`'s assignment would overwrite
-> `null` with the completed task - leaving `_inFlightFlush` permanently
-> non-null and every subsequent `AppendAsync` parked on its TCS forever.
-> Any future refactor of the flush loop must preserve this invariant.
+> this) would run the entire flush body inline before the slot is fully
+> initialised, including the chain-remove in the `finally` block - and
+> the chain invariant ("every slot in `_inFlight` carries a task that
+> completes when its provider call settles") would be violated. Any
+> future refactor of the flush loop must preserve this yield.
 
 ### What the protocol does *not* do yet
 
-- **Multiple in-flight batches.** The current implementation enforces a
-  single in-flight flush per shard. `WalMaxPendingBatches` is reserved
-  for a future change that lifts the cap; today it is validated (`>= 1`)
-  but not consumed by the grain.
 - **Exact-bytes accounting.** `WalMaxBatchBytes` is enforced against an
   estimate (key UTF-16 worst case + value length + 128 byte envelope),
   not the post-serialisation byte count. The estimate is conservative

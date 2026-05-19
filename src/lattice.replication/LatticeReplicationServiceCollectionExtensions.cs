@@ -289,6 +289,12 @@ public static class LatticeReplicationServiceCollectionExtensions
                 options.WalMaxBatchBytes = rep.WalMaxBatchBytes;
             }
 
+            if (rep.WalMaxPendingBatches != LatticeReplicationOptions.DefaultWalMaxPendingBatches
+                && options.WalMaxPendingBatches == LatticeOptions.DefaultWalMaxPendingBatches)
+            {
+                options.WalMaxPendingBatches = rep.WalMaxPendingBatches;
+            }
+
             if (rep.WalStorageProvider is not null && options.WalStorageProvider is null)
             {
                 options.WalStorageProvider = rep.WalStorageProvider;

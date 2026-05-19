@@ -41,8 +41,17 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// <b>Thread safety.</b> Instances are safe for concurrent calls
 /// across distinct partitions. Concurrent calls targeting the same
 /// partition rely on Azure Tables' partition-level transactional
-/// serialisation - the WAL grain is single-writer per shard so this
-/// is the documented usage.
+/// serialisation - and on the head-pointer upsert seeing the new
+/// transaction's highest offset rather than a stale earlier one.
+/// The WAL grain is single-writer per shard, so concurrent calls into
+/// the same partition only happen when
+/// <see cref="Orleans.Lattice.LatticeOptions.WalMaxPendingBatches"/>
+/// is greater than 1; in that mode the smaller-offset transaction can
+/// race the larger-offset one and clobber the head pointer. Hosts that
+/// raise <c>WalMaxPendingBatches</c> against this provider must accept
+/// that <see cref="GetHighestOffsetAsync"/> may briefly report a stale
+/// value until every concurrent transaction settles. The default cap
+/// of <c>1</c> avoids the race entirely.
 /// </para>
 /// </summary>
 public sealed class AzureTableWalStorageProvider : IWalStorageProvider

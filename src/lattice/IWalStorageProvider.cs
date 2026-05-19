@@ -19,11 +19,19 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// <b>Offset density.</b> Offsets supplied in <see cref="WalEntry.Offset"/>
-/// are caller-assigned and dense (gap-free) per shard. Implementations
-/// must preserve the supplied offsets verbatim so that
-/// <see cref="GetHighestOffsetAsync"/> on activation always returns a
-/// value that is exactly one less than the next offset the caller will
-/// assign.
+/// are caller-assigned. Within a single <see cref="AppendBatchAsync"/>
+/// call they are strictly ascending and gap-free (entry[i+1].Offset ==
+/// entry[i].Offset + 1). Across calls they are dense in aggregate under
+/// normal operation - the WAL grain assigns offsets monotonically under
+/// the grain turn - but with
+/// <see cref="LatticeOptions.WalMaxPendingBatches"/> > 1 a single shard
+/// can issue multiple concurrent <see cref="AppendBatchAsync"/> calls
+/// whose batches may arrive at the provider out of order, and a failed
+/// flush may leave a permanent gap in the log (downstream consumers
+/// observe the gap honestly). Implementations must preserve the
+/// supplied offsets verbatim and must reject overlap with any already-
+/// persisted offset; they must not assume contiguity with the persisted
+/// tail.
 /// </para>
 /// <para>
 /// <b>Cross-package consumer.</b> The contract is identical between
