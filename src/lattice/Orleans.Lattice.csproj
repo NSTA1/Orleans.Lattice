@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice</PackageId>
-    <Version>5.0.0</Version>
+    <Version>5.1.0</Version>
     <Description>Distributed B+ tree implementation (with CRDT primitives) for Microsoft Orleans.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
@@ -42,7 +42,7 @@
     <PackageReference Include="Microsoft.Orleans.Reminders" Version="10.1.0" />
     <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.1.0" />
     <PackageReference Include="Microsoft.Orleans.Streaming" Version="10.1.0" />
-    <PackageReference Include="System.IO.Hashing" Version="10.0.3" />
+    <PackageReference Include="System.IO.Hashing" Version="10.0.8" />
   </ItemGroup>
 
 </Project>

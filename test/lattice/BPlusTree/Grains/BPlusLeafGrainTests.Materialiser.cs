@@ -751,6 +751,70 @@ public partial class BPlusLeafGrainTests
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1));
     }
 
+    [Test]
+    public async Task Materialiser_replays_offset_zero_when_checkpoint_is_nothing_applied_sentinel()
+    {
+        // Pins the post-rebuild activation contract: when the leaf
+        // persists ProjectionCheckpointOffset = -1 (the "nothing
+        // applied" sentinel emitted by the operator-driven projection
+        // rebuild path), the materialiser must read strictly past
+        // offset -1, i.e. include offset 0 inclusive. A rebuild that
+        // reset to 0 instead would silently drop the first WAL entry
+        // ("k00" in the original regression).
+        var entries = new[]
+        {
+            new CommitLogSliceEntry(0, BuildCommittedSet("k0", Encoding.UTF8.GetBytes("v0"), hlcPhysical: 100)),
+            new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1"), hlcPhysical: 101)),
+        };
+        var coord = BuildCoordinator(head: 1, entries);
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(
+            coord,
+            persistedCheckpoint: -1);
+
+        await ActivateAsync(grain);
+
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k0"))!), Is.EqualTo("v0"));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k1"))!), Is.EqualTo("v1"));
+    }
+
+    [Test]
+    public async Task Materialiser_with_sentinel_checkpoint_invokes_detector_with_minus_one()
+    {
+        // The detector must observe the -1 sentinel verbatim so its
+        // gap-vs-budget arithmetic (gap = head - checkpoint) stays
+        // honest. If the materialiser silently normalised -1 to 0
+        // before consulting the detector, a freshly-rebuilt leaf could
+        // mask the replay-budget trigger off-by-one and overshoot the
+        // configured MaxLeafReplayEntries.
+        var detector = Substitute.For<ILatticeFallOffLogDetector>();
+        detector.ClassifyAsync(
+                Arg.Any<string>(),
+                Arg.Any<int>(),
+                Arg.Any<long>(),
+                Arg.Any<TimeSpan>(),
+                Arg.Any<ResolvedLatticeOptions>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(FallOffLogDecision.TailReplay));
+
+        var entry = new CommitLogSliceEntry(0, BuildCommittedSet("k0", Encoding.UTF8.GetBytes("v0")));
+        var coord = BuildCoordinator(head: 1, entry);
+        var (grain, _, _, _) = CreateGrainWithMaterialiser(
+            coord,
+            persistedCheckpoint: -1,
+            detector: detector);
+
+        await ActivateAsync(grain);
+
+        await detector.Received(1).ClassifyAsync(
+            MaterialiserTreeId,
+            0,
+            -1L,
+            Arg.Any<TimeSpan>(),
+            Arg.Any<ResolvedLatticeOptions>(),
+            Arg.Any<CancellationToken>());
+    }
+
     // -------------------------------------------------------------------
     // Cursor publish optimisation: redundant publish elision
     // -------------------------------------------------------------------

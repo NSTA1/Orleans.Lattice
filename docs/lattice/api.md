@@ -462,6 +462,8 @@ maintenance windows accordingly.
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `DiagnoseAsync` | `Task<TreeDiagnosticReport> DiagnoseAsync(bool deep = false, CancellationToken cancellationToken = default)` | Returns a per-shard health snapshot - depth, root-is-leaf, live-key count, tombstone count (deep only), hotness counters, ops/sec, split/bulk state - plus a bounded ring buffer of recent adaptive-split events. Repeated calls within `LatticeOptions.DiagnosticsCacheTtl` (default 5 s) are served from cache; shallow and deep reports are cached independently. **Not for hot-path or correctness-critical decisions** - use the operation-specific APIs (`CountAsync`, `IsResizeCompleteAsync`, etc.) instead. See [Diagnostics](diagnostics.md). |
+| `RebuildLeafProjectionAsync` | `Task RebuildLeafProjectionAsync(int shardIndex, CancellationToken cancellationToken = default)` | Operator-driven recovery: clears the projection state of every leaf in the specified physical shard and forces a WAL replay on next activation. Topology-bearing state is preserved. See [Operator tooling](#operator-tooling-projection-rebuild-and-materialiser-lag) and [Projection Rebuild](projection-rebuild.md#operator-tooling-rebuild-and-lag). |
+| `GetMaterialiserLagAsync` | `Task<long> GetMaterialiserLagAsync(CancellationToken cancellationToken = default)` | Returns the maximum WAL-entry lag between any shard's WAL head and the minimum leaf-projection checkpoint offset across all leaves in the tree. `0` means fully caught up; growing values indicate the materialiser is falling behind WAL ingestion. See [Operator tooling](#operator-tooling-projection-rebuild-and-materialiser-lag). |
 
 ```csharp verify
 var report = await tree.DiagnoseAsync(deep: true, cancellationToken);
@@ -634,6 +636,33 @@ opt-out makes the digest API unavailable), and
 [Projection Rebuild](projection-rebuild.md) for the determinism
 contract, the cost model, and the related `ProjectionRebuildPolicy`
 recovery options.
+
+## Operator tooling: projection rebuild and materialiser lag
+
+Two `ILattice` methods expose operator-driven projection recovery
+and steady-state materialiser-lag observation. Both surfaces are
+narrow: they do not freeze the tree, take no consistency lock, and
+are safe to call against a live shard under load.
+
+| Method | Description |
+|--------|-------------|
+| `RebuildLeafProjectionAsync(int shardIndex, CancellationToken)` | Clears the projection state of every leaf in the specified physical shard - `Entries`, `ProjectionHash`, the persisted `ProjectionCheckpointOffset`, and the in-memory pending-saga and recently-terminal dedup buffers - then deactivates each leaf so its next activation re-materialises the projection from the WAL via the standard activation-time replay path (including snapshot-then-WAL recovery when `ProjectionRebuildPolicy.SnapshotThenWal` is in effect). Topology-bearing state (`TreeId`, `ShardIndex`, key-range bounds, sibling pointers) is preserved. Throws `ArgumentOutOfRangeException` when `shardIndex` is not a physical shard of the per-tree map, `InvalidOperationException` for system-tree activations, and `OperationCanceledException` if the token is cancelled. |
+| `GetMaterialiserLagAsync(CancellationToken)` | Returns the maximum lag, in WAL entries, between the shard's WAL head offset and the minimum leaf-projection checkpoint offset across all leaves in the tree. A return value of `0` indicates the materialiser is fully caught up across every shard; a steadily growing value indicates the materialiser is falling behind WAL ingestion. The result is clamped at zero. Throws `InvalidOperationException` for system-tree activations and `OperationCanceledException` if the token is cancelled. |
+
+```csharp verify
+// Operator-driven recovery: rebuild one shard's projection from
+// the WAL after detecting drift via the digest surface.
+await tree.RebuildLeafProjectionAsync(shardIndex: 0, cancellationToken);
+
+// Steady-state lag observation: poll periodically and alert
+// when lag crosses an SLO threshold.
+long lag = await tree.GetMaterialiserLagAsync(cancellationToken);
+// Emit (treeId, lag) to telemetry.
+```
+
+See [Projection Rebuild](projection-rebuild.md#operator-tooling-rebuild-and-lag)
+for the rebuild semantics, the topology-preservation guarantees, and
+the recommended monitoring shape for lag.
 
 ## Metrics
 

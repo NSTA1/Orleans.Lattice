@@ -195,6 +195,12 @@ internal sealed partial class BPlusLeafGrain
 
         var checkpoint = state.State.ProjectionCheckpointOffset;
 
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG replay-enter] gid={context.GrainId} treeId={treeId} shardIndex={state.State.ShardIndex} " +
+            $"low='{state.State.LowKeyInclusive ?? "<null>"}' high='{state.State.HighKeyExclusive ?? "<null>"}' " +
+            $"checkpoint={checkpoint} entryCount={state.State.Entries.Count}");
+#endif
+
         // Fall-off-log gate: classify the gap before reading any
         // slice. The detector consults the commit log's head and
         // tail offsets, the configured replay budget, and the
@@ -274,6 +280,9 @@ internal sealed partial class BPlusLeafGrain
                     state.State.LowKeyInclusive,
                     state.State.HighKeyExclusive))
                 {
+#if LATTICE_DIAG
+                    DiagSink.Write($"[DIAG replay-apply] gid={context.GrainId} offset={entry.Offset} kind={entry.Mutation.Kind} key='{entry.Mutation.Key}' shardIndex={entry.Mutation.ShardIndex}");
+#endif
                     using (LatticeApplyOffsetContext.BeginScope(entry.Offset))
                     {
                         // Drives the existing ILeafProjection.Apply
@@ -302,6 +311,12 @@ internal sealed partial class BPlusLeafGrain
                         projection.Apply(entry.Mutation);
                     }
                 }
+#if LATTICE_DIAG
+                else
+                {
+                    DiagSink.Write($"[DIAG replay-skip] gid={context.GrainId} offset={entry.Offset} kind={entry.Mutation.Kind} key='{entry.Mutation.Key}' mutShard={entry.Mutation.ShardIndex} leafShard={state.State.ShardIndex} low='{state.State.LowKeyInclusive ?? "<null>"}' high='{state.State.HighKeyExclusive ?? "<null>"}'");
+                }
+#endif
 
                 if (entry.Offset > maxApplied)
                     maxApplied = entry.Offset;

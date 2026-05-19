@@ -362,3 +362,136 @@ siloBuilder.ConfigureLattice(o =>
 - `LeafProjectionStaleException` - thrown by `ProjectionRebuildPolicy.Fail`
   and by `ProjectionRebuildPolicy.FullRebuildFromWal` when the WAL has
   been trimmed.
+- `ILattice.RebuildLeafProjectionAsync` and `ILattice.GetMaterialiserLagAsync` -
+  see [Operator tooling: rebuild and lag](#operator-tooling-rebuild-and-lag).
+
+## Operator tooling: rebuild and lag
+
+Activation-time `ProjectionRebuildPolicy` recovers a leaf when it
+cold-starts and a fall-off-log trigger fires. Two complementary
+surfaces let an **operator** drive recovery and observe materialiser
+health without waiting for an activation:
+
+- `ILattice.RebuildLeafProjectionAsync(int shardIndex, CancellationToken)`
+- `ILattice.GetMaterialiserLagAsync(CancellationToken)`
+
+### Rebuild a shard''s projection from the WAL
+
+```csharp verify
+// Drift was detected via GetLeafProjectionDigestAsync, or an
+// integrity check flagged a leaf''s projection as suspect. Force a
+// full re-materialisation of the shard''s projection from the WAL.
+await tree.RebuildLeafProjectionAsync(shardIndex: 0, cancellationToken);
+```
+
+`RebuildLeafProjectionAsync` walks every leaf in the named physical
+shard via the sibling chain and, for each leaf, **clears only the
+projection-state slots** that the materialiser owns:
+
+- `LeafNodeState.Entries` is emptied.
+- `LeafNodeState.ProjectionCheckpointOffset` is reset to the `-1`
+  "nothing applied" sentinel (matching the WAL reader's
+  `fromOffsetExclusive = -1` start-of-log convention), so the next
+  activation replays the WAL from offset `0` inclusive. Setting `0`
+  instead would cause the materialiser to skip offset `0`, because
+  replay reads strictly past the persisted checkpoint.
+- `LeafNodeState.ProjectionHash` is cleared.
+- In-memory pending-saga, pending-tx-offset, recently-terminal, and
+  backstopped-terminal dedup buffers are dropped.
+- The leaf grain is deactivated. The next activation re-materialises
+  the projection from the WAL through the standard activation-time
+  replay path, including snapshot-then-WAL recovery when the
+  configured `ProjectionRebuildPolicy` is `SnapshotThenWal`.
+
+**Topology-bearing state is preserved**: `TreeId`, `ShardIndex`, the
+leaf''s key range, and the sibling pointers stay intact. The rebuild
+does not re-shape the tree - it only re-derives the materialised
+projection from the WAL prefix the leaf already claims to own.
+
+`RebuildLeafProjectionAsync` does **not** take a tree-wide
+consistency lock. Readers and writers continue to land on the shard
+during the rebuild; in-flight writes hit the leaf''s standard write
+path (which goes through the WAL) and will be visible after the
+next activation re-replays them. Operators rebuilding under load
+should expect a brief window during which reads against the rebuilt
+shard see fewer entries than the steady-state projection - this is
+the cold-start tail until WAL replay catches up. Pair the rebuild
+with a digest re-poll after replay stabilises to confirm the
+projection converged.
+
+Error surface:
+
+| Condition | Exception |
+|---|---|
+| `shardIndex` is not a physical shard of the per-tree map | `ArgumentOutOfRangeException` |
+| Tree id starts with the reserved system prefix `_lattice_` | `InvalidOperationException` |
+| `cancellationToken` was already cancelled | `OperationCanceledException` |
+
+### Observe materialiser lag
+
+```csharp verify
+long lag = await tree.GetMaterialiserLagAsync(cancellationToken);
+// 0 -> fully caught up across every shard.
+// > 0 -> the materialiser has at least `lag` WAL entries it has
+//        not yet folded into the leaf projection for some shard.
+```
+
+`GetMaterialiserLagAsync` returns the **maximum lag across all
+physical shards** of the tree. For each shard the lag is computed as
+
+```text
+walHead - min(checkpointOffset across leaves in the shard)
+```
+
+clamped at zero so a checkpoint that has temporarily raced ahead of
+the head observation (e.g. between the head fetch and the per-leaf
+checkpoint fetch) cannot return a negative value. The result is the
+worst-shard lag because a single slow shard is the SLO-relevant
+signal - averaging it would mask the actual problem.
+
+The intended monitoring shape is a periodic poll (e.g. every
+5-30 s) feeding a gauge in the telemetry pipeline:
+
+```csharp verify
+// Pseudo-code for an operator polling loop. The interval and
+// thresholds are deployment-specific - they scale with WAL
+// ingestion rate and the SLO for read-after-write recency.
+long lag = await tree.GetMaterialiserLagAsync(cancellationToken);
+if (lag > 10_000)
+{
+    // Materialiser is falling more than 10 000 entries behind the
+    // WAL on at least one shard. Investigate slow leaf activation,
+    // a stuck replay coordinator, or backpressure on the storage
+    // provider.
+}
+```
+
+A growing lag indicates the materialiser is not keeping up with WAL
+ingestion. Common causes are slow leaf activation under
+storage-provider backpressure, a stuck `ILeafReplayCoordinatorGrain`,
+or a deactivation storm cycling leaves faster than they can replay.
+A persistent lag at a small positive value (a few entries) is
+expected under sustained write load - the materialiser checkpoints
+in batches, so the most recently published WAL entries naturally lag
+the head briefly.
+
+Error surface:
+
+| Condition | Exception |
+|---|---|
+| Tree id starts with the reserved system prefix `_lattice_` | `InvalidOperationException` |
+| `cancellationToken` was already cancelled | `OperationCanceledException` |
+
+### When to use rebuild vs. activation-time recovery
+
+| Scenario | Surface |
+|---|---|
+| Leaf cold-starts and finds itself past `MaxLeafReplayEntries` or older than `LeafProjectionRetention`, or the WAL has been trimmed past its checkpoint | `ProjectionRebuildPolicy` (automatic, activation-time) |
+| Operator detects a digest mismatch across silos, or an integrity check flagged a corrupted projection, or a bug fix to `ILeafProjection.Apply` requires re-materialisation | `RebuildLeafProjectionAsync` (manual, while live) |
+| Operator wants a steady-state gauge to know whether the materialiser is keeping up | `GetMaterialiserLagAsync` |
+
+The two paths share the same replay seam: `RebuildLeafProjectionAsync`
+clears state and lets the standard activation-time path do the
+re-materialisation. There is no second, parallel rebuild code path
+to maintain - the operator surface is a controlled trigger for the
+existing recovery logic.

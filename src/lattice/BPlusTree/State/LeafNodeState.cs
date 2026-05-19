@@ -62,9 +62,22 @@ internal sealed class LeafNodeState
     /// <c>ILeafProjection.Apply</c> seam. Persisted alongside the
     /// projection so a re-activation can resume replay from
     /// <c>ProjectionCheckpointOffset + 1</c> rather than scanning the
-    /// full leaf state. Defaults to <c>0</c>; the seam ships dormant
-    /// until the WAL-as-sole-commit-point promotion lands and the
-    /// activation path begins consulting this slot.
+    /// full leaf state. Defaults to <c>0</c> on freshly persisted
+    /// state. The materialiser's activation gate
+    /// (<c>head &lt;= checkpoint</c>) short-circuits when the WAL is
+    /// empty (<c>head == -1</c>), so the default-0 value never causes
+    /// the activation path to skip offset 0 on a leaf whose
+    /// in-memory <see cref="Entries"/> already covers it.
+    /// <para>
+    /// The "nothing applied" sentinel is <c>-1</c>, matching
+    /// <see cref="IWalStorageProvider.GetHighestOffsetAsync"/>'s
+    /// empty-WAL convention. The operator-driven projection rebuild
+    /// path (<c>RebuildLeafProjectionAsync</c>) sets this slot to
+    /// <c>-1</c> after clearing <see cref="Entries"/> so the next
+    /// activation re-reads the WAL from offset <c>0</c> inclusive;
+    /// setting <c>0</c> would silently skip offset 0 because the
+    /// materialiser reads strictly past the checkpoint.
+    /// </para>
     /// </summary>
     [Id(11)] public long ProjectionCheckpointOffset { get; set; }
 

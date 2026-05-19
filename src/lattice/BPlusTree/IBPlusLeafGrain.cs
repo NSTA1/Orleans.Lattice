@@ -459,6 +459,46 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<LeafProjectionDigest> GetProjectionDigestAsync();
 
     /// <summary>
+    /// Returns the persisted projection-checkpoint offset for this leaf -
+    /// the highest WAL offset whose mutation has been durably applied to
+    /// the in-memory projection via
+    /// <see cref="State.LeafNodeState.ProjectionCheckpointOffset"/>.
+    /// Read-only diagnostic accessor used by the operator-facing
+    /// materialiser-lag surface (<c>ILattice.GetMaterialiserLagAsync</c>)
+    /// to compute the shard-wide <c>WAL_head - min(leaf.checkpoint)</c>
+    /// back-pressure metric without forcing a checkpoint flush.
+    /// </summary>
+    Task<long> GetProjectionCheckpointOffsetAsync();
+
+    /// <summary>
+    /// Operator-facing projection rebuild seam. Resets this leaf's
+    /// materialised projection (<see cref="State.LeafNodeState.Entries"/>,
+    /// the incremental <see cref="State.LeafNodeState.ProjectionHash"/>,
+    /// the persisted <see cref="State.LeafNodeState.ProjectionCheckpointOffset"/>,
+    /// and the per-leaf saga pending-tx map) to its post-activation
+    /// zero state, persists the cleared projection slots in a single
+    /// <see cref="IPersistentState{T}.WriteStateAsync"/> call, and
+    /// deactivates the grain so the next activation replays the
+    /// per-shard WAL from offset <c>0</c> through the existing
+    /// activation-time materialiser. Topology-bearing slots
+    /// (<see cref="State.LeafNodeState.TreeId"/>,
+    /// <see cref="State.LeafNodeState.ShardIndex"/>, sibling pointers,
+    /// key-range bounds, split markers, parent pointer) are preserved
+    /// verbatim so the rebuild observes the same WAL-filter context the
+    /// pre-rebuild leaf used. Used after a corrupt-projection incident
+    /// or a <see cref="LatticeOptions.MaxLeafReplayEntries"/> blow-out
+    /// to recover the leaf state from the durable WAL source of truth.
+    /// <para>
+    /// Asynchronous failure mode: a transient storage failure on the
+    /// persist surfaces back to the caller; the leaf state is left in
+    /// the pre-rebuild shape on a persist failure, so the operation is
+    /// safe to retry. A subsequent successful call completes the rebuild
+    /// from a clean state.
+    /// </para>
+    /// </summary>
+    Task RebuildProjectionFromWalAsync();
+
+    /// <summary>
     /// Applies the saga terminal mark for <paramref name="transactionId"/>
     /// against this leaf's pending-transaction map. When
     /// <paramref name="committed"/> is <c>true</c> every prepared mutation

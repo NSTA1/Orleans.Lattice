@@ -47,9 +47,10 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         {
             throw new ArgumentOutOfRangeException(nameof(shardIndex), shardIndex, "Shard index must be non-negative.");
         }
-        if (checkpointOffset < 0)
+        if (checkpointOffset < -1)
         {
-            throw new ArgumentOutOfRangeException(nameof(checkpointOffset), checkpointOffset, "Checkpoint offset must be non-negative.");
+            throw new ArgumentOutOfRangeException(nameof(checkpointOffset), checkpointOffset,
+                "Checkpoint offset must be >= -1 (the 'nothing applied' sentinel) or a real WAL offset.");
         }
 
         cancellationToken.ThrowIfCancellationRequested();
