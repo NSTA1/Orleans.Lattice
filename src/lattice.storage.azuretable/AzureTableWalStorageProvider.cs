@@ -78,6 +78,62 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider
     /// </summary>
     internal const string HeadRowKey = "HEAD";
 
+    /// <summary>
+    /// Per-batch partition prefix introduced by the per-batch partition
+    /// + manifest schema (roadmap R-079). Every <see cref="AppendBatchAsync"/>
+    /// call lands in its own partition keyed as
+    /// <c>{BatchPartitionPrefix}|{treeId}|{shardIndex}|S{startOffset:D19}</c>,
+    /// giving concurrent appends true partition-server parallelism on
+    /// the Azure Tables side. The leading marker is the minimal three
+    /// bytes (<c>_b_</c>) so the partition key stays compact on every
+    /// row (each row carries a copy on the wire); a longer marker like
+    /// <c>__batch__</c> would add ~6 bytes per row across an entire
+    /// shard's storage and network surface. The marker also makes the
+    /// namespace disjoint from the manifest namespace
+    /// (<see cref="ManifestPartitionPrefix"/>) and from the legacy
+    /// single-partition schema (no marker), so the activation-time
+    /// reconciliation step can distinguish all three by partition-key
+    /// prefix alone.
+    /// </summary>
+    internal const string BatchPartitionPrefix = "_b_";
+
+    /// <summary>
+    /// Per-shard manifest partition prefix introduced by the per-batch
+    /// partition + manifest schema (roadmap R-079). Each shard has
+    /// exactly one manifest partition keyed as
+    /// <c>{ManifestPartitionPrefix}|{treeId}|{shardIndex}</c>, holding
+    /// one row per committed batch plus the
+    /// <see cref="TailRowKey"/> pointer that
+    /// <see cref="GetHighestOffsetAsync"/> point-reads. Same length /
+    /// disjointness rationale as <see cref="BatchPartitionPrefix"/>.
+    /// </summary>
+    internal const string ManifestPartitionPrefix = "_m_";
+
+    /// <summary>
+    /// Per-batch row-key prefix for manifest rows. Each committed batch
+    /// contributes one row with key
+    /// <c>{ManifestRowKeyPrefix}{startOffset:D19}</c> in the shard's
+    /// manifest partition; the row's <c>Offset</c> column carries
+    /// <c>endOffsetInclusive</c>. The D19 width (long.MaxValue is 19
+    /// digits) makes the row keys lexicographically equivalent to the
+    /// numeric start-offset order, so a <c>RowKey</c> range query
+    /// against the manifest partition returns the batches that overlap
+    /// a requested window in ascending offset order.
+    /// </summary>
+    internal const string ManifestRowKeyPrefix = "M";
+
+    /// <summary>
+    /// Row-key for the shard's tail pointer. Stored in the manifest
+    /// partition; its <c>Offset</c> column holds the maximum committed
+    /// <c>endOffsetInclusive</c> across every batch in the shard. The
+    /// row sorts after every manifest entry row (because <c>'T' &gt;
+    /// 'M'</c>), matching the
+    /// <c>'HEAD' &gt; 'E'</c> convention from the per-batch schema and
+    /// letting a manifest-range query use a tight upper bound that
+    /// excludes the tail row.
+    /// </summary>
+    internal const string TailRowKey = "TAIL";
+
     private const int MaxTransactionActions = 100;
 
     private readonly AzureTableWalStorageOptions _options;
@@ -474,7 +530,9 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider
     /// the format string.
     /// </summary>
     internal static string BuildEntryRowKey(long offset) =>
-        EntryRowKeyPrefix + offset.ToString("D19", CultureInfo.InvariantCulture);
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"{EntryRowKeyPrefix}{offset:D19}");
 
     /// <summary>
     /// Builds the per-partition row-key for a <c>(treeId, shardIndex)</c>
@@ -488,7 +546,87 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider
     {
         ArgumentNullException.ThrowIfNull(treeId);
         var encoded = EncodePartitionSegment(treeId);
-        return encoded + "|" + shardIndex.ToString(CultureInfo.InvariantCulture);
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{encoded}|{shardIndex}");
+    }
+
+    /// <summary>
+    /// Builds the per-batch partition key for a single
+    /// <see cref="AppendBatchAsync"/> call in the per-batch partition
+    /// + manifest schema (roadmap R-079). The key is
+    /// <c>{BatchPartitionPrefix}|{encoded-treeId}|{shardIndex}|S{startOffset:D19}</c>.
+    /// The <c>S</c> infix sorts after the manifest's <c>M</c> rows
+    /// lexicographically and the D19 width makes the partition keys
+    /// inside a shard sort in start-offset order, so a tail scan can
+    /// stream them with a single ascending-<c>PartitionKey</c> range
+    /// query. Disjoint from <see cref="BuildPartitionKey"/> by
+    /// <c>|</c>-separator count (legacy = 1, batch = 3) so the legacy
+    /// and new schemas can coexist transiently during the
+    /// activation-time reconciliation step that rejects legacy data.
+    /// Exposed internally for unit tests.
+    /// </summary>
+    internal static string BuildBatchPartitionKey(string treeId, int shardIndex, long startOffset)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (startOffset < 0L)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(startOffset),
+                startOffset,
+                "Batch partition keys are derived from WAL offsets, which are non-negative.");
+        }
+        var encoded = EncodePartitionSegment(treeId);
+        // Interpolated under DefaultInterpolatedStringHandler: shardIndex
+        // and the D19-formatted startOffset are written directly into the
+        // handler's pooled char buffer via TryFormat, so the helper
+        // allocates exactly one string (the final result) per call - no
+        // intermediate ToString boxing, no string.Concat params array.
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{BatchPartitionPrefix}|{encoded}|{shardIndex}|S{startOffset:D19}");
+    }
+
+    /// <summary>
+    /// Builds the per-shard manifest partition key in the per-batch
+    /// partition + manifest schema (roadmap R-079). One manifest
+    /// partition per shard, keyed as
+    /// <c>{ManifestPartitionPrefix}|{encoded-treeId}|{shardIndex}</c>.
+    /// Disjoint from <see cref="BuildBatchPartitionKey"/> by prefix
+    /// (<c>_m_</c> vs <c>_b_</c>) and from <see cref="BuildPartitionKey"/>
+    /// by <c>|</c>-separator count (legacy = 1, manifest = 2). Exposed
+    /// internally for unit tests.
+    /// </summary>
+    internal static string BuildManifestPartitionKey(string treeId, int shardIndex)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        var encoded = EncodePartitionSegment(treeId);
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{ManifestPartitionPrefix}|{encoded}|{shardIndex}");
+    }
+
+    /// <summary>
+    /// Builds the row-key for the manifest entry that records the
+    /// batch starting at <paramref name="startOffset"/>. Format:
+    /// <c>{ManifestRowKeyPrefix}{startOffset:D19}</c>. The D19 width
+    /// makes row keys lexicographically equivalent to numeric
+    /// start-offset order, so an ascending-<c>RowKey</c> range scan of
+    /// a shard's manifest partition returns committed batches in
+    /// commit-offset order. Exposed internally for unit tests.
+    /// </summary>
+    internal static string BuildManifestRowKey(long startOffset)
+    {
+        if (startOffset < 0L)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(startOffset),
+                startOffset,
+                "Manifest row keys are derived from WAL offsets, which are non-negative.");
+        }
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{ManifestRowKeyPrefix}{startOffset:D19}");
     }
 
     private static string EncodePartitionSegment(string segment)
