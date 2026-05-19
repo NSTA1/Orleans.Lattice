@@ -5,8 +5,10 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// <summary>
 /// Unit tests for <see cref="AzureTableWalStorageOptions"/> covering
 /// every <see cref="AzureTableWalStorageOptions.Validate"/> failure
-/// mode and the happy paths for each of the three supported
-/// authentication shapes.
+/// mode and the happy paths for each of the four supported
+/// authentication shapes (connection string, <c>ServiceUri</c> +
+/// token credential, <c>ServiceUri</c> + shared-key credential, and
+/// a pre-built <c>TableServiceClient</c>).
 /// </summary>
 [TestFixture]
 public class AzureTableWalStorageOptionsTests
@@ -50,6 +52,18 @@ public class AzureTableWalStorageOptionsTests
         {
             ConnectionString = "UseDevelopmentStorage=true",
             TokenCredential = new FakeTokenCredential(),
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void Validate_throws_when_ConnectionString_and_SharedKeyCredential_are_both_supplied()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            SharedKeyCredential = new TableSharedKeyCredential("acct", "ZmFrZQ=="),
         };
 
         Assert.That(options.Validate, Throws.InvalidOperationException);
@@ -121,6 +135,173 @@ public class AzureTableWalStorageOptionsTests
 
         Assert.That(options.TableName, Is.EqualTo(AzureTableWalStorageOptions.DefaultTableName));
         Assert.That(options.TableName, Is.EqualTo("OrleansLatticeWal"));
+    }
+
+    [Test]
+    public void Validate_succeeds_for_prebuilt_ServiceClient_mode()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ServiceClient = new TableServiceClient(new Uri("https://example.table.core.windows.net"), new FakeTokenCredential()),
+        };
+
+        Assert.That(options.Validate, Throws.Nothing);
+    }
+
+    [Test]
+    public void Validate_throws_when_ServiceClient_and_ConnectionString_are_both_supplied()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ServiceClient = new TableServiceClient(new Uri("https://example.table.core.windows.net"), new FakeTokenCredential()),
+            ConnectionString = "UseDevelopmentStorage=true",
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void Validate_throws_when_ServiceClient_and_ServiceUri_are_both_supplied()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ServiceClient = new TableServiceClient(new Uri("https://example.table.core.windows.net"), new FakeTokenCredential()),
+            ServiceUri = new Uri("https://example.table.core.windows.net"),
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void Validate_throws_when_ServiceClient_and_TokenCredential_are_both_supplied()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ServiceClient = new TableServiceClient(new Uri("https://example.table.core.windows.net"), new FakeTokenCredential()),
+            TokenCredential = new FakeTokenCredential(),
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void Validate_throws_when_ServiceClient_and_SharedKeyCredential_are_both_supplied()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ServiceClient = new TableServiceClient(new Uri("https://example.table.core.windows.net"), new FakeTokenCredential()),
+            SharedKeyCredential = new TableSharedKeyCredential("acct", "ZmFrZQ=="),
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void BuildServiceClient_returns_the_supplied_instance_verbatim_when_ServiceClient_is_set()
+    {
+        // Host-supplied client must be returned by reference - the
+        // provider does not wrap or rebuild it. Hosts that share one
+        // TableServiceClient across multiple Orleans components rely
+        // on the provider routing through that exact instance.
+        var configured = new TableServiceClient(new Uri("https://example.table.core.windows.net"), new FakeTokenCredential());
+        var options = new AzureTableWalStorageOptions
+        {
+            ServiceClient = configured,
+        };
+
+        var built = options.BuildServiceClient();
+
+        Assert.That(built, Is.SameAs(configured));
+    }
+
+    [Test]
+    public void BuildServiceClient_ignores_ConfigureClientOptions_when_ServiceClient_is_set()
+    {
+        // When the host supplies a pre-built client, it owns the
+        // TableClientOptions; the provider must not invoke any
+        // ConfigureClientOptions delegate because the underlying client
+        // is already constructed and the delegate has nowhere to apply.
+        var configured = new TableServiceClient(new Uri("https://example.table.core.windows.net"), new FakeTokenCredential());
+        var delegateInvoked = false;
+        var options = new AzureTableWalStorageOptions
+        {
+            ServiceClient = configured,
+            ConfigureClientOptions = _ => delegateInvoked = true,
+        };
+
+        _ = options.BuildServiceClient();
+
+        Assert.That(delegateInvoked, Is.False);
+    }
+
+    [Test]
+    public void BuildServiceClient_invokes_ConfigureClientOptions_for_ConnectionString_mode()
+    {
+        // Sanity-pin the legacy path: callers still relying on
+        // ConnectionString mode continue to receive ConfigureClientOptions
+        // callbacks unchanged.
+        var delegateInvoked = false;
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            ConfigureClientOptions = _ => delegateInvoked = true,
+        };
+
+        _ = options.BuildServiceClient();
+
+        Assert.That(delegateInvoked, Is.True);
+    }
+
+    [Test]
+    public void BuildServiceClient_invokes_ConfigureClientOptions_for_TokenCredential_mode()
+    {
+        // Symmetry pin: the token-credential construction branch must
+        // also surface the host's ConfigureClientOptions delegate.
+        var delegateInvoked = false;
+        var options = new AzureTableWalStorageOptions
+        {
+            ServiceUri = new Uri("https://example.table.core.windows.net"),
+            TokenCredential = new FakeTokenCredential(),
+            ConfigureClientOptions = _ => delegateInvoked = true,
+        };
+
+        var built = options.BuildServiceClient();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(built, Is.Not.Null);
+            Assert.That(delegateInvoked, Is.True);
+        });
+    }
+
+    [Test]
+    public void BuildServiceClient_invokes_ConfigureClientOptions_for_SharedKeyCredential_mode()
+    {
+        // Symmetry pin: the shared-key construction branch must also
+        // surface the host's ConfigureClientOptions delegate.
+        var delegateInvoked = false;
+        var options = new AzureTableWalStorageOptions
+        {
+            ServiceUri = new Uri("https://example.table.core.windows.net"),
+            SharedKeyCredential = new TableSharedKeyCredential("acct", "ZmFrZQ=="),
+            ConfigureClientOptions = _ => delegateInvoked = true,
+        };
+
+        var built = options.BuildServiceClient();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(built, Is.Not.Null);
+            Assert.That(delegateInvoked, Is.True);
+        });
+    }
+
+    [Test]
+    public void ServiceClient_default_is_null()
+    {
+        var options = new AzureTableWalStorageOptions();
+
+        Assert.That(options.ServiceClient, Is.Null);
     }
 
     /// <summary>
