@@ -47,6 +47,47 @@ public readonly record struct ReplicationBatch
     /// the transport treats this as a black box: it does not parse, peek
     /// into, or otherwise interpret the bytes. May be empty (a heartbeat
     /// or keep-alive batch).
+    /// <para>
+    /// Transports that re-encode the bytes onto their own wire frame
+    /// (the canonical gRPC streaming push transport, for example) prefer
+    /// <see cref="Envelope"/> when it is non-<see langword="null"/> and
+    /// fall back to decoding <see cref="Payload"/> only when the call
+    /// site predates the typed-envelope slot. The shipper populates
+    /// both slots on every send so transports are free to pick.
+    /// </para>
     /// </summary>
     public ReadOnlyMemory<byte> Payload { get; init; }
+
+    /// <summary>
+    /// Pre-built typed envelope corresponding to <see cref="Payload"/>.
+    /// Optional and additive: when non-<see langword="null"/>, transports
+    /// that frame the envelope onto their own wire (e.g. the gRPC
+    /// streaming push transport, which marshals
+    /// <see cref="ReplicationBatchEnvelope"/> directly into the gRPC
+    /// stream's <see cref="System.Buffers.IBufferWriter{T}"/>) skip the
+    /// per-send decode-then-re-encode round-trip the opaque-bytes seam
+    /// would otherwise force. When <see langword="null"/>, transports
+    /// must decode <see cref="Payload"/> through
+    /// <see cref="IReplicationBatchEncoder.Decode(ReadOnlyMemory{byte})"/>
+    /// to recover the envelope.
+    /// <para>
+    /// Transports that ship the opaque bytes verbatim (HTTP body,
+    /// disk-cached batch, custom binary framing) ignore this slot and
+    /// continue to consume <see cref="Payload"/>; transports that
+    /// surface the typed object to their hot path
+    /// (<c>GrpcPushTransport.BuildEnvelope</c>, in-process loopback
+    /// transports under test) consult it first and avoid the
+    /// allocation entirely.
+    /// </para>
+    /// <para>
+    /// The slot is a <see cref="Nullable{T}"/> reference into the
+    /// shipper's activation-scoped <c>List&lt;WalRecord&gt;</c> drain
+    /// buffer, not a defensive copy. The Orleans single-threaded grain
+    /// turn model makes the reference safe for synchronous consumption
+    /// inside the <see cref="IReplicationTransport.SendAsync(ReplicationBatch, CancellationToken)"/>
+    /// call; transports that need to retain the entry list past the
+    /// returned <see cref="Task"/>'s completion must copy it.
+    /// </para>
+    /// </summary>
+    public ReplicationBatchEnvelope? Envelope { get; init; }
 }

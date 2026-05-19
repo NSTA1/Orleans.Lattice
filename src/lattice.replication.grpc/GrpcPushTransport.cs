@@ -26,18 +26,18 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// the supported mechanism for transient-error backoff.
 /// </para>
 /// <para>
-/// On each <c>SendAsync</c> the transport decodes
-/// <see cref="ReplicationBatch.Payload"/> back into a typed
-/// <see cref="ReplicationBatchEnvelope"/>, then hands the envelope to
-/// the gRPC marshaller. The marshaller re-encodes via the same
-/// <see cref="IReplicationBatchEncoder"/> directly into the gRPC
-/// stream's <see cref="System.Buffers.IBufferWriter{T}"/>, so the
-/// outbound bytes never allocate a managed buffer beyond the encoded
-/// length the encoder needs. The decode-then-encode round-trip on the
-/// sender side is the cost of the current opaque-bytes
-/// <see cref="IReplicationTransport"/> seam; a future iteration may
-/// widen the seam to accept a typed envelope and remove the round-trip
-/// entirely.
+/// On each <c>SendAsync</c> the transport prefers the pre-built
+/// <see cref="ReplicationBatch.Envelope"/> when the caller supplied
+/// one and hands it straight to the gRPC marshaller. The marshaller
+/// re-encodes via the same <see cref="IReplicationBatchEncoder"/>
+/// directly into the gRPC stream's
+/// <see cref="System.Buffers.IBufferWriter{T}"/>, so the outbound
+/// bytes never allocate a managed buffer beyond the encoded length the
+/// encoder needs. When the typed slot is absent (legacy call sites,
+/// bytes-only tests), the transport falls back to decoding
+/// <see cref="ReplicationBatch.Payload"/> through the canonical
+/// encoder; that fallback allocates one <c>WalRecord[]</c> per send
+/// and is the cost of the bytes-only seam shape.
 /// </para>
 /// <para>
 /// Each <c>SendAsync</c> records a
@@ -152,6 +152,21 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
 
     private ReplicationBatchEnvelope BuildEnvelope(ReplicationBatch batch)
     {
+        // Typed-envelope fast path: when the shipper supplied the
+        // pre-built envelope on the batch, ship it verbatim. Skips a
+        // per-send `_encoder.Decode(batch.Payload)` call that would
+        // otherwise allocate one `WalRecord[]` per send purely to
+        // satisfy the gRPC marshaller (which then re-encodes via the
+        // same canonical encoder directly into the gRPC stream's
+        // buffer writer). The shipper populates this slot on every
+        // batch it sends, so the legacy decode path below is
+        // exercised only by call sites that predate the typed slot
+        // (or by tests that exercise the bytes-only seam directly).
+        if (batch.Envelope is { } envelope)
+        {
+            return envelope;
+        }
+
         // An empty payload is the heartbeat / keep-alive shape. We
         // construct an empty-entries envelope rather than feed an
         // empty buffer through the decoder (which would throw on
@@ -167,17 +182,21 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
             };
         }
 
-        // The IReplicationTransport seam carries opaque bytes; the
-        // gRPC wire is type-shaped. Decode once on the sender so the
-        // typed envelope can flow through the gRPC marshaller, which
-        // re-encodes via the same canonical encoder directly into the
-        // gRPC stream's buffer writer (zero managed allocation
-        // beyond the encoded length). The decode-encode round-trip
-        // here is the cost of the current bytes-shaped seam; widening
-        // the seam to accept an envelope directly is a future
-        // optimisation tracked separately.
+        // Legacy bytes-shaped path: callers that did not supply the
+        // typed envelope decode through the canonical encoder so the
+        // gRPC marshaller can re-encode into the stream buffer. The
+        // shipper hot path no longer takes this branch.
         return _encoder.Decode(batch.Payload);
     }
+
+    /// <summary>
+    /// Test-only seam exposing the private
+    /// <c>BuildEnvelope</c> branch logic so the typed-envelope fast
+    /// path, the heartbeat / empty-payload shortcut, and the legacy
+    /// bytes-shaped decode fallback can be pinned without standing up
+    /// a real gRPC server. Not part of the public API.
+    /// </summary>
+    internal ReplicationBatchEnvelope BuildEnvelopeForTesting(ReplicationBatch batch) => BuildEnvelope(batch);
 
     private PeerChannel ResolvePeerChannel(string targetClusterId)
     {
