@@ -240,7 +240,7 @@ Two batch limits are enforced at append time:
 | Option | Default | Trigger |
 |---|---|---|
 | `WalMaxBatchEntries` | `100` | Adding the new entry would push the pending count above the cap; the current batch is flushed first, then the new entry starts the next batch. |
-| `WalMaxBatchBytes` | `4 MB` | Adding the new entry's estimated serialised size would exceed the byte budget; same cutover. The size estimate is `key.Length * 2 + value.Length + 128` bytes - UTF-16 worst case for the key plus a constant envelope overhead. |
+| `WalMaxBatchBytes` | `4 MB` | Adding the new entry's exact serialised size would exceed the byte budget; same cutover. The grain measures every captured `WalRecord` through the registered `IWalRecordSizer` (default: `OrleansBinaryWalRecordSizer`, which serialises through the canonical Orleans-binary codec via a counting `IBufferWriter<byte>` so no payload buffer is materialised). The budget is an exact ceiling, suitable for sizing against backends with hard transactional limits (e.g. the Azure Table Storage 4 MB batch cap). |
 | `WalMaxPendingBatches` | `1` | Maximum number of in-flight + just-started flushes the grain holds against the provider concurrently. The default reproduces the original single-in-flight protocol bit-for-bit. Raise to pipeline writer-side burst absorption against a higher-latency durable provider; the cap is the only synchronisation point new appends see, so cap values above the steady-state burst depth do not buy further throughput. |
 
 Cutovers below the in-flight cap start a fresh flush immediately;
@@ -302,14 +302,6 @@ batch.
 > the chain invariant ("every slot in `_inFlight` carries a task that
 > completes when its provider call settles") would be violated. Any
 > future refactor of the flush loop must preserve this yield.
-
-### What the protocol does *not* do yet
-
-- **Exact-bytes accounting.** `WalMaxBatchBytes` is enforced against an
-  estimate (key UTF-16 worst case + value length + 128 byte envelope),
-  not the post-serialisation byte count. The estimate is conservative
-  for typical payloads; pathological keys or oversized envelopes can
-  drift either way. Documented as approximate in the option's XML doc.
 
 ## Recovery and rebuild
 

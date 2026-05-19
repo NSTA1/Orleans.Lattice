@@ -47,11 +47,9 @@ internal sealed class WalShardGrain(
     IServiceProvider services,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     ILatticeMergeModeResolver modeResolver,
-    ILatticeOriginClusterIdResolver clusterIdResolver) : IWalShardGrain, IGrainBase
+    ILatticeOriginClusterIdResolver clusterIdResolver,
+    IWalRecordSizer sizer) : IWalShardGrain, IGrainBase
 {
-    /// <summary>Per-entry serialised-size estimate overhead in bytes (envelope + HLC + origin id + slot tags).</summary>
-    private const int EntrySizeOverhead = 128;
-
     private string _treeId = "";
     private int _shardIndex;
     private IWalStorageProvider _provider = null!;
@@ -240,7 +238,7 @@ internal sealed class WalShardGrain(
             throw sticky;
         }
 
-        var size = EstimateSize(entry);
+        var size = sizer.Measure(entry);
         var options = Options;
         var maxEntries = options.WalMaxBatchEntries;
         var maxBytes = options.WalMaxBatchBytes;
@@ -677,20 +675,6 @@ internal sealed class WalShardGrain(
     }
 
     /// <summary>
-    /// Approximates the serialised size of a captured
-    /// <see cref="WalRecord"/> for batch-byte-budget accounting. The
-    /// estimate covers the key bytes (UTF-16 worst case), the value
-    /// bytes, and a constant overhead for the record envelope, HLC,
-    /// origin cluster id, and Orleans slot tags. Documented as
-    /// approximate in <see cref="LatticeOptions.WalMaxBatchBytes"/>.
-    /// </summary>
-    private static long EstimateSize(WalRecord entry)
-    {
-        var keyBytes = entry.Key is { } k ? k.Length * 2 : 0;
-        var valueBytes = entry.Value?.Length ?? 0;
-        return keyBytes + valueBytes + EntrySizeOverhead;
-    }
-
     /// <summary>
     /// Rents a cleared <see cref="WalEntry"/> batch list from the
     /// per-grain pool, or allocates a fresh one if the pool is empty.
