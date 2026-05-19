@@ -71,6 +71,18 @@ internal sealed class ReplicationShipperGrain(
     private bool _pumpInFlight;
 
     /// <summary>
+    /// Receiver-stamped <see cref="ReplicationAck.SuggestedBatchSize"/>
+    /// from the most recent successful ack, or <see langword="null"/>
+    /// when the receiver has not stamped a preference (or stamped
+    /// <see langword="null"/> to re-accelerate). Clamps the per-tick
+    /// batch cap on the next pump tick to
+    /// <c>min(SuggestedBatchSize, options.ShipBatchSize)</c>.
+    /// Activation-scoped: lost on grain deactivation, at which point
+    /// the receiver re-stamps its preference on the next ack.
+    /// </summary>
+    private int? _receiverSuggestedBatchSize;
+
+    /// <summary>
     /// Random source for backoff jitter. Aliased to the process-wide
     /// thread-safe singleton (<see cref="Random.Shared"/>) - shared
     /// across every shipper activation on this silo. Sufficient for
@@ -287,7 +299,20 @@ internal sealed class ReplicationShipperGrain(
         // Orleans serialises grain turns and the _pumpInFlight guard
         // prevents re-entry, so clearing in place is safe.
         _drainBuffer.Clear();
-        var maxPerBatch = Math.Max(1, options.ShipBatchSize);
+        // Clamp the per-tick batch cap to the receiver's last
+        // stamped SuggestedBatchSize when present (receiver-side
+        // flow-control hint). The receiver may stamp values outside
+        // the valid range; we clamp to [1, options.ShipBatchSize] so
+        // a malformed hint can never push the cap above the configured
+        // ceiling nor below 1. A null hint (the default, or the
+        // canonical re-acceleration signal) leaves the cap at the
+        // configured ShipBatchSize.
+        var configuredMax = Math.Max(1, options.ShipBatchSize);
+        var maxPerBatch = configuredMax;
+        if (_receiverSuggestedBatchSize is { } suggested && suggested > 0)
+        {
+            maxPerBatch = Math.Min(configuredMax, Math.Max(1, suggested));
+        }
         try
         {
             await DrainBatchAsync(options, maxPerBatch, cancellationToken);
@@ -417,6 +442,26 @@ internal sealed class ReplicationShipperGrain(
         // Successful round-trip resets the backoff counter.
         state.State.ConsecutiveFailures = 0;
         _nextRetryAtUtc = DateTime.MinValue;
+
+        // Receiver-side flow control: stash the receiver's
+        // SuggestedBatchSize for the next pump tick's cap, and apply
+        // any requested PauseForMs by extending (never shortening)
+        // the per-peer retry deadline. PauseForMs composes with the
+        // shipper's existing exponential-backoff retry budget via
+        // max(currentBackoffDeadline, now + PauseForMs); because the
+        // success path just cleared _nextRetryAtUtc to MinValue, the
+        // composition collapses to "now + PauseForMs" on the steady-
+        // state success path, and to "max(...)" only when a late
+        // pause races a still-in-flight backoff.
+        _receiverSuggestedBatchSize = ack.SuggestedBatchSize;
+        if (ack.PauseForMs is { } pauseMs && pauseMs > 0)
+        {
+            var requested = DateTime.UtcNow.AddMilliseconds(pauseMs);
+            if (requested > _nextRetryAtUtc)
+            {
+                _nextRetryAtUtc = requested;
+            }
+        }
 
         // Per-peer telemetry. RecordSuccess clears the consecutive-error
         // counter and stamps the last-contact timestamp; RecordBacklog

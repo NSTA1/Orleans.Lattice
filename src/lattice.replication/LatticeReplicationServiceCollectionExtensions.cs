@@ -149,6 +149,12 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeOriginClusterIdResolver, ConfiguredLatticeOriginClusterIdResolver>();
 
         builder.Services.TryAddSingleton<IReplicationBatchEncoder, OrleansBinaryReplicationBatchEncoder>();
+        // Default receiver-side flow-control policy: no-op (no hint
+        // stamped on the ack). Hosts that want receiver-driven
+        // throttling replace this registration with their own
+        // IReceiverFlowControlPolicy implementation before or after
+        // AddLatticeReplication.
+        builder.Services.TryAddSingleton<IReceiverFlowControlPolicy>(_ => NoOpReceiverFlowControlPolicy.Instance);
         // The cursor registry, leaf-cursor reporter, and WAL GC are core
         // seams (formerly in this package, promoted in v3.5.0). Calling
         // AddWalCursorRegistry registers the in-memory default plus the

@@ -28,6 +28,9 @@ public readonly record struct ReplicationAck
 {
     public bool Accepted { get; init; }
     public HybridLogicalClock HighestAppliedHlc { get; init; }
+    public HybridLogicalClock? BlockedAtHlc { get; init; }
+    public int? SuggestedBatchSize { get; init; }
+    public int? PauseForMs { get; init; }
 }
 ```
 
@@ -42,6 +45,9 @@ public readonly record struct ReplicationAck
 |---|---|
 | `Accepted` | `true` when the receiver successfully received and processed the batch. Note that `Accepted` is `true` even when every entry in the batch was de-duplicated by the per-origin high-water-mark - dedup is a successful idempotent apply, not a rejection. `false` when the receiver rejected the batch outright (transport-level error, schema mismatch, unknown tree). |
 | `HighestAppliedHlc` | The per-origin high-water-mark for `(TreeName, OriginClusterId)` after the receiver finished processing the batch. The sender advances its per-peer cursor strictly to this value when `Accepted` is `true`; when `Accepted` is `false` this value is undefined and the sender must not consume it. |
+| `BlockedAtHlc` | Optional receiver-side blocked-floor pin (lowest HLC across every partially-staged atomic batch). The sender publishes this value to its local `IWalCursorRegistry` so the producer-side WAL GC AND-s `entry.Timestamp < blockedFloor` into its trim predicate; `null` means the receiver has no in-flight admissions for this tree (or is pre-Phase-9 and never stamped the slot). Strictly additive on the wire. |
+| `SuggestedBatchSize` | Optional receiver-side flow-control hint: the largest per-tick batch the receiver would like the sender to ship next, in entries. The sender clamps to `[1, options.ShipBatchSize]`; `null` (or any value `<= 0`) means "no preference" and the sender resumes at its configured `ShipBatchSize` (the canonical re-acceleration signal). Strictly additive on the wire. |
+| `PauseForMs` | Optional receiver-side flow-control hint: number of milliseconds the sender should pause before its next pump tick. Composes with the shipper's exponential-backoff retry budget via `max(currentBackoffDeadline, now + PauseForMs)` - a receiver-requested pause never shortens an in-progress backoff. `null` or `<= 0` means "no pause requested". Strictly additive on the wire. |
 
 `ReplicationBatch` is intentionally **not** Orleans-serialisable: it is the in-process call argument, not the on-the-wire envelope. Wire-format hardening - versioned envelopes, content framing, compression - happens inside `Payload` and is the binary-framing seam's concern. `ReplicationAck` **is** Orleans-serialisable (alias `olr.ak`) because the receiver returns it to the sender across whatever transport is in use, including in-cluster Orleans RPC bridges.
 
@@ -107,7 +113,7 @@ The canonical sender + receiver pair ships in the `Orleans.Lattice.Replication.G
 ## Caveats
 
 - **Transports do not interpret the payload.** A transport that needs to make a routing decision based on payload contents (e.g. shed-load on oversize batches) must do so via batch metadata that the framing seam exposes on the call site, not by parsing `Payload` itself. Cross-cutting concerns belong on the call envelope; the wire bytes stay opaque.
-- **The ack envelope is not extensible at this seam.** A future item that needs to surface receiver-side flow-control hints (e.g. "throttle to N batches/sec") will do so by extending `ReplicationAck` with new `[Id(n)]` slots backed by stable defaults so legacy receivers decode safely. The single-method `SendAsync` contract does not change.
+- **The ack envelope grows additively, never by breaking change.** New `[Id(n)]` slots backed by nullable defaults (the `BlockedAtHlc`, `SuggestedBatchSize`, and `PauseForMs` slots are the existing precedent) are safe to ship on either side of a peering independently because pre-existing receivers and senders decode the slot as `null`. The single-method `SendAsync` contract does not change. Receiver-side flow-control hints in particular are wired through a pluggable [`IReceiverFlowControlPolicy`](receiver-flow-control.md) seam.
 
 ## Metadata pass-through contract
 

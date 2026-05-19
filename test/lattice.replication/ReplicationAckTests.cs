@@ -62,4 +62,51 @@ public class ReplicationAckTests
             Assert.That(ack.Accepted, Is.True);
         });
     }
+
+    [Test]
+    public void Default_flow_control_hint_slots_are_null()
+    {
+        var ack = default(ReplicationAck);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ack.SuggestedBatchSize, Is.Null);
+            Assert.That(ack.PauseForMs, Is.Null);
+        });
+    }
+
+    [Test]
+    public void Init_assigns_flow_control_hint_slots()
+    {
+        var ack = new ReplicationAck
+        {
+            Accepted = true,
+            HighestAppliedHlc = HybridLogicalClock.Zero,
+            SuggestedBatchSize = 64,
+            PauseForMs = 250,
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ack.SuggestedBatchSize, Is.EqualTo(64));
+            Assert.That(ack.PauseForMs, Is.EqualTo(250));
+        });
+    }
+
+    [Test]
+    public void Equality_uses_flow_control_hint_slots()
+    {
+        var hlc = new HybridLogicalClock { WallClockTicks = 10, Counter = 1 };
+        var a = new ReplicationAck { Accepted = true, HighestAppliedHlc = hlc, SuggestedBatchSize = 32, PauseForMs = 100 };
+        var b = new ReplicationAck { Accepted = true, HighestAppliedHlc = hlc, SuggestedBatchSize = 32, PauseForMs = 100 };
+        var differentBatch = a with { SuggestedBatchSize = 64 };
+        var differentPause = a with { PauseForMs = 200 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(a, Is.EqualTo(b));
+            Assert.That(a, Is.Not.EqualTo(differentBatch));
+            Assert.That(a, Is.Not.EqualTo(differentPause));
+        });
+    }
 }

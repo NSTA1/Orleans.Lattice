@@ -76,4 +76,52 @@ public readonly record struct ReplicationAck
     /// </para>
     /// </summary>
     [Id(2)] public HybridLogicalClock? BlockedAtHlc { get; init; }
+
+    /// <summary>
+    /// Receiver-side flow-control hint: the largest batch the receiver
+    /// would like the sender to ship on the next pump tick, expressed
+    /// as a strictly-positive entry count. The sender clamps the value
+    /// to the closed interval
+    /// <c>[1, LatticeReplicationOptions.ShipBatchSize]</c> and uses it
+    /// as the per-tick batch cap until the receiver lifts or revises
+    /// the hint. A value of <see langword="null"/> means "no preference";
+    /// the sender resumes shipping at its configured
+    /// <see cref="LatticeReplicationOptions.ShipBatchSize"/> on the
+    /// next tick, which is the canonical re-acceleration signal once
+    /// the receiver has recovered from a transient load spike.
+    /// <para>
+    /// Strictly additive on the wire: receivers built before the
+    /// receiver-side flow-control wave omit the slot entirely
+    /// (decodes as <see langword="null"/>); senders built before that
+    /// wave ignore the field. The slot is therefore safe to roll out
+    /// independently on either side of a peering.
+    /// </para>
+    /// <para>
+    /// The receiver-side source of the hint is the pluggable
+    /// <c>IReceiverFlowControlPolicy</c> seam. The default
+    /// implementation is a no-op that always returns <c>null</c>
+    /// hints, preserving today's blind-push behaviour for hosts that
+    /// have not opted in.
+    /// </para>
+    /// </summary>
+    [Id(3)] public int? SuggestedBatchSize { get; init; }
+
+    /// <summary>
+    /// Receiver-side flow-control hint: number of milliseconds the
+    /// sender should pause before its next pump tick to this peer.
+    /// Composes with the shipper's existing exponential-backoff retry
+    /// budget by advancing the per-peer retry deadline to
+    /// <c>max(currentBackoffDeadline, now + PauseForMs)</c>, so a
+    /// receiver-requested pause never shortens an in-progress backoff.
+    /// A value of <see langword="null"/> or <c>&lt;= 0</c> means
+    /// "no pause requested"; the sender's next tick fires on its
+    /// normal cadence.
+    /// <para>
+    /// Strictly additive on the wire (same compat profile as
+    /// <see cref="SuggestedBatchSize"/>). The slot is the canonical
+    /// way for a struggling receiver to throttle a sender without
+    /// timing out the RPC.
+    /// </para>
+    /// </summary>
+    [Id(4)] public int? PauseForMs { get; init; }
 }

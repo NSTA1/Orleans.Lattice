@@ -54,6 +54,7 @@ Behaviour is validated end-to-end by active-active convergence chaos tests acros
 | **Origin-stamped HLC** | Every replicated record carries `(originClusterId, hlc)`. Cycles break naturally, transitive topologies preserve causality, and applies are idempotent by identity. | [Replication Apply](replication-apply.md) |
 | **Per-tree opt-in + per-key filter** | Declare which trees replicate and (optionally) which keys within a tree. Granular enough to ship operator-visible labels while keeping per-shift counters local. | [Replication Modes](replication-modes.md) |
 | **Pluggable transport** | `IReplicationTransport` is the public seam. gRPC is the canonical implementation; in-process and custom transports plug into the same contract. | [Transport](transport.md) |
+| **Receiver-side flow control** | The receiver stamps optional `SuggestedBatchSize` / `PauseForMs` hints onto every ack; the sender clamps its per-tick batch cap and pauses on request. A struggling receiver throttles in-band without timing out RPCs; a recovered receiver re-accelerates by lifting the hints. | [Receiver Flow Control](receiver-flow-control.md) |
 | **Snapshot bootstrap** | New or re-seeded peers receive a point-in-time snapshot, then switch to incremental shipping at the snapshot's HLC. | [Snapshot Bootstrap](snapshot-bootstrap.md) |
 | **Typed CRDT deltas** | The wire carries typed deltas for LWW-Register, OR-Set, PN-Counter, and VersionVector. Receivers merge by mode, not by opaque-byte LWW. | [Deltas](deltas.md) |
 
@@ -118,6 +119,7 @@ For internals (the "how"):
 - [Replication Drivers](replication-drivers.md) - production drivers that turn the dormant seams into a running pipeline.
 - [Transport](transport.md) - `IReplicationTransport` seam, batch shape, acks.
 - [gRPC Push Transport](grpc-push-transport.md) - canonical transport: streaming RPC, channel reuse, custom marshallers.
+- [Receiver Flow Control](receiver-flow-control.md) - `IReceiverFlowControlPolicy` seam, ack-stamped hints, sender clamping / pause composition.
 - [Wire Format](wire-format.md) - `ReplicationBatchEnvelope`, `IReplicationBatchEncoder`, wire version negotiation.
 - [Deltas](deltas.md) - typed CRDT delta records on the wire.
 - [WAL](wal.md) - per-shard replication write-ahead log, turn-safe batching, causal+ entry schema.
