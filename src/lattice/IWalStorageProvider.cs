@@ -62,6 +62,79 @@ public interface IWalStorageProvider
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Zero-copy overload of <see cref="AppendBatchAsync"/> that
+    /// takes pre-encoded payload bytes alongside their parallel
+    /// dense offsets. Producers (the WAL grain) call this overload
+    /// when they have already paid the encode cost via
+    /// <see cref="IWalMutationEncoder"/> at append time, so the bytes
+    /// that informed the per-batch byte budget are the same bytes
+    /// handed to the provider - no second encode.
+    /// <para>
+    /// Backends that natively store binary payloads (Azure Table
+    /// Storage, file-backed providers) hand the segments straight
+    /// through to their persistence row. Backends that prefer to own
+    /// the codec (for example, ones that index secondary fields off
+    /// <see cref="LatticeMutation.Timestamp"/> or
+    /// <see cref="LatticeMutation.OriginClusterId"/>) decode each
+    /// segment with the configured <see cref="IWalMutationEncoder"/>
+    /// before storing.
+    /// </para>
+    /// <para>
+    /// All-or-nothing atomicity, offset density, and overlap
+    /// semantics are identical to <see cref="AppendBatchAsync"/>; the
+    /// only difference is the input shape. The default implementation
+    /// decodes the segments to <see cref="WalEntry"/> values and
+    /// delegates to <see cref="AppendBatchAsync"/>, so a provider
+    /// authored against the <see cref="WalEntry"/>-shaped contract
+    /// continues to work without recompiling - implementations that
+    /// can skip the round-trip override this method to gain the
+    /// zero-copy fast path.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="encodedEntries">Pre-encoded payload bytes for each entry, in the same order as <paramref name="offsets"/>. Segment lengths are arbitrary; segments are owned by the caller and must not be retained past the returned task's completion.</param>
+    /// <param name="offsets">Dense ascending offsets parallel to <paramref name="encodedEntries"/>. Length must match.</param>
+    /// <param name="encoder">Encoder used to decode segments for the default fallback implementation. Providers that override this method may ignore it.</param>
+    /// <param name="cancellationToken">Cancellation token observed before the durable write commences.</param>
+    Task AppendEncodedBatchAsync(
+        string treeId,
+        int shardIndex,
+        ReadOnlyMemory<ArraySegment<byte>> encodedEntries,
+        ReadOnlyMemory<long> offsets,
+        IWalMutationEncoder encoder,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(encoder);
+        if (encodedEntries.Length != offsets.Length)
+        {
+            throw new ArgumentException(
+                $"Encoded segment count ({encodedEntries.Length}) does not match offset count ({offsets.Length}); the two sequences must be parallel.",
+                nameof(encodedEntries));
+        }
+
+        // Default fallback: decode each segment to a WalEntry and
+        // delegate to the legacy overload so third-party providers
+        // that have not implemented this method keep working.
+        // Providers that can store the segments directly (e.g.
+        // AzureTableWalStorageProvider) override this method and
+        // skip the round-trip.
+        var segments = encodedEntries.Span;
+        var offsetSpan = offsets.Span;
+        var decoded = new WalEntry[segments.Length];
+        for (var i = 0; i < segments.Length; i++)
+        {
+            decoded[i] = new WalEntry
+            {
+                Offset = offsetSpan[i],
+                Mutation = encoder.Decode(segments[i].AsSpan()),
+            };
+        }
+        return AppendBatchAsync(treeId, shardIndex, decoded, cancellationToken);
+    }
+
+    /// <summary>
     /// Yields entries with <see cref="WalEntry.Offset"/> strictly greater
     /// than <paramref name="fromOffsetExclusive"/>, in ascending offset
     /// order, up to a maximum of <paramref name="maxEntries"/>. The

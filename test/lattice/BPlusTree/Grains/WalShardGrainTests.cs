@@ -25,7 +25,7 @@ public partial class WalShardGrainTests
     private static async Task<WalShardGrain> CreateGrainAsync(
         IWalStorageProvider? provider = null,
         LatticeOptions? options = null,
-        IWalRecordSizer? sizer = null)
+        IWalMutationEncoder? encoder = null)
     {
         provider ??= new InMemoryWalStorageProvider();
         var grainContext = Substitute.For<IGrainContext>();
@@ -43,7 +43,7 @@ public partial class WalShardGrainTests
             monitor,
             CreatePermissiveResolver(),
             CreatePermissiveClusterIdResolver(),
-            sizer ?? CreateDefaultSizer());
+            encoder ?? CreateDefaultEncoder());
         await grain.InitializeForTestingAsync(TreeId, ShardIndex, provider, CancellationToken.None);
         return grain;
     }
@@ -83,17 +83,17 @@ public partial class WalShardGrainTests
     }
 
     /// <summary>
-    /// Constructs the canonical Orleans-binary sizer backed by a fresh
-    /// <c>Serializer&lt;WalRecord&gt;</c> from a minimal service
-    /// provider. Tests that want to assert sizer-injection observability
-    /// supply their own stub instead.
+    /// Constructs the canonical Orleans-binary encoder backed by a
+    /// fresh <c>Serializer&lt;LatticeMutation&gt;</c> from a minimal
+    /// service provider. Tests that want to assert encoder-injection
+    /// observability supply their own stub instead.
     /// </summary>
-    private static IWalRecordSizer CreateDefaultSizer()
+    private static IWalMutationEncoder CreateDefaultEncoder()
     {
         var services = new ServiceCollection()
             .AddSerializer()
             .BuildServiceProvider();
-        return new OrleansBinaryWalRecordSizer(services.GetRequiredService<Serializer<WalRecord>>());
+        return new OrleansBinaryWalMutationEncoder(services.GetRequiredService<Serializer<LatticeMutation>>());
     }
 
     [Test]
@@ -637,7 +637,7 @@ public partial class WalShardGrainTests
         var grainContext = Substitute.For<IGrainContext>();
         var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultSizer());
+        var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder());
 
         Assert.That(
             async () => await grain.InitializeForTestingAsync(null!, 0, new InMemoryWalStorageProvider(), CancellationToken.None),
@@ -650,7 +650,7 @@ public partial class WalShardGrainTests
         var grainContext = Substitute.For<IGrainContext>();
         var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultSizer());
+        var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder());
 
         Assert.That(
             async () => await grain.InitializeForTestingAsync(TreeId, 0, null!, CancellationToken.None),
@@ -689,7 +689,7 @@ public partial class WalShardGrainTests
             monitor,
             CreatePermissiveResolver(),
             CreatePermissiveClusterIdResolver(),
-            CreateDefaultSizer());
+            CreateDefaultEncoder());
         await grain.InitializeForTestingAsync(TreeId, ShardIndex, provider, CancellationToken.None);
 
         monitor.ClearReceivedCalls();

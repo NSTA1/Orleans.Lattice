@@ -172,6 +172,109 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider
         await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public async Task AppendEncodedBatchAsync(
+        string treeId,
+        int shardIndex,
+        ReadOnlyMemory<ArraySegment<byte>> encodedEntries,
+        ReadOnlyMemory<long> offsets,
+        IWalMutationEncoder encoder,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(encoder);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (encodedEntries.Length != offsets.Length)
+        {
+            throw new ArgumentException(
+                $"Encoded segment count ({encodedEntries.Length}) does not match offset count ({offsets.Length}); the two sequences must be parallel.",
+                nameof(encodedEntries));
+        }
+
+        if (encodedEntries.Length == 0)
+        {
+            return;
+        }
+
+        if (encodedEntries.Length > MaxEntriesPerBatch)
+        {
+            throw new ArgumentException(
+                $"Azure Table Storage caps a single transactional batch at {MaxTransactionActions} actions and the provider reserves one for the head-pointer upsert; "
+                + $"the supplied batch of {encodedEntries.Length} entries exceeds the per-call limit of {MaxEntriesPerBatch}. Chunk the batch upstream before calling.",
+                nameof(encodedEntries));
+        }
+
+        // Validate dense offsets and materialise the transaction actions
+        // in a synchronous helper so the ref-struct `Span<T>` locals do
+        // not need to be preserved across the `await` boundary below.
+        ValidateDenseOffsets(treeId, shardIndex, offsets.Span);
+
+        var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
+        var partitionKey = BuildPartitionKey(treeId, shardIndex);
+        var actions = BuildEncodedBatchActions(partitionKey, encodedEntries.Span, offsets.Span);
+
+        await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void ValidateDenseOffsets(string treeId, int shardIndex, ReadOnlySpan<long> offsetSpan)
+    {
+        var firstOffset = offsetSpan[0];
+        if (firstOffset < 0L)
+        {
+            throw new ArgumentException(
+                $"Append batch for '{treeId}/{shardIndex}' starts at a negative offset ({firstOffset}); WAL offsets are non-negative dense integers.",
+                "offsets");
+        }
+
+        for (var i = 1; i < offsetSpan.Length; i++)
+        {
+            var expected = firstOffset + i;
+            if (offsetSpan[i] != expected)
+            {
+                throw new ArgumentException(
+                    $"Append batch for '{treeId}/{shardIndex}' is not dense: entry {i} has offset {offsetSpan[i]} but expected {expected}. "
+                    + "Supplied offsets must equal offsets[0] + i for every i.",
+                    "offsets");
+            }
+        }
+    }
+
+    private List<TableTransactionAction> BuildEncodedBatchActions(
+        string partitionKey,
+        ReadOnlySpan<ArraySegment<byte>> segments,
+        ReadOnlySpan<long> offsetSpan)
+    {
+        var firstOffset = offsetSpan[0];
+        var actions = new List<TableTransactionAction>(segments.Length + 1)
+        {
+            new(
+                TableTransactionActionType.UpsertReplace,
+                BuildHeadEntity(partitionKey, highestOffset: firstOffset + segments.Length - 1)),
+        };
+
+        // Hand each segment straight to the row's Payload column - no
+        // re-encode. ToArray() materialises the segment's bytes into a
+        // freshly-owned byte[] so the entity's Payload field carries a
+        // stable reference; the segment's underlying array is pooled
+        // upstream by the WAL grain and will be returned to the pool
+        // once the producer's batch completes.
+        for (var i = 0; i < segments.Length; i++)
+        {
+            actions.Add(new TableTransactionAction(
+                TableTransactionActionType.Add,
+                new AzureTableWalEntity
+                {
+                    PartitionKey = partitionKey,
+                    RowKey = BuildEntryRowKey(offsetSpan[i]),
+                    Offset = offsetSpan[i],
+                    Payload = segments[i].AsSpan().ToArray(),
+                }));
+        }
+
+        return actions;
+    }
+
     /// <summary>
     /// Encodes <paramref name="entries"/> into <see cref="TableTransactionAction"/>
     /// add-actions appended onto <paramref name="actions"/>. Extracted from the
