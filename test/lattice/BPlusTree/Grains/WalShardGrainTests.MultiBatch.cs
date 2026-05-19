@@ -119,15 +119,25 @@ public partial class WalShardGrainTests
     public async Task AppendAsync_multi_batch_failure_faults_failed_and_later_windows_and_pending()
     {
         // With cap=3 and one-entry batches, fan three appends out to
-        // the provider; the third call throws. The contract: every
-        // TCS in the failed window AND every later in-flight TCS
-        // (none here - the failure is in the last slot) AND every
-        // pending TCS (the fourth append, which races in while the
-        // chain is in flight) is faulted with the underlying
-        // exception. Then a subsequent append must succeed against
-        // the provider's authoritative tail.
+        // the provider; the slot owning offset 2 (the third entry)
+        // throws. The contract: every TCS in the failed window AND
+        // every later in-flight TCS (none here - the failure is in
+        // the last slot) AND every pending TCS (the fourth append,
+        // which races in while the chain is in flight) is faulted
+        // with the underlying exception. Then a subsequent append
+        // must succeed against the provider's authoritative tail.
+        //
+        // The failure trigger is offset-based, not call-ordinal-
+        // based: with three flushes fanned out concurrently the
+        // provider-call arrival order at AppendBatchAsync is
+        // threadpool-scheduling-dependent (any sync work between
+        // FlushAsync's Task.Yield and the provider call perturbs
+        // it), so a call-ordinal trigger was flaky. The slot owning
+        // a given offset is stable by construction - it is decided
+        // synchronously inside the grain turn that admitted the
+        // append.
         var inner = new InMemoryWalStorageProvider();
-        var failingThird = new FailNthAppendProvider(inner, failOn: 3, message: "boom-3");
+        var failingThird = new FailOnOffsetAppendProvider(inner, failOnOffset: 2, message: "boom-3");
         var grain = await CreateGrainAsync(failingThird, new LatticeOptions
         {
             WalMaxBatchEntries = 1,
@@ -257,22 +267,57 @@ public partial class WalShardGrainTests
     }
 
     /// <summary>
-    /// Provider that forwards to an inner provider for every call
-    /// except the <c>failOn</c>-th, which throws an
-    /// <see cref="InvalidOperationException"/>. Counts are 1-based.
+    /// Provider that forwards to an inner provider for every batch
+    /// whose offset window does not contain <c>failOnOffset</c>, and
+    /// throws an <see cref="InvalidOperationException"/> for the
+    /// <em>first</em> batch that does. Subsequent batches covering
+    /// the same offset (e.g. the grain's post-failure resync followed
+    /// by a retry append) pass through to <paramref name="inner"/>.
+    /// <para>
+    /// Before throwing, the provider waits until every offset
+    /// strictly below <c>failOnOffset</c> is committed in the inner
+    /// provider, so the predecessor slots' <c>FlushAsync</c>
+    /// coroutines have already <c>TrySetResult</c>-ed their TCSs by
+    /// the time the grain's failure handler latches
+    /// <c>_stickyFailure</c>. The wait-for-predecessors ordering
+    /// matches the test's stated intent ("t1+t2 commit cleanly; t3
+    /// throws") and is stable under concurrent multi-batch flushes,
+    /// where the threadpool-driven arrival order at
+    /// <c>AppendBatchAsync</c> is otherwise non-deterministic.
+    /// </para>
     /// </summary>
-    private sealed class FailNthAppendProvider(IWalStorageProvider inner, int failOn, string message) : IWalStorageProvider
+    private sealed class FailOnOffsetAppendProvider(IWalStorageProvider inner, long failOnOffset, string message) : IWalStorageProvider
     {
-        private int _calls;
+        private int _fired;
 
-        public Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken)
+        public async Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken)
         {
-            var n = Interlocked.Increment(ref _calls);
-            if (n == failOn)
+            var fails = false;
+            for (var i = 0; i < entries.Count; i++)
             {
+                if (entries[i].Offset == failOnOffset)
+                {
+                    fails = true;
+                    break;
+                }
+            }
+            if (fails && Interlocked.CompareExchange(ref _fired, 1, 0) == 0)
+            {
+                // Wait until every offset strictly below failOnOffset
+                // is committed in the inner provider before throwing.
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+                while (DateTime.UtcNow < deadline)
+                {
+                    var head = await inner.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
+                    if (head >= failOnOffset - 1)
+                    {
+                        break;
+                    }
+                    await Task.Delay(5, cancellationToken).ConfigureAwait(false);
+                }
                 throw new InvalidOperationException(message);
             }
-            return inner.AppendBatchAsync(treeId, shardIndex, entries, cancellationToken);
+            await inner.AppendBatchAsync(treeId, shardIndex, entries, cancellationToken).ConfigureAwait(false);
         }
 
         public IAsyncEnumerable<WalEntry> ReadAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken cancellationToken)

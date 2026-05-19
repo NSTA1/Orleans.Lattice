@@ -33,7 +33,6 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
-
         if (entries.Count == 0)
         {
             return Task.CompletedTask;

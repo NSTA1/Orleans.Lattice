@@ -654,12 +654,15 @@ public class LatticeOptions
     /// <para>
     /// Measured against the <i>exact</i> serialised size of each
     /// captured <see cref="WalRecord"/> under the WAL grain's wire
-    /// format - the per-entry sizer
-    /// (<c>IWalRecordSizer</c>) walks every field of the record
+    /// format - the per-entry encoder
+    /// (<c>IWalMutationEncoder</c>) walks every field of the record
     /// through the same Orleans-binary codec that the storage
-    /// provider will see. Earlier releases approximated the per-entry
-    /// cost with <c>key.Length * 2 + value.Length + 128</c>, which
-    /// under-counted records carrying a populated
+    /// provider will see, and the bytes it produces are handed
+    /// straight to <see cref="IWalStorageProvider.AppendEncodedBatchAsync"/>
+    /// on flush so the grain pays exactly one encode per append.
+    /// Earlier releases approximated the per-entry cost with
+    /// <c>key.Length * 2 + value.Length + 128</c>, which under-counted
+    /// records carrying a populated
     /// <see cref="WalRecord.VectorClock"/> and over-counted small-key
     /// records with no vector clock; the budget is now an exact
     /// ceiling, suitable for sizing against the Azure Table Storage

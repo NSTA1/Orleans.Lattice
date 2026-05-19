@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.Runtime;
@@ -48,7 +50,7 @@ internal sealed class WalShardGrain(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     ILatticeMergeModeResolver modeResolver,
     ILatticeOriginClusterIdResolver clusterIdResolver,
-    IWalRecordSizer sizer) : IWalShardGrain, IGrainBase
+    IWalMutationEncoder encoder) : IWalShardGrain, IGrainBase
 {
     private string _treeId = "";
     private int _shardIndex;
@@ -56,7 +58,15 @@ internal sealed class WalShardGrain(
     private long _nextOffset;
     private bool _initialized;
 
-    private List<WalEntry> _pendingBatch = new();
+    // Pending state shape after the zero-copy provider hand-off (R-076):
+    // each pending entry contributes one pre-encoded payload segment
+    // (carrying the bytes the canonical IWalMutationEncoder produced at
+    // append time) and one parallel offset slot. The encoded bytes are
+    // the same bytes the storage provider will see - the grain pays
+    // exactly one encode per append rather than one for the byte budget
+    // and a second one inside the provider.
+    private List<ArraySegment<byte>> _pendingSegments = new();
+    private List<long> _pendingOffsets = new();
     private List<TaskCompletionSource<long>> _pendingAcks = new();
     private long _pendingBatchSizeBytes;
 
@@ -81,15 +91,22 @@ internal sealed class WalShardGrain(
     private readonly Lock _stateGate = new();
 
     /// <summary>
-    /// Per-grain free-list of recycled <see cref="WalEntry"/> batch
-    /// buffers. Eliminates the per-flush
-    /// <c>new List&lt;WalEntry&gt;()</c> allocation in the steady-state
-    /// hot path. Accessed only under <see cref="_stateGate"/>; the
-    /// pre-existing gate makes a separate pool lock unnecessary. Depth
-    /// is capped at <see cref="MaxPoolDepth"/> so a transient burst of
-    /// concurrent flushes does not pin large buffers indefinitely.
+    /// Per-grain free-list of recycled segment-list batch buffers.
+    /// Eliminates the per-flush
+    /// <c>new List&lt;ArraySegment&lt;byte&gt;&gt;()</c> allocation in the
+    /// steady-state hot path. Accessed only under
+    /// <see cref="_stateGate"/>; the pre-existing gate makes a separate
+    /// pool lock unnecessary. Depth is capped at
+    /// <see cref="MaxPoolDepth"/> so a transient burst of concurrent
+    /// flushes does not pin large buffers indefinitely.
     /// </summary>
-    private readonly Stack<List<WalEntry>> _batchListPool = new();
+    private readonly Stack<List<ArraySegment<byte>>> _segmentListPool = new();
+
+    /// <summary>
+    /// Per-grain free-list of recycled offset-list batch buffers.
+    /// Same shape and invariants as <see cref="_segmentListPool"/>.
+    /// </summary>
+    private readonly Stack<List<long>> _offsetListPool = new();
 
     /// <summary>
     /// Per-grain free-list of recycled ack-TCS buffers. Same shape and
@@ -119,6 +136,22 @@ internal sealed class WalShardGrain(
     /// offsets the provider may still hold from the orphaned windows.
     /// </summary>
     private Exception? _stickyFailure;
+
+    /// <summary>
+    /// Compiled-out diagnostic trace. Enabled by defining the
+    /// <c>LATTICE_DIAG</c> preprocessor symbol on the build (e.g.
+    /// <c>dotnet build /p:LatticeDiag=true</c>); emits a single line
+    /// per flush lifecycle event with the slot's offset window and the
+    /// thread id, so flush ordering can be reconstructed from the test
+    /// output stream when the WAL turn-safe batching protocol is
+    /// changed. Zero overhead in release builds because the method
+    /// body is elided by <see cref="ConditionalAttribute"/>.
+    /// </summary>
+    [Conditional("LATTICE_DIAG")]
+    private static void Trace(string message)
+    {
+        Console.WriteLine($"[WAL t{Environment.CurrentManagedThreadId,3}] {message}");
+    }
 
     /// <inheritdoc />
     IGrainContext IGrainBase.GrainContext => context;
@@ -183,7 +216,7 @@ internal sealed class WalShardGrain(
         bool hasPending;
         lock (_stateGate)
         {
-            hasPending = _pendingBatch.Count > 0;
+            hasPending = _pendingSegments.Count > 0;
         }
         if (hasPending)
         {
@@ -238,7 +271,27 @@ internal sealed class WalShardGrain(
             throw sticky;
         }
 
-        var size = sizer.Measure(entry);
+        // Encode the mutation once at append time. The exact encoded
+        // byte count becomes the budget contribution (replacing the
+        // historical heuristic) and the same bytes are handed to the
+        // provider on flush via AppendEncodedBatchAsync - one encode per
+        // append, no second pass inside the provider. The mutation is
+        // converted to the WAL-boundary LatticeMutation shape once,
+        // here, so the encoded form is exactly what the storage layer
+        // sees on read-back.
+        var mutation = WalRecordConverter.FromWalRecord(entry);
+        var writer = new PooledByteBufferWriter();
+        try
+        {
+            encoder.Encode(in mutation, writer);
+        }
+        catch
+        {
+            writer.Dispose();
+            throw;
+        }
+        var segment = writer.DetachWrittenSegment();
+        var size = segment.Count;
         var options = Options;
         var maxEntries = options.WalMaxBatchEntries;
         var maxBytes = options.WalMaxBatchBytes;
@@ -256,8 +309,8 @@ internal sealed class WalShardGrain(
             Task? headTask = null;
             lock (_stateGate)
             {
-                needsCutover = _pendingBatch.Count > 0
-                    && (_pendingBatch.Count + 1 > maxEntries || _pendingBatchSizeBytes + size > maxBytes);
+                needsCutover = _pendingSegments.Count > 0
+                    && (_pendingSegments.Count + 1 > maxEntries || _pendingBatchSizeBytes + size > maxBytes);
                 if (!needsCutover)
                 {
                     break;
@@ -278,6 +331,7 @@ internal sealed class WalShardGrain(
                 try { await headTask!.ConfigureAwait(true); } catch { /* surfaced via TCSs */ }
                 if (Volatile.Read(ref _stickyFailure) is { } stickyMid)
                 {
+                    ReturnSegment(segment);
                     throw stickyMid;
                 }
             }
@@ -290,6 +344,7 @@ internal sealed class WalShardGrain(
         // Re-check sticky after any awaits in the cutover loop.
         if (Volatile.Read(ref _stickyFailure) is { } stickyPost)
         {
+            ReturnSegment(segment);
             throw stickyPost;
         }
 
@@ -298,7 +353,8 @@ internal sealed class WalShardGrain(
         lock (_stateGate)
         {
             var offset = _nextOffset++;
-            _pendingBatch.Add(new WalEntry { Offset = offset, Mutation = WalRecordConverter.FromWalRecord(entry) });
+            _pendingSegments.Add(segment);
+            _pendingOffsets.Add(offset);
             _pendingBatchSizeBytes += size;
 
             tcs = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -317,7 +373,7 @@ internal sealed class WalShardGrain(
             // Always honour the cap: never kick when at it.
             kickFlush = _inFlight.Count < maxPending
                 && (_inFlight.Count == 0
-                    || _pendingBatch.Count >= maxEntries
+                    || _pendingSegments.Count >= maxEntries
                     || _pendingBatchSizeBytes >= maxBytes);
         }
         if (kickFlush)
@@ -455,34 +511,39 @@ internal sealed class WalShardGrain(
     /// </summary>
     private void StartFlush()
     {
-        List<WalEntry> batch;
+        List<ArraySegment<byte>> segments;
+        List<long> offsets;
         LinkedListNode<InFlightFlush> node;
         InFlightFlush slot;
         lock (_stateGate)
         {
-            if (_pendingBatch.Count == 0)
+            if (_pendingSegments.Count == 0)
             {
                 return;
             }
 
-            batch = _pendingBatch;
+            segments = _pendingSegments;
+            offsets = _pendingOffsets;
             var acks = _pendingAcks;
-            _pendingBatch = RentBatchList();
+            _pendingSegments = RentSegmentList();
+            _pendingOffsets = RentOffsetList();
             _pendingAcks = RentAckList();
             _pendingBatchSizeBytes = 0;
 
             slot = new InFlightFlush
             {
-                StartOffset = batch[0].Offset,
-                EndOffsetExclusive = batch[^1].Offset + 1,
+                StartOffset = offsets[0],
+                EndOffsetExclusive = offsets[^1] + 1,
+                Segments = segments,
+                Offsets = offsets,
                 Acks = acks,
             };
             node = _inFlight.AddLast(slot);
         }
-        slot.Task = FlushAsync(batch, node);
+        slot.Task = FlushAsync(node);
     }
 
-    private async Task FlushAsync(List<WalEntry> batch, LinkedListNode<InFlightFlush> node)
+    private async Task FlushAsync(LinkedListNode<InFlightFlush> node)
     {
         // Yield once before any provider call so this task is observably
         // incomplete by the time StartFlush stores the Task on the slot
@@ -495,9 +556,34 @@ internal sealed class WalShardGrain(
         await Task.Yield();
 
         var slot = node.Value;
+        var segments = slot.Segments;
+        var offsets = slot.Offsets;
+        Trace($"flush.enter [{slot.StartOffset},{slot.EndOffsetExclusive})");
         try
         {
-            await _provider.AppendBatchAsync(_treeId, _shardIndex, batch, CancellationToken.None).ConfigureAwait(true);
+            // Hand the encoded segments straight to the provider's
+            // zero-copy overload. Providers that natively store binary
+            // payloads (Azure Table Storage) skip the second encode
+            // entirely; providers that need the WalEntry shape (or
+            // third-party ones that have not overridden the new
+            // overload) round-trip via the encoder's Decode path on the
+            // default interface implementation.
+            // Materialise parallel arrays for the provider call.
+            // ReadOnlyMemory<T> needs a backing array, so we copy the
+            // pooled list contents into two fresh arrays per flush.
+            // The two arrays themselves are tiny relative to the
+            // payload bytes the segments carry, and rented payload
+            // buffers are still pooled; this copy is one O(N) array
+            // walk per flush, not per entry.
+            var encodedArray = segments.ToArray();
+            var offsetsArray = offsets.ToArray();
+            await _provider.AppendEncodedBatchAsync(
+                _treeId,
+                _shardIndex,
+                encodedArray.AsMemory(),
+                offsetsArray.AsMemory(),
+                encoder,
+                CancellationToken.None).ConfigureAwait(true);
 
             // If a predecessor already failed and faulted us, our acks
             // were faulted in HandleFailureAsync; do not try to satisfy
@@ -507,14 +593,20 @@ internal sealed class WalShardGrain(
             // failure resync against GetHighestOffsetAsync.
             if (Volatile.Read(ref _stickyFailure) is null)
             {
+                Trace($"flush.ok    [{slot.StartOffset},{slot.EndOffsetExclusive}) -> set {slot.Acks.Count} TCS results");
                 for (var i = 0; i < slot.Acks.Count; i++)
                 {
-                    slot.Acks[i].TrySetResult(batch[i].Offset);
+                    slot.Acks[i].TrySetResult(offsets[i]);
                 }
+            }
+            else
+            {
+                Trace($"flush.ok    [{slot.StartOffset},{slot.EndOffsetExclusive}) but sticky set - SKIP TCS results");
             }
         }
         catch (Exception ex)
         {
+            Trace($"flush.fail  [{slot.StartOffset},{slot.EndOffsetExclusive}) ex={ex.GetType().Name}: {ex.Message}");
             await HandleFlushFailureAsync(node, ex).ConfigureAwait(true);
         }
         finally
@@ -541,7 +633,15 @@ internal sealed class WalShardGrain(
                 }
                 if (_stickyFailure is null)
                 {
-                    ReturnBatchList(batch);
+                    // Return rented byte arrays to the ArrayPool before
+                    // clearing the segment list so the pool sees them
+                    // once and only once per batch.
+                    for (var i = 0; i < segments.Count; i++)
+                    {
+                        ReturnSegment(segments[i]);
+                    }
+                    ReturnSegmentList(segments);
+                    ReturnOffsetList(offsets);
                     ReturnAckList(slot.Acks);
                 }
             }
@@ -556,7 +656,7 @@ internal sealed class WalShardGrain(
         bool kickFollowOn;
         lock (_stateGate)
         {
-            kickFollowOn = _stickyFailure is null && _pendingBatch.Count > 0 && _inFlight.Count == 0;
+            kickFollowOn = _stickyFailure is null && _pendingSegments.Count > 0 && _inFlight.Count == 0;
         }
         if (kickFollowOn)
         {
@@ -597,14 +697,25 @@ internal sealed class WalShardGrain(
             {
                 laterSlots.Add(n.Value);
             }
+            Trace($"failure.handle failed=[{failedNode.Value.StartOffset},{failedNode.Value.EndOffsetExclusive}) laterSlots={laterSlots.Count} pendingAcks={_pendingAcks.Count}");
 
             // Reset pending state immediately so any append that races in
             // on a future grain turn (and would otherwise be admitted by
             // the cap loop) sees an empty pending and short-circuits on
             // _stickyFailure instead. We hold the stale TCSs locally for
-            // post-resync faulting.
+            // post-resync faulting. The pre-existing pending segments
+            // are dropped (their backing buffers are returned to the
+            // pool below) because the failure handler is the only writer
+            // that mutates _pendingSegments after the latch was taken.
             stalePending = _pendingAcks;
-            _pendingBatch = RentBatchList();
+            for (var i = 0; i < _pendingSegments.Count; i++)
+            {
+                ReturnSegment(_pendingSegments[i]);
+            }
+            ReturnSegmentList(_pendingSegments);
+            ReturnOffsetList(_pendingOffsets);
+            _pendingSegments = RentSegmentList();
+            _pendingOffsets = RentOffsetList();
             _pendingAcks = RentAckList();
             _pendingBatchSizeBytes = 0;
         }
@@ -642,6 +753,7 @@ internal sealed class WalShardGrain(
         // consistent post-failure state. Callers that catch the
         // surfaced exception and retry immediately will observe a
         // fully-resynced _nextOffset.
+        Trace($"failure.fault  failed.acks={failedAcks.Count} later.slots={laterSlots.Count} stale.pending={stalePending.Count}");
         for (var i = 0; i < failedAcks.Count; i++)
         {
             failedAcks[i].TrySetException(ex);
@@ -662,31 +774,47 @@ internal sealed class WalShardGrain(
 
     /// <summary>
     /// One slot in the in-flight flush chain. Carries the offset
-    /// window it owns, the ack TCSs parked against it, and the task
-    /// that completes when the provider's <c>AppendBatchAsync</c> for
-    /// this slot has settled.
+    /// window it owns, the encoded payload segments and parallel
+    /// offsets handed to the provider, the ack TCSs parked against
+    /// the slot, and the task that completes when the provider's
+    /// <c>AppendEncodedBatchAsync</c> for this slot has settled.
     /// </summary>
     private sealed class InFlightFlush
     {
         public long StartOffset { get; init; }
         public long EndOffsetExclusive { get; init; }
+        public required List<ArraySegment<byte>> Segments { get; init; }
+        public required List<long> Offsets { get; init; }
         public required List<TaskCompletionSource<long>> Acks { get; init; }
         public Task Task { get; set; } = System.Threading.Tasks.Task.CompletedTask;
     }
 
     /// <summary>
-    /// <summary>
-    /// Rents a cleared <see cref="WalEntry"/> batch list from the
-    /// per-grain pool, or allocates a fresh one if the pool is empty.
-    /// Must be called under <see cref="_stateGate"/>.
+    /// Rents a cleared encoded-segment list from the per-grain pool,
+    /// or allocates a fresh one if the pool is empty. Must be called
+    /// under <see cref="_stateGate"/>.
     /// </summary>
-    private List<WalEntry> RentBatchList()
+    private List<ArraySegment<byte>> RentSegmentList()
     {
-        if (_batchListPool.Count > 0)
+        if (_segmentListPool.Count > 0)
         {
-            return _batchListPool.Pop();
+            return _segmentListPool.Pop();
         }
-        return new List<WalEntry>();
+        return new List<ArraySegment<byte>>();
+    }
+
+    /// <summary>
+    /// Rents a cleared offset list from the per-grain pool, or
+    /// allocates a fresh one if the pool is empty. Must be called
+    /// under <see cref="_stateGate"/>.
+    /// </summary>
+    private List<long> RentOffsetList()
+    {
+        if (_offsetListPool.Count > 0)
+        {
+            return _offsetListPool.Pop();
+        }
+        return new List<long>();
     }
 
     /// <summary>
@@ -704,27 +832,56 @@ internal sealed class WalShardGrain(
     }
 
     /// <summary>
-    /// Returns a no-longer-needed batch list to the pool. The caller
-    /// must guarantee no other reference to the list survives.
-    /// Lists that exceed the pool depth are dropped to the GC; lists
-    /// whose backing array has grown unusually large are also dropped
-    /// to keep the pool's resident footprint bounded. Must be called
-    /// under <see cref="_stateGate"/>.
+    /// Returns a no-longer-needed segment list to the pool. The caller
+    /// must guarantee no other reference to the list survives. Lists
+    /// that exceed the pool depth are dropped to the GC; lists whose
+    /// backing array has grown unusually large are also dropped to keep
+    /// the pool's resident footprint bounded. Must be called under
+    /// <see cref="_stateGate"/>.
     /// </summary>
-    private void ReturnBatchList(List<WalEntry> list)
+    private void ReturnSegmentList(List<ArraySegment<byte>> list)
     {
-        if (_batchListPool.Count >= MaxPoolDepth || list.Capacity > 4096)
+        if (_segmentListPool.Count >= MaxPoolDepth || list.Capacity > 4096)
         {
             return;
         }
         list.Clear();
-        _batchListPool.Push(list);
+        _segmentListPool.Push(list);
+    }
+
+    /// <summary>
+    /// Returns a no-longer-needed offset list to the pool. Same
+    /// contract as <see cref="ReturnSegmentList"/>.
+    /// </summary>
+    private void ReturnOffsetList(List<long> list)
+    {
+        if (_offsetListPool.Count >= MaxPoolDepth || list.Capacity > 4096)
+        {
+            return;
+        }
+        list.Clear();
+        _offsetListPool.Push(list);
+    }
+
+    /// <summary>
+    /// Returns a rented byte buffer underlying an encoded segment to
+    /// the shared <see cref="ArrayPool{T}"/>. The grain hands the
+    /// segment to the provider on flush; once the provider's call
+    /// settles (success or failure), the buffer is no longer needed
+    /// because the storage layer has either captured the bytes
+    /// verbatim into its own row or persisted them in its own buffer.
+    /// </summary>
+    private static void ReturnSegment(ArraySegment<byte> segment)
+    {
+        if (segment.Array is { Length: > 0 } array)
+        {
+            ArrayPool<byte>.Shared.Return(array);
+        }
     }
 
     /// <summary>
     /// Returns a no-longer-needed ack list to the pool. Same contract
-    /// as <see cref="ReturnBatchList"/>. Must be called under
-    /// <see cref="_stateGate"/>.
+    /// as <see cref="ReturnSegmentList"/>.
     /// </summary>
     private void ReturnAckList(List<TaskCompletionSource<long>> list)
     {
