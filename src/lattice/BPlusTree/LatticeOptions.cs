@@ -651,6 +651,21 @@ public class LatticeOptions
     /// Maximum byte budget the WAL grain will accumulate into a single
     /// storage flush. Defaults to <see cref="DefaultWalMaxBatchBytes"/>
     /// (4 MiB). Reached whichever-first with <see cref="WalMaxBatchEntries"/>.
+    /// <para>
+    /// Measured against the <i>exact</i> serialised size of each
+    /// captured <see cref="WalRecord"/> under the WAL grain's wire
+    /// format - the per-entry sizer
+    /// (<c>IWalRecordSizer</c>) walks every field of the record
+    /// through the same Orleans-binary codec that the storage
+    /// provider will see. Earlier releases approximated the per-entry
+    /// cost with <c>key.Length * 2 + value.Length + 128</c>, which
+    /// under-counted records carrying a populated
+    /// <see cref="WalRecord.VectorClock"/> and over-counted small-key
+    /// records with no vector clock; the budget is now an exact
+    /// ceiling, suitable for sizing against the Azure Table Storage
+    /// 4 MB transactional-batch limit which has zero tolerance for
+    /// under-counts.
+    /// </para>
     /// </summary>
     public long WalMaxBatchBytes { get; set; } = DefaultWalMaxBatchBytes;
 

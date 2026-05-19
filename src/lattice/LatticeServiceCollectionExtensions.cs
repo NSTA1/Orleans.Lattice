@@ -52,6 +52,12 @@ public static class LatticeServiceCollectionExtensions
         builder.AddWalStorage();
         builder.Services.TryAddSingleton<ICommitLogWriter, WalCommitLogWriter>();
         builder.Services.TryAddSingleton<ICommitLogReader, WalCommitLogReader>();
+        // WAL byte-budget sizer: the canonical Orleans-binary
+        // implementation measures the exact serialised footprint of each
+        // captured WalRecord so WalShardGrain's WalMaxBatchBytes gate
+        // operates on the true encoded size rather than the historical
+        // heuristic. Singleton-scoped so the underlying codec stays hot.
+        builder.Services.TryAddSingleton<IWalRecordSizer, OrleansBinaryWalRecordSizer>();
         builder.Services.TryAddSingleton<ILatticeMergeModeResolver, DefaultLatticeMergeModeResolver>();
         // Single-cluster default for the per-tree origin-cluster-id resolver.
         // Returns string.Empty for every tree so the WAL writer stamps an
