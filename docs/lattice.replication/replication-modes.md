@@ -64,7 +64,7 @@ The commit-time observer routes every mutation through
   elsewhere (a control plane, a feature flag system, or a permissive
   test stub that opts every tree in to `LwwRegister`).
 - A `null` return value means "this tree is not replicated" and the
-  observer returns immediately, before any `IReplogSink` call.
+  observer returns immediately, before any sink call.
 
 The resolved mode is written to `WalRecord.Mode` so receivers can pick
 the correct apply algorithm without re-inspecting the value bytes.

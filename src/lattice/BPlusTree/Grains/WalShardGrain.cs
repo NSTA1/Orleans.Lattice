@@ -408,6 +408,39 @@ internal sealed class WalShardGrain(
     }
 
     /// <inheritdoc />
+    public async Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        // The live entry count is `highest - lowest + 1` when the shard
+        // holds at least one entry, otherwise zero. We read both
+        // boundary offsets through the provider so the result reflects
+        // the persisted footprint after any TrimAsync calls; `_nextOffset`
+        // alone is trim-unaware. The two reads do not need to be a
+        // consistent snapshot: a TrimAsync running concurrently can
+        // only ever raise the lowest offset (never lower it), so a
+        // brief race undercounts by at most the number of entries
+        // trimmed between the two reads - a self-healing diagnostic
+        // signal, not a correctness invariant.
+        var highest = await _provider.GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
+        if (highest < 0)
+        {
+            return 0L;
+        }
+        var lowest = await _provider.GetLowestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
+        if (lowest < 0)
+        {
+            // Highest is set but lowest reports empty: every entry was
+            // trimmed between the two reads. Live count is zero.
+            return 0L;
+        }
+        var live = highest - lowest + 1L;
+        return live < 0L ? 0L : live;
+    }
+
+    /// <inheritdoc />
+    [Obsolete("Use GetLiveEntryCountAsync instead. GetEntryCountAsync is not trim-aware and will be removed in a future minor version.", DiagnosticId = "LATTICE0001")]
     public Task<long> GetEntryCountAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

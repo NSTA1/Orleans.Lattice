@@ -420,6 +420,73 @@ public class AzureTableWalStorageProviderIntegrationTests
     }
 
     [Test]
+    public async Task GetLowestOffsetAsync_returns_minus_one_when_partition_has_never_been_written()
+    {
+        // Untouched partition - no entry rows in the table at all.
+        var lowest = await _sut.GetLowestOffsetAsync(TreeId, 0, CancellationToken.None);
+
+        Assert.That(lowest, Is.EqualTo(-1L));
+    }
+
+    [Test]
+    public async Task GetLowestOffsetAsync_returns_zero_on_untrimmed_shard()
+    {
+        await _sut.AppendBatchAsync(TreeId, 0, new[] { Entry(0), Entry(1), Entry(2) }, CancellationToken.None);
+
+        var lowest = await _sut.GetLowestOffsetAsync(TreeId, 0, CancellationToken.None);
+
+        Assert.That(lowest, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public async Task GetLowestOffsetAsync_returns_first_surviving_offset_after_partial_trim()
+    {
+        await _sut.AppendBatchAsync(TreeId, 0, new[] { Entry(0), Entry(1), Entry(2), Entry(3) }, CancellationToken.None);
+        await _sut.TrimAsync(TreeId, 0, throughOffsetInclusive: 1L, CancellationToken.None);
+
+        var lowest = await _sut.GetLowestOffsetAsync(TreeId, 0, CancellationToken.None);
+
+        Assert.That(lowest, Is.EqualTo(2L));
+    }
+
+    [Test]
+    public async Task GetLowestOffsetAsync_returns_minus_one_after_full_trim()
+    {
+        await _sut.AppendBatchAsync(TreeId, 0, new[] { Entry(0), Entry(1), Entry(2) }, CancellationToken.None);
+        await _sut.TrimAsync(TreeId, 0, throughOffsetInclusive: 2L, CancellationToken.None);
+
+        var lowest = await _sut.GetLowestOffsetAsync(TreeId, 0, CancellationToken.None);
+
+        Assert.That(lowest, Is.EqualTo(-1L));
+    }
+
+    [Test]
+    public async Task GetLowestOffsetAsync_recovers_persisted_low_water_mark_on_a_fresh_provider()
+    {
+        // Symmetric to GetHighestOffsetAsync_recovers_persisted_head_on_a_fresh_provider:
+        // confirm the low-water-mark query reads from durable storage,
+        // not from any process-local cache.
+        await _sut.AppendBatchAsync(TreeId, 0, new[] { Entry(0), Entry(1), Entry(2) }, CancellationToken.None);
+        await _sut.TrimAsync(TreeId, 0, throughOffsetInclusive: 0L, CancellationToken.None);
+
+        var recovered = CreateProvider(_tableName);
+        var lowest = await recovered.GetLowestOffsetAsync(TreeId, 0, CancellationToken.None);
+
+        Assert.That(lowest, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public void GetLowestOffsetAsync_observes_a_pre_cancelled_token()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.That(
+            async () => await _sut.GetLowestOffsetAsync(TreeId, 0, cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
     public void TrimAsync_observes_a_pre_cancelled_token()
     {
         using var cts = new CancellationTokenSource();

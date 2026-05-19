@@ -159,7 +159,8 @@ replication change feed.
 | `AppendAsync(WalRecord, CancellationToken)` | Append a captured mutation. Returns the assigned dense per-shard sequence number. |
 | `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`. Returns a `WalShardPage` with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1`; out-of-range reads return `WalShardPage.Empty(fromSequence)`. |
 | `GetNextSequenceAsync(CancellationToken)` | Returns the sequence the next append will use. |
-| `GetEntryCountAsync(CancellationToken)` | Returns the total number of entries persisted. |
+| `GetLiveEntryCountAsync(CancellationToken)` | Returns the number of live entries currently persisted, computed as `highest - lowest + 1` against the storage provider. Drops by the trimmed prefix length once `IWalStorageProvider.TrimAsync` runs (driven by `ILatticeWalGc`), so dashboards, alerts, and the back-pressure health check observe the persisted footprint rather than a monotonically-growing offset counter. |
+| `GetEntryCountAsync(CancellationToken)` | **Obsolete** trim-unaware diagnostic helper retained for one minor version. Returns `_nextOffset` (the next sequence to be assigned). Use `GetLiveEntryCountAsync` for the trim-aware live count. |
 
 Saga terminal mutations (`MutationKind.TxCommit` / `TxAbort`) carry their
 shard index in `mutation.Key` as a base-10 invariant-culture string; the

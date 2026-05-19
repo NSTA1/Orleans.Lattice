@@ -30,6 +30,20 @@
     <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
+  <!--
+    LATTICE0001 is the custom diagnostic id raised by the [Obsolete] forwarder
+    on IWalShardGrain.GetEntryCountAsync. Orleans' source-generated grain
+    proxy mechanically implements every interface method, including the
+    obsolete one, and the generated file is outside our control. We suppress
+    LATTICE0001 project-wide because our own callers raise the diagnostic too
+    (via the forwarder body); the matching test sites use #pragma to keep the
+    suppression scoped where it matters. CS0618 from any *other* obsolete API
+    remains active.
+  -->
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);LATTICE0001</NoWarn>
+  </PropertyGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Replication" />

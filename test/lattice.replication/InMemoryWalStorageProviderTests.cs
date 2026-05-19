@@ -32,6 +32,51 @@ public class InMemoryWalStorageProviderTests
     }
 
     [Test]
+    public async Task GetLowestOffsetAsync_returns_minus_one_when_shard_empty()
+    {
+        var sut = new InMemoryWalStorageProvider();
+
+        var lowest = await sut.GetLowestOffsetAsync("tree", 0, CancellationToken.None);
+
+        Assert.That(lowest, Is.EqualTo(-1L));
+    }
+
+    [Test]
+    public async Task GetLowestOffsetAsync_returns_zero_on_untrimmed_shard()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync("tree", 0, new[] { MakeEntry(0), MakeEntry(1), MakeEntry(2) }, CancellationToken.None);
+
+        var lowest = await sut.GetLowestOffsetAsync("tree", 0, CancellationToken.None);
+
+        Assert.That(lowest, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public async Task GetLowestOffsetAsync_returns_first_surviving_offset_after_partial_trim()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync("tree", 0, new[] { MakeEntry(0), MakeEntry(1), MakeEntry(2), MakeEntry(3) }, CancellationToken.None);
+
+        await sut.TrimAsync("tree", 0, throughOffsetInclusive: 1, CancellationToken.None);
+
+        var lowest = await sut.GetLowestOffsetAsync("tree", 0, CancellationToken.None);
+        Assert.That(lowest, Is.EqualTo(2L));
+    }
+
+    [Test]
+    public async Task GetLowestOffsetAsync_returns_minus_one_after_full_trim()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync("tree", 0, new[] { MakeEntry(0), MakeEntry(1) }, CancellationToken.None);
+
+        await sut.TrimAsync("tree", 0, throughOffsetInclusive: 1, CancellationToken.None);
+
+        var lowest = await sut.GetLowestOffsetAsync("tree", 0, CancellationToken.None);
+        Assert.That(lowest, Is.EqualTo(-1L));
+    }
+
+    [Test]
     public async Task AppendBatchAsync_persists_dense_offsets_and_advances_highest()
     {
         var sut = new InMemoryWalStorageProvider();

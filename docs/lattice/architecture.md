@@ -219,7 +219,7 @@ flowchart LR
         LeafA -->|"step 1: wal"| WalA[(WalShardGrain)]
         LeafA -->|"step 2: apply"| ProjA[(Leaf projection)]
         LeafA -->|"step 3: observer"| Obs[ReplicationMutationObserver]
-        Obs -->|"WalRecord (op + key + value + HLC + origin + mode)"| Sink[IReplogSink]
+        Obs -->|"WalRecord (op + key + value + HLC + origin + mode)"| Sink[Replication sink]
         Sink --> Shipper[ReplicationShipperGrain]
         Shipper -->|"WAL cursor, batched"| Transport[Push transport<br/>in-process / gRPC]
     end
@@ -238,7 +238,7 @@ flowchart LR
 
 Key invariants the replication path preserves end-to-end:
 
-1. **Capture is atomic with the local commit.** `ReplicationMutationObserver` runs inside the `observer` step of the leaf commit pipeline, after `wal` and `apply`, so the `WalRecord` it builds is guaranteed to describe a durably-committed mutation. The observer call is awaited inline; an `IReplogSink` failure surfaces to the original `SetAsync` caller.
+1. **Capture is atomic with the local commit.** `ReplicationMutationObserver` runs inside the `observer` step of the leaf commit pipeline, after `wal` and `apply`, so the `WalRecord` it builds is guaranteed to describe a durably-committed mutation. The observer call is awaited inline; a replication-sink failure surfaces to the original `SetAsync` caller.
 2. **Origin metadata rides through verbatim.** The authoring cluster stamps `LatticeMutation.OriginClusterId` with the configured `LatticeReplicationOptions.ClusterId`; the receiver's apply seam reuses that value under `LatticeOriginContext` so the local commit on the receiver carries the original origin, not a fresh one. This is what stops a loop - the receiver's own observer sees the foreign origin and short-circuits before calling its sink.
 3. **HLCs are preserved on the receiver.** Apply calls run under `LatticeHlcOverrideContext` so the leaf does not advance its local HLC over the incoming write; the persisted `LwwValue<byte[]>.Timestamp` is the authoring cluster's HLC, which is what makes `(HLC, originClusterId)` lexicographic LWW resolution converge across clusters.
 4. **Atomic-write sagas land all-or-nothing.** Prepare records flow through `ApplyPreparedSetAsync` / `ApplyPreparedDeleteAsync` into the receiver's per-leaf pending-tx bucket; only `ApplyTxTerminalAsync` (carrying the `TxCommit` or `TxAbort` decision) flips them onto the visible projection. Mid-ship partitions are tolerated because the producer-side per-key WAL filter explicitly bypasses `TxCommit` / `TxAbort` records via `ReplicationShipperGrain.ShouldShip`.

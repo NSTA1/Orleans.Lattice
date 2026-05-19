@@ -93,6 +93,28 @@ public interface IWalStorageProvider
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns the lowest <see cref="WalEntry.Offset"/> currently
+    /// persisted for <paramref name="treeId"/> /
+    /// <paramref name="shardIndex"/>, or <c>-1</c> when the WAL has no
+    /// entries (either never written or fully trimmed). The default
+    /// for an untrimmed shard is <c>0</c>; once
+    /// <see cref="TrimAsync"/> has removed a prefix, this returns the
+    /// first still-stored offset. Together with
+    /// <see cref="GetHighestOffsetAsync"/> this lets a caller compute
+    /// the number of live entries currently persisted as
+    /// <c>highest - lowest + 1</c> without scanning the log; the WAL
+    /// grain uses that pair to expose a trim-aware live entry count
+    /// to diagnostics, dashboards, and back-pressure consumers.
+    /// </summary>
+    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="cancellationToken">Cancellation token observed before the read.</param>
+    Task<long> GetLowestOffsetAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Trims every entry with offset less than or equal to
     /// <paramref name="throughOffsetInclusive"/> from the WAL. Called by
     /// the GC predicate (<see cref="ILatticeWalGc"/>) once every consumer

@@ -17,7 +17,10 @@ Routing of a mutation to a partition is deterministic and process-independent: a
             IMutationObserver chain
                        │
                        ▼
-              ShardedReplogSink            ← default IReplogSink
+            ReplicationMutationObserver
+                       │
+                       ▼
+              ShardedReplogSink
                        │
               hash(key) % partitions
                        │
@@ -28,7 +31,7 @@ Routing of a mutation to a partition is deterministic and process-independent: a
                 IWalStorageProvider
 ```
 
-For the `IWalShardGrain` API surface (`AppendAsync`, `ReadAsync`, `GetNextSequenceAsync`, `GetEntryCountAsync`) and the turn-safe batching protocol that backs every `AppendAsync` call, see [`../lattice/wal.md`](../lattice/wal.md).
+For the `IWalShardGrain` API surface (`AppendAsync`, `ReadAsync`, `GetNextSequenceAsync`, `GetLiveEntryCountAsync`) and the turn-safe batching
 
 ## Configuration
 
@@ -70,7 +73,7 @@ The maintenance gate runs **before** mode resolution and per-key filters: a main
 
 ## Sink failure semantics
 
-WAL-append failures propagate. A failure inside `IReplogSink.WriteAsync` flows back out of the commit-time observer, and because the observer fires inside the originating grain's write path, the failure surfaces as the same exception the underlying storage provider threw - the calling `ILattice.SetAsync` / `DeleteAsync` / `DeleteRangeAsync` observes it. This guarantees that every committed mutation is also captured for replication.
+WAL-append failures propagate. A failure inside the replication sink's write call flows back out of the commit-time observer, and because the observer fires inside the originating grain's write path, the failure surfaces as the same exception the underlying storage provider threw - the calling `ILattice.SetAsync` / `DeleteAsync` / `DeleteRangeAsync` observes it. This guarantees that every committed mutation is also captured for replication.
 
 There is intentionally no opt-in "best-effort" mode that would catch the exception and let the primary write report success while silently dropping the change-feed record. Silent change-feed drops are exactly the hazard commit-time capture exists to remove; a host that wants different semantics for a specific tree should compose its own `IMutationObserver` rather than configure correctness away.
 
