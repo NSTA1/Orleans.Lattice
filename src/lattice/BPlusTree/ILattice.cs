@@ -563,6 +563,33 @@ public interface ILattice : IGrainWithStringKey
     Task<string> OpenEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Opens a zero-observable-writes snapshot key cursor over the given
+    /// range. Every page is served against a tree-wide
+    /// <see cref="LatticeSnapshotCoordinate"/> captured at open time, so
+    /// foreground non-saga writes, atomic-write sagas, range deletes,
+    /// replication apply, and topology changes that commit after the
+    /// capture are all invisible to the cursor's view. The
+    /// <see cref="LatticeOptions.MaxSnapshotReplayEntries"/> gate
+    /// rejects opens whose projected WAL-replay cost would dominate
+    /// the call; a stalled snapshot whose pin TTL elapses throws
+    /// <see cref="LatticeSnapshotExpiredException"/> on the next step.
+    /// </summary>
+    /// <param name="startInclusive">Inclusive lower bound, or <c>null</c> for the first key.</param>
+    /// <param name="endExclusive">Exclusive upper bound, or <c>null</c> for the end of the tree.</param>
+    /// <param name="reverse">When <c>true</c>, the cursor walks keys in descending lexicographic order.</param>
+    /// <param name="cancellationToken">Cancels the open before any state is persisted.</param>
+    /// <returns>An opaque cursor handle scoped to this tree.</returns>
+    Task<string> OpenSnapshotKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Opens a zero-observable-writes snapshot entry cursor. Semantically
+    /// identical to <see cref="OpenSnapshotKeyCursorAsync"/> but yields
+    /// <see cref="KeyValuePair{TKey,TValue}"/> via
+    /// <see cref="NextEntriesAsync"/>.
+    /// </summary>
+    Task<string> OpenSnapshotEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Opens a stateful, resumable range-delete cursor over
     /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
     /// Each <see cref="DeleteRangeStepAsync"/> call tombstones at most

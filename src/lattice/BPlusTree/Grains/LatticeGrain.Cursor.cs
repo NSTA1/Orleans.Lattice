@@ -55,6 +55,54 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
+    public Task<string> OpenSnapshotKeyCursorAsync(
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default)
+        => OpenSnapshotCursorAsync(LatticeCursorKind.Keys, startInclusive, endExclusive, reverse, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<string> OpenSnapshotEntryCursorAsync(
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default)
+        => OpenSnapshotCursorAsync(LatticeCursorKind.Entries, startInclusive, endExclusive, reverse, cancellationToken);
+
+    /// <summary>
+    /// Shared open path for zero-observable-writes snapshot cursors.
+    /// Both <see cref="LatticeCursorKind.Keys"/> and
+    /// <see cref="LatticeCursorKind.Entries"/> route here; the spec
+    /// carries the kind through to the cursor grain. Snapshot cursors
+    /// are also point-in-time so saga decisions captured at open time
+    /// are frozen alongside the per-shard WAL offsets - see
+    /// <see cref="LatticeSnapshotCoordinate"/>.
+    /// </summary>
+    private async Task<string> OpenSnapshotCursorAsync(
+        LatticeCursorKind kind,
+        string? startInclusive,
+        string? endExclusive,
+        bool reverse,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfSystemTree();
+        cancellationToken.ThrowIfCancellationRequested();
+        var cursorId = Guid.NewGuid().ToString("N");
+        var cursor = grainFactory.GetGrain<ILatticeCursorGrain>(BuildCursorKey(cursorId));
+        await cursor.OpenAsync(TreeId, new LatticeCursorSpec
+        {
+            Kind = kind,
+            StartInclusive = startInclusive,
+            EndExclusive = endExclusive,
+            Reverse = reverse,
+            PointInTime = true,
+            ZeroObservableWrites = true,
+        });
+        return cursorId;
+    }
+
+    /// <inheritdoc />
     public async Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();

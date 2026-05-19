@@ -57,4 +57,27 @@ public readonly record struct LatticeCursorSpec
     /// </para>
     /// </summary>
     [Id(4)] public bool PointInTime { get; init; }
+
+    /// <summary>
+    /// When <c>true</c>, the cursor is opened in zero-observable-writes
+    /// snapshot mode: every page is served by replaying each shard's
+    /// WAL up to the offset captured at open time, so foreground
+    /// non-saga writes that append after capture are invisible. Pairs
+    /// with <see cref="PointInTime"/> (which freezes saga decisions)
+    /// to deliver strict tree-wide snapshot isolation against every
+    /// dimension the live read path is subject to (foreground writes,
+    /// saga decisions, replication apply, topology changes).
+    /// <para>
+    /// Set internally by
+    /// <see cref="ILattice.OpenSnapshotKeyCursorAsync"/> /
+    /// <see cref="ILattice.OpenSnapshotEntryCursorAsync"/>; not a
+    /// direct opt-in on the existing open methods because snapshot
+    /// cursors have a different cost profile, a different failure
+    /// mode (<see cref="LatticeSnapshotExpiredException"/>), and a
+    /// different acceptance gate
+    /// (<see cref="LatticeOptions.MaxSnapshotReplayEntries"/>).
+    /// </para>
+    /// </summary>
+    [Id(5)] public bool ZeroObservableWrites { get; init; }
 }
+

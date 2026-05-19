@@ -332,8 +332,59 @@ public class LatticeOptions
     public const int DefaultMaxPinnedSagaDecisions = 100_000;
 
     /// <summary>
+    /// Per-shard cap on the projected WAL-replay record count consulted
+    /// at <c>OpenSnapshot*Async</c> time. The open fan-out reads each
+    /// touched shard's <c>GetMaterialiserLagAsync</c> and fails fast
+    /// with <see cref="LatticeSnapshotReplayBudgetExceededException"/>
+    /// when any shard's projected lag exceeds this cap, so a snapshot
+    /// cursor cannot be opened against a tree whose materialiser is
+    /// far enough behind that replay would dominate the open call.
+    /// Operators tune this against the steady-state apply rate and
+    /// the materialiser-checkpoint cadence
+    /// (<see cref="MaterialiserCheckpointInterval"/>,
+    /// <see cref="MaterialiserCheckpointEntries"/>): a healthy
+    /// materialiser sits well below the cap; a sustained excursion
+    /// surfaces as the open-time fail-fast.
+    /// <para>
+    /// The cap is the snapshot analogue of
+    /// <see cref="MaxLeafReplayEntries"/>, which bounds activation-
+    /// time replay on a single leaf. Default 10 000 000 records,
+    /// matching the conservative-but-non-degenerate sizing typical
+    /// production WAL retention windows admit at the per-shard scale.
+    /// </para>
+    /// </summary>
+    public long MaxSnapshotReplayEntries { get; set; } = DefaultMaxSnapshotReplayEntries;
+
+    /// <summary>Default value for <see cref="MaxSnapshotReplayEntries"/> (10 000 000).</summary>
+    public const long DefaultMaxSnapshotReplayEntries = 10_000_000L;
+
+    /// <summary>
+    /// Idle-eviction window for transient per-shard snapshot leaf
+    /// grains materialised by a zero-observable-writes snapshot
+    /// cursor. A snapshot leaf rebuilds the shard's projection on
+    /// first read by replaying the captured WAL prefix, then stays
+    /// activated for further pages against the same shard. After
+    /// this window elapses without activity the grain self-evicts;
+    /// the next <c>Next*Async</c> transparently rebuilds it on
+    /// demand (the underlying WAL prefix is held alive by the
+    /// snapshot's <see cref="MaxCursorSnapshotPinTtl"/> pin, so the
+    /// rebuild is always feasible until the cursor is closed or
+    /// expires).
+    /// <para>
+    /// Decoupled from <see cref="CursorIdleTtl"/> because the
+    /// snapshot-leaf state is purely a replay-cost cache, not part
+    /// of the cursor's correctness boundary - evicting it earlier
+    /// only trades a replay re-run for memory. Default 30 minutes.
+    /// </para>
+    /// </summary>
+    public TimeSpan SnapshotLeafIdleTtl { get; set; } = DefaultSnapshotLeafIdleTtl;
+
+    /// <summary>Default value for <see cref="SnapshotLeafIdleTtl"/> (30 minutes).</summary>
+    public static readonly TimeSpan DefaultSnapshotLeafIdleTtl = TimeSpan.FromMinutes(30);
+
+    /// <summary>
     /// Optional retention window for <see cref="Primitives.VersionVector"/>
-    /// entries. When a merge pipeline calls
+    /// entries.
     /// <see cref="Primitives.VersionVector.PruneOlderThan(long)"/> with
     /// <c>UtcNow - VersionVectorRetention</c>, replica entries whose
     /// wall-clock tick falls before the cutoff are dropped to bound the

@@ -84,4 +84,19 @@ internal sealed class LatticeCursorState
     /// for non-point-in-time cursors.
     /// </summary>
     [Id(6)] public Guid SnapshotPinId { get; set; }
+
+    /// <summary>
+    /// Tree-wide WAL coordinate captured at
+    /// <see cref="ILatticeCursorGrain.OpenAsync"/> when the cursor is
+    /// opened with
+    /// <see cref="LatticeCursorSpec.ZeroObservableWrites"/> set. Pairs
+    /// with <see cref="PointInTimeSnapshot"/> to encode "the
+    /// projection as of this tree-wide moment": the WAL offsets fix
+    /// the foreground-write view, the registry snapshot fixes saga
+    /// decisions. <c>null</c> for non-snapshot cursors. Persisted so
+    /// a reactivated cursor (after silo failover or grain recycling)
+    /// continues to serve the same snapshot view it opened with.
+    /// </summary>
+    [Id(7)] public LatticeSnapshotCoordinate? SnapshotCoordinate { get; set; }
 }
+
