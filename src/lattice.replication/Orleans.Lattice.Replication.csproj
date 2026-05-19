@@ -27,6 +27,8 @@
   <ItemGroup>
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
     <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="10.0.3" />
   </ItemGroup>
 
 </Project>

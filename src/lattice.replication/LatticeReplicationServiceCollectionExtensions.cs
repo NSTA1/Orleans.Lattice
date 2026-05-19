@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Replication;
 /// Extension methods for configuring <c>Orleans.Lattice.Replication</c> on an
 /// Orleans silo.
 /// </summary>
-public static class LatticeReplicationServiceCollectionExtensions
+public static partial class LatticeReplicationServiceCollectionExtensions
 {
     /// <summary>
     /// Adds <c>Orleans.Lattice.Replication</c> to the silo. Registers the
