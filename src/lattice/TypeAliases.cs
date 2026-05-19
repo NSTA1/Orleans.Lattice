@@ -103,10 +103,10 @@ internal static class TypeAliases
     internal const string LatticeCursorEntriesPage = "ol.lep";
     internal const string LatticeCursorDeleteProgress = "ol.ldp";
 
-    // Zero-observable-writes snapshot cursor (F-065): coordinate
-    // captured at OpenSnapshot*Async time and persisted on the cursor
-    // state; transient per-shard snapshot leaf grain that
-    // materialises the projection by replaying the WAL prefix.
+    // Zero-observable-writes snapshot cursor: coordinate captured at
+    // OpenSnapshot*Async time and persisted on the cursor state;
+    // transient per-shard snapshot leaf grain that materialises the
+    // projection by replaying the WAL prefix.
     internal const string LatticeSnapshotCoordinate = "ol.lsc";
     internal const string ISnapshotLeafGrain = "ol.slg";
 

@@ -262,6 +262,8 @@ model.
 |--------|-----------|-------------|
 | `OpenKeyCursorAsync` | `Task<string> OpenKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false)` | Opens a key-enumeration cursor and returns a server-assigned opaque cursor ID. `null` bounds are unbounded; `reverse=true` walks descending. `pointInTime=true` freezes the saga-decision view at open time so every page sees the same in-flight-saga view (see [Point-in-time cursors](#point-in-time-cursors)). |
 | `OpenEntryCursorAsync` | `Task<string> OpenEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false)` | Opens an entry-enumeration cursor (key + value pairs). Same bounds, direction, and point-in-time semantics as `OpenKeyCursorAsync`. |
+| `OpenSnapshotKeyCursorAsync` | `Task<string> OpenSnapshotKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false)` | Opens a **zero-observable-writes snapshot** key-enumeration cursor. Captures a tree-wide `LatticeSnapshotCoordinate` (per-shard WAL heads + tree map version + registry HLC) at open time and materialises pages by replaying WAL slices through transient per-shard `SnapshotLeafGrain`s. Subsequent foreground writes, saga commits, range deletes, and replication applies are invisible to this cursor. Open-time replay cost is gated by `LatticeOptions.MaxSnapshotReplayEntries`; failure throws `LatticeSnapshotReplayBudgetExceededException`. WAL retention is pinned through `IWalCursorRegistry` for the cursor's lifetime. See [Snapshot cursors](snapshot-cursors.md). |
+| `OpenSnapshotEntryCursorAsync` | `Task<string> OpenSnapshotEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false)` | Opens a zero-observable-writes snapshot entry cursor. Same isolation guarantees and open-time cost gate as `OpenSnapshotKeyCursorAsync`. |
 | `OpenDeleteRangeCursorAsync` | `Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive)` | Opens a resumable range-delete cursor. Both bounds are **required** (non-null). Reverse mode is not supported. Throws `ArgumentException` on null bounds or a reverse spec. |
 | `NextKeysAsync` | `Task<LatticeCursorKeysPage> NextKeysAsync(string cursorId, int pageSize)` | Returns up to `pageSize` keys and advances the cursor. `HasMore=false` signals exhaustion. Throws `ArgumentOutOfRangeException` for non-positive `pageSize`; throws `InvalidOperationException` if the cursor was opened for a different kind or has been closed. |
 | `NextEntriesAsync` | `Task<LatticeCursorEntriesPage> NextEntriesAsync(string cursorId, int pageSize)` | Returns up to `pageSize` entries and advances the cursor. Same error surface as `NextKeysAsync` with expected kind `Entries`. |
@@ -276,7 +278,37 @@ model.
 | `LatticeCursorEntriesPage` | `IReadOnlyList<KeyValuePair<string, byte[]>> Entries`, `bool HasMore` | A page returned by `NextEntriesAsync`. |
 | `LatticeCursorDeleteProgress` | `int DeletedThisStep`, `int DeletedTotal`, `bool IsComplete` | Returned by `DeleteRangeStepAsync`. `DeletedTotal` accumulates across every step. |
 | `LatticeCursorKind` | `Keys`, `Entries`, `DeleteRange` | The kind of scan a cursor performs. |
-| `LatticeCursorSpec` | `Kind`, `StartInclusive`, `EndExclusive`, `Reverse`, `PointInTime` | Immutable cursor specification, frozen at open time. |
+| `LatticeCursorSpec` | `Kind`, `StartInclusive`, `EndExclusive`, `Reverse`, `PointInTime`, `ZeroObservableWrites` | Immutable cursor specification, frozen at open time. `ZeroObservableWrites=true` selects the WAL-replay snapshot path; `PointInTime=true` selects the registry-snapshot path; both `false` is the live path. |
+| `LatticeSnapshotCoordinate` | `long TreeMapVersion`, `IReadOnlyDictionary<int, long> PerShardWalOffsets`, `HybridLogicalClock RegistrySnapshotHlc` | Tree-wide snapshot coordinate captured at `OpenSnapshot*CursorAsync` time. Pins the routing decision and every shard's WAL head so paging is deterministic across silo failovers. |
+| `LatticeScopedCursor` | `string Id`, `ValueTask DisposeAsync()`, implicit conversion to `string` | `IAsyncDisposable` wrapper returned by the `LatticeExtensions.Open*CursorScopeAsync` family. Disposing the scope calls `CloseCursorAsync` exactly once; idempotent. The implicit `string` conversion lets a scope be passed directly to `NextKeysAsync` / `NextEntriesAsync` / `DeleteRangeStepAsync`. Does **not** change the durability contract of the underlying cursor; for cursors whose ID must survive a process boundary, keep using the raw `Open*CursorAsync` / `CloseCursorAsync` shape. |
+
+#### Scoped cursor extensions
+
+`LatticeExtensions` exposes an `IAsyncDisposable`-returning overload
+for every `Open*CursorAsync` method. They are pure conveniences -
+the underlying cursor grain semantics are unchanged - but they
+let callers whose cursor lifetime fits in one stack frame avoid the
+`try` / `finally` boilerplate.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `OpenKeyCursorScopeAsync` | `Task<LatticeScopedCursor> OpenKeyCursorScopeAsync(this ILattice, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken cancellationToken = default)` | Scoped variant of `OpenKeyCursorAsync`. |
+| `OpenEntryCursorScopeAsync` | `Task<LatticeScopedCursor> OpenEntryCursorScopeAsync(this ILattice, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken cancellationToken = default)` | Scoped variant of `OpenEntryCursorAsync`. |
+| `OpenSnapshotKeyCursorScopeAsync` | `Task<LatticeScopedCursor> OpenSnapshotKeyCursorScopeAsync(this ILattice, string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default)` | Scoped variant of `OpenSnapshotKeyCursorAsync`. |
+| `OpenSnapshotEntryCursorScopeAsync` | `Task<LatticeScopedCursor> OpenSnapshotEntryCursorScopeAsync(this ILattice, string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default)` | Scoped variant of `OpenSnapshotEntryCursorAsync`. |
+| `OpenDeleteRangeCursorScopeAsync` | `Task<LatticeScopedCursor> OpenDeleteRangeCursorScopeAsync(this ILattice, string startInclusive, string endExclusive, CancellationToken cancellationToken = default)` | Scoped variant of `OpenDeleteRangeCursorAsync`. |
+
+```csharp verify
+await using var scope = await tree.OpenEntryCursorScopeAsync();
+while (true)
+{
+    var page = await tree.NextEntriesAsync(scope, pageSize: 500);
+    foreach (var (k, v) in page.Entries)
+        Console.WriteLine($"{k}={v.Length} bytes");
+    if (!page.HasMore) break;
+}
+// scope.DisposeAsync() runs here.
+```
 
 #### Ordering and visibility
 
@@ -347,6 +379,8 @@ Console.WriteLine($"Deleted {total} keys.");
 | `OpenDeleteRangeCursorAsync` | `reverse=true` passed through the internal spec | `ArgumentException` |
 | `Open*` (point-in-time) | `pointInTime=true` passed for a `DeleteRange` cursor | `ArgumentException` |
 | `Open*` (point-in-time) | Registry would exceed `LatticeOptions.MaxPinnedSagaDecisions` | `LatticeCursorRegistryPinExhaustedException` |
+| `OpenSnapshot*CursorAsync` | Replay budget exceeded (any shard's `head - 0 > MaxSnapshotReplayEntries`) | `LatticeSnapshotReplayBudgetExceededException` |
+| `Next*` (snapshot) | Snapshot leaf cannot be rebuilt because the WAL prefix was trimmed past the pinned offset | `LatticeSnapshotExpiredException` |
 | Any `Open*` | Re-open with a different spec on the same cursor ID | `InvalidOperationException` |
 | `Next*` / `DeleteRangeStep*` | Cursor kind mismatch | `InvalidOperationException` |
 | `Next*` / `DeleteRangeStep*` | Cursor was closed | `InvalidOperationException` |

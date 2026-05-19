@@ -64,8 +64,8 @@ internal sealed class SnapshotLeafGrain(
     /// / <see cref="MutationKind.TxAbort"/> appears later in the same
     /// WAL prefix; sagas whose terminal lands after the captured
     /// offset stay pending and are invisible to scans (the snapshot
-    /// view hides incomplete sagas, mirroring the F-064 registry-
-    /// snapshot semantics for the foreground read path).
+    /// view hides incomplete sagas, mirroring the registry-snapshot
+    /// semantics for the foreground read path).
     /// </summary>
     private readonly Dictionary<Guid, Dictionary<string, LwwValue<byte[]>>> _pendingTx = new();
 
@@ -194,6 +194,8 @@ internal sealed class SnapshotLeafGrain(
         // capturedOffset - 1.
         long fromExclusive = -1;
         long toInclusive = _capturedOffset - 1;
+        long entriesObserved = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
 
         while (fromExclusive < toInclusive)
         {
@@ -212,12 +214,27 @@ internal sealed class SnapshotLeafGrain(
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 ApplyEntry(entry.Mutation);
+                entriesObserved++;
             }
 
             var lastOffset = slice[^1].Offset;
             if (lastOffset <= fromExclusive)
                 break; // defensive: never spin if the slice failed to advance.
             fromExclusive = lastOffset;
+        }
+
+        sw.Stop();
+        // Tags allocated once per replay (one open call) so the
+        // allocation cost is amortised over the WAL slice loop.
+        var tags = new KeyValuePair<string, object?>[]
+        {
+            new(LatticeMetrics.TagTree, _treeId),
+            new(LatticeMetrics.TagShard, _shardIndex),
+        };
+        LatticeMetrics.SnapshotReplayDuration.Record(sw.Elapsed.TotalMilliseconds, tags);
+        if (entriesObserved > 0)
+        {
+            LatticeMetrics.SnapshotReplayEntries.Add(entriesObserved, tags);
         }
     }
 

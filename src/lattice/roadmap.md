@@ -263,7 +263,7 @@ Internal-additive:
 
 ---
 
-### 5 · F-065
+### 5 · F-065 ✅ shipped
 **Feature / reliability / medium impact (zero-observable-writes snapshot reads via WAL-replay materialisation; the strict-isolation step F-064 explicitly defers)** *(depends on Core F-049 ✓, F-053 ✓, F-056 ✓, F-064 ✓, F-052 ✓)*
 
 Strict snapshot-isolation reads: a multi-page enumeration whose view of every key is fixed at `OpenAsync` time and *not* perturbed by any concurrent write - foreground `SetAsync` / `RemoveAsync`, saga `SetManyAtomicAsync`, range deletes, or replication apply. F-064 closes the saga-decision dimension; F-065 closes the only remaining dimension: foreground non-saga writes between pages. Together they deliver the literal "point-in-time, tree-wide atomic" contract the design exploration that produced this entry sketched at level 3.

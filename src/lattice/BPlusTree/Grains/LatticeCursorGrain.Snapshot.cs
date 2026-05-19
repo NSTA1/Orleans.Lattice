@@ -14,6 +14,15 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class LatticeCursorGrain
 {
+    /// <summary>
+    /// In-memory marker that tracks whether the WAL retention pin
+    /// gauge has been incremented for this activation. Pin reports
+    /// happen on every <c>Next*Async</c> page (slide semantics), so
+    /// the bookkeeping flag prevents double-increments. Reset on
+    /// activation; the first successful report on a reactivated
+    /// cursor will re-increment the gauge.
+    /// </summary>
+    private bool _snapshotPinGaugeHeld;
     /// <inheritdoc />
     public async Task OpenSnapshotAsync(string treeId, LatticeCursorSpec spec, LatticeSnapshotCoordinate coordinate)
     {
@@ -99,10 +108,16 @@ internal sealed partial class LatticeCursorGrain
                 SnapshotConsumerId,
                 pinHlc,
                 blockedAtHlc: pinHlc > HybridLogicalClock.Zero ? pinHlc : null);
+            if (!_snapshotPinGaugeHeld)
+            {
+                LatticeMetrics.SnapshotPinCount.Add(1,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId));
+                _snapshotPinGaugeHeld = true;
+            }
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex,
+            Logger.LogWarning(ex,
                 "Snapshot cursor {CursorKey}: failed to report WAL retention pin; the WAL GC may trim past the captured offset.",
                 CursorKey);
         }
@@ -122,10 +137,16 @@ internal sealed partial class LatticeCursorGrain
         try
         {
             await registry.UnregisterAsync(state.State.TreeId, SnapshotConsumerId);
+            if (_snapshotPinGaugeHeld)
+            {
+                LatticeMetrics.SnapshotPinCount.Add(-1,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId));
+                _snapshotPinGaugeHeld = false;
+            }
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex,
+            Logger.LogWarning(ex,
                 "Snapshot cursor {CursorKey}: failed to unregister WAL retention pin; the pin will fall out via its own TTL.",
                 CursorKey);
         }

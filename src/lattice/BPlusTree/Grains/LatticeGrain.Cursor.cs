@@ -95,7 +95,7 @@ internal sealed partial class LatticeGrain
     /// <item><description>
     /// Take a registry-decision snapshot via the per-tree
     /// <see cref="ITxRegistryGrain"/> so saga decisions captured at open
-    /// time are frozen for the cursor's lifetime, mirroring the F-064
+    /// time are frozen for the cursor's lifetime, mirroring the
     /// point-in-time cursor path.
     /// </description></item>
     /// <item><description>
@@ -161,11 +161,11 @@ internal sealed partial class LatticeGrain
                 "Trigger a leaf-projection rebuild (RebuildLeafProjectionAsync) or raise the cap.");
         }
 
-        // Step 3: registry-decision snapshot, mirroring the F-064
-        // point-in-time path. A failure here returns null - the cursor
-        // grain will treat that as "no sagas captured" and proceed; the
-        // snapshot semantics weaken to "WAL-only" rather than failing
-        // the open.
+        // Step 3: registry-decision snapshot, mirroring the
+        // point-in-time cursor path. A failure here returns null - the
+        // cursor grain will treat that as "no sagas captured" and
+        // proceed; the snapshot semantics weaken to "WAL-only" rather
+        // than failing the open.
         var registrySnapshot = await FetchRegistrySnapshotAsync();
         cancellationToken.ThrowIfCancellationRequested();
         // The HLC stamped on the snapshot is the maximum HLC observed

@@ -9,7 +9,7 @@ each section:
 
 - Topology changes - [Shard Splitting](shard-splitting.md), [Online Reshard](online-reshard.md)
 - Atomic batches - [Atomic Writes](atomic-writes.md)
-- Multi-page enumerations - [Durable Cursors](durable-cursors.md)
+- Multi-page enumerations - [Durable Cursors](durable-cursors.md), [Snapshot Cursors](snapshot-cursors.md)
 - Durable copies - [Snapshots](snapshots.md), [Tree Sizing](tree-sizing.md), [Tree Storage](tree-storage.md)
 - Read path - [Read Caching](caching.md)
 - State merge - [State Primitives](state-primitives.md)
@@ -79,6 +79,7 @@ exception. Callers never see `StaleShardRoutingException` or
 | `ScanEntriesAsync` | **Strongly consistent, strictly ordered, atomic-visible for the lifetime of the enumeration** | Same key ordering and atomic-visibility guarantees as `ScanKeysAsync`. Values reflect the authoritative state at the moment each key is yielded. |
 | Durable cursor steps - **live mode** (`NextKeysAsync`, `NextEntriesAsync`, `DeleteRangeStepAsync`) | **Per-step strongly consistent and atomic-visible, cross-step snapshot** | Each step is a strongly consistent scan, atomic-visible tree-wide *within* that step. Across steps, a key updated between two pages is observed at its newest value when it is next visited, but once yielded by a cursor it is never re-yielded. A saga that commits between page *i* and page *i+1* may have its keys split across the two pages - use point-in-time mode (below) for cross-step atomicity. See [Durable Cursors](durable-cursors.md). |
 | Durable cursor steps - **point-in-time mode** (opened with `pointInTime: true`) | **Strongly consistent, strictly ordered, atomic-visible for the cursor's lifetime** | Every page reads against the saga-decision view captured at `OpenAsync` time. A `SetManyAtomicAsync` that commits between two pages is observed identically on every page (either all of its keys, or none). A stalled cursor whose pin lifetime is exceeded surfaces `LatticeCursorSnapshotExpiredException` on its next call and must be reopened. Not available for `DeleteRangeStepAsync`. See [Durable Cursors - Point-in-time cursors](durable-cursors.md#point-in-time-cursors). |
+| Snapshot cursor steps - **zero-observable-writes mode** (`OpenSnapshotKeyCursorAsync`, `OpenSnapshotEntryCursorAsync`) | **Snapshot-isolated, strictly ordered, atomic-visible for the cursor's lifetime** | Every page reflects the tree state captured at open time. No write committed after open - foreground `SetAsync` / `DeleteAsync`, saga `SetManyAtomicAsync`, `DeleteRangeAsync`, or replication apply - is ever visible to the cursor on any page. The captured `LatticeSnapshotCoordinate` is deterministic across silo failover. Open-time replay cost is bounded by `LatticeOptions.MaxSnapshotReplayEntries`; exceeding the budget throws `LatticeSnapshotReplayBudgetExceededException`. A cursor whose WAL retention pin is invalidated surfaces `LatticeSnapshotExpiredException` on its next call and must be reopened. See [Snapshot Cursors](snapshot-cursors.md). |
 
 ### Retry exhaustion
 
@@ -139,6 +140,7 @@ across multiple grain calls:
 | `GetManyAsync`, `CountAsync`, `CountPerShardAsync` | Tree-wide for the call. |
 | `ScanKeysAsync`, `ScanEntriesAsync` | Tree-wide for the lifetime of the `IAsyncEnumerable`. |
 | Durable key/entry cursor (point-in-time mode) | Tree-wide for the lifetime of the cursor. |
+| Snapshot key/entry cursor (zero-observable-writes mode) | Tree-wide for the lifetime of the cursor. Stricter than point-in-time mode: hides every concurrent write, not only sagas. |
 | Durable key/entry/delete-range cursor (live mode) | Tree-wide *within* each step; not preserved across steps. |
 | `DeleteRangeAsync` (one-shot) | Per-key only; a concurrent saga may be observed as committed for some keys and pending for others. Use `SetManyAtomicAsync` to layer atomic deletion semantics on top. |
 
