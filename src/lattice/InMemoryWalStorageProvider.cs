@@ -42,20 +42,58 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
         var shard = _shards.GetOrAdd(Key(treeId, shardIndex), static _ => new ShardLog());
         lock (shard.Gate)
         {
-            // Validate the supplied offsets are dense and contiguous with
-            // the persisted tail. If validation fails the batch is
-            // rejected before any state mutation, preserving the
-            // all-or-nothing append contract.
-            var expected = shard.Entries.Count == 0 ? 0L : shard.Entries[^1].Offset + 1;
-            for (var i = 0; i < entries.Count; i++)
+            // Validate the supplied offsets are dense ascending within
+            // the batch (i.e. entry[i+1].Offset == entry[i].Offset + 1).
+            // Concurrent flushes (LatticeOptions.WalMaxPendingBatches > 1)
+            // can produce out-of-order batch *arrival* against the
+            // provider, so we no longer require the batch to start
+            // exactly at `currentHighest + 1`; we only require that no
+            // supplied offset duplicates an offset already in the log.
+            // The dense-offset invariant against the log as a whole is
+            // restored once every concurrent flush completes - the WAL
+            // grain's failure-resync path reads back the authoritative
+            // tail via GetHighestOffsetAsync rather than assuming
+            // contiguity.
+            for (var i = 1; i < entries.Count; i++)
             {
-                if (entries[i].Offset != expected + i)
+                if (entries[i].Offset != entries[i - 1].Offset + 1)
                 {
                     throw new InvalidOperationException(
-                        $"Append batch for '{treeId}/{shardIndex}' is not dense: entry {i} has offset "
-                        + $"{entries[i].Offset} but expected {expected + i}. Supplied offsets must equal "
-                        + "currentHighest + 1, +2, ….");
+                        $"Append batch for '{treeId}/{shardIndex}' is not dense within the batch: entry {i} "
+                        + $"has offset {entries[i].Offset} but expected {entries[i - 1].Offset + 1}. Offsets "
+                        + "supplied to a single AppendBatchAsync call must be strictly ascending and gap-free.");
                 }
+            }
+
+            // Reject overlap with anything already persisted.
+            var first = entries[0].Offset;
+            var last = entries[^1].Offset;
+            if (shard.Entries.Count > 0)
+            {
+                // Fast path: append at the tail (the common case under
+                // single-in-flight operation).
+                var tail = shard.Entries[^1].Offset;
+                if (first > tail)
+                {
+                    for (var i = 0; i < entries.Count; i++)
+                    {
+                        shard.Entries.Add(entries[i]);
+                    }
+                    return Task.CompletedTask;
+                }
+
+                // Out-of-order arrival: ensure no overlap with existing
+                // offsets. Because the log is kept sorted ascending we
+                // can binary-search for the insertion point.
+                var insertAt = LowerBound(shard.Entries, first);
+                if (insertAt < shard.Entries.Count && shard.Entries[insertAt].Offset <= last)
+                {
+                    throw new InvalidOperationException(
+                        $"Append batch for '{treeId}/{shardIndex}' overlaps an existing entry: offset "
+                        + $"{shard.Entries[insertAt].Offset} is already persisted.");
+                }
+                shard.Entries.InsertRange(insertAt, entries);
+                return Task.CompletedTask;
             }
 
             for (var i = 0; i < entries.Count; i++)
@@ -65,6 +103,30 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
         }
 
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Returns the index of the first entry whose offset is at least
+    /// <paramref name="target"/>, or <c>entries.Count</c> if no such
+    /// entry exists. Entries are kept sorted ascending by offset.
+    /// </summary>
+    private static int LowerBound(List<WalEntry> entries, long target)
+    {
+        var lo = 0;
+        var hi = entries.Count;
+        while (lo < hi)
+        {
+            var mid = lo + ((hi - lo) >> 1);
+            if (entries[mid].Offset < target)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid;
+            }
+        }
+        return lo;
     }
 
     /// <inheritdoc />
@@ -104,9 +166,12 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
             }
             else
             {
-                var headOffset = entries[0].Offset;
-                // First index whose Offset > fromOffsetExclusive.
-                var startIndex = (int)Math.Max(0L, fromOffsetExclusive - headOffset + 1);
+                // Binary search for the first entry whose offset is
+                // strictly greater than fromOffsetExclusive. Concurrent
+                // flush failures can leave the log non-contiguous, so
+                // we cannot assume `startIndex = fromOffsetExclusive -
+                // headOffset + 1` (the dense-offsets shortcut).
+                var startIndex = LowerBound(entries, fromOffsetExclusive + 1);
                 if (startIndex >= entries.Count)
                 {
                     snapshot = Array.Empty<WalEntry>();

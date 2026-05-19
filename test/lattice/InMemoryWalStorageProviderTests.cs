@@ -5,8 +5,10 @@ namespace Orleans.Lattice.Tests;
 /// <summary>
 /// Unit tests for the core <see cref="InMemoryWalStorageProvider"/>
 /// after the type was promoted from the replication package. Pins the
-/// dense-offset append, snapshot-then-yield read, recovery, and trim
-/// semantics on the LatticeMutation-shaped WalEntry.
+/// within-batch dense-offset append contract, the no-overlap invariant
+/// against the log as a whole (out-of-order batch arrival is permitted
+/// to support multi-in-flight flushes), snapshot-then-yield read,
+/// recovery, and trim semantics on the LatticeMutation-shaped WalEntry.
 /// </summary>
 [TestFixture]
 public class InMemoryWalStorageProviderTests
@@ -50,14 +52,66 @@ public class InMemoryWalStorageProviderTests
     }
 
     [Test]
-    public void AppendBatchAsync_rejects_non_dense_first_offset()
+    public async Task AppendBatchAsync_accepts_non_zero_first_offset_on_empty_shard()
+    {
+        // Under WalMaxPendingBatches > 1 the WAL grain assigns offsets
+        // on the grain turn but flush completion can arrive in any order
+        // against the provider. The provider therefore no longer requires
+        // a batch to start at `currentHighest + 1`; it only requires no
+        // overlap with persisted offsets. An empty shard accepting a
+        // batch that starts at offset 5 is the canonical example of the
+        // earlier-finishing second flush landing before the first.
+        var sut = new InMemoryWalStorageProvider();
+        var batch = new[] { Entry(5), Entry(6) };
+
+        await sut.AppendBatchAsync(Tree, 0, batch, CancellationToken.None);
+
+        var head = await sut.GetHighestOffsetAsync(Tree, 0, CancellationToken.None);
+        Assert.That(head, Is.EqualTo(6L));
+    }
+
+    [Test]
+    public async Task AppendBatchAsync_rejects_batch_overlapping_existing_offsets()
     {
         var sut = new InMemoryWalStorageProvider();
-        var batch = new[] { Entry(5) };
+        await sut.AppendBatchAsync(Tree, 0, new[] { Entry(0), Entry(1), Entry(2) }, CancellationToken.None);
 
+        // Overlap with offset 2 must be rejected even when the batch is
+        // otherwise dense within itself.
         Assert.That(
-            async () => await sut.AppendBatchAsync(Tree, 0, batch, CancellationToken.None),
+            async () => await sut.AppendBatchAsync(Tree, 0, new[] { Entry(2), Entry(3) }, CancellationToken.None),
             Throws.InvalidOperationException);
+
+        // Validation runs ahead of mutation - the head stays at 2.
+        var head = await sut.GetHighestOffsetAsync(Tree, 0, CancellationToken.None);
+        Assert.That(head, Is.EqualTo(2L));
+    }
+
+    [Test]
+    public async Task AppendBatchAsync_accepts_out_of_order_batch_arrival()
+    {
+        // The grain assigns offsets [0..1] to flush A and [2..3] to
+        // flush B; under multi-in-flight flushes B can land at the
+        // provider first. The provider must accept B and then accept A
+        // into the gap below, preserving offset order in storage.
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync(Tree, 0, new[] { Entry(2), Entry(3) }, CancellationToken.None);
+        await sut.AppendBatchAsync(Tree, 0, new[] { Entry(0), Entry(1) }, CancellationToken.None);
+
+        var collected = new List<WalEntry>();
+        await foreach (var w in sut.ReadAsync(Tree, 0, fromOffsetExclusive: -1, maxEntries: 10, CancellationToken.None))
+        {
+            collected.Add(w);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(collected.Count, Is.EqualTo(4));
+            Assert.That(collected[0].Offset, Is.EqualTo(0L));
+            Assert.That(collected[1].Offset, Is.EqualTo(1L));
+            Assert.That(collected[2].Offset, Is.EqualTo(2L));
+            Assert.That(collected[3].Offset, Is.EqualTo(3L));
+        });
     }
 
     [Test]

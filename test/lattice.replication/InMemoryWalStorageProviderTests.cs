@@ -56,12 +56,31 @@ public class InMemoryWalStorageProviderTests
     }
 
     [Test]
-    public void AppendBatchAsync_throws_on_non_dense_first_offset()
+    public async Task AppendBatchAsync_accepts_non_zero_first_offset_on_empty_shard()
     {
+        // After LatticeOptions.WalMaxPendingBatches > 1 (R-074), the
+        // grain assigns offsets serially on its turn but flush
+        // completion can arrive at the provider out of order. The
+        // provider therefore no longer requires the first batch to
+        // start at offset 0; it only requires within-batch density and
+        // no overlap with persisted offsets.
         var sut = new InMemoryWalStorageProvider();
 
+        await sut.AppendBatchAsync("tree", 0, new[] { MakeEntry(5) }, CancellationToken.None);
+
+        var highest = await sut.GetHighestOffsetAsync("tree", 0, CancellationToken.None);
+        Assert.That(highest, Is.EqualTo(5L));
+    }
+
+    [Test]
+    public void AppendBatchAsync_throws_on_overlap_with_persisted_offsets()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        sut.AppendBatchAsync("tree", 0, new[] { MakeEntry(0), MakeEntry(1) }, CancellationToken.None).GetAwaiter().GetResult();
+
         Assert.That(
-            async () => await sut.AppendBatchAsync("tree", 0, new[] { MakeEntry(5) }, CancellationToken.None),
+            async () => await sut.AppendBatchAsync(
+                "tree", 0, new[] { MakeEntry(1), MakeEntry(2) }, CancellationToken.None),
             Throws.InstanceOf<InvalidOperationException>());
     }
 
@@ -80,15 +99,17 @@ public class InMemoryWalStorageProviderTests
     public async Task AppendBatchAsync_failed_batch_does_not_mutate_state()
     {
         var sut = new InMemoryWalStorageProvider();
-        await sut.AppendBatchAsync("tree", 0, new[] { MakeEntry(0) }, CancellationToken.None);
+        await sut.AppendBatchAsync("tree", 0, new[] { MakeEntry(0), MakeEntry(1) }, CancellationToken.None);
 
+        // A within-batch gap is rejected ahead of any mutation; the
+        // head must not advance past offset 1.
         Assert.That(
             async () => await sut.AppendBatchAsync(
-                "tree", 0, new[] { MakeEntry(5) }, CancellationToken.None),
+                "tree", 0, new[] { MakeEntry(2), MakeEntry(4) }, CancellationToken.None),
             Throws.InstanceOf<InvalidOperationException>());
 
         var highest = await sut.GetHighestOffsetAsync("tree", 0, CancellationToken.None);
-        Assert.That(highest, Is.EqualTo(0L));
+        Assert.That(highest, Is.EqualTo(1L));
     }
 
     [Test]
