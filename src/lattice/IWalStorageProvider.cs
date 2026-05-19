@@ -201,4 +201,45 @@ public interface IWalStorageProvider
         int shardIndex,
         long throughOffsetInclusive,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Activation-time recovery hook. Called by the WAL grain's
+    /// <c>OnActivateAsync</c> immediately after
+    /// <see cref="GetHighestOffsetAsync"/>, before the grain accepts
+    /// any appends, so the backend can reconcile any state that a
+    /// crash between transactional phases may have left in a
+    /// half-committed form. The method must complete (success or
+    /// throw) before the grain is observable to callers.
+    /// <para>
+    /// The contract is "leave the log in a state where
+    /// <see cref="GetHighestOffsetAsync"/>,
+    /// <see cref="GetLowestOffsetAsync"/>, and
+    /// <see cref="ReadAsync"/> all agree on the persisted tail" - the
+    /// reconciliation step is permitted to either roll forward (commit
+    /// missing manifest rows for fully-written batch partitions) or
+    /// roll back (delete the orphan batch partitions), at the
+    /// implementation's discretion.
+    /// </para>
+    /// <para>
+    /// The default implementation is a no-op: single-transaction
+    /// backends (the in-memory provider, any provider whose commit
+    /// path is a single atomic operation) have no orphan state to
+    /// reconcile. Multi-phase backends (the Azure Table Storage
+    /// provider's per-batch partition + manifest layout) override
+    /// this method to scan their commit log for orphans and either
+    /// finish the commit or revert it.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="cancellationToken">Cancellation token observed before any I/O commences.</param>
+    Task ReconcileAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
 }
