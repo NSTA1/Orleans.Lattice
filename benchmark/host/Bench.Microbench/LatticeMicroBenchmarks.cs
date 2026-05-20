@@ -1398,7 +1398,7 @@ public class LatticeMicroBenchmarks
         var sp = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
             .AddSerializer()
             .BuildServiceProvider();
-        var serializer = (Serializer<LatticeMutation>)sp.GetService(typeof(Serializer<LatticeMutation>))!;
+        var serializer = (Serializer<WalRecord>)sp.GetService(typeof(Serializer<WalRecord>))!;
 
         var options = Microsoft.Extensions.Options.Options.Create(new AzureTableWalStorageOptions
         {

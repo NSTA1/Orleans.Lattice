@@ -6,6 +6,7 @@ using System.Text;
 using Azure;
 using Azure.Data.Tables;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Storage.AzureTable;
@@ -212,7 +213,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         new(StringComparer.Ordinal);
 
     private readonly AzureTableWalStorageOptions _options;
-    private readonly Serializer<LatticeMutation> _serializer;
+    private readonly Serializer<WalRecord> _serializer;
 
     // Per-shard phase-2 workers, lazily created on first append for a
     // given (treeId, shardIndex). Each worker owns a single Task plus
@@ -252,7 +253,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// </summary>
     public AzureTableWalStorageProvider(
         IOptions<AzureTableWalStorageOptions> options,
-        Serializer<LatticeMutation> serializer)
+        Serializer<WalRecord> serializer)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -356,7 +357,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         int shardIndex,
         ReadOnlyMemory<ArraySegment<byte>> encodedEntries,
         ReadOnlyMemory<long> offsets,
-        IWalMutationEncoder encoder,
+        IWalRecordEncoder encoder,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(treeId);
@@ -1227,14 +1228,24 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     private AzureTableWalEntity BuildEntryEntity(string partitionKey, in WalEntry entry, ArrayBufferWriter<byte> buffer)
     {
         // Serialise via Orleans so the payload survives every
-        // additive change to LatticeMutation under the existing
-        // Orleans-serialization wire-compat rules. The provider does
-        // not need to know the field layout - only that the bytes
-        // round-trip through the same serializer. The caller hands in
-        // a buffer that has already been reset to zero written count;
-        // we own it for the duration of the call but never retain a
-        // reference past the WrittenSpan.ToArray copy below.
-        _serializer.Serialize(entry.Mutation, buffer);
+        // additive change to WalRecord under the existing Orleans-
+        // serialization wire-compat rules. The provider does not need
+        // to know the field layout - only that the bytes round-trip
+        // through the same serializer. The caller hands in a buffer
+        // that has already been reset to zero written count; we own it
+        // for the duration of the call but never retain a reference
+        // past the WrittenSpan.ToArray copy below.
+        // The provider-boundary WalEntry carries the LatticeMutation-
+        // shaped payload; project it to the durability-shaped WalRecord
+        // so the on-disk format matches AppendEncodedBatchAsync exactly.
+        // The legacy AppendBatchAsync path has no mode/origin context,
+        // so we fall back to LwwRegister and an empty origin id (the
+        // converter preserves the mutation's own origin when present).
+        var record = WalRecordConverter.ToWalRecord(
+            entry.Mutation,
+            LatticeMergeMode.LwwRegister,
+            string.Empty);
+        _serializer.Serialize(record, buffer);
         return new AzureTableWalEntity
         {
             PartitionKey = partitionKey,
@@ -1254,7 +1265,11 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             // provider's behaviour for an absent shard.
             return default;
         }
-        return _serializer.Deserialize(new ReadOnlyMemory<byte>(payload));
+        // On-disk format is WalRecord-shaped; project back to the
+        // provider-boundary LatticeMutation shape so WalEntry.Mutation
+        // consumers see the same surface they always have.
+        var record = _serializer.Deserialize(new ReadOnlyMemory<byte>(payload));
+        return WalRecordConverter.FromWalRecord(in record);
     }
 
     private async ValueTask<TableClient> EnsureTableAsync(CancellationToken cancellationToken)

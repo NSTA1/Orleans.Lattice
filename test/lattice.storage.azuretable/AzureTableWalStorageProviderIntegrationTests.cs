@@ -32,7 +32,7 @@ public class AzureTableWalStorageProviderIntegrationTests
     private const string TreeId = "tree-int";
 
     private ServiceProvider _services = null!;
-    private Serializer<LatticeMutation> _serializer = null!;
+    private Serializer<WalRecord> _serializer = null!;
     private TableServiceClient _adminClient = null!;
     private string _tableName = null!;
     private AzureTableWalStorageProvider _sut = null!;
@@ -41,7 +41,7 @@ public class AzureTableWalStorageProviderIntegrationTests
     public async Task OneTimeSetUp()
     {
         _services = new ServiceCollection().AddSerializer().BuildServiceProvider();
-        _serializer = _services.GetRequiredService<Serializer<LatticeMutation>>();
+        _serializer = _services.GetRequiredService<Serializer<WalRecord>>();
         _adminClient = new TableServiceClient(AzuriteConnectionString);
 
         try
@@ -556,34 +556,36 @@ public class AzureTableWalStorageProviderIntegrationTests
         // Payload column - no second encode. The provider overrides
         // the default interface implementation; this test exercises
         // the override end-to-end.
-        var encoder = new OrleansBinaryWalMutationEncoder(_serializer);
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
 
-        var mutationOne = new LatticeMutation
+        var recordOne = new WalRecord
         {
             TreeId = TreeId,
-            Kind = MutationKind.Set,
+            Op = MutationKind.Set,
             Key = "encoded-zero",
             Value = new byte[] { 1, 2, 3 },
             Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
             OriginClusterId = "site-a",
+            Mode = LatticeMergeMode.LwwRegister,
         };
-        var mutationTwo = new LatticeMutation
+        var recordTwo = new WalRecord
         {
             TreeId = TreeId,
-            Kind = MutationKind.Delete,
+            Op = MutationKind.Delete,
             Key = "encoded-one",
             Value = Array.Empty<byte>(),
             Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Tick(HybridLogicalClock.Zero)),
             OriginClusterId = "site-b",
+            Mode = LatticeMergeMode.LwwRegister,
         };
 
-        // Encode each mutation through the encoder. The provider
+        // Encode each record through the encoder. The provider
         // accepts ArraySegment<byte> rentals; an owned byte[] is
         // fine for the test surface.
         var writerOne = new System.Buffers.ArrayBufferWriter<byte>();
-        encoder.Encode(mutationOne, writerOne);
+        encoder.Encode(recordOne, writerOne);
         var writerTwo = new System.Buffers.ArrayBufferWriter<byte>();
-        encoder.Encode(mutationTwo, writerTwo);
+        encoder.Encode(recordTwo, writerTwo);
         var segments = new[]
         {
             new ArraySegment<byte>(writerOne.WrittenSpan.ToArray()),
@@ -616,7 +618,7 @@ public class AzureTableWalStorageProviderIntegrationTests
         // ReadOnlyMemory<ArraySegment<byte>> and ReadOnlyMemory<long>
         // are parallel sequences; the provider must reject a length
         // mismatch synchronously without any I/O.
-        var encoder = new OrleansBinaryWalMutationEncoder(_serializer);
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
 
         var segments = new ArraySegment<byte>[] { new(new byte[] { 1 }) };
         var offsets = new long[] { 0L, 1L };

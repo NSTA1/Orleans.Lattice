@@ -66,7 +66,7 @@ public interface IWalStorageProvider
     /// takes pre-encoded payload bytes alongside their parallel
     /// dense offsets. Producers (the WAL grain) call this overload
     /// when they have already paid the encode cost via
-    /// <see cref="IWalMutationEncoder"/> at append time, so the bytes
+    /// <see cref="IWalRecordEncoder"/> at append time, so the bytes
     /// that informed the per-batch byte budget are the same bytes
     /// handed to the provider - no second encode.
     /// <para>
@@ -74,10 +74,10 @@ public interface IWalStorageProvider
     /// Storage, file-backed providers) hand the segments straight
     /// through to their persistence row. Backends that prefer to own
     /// the codec (for example, ones that index secondary fields off
-    /// <see cref="LatticeMutation.Timestamp"/> or
-    /// <see cref="LatticeMutation.OriginClusterId"/>) decode each
-    /// segment with the configured <see cref="IWalMutationEncoder"/>
-    /// before storing.
+    /// <see cref="WalRecord.Timestamp"/> or
+    /// <see cref="WalRecord.OriginClusterId"/>) decode each segment
+    /// with the configured <see cref="IWalRecordEncoder"/> before
+    /// storing.
     /// </para>
     /// <para>
     /// All-or-nothing atomicity, offset density, and overlap
@@ -102,7 +102,7 @@ public interface IWalStorageProvider
         int shardIndex,
         ReadOnlyMemory<ArraySegment<byte>> encodedEntries,
         ReadOnlyMemory<long> offsets,
-        IWalMutationEncoder encoder,
+        IWalRecordEncoder encoder,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(treeId);
@@ -114,21 +114,23 @@ public interface IWalStorageProvider
                 nameof(encodedEntries));
         }
 
-        // Default fallback: decode each segment to a WalEntry and
-        // delegate to the legacy overload so third-party providers
-        // that have not implemented this method keep working.
-        // Providers that can store the segments directly (e.g.
-        // AzureTableWalStorageProvider) override this method and
-        // skip the round-trip.
+        // Default fallback: decode each segment back to the durability-
+        // shaped WalRecord, project it onto the provider-boundary
+        // WalEntry.Mutation (LatticeMutation-shaped), and delegate to
+        // the legacy overload so third-party providers that have not
+        // implemented this method keep working. Providers that can
+        // store the segments directly (e.g. AzureTableWalStorageProvider)
+        // override this method and skip the round-trip.
         var segments = encodedEntries.Span;
         var offsetSpan = offsets.Span;
         var decoded = new WalEntry[segments.Length];
         for (var i = 0; i < segments.Length; i++)
         {
+            var record = encoder.Decode(segments[i].AsSpan());
             decoded[i] = new WalEntry
             {
                 Offset = offsetSpan[i],
-                Mutation = encoder.Decode(segments[i].AsSpan()),
+                Mutation = BPlusTree.Grains.WalRecordConverter.FromWalRecord(in record),
             };
         }
         return AppendBatchAsync(treeId, shardIndex, decoded, cancellationToken);

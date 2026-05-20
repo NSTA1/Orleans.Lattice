@@ -50,7 +50,7 @@ internal sealed class WalShardGrain(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     ILatticeMergeModeResolver modeResolver,
     ILatticeOriginClusterIdResolver clusterIdResolver,
-    IWalMutationEncoder encoder) : IWalShardGrain, IGrainBase
+    IWalRecordEncoder encoder) : IWalShardGrain, IGrainBase
 {
     private string _treeId = "";
     private int _shardIndex;
@@ -60,7 +60,7 @@ internal sealed class WalShardGrain(
 
     // Pending state shape after the zero-copy provider hand-off:
     // each pending entry contributes one pre-encoded payload segment
-    // (carrying the bytes the canonical IWalMutationEncoder produced at
+    // (carrying the bytes the canonical IWalRecordEncoder produced at
     // append time) and one parallel offset slot. The encoded bytes are
     // the same bytes the storage provider will see - the grain pays
     // exactly one encode per append rather than one for the byte budget
@@ -279,19 +279,17 @@ internal sealed class WalShardGrain(
             throw sticky;
         }
 
-        // Encode the mutation once at append time. The exact encoded
+        // Encode the record once at append time. The exact encoded
         // byte count becomes the budget contribution (replacing the
         // historical heuristic) and the same bytes are handed to the
         // provider on flush via AppendEncodedBatchAsync - one encode per
-        // append, no second pass inside the provider. The mutation is
-        // converted to the WAL-boundary LatticeMutation shape once,
-        // here, so the encoded form is exactly what the storage layer
-        // sees on read-back.
-        var mutation = WalRecordConverter.FromWalRecord(entry);
+        // append, no second pass inside the provider. The encoder
+        // consumes the WalRecord directly: no producer-side
+        // LatticeMutation round-trip on the append hot path.
         var writer = new PooledByteBufferWriter();
         try
         {
-            encoder.Encode(in mutation, writer);
+            encoder.Encode(in entry, writer);
         }
         catch
         {
@@ -417,17 +415,19 @@ internal sealed class WalShardGrain(
         // AppendEncodedBatchAsync - one encode per entry, no second pass
         // inside the provider. We pre-allocate the segments and the
         // result-offsets array so the per-entry path inside the lock
-        // is bound-checked but allocation-free.
+        // is bound-checked but allocation-free. The encoder consumes
+        // each WalRecord directly: no producer-side LatticeMutation
+        // round-trip on the append hot path.
         var count = entries.Count;
         var segments = new ArraySegment<byte>[count];
         var sizes = new int[count];
         for (var i = 0; i < count; i++)
         {
-            var mutation = WalRecordConverter.FromWalRecord(entries[i]);
+            var record = entries[i];
             var writer = new PooledByteBufferWriter();
             try
             {
-                encoder.Encode(in mutation, writer);
+                encoder.Encode(in record, writer);
             }
             catch
             {

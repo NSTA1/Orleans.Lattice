@@ -43,7 +43,7 @@ public partial class AzureTableWalStorageProviderTests
         // string and table name are placeholders - they are only read
         // by the EnsureTableAsync path that is never invoked here.
         var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
-        var serializer = services.GetRequiredService<Serializer<LatticeMutation>>();
+        var serializer = services.GetRequiredService<Serializer<WalRecord>>();
         var options = Options.Create(new AzureTableWalStorageOptions
         {
             ConnectionString = "UseDevelopmentStorage=true",
@@ -134,7 +134,7 @@ public partial class AzureTableWalStorageProviderTests
         // between entries so the WrittenSpan slice for entry i+1 does
         // not contain trailing bytes from entry i).
         var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
-        var serializer = services.GetRequiredService<Serializer<LatticeMutation>>();
+        var serializer = services.GetRequiredService<Serializer<WalRecord>>();
         var options = Options.Create(new AzureTableWalStorageOptions
         {
             ConnectionString = "UseDevelopmentStorage=true",
@@ -188,7 +188,7 @@ public partial class AzureTableWalStorageProviderTests
                     roundTripped.Value,
                     Is.EqualTo(entries[i].Mutation.Value),
                     $"entity[{i}] value bytes - residual data in shared writer indicates ResetWrittenCount was skipped");
-                Assert.That(roundTripped.Kind, Is.EqualTo(entries[i].Mutation.Kind), $"entity[{i}] kind");
+                Assert.That(roundTripped.Op, Is.EqualTo(entries[i].Mutation.Kind), $"entity[{i}] kind");
             });
         }
     }
@@ -260,7 +260,7 @@ public partial class AzureTableWalStorageProviderTests
         // Only the writer-allocation strategy differs, isolating the
         // optimisation we are pinning.
         var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
-        var serializer = services.GetRequiredService<Serializer<LatticeMutation>>();
+        var serializer = services.GetRequiredService<Serializer<WalRecord>>();
         var options = Options.Create(new AzureTableWalStorageOptions
         {
             ConnectionString = "UseDevelopmentStorage=true",
@@ -278,8 +278,14 @@ public partial class AzureTableWalStorageProviderTests
         // entity wrappers are the same shape the production path
         // emits, so the only allocation delta between this and
         // provider.EncodeEntriesForBatch is the per-entry writer.
+        // The encoder serialises a WalRecord projection of each
+        // entry.Mutation so the byte-level allocation profile matches
+        // the production BuildEntryEntity path exactly: the provider
+        // now writes WalRecord bytes (not LatticeMutation bytes) and
+        // the reference encoder must shadow that to keep the
+        // allocation delta isolated to the per-entry-writer choice.
         static void ReferencePerEntryWriterEncode(
-            Serializer<LatticeMutation> ser,
+            Serializer<WalRecord> ser,
             string pk,
             IReadOnlyList<WalEntry> es,
             List<TableTransactionAction> sink)
@@ -287,7 +293,11 @@ public partial class AzureTableWalStorageProviderTests
             for (var i = 0; i < es.Count; i++)
             {
                 var buffer = new ArrayBufferWriter<byte>();
-                ser.Serialize(es[i].Mutation, buffer);
+                var record = Orleans.Lattice.BPlusTree.Grains.WalRecordConverter.ToWalRecord(
+                    es[i].Mutation,
+                    LatticeMergeMode.LwwRegister,
+                    string.Empty);
+                ser.Serialize(record, buffer);
                 sink.Add(new TableTransactionAction(
                     TableTransactionActionType.Add,
                     new AzureTableWalEntity
