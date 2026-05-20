@@ -209,31 +209,30 @@ public partial class AzureTableWalStorageProviderTests
     }
 
     [Test]
-    public void Legacy_batch_and_manifest_partition_keys_are_disjoint_namespaces()
+    public void Batch_and_manifest_partition_keys_are_disjoint_namespaces()
     {
-        // Three coexisting partition-key shapes during the
-        // activation-time legacy-data rejection window: legacy
-        // (1 separator), manifest (2 separators), batch (3
-        // separators). The byte-level prefix is the cheaper signal
-        // but the separator count is the algebraic guarantee, so we
-        // assert both here. A tree id that itself contains '|'
-        // characters is percent-encoded by EncodePartitionSegment
-        // before assembly, so '|' is always a structural separator.
-        var legacy = AzureTableWalStorageProvider.BuildPartitionKey("tree", 0);
+        // Two coexisting partition-key shapes in the per-batch
+        // schema: manifest (2 separators) and batch (3 separators).
+        // The byte-level prefix is the cheaper signal but the
+        // separator count is the algebraic guarantee, so we assert
+        // both here. A tree id that itself contains '|' characters
+        // is percent-encoded by EncodePartitionSegment before
+        // assembly, so '|' is always a structural separator.
         var manifest = AzureTableWalStorageProvider.BuildManifestPartitionKey("tree", 0);
         var batch = AzureTableWalStorageProvider.BuildBatchPartitionKey("tree", 0, 0L);
 
         Assert.Multiple(() =>
         {
-            // No shape is a prefix of another shape.
             Assert.That(manifest, Does.StartWith("_m_|"));
             Assert.That(batch, Does.StartWith("_b_|"));
-            Assert.That(legacy, Does.Not.StartWith("_"));
 
             // Separator counts make the namespaces algebraically disjoint.
-            Assert.That(CountPipes(legacy), Is.EqualTo(1));
             Assert.That(CountPipes(manifest), Is.EqualTo(2));
             Assert.That(CountPipes(batch), Is.EqualTo(3));
+
+            // No shape is a prefix of another shape.
+            Assert.That(batch, Does.Not.StartWith(manifest));
+            Assert.That(manifest, Does.Not.StartWith(batch));
         });
     }
 

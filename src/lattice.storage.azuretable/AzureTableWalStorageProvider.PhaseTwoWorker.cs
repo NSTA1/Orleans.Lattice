@@ -97,7 +97,19 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         });
         _pending = new SortedSet<PhaseTwoCommit>(PhaseTwoCommitByStartOffset.Instance);
         _shutdown = new CancellationTokenSource();
-        _drainLoop = Task.Run(() => DrainLoopAsync(_shutdown.Token));
+
+        // Suppress ExecutionContext flow into the drain loop so the
+        // background pump does not inherit AsyncLocal state (e.g.
+        // Activity.Current, AmbientTransaction) from the first
+        // caller that activated this worker. The drain loop services
+        // every subsequent append on the shard, so any flowed value
+        // would silently leak across logically independent commits;
+        // suppressing the flow is the standard pattern for a
+        // long-lived background pump.
+        using (ExecutionContext.SuppressFlow())
+        {
+            _drainLoop = Task.Run(() => DrainLoopAsync(_shutdown.Token));
+        }
     }
 
     /// <summary>
@@ -264,23 +276,44 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     }));
             }
 
-            // TAIL is upserted to the highest endOffsetInclusive in
-            // the coalesced group. Strict offset-FIFO drainage means
-            // every batch with a smaller start offset has already
-            // committed, so this is unconditionally monotonic.
-            actions.Add(new TableTransactionAction(
-                TableTransactionActionType.UpsertReplace,
-                new AzureTableWalEntity
-                {
-                    PartitionKey = _manifestPartitionKey,
-                    RowKey = AzureTableWalStorageProvider.TailRowKey,
-                    Offset = highestEndOffset,
-                    Payload = null,
-                }));
+            // TAIL is upserted to the highest endOffsetInclusive
+            // observed across every commit this worker has durably
+            // landed, not just the current coalesced group. Two
+            // concurrent <c>AppendBatchAsync</c> calls into the same
+            // shard whose phase-0/1 races complete out of
+            // start-offset order arrive at the worker in the
+            // "wrong" order; the sorted set restores ascending
+            // start-offset order *across the pending set*, but the
+            // worker can still commit batches as separate phase-2
+            // transactions (e.g. when a higher-offset batch arrives
+            // while a lower-offset batch is mid-submit, the higher
+            // one ends up in its own later commit). If we upserted
+            // the current group's max blindly, a later
+            // smaller-offset commit would *regress* TAIL by
+            // overwriting the higher value already on disk. We
+            // instead clamp the persisted TAIL at the high-water
+            // mark across this worker's lifetime; the upsert is
+            // skipped entirely (no action in the transaction) when
+            // the current group's max does not advance the mark.
+            var tailToPersist = Math.Max(highestEndOffset, _highestCommittedEndOffset);
+            var tailAdvances = tailToPersist > _highestCommittedEndOffset
+                || (_highestCommittedEndOffset == -1L && highestEndOffset >= 0L);
+            if (tailAdvances)
+            {
+                actions.Add(new TableTransactionAction(
+                    TableTransactionActionType.UpsertReplace,
+                    new AzureTableWalEntity
+                    {
+                        PartitionKey = _manifestPartitionKey,
+                        RowKey = AzureTableWalStorageProvider.TailRowKey,
+                        Offset = tailToPersist,
+                        Payload = null,
+                    }));
+            }
 
             await _submit(actions, cancellationToken).ConfigureAwait(false);
 
-            _highestCommittedEndOffset = highestEndOffset;
+            _highestCommittedEndOffset = tailToPersist;
             for (var i = 0; i < commits.Count; i++)
             {
                 commits[i].Completion.TrySetResult();

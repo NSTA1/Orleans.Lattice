@@ -109,10 +109,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// <c>__batch__</c> would add ~6 bytes per row across an entire
     /// shard's storage and network surface. The marker also makes the
     /// namespace disjoint from the manifest namespace
-    /// (<see cref="ManifestPartitionPrefix"/>) and from the legacy
-    /// single-partition schema (no marker), so the activation-time
-    /// reconciliation step can distinguish all three by partition-key
-    /// prefix alone.
+    /// (<see cref="ManifestPartitionPrefix"/>).
     /// </summary>
     internal const string BatchPartitionPrefix = "_b_";
 
@@ -185,16 +182,36 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
     private const int MaxTransactionActions = 100;
 
+    /// <summary>
+    /// Process-wide cache of percent-encoded tree-id segments. The
+    /// percent-encoding of a tree id is a pure function of the input
+    /// string and the same id is hashed on every <see cref="AppendBatchAsync"/>,
+    /// <see cref="ReadAsync"/>, <see cref="TrimAsync"/>,
+    /// <see cref="GetHighestOffsetAsync"/>, and
+    /// <see cref="GetLowestOffsetAsync"/> call into the provider - i.e.
+    /// on every WAL operation. Caching the encoded form here saves a
+    /// per-call <c>Encoding.UTF8.GetBytes</c> byte-array and a
+    /// <c>StringBuilder</c> chararray allocation on each
+    /// <see cref="BuildBatchPartitionKey"/> / <see cref="BuildManifestPartitionKey"/>
+    /// / <see cref="BuildPartitionKey"/> invocation. The cache is
+    /// process-static (no per-instance state) because the encoded form
+    /// is invariant; the dictionary is bounded by the active-tree
+    /// set, which is naturally O(tens) in the canonical deployment.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, string> EncodedPartitionSegmentCache =
+        new(StringComparer.Ordinal);
+
     private readonly AzureTableWalStorageOptions _options;
     private readonly Serializer<LatticeMutation> _serializer;
-    private readonly ConcurrentDictionary<string, byte> _initialisedPartitions = new(StringComparer.Ordinal);
 
     // Per-shard phase-2 workers, lazily created on first append for a
     // given (treeId, shardIndex). Each worker owns a single Task plus
     // a bounded SortedSet drain buffer; shards are bounded by Orleans
     // activation counts so the steady-state overhead is bounded by
-    // the silo's active-shard set.
-    private readonly ConcurrentDictionary<string, PhaseTwoWorker> _phaseTwoWorkers =
+    // the silo's active-shard set. Exposed as `internal` so the test
+    // assembly can structurally pin the "one worker per (treeId,
+    // shardIndex)" parallelism characteristic without reflection.
+    internal readonly ConcurrentDictionary<string, PhaseTwoWorker> _phaseTwoWorkers =
         new(StringComparer.Ordinal);
 
     private TableClient? _tableClient;
@@ -288,8 +305,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // Phase 1: write the entry rows into the batch's own partition
         // in a single transaction. Each batch hits a distinct Azure
         // Tables partition server so concurrent batches against the
-        // same shard get true parallelism (the legacy single-partition
-        // schema serialised them on one server).
+        // same shard get true parallelism.
         var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, firstOffset);
         var phaseOneActions = new List<TableTransactionAction>(entries.Count);
         EncodeEntriesForBatch(batchPartitionKey, entries, phaseOneActions);
@@ -827,11 +843,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// lexicographically and the D19 width makes the partition keys
     /// inside a shard sort in start-offset order, so a tail scan can
     /// stream them with a single ascending-<c>PartitionKey</c> range
-    /// query. Disjoint from <see cref="BuildPartitionKey"/> by
-    /// <c>|</c>-separator count (legacy = 1, batch = 3) so the legacy
-    /// and new schemas can coexist transiently during the
-    /// activation-time reconciliation step that rejects legacy data.
-    /// Exposed internally for unit tests.
+    /// query. Exposed internally for unit tests.
     /// </summary>
     internal static string BuildBatchPartitionKey(string treeId, int shardIndex, long startOffset)
     {
@@ -860,9 +872,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// partition per shard, keyed as
     /// <c>{ManifestPartitionPrefix}|{encoded-treeId}|{shardIndex}</c>.
     /// Disjoint from <see cref="BuildBatchPartitionKey"/> by prefix
-    /// (<c>_m_</c> vs <c>_b_</c>) and from <see cref="BuildPartitionKey"/>
-    /// by <c>|</c>-separator count (legacy = 1, manifest = 2). Exposed
-    /// internally for unit tests.
+    /// (<c>_m_</c> vs <c>_b_</c>). Exposed internally for unit tests.
     /// </summary>
     internal static string BuildManifestPartitionKey(string treeId, int shardIndex)
     {
@@ -924,11 +934,49 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
     private static string EncodePartitionSegment(string segment)
     {
+        // Hot path: percent-encoded form is invariant for a given
+        // segment string, so cache by ordinal identity. The cache is
+        // bounded by the active-tree set and shared across every
+        // provider instance.
+        if (EncodedPartitionSegmentCache.TryGetValue(segment, out var cached))
+        {
+            return cached;
+        }
+
+        var encoded = EncodePartitionSegmentCore(segment);
+        // First-writer-wins: a race only allocates one extra string
+        // and the cache shape stabilises after the second call.
+        return EncodedPartitionSegmentCache.GetOrAdd(segment, encoded);
+    }
+
+    private static string EncodePartitionSegmentCore(string segment)
+    {
         // Conservative encoding: leave alphanumerics, '-', '_', '.'
         // alone; percent-encode everything else. Keeps the encoded form
         // valid as a partition key under Azure's documented rules and
         // round-trippable for diagnostics. UTF-8 byte-wise so non-ASCII
         // tree ids survive.
+        //
+        // Pure-ASCII fast path: scan the chars; if every char is in the
+        // safe set we return the original string verbatim (no UTF-8
+        // round-trip, no StringBuilder, no allocation beyond the cache
+        // entry the caller stores). The canonical replication path
+        // names tree ids with ASCII alphanumerics + '-' / '_' so this
+        // path matches almost every production call.
+        var fastPath = true;
+        for (var i = 0; i < segment.Length; i++)
+        {
+            if (!IsSafeAsciiSegmentChar(segment[i]))
+            {
+                fastPath = false;
+                break;
+            }
+        }
+        if (fastPath)
+        {
+            return segment;
+        }
+
         var utf8 = Encoding.UTF8.GetBytes(segment);
         var builder = new StringBuilder(utf8.Length);
         for (var i = 0; i < utf8.Length; i++)
@@ -951,20 +999,18 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         return builder.ToString();
     }
 
+    private static bool IsSafeAsciiSegmentChar(char c) =>
+        c is (>= 'a' and <= 'z')
+          or (>= 'A' and <= 'Z')
+          or (>= '0' and <= '9')
+          or '-' or '_' or '.';
+
     private static string Escape(string value) =>
         // OData filter literal escape: only the single quote needs
         // doubling. The PartitionKey we feed in here is already
         // percent-encoded so it never contains a single quote, but the
         // helper guards against future callers.
         value.Replace("'", "''", StringComparison.Ordinal);
-
-    private AzureTableWalEntity BuildHeadEntity(string partitionKey, long highestOffset) => new()
-    {
-        PartitionKey = partitionKey,
-        RowKey = HeadRowKey,
-        Offset = highestOffset,
-        Payload = null,
-    };
 
     private AzureTableWalEntity BuildEntryEntity(string partitionKey, in WalEntry entry, ArrayBufferWriter<byte> buffer)
     {
@@ -1026,7 +1072,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         }
     }
 
-    private PhaseTwoWorker GetOrCreatePhaseTwoWorker(string treeId, int shardIndex)
+    internal PhaseTwoWorker GetOrCreatePhaseTwoWorker(string treeId, int shardIndex)
     {
         // Cache key matches the manifest partition layout but is held
         // as an ordinal string so the dictionary's hashing stays cheap.

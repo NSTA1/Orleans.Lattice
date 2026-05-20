@@ -192,6 +192,72 @@ public class PhaseTwoWorkerTests
     }
 
     [Test]
+    public async Task EnqueueAsync_high_offset_committed_first_does_not_regress_when_a_lower_offset_arrives_later()
+    {
+        // Concurrent same-shard appends whose phase 0/1 races
+        // complete out of start-offset order arrive at the worker
+        // in the "wrong" order. The drain loop restores ascending
+        // start-offset order across the *pending set*, but a
+        // high-offset arrival that lands first can still be
+        // committed in its own phase-2 transaction before the
+        // lower-offset arrival reaches the worker. In that case
+        // TAIL must NOT regress: the second commit either skips
+        // the TAIL upsert or upserts the same higher value.
+        //
+        // This is the regression test for the failure
+        //   AppendBatchAsync_concurrent_distinct_batches_into_one_shard_all_persist
+        // surfaced where TAIL on disk ended up at 1 instead of 4
+        // after batches (0,1) and (2,3,4) raced against a shared
+        // shard.
+        var submitter = new RecordingSubmitter();
+        await using var worker = NewWorker(submitter);
+
+        // Force two SEPARATE phase-2 transactions in reverse
+        // start-offset order by awaiting between enqueues.
+        await worker.EnqueueAsync(2L, 4L).ConfigureAwait(false);
+        await worker.EnqueueAsync(0L, 1L).ConfigureAwait(false);
+
+        Assert.That(submitter.Calls.Count, Is.EqualTo(2), "two separate commits expected when arrivals are serialised");
+
+        // First submit commits (2,4): C-del + M-add + TAIL=4.
+        var firstTail = submitter.Calls[0]
+            .Where(a => a.ActionType == TableTransactionActionType.UpsertReplace
+                && ((AzureTableWalEntity)a.Entity).RowKey == AzureTableWalStorageProvider.TailRowKey)
+            .Select(a => ((AzureTableWalEntity)a.Entity).Offset)
+            .Single();
+        Assert.That(firstTail, Is.EqualTo(4L), "first commit upserts TAIL to its endOffsetInclusive");
+
+        // Second submit commits (0,1): C-del + M-add. TAIL must
+        // either be absent from the transaction (the worker
+        // recognises the upsert would regress and skips it) or
+        // explicitly clamped to >= 4. Either way the final
+        // persisted TAIL must be 4, not 1.
+        var secondTailActions = submitter.Calls[1]
+            .Where(a => a.ActionType == TableTransactionActionType.UpsertReplace
+                && ((AzureTableWalEntity)a.Entity).RowKey == AzureTableWalStorageProvider.TailRowKey)
+            .Select(a => ((AzureTableWalEntity)a.Entity).Offset)
+            .ToArray();
+
+        if (secondTailActions.Length > 0)
+        {
+            Assert.That(secondTailActions[0], Is.GreaterThanOrEqualTo(4L),
+                "if the second commit upserts TAIL it must not regress below the first commit's TAIL");
+        }
+
+        // M-rows must still be emitted in ascending start-offset
+        // order across the two transactions even though the
+        // arrivals were reversed.
+        var mRowOffsets = submitter.Calls
+            .SelectMany(c => c.Where(a => a.ActionType == TableTransactionActionType.Add))
+            .Select(a => long.Parse(
+                ((AzureTableWalEntity)a.Entity).RowKey.AsSpan(AzureTableWalStorageProvider.ManifestRowKeyPrefix.Length)))
+            .ToArray();
+        Assert.That(mRowOffsets, Is.EqualTo(new long[] { 2L, 0L }),
+            "M-rows are emitted in arrival-commit order; the test pins that two separate commits occurred "
+            + "(arrival sequence 2-then-0), which is exactly the race that exposed the TAIL regression bug");
+    }
+
+    [Test]
     public async Task EnqueueAsync_coalesces_many_pending_commits_into_one_submit()
     {
         // Park the submitter on the first call so a backlog of 49

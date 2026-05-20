@@ -283,11 +283,13 @@ public class AzureTableWalStorageProviderIntegrationTests
     }
 
     [Test]
-    public async Task AppendBatchAsync_supports_a_full_99_entry_transaction()
+    public async Task AppendBatchAsync_supports_a_full_100_entry_transaction()
     {
-        // The 100-action / 99-entry cap is the load-bearing batching
-        // invariant. Exercise it end-to-end so a future SDK-side
-        // tightening surfaces here rather than at runtime in CI.
+        // The 100-action batch cap is the load-bearing batching
+        // invariant for the per-batch schema (phase 1 holds entry
+        // rows only; no HEAD sentinel). Exercise the cap end-to-end
+        // so a future SDK-side tightening surfaces here rather than
+        // at runtime in CI.
         var entries = Enumerable
             .Range(0, AzureTableWalStorageProvider.MaxEntriesPerBatch)
             .Select(i => Entry(i))
@@ -516,5 +518,214 @@ public class AzureTableWalStorageProviderIntegrationTests
 
         Assert.That(head, Is.EqualTo(3L));
         Assert.That(read.Select(e => e.Offset), Is.EqualTo(new[] { 0L, 1L, 2L, 3L }));
+    }
+
+    [Test]
+    public async Task AppendBatchAsync_concurrent_distinct_batches_into_one_shard_all_persist()
+    {
+        // Two concurrent appends into the same shard land in
+        // distinct batch partitions (per-batch partition + manifest
+        // schema), so Azure Tables serves them in parallel; the
+        // per-shard phase-2 worker then drains them in strict
+        // ascending start-offset order and produces a monotonic
+        // TAIL. Both batches must round-trip and the manifest must
+        // be readable in ascending order.
+        var batchA = new[] { Entry(0), Entry(1) };
+        var batchB = new[] { Entry(2), Entry(3), Entry(4) };
+
+        // Kick both batches off; the phase-2 worker is responsible
+        // for the strict-order TAIL, so the call order here only
+        // controls which batch hits phase 1 first. Pre-await both
+        // to confirm neither fails.
+        var taskA = _sut.AppendBatchAsync(TreeId, 0, batchA, CancellationToken.None);
+        var taskB = _sut.AppendBatchAsync(TreeId, 0, batchB, CancellationToken.None);
+        await Task.WhenAll(taskA, taskB);
+
+        var head = await _sut.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None);
+        var read = await ReadAllAsync(_sut, TreeId, 0);
+
+        Assert.That(head, Is.EqualTo(4L), "TAIL must advance to the highest end offset across both batches");
+        Assert.That(read.Select(e => e.Offset), Is.EqualTo(new[] { 0L, 1L, 2L, 3L, 4L }));
+    }
+
+    [Test]
+    public async Task AppendEncodedBatchAsync_round_trips_pre_encoded_payload_bytes()
+    {
+        // The zero-copy append path hands the WAL grain's
+        // already-encoded payload bytes straight to the row's
+        // Payload column - no second encode. The provider overrides
+        // the default interface implementation; this test exercises
+        // the override end-to-end.
+        var encoder = new OrleansBinaryWalMutationEncoder(_serializer);
+
+        var mutationOne = new LatticeMutation
+        {
+            TreeId = TreeId,
+            Kind = MutationKind.Set,
+            Key = "encoded-zero",
+            Value = new byte[] { 1, 2, 3 },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            OriginClusterId = "site-a",
+        };
+        var mutationTwo = new LatticeMutation
+        {
+            TreeId = TreeId,
+            Kind = MutationKind.Delete,
+            Key = "encoded-one",
+            Value = Array.Empty<byte>(),
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Tick(HybridLogicalClock.Zero)),
+            OriginClusterId = "site-b",
+        };
+
+        // Encode each mutation through the encoder. The provider
+        // accepts ArraySegment<byte> rentals; an owned byte[] is
+        // fine for the test surface.
+        var writerOne = new System.Buffers.ArrayBufferWriter<byte>();
+        encoder.Encode(mutationOne, writerOne);
+        var writerTwo = new System.Buffers.ArrayBufferWriter<byte>();
+        encoder.Encode(mutationTwo, writerTwo);
+        var segments = new[]
+        {
+            new ArraySegment<byte>(writerOne.WrittenSpan.ToArray()),
+            new ArraySegment<byte>(writerTwo.WrittenSpan.ToArray()),
+        };
+        var offsets = new long[] { 0L, 1L };
+
+        await _sut.AppendEncodedBatchAsync(
+            TreeId,
+            0,
+            new ReadOnlyMemory<ArraySegment<byte>>(segments),
+            new ReadOnlyMemory<long>(offsets),
+            encoder,
+            CancellationToken.None);
+
+        var head = await _sut.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None);
+        var read = await ReadAllAsync(_sut, TreeId, 0);
+
+        Assert.That(head, Is.EqualTo(1L));
+        Assert.That(read, Has.Count.EqualTo(2));
+        Assert.That(read[0].Mutation.Key, Is.EqualTo("encoded-zero"));
+        Assert.That(read[0].Mutation.Value, Is.EqualTo(new byte[] { 1, 2, 3 }));
+        Assert.That(read[1].Mutation.Key, Is.EqualTo("encoded-one"));
+        Assert.That(read[1].Mutation.Kind, Is.EqualTo(MutationKind.Delete));
+    }
+
+    [Test]
+    public void AppendEncodedBatchAsync_rejects_offset_segment_length_mismatch()
+    {
+        // ReadOnlyMemory<ArraySegment<byte>> and ReadOnlyMemory<long>
+        // are parallel sequences; the provider must reject a length
+        // mismatch synchronously without any I/O.
+        var encoder = new OrleansBinaryWalMutationEncoder(_serializer);
+
+        var segments = new ArraySegment<byte>[] { new(new byte[] { 1 }) };
+        var offsets = new long[] { 0L, 1L };
+
+        Assert.That(
+            async () => await _sut.AppendEncodedBatchAsync(
+                TreeId,
+                0,
+                new ReadOnlyMemory<ArraySegment<byte>>(segments),
+                new ReadOnlyMemory<long>(offsets),
+                encoder,
+                CancellationToken.None),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public async Task AppendBatchAsync_persists_after_provider_dispose_and_reactivation()
+    {
+        // The phase-2 worker is awaited synchronously inside
+        // AppendBatchAsync, so the visible TAIL is durable by the
+        // time the call returns even if the provider is disposed
+        // immediately afterwards. A fresh provider on the same
+        // table must observe the persisted state.
+        await _sut.AppendBatchAsync(TreeId, 0, new[] { Entry(0), Entry(1), Entry(2) }, CancellationToken.None);
+        await _sut.DisposeAsync();
+
+        var recovered = CreateProvider(_tableName);
+        var head = await recovered.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None);
+        var read = await ReadAllAsync(recovered, TreeId, 0);
+
+        Assert.That(head, Is.EqualTo(2L));
+        Assert.That(read.Select(e => e.Offset), Is.EqualTo(new[] { 0L, 1L, 2L }));
+    }
+
+    [Test]
+    public async Task AppendBatchAsync_concurrent_appends_across_distinct_shards_do_not_serialise()
+    {
+        // Pins the cross-shard parallelism characteristic at the
+        // behavioural level: distinct shards must accept concurrent
+        // appends and each shard's TAIL must reflect only that
+        // shard's commits. The structural invariant (one
+        // PhaseTwoWorker per (treeId, shardIndex), no cross-shard
+        // lock) is pinned by the white-box unit tests in
+        // AzureTableWalStorageProviderTests; this test exercises
+        // the same property end-to-end against Azurite.
+        const int shardCount = 8;
+        const int entriesPerShard = 4;
+
+        var tasks = new Task[shardCount];
+        for (var shard = 0; shard < shardCount; shard++)
+        {
+            var capturedShard = shard;
+            var batch = Enumerable
+                .Range(0, entriesPerShard)
+                .Select(i => Entry(i, key: $"shard-{capturedShard}-{i}"))
+                .ToArray();
+            tasks[shard] = _sut.AppendBatchAsync(TreeId, capturedShard, batch, CancellationToken.None);
+        }
+        await Task.WhenAll(tasks);
+
+        // Every shard's TAIL must reflect its own batch independently.
+        for (var shard = 0; shard < shardCount; shard++)
+        {
+            var head = await _sut.GetHighestOffsetAsync(TreeId, shard, CancellationToken.None);
+            Assert.That(head, Is.EqualTo((long)(entriesPerShard - 1)),
+                $"shard {shard}: every shard's TAIL is independent of every other shard's commits");
+
+            var read = await ReadAllAsync(_sut, TreeId, shard);
+            Assert.That(read.Select(e => e.Offset),
+                Is.EqualTo(Enumerable.Range(0, entriesPerShard).Select(i => (long)i)),
+                $"shard {shard}: per-shard read must yield only this shard's entries");
+        }
+    }
+
+    [Test]
+    public async Task AppendBatchAsync_concurrent_appends_across_distinct_trees_all_persist()
+    {
+        // Distinct tree ids land in distinct manifest partition keys
+        // (`_m_|<tree>|<shard>`), so the per-tree workers are also
+        // independent. This is the cross-tree counterpart of the
+        // cross-shard test: a tree-id-keyed silo bottleneck is one
+        // of the easier mistakes to make in a refactor, so the
+        // characteristic is worth pinning explicitly.
+        const int treeCount = 4;
+        var treeIds = Enumerable.Range(0, treeCount).Select(i => $"tree-conc-{i}").ToArray();
+
+        var tasks = new Task[treeCount];
+        for (var i = 0; i < treeCount; i++)
+        {
+            var tree = treeIds[i];
+            tasks[i] = _sut.AppendBatchAsync(
+                tree,
+                shardIndex: 0,
+                new[] { Entry(0, key: $"{tree}-k0"), Entry(1, key: $"{tree}-k1") },
+                CancellationToken.None);
+        }
+        await Task.WhenAll(tasks);
+
+        for (var i = 0; i < treeCount; i++)
+        {
+            var tree = treeIds[i];
+            var head = await _sut.GetHighestOffsetAsync(tree, 0, CancellationToken.None);
+            Assert.That(head, Is.EqualTo(1L), $"tree {tree}: independent TAIL");
+
+            var read = await ReadAllAsync(_sut, tree, 0);
+            Assert.That(read.Select(e => e.Offset), Is.EqualTo(new[] { 0L, 1L }));
+            Assert.That(read.Select(e => e.Mutation.Key),
+                Is.EqualTo(new[] { $"{tree}-k0", $"{tree}-k1" }),
+                $"tree {tree}: per-tree partitioning means no key bleed across trees");
+        }
     }
 }
