@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Benchmark.WalAzureTable</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Benchmark.WalAzureTable</AssemblyName>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredCompilation>true</TieredCompilation>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The probe drives the production AzureTableWalStorageProvider end-to-end
+      against an Azurite endpoint. No BenchmarkDotNet harness: the workload is
+      whole-burst throughput (op/s and ms-per-batch summary) rather than a
+      nanosecond-resolution microbench, and BDN's iteration model does not fit
+      a single-burst write-1024-entries-and-stop measurement.
+    -->
+    <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
+  </ItemGroup>
+
+</Project>
