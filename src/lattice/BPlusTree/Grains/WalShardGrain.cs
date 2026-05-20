@@ -634,6 +634,63 @@ internal sealed class WalShardGrain(
     }
 
     /// <inheritdoc />
+    public async Task<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (fromSequence < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(fromSequence),
+                fromSequence,
+                "Sequence numbers start at 0; negative values are not valid.");
+        }
+
+        if (maxEntries < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxEntries),
+                maxEntries,
+                "At least one entry must be requested per page.");
+        }
+
+        EnsureInitialized();
+
+        // Drain the bytes-shaped read seam so providers that natively
+        // store encoded payloads (Azure Table Storage) hand the rows
+        // through verbatim. Third-party providers fall back to the
+        // default body on IWalStorageProvider, which decodes via
+        // ReadAsync and re-encodes via the same encoder; the receiver
+        // observes byte-for-byte identical payloads either way.
+        var fromOffsetExclusive = fromSequence - 1;
+        var page = await _provider
+            .ReadEncodedAsync(_treeId, _shardIndex, fromOffsetExclusive, maxEntries, encoder, cancellationToken)
+            .ConfigureAwait(true);
+
+        var segments = page.EncodedEntries.Span;
+        var offsets = page.Offsets.Span;
+        var collected = new List<WalShardShippingEntry>(segments.Length);
+        for (var i = 0; i < segments.Length; i++)
+        {
+            // The shipping page is dispatched across grain boundaries,
+            // so the encoded payload must be a self-contained byte[]
+            // (provider-owned segments are scoped to the provider call
+            // only). The copy is unavoidable here; it is paid once per
+            // entry per ship, not per peer.
+            var seg = segments[i];
+            var copy = seg.Count == 0 ? Array.Empty<byte>() : seg.AsSpan().ToArray();
+            collected.Add(new WalShardShippingEntry { Sequence = offsets[i], EncodedPayload = copy });
+        }
+
+        var nextShippingSequence = collected.Count == 0 ? fromSequence : collected[^1].Sequence + 1;
+        return new WalShardShippingPage
+        {
+            Entries = collected,
+            NextSequence = nextShippingSequence,
+        };
+    }
+
+    /// <inheritdoc />
     public Task<long> GetNextSequenceAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

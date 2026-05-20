@@ -79,6 +79,30 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Bytes-shaped counterpart to <see cref="ReadAsync"/>. Returns the
+    /// same per-shard window of entries strictly greater than or equal
+    /// to <paramref name="fromSequence"/>, ascending, up to
+    /// <paramref name="maxEntries"/>, but each entry carries the
+    /// pre-encoded payload bytes the canonical
+    /// <see cref="IWalRecordEncoder"/> wrote at append time instead of
+    /// the materialised <see cref="WalRecord"/>. The replication
+    /// shipper drains this method to feed the framing-only outbound
+    /// transport seam without paying a per-send Orleans envelope
+    /// serialize - the encode happens once at append time and the
+    /// bytes are reused verbatim on every send to every peer.
+    /// <para>
+    /// Implementations resolve the encoded bytes from the underlying
+    /// <see cref="IWalStorageProvider.ReadEncodedAsync"/> seam, which
+    /// providers that natively store encoded bytes (the Azure Table
+    /// provider) override to return rows verbatim.
+    /// </para>
+    /// </summary>
+    /// <param name="fromSequence">Inclusive starting sequence number.</param>
+    /// <param name="maxEntries">Maximum number of entries to return; must be at least 1.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns the next sequence number that will be assigned by the
     /// next successful <see cref="AppendAsync"/>. Equal to the number
     /// of entries currently persisted. <c>0</c> when the WAL is empty.

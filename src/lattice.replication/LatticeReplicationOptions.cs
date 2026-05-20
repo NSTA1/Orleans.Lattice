@@ -495,6 +495,27 @@ public class LatticeReplicationOptions
     /// </summary>
     public bool ShipDoorbellEnabled { get; set; } = DefaultShipDoorbellEnabled;
 
+    /// <summary>
+    /// When <see langword="true"/>, the shipper drains pre-encoded WAL
+    /// segments via <c>IWalShardGrain.ReadShippingAsync</c> and the
+    /// gRPC marshaller writes the framing-only wire shape (an
+    /// <see cref="EncodedBatchHeader"/> plus length-prefixed segments)
+    /// directly into the gRPC stream's <see cref="System.Buffers.IBufferWriter{T}"/>
+    /// instead of running each <c>WalRecord</c> through the Orleans
+    /// serializer. The bytes are produced once on the WAL append path
+    /// (via <see cref="IWalRecordEncoder"/>) and reused verbatim on
+    /// every send to every peer; a tree replicated to <c>N</c> peers
+    /// pays one encode at append time instead of <c>N</c> encodes per
+    /// shipped entry.
+    /// <para>
+    /// Defaults to <see langword="false"/> so the existing
+    /// typed-envelope path is the one in use until operators opt in.
+    /// Receivers running this build accept either wire shape; rolling
+    /// the flag out cluster-by-cluster is safe.
+    /// </para>
+    /// </summary>
+    public bool OneEncodeFastPath { get; set; } = DefaultOneEncodeFastPath;
+
 
     /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
@@ -709,5 +730,14 @@ public class LatticeReplicationOptions
     /// signalling enabled.
     /// </summary>
     public const bool DefaultShipDoorbellEnabled = true;
+
+    /// <summary>
+    /// Default value for <see cref="OneEncodeFastPath"/>: opt-in. The
+    /// roadmap entry that introduces this flag flips the default to
+    /// <see langword="true"/> in the release after operators have had
+    /// one minor-version cycle to roll out the receiver build that
+    /// understands the framing wire shape.
+    /// </summary>
+    public const bool DefaultOneEncodeFastPath = false;
 
 }
