@@ -182,13 +182,13 @@ The replication library is functionally complete for an initial NuGet release - 
 
 These five items close the WAL design doc's deferred acceptance rows from R-070 / R-071. R-074 / R-075 / R-077 are independent and parallelisable; R-076 sequences after R-075; R-078 sequences after R-047 and R-076.
 
-29. **R-074 - Multi-batch in-flight flush concurrency** `[deps: R-071 ✓]`
+29. **R-074 ✓ shipped - Multi-batch in-flight flush concurrency** `[deps: R-071 ✓]`
     Closes WAL design §9.1.4. Lifts the hard-coded single-in-flight flush to `WalMaxPendingBatches` while preserving dense offsets via grain-turn-serialised offset assignment.
 
-    - **R-079 - Per-batch Azure Table partition keys with manifest-driven reads** `[deps: R-074 ✓]`
+    - **R-079 ✓ shipped - Per-batch Azure Table partition keys with manifest-driven reads** `[deps: R-074 ✓]`
       Removes the head-pointer clobber race that R-074 documents against Azure Tables when `WalMaxPendingBatches > 1`, and lifts the per-shard write quota by spreading concurrent batches across Azure Tables partition servers. Storage layout change: each batch lands in its own Azure Tables partition keyed by `treeId|shardIndex|S{startOffset:D19}`; a per-shard manifest partition records committed batches and exposes a monotonic tail pointer. Append becomes a two-phase commit (batch transaction → manifest transaction, the latter serialised per shard); read becomes manifest-driven multi-partition fetch; reconciliation on activation closes the crash window between phases. Sequenced after R-074 so the writer-side concurrency and the storage-side parallelism land separately with clean perf attribution.
 
-30. **R-075 - Exact byte accounting in pending-batch sizing** `[deps: R-071 ✓]`
+30. **R-075 ✓ shipped - Exact byte accounting in pending-batch sizing** `[deps: R-071 ✓]`
     Closes WAL design §9.1.3. Replaces the heuristic batch sizer with an allocation-free `IReplicationBatchEncoder.Measure(...)` so a 4 MB batch never overshoots the Azure Table Storage transactional-batch ceiling.
 
 31. **R-076 ✓ shipped - `ArraySegment<byte>` provider contract for zero-copy hand-off** `[deps: R-070 ✓, R-075 ✓]`
@@ -635,7 +635,7 @@ These items are gating for **R-041** (binary framing) and **R-042** (gRPC push t
 
   Acceptance: a fixture that appends 100 entries, trims through offset 50, and asserts `GetLiveEntryCountAsync` returns `50`; the in-memory provider's `GetLowestOffsetAsync` is correct on empty / fully-trimmed / partially-trimmed / untrimmed shards; the Azure Table Storage backend (R-073) test suite gains the same coverage.
 
-- [ ] **R-079 - Per-batch Azure Table partition keys with manifest-driven reads** *(closes head-pointer clobber race exposed by R-074 against Azure Tables; lifts per-shard write quota)* `[deps: R-074 ✓]`
+- [x] **R-079 - Per-batch Azure Table partition keys with manifest-driven reads** *(closes head-pointer clobber race exposed by R-074 against Azure Tables; lifts per-shard write quota)* `[deps: R-074 ✓]` ✓ shipped
   R-074 lifts the writer-side single-in-flight cap inside the WAL grain, but the Azure Table Storage backend (R-073) still serialises every concurrent batch through one partition `treeId|shardIndex`. Two costs result. (1) Throughput: Azure Tables enforces a per-partition write quota (~500 transactions/sec, ~2,000 entities/sec) regardless of how many flushes the grain has in flight, so `WalMaxPendingBatches > 1` against Azure Tables buys only RPC pipelining, not partition-server parallelism. (2) Correctness window: the per-batch transaction upserts a shared `(PK = treeId|shardIndex, RK = HEAD)` sentinel with the batch's max offset, and concurrent batches can race the upsert so a smaller-offset batch's `HEAD = endOffset_small` lands after a larger-offset batch's `HEAD = endOffset_large`, briefly reporting a stale tail from `GetHighestOffsetAsync`. R-074 documents this as a bounded, opt-in hazard; R-079 eliminates it.
 
   Approach: each batch lands in its own Azure Tables partition keyed by `treeId|shardIndex|S{startOffset:D19}` (`S` so it sorts after the manifest's `M…` rows lexicographically). A separate per-shard **manifest partition** keyed by `treeId|shardIndex|MANIFEST` carries one row per committed batch (`RK = M{startOffset:D19}`, payload = `(startOffset, endOffsetInclusive)`) plus a single tail-pointer row (`RK = TAIL`, payload = max committed `endOffsetInclusive`). Append becomes a **two-phase commit**: phase 1 commits the entry rows + per-batch head sentinel atomically within the batch partition (true parallelism across batches because every batch hits a distinct partition); phase 2 commits the manifest row + tail-pointer upsert atomically within the manifest partition (serialised per shard inside the grain to keep the tail pointer monotonic). The grain gates phase 2 with a per-shard ordered queue so phase-2 transactions commit in offset order regardless of phase-1 completion order.
