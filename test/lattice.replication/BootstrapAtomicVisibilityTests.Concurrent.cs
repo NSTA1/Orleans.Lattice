@@ -123,7 +123,7 @@ public partial class BootstrapAtomicVisibilityTests
                 // cut. Without this pump, the receiver would see only
                 // the snapshot's prepared rows for sagas that
                 // committed after the cut - exactly the partial-saga
-                // view R-160 forbids.
+                // view atomic bootstrap visibility forbids.
                 var producerOptions = BuildOptionsMonitor(siteA);
                 var receiverOptions = BuildOptionsMonitor(siteB);
                 var producerFeed = new ChangeFeed(producerCluster.Client, producerOptions);

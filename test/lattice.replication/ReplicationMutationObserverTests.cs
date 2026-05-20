@@ -224,7 +224,7 @@ public class ReplicationMutationObserverTests
     }
 
     // ------------------------------------------------------------------
-    // R-032 - declared replication mode is the gate
+    // Declared replication mode is the gate
     // ------------------------------------------------------------------
 
     [Test]
@@ -278,7 +278,7 @@ public class ReplicationMutationObserverTests
     }
 
     // ------------------------------------------------------------------
-    // R-012 - producer-side per-key filters (mode resolver permissive)
+    // Producer-side per-key filters (mode resolver permissive)
     // ------------------------------------------------------------------
 
     [Test]
@@ -457,7 +457,7 @@ public class ReplicationMutationObserverTests
     }
 
     // ------------------------------------------------------------------
-    // R-012 - compiled-filter cache
+    // Compiled-filter cache
     // ------------------------------------------------------------------
 
     [Test]
@@ -1048,7 +1048,7 @@ public class ReplicationMutationObserverTests
     }
 
     // ----------------------------------------------------------------__
-    // R-090 - MutationCategory classification + maintenance skip
+    // MutationCategory classification + maintenance skip
     // ------------------------------------------------------------------
 
     [Test]
@@ -1147,7 +1147,7 @@ public class ReplicationMutationObserverTests
     [Test]
     public async Task Maintenance_category_skip_is_independent_of_origin_cluster_id()
     {
-        // R-090 spec: the classification is independent of OriginClusterId.
+        // Spec: the classification is independent of OriginClusterId.
         // A remote-origin maintenance emit is still Maintenance and still
         // skips the WAL.
         var sink = new CapturingSink();

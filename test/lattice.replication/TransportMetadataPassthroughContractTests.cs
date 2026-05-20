@@ -8,7 +8,7 @@ using Orleans.Serialization;
 namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
-/// Pins the R-086 transport contract: an
+/// Pins the transport metadata pass-through contract: an
 /// <see cref="IReplicationTransport"/> implementation must preserve the
 /// causal-plus metadata slots
 /// (<see cref="WalRecord.VectorClock"/> and

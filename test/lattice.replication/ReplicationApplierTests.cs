@@ -698,7 +698,7 @@ public partial class ReplicationApplierTests
     }
 
     // ------------------------------------------------------------------
-    // R-068 - apply.duration histogram (per-outcome instrumentation)
+    // apply.duration histogram (per-outcome instrumentation)
     // ------------------------------------------------------------------
 
     private static bool HasOutcome(IReadOnlyList<KeyValuePair<string, object?>> tags, string outcome) =>

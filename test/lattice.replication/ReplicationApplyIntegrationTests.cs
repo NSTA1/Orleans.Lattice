@@ -350,8 +350,9 @@ public class ReplicationApplyIntegrationTests
     [Test]
     public async Task ApplyAsync_mv_register_state_merge_preserves_concurrent_writes()
     {
-        // Receiver-side R-034 dispatch path: a Site-A-origin MV-Register
-        // payload carrying a fresh dot from "site-a" must be merged
+        // Receiver-side MV-Register state-merge dispatch path: a
+        // Site-A-origin MV-Register payload carrying a fresh dot from
+        // "site-a" must be merged
         // with a locally-authored "site-b" dot so both values survive
         // (the whole point of MV-Register over LWW). Verifies the
         // applier routes `LatticeMergeMode.MvRegister` through

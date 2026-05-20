@@ -472,7 +472,7 @@ public class LatticeReplicationGrpcServiceTests
             "ack for tree-B must not carry tree-A's pin");
     }
 
-    // ---- Receiver-side flow control (R-062 surface) ---------------------
+    // ---- Receiver-side flow control surface ----------------------------
 
     /// <summary>
     /// Captures the <see cref="ReceiverFlowControlContext"/> the policy

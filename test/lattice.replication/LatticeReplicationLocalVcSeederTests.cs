@@ -395,9 +395,9 @@ public partial class LatticeReplicationLocalVcSeederTests
     [Test]
     public async Task SeedFromTreeAsync_pins_with_zero_as_of_hlc()
     {
-        // R-093 is intra-cluster; there is no cross-cluster snapshot
-        // HLC concept, so the durable pin uses HybridLogicalClock.Zero
-        // as the asOfHlc placeholder.
+        // The intra-cluster snapshot/restore VC seeder is intra-cluster;
+        // there is no cross-cluster snapshot HLC concept, so the durable
+        // pin uses HybridLogicalClock.Zero as the asOfHlc placeholder.
         var shards = new IReadOnlyList<IReadOnlyList<LwwEntry>>[]
         {
             new IReadOnlyList<LwwEntry>[]

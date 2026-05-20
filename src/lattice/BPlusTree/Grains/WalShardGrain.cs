@@ -58,7 +58,7 @@ internal sealed class WalShardGrain(
     private long _nextOffset;
     private bool _initialized;
 
-    // Pending state shape after the zero-copy provider hand-off (R-076):
+    // Pending state shape after the zero-copy provider hand-off:
     // each pending entry contributes one pre-encoded payload segment
     // (carrying the bytes the canonical IWalMutationEncoder produced at
     // append time) and one parallel offset slot. The encoded bytes are

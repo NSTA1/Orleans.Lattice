@@ -910,7 +910,7 @@ public partial class ReplicationShipperGrainTests
         });
     }
 
-    // --- DLQ routing on schema-shaped encode failure (R-067 §365) ---
+    // --- DLQ routing on schema-shaped encode failure ---
 
     [Test]
     public async Task PumpOnceAsync_routes_every_entry_to_dlq_on_argument_exception_during_encode()
@@ -983,7 +983,7 @@ public partial class ReplicationShipperGrainTests
         Assert.That(state.State.Cursor, Is.EqualTo(new HybridLogicalClock { WallClockTicks = 11, Counter = 0 }));
     }
 
-    // --- Activation-scoped buffer reuse (R-067 perf-pass) ---
+    // --- Activation-scoped buffer reuse (encoder perf-pass) ---
 
     private sealed class CapturingEncoder : IReplicationBatchEncoder
     {

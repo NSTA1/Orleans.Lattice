@@ -191,7 +191,7 @@ public class ChangeCaptureIntegrationTests
     }
 
     // ------------------------------------------------------------------
-    // R-090 - MutationCategory.Maintenance writes are skipped end-to-end
+    // MutationCategory.Maintenance writes are skipped end-to-end
     // ------------------------------------------------------------------
 
     [Test]

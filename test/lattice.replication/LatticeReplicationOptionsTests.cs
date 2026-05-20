@@ -203,7 +203,7 @@ public class LatticeReplicationOptionsTests
     }
 
     // ------------------------------------------------------------------
-    // WAL retention (R-061)
+    // WAL retention
     // ------------------------------------------------------------------
 
     [Test]
@@ -221,8 +221,8 @@ public class LatticeReplicationOptionsTests
     }
 
     // ------------------------------------------------------------------
-    // Auto-bootstrap on fall-off-the-log (R-052) and operator re-seed
-    // rate limit (R-053)
+    // Auto-bootstrap on fall-off-the-log and operator re-seed
+    // rate limit
     // ------------------------------------------------------------------
 
     [Test]

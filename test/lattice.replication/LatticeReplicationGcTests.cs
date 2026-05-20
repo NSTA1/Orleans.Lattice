@@ -449,7 +449,7 @@ public class LatticeReplicationGcTests
         var report = await sut.RunOnceAsync(Tree);
 
         // Causal-stable is null because no consumer reported a VC, so
-        // the predicate degrades to the existing R-061 HLC behaviour.
+        // the predicate degrades to the existing HLC-retention behaviour.
         Assert.That(report.CausalStable, Is.Null);
         Assert.That(report.EntriesTrimmed, Is.EqualTo(1));
     }

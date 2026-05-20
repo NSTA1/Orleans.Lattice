@@ -60,7 +60,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         // Pins the contract that an unconfigured tree (resolver returns
         // null, the "not enumerated in ReplicatedTrees" signal)
-        // preserves the historical pre-R-158 LwwRegister default.
+        // preserves the historical LwwRegister default.
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
         resolver.Resolve(Tree).Returns((LatticeMergeMode?)null);
         var fake = new FakePersistentState<BootstrapCoordinatorState>();

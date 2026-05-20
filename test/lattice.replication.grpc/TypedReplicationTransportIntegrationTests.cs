@@ -79,7 +79,7 @@ public sealed class TypedReplicationTransportIntegrationTests
                         new RecordingEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
                     services.AddLatticeReplicationGrpc();
-                    // R-078 coverage is about the typed-transport wire
+                    // Typed-transport coverage is about the wire
                     // shape, not the auth gate; relax it so the round-trip
                     // is not gated by the shared-secret authenticator.
                     services.Configure<LatticeReplicationSecurityOptions>(o => o.RequireAuthentication = false);
@@ -184,8 +184,8 @@ public sealed class TypedReplicationTransportIntegrationTests
         };
 
         // This is exactly the shape the outbound shipper emits on its
-        // typed fast path post R-078: typed envelope populated, payload
-        // empty (no shipper-side encode into _writeBuffer).
+        // typed fast path: typed envelope populated, payload empty (no
+        // shipper-side encode into _writeBuffer).
         var batch = new ReplicationBatch
         {
             TargetClusterId = PeerCluster,
@@ -221,8 +221,9 @@ public sealed class TypedReplicationTransportIntegrationTests
         // encode/decode the canonical encoder sees per round-trip is
         // the pair owned by the gRPC marshaller seam: one Encode on
         // the sender's stream-buffer, one Decode on the receiver's.
-        // Without R-078 the shipper would have encoded a second time
-        // into its _writeBuffer; this integration test does not stand
+        // Without the typed-transport fast path the shipper would have
+        // encoded a second time into its _writeBuffer; this integration
+        // test does not stand
         // up the shipper, but pinning "1 encode + 1 decode per round
         // trip" is a regression guard against any future change that
         // adds a redundant encode/decode inside the transport.
@@ -259,7 +260,7 @@ public sealed class TypedReplicationTransportIntegrationTests
                 recording.EncodeCalls,
                 Is.EqualTo(1),
                 "the canonical encoder is invoked exactly once on the sender's gRPC marshaller; the shipper's "
-                + "per-tick encode into _writeBuffer is the call R-078 eliminated, and it must not reappear here");
+                + "per-tick encode into _writeBuffer is the call the typed-transport fast path eliminated, and it must not reappear here");
             Assert.That(
                 recording.DecodeCalls,
                 Is.EqualTo(1),

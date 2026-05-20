@@ -103,7 +103,7 @@ public class InMemoryWalStorageProviderTests
     [Test]
     public async Task AppendBatchAsync_accepts_non_zero_first_offset_on_empty_shard()
     {
-        // After LatticeOptions.WalMaxPendingBatches > 1 (R-074), the
+        // With LatticeOptions.WalMaxPendingBatches > 1, the
         // grain assigns offsets serially on its turn but flush
         // completion can arrive at the provider out of order. The
         // provider therefore no longer requires the first batch to

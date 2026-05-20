@@ -64,8 +64,9 @@ public partial class LatticeBootstrapCoordinatorGrainTests
                 HighWaterMark = ((WalRecord)call[0]).Timestamp,
             }));
         // Default merge-mode resolver returns null so DrainSnapshotAsync
-        // falls back to LwwRegister - preserves the pre-R-158 behaviour
-        // for tests that pre-date the per-tree merge-mode plumbing.
+        // falls back to LwwRegister - preserves the historical default
+        // behaviour for tests that pre-date the per-tree merge-mode
+        // plumbing.
         var resolver = mergeResolver ?? Substitute.For<ILatticeMergeModeResolver>();
         if (mergeResolver is null)
         {

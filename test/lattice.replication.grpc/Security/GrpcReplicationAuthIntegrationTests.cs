@@ -16,7 +16,7 @@ using Orleans.Serialization;
 namespace Orleans.Lattice.Replication.Grpc.Tests.Security;
 
 /// <summary>
-/// Receiver-side end-to-end auth coverage for the R-046 shared-secret
+/// Receiver-side end-to-end auth coverage for the shared-secret
 /// authenticator. Spins up the gRPC server with
 /// <c>RequireAuthentication = true</c> and asserts:
 /// (a) inbound calls without the secret header are rejected as

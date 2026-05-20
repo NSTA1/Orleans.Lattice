@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Tests;
 /// Unit tests pinning the wire-compatible defaults and initialiser
 /// shape of the atomic-batch metadata slots
 /// (<see cref="LatticeMutation.AtomicBatchSize"/> /
-/// <see cref="LatticeMutation.AtomicBatchIndex"/>) added by R-094.
+/// <see cref="LatticeMutation.AtomicBatchIndex"/>).
 /// Sibling fixture to <see cref="LatticeTransactionContextTests"/> /
 /// <see cref="LatticeMaintenanceContextTests"/> following the same
 /// "Default_LatticeMutation_*" precedent for new wire slots.
@@ -20,8 +20,8 @@ public sealed class LatticeMutationAtomicBatchTests
         // Wire-compat: legacy persisted observer payloads (and any caller
         // that constructs the struct without setting the new slots) must
         // round-trip with both fields defaulting to 0 so observers
-        // persisted before R-094 decode identically to a single-key,
-        // non-atomic write.
+        // persisted before the atomic-batch metadata slots existed
+        // decode identically to a single-key, non-atomic write.
         var mutation = new LatticeMutation
         {
             TreeId = "t",

@@ -243,8 +243,9 @@ public sealed class ReplicationShipperGrainTypedTransportSkipsEncodeTests
     [Test]
     public async Task PumpOnceAsync_typed_envelope_matches_envelope_bytes_round_trip()
     {
-        // R-078 acceptance criterion 4: the typed envelope the shipper
-        // hands to a typed transport must describe exactly the entries
+        // Typed-transport fast-path acceptance criterion: the typed
+        // envelope the shipper hands to a typed transport must describe
+        // exactly the entries
         // the encoder would have written into Payload on the bytes-only
         // path. Use the canonical Orleans-binary encoder to round-trip
         // the bytes side; assert field-for-field equality with the

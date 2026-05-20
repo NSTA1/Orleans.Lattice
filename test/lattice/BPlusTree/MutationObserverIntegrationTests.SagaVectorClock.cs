@@ -66,7 +66,7 @@ public sealed partial class MutationObserverIntegrationTests
             && m.Key == "c");
 
         // Every per-key emit carries a VectorClock equal to the captured
-        // frontier - the core R-089 invariant.
+        // frontier - the core saga-wide vector-clock capture invariant.
         foreach (var m in new[] { m1, m2, m3 })
         {
             Assert.That(m.VectorClock, Is.Not.Null);
