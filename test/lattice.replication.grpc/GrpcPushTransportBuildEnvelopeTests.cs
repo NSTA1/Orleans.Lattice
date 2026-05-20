@@ -225,4 +225,45 @@ public class GrpcPushTransportBuildEnvelopeTests
                 "caller-supplied envelope must override the heartbeat-default wire version");
         });
     }
+
+    [Test]
+    public void BuildEnvelope_throws_NotSupportedException_when_EncodedEnvelope_is_populated()
+    {
+        // Stage 3 of the one-encode migration introduced the
+        // EncodedEnvelope slot but does not yet wire the shipper-side
+        // population or the transport-side framing fast path. Until
+        // stage 4 lands, a populated slot indicates a producer-side
+        // bug and the transport must fail fast rather than silently
+        // drop the framing-encoded entries onto one of the legacy
+        // paths.
+        var (transport, encoder) = CreateTransport();
+        using var _ = transport;
+        var batch = new ReplicationBatch
+        {
+            TargetClusterId = "peer",
+            TreeName = "orders",
+            OriginClusterId = "self",
+            // No bytes / typed envelope; the new slot is the only
+            // thing the caller supplied.
+            EncodedEnvelope = new ReplicationBatchEncodedEnvelope
+            {
+                Header = new EncodedBatchHeader
+                {
+                    Magic = EncodedBatchHeader.MagicValue,
+                    WireVersion = EncodedBatchHeader.CurrentWireVersion,
+                    OriginClusterIdHash = EncodedBatchHeader.HashClusterId("self"),
+                    EntryCount = 0,
+                },
+                EncodedEntries = ReadOnlyMemory<ArraySegment<byte>>.Empty,
+            },
+        };
+
+        Assert.That(
+            () => transport.BuildEnvelopeForTesting(batch),
+            Throws.InstanceOf<NotSupportedException>()
+                .With.Message.Contain("EncodedEnvelope")
+                .And.Message.Contain("stage 4"));
+        Assert.That(encoder.DecodeCalls, Is.Zero,
+            "the framing-only slot must not fall through to the legacy decode branch");
+    }
 }

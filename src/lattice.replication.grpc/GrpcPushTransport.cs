@@ -159,6 +159,24 @@ internal sealed class GrpcPushTransport : ITypedReplicationTransport, IDisposabl
 
     private ReplicationBatchEnvelope BuildEnvelope(ReplicationBatch batch)
     {
+        // Framing-only fast path slot. Stage 3 of the one-encode
+        // migration introduced this slot but does not wire the
+        // shipper-side population; stage 4 flips the shipper to
+        // populate it and the transport will then frame the bytes
+        // directly into the gRPC stream's IBufferWriter without going
+        // through the typed envelope. Until that lands, treat a
+        // populated slot as a producer-side bug rather than silently
+        // dropping it onto one of the legacy paths.
+        if (batch.EncodedEnvelope is not null)
+        {
+            throw new NotSupportedException(
+                "ReplicationBatch.EncodedEnvelope was populated, but the gRPC push "
+                + "transport's framing-only fast path is not yet wired (stage 4 of the "
+                + "one-encode migration). Either flip LatticeReplicationOptions."
+                + "OneEncodeFastPath to false or upgrade to the version that ships "
+                + "the framing-only shipper path.");
+        }
+
         // Typed-envelope fast path: when the shipper supplied the
         // pre-built envelope on the batch, ship it verbatim. Skips a
         // per-send `_encoder.Decode(batch.Payload)` call that would
