@@ -58,7 +58,7 @@ internal sealed class WalShardGrain(
     private long _nextOffset;
     private bool _initialized;
 
-    // Pending state shape after the zero-copy provider hand-off (R-076):
+    // Pending state shape after the zero-copy provider hand-off:
     // each pending entry contributes one pre-encoded payload segment
     // (carrying the bytes the canonical IWalMutationEncoder produced at
     // append time) and one parallel offset slot. The encoded bytes are
@@ -199,6 +199,14 @@ internal sealed class WalShardGrain(
         var options = optionsMonitor.Get(_treeId);
         _provider = options.WalStorageProvider?.Invoke(_treeId)
             ?? services.GetRequiredService<IWalStorageProvider>();
+        // Reconcile any half-committed state a multi-phase backend
+        // (e.g. Azure Table's per-batch partition + manifest layout)
+        // may have left from a previous activation's crash between
+        // commit phases, so GetHighestOffsetAsync's observable tail is
+        // the actual durable tail before the grain accepts appends.
+        // Single-transaction backends inherit the interface's default
+        // no-op implementation.
+        await _provider.ReconcileAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await _provider.GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = highest + 1;
         _initialized = true;
@@ -929,6 +937,11 @@ internal sealed class WalShardGrain(
         _treeId = treeId;
         _shardIndex = shardIndex;
         _provider = provider;
+        // Mirror OnActivateAsync's ordering: reconcile any
+        // half-committed multi-phase backend state before reading the
+        // tail so the test seam exercises the same activation contract
+        // production grains use.
+        await provider.ReconcileAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await provider.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = highest + 1;
         _initialized = true;

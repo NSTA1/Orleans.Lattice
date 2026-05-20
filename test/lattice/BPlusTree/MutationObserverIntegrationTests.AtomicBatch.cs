@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// End-to-end integration tests asserting that <c>SetManyAtomicAsync</c>
 /// stamps <see cref="LatticeMutation.AtomicBatchSize"/> /
 /// <see cref="LatticeMutation.AtomicBatchIndex"/> on every per-key emit
-/// produced by the saga (R-095). The size is the canonical sibling
+/// produced by the saga. The size is the canonical sibling
 /// count a remote receiver-side staging buffer reads to detect when
 /// every entry of a batch has arrived; the index is the deterministic
 /// per-key position within the batch. Single-key writes outside a

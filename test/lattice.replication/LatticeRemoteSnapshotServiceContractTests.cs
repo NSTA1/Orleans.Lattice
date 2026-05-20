@@ -6,8 +6,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// Drives the inherited <see cref="RemoteSnapshotTransportContractTests"/>
 /// suite against the real sender-side handler
 /// <see cref="LatticeRemoteSnapshotService"/>. Establishes the
-/// transport-agnostic loopback fixture R-151's acceptance criterion
-/// names: a host can route inbound
+/// transport-agnostic loopback fixture: a host can route inbound
 /// <see cref="IRemoteSnapshotTransport"/> RPCs into the shipped
 /// handler and observe the cross-cluster bootstrap contract
 /// (metadata-then-stream consistency, point-in-time view at

@@ -138,11 +138,46 @@ public partial class AzureTableWalStorageProviderTests
     }
 
     [Test]
-    public void MaxEntriesPerBatch_reserves_one_action_for_head_upsert()
+    public void MaxEntriesPerBatch_uses_full_transaction_action_cap()
     {
-        // Azure caps a transaction at 100 actions; the provider reserves
-        // one for the head upsert. Pin the constant so a future change
-        // on either side trips this regression.
-        Assert.That(AzureTableWalStorageProvider.MaxEntriesPerBatch, Is.EqualTo(99));
+        // Azure caps a transaction at 100 actions. The two-phase
+        // per-batch schema drops the per-batch HEAD
+        // sentinel from phase 1 so the full 100-action budget is
+        // available for entries; reconciliation derives
+        // endOffsetInclusive from a Top(1) DESC query over the batch
+        // partition. Pin the constant so a future change on either
+        // side trips this regression.
+        Assert.That(AzureTableWalStorageProvider.MaxEntriesPerBatch, Is.EqualTo(100));
+    }
+
+    [Test]
+    public void BuildBatchPartitionKey_returns_same_string_for_repeated_calls_with_safe_treeId()
+    {
+        // ASCII-safe segments hit the cache fast path: the encoded
+        // form is the input itself and a second invocation with the
+        // same treeId must serve from the cache. We do not assert
+        // reference equality on the assembled partition key (each
+        // call still allocates the final result string via the
+        // DefaultInterpolatedStringHandler), only on the inputs being
+        // re-encoded byte-for-byte, which is the wire-format
+        // invariant.
+        var a = AzureTableWalStorageProvider.BuildBatchPartitionKey("safe-tree_1.0", 0, 0L);
+        var b = AzureTableWalStorageProvider.BuildBatchPartitionKey("safe-tree_1.0", 0, 0L);
+        Assert.That(a, Is.EqualTo(b));
+        Assert.That(a, Does.Contain("safe-tree_1.0"), "ASCII-safe id should round-trip verbatim");
+    }
+
+    [Test]
+    public void EncodePartitionSegment_handles_repeated_non_ascii_call_consistently()
+    {
+        // Non-ASCII inputs hit the StringBuilder path; cached calls
+        // must still produce byte-identical encoded segments so the
+        // partition key remains stable across calls. A bug in the
+        // cache (e.g. holding the StringBuilder by reference instead
+        // of its ToString result) would surface here as a mismatch.
+        var first = AzureTableWalStorageProvider.BuildManifestPartitionKey("café", 3);
+        var second = AzureTableWalStorageProvider.BuildManifestPartitionKey("café", 3);
+        Assert.That(second, Is.EqualTo(first));
+        Assert.That(first, Is.EqualTo("_m_|caf%C3%A9|3"));
     }
 }

@@ -578,9 +578,9 @@ public partial class WalShardGrainTests
     [Test]
     public async Task GetEntryCountAsync_obsolete_forwarder_still_returns_next_offset()
     {
-        // The obsolete forwarder preserves the pre-R-077 behaviour
-        // (trim-unaware next-offset count) for one minor version so
-        // existing callers compile without immediate change.
+        // The obsolete forwarder preserves the historical pre-rename
+        // behaviour (trim-unaware next-offset count) for one minor
+        // version so existing callers compile without immediate change.
         var grain = await CreateGrainAsync();
         await grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
         await grain.AppendAsync(MakeEntry("b"), CancellationToken.None);

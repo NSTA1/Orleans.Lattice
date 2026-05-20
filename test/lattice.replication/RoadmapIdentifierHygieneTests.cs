@@ -5,10 +5,10 @@ namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
 /// Regression: replication feature-tracker identifiers (<c>R-XXX</c>) must
-/// appear only in the replication <c>roadmap.md</c>. They are meaningless
-/// outside of that file - docs, XML doc comments, inline comments, test
-/// fixture names, and string literals must describe the behaviour by name
-/// and effect instead. See the "Documentation" section of
+/// appear only in roadmap files. They are meaningless outside of those
+/// files - source, tests, docs, XML doc comments, inline comments, test
+/// fixture names, and string literals must describe the behaviour by
+/// name and effect instead. See the "Documentation" section of
 /// <c>.github/copilot-instructions.md</c>.
 /// </summary>
 [TestFixture]
@@ -22,10 +22,11 @@ public class RoadmapIdentifierHygieneTests
         RegexOptions.Compiled);
 
     /// <summary>
-    /// Scans every <c>.cs</c> file under <c>src/lattice.replication/</c> and
-    /// every <c>.md</c> file under <c>docs/lattice.replication/</c> and fails
-    /// if any tracker identifier is present. The replication
-    /// <c>roadmap.md</c> and this test file are the only permitted locations.
+    /// Scans every <c>.cs</c> file under <c>src/</c> and <c>test/</c> plus
+    /// every <c>.md</c> file under <c>docs/</c> and <c>.github/</c> and
+    /// fails if any replication tracker identifier is present. Any
+    /// <c>roadmap*.md</c> file and the few forward-looking design notes
+    /// listed below are the only permitted locations.
     /// </summary>
     [Test]
     public void Replication_tracker_identifiers_appear_only_in_roadmap()
@@ -35,8 +36,10 @@ public class RoadmapIdentifierHygieneTests
             Path.Combine(repoRoot, "test", "lattice.replication", "RoadmapIdentifierHygieneTests.cs"));
 
         var scanned = new List<string>();
-        scanned.AddRange(EnumerateFiles(Path.Combine(repoRoot, "src", "lattice.replication"), "*.cs"));
-        scanned.AddRange(EnumerateFiles(Path.Combine(repoRoot, "docs", "lattice.replication"), "*.md"));
+        scanned.AddRange(EnumerateFiles(Path.Combine(repoRoot, "src"), "*.cs"));
+        scanned.AddRange(EnumerateFiles(Path.Combine(repoRoot, "test"), "*.cs"));
+        scanned.AddRange(EnumerateFiles(Path.Combine(repoRoot, "docs"), "*.md"));
+        scanned.AddRange(EnumerateFiles(Path.Combine(repoRoot, ".github"), "*.md"));
 
         var violations = new List<string>();
         foreach (var file in scanned)
@@ -76,7 +79,7 @@ public class RoadmapIdentifierHygieneTests
         }
 
         Assert.That(violations, Is.Empty,
-            "Replication tracker identifiers must appear only in the replication roadmap.md. "
+            "Replication tracker identifiers must appear only in roadmap.md. "
             + "Rewrite these references to describe the behaviour by name and effect "
             + "(see .github/copilot-instructions.md -> Documentation)." + Environment.NewLine
             + string.Join(Environment.NewLine, violations));

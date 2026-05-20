@@ -138,7 +138,8 @@ internal sealed partial class BPlusLeafGrain
         // Stable, deterministic consumer id pinned
         // to the leaf grain so each leaf advances its own cursor
         // independently and the registry's per-shard min predicate
-        // (replication R-083) trims under the slowest local consumer.
+        // (replication slowest-consumer trim) trims under the slowest
+        // local consumer.
         _cachedConsumerId = $"{ILeafCursorReporter.MaterialiserConsumerIdPrefix}{treeId}_{context.GrainId}";
         return _cachedConsumerId;
     }

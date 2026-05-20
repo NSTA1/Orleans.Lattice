@@ -678,7 +678,7 @@ public partial class AtomicWriteGrainTests
         Assert.That(async () => await grain.ExecuteAsync(TreeId, original), Throws.Nothing);
     }
 
-    // --- Saga-wide vector-clock capture (R-089) ---
+    // --- Saga-wide vector-clock capture ---
 
     [Test]
     public async Task ExecuteAsync_captures_caller_VectorClock_once_on_first_prepare()

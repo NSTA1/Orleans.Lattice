@@ -15,7 +15,7 @@ using Orleans.Serialization;
 namespace Orleans.Lattice.Replication.Grpc.Tests;
 
 /// <summary>
-/// gRPC mirror of the R-086 transport metadata pass-through contract:
+/// gRPC mirror of the transport metadata pass-through contract:
 /// asserts that the canonical
 /// <see cref="GrpcPushTransport"/> + receiver-side service round-trips
 /// <see cref="WalRecord.VectorClock"/> and

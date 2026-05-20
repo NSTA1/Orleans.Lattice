@@ -163,7 +163,8 @@ public abstract class RemoteSnapshotTransportContractTests
         // The contract: a snapshot is a point-in-time view at the metadata's
         // AsOfHlc. Entries committed on the sender AFTER the metadata is
         // captured must not leak into a concurrently-running stream call.
-        // This is the core acceptance criterion R-150 names explicitly.
+        // This is the core acceptance criterion of the remote-snapshot
+        // transport contract.
         var asOf = Hlc(100);
         var frontier = new VersionVector();
         var initial = new[]

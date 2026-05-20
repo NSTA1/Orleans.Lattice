@@ -23,7 +23,12 @@ IAsyncEnumerable<WalEntry> ReadAsync(string treeId, int shardIndex, long fromOff
 Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken);
 Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken);
 Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken);
+Task ReconcileAsync(string treeId, int shardIndex, CancellationToken cancellationToken); // optional, default no-op
 ```
+
+### Activation-time recovery (`ReconcileAsync`)
+
+`ReconcileAsync` is the optional activation-time recovery seam for providers whose commit protocol can leave the durable state inconsistent across crash boundaries. The WAL grain calls it in `OnActivateAsync` before reading the highest offset, so the activation hook runs while the grain is quiescent. The default interface implementation is a no-op, suitable for backends whose append is atomic in a single operation (`InMemoryWalStorageProvider` inherits the default). The Azure Tables provider overrides it to repair phase-1/phase-2 orphans (see *Crash recovery* below).
 
 ### Zero-copy append (`AppendEncodedBatchAsync`)
 
@@ -58,6 +63,17 @@ Hosts wire a provider into the silo via `ISiloBuilder.AddWalStorage`. The defaul
 ```csharp verify
 siloBuilder.AddWalStorage(sp => new InMemoryWalStorageProvider());
 ```
+
+`AddWalStorage` has **two different registration semantics depending on the overload**, and the difference is load-bearing because `AddLattice` self-registers the in-memory baseline as part of its own setup:
+
+| Overload | Registration | Wins against |
+|---|---|---|
+| `AddWalStorage()` (no factory) | `TryAddSingleton` - first registration wins | nothing (only installs if no provider is registered yet) |
+| `AddWalStorage(factory)` | `Services.Replace` - last call wins | the in-memory baseline, any prior factory |
+
+Net effect: a host-supplied factory is **order-independent** with respect to `AddLattice`. `siloBuilder.AddLattice(...)` followed by `siloBuilder.AddAzureTableWalStorage(...)` produces the same effective registration as the reverse order - the Azure factory wins either way. Calling `AddWalStorage(factory)` (or one of the package-level overloads that wraps it, such as `AddAzureTableWalStorage`) multiple times follows last-call-wins.
+
+This contract was tightened to fix a silent-drop bug: previously both branches used `TryAddSingleton`, so a host that called `AddLattice` before `AddAzureTableWalStorage` would silently end up on the in-memory baseline because `AddLattice`'s own `AddWalStorage()` call had already won the `TryAdd` race.
 
 The replication package additionally exposes per-tree overrides via `LatticeReplicationOptions.WalStorageProvider` for trees that should opt out of the silo-wide default.
 
@@ -119,30 +135,48 @@ Exactly one authentication mode must be configured. `Validate()` throws `Invalid
 
 #### Storage layout
 
-The provider uses one Azure Table partition per `(treeId, shardIndex)` pair plus a per-partition head-pointer sentinel:
+The provider uses a **per-batch partition + per-shard manifest** schema. Each `AppendBatchAsync` (or `AppendEncodedBatchAsync`) call lands in its own batch partition; each shard also owns one manifest partition that records every committed batch plus the shard's monotonic tail.
 
 | Element | Format | Purpose |
 |---|---|---|
-| `PartitionKey` | `{percent-encoded treeId}\|{shardIndex}` | One partition per shard. Disallowed characters (`/`, `\`, `#`, `?`, control bytes, surrogates) and `%` itself are percent-encoded byte-wise over UTF-8 so non-ASCII tree ids round-trip. |
-| Entry `RowKey` | `E{Offset:D19}` | 19-digit zero-padded so lexicographic order matches numeric order (`long.MaxValue` is 19 digits). |
-| Head `RowKey` | `HEAD` | Per-partition sentinel. `'H'` (0x48) sorts after `'E'` (0x45), so the entry-range query uses a tight upper bound (`RowKey lt 'HEAD'`). |
-| Entity columns | `Offset` (long), `Payload` (byte[]?) | The payload is the Orleans-binary-serialised `LatticeMutation`; it is `null` on the head sentinel. |
+| Batch `PartitionKey` | `_b_\|{percent-encoded treeId}\|{shardIndex}\|S{startOffset:D19}` | One partition per appended batch. Distinct batch partitions sit on distinct Azure Tables partition servers, so concurrent appends against the same shard run in parallel rather than serialising on a single server. The D19 width makes batch partition keys sort lexicographically iff their start offsets sort numerically. |
+| Manifest `PartitionKey` | `_m_\|{percent-encoded treeId}\|{shardIndex}` | One manifest partition per shard. Holds the candidate-row, manifest, and tail rows described below. |
+| Entry `RowKey` | `E{Offset:D19}` (inside a batch partition) | One row per appended `WalEntry`. The 19-digit zero pad makes lexicographic order match numeric order. |
+| Candidate `RowKey` | `C{startOffset:D19}` (inside the manifest partition) | Phase-0 stamp written alongside phase-1 entry rows. The row's `Offset` column carries `endOffsetInclusive`. Deleted atomically with the matching manifest row by phase 2; a remaining candidate-row after a restart is exactly the orphan signal the reconciler looks for. |
+| Manifest `RowKey` | `M{startOffset:D19}` (inside the manifest partition) | Phase-2 commit. The row's `Offset` column carries `endOffsetInclusive`. A `RowKey` range scan returns committed batches in commit-offset order. |
+| Tail `RowKey` | `TAIL` (inside the manifest partition) | Per-shard tail pointer. The `Offset` column holds the maximum committed `endOffsetInclusive` across every batch in the shard. `'T' > 'M'`, so the manifest range query uses `RowKey lt 'TAIL'` as a tight upper bound. |
+| Entity columns | `Offset` (long), `Payload` (byte[]?) | The payload is the Orleans-binary-serialised `LatticeMutation` on entry rows; it is `null` on candidate, manifest, and tail rows. |
 
-The table is created on first use (idempotent) so hosts do not need to provision it out-of-band. Specify a non-default `TableName` to share an account across multiple Lattice clusters without WAL collisions.
+Disallowed characters (`/`, `\`, `#`, `?`, control bytes, surrogates) and `%` itself are percent-encoded byte-wise over UTF-8 so non-ASCII tree ids round-trip; the percent-encoded form is cached process-wide so the per-call partition-key build path allocates only the assembled key string. The table is created on first use (idempotent) so hosts do not need to provision it out-of-band. Specify a non-default `TableName` to share an account across multiple Lattice clusters without WAL collisions.
 
 #### Atomicity and capacity
 
-Every `AppendBatchAsync` (or `AppendEncodedBatchAsync`) call is translated to **one** `SubmitTransactionAsync` containing one head-sentinel upsert plus one `Add` per appended entry. Azure Tables commits the transaction atomically across the partition or fails the whole batch, satisfying the all-or-nothing append contract.
+Each append is committed in **three phases** so concurrent batches against the same shard get true partition-server parallelism while still presenting a monotonic, all-or-nothing visible tail:
 
-Azure Tables caps a single transaction at **100 actions and 4 MiB**. Because every batch reserves one action for the head upsert, the provider rejects batches of more than `MaxEntriesPerBatch = 99` entries with `ArgumentException`. The replication package's `LatticeReplicationOptions.WalMaxBatchEntries` (default 100, validated against this cap) already keeps batches well below this limit in the canonical pipeline; callers writing the WAL directly should chunk larger batches before invoking the provider.
+1. **Phase 0** stamps the candidate-row (`C{startOffset:D19}`) into the shard's manifest partition in parallel with phase 1. The row carries the batch's `endOffsetInclusive` so reconciliation can describe the batch without reading its entry rows.
+2. **Phase 1** writes every entry row into the batch's own partition in a single `SubmitTransactionAsync`. Azure Tables commits the transaction atomically across the partition or fails the whole batch, so phase 1 is either fully durable or invisible.
+3. **Phase 2** is handed off to a per-shard `PhaseTwoWorker`. The worker drains pending commits in strict ascending `startOffset` order and coalesces up to **49 manifest commits** plus a single `TAIL` upsert into one transaction (`2 * 49 + 1 = 99` actions per chunk, fitting under the 100-action cap). The strict-offset drain order makes `TAIL` unconditionally monotonic regardless of phase-1 completion order; the coalescing collapses N round-trips into one under burst load. `AppendBatchAsync` awaits the phase-2 completion, so post-append `GetHighestOffsetAsync` observes the new tail.
+
+Azure Tables caps a single transaction at **100 actions and 4 MiB**. Phase 1 holds entry rows only (no head sentinel) so the full 100-action budget is available for entries; the provider rejects batches of more than `MaxEntriesPerBatch = 100` entries with `ArgumentException`. The replication package's `LatticeReplicationOptions.WalMaxBatchEntries` already keeps batches well below this limit in the canonical pipeline; callers writing the WAL directly should chunk larger batches before invoking the provider.
+
+#### Crash recovery
+
+A silo crash between phase 0/1 and phase 2 leaves an **orphan**: a batch partition with phase-1 entry rows plus a phase-0 candidate-row in the manifest partition, but no phase-2 manifest row. The provider's `ReconcileAsync` activation-time hook discovers orphans with a **single anchored range query** against the shard's manifest partition (`RowKey ge 'C' and RowKey lt 'D'`) - no cross-partition scan over the shard's live batch partitions.
+
+- Orphans whose `startOffset` contiguously extends the current `TAIL` are **rolled forward**: their manifest rows are added in strict offset order, their candidate-rows are deleted, and `TAIL` advances.
+- Orphans below or above a gap are **rolled back**: every entry row in the orphan's batch partition is deleted and the candidate-row is deleted. The producer's WAL grain restarts at `TAIL + 1` and would otherwise observe an unreferenced batch sitting above the offset it expects to be the next monotonic append slot.
+
+Reconciliation is idempotent: a second pass with no intervening writes is a no-op because no candidate-rows remain (phase 2 or rollback already deleted them). The work is also bounded by `WalMaxPendingBatches`, which is typically 0 in steady state, so the activation cost is O(in-flight batches at the moment of the crash) rather than O(live batches in the shard).
+
+The activation seam itself - `IWalStorageProvider.ReconcileAsync` - ships with a default no-op implementation, so providers that do not need recovery (the in-memory provider, file-backed providers that commit atomically) inherit the no-op without code.
 
 #### Operational characteristics
 
-- **Recovery**: `GetHighestOffsetAsync` resolves in **one point read** of the head sentinel - O(1) regardless of log length. `GetLowestOffsetAsync` resolves in **one ascending `Top(1)` query** over the entry-row range - O(1) symmetric to the high-water-mark read.
-- **Reads**: `ReadAsync` issues a tightly-bounded `(PartitionKey, RowKey)` range query so paging is server-side. The provider yields entries lazily through `IAsyncEnumerable<WalEntry>` so a caller that only needs the first N entries pays for one Azure Tables page rather than the full log.
-- **Trim**: chunked delete in 100-action transactions with `ETag.All` (unconditional). A crash mid-trim leaves a contiguous live tail and a stale prefix; the next trim resumes from the new head. The head sentinel is never deleted, so the monotonic offset counter survives both trims and silo restarts.
-- **Concurrency**: instances are safe for concurrent calls across distinct partitions. Concurrent calls targeting the same partition rely on Azure Tables' partition-level transactional serialisation; the WAL grain is single-writer per shard so this is the documented usage.
-- **Per-call allocations**: the partition key is built per call (UTF-8 encode + percent-encode + concatenate). The hot path (`AppendEncodedBatchAsync`) materialises the row payload by copying each `ArraySegment<byte>` into a freshly-owned `byte[]` for the entity (the segment's backing buffer is pooled upstream by the WAL grain) and allocates a single `List<TableTransactionAction>` sized to `entries.Count + 1` for the batch. The legacy `AppendBatchAsync` overload additionally reuses a single `ArrayBufferWriter<byte>` across every entry in the batch for the per-entry encode.
+- **Recovery**: `GetHighestOffsetAsync` resolves in **one point read** of the shard's `TAIL` row - O(1) regardless of log length. `GetLowestOffsetAsync` walks the manifest partition forward until it finds a non-empty batch partition, so its cost is O(trimmed batches with surviving manifest rows), typically 0 outside the trim hot path.
+- **Reads**: `ReadAsync` walks the manifest partition in ascending start-offset order, then streams the matching batch partitions' entry rows. Paging is server-side; the provider yields entries lazily through `IAsyncEnumerable<WalEntry>` so a caller that only needs the first N entries pays for one Azure Tables page per overlapping batch.
+- **Trim**: chunked delete in 100-action transactions with `ETag.All` (unconditional) per batch partition, plus a per-batch manifest-row delete in commit order. A crash mid-trim leaves a contiguous live tail and a stale prefix; the next trim resumes from the new head. `TAIL` is never moved back by trim.
+- **Concurrency**: instances are safe for concurrent calls across distinct shards. Concurrent calls into the same shard land in distinct batch partitions during phase 1 (no contention) and serialise through the per-shard phase-2 worker for phase 2. With the default `WalMaxPendingBatches = 1` only one `AppendBatchAsync` is in flight per shard.
+- **Per-call allocations**: percent-encoded tree-id segments are cached process-wide so a repeated tree id pays the encode cost exactly once. The hot path (`AppendEncodedBatchAsync`) materialises the row payload by copying each `ArraySegment<byte>` into a freshly-owned `byte[]` for the entity (the segment's backing buffer is pooled upstream by the WAL grain) and allocates a single `List<TableTransactionAction>` sized to `entries.Count` for the batch. The legacy `AppendBatchAsync` overload additionally reuses a single `ArrayBufferWriter<byte>` across every entry in the batch for the per-entry encode.
 
 ## Testing
 
@@ -172,6 +206,7 @@ Authoring a custom provider is purely an exercise in implementing the contract. 
 3. Persist a head pointer (or equivalent O(1)-readable structure) so `GetHighestOffsetAsync` does not require scanning the log on activation. Symmetrically, expose the lowest still-persisted offset in O(1) so `GetLowestOffsetAsync` does not scan either - the live entry count is computed from both endpoints on the hot diagnostic path.
 4. Make `TrimAsync` idempotent and safe to interrupt - a crash mid-trim must leave the WAL in a state where a subsequent trim resumes correctly.
 5. **Optional fast path.** Override `AppendEncodedBatchAsync` when the backend stores binary payloads natively. The default implementation decodes each segment through the supplied `IWalMutationEncoder` and delegates to `AppendBatchAsync`, so a provider that only implements `AppendBatchAsync` keeps working - overriding the zero-copy overload skips the round-trip and stores the grain's already-encoded bytes directly.
+6. **Optional activation-time recovery.** Override `ReconcileAsync` if the backend's commit protocol can leave the durable state inconsistent across crash boundaries (e.g. a multi-phase commit, as in the Azure Tables provider). The default implementation is a no-op, suitable for backends whose append is atomic in a single operation. The WAL grain calls `ReconcileAsync` in `OnActivateAsync` before reading the highest offset, so the activation seam is quiescent for the duration.
 
 The `InMemoryWalStorageProvider` source under `src/lattice/InMemoryWalStorageProvider.cs` is the canonical reference implementation; the `AzureTableWalStorageProvider` source under `src/lattice.storage.azuretable/` is the canonical durable reference implementation.
 

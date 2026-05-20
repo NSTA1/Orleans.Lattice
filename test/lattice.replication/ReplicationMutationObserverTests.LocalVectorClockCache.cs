@@ -126,9 +126,10 @@ public class ReplicationMutationObserverLocalVectorClockCacheTests
     public async Task Multi_emit_fan_out_observes_consistent_cache_snapshot_across_emits()
     {
         // Range-delete fan-out, multi-leaf saga, and other multi-shard
-        // user writes emit several mutations in close succession. R-092
-        // requires every emit to stamp the same VC so a remote receiver
-        // does not park entry K waiting for entry K-1's frontier.
+        // user writes emit several mutations in close succession. The
+        // multi-emit consistent cache snapshot contract requires every
+        // emit to stamp the same VC so a remote receiver does not park
+        // entry K waiting for entry K-1's frontier.
         var seed = new VersionVector();
         seed.Entries["site-b"] = Hlc(50);
         var (observer, sink, _) = CreateObserver(coldStartVector: seed);

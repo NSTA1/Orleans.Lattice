@@ -16,8 +16,8 @@ public partial class WalShardGrainTests
     public async Task AppendAsync_default_cap_of_one_preserves_single_in_flight_batch_shape()
     {
         // With cap=1 (the default), exactly the same coalescing
-        // behaviour as the pre-R-074 protocol must be observed: the
-        // first append starts a flush of [a], the next three
+        // behaviour as the pre-multi-batch protocol must be observed:
+        // the first append starts a flush of [a], the next three
         // accumulate behind the gate, and the follow-on flush captures
         // them as a single 3-entry batch.
         var gated = new GatedWalStorageProvider(new InMemoryWalStorageProvider());

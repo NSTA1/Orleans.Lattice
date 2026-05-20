@@ -917,7 +917,7 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     }
 
     // ------------------------------------------------------------------
-    // Replication topology (R-066)
+    // Replication topology
     // ------------------------------------------------------------------
 
     [Test]
@@ -975,7 +975,7 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     }
 
     // ------------------------------------------------------------------
-    // Intra-cluster snapshot/restore VC seeder (R-093)
+    // Intra-cluster snapshot/restore VC seeder
     // ------------------------------------------------------------------
 
     private static void RegisterLatticeOptionsResolver(IServiceCollection services)

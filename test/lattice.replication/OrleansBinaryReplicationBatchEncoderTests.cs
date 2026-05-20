@@ -137,9 +137,10 @@ public class OrleansBinaryReplicationBatchEncoderTests
     [Test]
     public void Encode_then_decode_preserves_vector_clock_and_dependency_summary()
     {
-        // Closes the wire-format integration gap for R-080: the
-        // canonical encoder must carry both causal-plus slots through
-        // the IBufferWriter hot path verbatim. ReplicationBatchEnvelope
+        // Closes the wire-format integration gap for the causal-plus
+        // metadata slots: the canonical encoder must carry both slots
+        // through the IBufferWriter hot path verbatim.
+        // ReplicationBatchEnvelope
         // tests cover Serializer<T> in isolation; this test pins the
         // production seam (OrleansBinaryReplicationBatchEncoder) so a
         // future rewrite of the encoder cannot silently drop the slot.

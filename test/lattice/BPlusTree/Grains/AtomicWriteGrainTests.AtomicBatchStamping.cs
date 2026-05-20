@@ -12,7 +12,7 @@ using Orleans.Timers;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Unit tests for R-095 producer-side atomic-batch stamping. The saga must
+/// Unit tests for producer-side atomic-batch stamping. The saga must
 /// capture the batch size once on the first <c>Prepare</c>, persist it on
 /// <see cref="AtomicWriteState"/>, re-stamp it onto Orleans
 /// <see cref="RequestContext"/> via <see cref="LatticeAtomicBatchContext"/>
@@ -39,8 +39,9 @@ public partial class AtomicWriteGrainTests
     {
         // Every per-key SetAsync the saga issues must observe a
         // (Size = N, Index = 0..N-1) ambient at the time it executes,
-        // matching the producer-side stamping contract R-094 reserved
-        // and R-095 implements.
+        // matching the producer-side atomic-batch stamping contract
+        // the atomic-batch metadata slots reserve and the saga
+        // implements.
         var (grain, _, _, lattice, _) = CreateGrain();
 
         var observed = new List<(int Size, int Index)?>();

@@ -7,8 +7,11 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// Unit tests for
 /// <see cref="LatticeAzureTableServiceCollectionExtensions"/>.
 /// Covers null-argument guards on the public extension and the
-/// idempotency contract inherited from
-/// <see cref="LatticeServiceCollectionExtensions.AddWalStorage"/>.
+/// order-independent registration contract inherited from
+/// <see cref="LatticeServiceCollectionExtensions.AddWalStorage"/> -
+/// specifically, that the Azure factory wins regardless of whether the
+/// in-memory baseline (installed by <c>AddLattice</c> via the no-factory
+/// <c>AddWalStorage</c> overload) is registered before or after it.
 /// </summary>
 [TestFixture]
 public class LatticeAzureTableServiceCollectionExtensionsTests
@@ -75,24 +78,50 @@ public class LatticeAzureTableServiceCollectionExtensionsTests
     }
 
     [Test]
-    public void AddAzureTableWalStorage_is_idempotent_against_prior_AddWalStorage_registration()
+    public void AddAzureTableWalStorage_replaces_prior_in_memory_baseline()
     {
         var services = new ServiceCollection();
         var siloBuilder = new StubSiloBuilder(services);
 
-        // Pretend the host (or another sibling package) registered an
-        // in-memory provider first via the core extension. The Azure
-        // overload must not stack a second registration.
-        siloBuilder.AddWalStorage();
+        // The exact shape of the bug this fixture exists to pin:
+        // AddLattice installs the in-memory baseline via its internal
+        // AddWalStorage() call, then the host calls
+        // AddAzureTableWalStorage. Under the historical TryAddSingleton
+        // path the Azure factory was silently dropped; under the
+        // Services.Replace path the factory wins regardless of order.
+        siloBuilder.AddWalStorage(); // baseline (mimics what AddLattice does)
         siloBuilder.AddAzureTableWalStorage(o => o.ConnectionString = "UseDevelopmentStorage=true");
 
-        var registrations = services.Count(d => d.ServiceType == typeof(IWalStorageProvider));
+        var providers = services.Where(d => d.ServiceType == typeof(IWalStorageProvider)).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(providers, Has.Count.EqualTo(1),
+                "AddAzureTableWalStorage must Replace the baseline, not stack a second descriptor.");
+            Assert.That(providers[0].ImplementationFactory, Is.Not.Null,
+                "The remaining descriptor must be the Azure factory, not the in-memory baseline (which has an ImplementationType).");
+            Assert.That(providers[0].ImplementationType, Is.Null);
+        });
+    }
 
-        // TryAddSingleton on the second call short-circuits, so exactly
-        // one IWalStorageProvider descriptor remains - the in-memory
-        // one. This is the idempotency contract the core
-        // AddWalStorage helper documents.
-        Assert.That(registrations, Is.EqualTo(1));
+    [Test]
+    public void AddAzureTableWalStorage_wins_when_called_before_baseline()
+    {
+        // Symmetry: the host calls AddAzureTableWalStorage first and
+        // then a subsequent (no-factory) AddWalStorage() must not
+        // displace the factory.
+        var services = new ServiceCollection();
+        var siloBuilder = new StubSiloBuilder(services);
+
+        siloBuilder.AddAzureTableWalStorage(o => o.ConnectionString = "UseDevelopmentStorage=true");
+        siloBuilder.AddWalStorage(); // baseline must no-op
+
+        var providers = services.Where(d => d.ServiceType == typeof(IWalStorageProvider)).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(providers, Has.Count.EqualTo(1));
+            Assert.That(providers[0].ImplementationFactory, Is.Not.Null);
+            Assert.That(providers[0].ImplementationType, Is.Null);
+        });
     }
 
     /// <summary>

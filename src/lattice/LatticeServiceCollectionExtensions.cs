@@ -20,11 +20,18 @@ public static class LatticeServiceCollectionExtensions
     /// <para>
     /// Also registers the core write-ahead-log adapters
     /// (<see cref="ICommitLogReader"/>, <see cref="ICommitLogWriter"/>)
-    /// and the in-memory <see cref="IWalStorageProvider"/> default so a
-    /// single-cluster host gets durable commit-log infrastructure with
-    /// no extra wiring. Hosts that need a different WAL backing store
-    /// call <see cref="AddWalStorage"/> with a custom factory before
-    /// (or after) <c>AddLattice</c>; the registration is idempotent.
+    /// and the in-memory <see cref="IWalStorageProvider"/> baseline so a
+    /// single-cluster host gets a working commit-log pipeline with no
+    /// extra wiring. Hosts that need a durable WAL backing store call
+    /// <see cref="AddWalStorage"/> with a custom factory - or one of the
+    /// package-level overloads that wraps it (for example
+    /// <c>AddAzureTableWalStorage</c>) - either before or after
+    /// <c>AddLattice</c>. The host-supplied factory wins regardless of
+    /// order: <see cref="AddWalStorage"/> with a factory uses
+    /// <c>Services.Replace</c> so it displaces the in-memory baseline
+    /// rather than being silently dropped by the <c>TryAdd</c> path that
+    /// installs the baseline. See <see cref="AddWalStorage"/> for the
+    /// full registration-order contract.
     /// </para>
     /// <para>Example:</para>
     /// <code>
@@ -104,10 +111,41 @@ public static class LatticeServiceCollectionExtensions
     /// the WAL-as-sole-commit-point flip; the replication package builds
     /// on top of this registration via
     /// <see cref="LatticeOptions.WalStorageProvider"/> for per-tree
-    /// configurability. Idempotent: a previously-registered provider
-    /// (whether from a host-supplied factory or from a downstream
-    /// <c>AddLattice*</c> call) is preserved.
+    /// configurability.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Registration semantics differ by overload, and the difference is
+    /// load-bearing because <see cref="AddLattice"/> self-registers the
+    /// in-memory baseline via the no-factory overload as part of its
+    /// own setup:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// <b>No-factory baseline</b> (<c>AddWalStorage()</c>): registered via
+    /// <c>TryAddSingleton</c>. First registration wins, so a host (or a
+    /// downstream package) that has already registered a real provider
+    /// keeps it - the baseline never displaces an explicit choice.
+    /// </description></item>
+    /// <item><description>
+    /// <b>Host-supplied factory</b> (<c>AddWalStorage(factory)</c>):
+    /// registered via <c>Services.Replace(...)</c>. Supplying a factory
+    /// is unambiguous host intent to override; the call therefore wins
+    /// regardless of whether <see cref="AddLattice"/> (or any other
+    /// downstream extension that wraps <c>AddWalStorage</c>) has already
+    /// installed the in-memory baseline.
+    /// </description></item>
+    /// </list>
+    /// <para>
+    /// Net effect: the host's choice of WAL provider is order-independent
+    /// with respect to <see cref="AddLattice"/>. <c>AddWalStorage(factory)</c>
+    /// and the package-level overloads that build on it
+    /// (e.g. <c>AddAzureTableWalStorage</c>) may be called before or
+    /// after <see cref="AddLattice"/> and the durable provider survives.
+    /// Calling <c>AddWalStorage(factory)</c> multiple times follows
+    /// last-call-wins.
+    /// </para>
+    /// </remarks>
     public static ISiloBuilder AddWalStorage(
         this ISiloBuilder builder,
         Func<IServiceProvider, IWalStorageProvider>? factory = null)
@@ -115,11 +153,22 @@ public static class LatticeServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(builder);
         if (factory is null)
         {
+            // Baseline registration: first-wins so AddLattice's self-call
+            // never stomps a real provider that a host registered earlier
+            // in the builder.
             builder.Services.TryAddSingleton<IWalStorageProvider, InMemoryWalStorageProvider>();
         }
         else
         {
-            builder.Services.TryAddSingleton<IWalStorageProvider>(factory);
+            // Explicit host intent: replace whatever is there (the in-memory
+            // baseline installed by AddLattice, a sibling package's earlier
+            // registration, or nothing) with the supplied factory. Using
+            // Replace rather than TryAdd makes the host's choice
+            // order-independent with respect to AddLattice; using TryAdd
+            // here would silently drop the host's factory when AddLattice
+            // had already installed the baseline, which is the bug this
+            // overload exists to prevent.
+            builder.Services.Replace(ServiceDescriptor.Singleton<IWalStorageProvider>(factory));
         }
         return builder;
     }

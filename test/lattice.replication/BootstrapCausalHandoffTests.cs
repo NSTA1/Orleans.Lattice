@@ -184,7 +184,7 @@ public partial class BootstrapCausalHandoffTests
 
         // PinSnapshotAsync overwrites both the per-origin diagonal rows
         // and the local vector clock - exactly the persistence behaviour
-        // R-081's IReplicationHighWaterMarkGrain.PinSnapshotAsync does
+        // IReplicationHighWaterMarkGrain.PinSnapshotAsync exhibits
         // against real grain state.
         hwm.PinSnapshotAsync(
                 Arg.Any<HybridLogicalClock>(),
