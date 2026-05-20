@@ -45,7 +45,7 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// </summary>
 internal sealed class PhaseTwoWorker : IAsyncDisposable
 {
-    private readonly Func<CancellationToken, ValueTask<TableClient>> _tableProvider;
+    private readonly Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task> _submit;
     private readonly string _manifestPartitionKey;
     private readonly Channel<PhaseTwoCommit> _arrivals;
     private readonly Task _drainLoop;
@@ -53,11 +53,39 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     private readonly SortedSet<PhaseTwoCommit> _pending;
     private long _highestCommittedEndOffset = -1L;
 
+    /// <summary>
+    /// Production constructor. Captures the provider's table-client
+    /// lookup and adapts it to the worker's narrower transaction-submit
+    /// seam so the worker has no <see cref="TableClient"/> dependency
+    /// of its own (which keeps the test surface lean).
+    /// </summary>
     public PhaseTwoWorker(
         Func<CancellationToken, ValueTask<TableClient>> tableProvider,
         string manifestPartitionKey)
+        : this(
+            async (actions, cancellationToken) =>
+            {
+                var table = await tableProvider(cancellationToken).ConfigureAwait(false);
+                await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
+            },
+            manifestPartitionKey)
     {
-        _tableProvider = tableProvider;
+    }
+
+    /// <summary>
+    /// Test-only constructor that lets a unit test substitute the
+    /// transaction-submit seam with a recording / failing delegate.
+    /// The submit delegate receives the exact
+    /// <see cref="TableTransactionAction"/> sequence the worker would
+    /// have sent to Azure Tables; its returned <see cref="Task"/>
+    /// stand-in determines whether the worker treats the commit as
+    /// durable (completed) or faulted (faulted).
+    /// </summary>
+    internal PhaseTwoWorker(
+        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task> submit,
+        string manifestPartitionKey)
+    {
+        _submit = submit;
         _manifestPartitionKey = manifestPartitionKey;
         _arrivals = Channel.CreateUnbounded<PhaseTwoCommit>(new UnboundedChannelOptions
         {
@@ -89,8 +117,14 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         return tcs.Task;
     }
 
+    private int _disposed;
+
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
         _shutdown.Cancel();
         _arrivals.Writer.TryComplete();
         try
@@ -192,8 +226,6 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         var highestEndOffset = commits[^1].EndOffsetInclusive;
         try
         {
-            var table = await _tableProvider(cancellationToken).ConfigureAwait(false);
-
             var actions = new List<TableTransactionAction>(commits.Count + 1);
             for (var i = 0; i < commits.Count; i++)
             {
@@ -222,7 +254,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     Payload = null,
                 }));
 
-            await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
+            await _submit(actions, cancellationToken).ConfigureAwait(false);
 
             _highestCommittedEndOffset = highestEndOffset;
             for (var i = 0; i < commits.Count; i++)
