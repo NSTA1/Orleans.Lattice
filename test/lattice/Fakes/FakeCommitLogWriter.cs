@@ -5,11 +5,11 @@ namespace Orleans.Lattice.Tests.Fakes;
 /// <summary>
 /// In-memory implementation of <see cref="ICommitLogWriter"/> for unit
 /// testing the WAL-routed leaf write path without a real per-shard WAL.
-/// Captures every appended <see cref="LatticeMutation"/> in
+/// Captures every appended <see cref="WalRecord"/> in
 /// <see cref="Appended"/> so tests can assert on payload shape (e.g.
-/// <see cref="LatticeMutation.IsBackstop"/>,
-/// <see cref="LatticeMutation.TransactionId"/>,
-/// <see cref="LatticeMutation.Timestamp"/>) and on the
+/// <see cref="WalRecord.IsBackstop"/>,
+/// <see cref="WalRecord.TransactionId"/>,
+/// <see cref="WalRecord.Timestamp"/>) and on the
 /// "the backstop persists via the WAL, not via the legacy state row"
 /// invariant by counting <see cref="AppendCount"/>.
 /// <para>
@@ -22,11 +22,11 @@ namespace Orleans.Lattice.Tests.Fakes;
 internal sealed class FakeCommitLogWriter : ICommitLogWriter
 {
     /// <summary>
-    /// Every mutation appended through <see cref="AppendAsync"/>, in
+    /// Every record appended through <see cref="AppendAsync"/>, in
     /// arrival order. Tests can inspect element [N] to verify the
     /// payload of the Nth backstop / foreground write.
     /// </summary>
-    public List<LatticeMutation> Appended { get; } = new();
+    public List<WalRecord> Appended { get; } = new();
 
     /// <summary>
     /// Total number of successful <see cref="AppendAsync"/> calls. The
@@ -38,7 +38,7 @@ internal sealed class FakeCommitLogWriter : ICommitLogWriter
 
     /// <summary>
     /// When set, the next call to <see cref="AppendAsync"/> throws this
-    /// exception instead of recording the mutation. Cleared after it
+    /// exception instead of recording the record. Cleared after it
     /// fires so subsequent calls succeed; lets tests pin the
     /// "WAL append throws -> the backstop surfaces the exception and
     /// no in-memory state changes" crash-safety branch.
@@ -46,14 +46,14 @@ internal sealed class FakeCommitLogWriter : ICommitLogWriter
     public Exception? ThrowOnAppend { get; set; }
 
     /// <inheritdoc />
-    public Task<long> AppendAsync(LatticeMutation mutation, CancellationToken cancellationToken = default)
+    public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default)
     {
         if (ThrowOnAppend is { } ex)
         {
             ThrowOnAppend = null;
             throw ex;
         }
-        Appended.Add(mutation);
+        Appended.Add(entry);
         return Task.FromResult((long)(Appended.Count - 1));
     }
 
@@ -66,19 +66,19 @@ internal sealed class FakeCommitLogWriter : ICommitLogWriter
     public int AppendManyCallCount { get; private set; }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<LatticeMutation> mutations, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(mutations);
+        ArgumentNullException.ThrowIfNull(entries);
         AppendManyCallCount++;
         if (ThrowOnAppend is { } ex)
         {
             ThrowOnAppend = null;
             throw ex;
         }
-        var offsets = new long[mutations.Count];
-        for (var i = 0; i < mutations.Count; i++)
+        var offsets = new long[entries.Count];
+        for (var i = 0; i < entries.Count; i++)
         {
-            Appended.Add(mutations[i]);
+            Appended.Add(entries[i]);
             offsets[i] = Appended.Count - 1;
         }
         return Task.FromResult<IReadOnlyList<long>>(offsets);

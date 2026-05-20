@@ -51,10 +51,10 @@ public class WalCommitLogWriterTests
         return (writer, captured);
     }
 
-    private static LatticeMutation MakeMutation(string? originClusterId = null) => new()
+    private static WalRecord MakeMutation(string? originClusterId = null) => new()
     {
         TreeId = TreeId,
-        Kind = MutationKind.Set,
+        Op = MutationKind.Set,
         Key = "k",
         Value = new byte[] { 1 },
         Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
@@ -109,6 +109,30 @@ public class WalCommitLogWriterTests
     }
 
     [Test]
+    public async Task AppendAsync_overwrites_empty_string_origin_with_resolver_value()
+    {
+        // Semantic divergence from the pre-builder converter path.
+        // The OLD WalRecordConverter applied
+        // `mutation.OriginClusterId ?? originClusterId`, which preserved
+        // a deliberate empty string supplied by the producer. The NEW
+        // WalCommitLogWriter.Route applies
+        // `string.IsNullOrEmpty(entry.OriginClusterId) ? resolver : entry.OriginClusterId`,
+        // which overwrites both null AND "" with the resolver value.
+        // No production producer stamps "" deliberately
+        // (LatticeOriginContext.Current is either null or a populated
+        // cluster id), so the change is benign in practice. This test
+        // pins the new behaviour so a future revert to the null-coalesce
+        // form lights up.
+        var (writer, captured) = CreateWriter(clusterId: "site-resolved");
+
+        await writer.AppendAsync(MakeMutation(originClusterId: string.Empty));
+
+        Assert.That(captured, Has.Count.EqualTo(1));
+        Assert.That(captured[0].OriginClusterId, Is.EqualTo("site-resolved"),
+            "empty-string origin must be replaced with the resolver-supplied cluster id");
+    }
+
+    [Test]
     public async Task AppendAsync_calls_resolver_with_mutation_treeId()
     {
         var clusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
@@ -138,7 +162,7 @@ public class WalCommitLogWriterTests
     {
         var (writer, captured) = CreateWriter();
 
-        var result = await writer.AppendManyAsync(new List<LatticeMutation>());
+        var result = await writer.AppendManyAsync(new List<WalRecord>());
 
         Assert.Multiple(() =>
         {
@@ -198,13 +222,13 @@ public class WalCommitLogWriterTests
 
         var writer = new WalCommitLogWriter(grainFactory, optionsMonitor, modeResolver, clusterIdResolver);
 
-        var mutations = new List<LatticeMutation>();
+        var mutations = new List<WalRecord>();
         for (var i = 0; i < 16; i++)
         {
-            mutations.Add(new LatticeMutation
+            mutations.Add(new WalRecord
             {
                 TreeId = TreeId,
-                Kind = MutationKind.Set,
+                Op = MutationKind.Set,
                 Key = $"k{i:D2}",
                 Value = new byte[] { (byte)i },
                 Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
@@ -261,13 +285,13 @@ public class WalCommitLogWriterTests
 
         var writer = new WalCommitLogWriter(grainFactory, optionsMonitor, modeResolver, clusterIdResolver);
 
-        var mutations = new List<LatticeMutation>();
+        var mutations = new List<WalRecord>();
         for (var i = 0; i < 32; i++)
         {
-            mutations.Add(new LatticeMutation
+            mutations.Add(new WalRecord
             {
                 TreeId = TreeId,
-                Kind = MutationKind.Set,
+                Op = MutationKind.Set,
                 Key = $"k{i:D2}",
                 Value = new byte[] { (byte)i },
                 Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),

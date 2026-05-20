@@ -67,6 +67,9 @@ internal static class WalRecordConverter
             IsPrepared = mutation.IsPrepared,
             ShardIndex = mutation.ShardIndex,
             AtomicShardCount = mutation.AtomicShardCount,
+            IsMerge = mutation.IsMerge,
+            IsBackstop = mutation.IsBackstop,
+            Category = mutation.Category,
         };
     }
 
@@ -102,14 +105,19 @@ internal static class WalRecordConverter
             TransactionId = entry.TransactionId,
             AtomicBatchSize = entry.AtomicBatchSize,
             AtomicBatchIndex = entry.AtomicBatchIndex,
-            // Category is not on the replication wire today; leave at
-            // wire-compat default.
-            Category = MutationCategory.User,
+            // Category is round-tripped from the additive WalRecord
+            // slot. For legacy entries persisted before that slot
+            // existed, the slot defaults to User on decode - matching
+            // the historical wire-compat default this method used to
+            // apply unconditionally.
+            Category = entry.Category,
             DeltaKind = entry.DeltaKind,
             DeltaPayload = entry.DeltaPayload,
             IsPrepared = entry.IsPrepared,
             ShardIndex = entry.ShardIndex,
             AtomicShardCount = entry.AtomicShardCount,
+            IsMerge = entry.IsMerge,
+            IsBackstop = entry.IsBackstop,
         };
     }
 }

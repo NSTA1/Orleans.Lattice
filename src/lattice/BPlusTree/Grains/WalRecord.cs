@@ -292,5 +292,42 @@ public readonly record struct WalRecord
     /// </para>
     /// </summary>
     [Id(19)] public int AtomicShardCount { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when the entry was authored by the leaf's merge
+    /// channel (<see cref="MutationKind.Set"/> / <see cref="MutationKind.Delete"/>
+    /// produced by <c>MergeEntriesAsync</c>, sibling-redistribute,
+    /// snapshot-restore, or replication-apply) rather than a foreground
+    /// caller-issued write. Mirrored verbatim from the producing
+    /// <see cref="LatticeMutation.IsMerge"/>. Strictly additive on the
+    /// wire: legacy peers and entries authored before this slot existed
+    /// decode as <c>false</c>, which preserves the pre-slot
+    /// "every entry is a foreground write" assumption.
+    /// </summary>
+    [Id(20)] public bool IsMerge { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when the entry was authored by the saga
+    /// cross-migration backstop path (a destination leaf catching up
+    /// missing pre-saga values from the source leaf at terminal time).
+    /// Mirrored verbatim from the producing
+    /// <see cref="LatticeMutation.IsBackstop"/>. Strictly additive on
+    /// the wire: legacy peers and entries authored before this slot
+    /// existed decode as <c>false</c>.
+    /// </summary>
+    [Id(21)] public bool IsBackstop { get; init; }
+
+    /// <summary>
+    /// Classifies the entry as a user-driven write
+    /// (<see cref="MutationCategory.User"/>) or a maintenance-driven
+    /// write (<see cref="MutationCategory.Maintenance"/> - structural
+    /// rewrites, tombstone reaps). Mirrored verbatim from the producing
+    /// <see cref="LatticeMutation.Category"/>. Strictly additive on the
+    /// wire: legacy peers and entries authored before this slot existed
+    /// decode as <see cref="MutationCategory.User"/>, matching the
+    /// pre-slot wire-compat default applied by
+    /// <c>WalRecordConverter.FromWalRecord</c>.
+    /// </summary>
+    [Id(22)] public MutationCategory Category { get; init; }
 }
 

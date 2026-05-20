@@ -353,5 +353,69 @@ public class WalRecordConverterShardIndexTests
             Assert.That(roundTripped.ShardIndex, Is.Zero);
         });
     }
+
+    [Test]
+    public void Conversion_round_trips_IsMerge_IsBackstop_and_Category_through_both_directions()
+    {
+        // The direct-WalRecord builder migration added the IsMerge /
+        // IsBackstop / Category slots to WalRecord and rewired
+        // FromWalRecord to read Category from
+        // the slot rather than hardcode MutationCategory.User. This test
+        // pins the additive round-trip so a future revert (which would
+        // silently drop these fields on the WAL wire) lights up.
+        var original = new LatticeMutation
+        {
+            TreeId = "tree-A",
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 7 },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            IsMerge = true,
+            IsBackstop = true,
+            Category = MutationCategory.Maintenance,
+        };
+
+        var entry = WalRecordConverter.ToWalRecord(original, LatticeMergeMode.LwwRegister, "cluster-A");
+        var roundTripped = WalRecordConverter.FromWalRecord(entry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.IsMerge, Is.True, "forward: IsMerge mirrored");
+            Assert.That(entry.IsBackstop, Is.True, "forward: IsBackstop mirrored");
+            Assert.That(entry.Category, Is.EqualTo(MutationCategory.Maintenance), "forward: Category mirrored");
+            Assert.That(roundTripped.IsMerge, Is.True, "reverse: IsMerge round-trips");
+            Assert.That(roundTripped.IsBackstop, Is.True, "reverse: IsBackstop round-trips");
+            Assert.That(roundTripped.Category, Is.EqualTo(MutationCategory.Maintenance), "reverse: Category round-trips");
+        });
+    }
+
+    [Test]
+    public void FromWalRecord_defaults_legacy_slots_when_record_omits_them()
+    {
+        // Wire-compat: a WalRecord constructed without setting the
+        // additive metadata slots decodes IsMerge=false, IsBackstop=false,
+        // Category=User (the MutationCategory enum's zero value), exactly
+        // matching the pre-builder hardcoded behaviour of
+        // FromWalRecord. Receivers running the post-builder code
+        // accept legacy persisted entries that pre-date the slots.
+        var entry = new WalRecord
+        {
+            TreeId = "tree-A",
+            Op = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            OriginClusterId = "cluster-A",
+        };
+
+        var roundTripped = WalRecordConverter.FromWalRecord(entry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(roundTripped.IsMerge, Is.False);
+            Assert.That(roundTripped.IsBackstop, Is.False);
+            Assert.That(roundTripped.Category, Is.EqualTo(MutationCategory.User));
+        });
+    }
 }
 

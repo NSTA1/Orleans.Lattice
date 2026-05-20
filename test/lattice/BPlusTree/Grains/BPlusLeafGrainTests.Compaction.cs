@@ -202,7 +202,7 @@ public partial class BPlusLeafGrainTests
         Assert.That(commitLog.AppendCount, Is.EqualTo(3),
             "every reaped entry must emit a tombstone-reap WAL envelope so a reactivated leaf "
             + "observes the compacted state after replay returns.");
-        Assert.That(commitLog.Appended.All(m => m.Kind == MutationKind.Tombstone), Is.True);
+        Assert.That(commitLog.Appended.All(m => m.Op == MutationKind.Tombstone), Is.True);
         Assert.That(commitLog.Appended.All(m => m.IsMerge), Is.True,
             "tombstone-reap envelopes are tagged IsMerge=true to keep them out of ordinary "
             + "Set / Delete telemetry rollups");
@@ -298,7 +298,7 @@ public partial class BPlusLeafGrainTests
         await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
         Assert.That(commitLog.AppendCount, Is.EqualTo(1));
-        Assert.That(commitLog.Appended[0].Kind, Is.EqualTo(MutationKind.Tombstone));
+        Assert.That(commitLog.Appended[0].Op, Is.EqualTo(MutationKind.Tombstone));
         Assert.That(commitLog.Appended[0].IsMerge, Is.True);
         Assert.That(commitLog.Appended[0].IsTombstone, Is.True);
     }
