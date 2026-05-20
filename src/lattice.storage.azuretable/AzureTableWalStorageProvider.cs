@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Storage.AzureTable;
 
 /// <summary>
 /// Durable Azure Table Storage <see cref="IWalStorageProvider"/>. Uses
-/// a two-phase per-batch / manifest schema (roadmap R-079) for true
+/// a two-phase per-batch / manifest schema for true
 /// cross-batch partition-server parallelism.
 /// <para>
 /// <b>Schema.</b> Every <see cref="AppendBatchAsync"/> call lands in
@@ -71,12 +71,12 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// reconciliation (stage 2c) and surfaced on next activation.
 /// </para>
 /// </summary>
-public sealed class AzureTableWalStorageProvider : IWalStorageProvider, IAsyncDisposable
+public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, IAsyncDisposable
 {
     /// <summary>
     /// Maximum number of <see cref="WalEntry"/> values that can be
     /// appended in a single <see cref="AppendBatchAsync"/> call. With
-    /// the two-phase per-batch schema (roadmap R-079) phase 1 holds
+    /// the two-phase per-batch schema, phase 1 holds
     /// only entry rows - no per-batch HEAD sentinel - so the full
     /// 100-action Azure Tables transaction cap is available for
     /// entries.
@@ -99,7 +99,7 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider, IAsyncDi
 
     /// <summary>
     /// Per-batch partition prefix introduced by the per-batch partition
-    /// + manifest schema (roadmap R-079). Every <see cref="AppendBatchAsync"/>
+    /// + manifest schema. Every <see cref="AppendBatchAsync"/>
     /// call lands in its own partition keyed as
     /// <c>{BatchPartitionPrefix}|{treeId}|{shardIndex}|S{startOffset:D19}</c>,
     /// giving concurrent appends true partition-server parallelism on
@@ -118,7 +118,7 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider, IAsyncDi
 
     /// <summary>
     /// Per-shard manifest partition prefix introduced by the per-batch
-    /// partition + manifest schema (roadmap R-079). Each shard has
+    /// partition + manifest schema. Each shard has
     /// exactly one manifest partition keyed as
     /// <c>{ManifestPartitionPrefix}|{treeId}|{shardIndex}</c>, holding
     /// one row per committed batch plus the
@@ -140,6 +140,36 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider, IAsyncDi
     /// a requested window in ascending offset order.
     /// </summary>
     internal const string ManifestRowKeyPrefix = "M";
+
+    /// <summary>
+    /// Per-batch row-key prefix for the candidate-index row written
+    /// during phase 0 of an append. The row sits in the shard's
+    /// manifest partition (one C-row per in-flight batch, key
+    /// <c>{CandidateRowKeyPrefix}{startOffset:D19}</c>, payload = the
+    /// batch's <c>endOffsetInclusive</c>) so reconciliation can
+    /// discover orphans with a single anchored
+    /// <c>RowKey ge 'C' and RowKey lt 'D'</c> query against the
+    /// manifest partition - no cross-partition scan over the shard's
+    /// live batch partitions. Phase 2 deletes the C-row atomically
+    /// with the M-row insert and TAIL upsert, so once a batch is
+    /// committed no C-row remains; a non-empty C-row scan therefore
+    /// returns exactly the set of phase-1-without-phase-2 orphans.
+    /// The leading character <c>'C'</c> sorts before
+    /// <see cref="ManifestRowKeyPrefix"/> (<c>'M'</c>) and
+    /// <see cref="TailRowKey"/> (<c>'T'</c>) so every existing manifest
+    /// range query (<c>RowKey ge 'M' and RowKey lt 'T'</c>) excludes
+    /// C-rows without modification.
+    /// </summary>
+    internal const string CandidateRowKeyPrefix = "C";
+
+    /// <summary>
+    /// Exclusive upper bound matching <see cref="CandidateRowKeyPrefix"/>.
+    /// Used by reconciliation's anchored range query against the
+    /// manifest partition: <c>RowKey ge 'C' and RowKey lt 'D'</c>
+    /// returns the shard's outstanding C-rows in ascending
+    /// start-offset order.
+    /// </summary>
+    internal const string CandidateRowKeyExclusiveUpperBound = "D";
 
     /// <summary>
     /// Row-key for the shard's tail pointer. Stored in the manifest
@@ -245,6 +275,16 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider, IAsyncDi
         var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
         var endOffsetInclusive = firstOffset + entries.Count - 1;
 
+        // Phase 0 (parallel with phase 1): stamp a candidate-row in
+        // the shard's manifest partition so reconciliation can
+        // discover this batch with a single anchored RowKey range
+        // query if the silo crashes before phase 2 runs. Phase 2
+        // deletes the C-row atomically with its M-row insert, so the
+        // C-row's presence post-restart is the orphan signal.
+        var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
+        var candidateTask = WriteCandidateRowAsync(
+            table, manifestPartitionKey, firstOffset, endOffsetInclusive, cancellationToken);
+
         // Phase 1: write the entry rows into the batch's own partition
         // in a single transaction. Each batch hits a distinct Azure
         // Tables partition server so concurrent batches against the
@@ -253,13 +293,21 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider, IAsyncDi
         var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, firstOffset);
         var phaseOneActions = new List<TableTransactionAction>(entries.Count);
         EncodeEntriesForBatch(batchPartitionKey, entries, phaseOneActions);
-        await table.SubmitTransactionAsync(phaseOneActions, cancellationToken).ConfigureAwait(false);
+        var phaseOneTask = table.SubmitTransactionAsync(phaseOneActions, cancellationToken);
+
+        // Await both before enqueueing phase 2 so a failure in either
+        // surfaces synchronously to the caller and the worker never
+        // sees a phase-2 commit whose phase 1 or phase 0 didn't land.
+        await candidateTask.ConfigureAwait(false);
+        await phaseOneTask.ConfigureAwait(false);
 
         // Phase 2: hand the (startOffset, endOffsetInclusive) pair to
-        // the per-shard worker. The worker batches up to 99 phase-2
-        // commits into one manifest-partition transaction in strict
-        // ascending start-offset order, then upserts TAIL to the
-        // group's highest endOffsetInclusive.
+        // the per-shard worker. The worker batches up to 49 phase-2
+        // commits (each contributing 1 C-delete + 1 M-insert action,
+        // plus the shared TAIL upsert, fitting under the 100-action
+        // Azure Tables transaction cap) into one manifest-partition
+        // transaction in strict ascending start-offset order, then
+        // upserts TAIL to the group's highest endOffsetInclusive.
         var worker = GetOrCreatePhaseTwoWorker(treeId, shardIndex);
         await worker.EnqueueAsync(firstOffset, endOffsetInclusive).ConfigureAwait(false);
     }
@@ -309,13 +357,44 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider, IAsyncDi
         var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, firstOffset);
         var phaseOneActions = BuildEncodedBatchActions(batchPartitionKey, encodedEntries.Span, offsets.Span);
 
-        // Phase 1 / phase 2 split mirrors AppendBatchAsync; see the
-        // comments there for the parallelism + monotonic-TAIL
-        // rationale.
-        await table.SubmitTransactionAsync(phaseOneActions, cancellationToken).ConfigureAwait(false);
+        // Phase 0 / phase 1 / phase 2 split mirrors AppendBatchAsync;
+        // see the comments there for the parallelism, candidate-row,
+        // and monotonic-TAIL rationale.
+        var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
+        var candidateTask = WriteCandidateRowAsync(
+            table, manifestPartitionKey, firstOffset, endOffsetInclusive, cancellationToken);
+        var phaseOneTask = table.SubmitTransactionAsync(phaseOneActions, cancellationToken);
+        await candidateTask.ConfigureAwait(false);
+        await phaseOneTask.ConfigureAwait(false);
 
         var worker = GetOrCreatePhaseTwoWorker(treeId, shardIndex);
         await worker.EnqueueAsync(firstOffset, endOffsetInclusive).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Inserts the candidate-row for an in-flight batch. Idempotent
+    /// via <see cref="TableUpdateMode.Replace"/> on the upsert so a
+    /// retry inside the SDK does not surface as <c>EntityAlreadyExists</c>
+    /// to the caller; the row's identity is fully determined by
+    /// <c>(manifestPartitionKey, startOffset)</c> and its payload
+    /// (<c>endOffsetInclusive</c>) is deterministic for a given
+    /// <c>(startOffset, entries.Count)</c>.
+    /// </summary>
+    private static async Task WriteCandidateRowAsync(
+        TableClient table,
+        string manifestPartitionKey,
+        long startOffset,
+        long endOffsetInclusive,
+        CancellationToken cancellationToken)
+    {
+        var entity = new AzureTableWalEntity
+        {
+            PartitionKey = manifestPartitionKey,
+            RowKey = BuildCandidateRowKey(startOffset),
+            Offset = endOffsetInclusive,
+            Payload = null,
+        };
+        await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken).ConfigureAwait(false);
     }
 
     private static void ValidateDenseOffsets(string treeId, int shardIndex, ReadOnlySpan<long> offsetSpan)
@@ -742,7 +821,7 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider, IAsyncDi
     /// <summary>
     /// Builds the per-batch partition key for a single
     /// <see cref="AppendBatchAsync"/> call in the per-batch partition
-    /// + manifest schema (roadmap R-079). The key is
+    /// + manifest schema. The key is
     /// <c>{BatchPartitionPrefix}|{encoded-treeId}|{shardIndex}|S{startOffset:D19}</c>.
     /// The <c>S</c> infix sorts after the manifest's <c>M</c> rows
     /// lexicographically and the D19 width makes the partition keys
@@ -777,7 +856,7 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider, IAsyncDi
 
     /// <summary>
     /// Builds the per-shard manifest partition key in the per-batch
-    /// partition + manifest schema (roadmap R-079). One manifest
+    /// partition + manifest schema. One manifest
     /// partition per shard, keyed as
     /// <c>{ManifestPartitionPrefix}|{encoded-treeId}|{shardIndex}</c>.
     /// Disjoint from <see cref="BuildBatchPartitionKey"/> by prefix
@@ -815,6 +894,32 @@ public sealed class AzureTableWalStorageProvider : IWalStorageProvider, IAsyncDi
         return string.Create(
             CultureInfo.InvariantCulture,
             $"{ManifestRowKeyPrefix}{startOffset:D19}");
+    }
+
+    /// <summary>
+    /// Builds the candidate-row key for an in-flight batch starting at
+    /// <paramref name="startOffset"/>. Format:
+    /// <c>{CandidateRowKeyPrefix}{startOffset:D19}</c>. The C-row sits
+    /// in the shard's manifest partition during phase 0 of an append
+    /// and is deleted by phase 2 atomically with its M-row insert and
+    /// the TAIL upsert. The D19 width makes C-row keys
+    /// lexicographically equivalent to numeric start-offset order, so
+    /// an ascending-<c>RowKey</c> range scan returns outstanding
+    /// candidates in commit-offset order. Exposed internally for unit
+    /// tests.
+    /// </summary>
+    internal static string BuildCandidateRowKey(long startOffset)
+    {
+        if (startOffset < 0L)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(startOffset),
+                startOffset,
+                "Candidate row keys are derived from WAL offsets, which are non-negative.");
+        }
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{CandidateRowKeyPrefix}{startOffset:D19}");
     }
 
     private static string EncodePartitionSegment(string segment)

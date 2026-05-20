@@ -1,11 +1,13 @@
 using System.Threading.Channels;
+using Azure;
 using Azure.Data.Tables;
 
 namespace Orleans.Lattice.Storage.AzureTable;
 
 /// <summary>
 /// Per-shard phase-two commit worker for the two-phase append protocol
-/// (roadmap R-079 stage 2b). Phase 1 of an append commits the entry
+/// (the strict offset-ordered phase-2 stage of the two-phase WAL
+/// commit). Phase 1 of an append commits the entry
 /// rows + per-batch HEAD row atomically inside a distinct batch
 /// partition - that step gets true cross-batch parallelism because
 /// each batch hits its own Azure Tables partition server. Phase 2
@@ -142,16 +144,19 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// <summary>
     /// Maximum number of pending phase-2 commits coalesced into a
     /// single Azure Tables transaction. The transaction action cap is
-    /// 100; one action is reserved for the <c>TAIL</c> upsert so the
-    /// remaining 99 actions hold one <c>M{startOffset:D19}</c> add per
-    /// committed batch. Under burst load (e.g. <c>WalMaxPendingBatches</c>
-    /// raised, many phase-1 transactions completing concurrently) this
-    /// reduces phase-2 round-trip count by up to 99x without weakening
-    /// the strict offset-FIFO invariant - commits are still drained in
-    /// ascending start-offset order and the coalesced transaction is
-    /// itself atomic.
+    /// 100; each committed batch contributes two actions (one
+    /// <c>C{startOffset:D19}</c> delete plus one
+    /// <c>M{startOffset:D19}</c> add) and one action is reserved for
+    /// the shared <c>TAIL</c> upsert, so the per-transaction ceiling
+    /// is <c>(100 - 1) / 2 = 49</c> coalesced batches. Under burst
+    /// load (e.g. <c>WalMaxPendingBatches</c> raised, many phase-1
+    /// transactions completing concurrently) this reduces phase-2
+    /// round-trip count by up to 49x without weakening the strict
+    /// offset-FIFO invariant - commits are still drained in ascending
+    /// start-offset order and the coalesced transaction is itself
+    /// atomic.
     /// </summary>
-    private const int MaxBatchedManifestRows = 99;
+    private const int MaxBatchedManifestRows = 49;
 
     private readonly List<PhaseTwoCommit> _batchBuffer = new(MaxBatchedManifestRows);
 
@@ -226,9 +231,28 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         var highestEndOffset = commits[^1].EndOffsetInclusive;
         try
         {
-            var actions = new List<TableTransactionAction>(commits.Count + 1);
+            var actions = new List<TableTransactionAction>((commits.Count * 2) + 1);
             for (var i = 0; i < commits.Count; i++)
             {
+                // Delete the candidate-row stamped by phase 0. Atomic
+                // with the M-row insert below: either both land (the
+                // committed-batch invariant holds) or neither does
+                // (the C-row remains, reconciliation re-discovers the
+                // batch as an orphan). The C-row's ETag is unknown
+                // here because the worker did not write it; "*" is
+                // the documented sentinel for an unconditional
+                // delete inside a transaction.
+                actions.Add(new TableTransactionAction(
+                    TableTransactionActionType.Delete,
+                    new AzureTableWalEntity
+                    {
+                        PartitionKey = _manifestPartitionKey,
+                        RowKey = AzureTableWalStorageProvider.BuildCandidateRowKey(commits[i].StartOffset),
+                        Offset = commits[i].EndOffsetInclusive,
+                        Payload = null,
+                    },
+                    ETag.All));
+
                 actions.Add(new TableTransactionAction(
                     TableTransactionActionType.Add,
                     new AzureTableWalEntity

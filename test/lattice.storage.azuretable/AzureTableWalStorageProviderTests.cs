@@ -141,7 +141,7 @@ public partial class AzureTableWalStorageProviderTests
     public void MaxEntriesPerBatch_uses_full_transaction_action_cap()
     {
         // Azure caps a transaction at 100 actions. The two-phase
-        // per-batch schema (roadmap R-079) drops the per-batch HEAD
+        // per-batch schema drops the per-batch HEAD
         // sentinel from phase 1 so the full 100-action budget is
         // available for entries; reconciliation derives
         // endOffsetInclusive from a Top(1) DESC query over the batch

@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 
 /// <summary>
 /// White-box unit tests for the per-shard <see cref="PhaseTwoWorker"/>
-/// (roadmap R-079 stage 2b). The worker is the strict offset-FIFO,
+/// (the per-shard phase-2 manifest scheduler). The worker is the strict offset-FIFO,
 /// coalescing-up-to-99 scheduler that owns the phase-2 manifest +
 /// TAIL writes; integration tests against Azurite already exercise
 /// the production constructor end-to-end, so these tests instead
@@ -78,14 +78,17 @@ public class PhaseTwoWorkerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(actions.Length, Is.EqualTo(2), "1 manifest row + 1 TAIL upsert");
-            Assert.That(actions[0].ActionType, Is.EqualTo(TableTransactionActionType.Add));
+            Assert.That(actions.Length, Is.EqualTo(3), "1 candidate-row delete + 1 manifest row add + 1 TAIL upsert");
+            Assert.That(actions[0].ActionType, Is.EqualTo(TableTransactionActionType.Delete));
             Assert.That(((AzureTableWalEntity)actions[0].Entity).PartitionKey, Is.EqualTo(ManifestPartitionKey));
-            Assert.That(((AzureTableWalEntity)actions[0].Entity).RowKey, Is.EqualTo(AzureTableWalStorageProvider.BuildManifestRowKey(0L)));
-            Assert.That(((AzureTableWalEntity)actions[0].Entity).Offset, Is.EqualTo(4L));
-            Assert.That(actions[1].ActionType, Is.EqualTo(TableTransactionActionType.UpsertReplace));
-            Assert.That(((AzureTableWalEntity)actions[1].Entity).RowKey, Is.EqualTo(AzureTableWalStorageProvider.TailRowKey));
-            Assert.That(((AzureTableWalEntity)actions[1].Entity).Offset, Is.EqualTo(4L), "TAIL = endOffsetInclusive of the only commit");
+            Assert.That(((AzureTableWalEntity)actions[0].Entity).RowKey, Is.EqualTo(AzureTableWalStorageProvider.BuildCandidateRowKey(0L)));
+            Assert.That(actions[1].ActionType, Is.EqualTo(TableTransactionActionType.Add));
+            Assert.That(((AzureTableWalEntity)actions[1].Entity).PartitionKey, Is.EqualTo(ManifestPartitionKey));
+            Assert.That(((AzureTableWalEntity)actions[1].Entity).RowKey, Is.EqualTo(AzureTableWalStorageProvider.BuildManifestRowKey(0L)));
+            Assert.That(((AzureTableWalEntity)actions[1].Entity).Offset, Is.EqualTo(4L));
+            Assert.That(actions[2].ActionType, Is.EqualTo(TableTransactionActionType.UpsertReplace));
+            Assert.That(((AzureTableWalEntity)actions[2].Entity).RowKey, Is.EqualTo(AzureTableWalStorageProvider.TailRowKey));
+            Assert.That(((AzureTableWalEntity)actions[2].Entity).Offset, Is.EqualTo(4L), "TAIL = endOffsetInclusive of the only commit");
         });
     }
 
@@ -191,9 +194,11 @@ public class PhaseTwoWorkerTests
     [Test]
     public async Task EnqueueAsync_coalesces_many_pending_commits_into_one_submit()
     {
-        // Park the submitter on the first call so a backlog of 99
+        // Park the submitter on the first call so a backlog of 49
         // arrivals piles up, then release; the worker should drain
-        // them all in a single coalesced submit (99 M-rows + 1 TAIL).
+        // them all in a single coalesced submit (49 C-deletes + 49
+        // M-adds + 1 TAIL upsert = 99 actions, just under the
+        // 100-action Azure Tables transaction cap).
         var gate = new TaskCompletionSource();
         var primed = 0;
         var submitter = new RecordingSubmitter((actions, ct) =>
@@ -210,9 +215,9 @@ public class PhaseTwoWorkerTests
         var priming = worker.EnqueueAsync(0L, 0L);
         await WaitForCallsAsync(submitter, 1).ConfigureAwait(false);
 
-        // Now queue 99 more in-order commits behind the gate.
-        var tasks = new List<Task>(99);
-        for (var i = 1; i <= 99; i++)
+        // Now queue 49 more in-order commits behind the gate.
+        var tasks = new List<Task>(49);
+        for (var i = 1; i <= 49; i++)
         {
             tasks.Add(worker.EnqueueAsync(i, i));
         }
@@ -221,25 +226,28 @@ public class PhaseTwoWorkerTests
         await Task.WhenAll(tasks).ConfigureAwait(false);
         await priming.ConfigureAwait(false);
 
-        // Exactly two submits: the primed one (1 M-row + TAIL) and
-        // the coalesced one (99 M-rows + TAIL).
+        // Exactly two submits: the primed one (1 C-delete + 1 M-add
+        // + TAIL = 3 actions) and the coalesced one (49 C-deletes +
+        // 49 M-adds + TAIL = 99 actions).
         Assert.That(submitter.Calls.Count, Is.EqualTo(2));
         var coalesced = submitter.Calls[1];
         Assert.Multiple(() =>
         {
-            Assert.That(coalesced.Length, Is.EqualTo(100), "99 M-rows + 1 TAIL upsert in one transaction");
+            Assert.That(coalesced.Length, Is.EqualTo(99), "49 C-deletes + 49 M-adds + 1 TAIL upsert in one transaction");
             Assert.That(coalesced[^1].ActionType, Is.EqualTo(TableTransactionActionType.UpsertReplace));
             Assert.That(((AzureTableWalEntity)coalesced[^1].Entity).RowKey, Is.EqualTo(AzureTableWalStorageProvider.TailRowKey));
-            Assert.That(((AzureTableWalEntity)coalesced[^1].Entity).Offset, Is.EqualTo(99L), "TAIL = highest endOffsetInclusive in coalesced group");
+            Assert.That(((AzureTableWalEntity)coalesced[^1].Entity).Offset, Is.EqualTo(49L), "TAIL = highest endOffsetInclusive in coalesced group");
         });
     }
 
     [Test]
-    public async Task EnqueueAsync_coalesces_at_most_99_commits_per_submit()
+    public async Task EnqueueAsync_coalesces_at_most_49_commits_per_submit()
     {
-        // Same as the previous test but with 150 backlogged commits;
-        // the worker must split into a 99-row submit and a 51-row
-        // submit (never exceed the 99-row coalescing cap).
+        // Same as the previous test but with 75 backlogged commits;
+        // the worker must split into a 49-batch submit and a 26-batch
+        // submit (never exceed the 49-batch coalescing cap so the
+        // total action count stays under the 100-action transaction
+        // cap: 49 * 2 + 1 = 99).
         var gate = new TaskCompletionSource();
         var primed = 0;
         var submitter = new RecordingSubmitter((actions, ct) =>
@@ -255,8 +263,8 @@ public class PhaseTwoWorkerTests
         var priming = worker.EnqueueAsync(0L, 0L);
         await WaitForCallsAsync(submitter, 1).ConfigureAwait(false);
 
-        var tasks = new List<Task>(150);
-        for (var i = 1; i <= 150; i++)
+        var tasks = new List<Task>(75);
+        for (var i = 1; i <= 75; i++)
         {
             tasks.Add(worker.EnqueueAsync(i, i));
         }
@@ -265,16 +273,23 @@ public class PhaseTwoWorkerTests
         await Task.WhenAll(tasks).ConfigureAwait(false);
         await priming.ConfigureAwait(false);
 
-        // Every submit after the priming call must hold <= 100 actions
-        // (99 M-rows + 1 TAIL). The 150-commit backlog must therefore
-        // fan out across at least two coalesced submits.
+        // Every submit after the priming call must hold <= 100
+        // actions (at most 49 C-deletes + 49 M-adds + 1 TAIL). The
+        // 75-commit backlog must therefore fan out across at least
+        // two coalesced submits.
         var coalescedSubmits = submitter.Calls.Skip(1).ToArray();
-        Assert.That(coalescedSubmits.Length, Is.GreaterThanOrEqualTo(2), "150 backlogged commits cannot fit in a single 99-row coalesced submit");
+        Assert.That(coalescedSubmits.Length, Is.GreaterThanOrEqualTo(2), "75 backlogged commits cannot fit in a single 49-batch coalesced submit");
         Assert.That(coalescedSubmits.All(c => c.Length <= 100), Is.True, "no submit may exceed the 100-action transaction cap");
 
-        // Sum of M-rows across the coalesced submits must equal 150.
+        // Sum of M-row adds across the coalesced submits must equal
+        // 75 (one M-add per committed batch).
         var mRowCount = coalescedSubmits.Sum(c => c.Count(a => a.ActionType == TableTransactionActionType.Add));
-        Assert.That(mRowCount, Is.EqualTo(150), "every backlogged commit must be reflected in exactly one M-row across the coalesced submits");
+        Assert.That(mRowCount, Is.EqualTo(75), "every backlogged commit must be reflected in exactly one M-row across the coalesced submits");
+
+        // Same count of C-row deletes - one delete per committed
+        // batch, paired 1:1 with the M-add.
+        var cRowDeletes = coalescedSubmits.Sum(c => c.Count(a => a.ActionType == TableTransactionActionType.Delete));
+        Assert.That(cRowDeletes, Is.EqualTo(75), "every committed batch must remove its phase-0 candidate-row");
     }
 
     [Test]
@@ -420,8 +435,15 @@ public class PhaseTwoWorkerTests
 
         await worker.EnqueueAsync(42L, 99L).ConfigureAwait(false);
 
-        var rowKey = ((AzureTableWalEntity)submitter.Calls[0][0].Entity).RowKey;
-        Assert.That(rowKey, Is.EqualTo(AzureTableWalStorageProvider.BuildManifestRowKey(42L)));
+        // Find the M-row (the Add action - the Delete is the C-row,
+        // the UpsertReplace is TAIL) and assert its row key.
+        var mRow = submitter.Calls[0].First(a => a.ActionType == TableTransactionActionType.Add);
+        Assert.That(((AzureTableWalEntity)mRow.Entity).RowKey, Is.EqualTo(AzureTableWalStorageProvider.BuildManifestRowKey(42L)));
+
+        // And the candidate-row delete must use the provider's
+        // candidate-row helper.
+        var cRow = submitter.Calls[0].First(a => a.ActionType == TableTransactionActionType.Delete);
+        Assert.That(((AzureTableWalEntity)cRow.Entity).RowKey, Is.EqualTo(AzureTableWalStorageProvider.BuildCandidateRowKey(42L)));
     }
 
     /// <summary>

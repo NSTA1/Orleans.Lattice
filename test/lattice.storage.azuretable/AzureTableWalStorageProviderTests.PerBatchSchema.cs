@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// Pure-logic tests for the per-batch partition + manifest schema
 /// helpers (<c>BuildBatchPartitionKey</c>, <c>BuildManifestPartitionKey</c>,
 /// <c>BuildManifestRowKey</c>) and their supporting prefix constants
-/// (roadmap R-079). These helpers ship in commit 2a as schema scaffolding;
+/// (the per-batch partition + manifest WAL schema). These helpers ship in commit 2a as schema scaffolding;
 /// the behavioural rewrite that consumes them lands in 2b - 2d.
 /// </summary>
 public partial class AzureTableWalStorageProviderTests
