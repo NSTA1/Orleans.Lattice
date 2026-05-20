@@ -45,9 +45,19 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// into a single phase-2 transaction. The strict-offset drain order
 /// makes TAIL unconditionally monotonic regardless of phase-1
 /// completion order, and the coalescing collapses N round-trips into
-/// one under burst load. <see cref="AppendBatchAsync"/> awaits the
-/// phase-2 completion so post-append <see cref="GetHighestOffsetAsync"/>
-/// observes the new TAIL.
+/// one under burst load. By default <see cref="AppendBatchAsync"/>
+/// awaits the phase-2 completion so post-append
+/// <see cref="GetHighestOffsetAsync"/> observes the new TAIL. When
+/// <see cref="AzureTableWalStorageOptions.PipelinePhaseTwoCommits"/>
+/// is <see langword="true"/>, <see cref="AppendBatchAsync"/> instead
+/// awaits the <i>previous</i> append's phase-2 task on the same
+/// shard before returning - phase 2 of batch N runs in parallel with
+/// phase 0+1 of batch N+1, halving the steady-state request-path
+/// latency under <c>WalMaxPendingBatches = 1</c> while preserving
+/// every durability and ordering invariant the synchronous mode
+/// enforces (sticky failure still surfaces, just on the next call;
+/// reconciliation still rolls forward any phase-1-durable batch
+/// after a crash).
 /// </para>
 /// <para>
 /// <b>Capacity.</b> Azure Tables caps a single transaction at 100
@@ -214,6 +224,19 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     internal readonly ConcurrentDictionary<string, PhaseTwoWorker> _phaseTwoWorkers =
         new(StringComparer.Ordinal);
 
+    // Per-shard "previous batch's phase-2 task" slot, populated only
+    // when AzureTableWalStorageOptions.PipelinePhaseTwoCommits is on.
+    // AppendBatchAsync swaps the new batch's phase-2 task into the
+    // slot atomically and awaits whatever was there before, so phase
+    // 2 of batch N overlaps phase 0+1 of batch N+1 while still
+    // surfacing N's failure on call N+1. Keyed by manifest partition
+    // key (same key the worker dictionary uses) so the two
+    // dictionaries align entry-for-entry without an extra lookup.
+    // Internal so the test assembly can introspect the slot's
+    // identity-based swap behaviour without reflection.
+    internal readonly ConcurrentDictionary<string, Task> _pipelinedPhaseTwoTasks =
+        new(StringComparer.Ordinal);
+
     private TableClient? _tableClient;
     private int _tableInitialised;
     private int _disposed;
@@ -324,8 +347,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // Azure Tables transaction cap) into one manifest-partition
         // transaction in strict ascending start-offset order, then
         // upserts TAIL to the group's highest endOffsetInclusive.
-        var worker = GetOrCreatePhaseTwoWorker(treeId, shardIndex);
-        await worker.EnqueueAsync(firstOffset, endOffsetInclusive).ConfigureAwait(false);
+        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -383,12 +405,202 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         await candidateTask.ConfigureAwait(false);
         await phaseOneTask.ConfigureAwait(false);
 
-        var worker = GetOrCreatePhaseTwoWorker(treeId, shardIndex);
-        await worker.EnqueueAsync(firstOffset, endOffsetInclusive).ConfigureAwait(false);
+        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Inserts the candidate-row for an in-flight batch. Idempotent
+    /// Enqueues the phase-2 commit for the just-completed batch and
+    /// awaits whichever phase-2 task the caller is supposed to block
+    /// on per the configured durability mode.
+    /// <para>
+    /// <b>Default mode (<see cref="AzureTableWalStorageOptions.PipelinePhaseTwoCommits"/>
+    /// is <see langword="false"/>).</b> Awaits the new batch's own
+    /// phase-2 task. Post-append <see cref="GetHighestOffsetAsync"/>
+    /// observes the new <c>TAIL</c>.
+    /// </para>
+    /// <para>
+    /// <b>Pipelined mode (option <see langword="true"/>).</b>
+    /// Atomically swaps the new batch's phase-2 task into the
+    /// per-shard slot and awaits whatever the slot held before.
+    /// That previous task is the previous append's phase-2 commit
+    /// on the same shard; once it lands, the current call returns,
+    /// even though the current batch's phase-2 is still in flight.
+    /// A failed phase-2 surfaces on the next
+    /// <see cref="AppendBatchAsync"/> on the same shard (the worker's
+    /// sticky-failure semantics still hold because <c>WalShardGrain</c>
+    /// resyncs <c>_nextOffset</c> on observed failure exactly as in
+    /// the default mode). To guarantee surfacing even on a quiescent
+    /// shard - the "last batch's phase-2 fault with no successor"
+    /// gap - the slot occupant is also wired to
+    /// <see cref="AzureTableWalStorageOptions.PipelinedPhaseTwoFaultHandler"/>
+    /// via a one-shot continuation; see
+    /// <see cref="AttachPipelinedFaultObserver(Task)"/>.
+    /// </para>
+    /// <para>
+    /// <paramref name="cancellationToken"/> cancels only the current
+    /// caller's wait on the predecessor's task (via
+    /// <see cref="Task.WaitAsync(CancellationToken)"/>), never the
+    /// predecessor's task itself - that task is shared state owned
+    /// by the worker and any other observer (the next call, the
+    /// fault-observer continuation, <see cref="DisposeAsync"/>) will
+    /// continue to see it through to its terminal state.
+    /// </para>
+    /// </summary>
+    private Task DispatchPhaseTwoAsync(
+        string manifestPartitionKey,
+        string treeId,
+        int shardIndex,
+        long firstOffset,
+        long endOffsetInclusive,
+        CancellationToken cancellationToken)
+    {
+        var worker = GetOrCreatePhaseTwoWorker(treeId, shardIndex);
+        var currentTask = worker.EnqueueAsync(firstOffset, endOffsetInclusive);
+
+        if (!_options.PipelinePhaseTwoCommits)
+        {
+            return cancellationToken.CanBeCanceled
+                ? currentTask.WaitAsync(cancellationToken)
+                : currentTask;
+        }
+
+        // The slot occupant must observe its own fault even if no
+        // successor call ever arrives. AttachPipelinedFaultObserver
+        // chains a one-shot continuation off currentTask before
+        // currentTask enters the slot, so the configured handler
+        // fires exactly once on fault regardless of who else awaits
+        // the slot value (including DisposeAsync, which intentionally
+        // swallows). The continuation runs on the thread pool with
+        // ExecutionContext flow suppressed so it cannot re-enter the
+        // request path or leak AsyncLocal state.
+        var observed = AttachPipelinedFaultObserver(currentTask);
+        return AwaitPreviousPipelinedAsync(manifestPartitionKey, observed, cancellationToken);
+    }
+
+    /// <summary>
+    /// Wraps <paramref name="currentTask"/> with a one-shot
+    /// fault-observation continuation routed to
+    /// <see cref="AzureTableWalStorageOptions.PipelinedPhaseTwoFaultHandler"/>.
+    /// The returned task is the same logical task the caller
+    /// supplied; the continuation is fire-and-forget so it does not
+    /// alter the task's settled value or timing relative to the
+    /// pipelined slot's contract.
+    /// <para>
+    /// Returns <paramref name="currentTask"/> unchanged when no
+    /// handler is configured, so the no-handler default path
+    /// allocates nothing extra. When a handler is configured, the
+    /// continuation is attached with
+    /// <see cref="TaskContinuationOptions.OnlyOnFaulted"/> +
+    /// <see cref="TaskContinuationOptions.ExecuteSynchronously"/>
+    /// disabled, which queues to the thread pool only on fault and
+    /// never on the success path.
+    /// </para>
+    /// <para>
+    /// Internal so the test assembly can drive the helper directly
+    /// without standing up Azurite.
+    /// </para>
+    /// </summary>
+    internal Task AttachPipelinedFaultObserver(Task currentTask)
+    {
+        var handler = _options.PipelinedPhaseTwoFaultHandler;
+        if (handler is null)
+        {
+            return currentTask;
+        }
+
+        // Suppress ExecutionContext so the continuation runs without
+        // inheriting AsyncLocal state from the appending caller. The
+        // continuation is shutdown-safe: it must not fault on its own
+        // (handler exceptions are caught) and it accesses no captured
+        // disposable state of the provider.
+        using (ExecutionContext.SuppressFlow())
+        {
+            _ = currentTask.ContinueWith(
+                static (t, state) =>
+                {
+                    var h = (Action<Exception>)state!;
+                    var ex = t.Exception?.GetBaseException();
+                    if (ex is null)
+                    {
+                        return;
+                    }
+                    try
+                    {
+                        h(ex);
+                    }
+                    catch
+                    {
+                        // The handler is for observability only; a
+                        // throwing handler must not corrupt the
+                        // pipeline's internal task graph.
+                    }
+                },
+                handler,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.DenyChildAttach,
+                TaskScheduler.Default);
+        }
+
+        return currentTask;
+    }
+
+    /// <summary>
+    /// Exchanges the per-shard pipelined phase-2 task slot with
+    /// <paramref name="currentTask"/> and awaits whatever was in the
+    /// slot beforehand. Implemented as an explicit lock-free swap
+    /// because <see cref="ConcurrentDictionary{TKey, TValue}"/> lacks
+    /// an atomic exchange primitive that returns the previous value
+    /// for an in-place update. Internal so the test assembly can
+    /// pin the swap behaviour without driving the full append path.
+    /// <para>
+    /// <paramref name="cancellationToken"/> cancels only the wait on
+    /// the predecessor task (via
+    /// <see cref="Task.WaitAsync(CancellationToken)"/>), not the
+    /// predecessor itself; the slot's task continues running and any
+    /// other observer (next call, fault handler, dispose) will still
+    /// see it through to its terminal state.
+    /// </para>
+    /// </summary>
+    internal async Task AwaitPreviousPipelinedAsync(
+        string manifestPartitionKey,
+        Task currentTask,
+        CancellationToken cancellationToken = default)
+    {
+        Task? previousTask;
+        while (true)
+        {
+            if (_pipelinedPhaseTwoTasks.TryGetValue(manifestPartitionKey, out var existing))
+            {
+                if (_pipelinedPhaseTwoTasks.TryUpdate(manifestPartitionKey, currentTask, existing))
+                {
+                    previousTask = existing;
+                    break;
+                }
+                // Lost the race; retry with the new comparand.
+                continue;
+            }
+
+            if (_pipelinedPhaseTwoTasks.TryAdd(manifestPartitionKey, currentTask))
+            {
+                previousTask = null;
+                break;
+            }
+            // Another thread added a slot between our TryGetValue
+            // and TryAdd; retry the TryGetValue path.
+        }
+
+        if (previousTask is not null)
+        {
+            if (cancellationToken.CanBeCanceled)
+            {
+                await previousTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await previousTask.ConfigureAwait(false);
+            }
+        }
+    }
     /// via <see cref="TableUpdateMode.Replace"/> on the upsert so a
     /// retry inside the SDK does not surface as <c>EntityAlreadyExists</c>
     /// to the caller; the row's identity is fully determined by
@@ -1124,6 +1336,30 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // ThrowIfDisposed so no new workers can race in.
         var workers = _phaseTwoWorkers.Values.ToArray();
         _phaseTwoWorkers.Clear();
+
+        // Drain any still-outstanding pipelined phase-2 tasks so a
+        // host shutdown observes the same fault that a normal
+        // post-append await would have. Faults are swallowed here
+        // because Dispose is the terminal stage; the worker has
+        // already surfaced them to its enqueued TCSs which the
+        // pipelined tasks ultimately resolved against, and the
+        // canonical surface for those faults is the next
+        // AppendBatchAsync on the shard - which can no longer be
+        // issued because the provider is disposed.
+        var pipelined = _pipelinedPhaseTwoTasks.Values.ToArray();
+        _pipelinedPhaseTwoTasks.Clear();
+        foreach (var task in pipelined)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch
+            {
+                // See comment above; intentional swallow at shutdown.
+            }
+        }
+
         foreach (var worker in workers)
         {
             await worker.DisposeAsync().ConfigureAwait(false);
